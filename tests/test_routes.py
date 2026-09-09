@@ -121,3 +121,75 @@ def test_import_history_raw_xml_and_both_csv_exports():
     assert "open_services" in hosts.text
     assert "protocol,port,port_state" in ports.text
     assert "192.0.2.10" in ports.text
+
+
+def device_password_plan() -> dict:
+    return {
+        "operator": "analyst01",
+        "reason": "Authorized configuration baseline",
+        "originating_host": "collector01",
+        "vendor": "vyos",
+        "device_type": "router",
+        "device_address": "192.0.2.1",
+        "username": "admin",
+        "ssh_port": 22,
+        "key_path": None,
+        "authentication_mode": "password_prompt",
+        "accountability_interface": "eth0",
+    }
+
+
+def test_interactive_device_preview_starts_with_plain_ssh_and_never_contains_a_password():
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=device_password_plan())
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ssh_command"].endswith("admin@192.0.2.1")
+    assert "BatchMode=yes" not in data["ssh_command"]
+    assert data["authentication_mode"] == "password_prompt"
+    assert "password" not in data["ssh_command"].lower()
+
+
+def test_device_preview_appends_auditable_operator_commands_and_describes_cleanup():
+    body = device_password_plan()
+    body["additional_commands"] = ["show arp", "show lldp neighbors | include edge"]
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["commands"][-2:] == body["additional_commands"]
+    assert data["additional_commands"] == body["additional_commands"]
+    assert "delete the remote file" in data["cleanup_plan"]
+
+
+def test_device_preview_rejects_configuration_and_shell_control_commands():
+    for command in ("configure", "show version; reboot", "show version | sh"):
+        body = device_password_plan()
+        body["additional_commands"] = [command]
+        with TestClient(app) as client:
+            response = client.post("/api/device-configs/preview", json=body)
+
+        assert response.status_code == 422
+
+
+def test_interactive_password_workflow_requires_https_before_starting_ssh():
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/interactive/start", json=device_password_plan())
+
+    assert response.status_code == 400
+    assert "HTTPS" in response.json()["detail"]
+
+
+def test_device_page_has_one_time_password_dialog_and_history_presets():
+    with TestClient(app) as client:
+        response = client.get("/device-config")
+
+    assert response.status_code == 200
+    assert 'autocomplete="new-password"' in response.text
+    assert "Start SSH and collect" in response.text
+    assert "Use preset" in response.text
+    assert "Additional read-only commands" in response.text
+    assert "Cleanup status" in response.text
+    assert "credentials_stored" not in response.text
