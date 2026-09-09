@@ -20,12 +20,10 @@
 
 ## Phase 3 — Scheduling and discovery
 
+- [x] Show live Nmap host completion progress, including whole-batch progress
+  for sequential scheduled chunks.
 - [ ] Execute recurring daily, weekly, monthly, and custom schedules.
 - [ ] Retain schedule owner, modification history, next run, and last run.
-- [ ] Show live scan progress using the effective target total after no-strike
-  exclusions, including hosts scanned/total, percentage, elapsed time, current
-  chunk when applicable, and a clear indeterminate state when exact per-host
-  progress is unavailable.
 - [x] Add optional FPING pre-discovery with retained responsive-host evidence
   and an explicit warning that ICMP-blocking hosts can be omitted.
 - [x] Collect and retain Nmap traceroute hop paths and map observed hop
@@ -70,4 +68,3 @@
 - [ ] Add a safe export path for sharing selected feedback with the project
   backlog without including scan evidence, credentials, or sensitive network
   details by default.
-
