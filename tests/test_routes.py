@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import io
 import zipfile
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.device_configs import DeviceConfigPlan, _interactive_master_args
 
 
 ROUTE_XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10">
@@ -194,6 +196,15 @@ def test_interactive_password_workflow_requires_https_before_starting_ssh():
 
     assert response.status_code == 400
     assert "HTTPS" in response.json()["detail"]
+
+
+def test_interactive_ssh_uses_the_pty_as_its_controlling_terminal():
+    plan = DeviceConfigPlan.model_validate(device_password_plan())
+    command = _interactive_master_args(plan, Path("/tmp/control.sock"))
+
+    assert command[:3] == ["setsid", "--ctty", "ssh"]
+    assert "PreferredAuthentications=keyboard-interactive,password" in command
+    assert command[-1] == "admin@192.0.2.1"
 
 
 def test_device_page_has_one_time_password_dialog_and_history_presets():
