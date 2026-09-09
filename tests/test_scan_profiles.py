@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.poc import apply_fping_fallback
 from app.scan_profiles import build_nmap_flags, scan_display_name
 
 
@@ -60,6 +61,28 @@ def test_combined_top_port_counts_are_rejected_instead_of_misrepresented():
         build_nmap_flags(
             {"protocol": "tcp_udp", "tcp_scope": "top_1000", "udp_scope": "top_100"}
         )
+
+
+def test_fping_fallback_scans_the_full_approved_scope():
+    manifest = {
+        "profile": "Custom",
+        "interface": "eth0",
+        "no_strike": ["192.0.2.3/32"],
+        "profile_settings": {
+            "protocol": "tcp",
+            "tcp_scope": "common",
+            "discovery_mode": "fping",
+        },
+    }
+
+    apply_fping_fallback(manifest)
+
+    command = manifest["command_argv"]
+    assert command[command.index("-iL") + 1] == "targets.txt"
+    assert command[command.index("--excludefile") + 1] == "no-strike.txt"
+    assert "-n" in command
+    assert manifest["discovery_fallback_used"] is True
+    assert "Nmap fallback" in manifest["discovery_note"]
 
 
 def test_human_friendly_manual_and_scheduled_names():
