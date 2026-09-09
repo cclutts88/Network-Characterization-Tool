@@ -1,0 +1,9 @@
+data/
+logs/
+keys/
+backups/
+__pycache__/
+*.pyc
+*.tar
+*.tar.gz
+
