@@ -230,11 +230,11 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
             windows_nmap = f"nmap {common}"
             if use_fping:
                 linux_command = (
-                    f"fping -a -q -f {target_path} > {alive_path} 2> {fping_log_path} || [ $? -eq 1 ]; "
+                    f"fping -a -f {target_path} > {alive_path} 2> {fping_log_path} || [ $? -eq 1 ]; "
                     f"if [ -s {alive_path} ]; then {linux_nmap}; else echo 'No responsive hosts in {target_path}'; fi"
                 )
                 windows_command = (
-                    f"fping -a -q -f {target_path} > {alive_path} 2> {fping_log_path} & "
+                    f"fping -a -f {target_path} > {alive_path} 2> {fping_log_path} & "
                     f"for %%A in ({alive_path}) do if %%~zA GTR 0 {windows_nmap}"
                 )
             else:
