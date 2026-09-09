@@ -26,6 +26,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "fallback-decision" in html
     assert "awaiting_fallback_approval" in html
     assert "exact_fallback_command" in html
+    assert ".join('\n')" not in html
+    assert r".join('\n')" in html
 
 
 def test_navigation_is_sticky_on_every_primary_page():
