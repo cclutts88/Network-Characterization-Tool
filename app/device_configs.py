@@ -28,12 +28,22 @@ HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}$")
 USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 KEY_RE = re.compile(r"^/keys/[A-Za-z0-9._/-]{1,180}$")
 INTERFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+CUSTOM_COMMAND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/,=|?*+-]{0,199}$")
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ARTIFACT_NAMES = ("manifest.json", "stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt")
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
+MAX_ADDITIONAL_COMMANDS = 20
+READ_ONLY_COMMAND_PREFIXES = {
+    "show", "display", "get", "ping", "traceroute", "mtr",
+    "cat", "netstat", "sockstat", "uptime", "uname", "dmesg",
+}
+READ_ONLY_FILTER_PREFIXES = {
+    "include", "exclude", "match", "display", "grep", "egrep",
+    "head", "tail", "count", "no-more",
+}
 
 VENDORS = ("vyos", "cisco", "juniper", "pfsense")
 DEVICE_TYPES = ("router", "firewall")
@@ -135,6 +145,7 @@ class DeviceConfigPlan(BaseModel):
     key_path: str | None = Field(default=None, max_length=200)
     authentication_mode: Literal["password_prompt", "key"] = "key"
     accountability_interface: str = Field(min_length=1, max_length=64)
+    additional_commands: list[str] = Field(default_factory=list, max_length=MAX_ADDITIONAL_COMMANDS)
 
     @field_validator("operator", "reason", "originating_host", "device_address", "username")
     @classmethod
@@ -173,9 +184,41 @@ class DeviceConfigPlan(BaseModel):
             raise ValueError("Key paths must be under /keys")
         return value.strip() if value else None
 
+    @field_validator("additional_commands")
+    @classmethod
+    def validate_additional_commands(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw_command in values:
+            command = raw_command.strip()
+            if not command:
+                continue
+            if not CUSTOM_COMMAND_RE.fullmatch(command):
+                raise ValueError(
+                    "Additional commands may use letters, numbers, spaces, and safe read-only punctuation only"
+                )
+            pipeline = [segment.strip() for segment in command.split("|")]
+            if any(not segment for segment in pipeline):
+                raise ValueError("Additional command pipelines cannot contain an empty step")
+            primary = pipeline[0].split(maxsplit=1)[0].lower()
+            if primary not in READ_ONLY_COMMAND_PREFIXES:
+                raise ValueError(
+                    "Additional commands must start with a supported read-only command such as show, display, get, ping, traceroute, or cat"
+                )
+            for filter_step in pipeline[1:]:
+                filter_name = filter_step.split(maxsplit=1)[0].lower()
+                if filter_name not in READ_ONLY_FILTER_PREFIXES:
+                    raise ValueError(
+                        "Pipeline steps must use a supported output filter such as include, exclude, match, display, grep, head, tail, or count"
+                    )
+            if command not in cleaned:
+                cleaned.append(command)
+        return cleaned
+
 
 def build_plan(plan: DeviceConfigPlan) -> dict:
-    commands = list(TEMPLATES[plan.vendor][plan.device_type])
+    template_commands = list(TEMPLATES[plan.vendor][plan.device_type])
+    additional_commands = list(plan.additional_commands)
+    commands = template_commands + additional_commands
     run_id = uuid.uuid4().hex
     name = safe_name(plan.device_address)
     target = f"{plan.username}@{plan.device_address}"
@@ -223,6 +266,8 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
             "tcpdump", "-i", plan.accountability_interface, "-p", "-nn", "-U", "-s", "0",
             "-w", "accountability.pcap",
         ]),
+        "template_commands": template_commands,
+        "additional_commands": additional_commands,
         "commands": commands,
         "ssh_command": ssh_command,
         "ssh_args": ssh_args,
@@ -231,7 +276,12 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "remote_output_path": f"/tmp/{local_file}",
         "local_output_name": local_file,
         "authentication_mode": plan.authentication_mode,
-        "notes": "The command set is read-only except for session-only terminal pagination settings on Cisco devices.",
+        "cleanup_plan": (
+            "Create a temporary output file on the device, copy it back to the analyzer, delete the remote file, and close the SSH session."
+            if plan.vendor in {"vyos", "pfsense"}
+            else "Collect through the SSH output stream, create no remote file, and close the SSH session."
+        ),
+        "notes": "The template and validated operator additions are read-only except for session-only terminal pagination settings on Cisco devices.",
     }
 
 
@@ -252,9 +302,12 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "accountability_interface": plan.accountability_interface,
         "capture_required": True,
         "capture_command": preview["capture_command"],
+        "template_commands": preview["template_commands"],
+        "additional_commands": preview["additional_commands"],
         "commands": preview["commands"],
         "ssh_command": preview["ssh_command"],
         "scp_command": preview["scp_command"],
+        "cleanup_plan": preview["cleanup_plan"],
         "status": status,
     }
     value.update(extra)
