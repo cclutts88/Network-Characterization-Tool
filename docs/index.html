@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Nmap Terrain Analyzer project overview and development roadmap.">
+  <title>Nmap Terrain Analyzer</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07131b;--panel:#10222c;--line:#284653;--text:#edf7fb;--muted:#9cb1ba;--accent:#57d6bf;--blue:#73bfff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 85% 0,#12323b,#07131b 45%);color:var(--text);font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:1080px;margin:auto;padding:72px 24px}.eyebrow{color:var(--accent);font-size:.75rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}h1{font-size:clamp(2.6rem,7vw,5.4rem);line-height:1;margin:.2em 0;max-width:900px;letter-spacing:-.04em}h2{margin-top:0}p{color:var(--muted);max-width:760px}.lead{font-size:1.25rem}.actions{display:flex;flex-wrap:wrap;gap:12px;margin:28px 0 48px}.button{display:inline-block;padding:11px 16px;border-radius:8px;background:var(--accent);color:#061612;text-decoration:none;font-weight:800}.button.secondary{background:transparent;color:var(--blue);border:1px solid #3d7190}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:rgba(16,34,44,.92);border:1px solid var(--line);border-radius:13px;padding:20px}.card strong{color:var(--blue);display:block;margin-bottom:6px}.wide{grid-column:1/-1}.phase{display:grid;grid-template-columns:110px 1fr;gap:18px;padding:15px 0;border-bottom:1px solid var(--line)}.phase:last-child{border-bottom:0}.phase b{color:var(--accent)}code{color:#a6dbff}.notice{margin-top:36px;padding:18px;border-left:4px solid var(--accent);background:#0c1d25;color:var(--muted)}@media(max-width:780px){main{padding-top:42px}.grid{grid-template-columns:1fr}.phase{grid-template-columns:1fr;gap:2px}}
+  </style>
+</head>
+<body><main>
+  <div class="eyebrow">Authorized network characterization</div>
+  <h1>Nmap Terrain Analyzer</h1>
+  <p class="lead">A Dockerized workspace for building safe Nmap scans, retaining accountable evidence, and turning current or historical XML into useful terrain analysis.</p>
+  <div class="actions"><a class="button" href="#phase-1-2">Phase 1 + 2</a><a class="button secondary" href="#roadmap">Roadmap</a></div>
+  <section class="grid" aria-label="Current capabilities">
+    <article class="card"><strong>One scan page</strong>Build a scan once, then save its profile, run it now, or generate a portable package.</article>
+    <article class="card"><strong>Reproducible profiles</strong>Protected templates, cloning, and immutable versions keep historical and scheduled coverage trustworthy.</article>
+    <article class="card"><strong>TCP + UDP</strong>Independent common, full, custom, and conservative ICS-focused port scopes with mandatory <code>-n</code>.</article>
+    <article class="card"><strong>Full historical analysis</strong>Previous scans reopen through the same host, service, identity, MAC, and outlier renderer used for uploads.</article>
+    <article class="card"><strong>Useful exports</strong>Keep host summaries or export one normalized CSV row per IP, protocol, and port.</article>
+    <article class="card"><strong>Accountability</strong>Friendly names, creator/scheduler/executor metadata, immutable IDs, coverage, and retained PCAP evidence.</article>
+  </section>
+  <section id="phase-1-2" class="card wide" style="margin-top:28px"><h2>Phase 1 + 2 implementation</h2><div class="phase"><b>History</b><span>Unified historical/new-upload analysis, raw XML as a secondary action, and explicit coverage metadata.</span></div><div class="phase"><b>Identity</b><span><code>Name_Date_Time</code> naming, visible <code>(S)</code> scheduled marker, and creator/scheduler/executor provenance.</span></div><div class="phase"><b>Profiles</b><span>Save, clone, reuse, and save-as-new-version behavior with schedule definitions pinned to a version.</span></div><div class="phase"><b>Scanning</b><span>TCP, UDP, or TCP + UDP with independent port scopes and an ICS Safe Discovery template.</span></div></section>
+  <section id="roadmap" class="card wide" style="margin-top:18px"><h2>Later phases</h2><p>Recurring scheduled execution, FPING discovery, traceroute and hop-path history, richer scan comparison, ARP/PCAP/OUI enrichment, SearchSploit/ExploitDB references, parser and network-mapping evaluation, and redesigned zero-touch device configuration collection.</p></section>
+  <div class="notice">GitHub Pages hosts this project page only. The FastAPI application and Nmap execution remain self-hosted through Docker because Pages cannot run server-side Python or network scanners.</div>
+</main></body>
+</html>
