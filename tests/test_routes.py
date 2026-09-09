@@ -151,6 +151,20 @@ def test_interactive_device_preview_starts_with_plain_ssh_and_never_contains_a_p
     assert "password" not in data["ssh_command"].lower()
 
 
+def test_device_name_labels_the_ip_without_changing_the_ssh_target():
+    body = device_password_plan()
+    body["device_name"] = "Core Router"
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["device_name"] == "Core Router"
+    assert data["device_address"] == "192.0.2.1"
+    assert data["ssh_command"].endswith("admin@192.0.2.1")
+    assert data["local_output_name"].startswith("Core-Router-")
+
+
 def test_device_preview_appends_auditable_operator_commands_and_describes_cleanup():
     body = device_password_plan()
     body["additional_commands"] = ["show arp", "show lldp neighbors | include edge"]
@@ -192,4 +206,7 @@ def test_device_page_has_one_time_password_dialog_and_history_presets():
     assert "Use preset" in response.text
     assert "Additional read-only commands" in response.text
     assert "Cleanup status" in response.text
+    assert "Device name (optional)" in response.text
+    assert "Choose a device found by Nmap" in response.text
+    assert "loadDiscoveredDevices" in response.text
     assert "credentials_stored" not in response.text
