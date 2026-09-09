@@ -9,6 +9,7 @@ from app.poc import (
     init_poc_storage,
     router as poc_router,
     run_directory,
+    schedule_worker,
 )
 from app.device_configs import router as device_config_router
 from app.device_ui import device_config_page
@@ -25,6 +26,7 @@ import os
 import re
 import shlex
 import sqlite3
+import threading
 import zipfile
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
@@ -647,7 +649,19 @@ def parse_xml(content: bytes) -> dict:
 async def lifespan(_: FastAPI):
     init_storage()
     init_poc_storage()
-    yield
+    scheduler_stop = threading.Event()
+    scheduler_thread = threading.Thread(
+        target=schedule_worker,
+        args=(scheduler_stop,),
+        daemon=True,
+        name="scan-scheduler",
+    )
+    scheduler_thread.start()
+    try:
+        yield
+    finally:
+        scheduler_stop.set()
+        scheduler_thread.join(timeout=2)
 
 
 app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifespan)

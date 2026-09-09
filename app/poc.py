@@ -17,7 +17,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -117,7 +117,7 @@ class ScanProfileClone(BaseModel):
 
 
 class ScanScheduleCreate(BaseModel):
-    """Persisted schedule definition only; execution is a later-phase feature."""
+    """A version-pinned recurring or one-time scan schedule."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -128,8 +128,44 @@ class ScanScheduleCreate(BaseModel):
     targets: list[str] = Field(min_length=1)
     no_strike: list[str] = Field(default_factory=list)
     interface: str = Field(min_length=1, max_length=64)
-    cadence: str = Field(min_length=1, max_length=200)
+    cadence: Literal["once", "interval", "hourly", "daily", "weekly"] = "once"
+    first_run_at: datetime
+    interval_minutes: int = Field(default=60, ge=5, le=10080)
+    reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
+    originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
+    timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    fallback_policy: Literal["require_approval", "stop_without_nmap"] = "require_approval"
     enabled: bool = False
+
+    @field_validator("name", "created_by", "reason", "originating_host")
+    @classmethod
+    def clean_schedule_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("This field cannot be blank")
+        return cleaned
+
+
+class ScheduleStateChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class ScheduleProfileChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: int = Field(ge=1)
+    changed_by: str = Field(min_length=1, max_length=100)
+
+    @field_validator("changed_by")
+    @classmethod
+    def clean_changed_by(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("The analyst changing the schedule is required")
+        return cleaned
 
 
 class ScanRunPlan(BaseModel):
@@ -148,6 +184,7 @@ class ScanRunPlan(BaseModel):
     scheduled: bool = False
     scheduled_by: str | None = Field(default=None, max_length=100)
     executed_by: str | None = Field(default=None, max_length=100)
+    fallback_policy: Literal["require_approval", "stop_without_nmap"] = "require_approval"
     targets: list[str] = Field(min_length=1)
     no_strike: list[str] = Field(default_factory=list)
 
@@ -366,6 +403,7 @@ def build_scan_run_manifest(
         "scheduled_by": plan.scheduled_by,
         "executed_by": plan.executed_by or ("scheduler" if plan.scheduled else plan.operator),
         "execution_method": "scheduled" if plan.scheduled else "manual",
+        "fallback_policy": plan.fallback_policy,
         "reason": plan.reason,
         "originating_host": plan.originating_host,
         "interface": plan.interface,
@@ -624,19 +662,74 @@ def resolve_scan_profile(plan: ScanRunPlan, db_path: Path = DB_PATH) -> dict:
     return record
 
 
+def _as_utc(value: datetime | str) -> datetime:
+    moment = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("Scheduled times must include a timezone")
+    return moment.astimezone(timezone.utc).replace(microsecond=0)
+
+
+def next_schedule_time(schedule: dict, after: datetime) -> datetime | None:
+    """Advance a schedule after dispatch, preserving its original cadence."""
+    if schedule["cadence"] == "once":
+        return None
+    current = _as_utc(schedule["next_run_at"])
+    delta = {
+        "interval": timedelta(minutes=int(schedule.get("interval_minutes") or 60)),
+        "hourly": timedelta(hours=1),
+        "daily": timedelta(days=1),
+        "weekly": timedelta(weeks=1),
+    }[schedule["cadence"]]
+    while current <= after:
+        current += delta
+    return current
+
+
+def get_scan_schedule(schedule_id: str, db_path: Path = DB_PATH) -> dict | None:
+    if not RUN_ID_RE.fullmatch(schedule_id):
+        return None
+    init_poc_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        row = db.execute(
+            "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def _store_scan_schedule(schedule: dict, db_path: Path = DB_PATH) -> dict:
+    schedule["updated_at"] = utc_now()
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            UPDATE scan_schedules
+            SET name = ?, profile_id = ?, profile_version = ?, definition_json = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                schedule["name"], schedule["profile_id"], schedule["profile_version"],
+                json.dumps(schedule, sort_keys=True), schedule["schedule_id"],
+            ),
+        )
+    return schedule
+
+
 def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -> dict:
-    """Create a non-executing schedule definition pinned to one immutable profile version."""
+    """Create an executable schedule pinned to one immutable profile version."""
+    init_poc_storage(db_path)
     profile = get_scan_profile(request.profile_id, request.profile_version, db_path)
     if profile is None:
         raise ValueError("A schedule must reference an existing profile version")
     if not INTERFACE_RE.fullmatch(request.interface):
         raise ValueError("Interface must be a simple local interface name")
+    first_run = _as_utc(request.first_run_at)
     definition = {
-        "schema_version": 1,
+        "schema_version": 2,
         "schedule_id": uuid.uuid4().hex,
-        "name": request.name.strip(),
+        "name": request.name,
         "created_at": utc_now(),
-        "created_by": request.created_by.strip(),
+        "updated_at": utc_now(),
+        "created_by": request.created_by,
         "profile_id": profile["profile_id"],
         "profile_version": profile["version"],
         "profile_name": profile["name"],
@@ -644,9 +737,21 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "targets": normalize_ipv4_networks(request.targets, "target"),
         "no_strike": normalize_ipv4_networks(request.no_strike, "no-strike") if request.no_strike else [],
         "interface": request.interface,
-        "cadence": request.cadence.strip(),
+        "cadence": request.cadence,
+        "first_run_at": first_run.isoformat(),
+        "next_run_at": first_run.isoformat(),
+        "interval_minutes": request.interval_minutes,
+        "reason": request.reason,
+        "originating_host": request.originating_host,
+        "timeout_seconds": request.timeout_seconds,
+        "fallback_policy": request.fallback_policy,
         "enabled": bool(request.enabled),
-        "implementation_status": "definition_only",
+        "run_count": 0,
+        "last_run_id": None,
+        "last_run_at": None,
+        "last_run_status": None,
+        "last_changed_by": request.created_by,
+        "implementation_status": "active_scheduler",
     }
     with sqlite3.connect(db_path) as db:
         db.execute(
@@ -671,7 +776,60 @@ def list_scan_schedules(db_path: Path = DB_PATH) -> list[dict]:
         rows = db.execute(
             "SELECT definition_json FROM scan_schedules ORDER BY created_at DESC"
         ).fetchall()
-    return [json.loads(row[0]) for row in rows]
+    schedules = [json.loads(row[0]) for row in rows]
+    for schedule in schedules:
+        if schedule.get("last_run_id"):
+            run = get_scan_run_plan(schedule["last_run_id"], db_path)
+            schedule["last_run_status"] = run.get("status") if run else "not_found"
+    return schedules
+
+
+def set_scan_schedule_enabled(
+    schedule_id: str, enabled: bool, db_path: Path = DB_PATH
+) -> dict:
+    schedule = get_scan_schedule(schedule_id, db_path)
+    if schedule is None:
+        raise KeyError("Scan schedule not found")
+    schedule["enabled"] = bool(enabled)
+    schedule["last_changed_by"] = schedule.get("last_changed_by") or schedule["created_by"]
+    if enabled:
+        if not schedule.get("next_run_at"):
+            schedule["next_run_at"] = utc_now()
+        elif _as_utc(schedule["next_run_at"]) < datetime.now(timezone.utc):
+            if schedule["cadence"] == "once":
+                schedule["next_run_at"] = utc_now()
+            else:
+                schedule["next_run_at"] = next_schedule_time(
+                    schedule, datetime.now(timezone.utc)
+                ).isoformat()
+    return _store_scan_schedule(schedule, db_path)
+
+
+def change_scan_schedule_profile(
+    schedule_id: str, request: ScheduleProfileChange, db_path: Path = DB_PATH
+) -> dict:
+    schedule = get_scan_schedule(schedule_id, db_path)
+    if schedule is None:
+        raise KeyError("Scan schedule not found")
+    profile = get_scan_profile(request.profile_id, request.profile_version, db_path)
+    if profile is None:
+        raise ValueError("The selected saved profile version does not exist")
+    schedule.update(
+        {
+            "profile_id": profile["profile_id"],
+            "profile_version": profile["version"],
+            "profile_name": profile["name"],
+            "profile_snapshot": profile["settings"],
+            "fallback_policy": (
+                schedule.get("fallback_policy", "require_approval")
+                if profile["settings"].get("discovery_mode") == "fping"
+                else "require_approval"
+            ),
+            "last_changed_by": request.changed_by,
+            "profile_changed_at": utc_now(),
+        }
+    )
+    return _store_scan_schedule(schedule, db_path)
 
 
 def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
@@ -812,6 +970,43 @@ def consume_delete_challenge(scope: str, identifier: str | None, confirmation: s
             return False
         DELETE_CHALLENGES.pop(key, None)
         return True
+
+
+def delete_scan_profile(
+    profile_id: str, confirmation: str, db_path: Path = DB_PATH
+) -> dict:
+    profile = get_scan_profile(profile_id, db_path=db_path)
+    if profile is None:
+        raise KeyError("Scan profile not found")
+    if profile["built_in"]:
+        raise PermissionError("Built-in profiles are protected and cannot be deleted")
+    with sqlite3.connect(db_path) as db:
+        pinned = db.execute(
+            "SELECT COUNT(*) FROM scan_schedules WHERE profile_id = ?", (profile_id,)
+        ).fetchone()[0]
+    if pinned:
+        raise RuntimeError(
+            "This profile is pinned to a saved schedule. Change or delete that schedule first."
+        )
+    if not consume_delete_challenge("profile", profile_id, confirmation):
+        raise PermissionError("The confirmation string is invalid or expired")
+    with sqlite3.connect(db_path) as db:
+        removed = db.execute(
+            "DELETE FROM scan_profiles WHERE profile_id = ?", (profile_id,)
+        ).rowcount
+    return {"deleted": True, "profile_id": profile_id, "versions_removed": removed}
+
+
+def delete_scan_schedule(
+    schedule_id: str, confirmation: str, db_path: Path = DB_PATH
+) -> dict:
+    if get_scan_schedule(schedule_id, db_path) is None:
+        raise KeyError("Scan schedule not found")
+    if not consume_delete_challenge("schedule", schedule_id, confirmation):
+        raise PermissionError("The confirmation string is invalid or expired")
+    with sqlite3.connect(db_path) as db:
+        db.execute("DELETE FROM scan_schedules WHERE schedule_id = ?", (schedule_id,))
+    return {"deleted": True, "schedule_id": schedule_id}
 
 
 def scan_data_root(data_dir: Path = DATA_DIR) -> Path:
@@ -1117,64 +1312,78 @@ def execute_scan_run(
                     )
                     manifest["fallback_command_argv"] = fallback_argv
                     manifest["exact_fallback_command"] = shlex.join(fallback_argv)
-                    manifest["status"] = "awaiting_fallback_approval"
-                    manifest["fallback_approval_required"] = True
-                    manifest["discovery_note"] = (
-                        "FPING found no responsive hosts. Full Nmap fallback is paused "
-                        "pending explicit operator or mission-partner approval."
-                    )
-                    collect_artifacts(manifest, data_dir)
-                    update_scan_run_manifest(manifest, db_path)
-                    write_manifest_file(manifest, data_dir)
-                    while not control.fallback_decision_event.is_set():
-                        if control.cancel_event.is_set():
-                            manifest["status"] = "cancelled"
-                            run_nmap = False
-                            break
-                        sleep_fn(0.2)
-                    if run_nmap:
-                        manifest["fallback_decision"] = control.fallback_decision
-                        manifest["fallback_decided_by"] = control.fallback_decided_by
-                        manifest["fallback_authorization_note"] = (
-                            control.fallback_authorization_note
-                        )
+                    if manifest.get("fallback_policy") == "stop_without_nmap":
+                        manifest["status"] = "completed_without_nmap"
+                        manifest["fallback_approval_required"] = False
+                        manifest["fallback_decision"] = "policy_stop"
                         manifest["fallback_decided_at"] = utc_now()
-                        if control.fallback_decision == "approve":
-                            apply_fping_fallback(manifest)
-                            manifest["status"] = "running"
-                            manifest["discovery_note"] = (
-                                "FPING found no responsive hosts. Full Nmap fallback "
-                                f"approved by {control.fallback_decided_by}: "
-                                f"{control.fallback_authorization_note}"
-                            )
-                            deadline = time.monotonic() + int(manifest["timeout_seconds"])
-                            if manifest["capture_requested"]:
-                                control.capture_process = popen_factory(
-                                    manifest["capture_command_argv"],
-                                    cwd=run_dir,
-                                    stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=capture_error_handle,
-                                    start_new_session=True,
-                                )
-                                sleep_fn(0.25)
-                                capture_exit = control.capture_process.poll()
-                                if capture_exit is not None:
-                                    raise RuntimeError(
-                                        "tcpdump exited before the approved fallback "
-                                        f"with status {capture_exit}"
-                                    )
-                        else:
-                            manifest["status"] = "completed_without_nmap"
-                            manifest["discovery_note"] = (
-                                "FPING found no responsive hosts. "
-                                f"{control.fallback_decided_by} chose to finish without "
-                                f"Nmap fallback: {control.fallback_authorization_note}"
-                            )
-                            exit_code = 0
-                            run_nmap = False
+                        manifest["discovery_note"] = (
+                            "FPING found no responsive hosts. The pinned scheduled-scan "
+                            "policy finished without starting the full Nmap fallback."
+                        )
+                        exit_code = 0
+                        run_nmap = False
                         update_scan_run_manifest(manifest, db_path)
                         write_manifest_file(manifest, data_dir)
+                    else:
+                        manifest["status"] = "awaiting_fallback_approval"
+                        manifest["fallback_approval_required"] = True
+                        manifest["discovery_note"] = (
+                            "FPING found no responsive hosts. Full Nmap fallback is paused "
+                            "pending explicit operator or mission-partner approval."
+                        )
+                        collect_artifacts(manifest, data_dir)
+                        update_scan_run_manifest(manifest, db_path)
+                        write_manifest_file(manifest, data_dir)
+                        while not control.fallback_decision_event.is_set():
+                            if control.cancel_event.is_set():
+                                manifest["status"] = "cancelled"
+                                run_nmap = False
+                                break
+                            sleep_fn(0.2)
+                        if run_nmap:
+                            manifest["fallback_decision"] = control.fallback_decision
+                            manifest["fallback_decided_by"] = control.fallback_decided_by
+                            manifest["fallback_authorization_note"] = (
+                                control.fallback_authorization_note
+                            )
+                            manifest["fallback_decided_at"] = utc_now()
+                            if control.fallback_decision == "approve":
+                                apply_fping_fallback(manifest)
+                                manifest["status"] = "running"
+                                manifest["discovery_note"] = (
+                                    "FPING found no responsive hosts. Full Nmap fallback "
+                                    f"approved by {control.fallback_decided_by}: "
+                                    f"{control.fallback_authorization_note}"
+                                )
+                                deadline = time.monotonic() + int(manifest["timeout_seconds"])
+                                if manifest["capture_requested"]:
+                                    control.capture_process = popen_factory(
+                                        manifest["capture_command_argv"],
+                                        cwd=run_dir,
+                                        stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=capture_error_handle,
+                                        start_new_session=True,
+                                    )
+                                    sleep_fn(0.25)
+                                    capture_exit = control.capture_process.poll()
+                                    if capture_exit is not None:
+                                        raise RuntimeError(
+                                            "tcpdump exited before the approved fallback "
+                                            f"with status {capture_exit}"
+                                        )
+                            else:
+                                manifest["status"] = "completed_without_nmap"
+                                manifest["discovery_note"] = (
+                                    "FPING found no responsive hosts. "
+                                    f"{control.fallback_decided_by} chose to finish without "
+                                    f"Nmap fallback: {control.fallback_authorization_note}"
+                                )
+                                exit_code = 0
+                                run_nmap = False
+                            update_scan_run_manifest(manifest, db_path)
+                            write_manifest_file(manifest, data_dir)
 
             if run_nmap:
                 control.nmap_process = popen_factory(
@@ -1218,6 +1427,125 @@ def execute_scan_run(
         update_scan_run_manifest(manifest, db_path)
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
+
+
+def launch_scan_run(
+    request: ScanRunRequest,
+    *,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+    interfaces: set[str] | None = None,
+) -> dict:
+    """Queue one scan through the same capacity gate used by manual and scheduled runs."""
+    with ACTIVE_RUNS_LOCK:
+        if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
+            raise RuntimeError("Another scan is already running")
+        manifest = prepare_scan_run(request, db_path, interfaces)
+        control = RunControl()
+        ACTIVE_RUNS[manifest["run_id"]] = control
+    try:
+        worker = threading.Thread(
+            target=execute_scan_run,
+            args=(manifest["run_id"], control),
+            kwargs={"db_path": db_path, "data_dir": data_dir},
+            daemon=True,
+            name=f"scan-{manifest['run_id'][:8]}",
+        )
+        worker.start()
+    except Exception:
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(manifest["run_id"], None)
+        manifest["status"] = "failed"
+        manifest["error"] = "The scan worker could not be started"
+        update_scan_run_manifest(manifest, db_path)
+        raise
+    return manifest
+
+
+def _scheduled_request(schedule: dict) -> ScanRunRequest:
+    return ScanRunRequest(
+        operator=schedule["created_by"],
+        created_by=schedule["created_by"],
+        scheduled=True,
+        scheduled_by=schedule["created_by"],
+        executed_by="scheduler",
+        name=schedule["name"],
+        reason=schedule["reason"],
+        originating_host=schedule["originating_host"],
+        interface=schedule["interface"],
+        profile=schedule["profile_name"],
+        profile_id=schedule["profile_id"],
+        profile_version=schedule["profile_version"],
+        targets=schedule["targets"],
+        no_strike=schedule.get("no_strike") or [],
+        capture=True,
+        timeout_seconds=int(schedule.get("timeout_seconds") or 900),
+        fallback_policy=schedule.get("fallback_policy", "require_approval"),
+    )
+
+
+def record_schedule_dispatch(
+    schedule: dict,
+    run: dict,
+    *,
+    advance: bool,
+    db_path: Path = DB_PATH,
+) -> dict:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    schedule["last_run_id"] = run["run_id"]
+    schedule["last_run_at"] = now.isoformat()
+    schedule["last_run_status"] = run["status"]
+    schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
+    schedule["last_dispatch_note"] = "queued"
+    if advance:
+        following = next_schedule_time(schedule, now)
+        schedule["next_run_at"] = following.isoformat() if following else None
+        if following is None:
+            schedule["enabled"] = False
+    return _store_scan_schedule(schedule, db_path)
+
+
+def run_scan_schedule_now(schedule_id: str, db_path: Path = DB_PATH) -> dict:
+    schedule = get_scan_schedule(schedule_id, db_path)
+    if schedule is None:
+        raise KeyError("Scan schedule not found")
+    manifest = launch_scan_run(_scheduled_request(schedule), db_path=db_path)
+    record_schedule_dispatch(schedule, manifest, advance=False, db_path=db_path)
+    return manifest
+
+
+def dispatch_due_schedules(
+    now: datetime | None = None, db_path: Path = DB_PATH
+) -> list[dict]:
+    """Dispatch at most one due schedule because the analyzer permits one active scan."""
+    moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    dispatched = []
+    due = [
+        schedule for schedule in list_scan_schedules(db_path)
+        if schedule.get("enabled") and schedule.get("next_run_at")
+        and _as_utc(schedule["next_run_at"]) <= moment
+    ]
+    due.sort(key=lambda item: item["next_run_at"])
+    for schedule in due[:1]:
+        try:
+            manifest = launch_scan_run(_scheduled_request(schedule), db_path=db_path)
+        except RuntimeError:
+            schedule["last_dispatch_note"] = "waiting_for_scanner"
+            _store_scan_schedule(schedule, db_path)
+            break
+        record_schedule_dispatch(schedule, manifest, advance=True, db_path=db_path)
+        dispatched.append(manifest)
+    return dispatched
+
+
+def schedule_worker(stop_event: threading.Event, interval_seconds: float = 15.0) -> None:
+    while not stop_event.is_set():
+        try:
+            dispatch_due_schedules()
+        except Exception:
+            # One malformed or unavailable schedule must not stop future checks.
+            pass
+        stop_event.wait(interval_seconds)
 
 
 def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
@@ -1391,6 +1719,28 @@ def clone_saved_scan_profile(profile_id: str, request: ScanProfileClone) -> dict
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/scan-profiles/{profile_id}/delete-challenge")
+def scan_profile_delete_challenge(profile_id: str) -> dict:
+    profile = get_scan_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Scan profile not found")
+    if profile["built_in"]:
+        raise HTTPException(status_code=403, detail="Built-in profiles cannot be deleted")
+    return issue_delete_challenge("profile", profile_id)
+
+
+@router.post("/scan-profiles/{profile_id}/delete")
+def delete_saved_scan_profile(profile_id: str, confirmation: DeleteConfirmation) -> dict:
+    try:
+        return delete_scan_profile(profile_id, confirmation.confirmation)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan profile not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @router.get("/scan-schedules")
 def scan_schedule_history() -> list[dict]:
     return list_scan_schedules()
@@ -1404,6 +1754,53 @@ def save_scan_schedule(request: ScanScheduleCreate) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/scan-schedules/{schedule_id}/state")
+def change_scan_schedule_state(schedule_id: str, request: ScheduleStateChange) -> dict:
+    try:
+        return set_scan_schedule_enabled(schedule_id, request.enabled)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
+
+
+@router.post("/scan-schedules/{schedule_id}/profile")
+def repin_scan_schedule_profile(schedule_id: str, request: ScheduleProfileChange) -> dict:
+    try:
+        return change_scan_schedule_profile(schedule_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scan-schedules/{schedule_id}/run", status_code=202)
+def run_saved_scan_schedule(schedule_id: str) -> dict:
+    try:
+        return run_scan_schedule_now(schedule_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scan-schedules/{schedule_id}/delete-challenge")
+def scan_schedule_delete_challenge(schedule_id: str) -> dict:
+    if get_scan_schedule(schedule_id) is None:
+        raise HTTPException(status_code=404, detail="Scan schedule not found")
+    return issue_delete_challenge("schedule", schedule_id)
+
+
+@router.post("/scan-schedules/{schedule_id}/delete")
+def delete_saved_scan_schedule(schedule_id: str, confirmation: DeleteConfirmation) -> dict:
+    try:
+        return delete_scan_schedule(schedule_id, confirmation.confirmation)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 @router.post("/scan-runs/plans", status_code=201)
 def create_scan_run_plan(plan: ScanRunPlan) -> dict:
     try:
@@ -1414,31 +1811,12 @@ def create_scan_run_plan(plan: ScanRunPlan) -> dict:
 
 @router.post("/scan-runs", status_code=202)
 def start_scan_run(request: ScanRunRequest) -> dict:
-    with ACTIVE_RUNS_LOCK:
-        if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
-            raise HTTPException(status_code=409, detail="Another scan is already running")
-        try:
-            manifest = prepare_scan_run(request)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        control = RunControl()
-        ACTIVE_RUNS[manifest["run_id"]] = control
     try:
-        worker = threading.Thread(
-            target=execute_scan_run,
-            args=(manifest["run_id"], control),
-            daemon=True,
-            name=f"scan-{manifest['run_id'][:8]}",
-        )
-        worker.start()
-    except Exception:
-        with ACTIVE_RUNS_LOCK:
-            ACTIVE_RUNS.pop(manifest["run_id"], None)
-        manifest["status"] = "failed"
-        manifest["error"] = "The scan worker could not be started"
-        update_scan_run_manifest(manifest)
-        raise
-    return manifest
+        return launch_scan_run(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-runs/{run_id}/fallback-decision", status_code=202)
