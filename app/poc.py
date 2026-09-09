@@ -888,6 +888,10 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "last_run_at": None,
         "last_run_status": None,
         "last_changed_by": request.created_by,
+        "conflict_count": 0,
+        "conflict_flagged": False,
+        "last_conflict_at": None,
+        "last_conflict_key": None,
         "batch_status": None,
         "active_batch_id": None,
         "active_chunk_number": None,
@@ -1710,8 +1714,11 @@ def execute_schedule_batch(
                     )
                     break
                 except RuntimeError:
-                    schedule["last_dispatch_note"] = "Waiting for the analyzer scanner"
-                    _store_scan_schedule(schedule, db_path)
+                    record_schedule_conflict(
+                        schedule,
+                        f"batch:{batch_id}",
+                        db_path,
+                    )
                     sleep_fn(2)
             schedule["last_run_id"] = run["run_id"]
             schedule["last_run_at"] = utc_now()
@@ -1835,6 +1842,21 @@ def run_scan_schedule_now(schedule_id: str, db_path: Path = DB_PATH) -> dict:
     )
 
 
+def record_schedule_conflict(
+    schedule: dict,
+    conflict_key: str,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Record one distinct delayed occurrence without counting scheduler retries."""
+    if schedule.get("last_conflict_key") != conflict_key:
+        schedule["conflict_count"] = int(schedule.get("conflict_count") or 0) + 1
+        schedule["last_conflict_key"] = conflict_key
+        schedule["last_conflict_at"] = utc_now()
+        schedule["conflict_flagged"] = schedule["conflict_count"] > 3
+    schedule["last_dispatch_note"] = "Waiting for the analyzer scanner"
+    return _store_scan_schedule(schedule, db_path)
+
+
 def dispatch_due_schedules(
     now: datetime | None = None, db_path: Path = DB_PATH
 ) -> list[dict]:
@@ -1856,8 +1878,11 @@ def dispatch_due_schedules(
                 schedule["schedule_id"], advance_schedule=True, db_path=db_path
             )
         except RuntimeError:
-            schedule["last_dispatch_note"] = "waiting_for_scanner"
-            _store_scan_schedule(schedule, db_path)
+            record_schedule_conflict(
+                schedule,
+                f"scheduled:{schedule['next_run_at']}",
+                db_path,
+            )
             break
         dispatched.append(batch)
     return dispatched
