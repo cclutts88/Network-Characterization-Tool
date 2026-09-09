@@ -96,7 +96,7 @@ def test_combined_tcp_udp_package_supports_fping_and_traceroute():
     with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
         linux_script = archive.read("run-linux.sh").decode()
         manifest = archive.read("manifest.json").decode()
-    assert "fping -a -q -f" in linux_script
+    assert "fping -a -f" in linux_script
     assert "-n -sS -sU" in linux_script
     assert '"discovery_mode": "fping"' in manifest
     assert '"traceroute": true' in manifest
