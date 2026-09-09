@@ -1,0 +1,28 @@
+# Runtime and sensitive evidence
+/data/
+/logs/
+/keys/
+/backups/
+*.db
+*.db-shm
+*.db-wal
+*.pcap
+*.pcapng
+*.pem
+*.key
+
+# Generated packages and images
+/offline-images/
+*.zip
+*.tar
+*.tar.gz
+*.iso
+
+# Local development
+/.venv/
+/.pytest_cache/
+/.coverage
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
