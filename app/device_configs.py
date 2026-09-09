@@ -140,6 +140,7 @@ class DeviceConfigPlan(BaseModel):
     vendor: Literal["vyos", "cisco", "juniper", "pfsense"]
     device_type: Literal["router", "firewall"]
     device_address: str = Field(min_length=1, max_length=255)
+    device_name: str | None = Field(default=None, max_length=100)
     username: str = Field(min_length=1, max_length=64)
     ssh_port: int = Field(default=22, ge=1, le=65535)
     key_path: str | None = Field(default=None, max_length=200)
@@ -161,6 +162,14 @@ class DeviceConfigPlan(BaseModel):
         if not HOST_RE.fullmatch(value):
             raise ValueError("Use a hostname or IP address without shell characters")
         return value
+
+    @field_validator("device_name")
+    @classmethod
+    def clean_device_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
     @field_validator("username")
     @classmethod
@@ -220,7 +229,7 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
     additional_commands = list(plan.additional_commands)
     commands = template_commands + additional_commands
     run_id = uuid.uuid4().hex
-    name = safe_name(plan.device_address)
+    name = safe_name(plan.device_name or plan.device_address)
     target = f"{plan.username}@{plan.device_address}"
     interactive = plan.authentication_mode == "password_prompt"
     ssh_args = ["ssh"]
@@ -260,6 +269,7 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "vendor": plan.vendor,
         "device_type": plan.device_type,
         "device_address": plan.device_address,
+        "device_name": plan.device_name,
         "username": plan.username,
         "accountability_interface": plan.accountability_interface,
         "capture_command": shlex.join([
@@ -295,6 +305,7 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "vendor": plan.vendor,
         "device_type": plan.device_type,
         "device_address": plan.device_address,
+        "device_name": plan.device_name,
         "username": plan.username,
         "ssh_port": plan.ssh_port,
         "authentication_mode": plan.authentication_mode,
@@ -1056,6 +1067,7 @@ async def upload_result(
     vendor: str = Form(...),
     device_type: str = Form(...),
     device_address: str = Form(...),
+    device_name: str = Form(""),
     result_file: UploadFile = File(...),
 ) -> dict:
     """Import an existing router/firewall configuration result without contacting a device."""
@@ -1069,6 +1081,9 @@ async def upload_result(
         raise HTTPException(status_code=422, detail="Operator, reason, originating host, and device address are required")
     if len(values["operator"]) > 100 or len(values["reason"]) > 500 or len(values["originating_host"]) > 255:
         raise HTTPException(status_code=422, detail="One or more upload fields exceed the allowed length")
+    clean_device_name = device_name.strip()
+    if len(clean_device_name) > 100:
+        raise HTTPException(status_code=422, detail="Device name is limited to 100 characters")
     if vendor not in VENDORS or device_type not in DEVICE_TYPES:
         raise HTTPException(status_code=422, detail="Choose a supported vendor and device type")
     if not HOST_RE.fullmatch(values["device_address"]):
@@ -1098,6 +1113,7 @@ async def upload_result(
         "vendor": vendor,
         "device_type": device_type,
         "device_address": values["device_address"],
+        "device_name": clean_device_name or None,
         "operation": "manual_upload",
         "status": "uploaded",
         "capture_required": False,
