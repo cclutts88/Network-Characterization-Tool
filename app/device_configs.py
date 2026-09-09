@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import re
+import select
 import shlex
+import shutil
 import socket
 import subprocess
+import tempfile
+import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 CONFIG_DIR = DATA_DIR / "device-configs"
@@ -25,7 +31,9 @@ INTERFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ARTIFACT_NAMES = ("manifest.json", "stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt")
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
+COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+PASSWORD_SESSION_TTL_SECONDS = 90
 
 VENDORS = ("vyos", "cisco", "juniper", "pfsense")
 DEVICE_TYPES = ("router", "firewall")
@@ -125,6 +133,7 @@ class DeviceConfigPlan(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     ssh_port: int = Field(default=22, ge=1, le=65535)
     key_path: str | None = Field(default=None, max_length=200)
+    authentication_mode: Literal["password_prompt", "key"] = "key"
     accountability_interface: str = Field(min_length=1, max_length=64)
 
     @field_validator("operator", "reason", "originating_host", "device_address", "username")
@@ -170,13 +179,21 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
     run_id = uuid.uuid4().hex
     name = safe_name(plan.device_address)
     target = f"{plan.username}@{plan.device_address}"
-    ssh_args = [
-        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-        "-o", "StrictHostKeyChecking=accept-new", "-p", str(plan.ssh_port),
+    interactive = plan.authentication_mode == "password_prompt"
+    ssh_args = ["ssh"]
+    if not interactive:
+        ssh_args += ["-o", "BatchMode=yes"]
+    ssh_args += [
+        "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new",
+        "-p", str(plan.ssh_port),
     ]
     if plan.key_path:
         ssh_args += ["-o", "IdentitiesOnly=yes", "-i", plan.key_path]
-    if plan.vendor == "vyos":
+    if interactive:
+        remote_input = None
+        ssh_args += [target]
+        ssh_command = shlex.join(ssh_args)
+    elif plan.vendor == "vyos":
         remote = "vbash -s"
         remote_input = "\n".join(
             ["source /opt/vyatta/etc/functions/script-template"]
@@ -212,6 +229,8 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "remote_input": remote_input,
         "scp_command": shlex.join(scp_args),
         "remote_output_path": f"/tmp/{local_file}",
+        "local_output_name": local_file,
+        "authentication_mode": plan.authentication_mode,
         "notes": "The command set is read-only except for session-only terminal pagination settings on Cisco devices.",
     }
 
@@ -228,6 +247,8 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "device_address": plan.device_address,
         "username": plan.username,
         "ssh_port": plan.ssh_port,
+        "authentication_mode": plan.authentication_mode,
+        "credentials_stored": False,
         "accountability_interface": plan.accountability_interface,
         "capture_required": True,
         "capture_command": preview["capture_command"],
@@ -331,11 +352,301 @@ def capture_is_valid(run_dir: Path) -> bool:
     return path.is_file() and path.stat().st_size > 40
 
 
+class InteractivePasswordSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: SecretStr = Field(min_length=1, max_length=1024)
+
+
+@dataclass
+class InteractiveSshSession:
+    session_id: str
+    plan: DeviceConfigPlan
+    preview: dict
+    run_dir: Path
+    control_dir: Path
+    control_path: Path
+    master_process: subprocess.Popen[bytes]
+    pty_fd: int
+    capture_process: object
+    capture_stderr: object
+    manifest: dict
+    created_monotonic: float = field(default_factory=time.monotonic)
+    timer: threading.Timer | None = None
+
+
+_INTERACTIVE_SESSIONS: dict[str, InteractiveSshSession] = {}
+_INTERACTIVE_SESSIONS_LOCK = threading.Lock()
+
+
+def _transport_is_secure(request: Request) -> bool:
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    if forwarded == "https" or request.url.scheme == "https":
+        return True
+    if request.url.hostname in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    return os.environ.get("ALLOW_INSECURE_DEVICE_PASSWORDS", "").lower() in {"1", "true", "yes"}
+
+
+def _require_secure_password_transport(request: Request) -> None:
+    if not _transport_is_secure(request):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Interactive SSH passwords require HTTPS. Configure TLS for the analyzer before "
+                "using password-based device collection."
+            ),
+        )
+
+
+def _read_pty(session: InteractiveSshSession, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    output = bytearray()
+    while time.monotonic() < deadline:
+        if session.control_path.exists():
+            break
+        if session.master_process.poll() is not None:
+            break
+        ready, _, _ = select.select([session.pty_fd], [], [], 0.15)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(session.pty_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        output.extend(chunk)
+        text = output.decode(errors="replace")
+        if re.search(r"(?i)(password|verification code)[^:\r\n]*:\s*$", text):
+            break
+    return output.decode(errors="replace")[-4000:]
+
+
+def _control_check(session: InteractiveSshSession) -> bool:
+    if not session.control_path.exists():
+        return False
+    checked = subprocess.run(
+        [
+            "ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port),
+            "-O", "check", f"{session.plan.username}@{session.plan.device_address}",
+        ],
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    return checked.returncode == 0
+
+
+def _close_interactive_resources(session: InteractiveSshSession) -> None:
+    target = f"{session.plan.username}@{session.plan.device_address}"
+    if session.timer is not None:
+        session.timer.cancel()
+    if session.control_path.exists():
+        subprocess.run(
+            ["ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port), "-O", "exit", target],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    if session.master_process.poll() is None:
+        session.master_process.terminate()
+        try:
+            session.master_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            session.master_process.kill()
+            session.master_process.wait(timeout=3)
+    try:
+        os.close(session.pty_fd)
+    except OSError:
+        pass
+    stop_accountability_capture(session.capture_process, session.capture_stderr)
+    shutil.rmtree(session.control_dir, ignore_errors=True)
+
+
+def _finish_interactive_session(
+    session: InteractiveSshSession,
+    *,
+    status: str,
+    stderr: str,
+    failure_class: str | None,
+    exit_code: int | None = None,
+    extra: dict | None = None,
+) -> dict:
+    with _INTERACTIVE_SESSIONS_LOCK:
+        _INTERACTIVE_SESSIONS.pop(session.session_id, None)
+    _close_interactive_resources(session)
+    if failure_class != "accountability_capture_problem" and not capture_is_valid(session.run_dir):
+        status = "failed"
+        failure_class = "accountability_capture_problem"
+        stderr = (stderr + "\n" if stderr else "") + "Mandatory tcpdump accountability did not produce a valid PCAP."
+    stdout_path = session.run_dir / "stdout.txt"
+    stderr_path = session.run_dir / "stderr.txt"
+    if not stdout_path.exists():
+        stdout_path.write_text("")
+    stderr_path.write_text(stderr[:50_000])
+    session.manifest.update(
+        {
+            "status": status,
+            "completed_at": utc_now(),
+            "exit_code": exit_code,
+            "failure_class": failure_class,
+            "credentials_stored": False,
+        }
+    )
+    if extra:
+        session.manifest.update(extra)
+    (session.run_dir / "manifest.json").write_text(json.dumps(session.manifest, indent=2) + "\n")
+    stdout = stdout_path.read_text(errors="replace")[:200_000]
+    return {
+        **session.manifest,
+        "stdout": stdout,
+        "stderr": stderr[:50_000],
+        "artifacts": artifact_records(session.preview["run_id"], session.run_dir),
+    }
+
+
+def _expire_interactive_session(session_id: str) -> None:
+    with _INTERACTIVE_SESSIONS_LOCK:
+        session = _INTERACTIVE_SESSIONS.get(session_id)
+    if session is None or time.monotonic() - session.created_monotonic < PASSWORD_SESSION_TTL_SECONDS:
+        return
+    _finish_interactive_session(
+        session,
+        status="expired",
+        stderr="The password prompt expired before the operator completed authentication.",
+        failure_class="authentication_expired",
+    )
+
+
+def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
+    return [
+        "ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port),
+        f"{session.plan.username}@{session.plan.device_address}",
+    ]
+
+
+def _run_interactive_collection(session: InteractiveSshSession) -> dict:
+    plan = session.plan
+    preview = session.preview
+    target = f"{plan.username}@{plan.device_address}"
+    local_output = session.run_dir / preview["local_output_name"]
+    remote_output = preview["remote_output_path"]
+    stderr_parts: list[str] = []
+    exit_code: int | None = None
+    transfer_method = "ssh_stdout"
+    cleanup_status = "not_required"
+    remote_created = False
+    try:
+        if plan.vendor in {"vyos", "pfsense"}:
+            transfer_method = "scp_control_session"
+            remote_created = True
+            if plan.vendor == "vyos":
+                remote_input = "\n".join(
+                    ["source /opt/vyatta/etc/functions/script-template"]
+                    + [f"run {command}" for command in preview["commands"]]
+                    + ["exit"]
+                ) + "\n"
+                remote_command = f"vbash -s > {shlex.quote(remote_output)}"
+            else:
+                remote_input = None
+                labeled_commands = []
+                for command in preview["commands"]:
+                    labeled_commands.extend([f"printf '\\n===== {command} =====\\n'", command])
+                remote_script = "{ " + "; ".join(labeled_commands) + f"; }} > {shlex.quote(remote_output)}"
+                remote_command = f"sh -c {shlex.quote(remote_script)}"
+            collected = subprocess.run(
+                _control_ssh_args(session) + [remote_command],
+                input=remote_input,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            exit_code = collected.returncode
+            if collected.stderr:
+                stderr_parts.append(collected.stderr[:20_000])
+            if collected.returncode != 0:
+                raise RuntimeError("The remote collection command returned a non-zero result.")
+            copied = subprocess.run(
+                [
+                    "scp", "-q", "-P", str(plan.ssh_port), "-o", f"ControlPath={session.control_path}",
+                    f"{target}:{remote_output}", str(local_output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if copied.stderr:
+                stderr_parts.append(copied.stderr[:20_000])
+            if copied.returncode != 0 or not local_output.is_file():
+                raise RuntimeError("SCP could not copy the collected configuration back to the analyzer.")
+        else:
+            collected = subprocess.run(
+                _control_ssh_args(session) + ["; ".join(preview["commands"])],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            exit_code = collected.returncode
+            local_output.write_text(collected.stdout[:200_000])
+            if collected.stderr:
+                stderr_parts.append(collected.stderr[:20_000])
+            if collected.returncode != 0:
+                raise RuntimeError("The remote collection command returned a non-zero result.")
+        (session.run_dir / "stdout.txt").write_text(local_output.read_text(errors="replace")[:200_000])
+        status = "completed"
+        failure_class = None
+    except subprocess.TimeoutExpired:
+        status = "timed_out"
+        failure_class = "network_connection_problem"
+        stderr_parts.append("The device collection timed out.")
+    except (FileNotFoundError, RuntimeError, OSError) as exc:
+        status = "failed"
+        failure_class = "remote_command_failed"
+        stderr_parts.append(str(exc))
+    finally:
+        if remote_created:
+            try:
+                cleaned = subprocess.run(
+                    _control_ssh_args(session) + [f"rm -f -- {shlex.quote(remote_output)}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                cleanup_status = "completed" if cleaned.returncode == 0 else "failed"
+                if cleaned.stderr:
+                    stderr_parts.append(cleaned.stderr[:4000])
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                cleanup_status = "failed"
+                stderr_parts.append("Remote temporary-file cleanup could not be confirmed.")
+    return _finish_interactive_session(
+        session,
+        status=status,
+        stderr="\n".join(part.strip() for part in stderr_parts if part.strip()),
+        failure_class=failure_class,
+        exit_code=exit_code,
+        extra={
+            "transfer_method": transfer_method,
+            "remote_temp_created": remote_created,
+            "remote_cleanup_status": cleanup_status,
+            "local_output_name": preview["local_output_name"],
+        },
+    )
+
+
 def artifact_records(run_id: str, run_dir: Path) -> list[dict]:
     names = list(ARTIFACT_NAMES)
     names.extend(
         path.name for path in sorted(run_dir.glob("uploaded-*"))
         if path.is_file() and UPLOADED_ARTIFACT_RE.fullmatch(path.name)
+    )
+    names.extend(
+        path.name for path in sorted(run_dir.glob("*-config.txt"))
+        if path.is_file() and COLLECTION_ARTIFACT_RE.fullmatch(path.name)
     )
     return [
         {
@@ -374,9 +685,189 @@ def preview(plan: DeviceConfigPlan) -> dict:
     return value
 
 
+@router.post("/interactive/start")
+def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
+    """Open a short-lived SSH control session and stop at the device password prompt."""
+    _require_secure_password_transport(request)
+    if plan.authentication_mode != "password_prompt":
+        raise HTTPException(status_code=422, detail="Choose password-prompt authentication for this workflow")
+    preview_data = build_plan(plan)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    run_dir = CONFIG_DIR / preview_data["run_id"]
+    run_dir.mkdir(parents=True, exist_ok=False)
+    manifest = manifest_for(
+        plan,
+        preview_data,
+        "waiting_for_password",
+        operation="interactive_configuration_pull",
+        credential_transport="https",
+        credential_retention="none",
+    )
+    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    capture_process = None
+    capture_stderr = None
+    control_dir: Path | None = None
+    master_fd: int | None = None
+    slave_fd: int | None = None
+    master_process: subprocess.Popen[bytes] | None = None
+    try:
+        capture_process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
+        control_dir = Path(tempfile.mkdtemp(prefix=f"nct-ssh-{preview_data['run_id'][:12]}-", dir="/tmp"))
+        control_dir.chmod(0o700)
+        control_path = control_dir / "control.sock"
+        master_fd, slave_fd = pty.openpty()
+        target = f"{plan.username}@{plan.device_address}"
+        master_args = [
+            "ssh", "-M", "-N", "-T",
+            "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
+            "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
+            "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
+            "-o", "PreferredAuthentications=keyboard-interactive,password",
+            "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
+            "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
+            "-p", str(plan.ssh_port), target,
+        ]
+        master_process = subprocess.Popen(
+            master_args,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        slave_fd = None
+        session_id = uuid.uuid4().hex
+        session = InteractiveSshSession(
+            session_id=session_id,
+            plan=plan,
+            preview=preview_data,
+            run_dir=run_dir,
+            control_dir=control_dir,
+            control_path=control_path,
+            master_process=master_process,
+            pty_fd=master_fd,
+            capture_process=capture_process,
+            capture_stderr=capture_stderr,
+            manifest=manifest,
+        )
+        prompt_output = _read_pty(session, 12)
+        if _control_check(session):
+            return _run_interactive_collection(session)
+        if not re.search(r"(?i)(password|verification code)[^:\r\n]*:\s*$", prompt_output):
+            message = "SSH did not present a supported password prompt. Check reachability, the username, and device SSH settings."
+            if "permission denied" in prompt_output.lower():
+                message = "The device rejected password authentication for this account."
+            return _finish_interactive_session(
+                session,
+                status="failed",
+                stderr=message,
+                failure_class="authentication_prompt_failed",
+                exit_code=master_process.poll(),
+            )
+        with _INTERACTIVE_SESSIONS_LOCK:
+            _INTERACTIVE_SESSIONS[session_id] = session
+        timer = threading.Timer(PASSWORD_SESSION_TTL_SECONDS + 1, _expire_interactive_session, args=(session_id,))
+        timer.daemon = True
+        session.timer = timer
+        timer.start()
+        return {
+            "status": "waiting_for_password",
+            "session_id": session_id,
+            "run_id": preview_data["run_id"],
+            "device_address": plan.device_address,
+            "username": plan.username,
+            "ssh_port": plan.ssh_port,
+            "expires_in_seconds": PASSWORD_SESSION_TTL_SECONDS,
+            "message": f"SSH is waiting for the password for {target}.",
+        }
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        if slave_fd is not None:
+            os.close(slave_fd)
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+        if master_process is not None and master_process.poll() is None:
+            master_process.terminate()
+        stop_accountability_capture(capture_process, capture_stderr)
+        if control_dir is not None:
+            shutil.rmtree(control_dir, ignore_errors=True)
+        manifest.update(
+            {
+                "status": "failed",
+                "completed_at": utc_now(),
+                "failure_class": "session_start_failed",
+                "credentials_stored": False,
+            }
+        )
+        (run_dir / "stderr.txt").write_text(str(exc)[:50_000])
+        (run_dir / "stdout.txt").write_text("")
+        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        raise HTTPException(status_code=502, detail="The interactive SSH session could not be started") from exc
+
+
+@router.post("/interactive/{session_id}/password")
+def submit_interactive_password(
+    session_id: str,
+    submission: InteractivePasswordSubmission,
+    request: Request,
+) -> dict:
+    """Send a one-time password to the waiting SSH PTY without persisting or logging it."""
+    _require_secure_password_transport(request)
+    with _INTERACTIVE_SESSIONS_LOCK:
+        session = _INTERACTIVE_SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="The SSH password prompt is no longer active")
+    if time.monotonic() - session.created_monotonic >= PASSWORD_SESSION_TTL_SECONDS:
+        _expire_interactive_session(session_id)
+        raise HTTPException(status_code=410, detail="The SSH password prompt expired; start a new session")
+    password_bytes = bytearray(submission.password.get_secret_value().encode("utf-8"))
+    try:
+        os.write(session.pty_fd, password_bytes + b"\n")
+    finally:
+        for index in range(len(password_bytes)):
+            password_bytes[index] = 0
+        del password_bytes
+        del submission
+    authentication_output = _read_pty(session, 15)
+    if not _control_check(session):
+        message = "SSH authentication failed. Recheck the username and password, then start a new session."
+        if session.master_process.poll() is None:
+            message = "SSH did not finish authentication before the prompt timed out."
+        return _finish_interactive_session(
+            session,
+            status="failed",
+            stderr=message,
+            failure_class="authentication_failed",
+            exit_code=session.master_process.poll(),
+            extra={"authentication_output_retained": False},
+        )
+    del authentication_output
+    return _run_interactive_collection(session)
+
+
+@router.post("/interactive/{session_id}/cancel")
+def cancel_interactive_session(session_id: str) -> dict:
+    with _INTERACTIVE_SESSIONS_LOCK:
+        session = _INTERACTIVE_SESSIONS.get(session_id)
+    if session is None:
+        return {"status": "closed", "message": "The SSH password prompt is already closed."}
+    result = _finish_interactive_session(
+        session,
+        status="cancelled",
+        stderr="The operator cancelled the SSH password prompt.",
+        failure_class="operator_cancelled",
+    )
+    return {"status": result["status"], "run_id": result["run_id"], "message": "The SSH session was closed."}
+
+
 @router.post("/preflight")
 def preflight(plan: DeviceConfigPlan) -> dict:
     """Validate the key and capture every non-interactive SSH access check."""
+    if plan.authentication_mode != "key":
+        raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     key = key_preflight(plan.key_path)
     result = {"key": key, "device_address": plan.device_address, "username": plan.username, "ssh_port": plan.ssh_port}
     if key["status"] in {"missing", "unreadable", "invalid"}:
@@ -432,6 +923,8 @@ def preflight(plan: DeviceConfigPlan) -> dict:
 
 @router.post("/execute")
 def execute(plan: DeviceConfigPlan) -> dict:
+    if plan.authentication_mode != "key":
+        raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     preview_data = build_plan(plan)
     key = key_preflight(plan.key_path)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -588,7 +1081,11 @@ def history(limit: int = Query(default=30, ge=1, le=100)) -> list[dict]:
 @router.get("/{run_id}/files/{filename}")
 def download_artifact(run_id: str, filename: str) -> FileResponse:
     """Download one allowlisted artifact from a recorded device collection."""
-    allowed_name = filename in ARTIFACT_NAMES or bool(UPLOADED_ARTIFACT_RE.fullmatch(filename))
+    allowed_name = (
+        filename in ARTIFACT_NAMES
+        or bool(UPLOADED_ARTIFACT_RE.fullmatch(filename))
+        or bool(COLLECTION_ARTIFACT_RE.fullmatch(filename))
+    )
     if not RUN_ID_RE.fullmatch(run_id) or not allowed_name:
         raise HTTPException(status_code=404, detail="Collection artifact was not found")
     path = CONFIG_DIR / run_id / filename
