@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from app.exports import host_summary_rows, port_level_rows, rows_to_csv, PORT_LEVEL_FIELDS
+from app.main import parse_xml
+
+
+SAMPLE_XML = b'''<?xml version="1.0"?>
+<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS -sU -p T:502,U:47808 10.20.30.0/24" startstr="Wed Sep 9 14:30:00 2026">
+  <scaninfo type="syn" protocol="tcp" numservices="1" services="502"/>
+  <scaninfo type="udp" protocol="udp" numservices="1" services="47808"/>
+  <host>
+    <status state="up" reason="arp-response"/>
+    <address addr="10.20.30.15" addrtype="ipv4"/>
+    <address addr="3C:52:82:11:22:33" addrtype="mac" vendor="Dell"/>
+    <hostnames><hostname name="plc-15" type="PTR"/></hostnames>
+    <ports>
+      <port protocol="tcp" portid="502"><state state="open" reason="syn-ack"/><service name="modbus" product="Modbus device" version="1"/></port>
+      <port protocol="udp" portid="47808"><state state="open" reason="udp-response"/><service name="bacnet"/></port>
+    </ports>
+    <os><osmatch name="Linux 5.x" accuracy="90"><osclass type="general purpose" vendor="Linux" osfamily="Linux" osgen="5.X"/></osmatch></os>
+  </host>
+  <runstats><finished timestr="Wed Sep 9 14:31:00 2026"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>'''
+
+
+def test_parser_surfaces_mac_hostname_protocol_and_coverage():
+    analysis = parse_xml(SAMPLE_XML)
+    host = analysis["hosts"][0]
+    assert host["mac"] == "3C:52:82:11:22:33"
+    assert host["vendor"] == "Dell"
+    assert host["hostname"] == "plc-15"
+    assert {port["protocol"] for port in host["ports"]} == {"tcp", "udp"}
+    assert all(port["state"] == "open" for port in host["ports"])
+    assert analysis["mac_count"] == 1
+    assert analysis["coverage"]["protocols"] == ["TCP", "UDP"]
+    assert analysis["coverage"]["dns_resolution_disabled"] is True
+
+
+def test_normalized_export_has_one_row_per_ip_protocol_port():
+    analysis = parse_xml(SAMPLE_XML)
+    port_rows = port_level_rows(analysis)
+    assert len(port_rows) == 2
+    assert {(row["ip"], row["protocol"], row["port"]) for row in port_rows} == {
+        ("10.20.30.15", "tcp", 502),
+        ("10.20.30.15", "udp", 47808),
+    }
+    assert len(host_summary_rows(analysis)) == 1
+    csv_bytes = rows_to_csv(port_rows, PORT_LEVEL_FIELDS)
+    assert b"protocol,port,port_state" in csv_bytes
+    assert b"10.20.30.15" in csv_bytes
