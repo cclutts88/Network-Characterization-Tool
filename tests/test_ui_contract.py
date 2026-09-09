@@ -17,6 +17,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "What this port scope includes" in html
     assert "102,502,789,1911,1962,2404" in html
     assert "FPING pre-scan" in html
+    assert 'id="fpingNote" class="hint hidden"' in html
+    assert "$('fpingNote').classList.toggle('hidden',!useFping)" in html
     assert "Collect traceroute paths" in html
     assert "normalizeCombinedScopes" in html
     assert 'id="fallbackApproval"' in html
@@ -26,6 +28,19 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "fallback-decision" in html
     assert "awaiting_fallback_approval" in html
     assert "exact_fallback_command" in html
+    assert "Delete profile" in html
+    assert "Scheduled scans" in html
+    assert "Use selected profile" in html
+    assert "Addresses per chunk" in html
+    assert "Pause between chunks (seconds)" in html
+    assert "chunk_delay_seconds" in html
+    assert "Chunks never overlap" in html
+    assert "Global no-strike safety list" in html
+    assert "Profiles cannot turn this protection off" in html
+    assert "/api/safety/no-strike" in html
+    assert "Remove a global no-strike entry" in html
+    assert "Pause and require operator approval before Nmap" in html
+    assert "/api/scan-schedules/" in html
     assert ".join('\n')" not in html
     assert r".join('\n')" in html
 

@@ -65,6 +65,58 @@ def test_preview_and_package_use_the_same_udp_settings_and_required_n():
     assert "UDP_Baseline_" in package.headers["content-disposition"]
 
 
+def test_global_no_strike_is_applied_to_packages_and_requires_confirmed_removal():
+    body = {
+        "name": "Protected Baseline",
+        "created_by": "analyst01",
+        "profile": "standard",
+        "terrain": [{"name": "Protected", "targets": ["192.0.2.0/30"]}],
+        "no_strike_mode": "none",
+        "no_strike": [],
+        "chunk_size": 16,
+    }
+    with TestClient(app) as client:
+        added = client.post(
+            "/api/safety/no-strike",
+            json={"entries": ["192.0.2.1"], "changed_by": "safety-officer"},
+        )
+        package = client.post("/api/packages", json=body)
+
+        assert added.status_code == 201
+        assert added.json()["entries"] == ["192.0.2.1/32"]
+        assert package.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+            targets = archive.read("targets/001-Protected.txt").decode().splitlines()
+            no_strike = archive.read("no-strike.txt").decode().splitlines()
+        assert "192.0.2.1" not in targets
+        assert no_strike == ["192.0.2.1"]
+
+        challenge = client.post(
+            "/api/safety/no-strike/remove-challenge", json=["192.0.2.1/32"]
+        )
+        rejected = client.post(
+            "/api/safety/no-strike/remove",
+            json={
+                "entries": ["192.0.2.1/32"],
+                "changed_by": "safety-officer",
+                "confirmation": "WRONG",
+            },
+        )
+        removed = client.post(
+            "/api/safety/no-strike/remove",
+            json={
+                "entries": ["192.0.2.1/32"],
+                "changed_by": "safety-officer",
+                "confirmation": challenge.json()["challenge"],
+            },
+        )
+
+    assert challenge.status_code == 200
+    assert rejected.status_code == 403
+    assert removed.status_code == 200
+    assert removed.json()["entries"] == []
+
+
 def test_combined_tcp_udp_package_supports_fping_and_traceroute():
     body = {
         "name": "ICS Combined",
