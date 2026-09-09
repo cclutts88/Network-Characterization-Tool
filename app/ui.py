@@ -156,8 +156,7 @@ function setCurrent(run){
   $('currentMethod').textContent=run.execution_method||'—';
   $('currentMetadata').textContent='Created by '+(run.created_by||run.operator||'—')+' · Executed by '+(run.executed_by||'—')+' · '+(run.targets||[]).join(', ')+' · '+coverageLabel(run);
   const note=run.discovery_note||'';$('currentDiscoveryNote').textContent=note;$('currentDiscoveryNote').classList.toggle('hidden',!note);
-  $('currentCommand').textContent=[run.exact_discovery_command?'Discovery: '+run.exact_discovery_command:'',run.exact_command?'Planned Nmap: '+run.exact_command:'',run.capture_requested?'Capture: '+(run.exact_capture_command||''):'Capture: not requested'].filter(Boolean).join('
-');
+  $('currentCommand').textContent=[run.exact_discovery_command?'Discovery: '+run.exact_discovery_command:'',run.exact_command?'Planned Nmap: '+run.exact_command:'',run.capture_requested?'Capture: '+(run.exact_capture_command||''):'Capture: not requested'].filter(Boolean).join('\n');
   const needsApproval=state==='awaiting_fallback_approval';$('fallbackApproval').classList.toggle('hidden',!needsApproval);
   $('fallbackCommand').textContent=run.exact_fallback_command||'Full-target command is not available.';
   if(changedRun){$('fallbackApprover').value='';$('fallbackNote').value=''}
