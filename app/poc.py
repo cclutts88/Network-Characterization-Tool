@@ -277,6 +277,22 @@ def expanded_discovery_targets(targets: list[str], no_strike: list[str]) -> list
     return addresses
 
 
+def apply_fping_fallback(manifest: dict) -> None:
+    """Retarget Nmap when ICMP-only discovery cannot see approved hosts."""
+    manifest["command_argv"] = build_nmap_argv(
+        manifest["profile"],
+        manifest["interface"],
+        include_no_strike=bool(manifest.get("no_strike")),
+        scan_options=manifest["profile_settings"],
+        target_file="targets.txt",
+    )
+    manifest["exact_command"] = shlex.join(manifest["command_argv"])
+    manifest["discovery_fallback_used"] = True
+    manifest["discovery_note"] = (
+        "FPING found no responsive hosts; Nmap fallback scanned the full approved target list."
+    )
+
+
 def build_tcpdump_argv(interface: str) -> list[str]:
     return [
         "tcpdump", "-i", interface, "-p", "-nn", "-U", "-s", "0",
@@ -1073,10 +1089,7 @@ def execute_scan_run(
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
                 if run_nmap and not alive_hosts:
-                    manifest["status"] = "completed"
-                    manifest["discovery_note"] = "FPING found no responsive hosts; Nmap was not started."
-                    exit_code = 0
-                    run_nmap = False
+                    apply_fping_fallback(manifest)
 
             if run_nmap:
                 control.nmap_process = popen_factory(
