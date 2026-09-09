@@ -25,6 +25,7 @@ from app.poc import (
     NoStrikeRemoval,
     NoStrikeUpdate,
     remove_global_no_strike,
+    record_schedule_conflict,
     schedule_target_chunks,
 )
 
@@ -223,6 +224,36 @@ def test_custom_hour_cadence_advances_by_operator_selected_hours(tmp_path):
 
     assert schedule["cadence_hours"] == 6
     assert following == first_run + timedelta(hours=6)
+
+
+def test_schedule_conflict_flag_counts_occurrences_not_retry_checks(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Conflict Tracking",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["198.51.100.10"],
+            interface="eth0",
+            cadence="daily",
+            first_run_at=datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc),
+        ),
+        db_path,
+    )
+
+    for _ in range(4):
+        schedule = record_schedule_conflict(schedule, "scheduled:occurrence-1", db_path)
+    assert schedule["conflict_count"] == 1
+    assert schedule["conflict_flagged"] is False
+
+    for occurrence in range(2, 5):
+        schedule = record_schedule_conflict(
+            schedule, f"scheduled:occurrence-{occurrence}", db_path
+        )
+    assert schedule["conflict_count"] == 4
+    assert schedule["conflict_flagged"] is True
+    assert schedule["last_conflict_at"]
 
 
 def test_global_no_strike_is_automatic_and_requires_confirmation_to_remove(tmp_path):
