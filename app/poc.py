@@ -128,8 +128,12 @@ class ScanScheduleCreate(BaseModel):
     targets: list[str] = Field(min_length=1)
     no_strike: list[str] = Field(default_factory=list)
     interface: str = Field(min_length=1, max_length=64)
-    cadence: Literal["once", "interval", "hourly", "daily", "weekly"] = "once"
+    cadence: Literal[
+        "once", "interval", "custom_hours", "hourly", "daily", "weekly"
+    ] = "once"
     first_run_at: datetime
+    cadence_hours: int = Field(default=2, ge=1, le=8760)
+    # Retained so schedules created by earlier builds remain readable.
     interval_minutes: int = Field(default=60, ge=5, le=10080)
     reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
     originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
@@ -805,6 +809,7 @@ def next_schedule_time(schedule: dict, after: datetime) -> datetime | None:
     current = _as_utc(schedule["next_run_at"])
     delta = {
         "interval": timedelta(minutes=int(schedule.get("interval_minutes") or 60)),
+        "custom_hours": timedelta(hours=int(schedule.get("cadence_hours") or 2)),
         "hourly": timedelta(hours=1),
         "daily": timedelta(days=1),
         "weekly": timedelta(weeks=1),
@@ -869,6 +874,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "cadence": request.cadence,
         "first_run_at": first_run.isoformat(),
         "next_run_at": first_run.isoformat(),
+        "cadence_hours": request.cadence_hours,
         "interval_minutes": request.interval_minutes,
         "reason": request.reason,
         "originating_host": request.originating_host,
