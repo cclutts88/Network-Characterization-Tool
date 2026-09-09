@@ -1108,6 +1108,15 @@ def execute_scan_run(
                 if run_nmap and not alive_hosts:
                     terminate_process(control.capture_process)
                     control.capture_process = None
+                    fallback_argv = build_nmap_argv(
+                        manifest["profile"],
+                        manifest["interface"],
+                        include_no_strike=bool(manifest.get("no_strike")),
+                        scan_options=manifest["profile_settings"],
+                        target_file="targets.txt",
+                    )
+                    manifest["fallback_command_argv"] = fallback_argv
+                    manifest["exact_fallback_command"] = shlex.join(fallback_argv)
                     manifest["status"] = "awaiting_fallback_approval"
                     manifest["fallback_approval_required"] = True
                     manifest["discovery_note"] = (
