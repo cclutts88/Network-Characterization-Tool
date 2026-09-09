@@ -148,6 +148,33 @@ def test_scheduler_splits_a_slash_24_into_six_sequential_chunks(tmp_path):
     assert len({address for chunk in chunks for address in chunk}) == 256
 
 
+def test_new_schedule_is_unchunked_unless_analyst_opts_in(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Continuous Terrain",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["198.51.100.0/24"],
+            interface="eth0",
+            cadence="daily",
+            first_run_at=datetime(2026, 9, 10, 2, 0, tzinfo=timezone.utc),
+            chunking_enabled=False,
+            chunk_size=50,
+            chunk_delay_seconds=30,
+        ),
+        db_path,
+    )
+
+    chunks = schedule_target_chunks(schedule, db_path)
+
+    assert schedule["chunking_enabled"] is False
+    assert schedule["chunk_delay_seconds"] == 0
+    assert len(chunks) == 1
+    assert len(chunks[0]) == 256
+
+
 def test_schedule_batch_waits_after_completion_and_advances(monkeypatch, tmp_path):
     db_path = tmp_path / "analyzer.db"
     now = datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc)

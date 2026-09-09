@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import CampaignSpec, TerrainSegment, app, build_scan_plan
 from app.device_configs import DeviceConfigPlan, _interactive_master_args
 
 
@@ -63,6 +63,36 @@ def test_preview_and_package_use_the_same_udp_settings_and_required_n():
     assert "53,161,47808" in preview.json()["copy_text"]
     assert package.status_code == 200
     assert "UDP_Baseline_" in package.headers["content-disposition"]
+
+
+def test_unchunked_slash_16_builds_one_continuous_scan():
+    spec = CampaignSpec(
+        name="Unchunked Lab",
+        profile="standard",
+        terrain=[TerrainSegment(name="Target", targets=["198.18.0.0/16"])],
+        no_strike_mode="none",
+        chunking_enabled=False,
+    )
+
+    _, _, chunks = build_scan_plan(spec)
+
+    assert len(chunks) == 1
+    assert len(chunks[0]["addresses"]) == 65536
+
+
+def test_chunking_must_be_explicitly_enabled_for_new_requests():
+    spec = CampaignSpec(
+        name="Chunked Lab",
+        profile="standard",
+        terrain=[TerrainSegment(name="Target", targets=["198.51.100.0/24"])],
+        no_strike_mode="none",
+        chunking_enabled=True,
+        chunk_size=50,
+    )
+
+    _, _, chunks = build_scan_plan(spec)
+
+    assert [len(chunk["addresses"]) for chunk in chunks] == [50, 50, 50, 50, 50, 6]
 
 
 def test_global_no_strike_is_applied_to_packages_and_requires_confirmed_removal():

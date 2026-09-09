@@ -32,6 +32,13 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Scheduled scans" in html
     assert "Use selected profile" in html
     assert "Addresses per chunk" in html
+    assert "Use chunked scan strategy" in html
+    assert 'id="chunkSizeBox" class="span-3 hidden"' in html
+    assert 'id="scheduleChunkDelayBox" class="span-4 hidden"' in html
+    assert "chunking_enabled" in html
+    assert "showChunkingOptions" in html
+    assert "size===256" in html
+    assert "One continuous unchunked scan queued" in html
     assert "Pause between chunks (seconds)" in html
     assert "Custom hours" in html
     assert "Hours between scans" in html
