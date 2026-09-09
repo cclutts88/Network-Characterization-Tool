@@ -1,0 +1,22 @@
+Nmap Terrain Analyzer - clean source build
+
+This source tree intentionally contains no scan history, database, packet
+captures, logs, private keys, cached runtime files, or home-range data.
+
+Connected build:
+  docker compose up -d --build
+
+Open:
+  http://SERVER-IP
+
+For a new air-gapped release, rebuild the Linux/AMD64 Docker image from this
+source, export it, and place it under offline-images/ before packaging. The
+image from the earlier 2026-09-08 bundle predates these enhancements and is not
+included in this working source deliverable.
+
+Runtime directories:
+  data/
+  logs/
+  keys/
+
+These directories and common evidence/key formats are excluded from Git.
