@@ -268,6 +268,8 @@ def test_schedule_batch_waits_after_completion_and_advances(monkeypatch, tmp_pat
 
     assert [len(item["targets"]) for item in captured] == [3, 3, 2]
     assert [item["chunk_number"] for item in captured] == [1, 2, 3]
+    assert [item["batch_hosts_total"] for item in captured] == [8, 8, 8]
+    assert [item["batch_hosts_completed_before"] for item in captured] == [0, 3, 6]
     assert all(item["scheduled"] is True for item in captured)
     assert all(item["profile_id"] == "builtin-standard" for item in captured)
     assert waits == [30, 30]

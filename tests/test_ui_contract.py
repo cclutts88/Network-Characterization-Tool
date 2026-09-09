@@ -50,6 +50,10 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "conflict_flagged" in html
     assert "chunk_delay_seconds" in html
     assert "Chunks never overlap" in html
+    assert 'id="currentProgress"' in html
+    assert 'role="progressbar"' in html
+    assert "FPING discovery" in html
+    assert "batch_hosts_completed" in html
     assert 'class="delete-modal hidden"' in html
     assert 'role="dialog"' in html
     assert 'id="deleteStatus"' in html

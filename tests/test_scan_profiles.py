@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.poc import FallbackDecision, apply_fping_fallback
+from app.poc import FallbackDecision, apply_fping_fallback, build_nmap_argv
 from app.scan_profiles import build_nmap_flags, scan_display_name
 
 
@@ -28,6 +28,18 @@ def test_every_scan_mode_preserves_required_n(options, required):
     flags = build_nmap_flags(options)
     assert required.issubset(set(flags))
     assert flags.count("-n") == 1
+
+
+def test_generated_nmap_command_enables_real_host_progress_statistics():
+    command = build_nmap_argv(
+        "Standard",
+        "eth0",
+        include_no_strike=False,
+        scan_options={"protocol": "tcp", "tcp_scope": "common"},
+    )
+
+    assert command[command.index("--stats-every") + 1] == "2s"
+    assert "-n" in command
 
 
 def test_combined_scan_uses_independent_protocol_port_scopes():
@@ -81,6 +93,7 @@ def test_approved_fping_fallback_scans_the_full_approved_scope():
     assert command[command.index("-iL") + 1] == "targets.txt"
     assert command[command.index("--excludefile") + 1] == "no-strike.txt"
     assert "-n" in command
+    assert command[command.index("--stats-every") + 1] == "2s"
     assert manifest["discovery_fallback_used"] is True
     assert "discovery_note" not in manifest
 
