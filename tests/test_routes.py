@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import zipfile
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -58,6 +61,43 @@ def test_preview_and_package_use_the_same_udp_settings_and_required_n():
     assert "53,161,47808" in preview.json()["copy_text"]
     assert package.status_code == 200
     assert "UDP_Baseline_" in package.headers["content-disposition"]
+
+
+def test_combined_tcp_udp_package_supports_fping_and_traceroute():
+    body = {
+        "name": "ICS Combined",
+        "created_by": "analyst01",
+        "profile": "Custom",
+        "scan_options": {
+            "protocol": "tcp_udp",
+            "tcp_scope": "common",
+            "udp_scope": "ics",
+            "discovery_mode": "fping",
+            "traceroute": True,
+            "timing": "conservative",
+        },
+        "terrain": [{"name": "ICS", "targets": ["192.0.2.0/30"]}],
+        "no_strike_mode": "none",
+        "no_strike": [],
+        "chunk_size": 16,
+    }
+    with TestClient(app) as client:
+        preview = client.post("/api/preview", json=body)
+        package = client.post("/api/packages", json=body)
+
+    assert preview.status_code == 200
+    command = preview.json()["copy_text"]
+    assert "-n -sS -sU" in command
+    assert "--traceroute" in command
+    assert "T:" in command and ",U:2222,47808" in command
+    assert package.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+        linux_script = archive.read("run-linux.sh").decode()
+        manifest = archive.read("manifest.json").decode()
+    assert "fping -a -q -f" in linux_script
+    assert "-n -sS -sU" in linux_script
+    assert '"discovery_mode": "fping"' in manifest
+    assert '"traceroute": true' in manifest
 
 
 def test_import_history_raw_xml_and_both_csv_exports():

@@ -40,6 +40,21 @@ def test_combined_scan_uses_independent_protocol_port_scopes():
     assert "47808" in expression
 
 
+def test_fping_and_traceroute_options_are_retained_without_losing_required_n():
+    flags = build_nmap_flags(
+        {
+            "protocol": "tcp_udp",
+            "tcp_scope": "common",
+            "udp_scope": "ics",
+            "discovery_mode": "fping",
+            "traceroute": True,
+        }
+    )
+    assert "-n" in flags
+    assert "-Pn" in flags
+    assert "--traceroute" in flags
+
+
 def test_combined_top_port_counts_are_rejected_instead_of_misrepresented():
     with pytest.raises(ValueError, match="independently"):
         build_nmap_flags(

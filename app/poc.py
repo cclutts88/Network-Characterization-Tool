@@ -56,6 +56,8 @@ ARTIFACT_FILES = {
     "stderr": ("stderr.txt", "text/plain"),
     "pcap": ("capture.pcap", "application/vnd.tcpdump.pcap"),
     "capture_stderr": ("capture-stderr.txt", "text/plain"),
+    "fping_alive": ("fping-alive.txt", "text/plain"),
+    "fping_stderr": ("fping-stderr.txt", "text/plain"),
 }
 
 router = APIRouter(prefix="/api", tags=["poc"])
@@ -76,6 +78,8 @@ class ScanOptions(BaseModel):
     service_detection: bool = True
     os_detection: bool = True
     timing: Literal["conservative", "normal", "fast"] = "fast"
+    discovery_mode: Literal["nmap", "fping"] = "nmap"
+    traceroute: bool = False
 
     def normalized(self) -> dict:
         return normalize_scan_options(self.model_dump())
@@ -185,6 +189,7 @@ class DeleteConfirmation(BaseModel):
 @dataclass
 class RunControl:
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    discovery_process: object | None = None
     nmap_process: object | None = None
     capture_process: object | None = None
 
@@ -237,6 +242,7 @@ def build_nmap_argv(
     *,
     include_no_strike: bool,
     scan_options: dict | None = None,
+    target_file: str = "targets.txt",
 ) -> list[str]:
     if scan_options is None:
         profile_id = LEGACY_PROFILE_IDS.get(profile, profile)
@@ -247,11 +253,28 @@ def build_nmap_argv(
         if builtin is None:
             raise ValueError(f"Unknown scan profile: {profile}")
         scan_options = builtin["settings"]
-    argv = ["nmap", *build_nmap_flags(scan_options), "-e", interface, "-iL", "targets.txt"]
+    argv = ["nmap", *build_nmap_flags(scan_options), "-e", interface, "-iL", target_file]
     if include_no_strike:
         argv.extend(["--excludefile", "no-strike.txt"])
     argv.extend(["-oX", "scan.xml"])
     return argv
+
+
+def build_fping_argv(interface: str) -> list[str]:
+    """Build the optional fast discovery command from a pre-certified address list."""
+    return ["fping", "-a", "-q", "-I", interface, "-f", "discovery-targets.txt"]
+
+
+def expanded_discovery_targets(targets: list[str], no_strike: list[str]) -> list[str]:
+    """Expand a bounded target scope while preserving no-strike exclusions."""
+    excluded = [ipaddress.ip_network(item, strict=False) for item in no_strike]
+    addresses: list[str] = []
+    for raw in targets:
+        network = ipaddress.ip_network(raw, strict=False)
+        for address in network:
+            if not any(address in blocked for blocked in excluded):
+                addresses.append(str(address))
+    return addresses
 
 
 def build_tcpdump_argv(interface: str) -> list[str]:
@@ -273,12 +296,15 @@ def build_scan_run_manifest(
     no_strike = normalize_ipv4_networks(plan.no_strike, "no-strike") if plan.no_strike else []
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
+    use_fping = settings.get("discovery_mode") == "fping"
     nmap_argv = build_nmap_argv(
         profile_record["name"],
         plan.interface,
         include_no_strike=bool(no_strike),
         scan_options=settings,
+        target_file="fping-alive.txt" if use_fping else "targets.txt",
     )
+    discovery_argv = build_fping_argv(plan.interface) if use_fping else None
     capture_argv = build_tcpdump_argv(plan.interface) if capture else None
     created_at = utc_now()
     creator = plan.created_by or plan.operator
@@ -318,6 +344,9 @@ def build_scan_run_manifest(
         "no_strike": no_strike,
         "coverage": coverage,
         "capture_requested": capture,
+        "discovery_mode": settings.get("discovery_mode", "nmap"),
+        "discovery_command_argv": discovery_argv,
+        "exact_discovery_command": shlex.join(discovery_argv) if discovery_argv else None,
         "timeout_seconds": timeout_seconds,
         "command_argv": nmap_argv,
         "exact_command": shlex.join(nmap_argv),
@@ -964,6 +993,14 @@ def execute_scan_run(
     run_dir = run_directory(run_id, data_dir)
     run_dir.mkdir(parents=True, exist_ok=False)
     (run_dir / "targets.txt").write_text("\n".join(manifest["targets"]) + "\n", encoding="utf-8")
+    if manifest.get("discovery_mode") == "fping":
+        discovery_targets = expanded_discovery_targets(
+            manifest["targets"], manifest.get("no_strike") or []
+        )
+        (run_dir / "discovery-targets.txt").write_text(
+            "\n".join(discovery_targets) + ("\n" if discovery_targets else ""),
+            encoding="utf-8",
+        )
     if manifest["no_strike"]:
         (run_dir / "no-strike.txt").write_text(
             "\n".join(manifest["no_strike"]) + "\n", encoding="utf-8"
@@ -996,34 +1033,81 @@ def execute_scan_run(
                 if capture_exit is not None:
                     raise RuntimeError(f"tcpdump exited before the scan with status {capture_exit}")
 
-            control.nmap_process = popen_factory(
-                manifest["command_argv"],
-                cwd=run_dir,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_handle,
-                stderr=stderr_handle,
-                start_new_session=True,
-            )
-            while True:
-                exit_code = control.nmap_process.poll()
-                if exit_code is not None:
-                    manifest["status"] = "completed" if exit_code == 0 else "failed"
-                    break
-                if control.cancel_event.is_set():
-                    manifest["status"] = "cancelled"
-                    terminate_process(control.nmap_process)
+            run_nmap = True
+            if manifest.get("discovery_mode") == "fping":
+                with (
+                    (run_dir / "fping-alive.txt").open("wb") as alive_handle,
+                    (run_dir / "fping-stderr.txt").open("wb") as fping_error_handle,
+                ):
+                    control.discovery_process = popen_factory(
+                        manifest["discovery_command_argv"],
+                        cwd=run_dir,
+                        stdin=subprocess.DEVNULL,
+                        stdout=alive_handle,
+                        stderr=fping_error_handle,
+                        start_new_session=True,
+                    )
+                    while True:
+                        discovery_exit = control.discovery_process.poll()
+                        if discovery_exit is not None:
+                            if discovery_exit not in {0, 1}:
+                                raise RuntimeError(f"fping failed with status {discovery_exit}")
+                            break
+                        if control.cancel_event.is_set():
+                            manifest["status"] = "cancelled"
+                            terminate_process(control.discovery_process)
+                            run_nmap = False
+                            break
+                        if time.monotonic() >= deadline:
+                            manifest["status"] = "timed_out"
+                            terminate_process(control.discovery_process)
+                            run_nmap = False
+                            break
+                        sleep_fn(0.2)
+                alive_hosts = [
+                    line.strip()
+                    for line in (run_dir / "fping-alive.txt").read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()
+                    if line.strip()
+                ]
+                manifest["discovery_host_count"] = len(alive_hosts)
+                if run_nmap and not alive_hosts:
+                    manifest["status"] = "completed"
+                    manifest["discovery_note"] = "FPING found no responsive hosts; Nmap was not started."
+                    exit_code = 0
+                    run_nmap = False
+
+            if run_nmap:
+                control.nmap_process = popen_factory(
+                    manifest["command_argv"],
+                    cwd=run_dir,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    start_new_session=True,
+                )
+                while True:
                     exit_code = control.nmap_process.poll()
-                    break
-                if time.monotonic() >= deadline:
-                    manifest["status"] = "timed_out"
-                    terminate_process(control.nmap_process)
-                    exit_code = control.nmap_process.poll()
-                    break
-                sleep_fn(0.2)
+                    if exit_code is not None:
+                        manifest["status"] = "completed" if exit_code == 0 else "failed"
+                        break
+                    if control.cancel_event.is_set():
+                        manifest["status"] = "cancelled"
+                        terminate_process(control.nmap_process)
+                        exit_code = control.nmap_process.poll()
+                        break
+                    if time.monotonic() >= deadline:
+                        manifest["status"] = "timed_out"
+                        terminate_process(control.nmap_process)
+                        exit_code = control.nmap_process.poll()
+                        break
+                    sleep_fn(0.2)
     except Exception as exc:
         manifest["status"] = "failed"
         manifest["error"] = f"{type(exc).__name__}: {exc}"
     finally:
+        terminate_process(control.discovery_process)
         terminate_process(control.nmap_process)
         terminate_process(control.capture_process)
         manifest["completed_at"] = utc_now()

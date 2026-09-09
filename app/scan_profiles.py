@@ -14,6 +14,7 @@ PROTOCOLS = {"tcp", "udp", "tcp_udp"}
 TCP_SCOPES = {"top_1000", "common", "ics", "custom", "all"}
 UDP_SCOPES = {"top_100", "common", "ics", "custom", "all"}
 TIMINGS = {"conservative", "normal", "fast"}
+DISCOVERY_MODES = {"nmap", "fping"}
 PORT_EXPRESSION_RE = re.compile(r"^[0-9,\-\s]+$")
 
 
@@ -26,6 +27,8 @@ DEFAULT_SCAN_OPTIONS = {
     "service_detection": True,
     "os_detection": True,
     "timing": "fast",
+    "discovery_mode": "nmap",
+    "traceroute": False,
 }
 
 
@@ -121,6 +124,7 @@ def normalize_scan_options(value: Mapping[str, object] | None = None) -> dict:
     tcp_scope = str(options["tcp_scope"])
     udp_scope = str(options["udp_scope"])
     timing = str(options["timing"])
+    discovery_mode = str(options.get("discovery_mode", "nmap"))
     if protocol not in PROTOCOLS:
         raise ValueError("Protocol must be TCP, UDP, or TCP + UDP")
     if tcp_scope not in TCP_SCOPES:
@@ -129,6 +133,8 @@ def normalize_scan_options(value: Mapping[str, object] | None = None) -> dict:
         raise ValueError("Unknown UDP port scope")
     if timing not in TIMINGS:
         raise ValueError("Timing must be conservative, normal, or fast")
+    if discovery_mode not in DISCOVERY_MODES:
+        raise ValueError("Host discovery must use Nmap or FPING")
 
     normalized = {
         "protocol": protocol,
@@ -139,6 +145,8 @@ def normalize_scan_options(value: Mapping[str, object] | None = None) -> dict:
         "service_detection": bool(options.get("service_detection", True)),
         "os_detection": bool(options.get("os_detection", True)),
         "timing": timing,
+        "discovery_mode": discovery_mode,
+        "traceroute": bool(options.get("traceroute", False)),
     }
     if tcp_scope == "custom":
         normalized["tcp_ports"] = normalize_port_expression(normalized["tcp_ports"], "TCP")
@@ -172,6 +180,10 @@ def build_nmap_flags(value: Mapping[str, object] | None = None) -> list[str]:
         flags.append("-sS")
     if protocol in {"udp", "tcp_udp"}:
         flags.append("-sU")
+    if options["discovery_mode"] == "fping":
+        # FPING already certified these hosts as responsive. Avoid repeating
+        # Nmap's host-discovery stage before the requested port scan.
+        flags.append("-Pn")
     if options["service_detection"]:
         flags.append("-sV")
     if options["os_detection"]:
@@ -194,6 +206,8 @@ def build_nmap_flags(value: Mapping[str, object] | None = None) -> list[str]:
         flags.extend(["-p", str(tcp_ports or udp_ports)])
 
     flags.append({"conservative": "-T2", "normal": "-T3", "fast": "-T4"}[options["timing"]])
+    if options["traceroute"]:
+        flags.append("--traceroute")
     if "-n" not in flags:
         raise RuntimeError("All generated Nmap commands must include -n")
     return flags
@@ -215,5 +229,7 @@ def scan_coverage(value: Mapping[str, object] | None = None) -> dict:
         "service_detection": options["service_detection"],
         "os_detection": options["os_detection"],
         "timing": options["timing"],
+        "discovery_mode": options["discovery_mode"],
+        "traceroute": options["traceroute"],
         "dns_resolution_disabled": True,
     }

@@ -38,7 +38,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
@@ -209,6 +209,7 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
     no_strike, segments = validate_campaign(spec)
     profile = resolve_campaign_profile(spec)
     flags = build_nmap_flags(profile["settings"])
+    use_fping = profile["settings"].get("discovery_mode") == "fping"
     chunks: list[dict] = []
     chunk_number = 0
     for segment_name, addresses in segments:
@@ -218,10 +219,27 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
             stem = f"{chunk_number:03d}-{segment_name}"
             target_path = f"targets/{stem}.txt"
             output_path = f"results/{stem}.xml"
+            alive_path = f"results/{stem}-fping-alive.txt"
+            fping_log_path = f"results/{stem}-fping-stderr.txt"
+            nmap_target_path = alive_path if use_fping else target_path
             common = (
-                f"{' '.join(flags)} -iL {target_path} "
+                f"{' '.join(flags)} -iL {nmap_target_path} "
                 f"--excludefile no-strike.txt -oX {output_path}"
             )
+            linux_nmap = f"sudo nmap {common}"
+            windows_nmap = f"nmap {common}"
+            if use_fping:
+                linux_command = (
+                    f"fping -a -q -f {target_path} > {alive_path} 2> {fping_log_path} || [ $? -eq 1 ]; "
+                    f"if [ -s {alive_path} ]; then {linux_nmap}; else echo 'No responsive hosts in {target_path}'; fi"
+                )
+                windows_command = (
+                    f"fping -a -q -f {target_path} > {alive_path} 2> {fping_log_path} & "
+                    f"for %%A in ({alive_path}) do if %%~zA GTR 0 {windows_nmap}"
+                )
+            else:
+                linux_command = linux_nmap
+                windows_command = windows_nmap
             chunks.append({
                 "number": chunk_number,
                 "terrain_segment": segment_name,
@@ -229,8 +247,11 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
                 "target_file": target_path,
                 "output_file": output_path,
                 "addresses": chunk_addresses,
-                "linux_command": f"sudo nmap {common}",
-                "windows_command": f"nmap {common}",
+                "linux_command": linux_command,
+                "windows_command": windows_command,
+                "discovery_mode": "fping" if use_fping else "nmap",
+                "fping_alive_file": alive_path if use_fping else None,
+                "fping_log_file": fping_log_path if use_fping else None,
             })
     return no_strike, flags, chunks
 
@@ -285,6 +306,8 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
         "profile_version": profile["version"],
         "profile_settings": profile["settings"],
         "nmap_flags": flags,
+        "discovery_mode": profile["settings"].get("discovery_mode", "nmap"),
+        "traceroute": bool(profile["settings"].get("traceroute", False)),
         "dns_resolution_disabled": True,
         "no_strike_mode": spec.no_strike_mode,
         "no_strike_count": len(no_strike),
@@ -311,6 +334,8 @@ Chunks: {len(chunks)}
 ## Certification
 
 - DNS resolution is disabled (`-n`).
+- Host discovery: `{profile['settings'].get('discovery_mode', 'nmap')}`.
+- Nmap traceroute collection: `{'enabled' if profile['settings'].get('traceroute') else 'disabled'}`.
 - Every target file has had the certified no-strike addresses removed.
 - Every command also uses `--excludefile no-strike.txt` as a second safeguard.
 - Chunks never mix terrain segments.
@@ -320,7 +345,8 @@ Chunks: {len(chunks)}
 
 Linux: `chmod +x run-linux.sh && ./run-linux.sh`
 
-Windows: run `run-windows.cmd` from a terminal with Nmap available.
+Windows: run `run-windows.cmd` from a terminal with Nmap available. FPING-enabled
+profiles also require an `fping` executable on the command path.
 
 Return the completed XML files from `results/` to the analyzer.
 """
@@ -424,6 +450,7 @@ def nmap_xml_coverage(root: ET.Element) -> dict:
         "command": arguments,
         "timing": timing,
         "dns_resolution_disabled": "-n" in argument_tokens,
+        "traceroute": "--traceroute" in argument_tokens,
     }
 
 
@@ -504,6 +531,23 @@ def parse_xml(content: bytes) -> dict:
         family, role, classification_basis = classify_os_group(
             os_name, os_vendor, os_family, device_type, ports
         )
+        trace_node = host.find("trace")
+        trace = None
+        if trace_node is not None:
+            trace = {
+                "port": trace_node.get("port", ""),
+                "protocol": trace_node.get("proto", ""),
+                "hops": [
+                    {
+                        "ttl": int(hop.get("ttl", "0") or 0),
+                        "rtt": hop.get("rtt", ""),
+                        "ip": hop.get("ipaddr", ""),
+                        "hostname": hop.get("host", ""),
+                    }
+                    for hop in trace_node.findall("hop")
+                    if hop.get("ipaddr")
+                ],
+            }
         hosts.append({
             "ip": ipv4,
             "hostname": hostnames[0] if hostnames else "",
@@ -519,6 +563,7 @@ def parse_xml(content: bytes) -> dict:
             "os_group": f"{family} {role}" if role != "Unclassified" else "Unclassified",
             "classification_basis": classification_basis,
             "ports": ports,
+            "trace": trace,
         })
 
     up_hosts = [host for host in hosts if host["state"] == "up"]

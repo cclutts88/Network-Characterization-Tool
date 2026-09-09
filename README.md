@@ -16,6 +16,11 @@ and analyzing current or historical Nmap XML.
   immutable save-as-new-version behavior.
 - First-class TCP, UDP, and TCP + UDP scans with independent common, full,
   custom, and ICS/OT port scopes.
+- Optional FPING pre-discovery to focus Nmap on ICMP-responsive hosts, with the
+  responsive-host list and FPING diagnostics retained as evidence. Use normal
+  Nmap discovery when hosts may block ICMP.
+- Optional Nmap traceroute collection with parsed hop evidence for the network
+  map.
 - Mandatory `-n` in every generated Nmap command.
 - Schedule-definition storage pinned to a specific immutable profile version.
   Recurring schedule execution remains a later-phase feature.
@@ -37,7 +42,7 @@ docker compose up -d --build
 Open `http://SERVER-IP`. Port `8080` is also mapped for diagnostics.
 
 The automated **Run now** path requires the container capabilities and bundled
-Nmap/tcpdump tools. It starts tcpdump on the selected analyzer interface and
+Nmap/FPING/tcpdump tools. It starts tcpdump on the selected analyzer interface and
 retains the PCAP with the scan evidence. The **Generate package** path creates a
 portable certified package without starting a scan on the analyzer.
 

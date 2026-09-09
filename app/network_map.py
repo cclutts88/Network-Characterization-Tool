@@ -177,7 +177,8 @@ def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
 
 
 def add_edge(edges: dict[tuple[str, str, str], dict], source: str, target: str, relation: str,
-             label: str, confidence: str, evidence: str | None = None) -> None:
+             label: str, confidence: str, evidence: str | None = None,
+             interface_label: bool = False) -> None:
     key = (source, target, relation)
     if key not in edges:
         edges[key] = {
@@ -188,6 +189,7 @@ def add_edge(edges: dict[tuple[str, str, str], dict], source: str, target: str, 
             "label": label,
             "confidence": confidence,
             "evidence": evidence,
+            "interface_label": interface_label,
         }
 
 
@@ -205,7 +207,12 @@ def os_label(host: dict) -> str | None:
     return label or host.get("os") or None
 
 
-def add_analysis_hosts(nodes: dict[str, dict], analysis: dict, source: dict) -> int:
+def add_analysis_hosts(
+    nodes: dict[str, dict],
+    analysis: dict,
+    source: dict,
+    edges: dict[tuple[str, str, str], dict] | None = None,
+) -> int:
     added = 0
     for host in analysis.get("hosts") or []:
         ip = valid_ip(host.get("ip"))
@@ -222,7 +229,7 @@ def add_analysis_hosts(nodes: dict[str, dict], analysis: dict, source: dict) -> 
                     "version": port.get("version"),
                 }
             )
-        ensure_ip_node(
+        destination = ensure_ip_node(
             nodes,
             ip,
             hostname=host.get("hostname") or host.get("name"),
@@ -233,11 +240,71 @@ def add_analysis_hosts(nodes: dict[str, dict], analysis: dict, source: dict) -> 
             services=services,
             source=source,
         )
+        trace = host.get("trace") or {}
+        hops = trace.get("hops") or []
+        if hops:
+            path = []
+            previous_id = None
+            for hop in hops:
+                hop_ip = valid_ip(hop.get("ip"))
+                if not hop_ip:
+                    continue
+                hop_node = (
+                    destination
+                    if hop_ip == ip
+                    else ensure_ip_node(
+                        nodes,
+                        hop_ip,
+                        hostname=hop.get("hostname"),
+                        kind="gateway",
+                        source=source,
+                    )
+                )
+                path.append(
+                    {
+                        "ttl": hop.get("ttl"),
+                        "rtt": hop.get("rtt"),
+                        "ip": hop_ip,
+                        "hostname": hop.get("hostname"),
+                    }
+                )
+                if edges is not None and previous_id and previous_id != hop_node["id"]:
+                    add_edge(
+                        edges,
+                        previous_id,
+                        hop_node["id"],
+                        "trace_hop",
+                        f"TTL {hop.get('ttl') or '?'} · {hop.get('rtt') or '?'} ms",
+                        "observed",
+                        "Nmap traceroute",
+                        True,
+                    )
+                previous_id = hop_node["id"]
+            if path:
+                destination.setdefault("paths", []).append(
+                    {
+                        "protocol": trace.get("protocol"),
+                        "port": trace.get("port"),
+                        "hops": path,
+                        "source": source,
+                    }
+                )
+                if edges is not None and previous_id and previous_id != destination["id"]:
+                    add_edge(
+                        edges,
+                        previous_id,
+                        destination["id"],
+                        "trace_destination",
+                        "Observed destination",
+                        "observed",
+                        "Nmap traceroute",
+                        True,
+                    )
         added += 1
     return added
 
 
-def imported_hosts(nodes: dict[str, dict], warnings: list[str]) -> int:
+def imported_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
     db = None
     try:
         db = sqlite3.connect(DB_PATH)
@@ -260,7 +327,7 @@ def imported_hosts(nodes: dict[str, dict], warnings: list[str]) -> int:
         source = source_record(
             "nmap_import", filename, imported_at, f"/api/imports/{sha256}"
         )
-        count += add_analysis_hosts(nodes, analysis, source)
+        count += add_analysis_hosts(nodes, analysis, source, edges)
     return count
 
 
@@ -308,12 +375,28 @@ def parse_nmap_xml(path: Path) -> list[dict]:
                 ),
                 "os": os_el.get("name") if os_el is not None else None,
                 "ports": ports,
+                "trace": {
+                    "port": element.find("trace").get("port", ""),
+                    "protocol": element.find("trace").get("proto", ""),
+                    "hops": [
+                        {
+                            "ttl": int(hop.get("ttl", "0") or 0),
+                            "rtt": hop.get("rtt", ""),
+                            "ip": hop.get("ipaddr", ""),
+                            "hostname": hop.get("host", ""),
+                        }
+                        for hop in element.findall("trace/hop")
+                        if hop.get("ipaddr")
+                    ],
+                }
+                if element.find("trace") is not None
+                else None,
             }
         )
     return hosts
 
 
-def automated_scan_hosts(nodes: dict[str, dict], warnings: list[str]) -> int:
+def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
     db = None
     try:
         db = sqlite3.connect(DB_PATH)
@@ -344,7 +427,7 @@ def automated_scan_hosts(nodes: dict[str, dict], warnings: list[str]) -> int:
             manifest.get("completed_at") or manifest.get("created_at"),
             f"/api/scan-runs/{run_id}/artifacts/xml",
         )
-        count += add_analysis_hosts(nodes, {"hosts": hosts}, source)
+        count += add_analysis_hosts(nodes, {"hosts": hosts}, source, edges)
     return count
 
 
@@ -726,8 +809,8 @@ def build_topology() -> dict:
     nodes: dict[str, dict] = {}
     edges: dict[tuple[str, str, str], dict] = {}
     warnings: list[str] = []
-    imported_count = imported_hosts(nodes, warnings)
-    automated_count = automated_scan_hosts(nodes, warnings)
+    imported_count = imported_hosts(nodes, edges, warnings)
+    automated_count = automated_scan_hosts(nodes, edges, warnings)
     config_count = configuration_devices(nodes, edges, warnings)
     add_membership_edges(nodes, edges)
     node_list = sorted(

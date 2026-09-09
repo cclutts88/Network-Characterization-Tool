@@ -22,9 +22,10 @@
 
 - [ ] Execute recurring daily, weekly, monthly, and custom schedules.
 - [ ] Retain schedule owner, modification history, next run, and last run.
-- [ ] Add FPING as an optional pre-discovery source without equating no ICMP
-  response with an absent host.
-- [ ] Collect and retain traceroute hop paths.
+- [x] Add optional FPING pre-discovery with retained responsive-host evidence
+  and an explicit warning that ICMP-blocking hosts can be omitted.
+- [x] Collect and retain Nmap traceroute hop paths and map observed hop
+  relationships.
 - [ ] Offer automatic compare-to-previous for scheduled scans.
 
 ## Phase 4 — Comparison
@@ -52,3 +53,16 @@
   SSH-agent use, NETCONF, RESTCONF, vendor APIs, and platform constraints.
 - [ ] Keep manual configuration retrieval and upload as the supported workflow
   until the automated design is proven safe and reliable.
+
+## Phase 7 — Operator feedback
+
+- [ ] Add an **Operator Feedback** page as the final navigation tab.
+- [ ] Let operators classify feedback as a feature to add, change, or remove,
+  or as a problem encountered while using the tool.
+- [ ] Capture the affected page/feature, operator comments, submission time,
+  application version, and optional scan/run reference for troubleshooting.
+- [ ] Provide a simple review queue with status such as New, Under Review,
+  Planned, Completed, or Declined while preserving the original submission.
+- [ ] Add a safe export path for sharing selected feedback with the project
+  backlog without including scan evidence, credentials, or sensitive network
+  details by default.

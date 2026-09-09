@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from app.exports import host_summary_rows, port_level_rows, rows_to_csv, PORT_LEVEL_FIELDS
 from app.main import parse_xml
+from app.network_map import add_analysis_hosts
 
 
 SAMPLE_XML = b'''<?xml version="1.0"?>
-<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS -sU -p T:502,U:47808 10.20.30.0/24" startstr="Wed Sep 9 14:30:00 2026">
+<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS -sU --traceroute -p T:502,U:47808 10.20.30.0/24" startstr="Wed Sep 9 14:30:00 2026">
   <scaninfo type="syn" protocol="tcp" numservices="1" services="502"/>
   <scaninfo type="udp" protocol="udp" numservices="1" services="47808"/>
   <host>
@@ -18,6 +19,7 @@ SAMPLE_XML = b'''<?xml version="1.0"?>
       <port protocol="udp" portid="47808"><state state="open" reason="udp-response"/><service name="bacnet"/></port>
     </ports>
     <os><osmatch name="Linux 5.x" accuracy="90"><osclass type="general purpose" vendor="Linux" osfamily="Linux" osgen="5.X"/></osmatch></os>
+    <trace port="502" proto="tcp"><hop ttl="1" rtt="0.85" ipaddr="10.20.30.1" host="range-gateway"/><hop ttl="2" rtt="1.40" ipaddr="10.20.30.15" host="plc-15"/></trace>
   </host>
   <runstats><finished timestr="Wed Sep 9 14:31:00 2026"/><hosts up="1" down="0" total="1"/></runstats>
 </nmaprun>'''
@@ -34,6 +36,9 @@ def test_parser_surfaces_mac_hostname_protocol_and_coverage():
     assert analysis["mac_count"] == 1
     assert analysis["coverage"]["protocols"] == ["TCP", "UDP"]
     assert analysis["coverage"]["dns_resolution_disabled"] is True
+    assert analysis["coverage"]["traceroute"] is True
+    assert host["trace"]["hops"][0]["ip"] == "10.20.30.1"
+    assert host["trace"]["hops"][0]["ttl"] == 1
 
 
 def test_normalized_export_has_one_row_per_ip_protocol_port():
@@ -48,3 +53,19 @@ def test_normalized_export_has_one_row_per_ip_protocol_port():
     csv_bytes = rows_to_csv(port_rows, PORT_LEVEL_FIELDS)
     assert b"protocol,port,port_state" in csv_bytes
     assert b"10.20.30.15" in csv_bytes
+
+
+def test_traceroute_hops_become_observed_map_relationships():
+    analysis = parse_xml(SAMPLE_XML)
+    nodes, edges = {}, {}
+    count = add_analysis_hosts(
+        nodes,
+        analysis,
+        {"kind": "test", "label": "sample", "timestamp": "2026-09-09"},
+        edges,
+    )
+    assert count == 1
+    assert nodes["ip:10.20.30.15"]["kind"] == "host"
+    assert nodes["ip:10.20.30.1"]["kind"] == "gateway"
+    assert nodes["ip:10.20.30.15"]["paths"][0]["hops"][0]["ttl"] == 1
+    assert any(edge["relation"] == "trace_hop" for edge in edges.values())
