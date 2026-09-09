@@ -262,7 +262,7 @@ def build_nmap_argv(
 
 def build_fping_argv(interface: str) -> list[str]:
     """Build the optional fast discovery command from a pre-certified address list."""
-    return ["fping", "-a", "-q", "-I", interface, "-f", "discovery-targets.txt"]
+    return ["fping", "-a", "-I", interface, "-f", "discovery-targets.txt"]
 
 
 def expanded_discovery_targets(targets: list[str], no_strike: list[str]) -> list[str]:
