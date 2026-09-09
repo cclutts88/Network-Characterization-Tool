@@ -186,12 +186,32 @@ class DeleteConfirmation(BaseModel):
     confirmation: str = Field(min_length=1, max_length=64)
 
 
+class FallbackDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "decline"]
+    decided_by: str = Field(min_length=1, max_length=100)
+    authorization_note: str = Field(min_length=1, max_length=500)
+
+    @field_validator("decided_by", "authorization_note")
+    @classmethod
+    def clean_fallback_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("This field cannot be blank")
+        return cleaned
+
+
 @dataclass
 class RunControl:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     discovery_process: object | None = None
     nmap_process: object | None = None
     capture_process: object | None = None
+    fallback_decision_event: threading.Event = field(default_factory=threading.Event)
+    fallback_decision: Literal["approve", "decline"] | None = None
+    fallback_decided_by: str | None = None
+    fallback_authorization_note: str | None = None
 
 
 ACTIVE_RUNS: dict[str, RunControl] = {}
@@ -288,9 +308,6 @@ def apply_fping_fallback(manifest: dict) -> None:
     )
     manifest["exact_command"] = shlex.join(manifest["command_argv"])
     manifest["discovery_fallback_used"] = True
-    manifest["discovery_note"] = (
-        "FPING found no responsive hosts; Nmap fallback scanned the full approved target list."
-    )
 
 
 def build_tcpdump_argv(interface: str) -> list[str]:
@@ -1089,7 +1106,66 @@ def execute_scan_run(
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
                 if run_nmap and not alive_hosts:
-                    apply_fping_fallback(manifest)
+                    terminate_process(control.capture_process)
+                    control.capture_process = None
+                    manifest["status"] = "awaiting_fallback_approval"
+                    manifest["fallback_approval_required"] = True
+                    manifest["discovery_note"] = (
+                        "FPING found no responsive hosts. Full Nmap fallback is paused "
+                        "pending explicit operator or mission-partner approval."
+                    )
+                    collect_artifacts(manifest, data_dir)
+                    update_scan_run_manifest(manifest, db_path)
+                    write_manifest_file(manifest, data_dir)
+                    while not control.fallback_decision_event.is_set():
+                        if control.cancel_event.is_set():
+                            manifest["status"] = "cancelled"
+                            run_nmap = False
+                            break
+                        sleep_fn(0.2)
+                    if run_nmap:
+                        manifest["fallback_decision"] = control.fallback_decision
+                        manifest["fallback_decided_by"] = control.fallback_decided_by
+                        manifest["fallback_authorization_note"] = (
+                            control.fallback_authorization_note
+                        )
+                        manifest["fallback_decided_at"] = utc_now()
+                        if control.fallback_decision == "approve":
+                            apply_fping_fallback(manifest)
+                            manifest["status"] = "running"
+                            manifest["discovery_note"] = (
+                                "FPING found no responsive hosts. Full Nmap fallback "
+                                f"approved by {control.fallback_decided_by}: "
+                                f"{control.fallback_authorization_note}"
+                            )
+                            deadline = time.monotonic() + int(manifest["timeout_seconds"])
+                            if manifest["capture_requested"]:
+                                control.capture_process = popen_factory(
+                                    manifest["capture_command_argv"],
+                                    cwd=run_dir,
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=capture_error_handle,
+                                    start_new_session=True,
+                                )
+                                sleep_fn(0.25)
+                                capture_exit = control.capture_process.poll()
+                                if capture_exit is not None:
+                                    raise RuntimeError(
+                                        "tcpdump exited before the approved fallback "
+                                        f"with status {capture_exit}"
+                                    )
+                        else:
+                            manifest["status"] = "completed_without_nmap"
+                            manifest["discovery_note"] = (
+                                "FPING found no responsive hosts. "
+                                f"{control.fallback_decided_by} chose to finish without "
+                                f"Nmap fallback: {control.fallback_authorization_note}"
+                            )
+                            exit_code = 0
+                            run_nmap = False
+                        update_scan_run_manifest(manifest, db_path)
+                        write_manifest_file(manifest, data_dir)
 
             if run_nmap:
                 control.nmap_process = popen_factory(
@@ -1125,7 +1201,9 @@ def execute_scan_run(
         terminate_process(control.capture_process)
         manifest["completed_at"] = utc_now()
         manifest["exit_code"] = exit_code
-        manifest["success"] = manifest["status"] == "completed"
+        manifest["success"] = manifest["status"] in {
+            "completed", "completed_without_nmap"
+        }
         manifest["host_count"] = nmap_host_count(run_dir / "scan.xml")
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
@@ -1354,6 +1432,24 @@ def start_scan_run(request: ScanRunRequest) -> dict:
     return manifest
 
 
+@router.post("/scan-runs/{run_id}/fallback-decision", status_code=202)
+def decide_scan_fallback(run_id: str, request: FallbackDecision) -> dict:
+    manifest = get_scan_run_plan(run_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    with ACTIVE_RUNS_LOCK:
+        control = ACTIVE_RUNS.get(run_id)
+        if control is None or manifest["status"] != "awaiting_fallback_approval":
+            raise HTTPException(status_code=409, detail="Fallback approval is not pending")
+        if control.fallback_decision is not None:
+            raise HTTPException(status_code=409, detail="Fallback decision already recorded")
+        control.fallback_decision = request.decision
+        control.fallback_decided_by = request.decided_by
+        control.fallback_authorization_note = request.authorization_note
+        control.fallback_decision_event.set()
+    return {"run_id": run_id, "decision": request.decision, "status": "decision_recorded"}
+
+
 @router.post("/scan-runs/{run_id}/cancel", status_code=202)
 def cancel_scan_run(run_id: str) -> dict:
     manifest = get_scan_run_plan(run_id)
@@ -1361,7 +1457,7 @@ def cancel_scan_run(run_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Scan run not found")
     with ACTIVE_RUNS_LOCK:
         control = ACTIVE_RUNS.get(run_id)
-    if control is None or manifest["status"] not in {"queued", "running"}:
+    if control is None or manifest["status"] not in {"queued", "running", "awaiting_fallback_approval"}:
         raise HTTPException(status_code=409, detail="Scan run is not active")
     control.cancel_event.set()
     return {"run_id": run_id, "status": "cancellation_requested"}
