@@ -3,6 +3,10 @@
 /logs/
 /keys/
 /backups/
+/certs/
+/tls/
+/caddy-data/
+/caddy-config/
 *.db
 *.db-shm
 *.db-wal

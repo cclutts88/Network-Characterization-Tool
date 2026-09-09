@@ -1,0 +1,14 @@
+:80 {
+    handle /nct-lab-root.crt {
+        root * /srv/certs
+        file_server
+    }
+    handle {
+        redir https://{host}{uri} permanent
+    }
+}
+
+:443 {
+    tls /etc/caddy/tls/nct-server.crt /etc/caddy/tls/nct-server.key
+    reverse_proxy analyzer:8080
+}

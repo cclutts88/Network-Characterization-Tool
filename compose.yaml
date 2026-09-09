@@ -1,15 +1,30 @@
 services:
   analyzer:
     build: .
-    image: nmap-analyzer-analyzer:latest
     container_name: nmap-terrain-analyzer
     restart: unless-stopped
     cap_add:
       - NET_RAW
+    expose:
+      - "8080"
     ports:
-      - "80:8080"
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/data
       - ./logs:/logs
       - ./keys:/keys:ro
+  caddy:
+    image: caddy:2-alpine
+    container_name: nmap-terrain-https
+    restart: unless-stopped
+    depends_on:
+      - analyzer
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/srv/certs:ro
+      - ./tls:/etc/caddy/tls:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config
