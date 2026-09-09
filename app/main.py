@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
+    effective_no_strike,
     get_import_history_item,
     get_scan_profile,
     get_scan_run_plan,
@@ -183,9 +184,12 @@ def validate_campaign(spec: CampaignSpec) -> tuple[list[str], list[tuple[str, li
     if spec.no_strike_mode == "none" and spec.no_strike:
         raise ValueError("Choose 'entered' when supplying no-strike addresses")
 
+    effective_entries, _ = effective_no_strike(spec.no_strike, DB_PATH)
     no_strike_addresses: list[str] = []
-    if spec.no_strike_mode == "entered":
-        no_strike_addresses = addresses_for(parse_networks(spec.no_strike, "no-strike"))
+    if effective_entries:
+        no_strike_addresses = addresses_for(
+            parse_networks(effective_entries, "no-strike")
+        )
     blocked = set(no_strike_addresses)
 
     seen_names: set[str] = set()
@@ -262,6 +266,7 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
     if spec.scheduled and not (spec.scheduled_by or "").strip():
         raise ValueError("Scheduled packages must retain the scheduler identity")
     no_strike, flags, scan_plan = build_scan_plan(spec)
+    global_no_strike = effective_no_strike([], DB_PATH)[0]
     profile = resolve_campaign_profile(spec)
     moment = datetime.now(timezone.utc)
     created_at = moment.replace(microsecond=0).isoformat()
@@ -313,6 +318,8 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
         "dns_resolution_disabled": True,
         "no_strike_mode": spec.no_strike_mode,
         "no_strike_count": len(no_strike),
+        "global_no_strike": global_no_strike,
+        "global_no_strike_count": len(global_no_strike),
         "no_strike_sha256": sha256_bytes(files["no-strike.txt"]),
         "chunk_size": spec.chunk_size,
         "chunks": chunks,

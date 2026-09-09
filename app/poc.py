@@ -134,6 +134,8 @@ class ScanScheduleCreate(BaseModel):
     reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
     originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
     timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    chunk_size: int = Field(default=256, ge=1, le=4096)
+    chunk_delay_seconds: int = Field(default=30, ge=0, le=3600)
     fallback_policy: Literal["require_approval", "stop_without_nmap"] = "require_approval"
     enabled: bool = False
 
@@ -185,6 +187,11 @@ class ScanRunPlan(BaseModel):
     scheduled_by: str | None = Field(default=None, max_length=100)
     executed_by: str | None = Field(default=None, max_length=100)
     fallback_policy: Literal["require_approval", "stop_without_nmap"] = "require_approval"
+    schedule_id: str | None = Field(default=None, max_length=32)
+    schedule_batch_id: str | None = Field(default=None, max_length=32)
+    chunk_number: int | None = Field(default=None, ge=1)
+    chunk_count: int | None = Field(default=None, ge=1)
+    chunk_delay_seconds: int | None = Field(default=None, ge=0, le=3600)
     targets: list[str] = Field(min_length=1)
     no_strike: list[str] = Field(default_factory=list)
 
@@ -223,6 +230,27 @@ class DeleteConfirmation(BaseModel):
     confirmation: str = Field(min_length=1, max_length=64)
 
 
+class NoStrikeUpdate(BaseModel):
+    """Add entries to the persistent global no-strike safety list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entries: list[str] = Field(min_length=1)
+    changed_by: str = Field(min_length=1, max_length=100)
+
+    @field_validator("changed_by")
+    @classmethod
+    def clean_no_strike_operator(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("The operator changing the no-strike list is required")
+        return cleaned
+
+
+class NoStrikeRemoval(NoStrikeUpdate):
+    confirmation: str = Field(min_length=1, max_length=64)
+
+
 class FallbackDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -253,6 +281,8 @@ class RunControl:
 
 ACTIVE_RUNS: dict[str, RunControl] = {}
 ACTIVE_RUNS_LOCK = threading.Lock()
+ACTIVE_SCHEDULE_BATCHES: set[str] = set()
+ACTIVE_SCHEDULE_BATCHES_LOCK = threading.Lock()
 DELETE_CHALLENGES: dict[str, tuple[str, float]] = {}
 DELETE_CHALLENGES_LOCK = threading.Lock()
 
@@ -291,6 +321,88 @@ def normalize_ipv4_networks(entries: list[str], label: str) -> list[str]:
             f"{label.title()} scope exceeds the {MAX_EXPANDED_ADDRESSES}-address safety limit"
         )
     return [str(network) for network in collapsed]
+
+
+def get_global_no_strike(db_path: Path = DB_PATH) -> dict:
+    """Return the protected no-strike list that applies to every scan path."""
+    init_poc_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        row = db.execute(
+            "SELECT value_json, updated_at, updated_by FROM app_settings WHERE key = ?",
+            ("global_no_strike",),
+        ).fetchone()
+    if not row:
+        return {"entries": [], "updated_at": None, "updated_by": None}
+    return {
+        "entries": json.loads(row[0]),
+        "updated_at": row[1],
+        "updated_by": row[2],
+    }
+
+
+def _store_global_no_strike(
+    entries: list[str], changed_by: str, db_path: Path = DB_PATH
+) -> dict:
+    normalized = normalize_ipv4_networks(entries, "no-strike") if entries else []
+    updated_at = utc_now()
+    init_poc_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """,
+            ("global_no_strike", json.dumps(normalized), updated_at, changed_by),
+        )
+    return {
+        "entries": normalized,
+        "updated_at": updated_at,
+        "updated_by": changed_by,
+    }
+
+
+def add_global_no_strike(
+    request: NoStrikeUpdate, db_path: Path = DB_PATH
+) -> dict:
+    current = get_global_no_strike(db_path)["entries"]
+    return _store_global_no_strike(
+        [*current, *request.entries], request.changed_by, db_path
+    )
+
+
+def effective_no_strike(
+    additional: list[str] | None = None, db_path: Path = DB_PATH
+) -> tuple[list[str], list[str]]:
+    """Merge persistent exclusions with optional run-specific exclusions."""
+    global_entries = get_global_no_strike(db_path)["entries"]
+    combined = [*global_entries, *(additional or [])]
+    return (
+        normalize_ipv4_networks(combined, "no-strike") if combined else [],
+        global_entries,
+    )
+
+
+def remove_global_no_strike(
+    request: NoStrikeRemoval, db_path: Path = DB_PATH
+) -> dict:
+    requested = normalize_ipv4_networks(request.entries, "no-strike")
+    current = get_global_no_strike(db_path)["entries"]
+    missing = [entry for entry in requested if entry not in current]
+    if missing:
+        raise KeyError("No-strike entry not found: " + ", ".join(missing))
+    identifier = ",".join(requested)
+    if not consume_delete_challenge(
+        "global-no-strike", identifier, request.confirmation
+    ):
+        raise PermissionError("The confirmation string is invalid or expired")
+    remaining = [entry for entry in current if entry not in set(requested)]
+    result = _store_global_no_strike(remaining, request.changed_by, db_path)
+    result["removed"] = requested
+    return result
 
 
 def build_nmap_argv(
@@ -363,7 +475,7 @@ def build_scan_run_manifest(
     db_path: Path = DB_PATH,
 ) -> dict:
     targets = normalize_ipv4_networks(plan.targets, "target")
-    no_strike = normalize_ipv4_networks(plan.no_strike, "no-strike") if plan.no_strike else []
+    no_strike, global_no_strike = effective_no_strike(plan.no_strike, db_path)
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
     use_fping = settings.get("discovery_mode") == "fping"
@@ -385,6 +497,8 @@ def build_scan_run_manifest(
         **scan_coverage(settings),
         "targets": targets,
         "no_strike": no_strike,
+        "global_no_strike": global_no_strike,
+        "additional_no_strike": normalize_ipv4_networks(plan.no_strike, "no-strike") if plan.no_strike else [],
         "interface": plan.interface,
         "profile_id": profile_record["profile_id"],
         "profile_name": profile_record["name"],
@@ -404,6 +518,11 @@ def build_scan_run_manifest(
         "executed_by": plan.executed_by or ("scheduler" if plan.scheduled else plan.operator),
         "execution_method": "scheduled" if plan.scheduled else "manual",
         "fallback_policy": plan.fallback_policy,
+        "schedule_id": plan.schedule_id,
+        "schedule_batch_id": plan.schedule_batch_id,
+        "chunk_number": plan.chunk_number,
+        "chunk_count": plan.chunk_count,
+        "chunk_delay_seconds": plan.chunk_delay_seconds,
         "reason": plan.reason,
         "originating_host": plan.originating_host,
         "interface": plan.interface,
@@ -474,6 +593,16 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                 definition_json TEXT NOT NULL,
                 FOREIGN KEY (profile_id, profile_version)
                     REFERENCES scan_profiles(profile_id, version)
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL
             )
             """
         )
@@ -744,6 +873,8 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "reason": request.reason,
         "originating_host": request.originating_host,
         "timeout_seconds": request.timeout_seconds,
+        "chunk_size": request.chunk_size,
+        "chunk_delay_seconds": request.chunk_delay_seconds,
         "fallback_policy": request.fallback_policy,
         "enabled": bool(request.enabled),
         "run_count": 0,
@@ -751,6 +882,10 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "last_run_at": None,
         "last_run_status": None,
         "last_changed_by": request.created_by,
+        "batch_status": None,
+        "active_batch_id": None,
+        "active_chunk_number": None,
+        "active_chunk_count": None,
         "implementation_status": "active_scheduler",
     }
     with sqlite3.connect(db_path) as db:
@@ -811,6 +946,11 @@ def change_scan_schedule_profile(
     schedule = get_scan_schedule(schedule_id, db_path)
     if schedule is None:
         raise KeyError("Scan schedule not found")
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        if schedule_id in ACTIVE_SCHEDULE_BATCHES:
+            raise RuntimeError(
+                "Pause and wait for the active scheduled batch to finish before changing its profile"
+            )
     profile = get_scan_profile(request.profile_id, request.profile_version, db_path)
     if profile is None:
         raise ValueError("The selected saved profile version does not exist")
@@ -1002,6 +1142,11 @@ def delete_scan_schedule(
 ) -> dict:
     if get_scan_schedule(schedule_id, db_path) is None:
         raise KeyError("Scan schedule not found")
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        if schedule_id in ACTIVE_SCHEDULE_BATCHES:
+            raise RuntimeError(
+                "An active scheduled batch must finish or stop before its schedule can be deleted"
+            )
     if not consume_delete_challenge("schedule", schedule_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
     with sqlite3.connect(db_path) as db:
@@ -1462,79 +1607,253 @@ def launch_scan_run(
     return manifest
 
 
-def _scheduled_request(schedule: dict) -> ScanRunRequest:
+def schedule_target_chunks(
+    schedule: dict, db_path: Path = DB_PATH
+) -> list[list[str]]:
+    no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
+    addresses = expanded_discovery_targets(
+        schedule["targets"], no_strike
+    )
+    size = int(schedule.get("chunk_size") or 256)
+    return [addresses[index:index + size] for index in range(0, len(addresses), size)]
+
+
+def _scheduled_request(
+    schedule: dict,
+    targets: list[str],
+    *,
+    batch_id: str,
+    chunk_number: int,
+    chunk_count: int,
+    db_path: Path = DB_PATH,
+) -> ScanRunRequest:
+    no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
     return ScanRunRequest(
         operator=schedule["created_by"],
         created_by=schedule["created_by"],
         scheduled=True,
         scheduled_by=schedule["created_by"],
         executed_by="scheduler",
-        name=schedule["name"],
+        name=f"{schedule['name']} Chunk {chunk_number} of {chunk_count}",
         reason=schedule["reason"],
         originating_host=schedule["originating_host"],
         interface=schedule["interface"],
         profile=schedule["profile_name"],
         profile_id=schedule["profile_id"],
         profile_version=schedule["profile_version"],
-        targets=schedule["targets"],
-        no_strike=schedule.get("no_strike") or [],
+        targets=targets,
+        no_strike=no_strike,
         capture=True,
         timeout_seconds=int(schedule.get("timeout_seconds") or 900),
         fallback_policy=schedule.get("fallback_policy", "require_approval"),
+        schedule_id=schedule["schedule_id"],
+        schedule_batch_id=batch_id,
+        chunk_number=chunk_number,
+        chunk_count=chunk_count,
+        chunk_delay_seconds=int(schedule.get("chunk_delay_seconds") or 0),
     )
 
 
-def record_schedule_dispatch(
-    schedule: dict,
-    run: dict,
+def execute_schedule_batch(
+    schedule_id: str,
+    batch_id: str,
     *,
-    advance: bool,
+    advance_schedule: bool,
     db_path: Path = DB_PATH,
-) -> dict:
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    schedule["last_run_id"] = run["run_id"]
-    schedule["last_run_at"] = now.isoformat()
-    schedule["last_run_status"] = run["status"]
-    schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
-    schedule["last_dispatch_note"] = "queued"
-    if advance:
-        following = next_schedule_time(schedule, now)
-        schedule["next_run_at"] = following.isoformat() if following else None
-        if following is None:
+    data_dir: Path = DATA_DIR,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> None:
+    successful_states = {"completed", "completed_without_nmap"}
+    terminal_states = successful_states | {"failed", "cancelled", "timed_out"}
+    try:
+        schedule = get_scan_schedule(schedule_id, db_path)
+        if schedule is None:
+            return
+        chunks = schedule_target_chunks(schedule, db_path)
+        if not chunks:
+            schedule["batch_status"] = "stopped_no_targets"
             schedule["enabled"] = False
-    return _store_scan_schedule(schedule, db_path)
+            schedule["last_dispatch_note"] = "No addresses remained after no-strike filtering"
+            _store_scan_schedule(schedule, db_path)
+            return
+        total = len(chunks)
+        schedule.update(
+            {
+                "batch_status": "running",
+                "active_batch_id": batch_id,
+                "active_chunk_number": 0,
+                "active_chunk_count": total,
+                "last_dispatch_note": f"Preparing {total} sequential chunk(s)",
+            }
+        )
+        _store_scan_schedule(schedule, db_path)
+        for index, targets in enumerate(chunks, start=1):
+            while True:
+                try:
+                    run = launch_scan_run(
+                        _scheduled_request(
+                            schedule,
+                            targets,
+                            batch_id=batch_id,
+                            chunk_number=index,
+                            chunk_count=total,
+                            db_path=db_path,
+                        ),
+                        db_path=db_path,
+                        data_dir=data_dir,
+                    )
+                    break
+                except RuntimeError:
+                    schedule["last_dispatch_note"] = "Waiting for the analyzer scanner"
+                    _store_scan_schedule(schedule, db_path)
+                    sleep_fn(2)
+            schedule["last_run_id"] = run["run_id"]
+            schedule["last_run_at"] = utc_now()
+            schedule["last_run_status"] = run["status"]
+            schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
+            schedule["active_chunk_number"] = index
+            schedule["last_dispatch_note"] = f"Chunk {index} of {total} queued"
+            _store_scan_schedule(schedule, db_path)
+            while True:
+                current = get_scan_run_plan(run["run_id"], db_path)
+                if current and current.get("status") in terminal_states:
+                    break
+                sleep_fn(1)
+            schedule = get_scan_schedule(schedule_id, db_path) or schedule
+            schedule["last_run_status"] = current["status"]
+            schedule["last_dispatch_note"] = f"Chunk {index} of {total} {current['status']}"
+            _store_scan_schedule(schedule, db_path)
+            if current["status"] not in successful_states:
+                schedule["batch_status"] = f"stopped_{current['status']}"
+                schedule["enabled"] = False
+                schedule["active_batch_id"] = None
+                _store_scan_schedule(schedule, db_path)
+                return
+            if advance_schedule and not schedule.get("enabled"):
+                schedule["batch_status"] = "paused_after_current_chunk"
+                schedule["active_batch_id"] = None
+                schedule["last_dispatch_note"] = "Paused before the next chunk"
+                _store_scan_schedule(schedule, db_path)
+                return
+            if index < total:
+                delay = int(schedule.get("chunk_delay_seconds") or 0)
+                schedule["next_chunk_at"] = (
+                    datetime.now(timezone.utc) + timedelta(seconds=delay)
+                ).replace(microsecond=0).isoformat()
+                schedule["last_dispatch_note"] = (
+                    f"Chunk {index} of {total} completed; waiting {delay} seconds"
+                )
+                _store_scan_schedule(schedule, db_path)
+                if delay:
+                    sleep_fn(delay)
+        schedule = get_scan_schedule(schedule_id, db_path) or schedule
+        schedule["batch_status"] = "completed"
+        schedule["active_batch_id"] = None
+        schedule["active_chunk_number"] = total
+        schedule["next_chunk_at"] = None
+        schedule["occurrence_count"] = int(schedule.get("occurrence_count") or 0) + 1
+        schedule["last_dispatch_note"] = f"All {total} chunks completed"
+        if advance_schedule:
+            following = next_schedule_time(schedule, datetime.now(timezone.utc))
+            schedule["next_run_at"] = following.isoformat() if following else None
+            if following is None:
+                schedule["enabled"] = False
+        _store_scan_schedule(schedule, db_path)
+    except Exception as exc:
+        schedule = get_scan_schedule(schedule_id, db_path)
+        if schedule is not None:
+            schedule["batch_status"] = "failed_to_dispatch"
+            schedule["enabled"] = False
+            schedule["active_batch_id"] = None
+            schedule["last_dispatch_note"] = f"{type(exc).__name__}: {exc}"
+            _store_scan_schedule(schedule, db_path)
+    finally:
+        with ACTIVE_SCHEDULE_BATCHES_LOCK:
+            ACTIVE_SCHEDULE_BATCHES.discard(schedule_id)
 
 
-def run_scan_schedule_now(schedule_id: str, db_path: Path = DB_PATH) -> dict:
+def queue_scan_schedule_batch(
+    schedule_id: str,
+    *,
+    advance_schedule: bool,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+) -> dict:
     schedule = get_scan_schedule(schedule_id, db_path)
     if schedule is None:
         raise KeyError("Scan schedule not found")
-    manifest = launch_scan_run(_scheduled_request(schedule), db_path=db_path)
-    record_schedule_dispatch(schedule, manifest, advance=False, db_path=db_path)
-    return manifest
+    chunks = schedule_target_chunks(schedule, db_path)
+    if not chunks:
+        raise ValueError("No addresses remain after no-strike filtering")
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        if ACTIVE_SCHEDULE_BATCHES:
+            raise RuntimeError("Another scheduled batch is already active")
+        ACTIVE_SCHEDULE_BATCHES.add(schedule_id)
+    batch_id = uuid.uuid4().hex
+    schedule["batch_status"] = "queued"
+    schedule["active_batch_id"] = batch_id
+    schedule["active_chunk_number"] = 0
+    schedule["active_chunk_count"] = len(chunks)
+    schedule["last_dispatch_note"] = f"Queued {len(chunks)} sequential chunk(s)"
+    _store_scan_schedule(schedule, db_path)
+    try:
+        worker = threading.Thread(
+            target=execute_schedule_batch,
+            args=(schedule_id, batch_id),
+            kwargs={
+                "advance_schedule": advance_schedule,
+                "db_path": db_path,
+                "data_dir": data_dir,
+            },
+            daemon=True,
+            name=f"schedule-{schedule_id[:8]}",
+        )
+        worker.start()
+    except Exception:
+        with ACTIVE_SCHEDULE_BATCHES_LOCK:
+            ACTIVE_SCHEDULE_BATCHES.discard(schedule_id)
+        raise
+    return {
+        "schedule_id": schedule_id,
+        "batch_id": batch_id,
+        "status": "queued",
+        "chunk_count": len(chunks),
+        "chunk_size": int(schedule.get("chunk_size") or 256),
+        "chunk_delay_seconds": int(schedule.get("chunk_delay_seconds") or 0),
+    }
+
+
+def run_scan_schedule_now(schedule_id: str, db_path: Path = DB_PATH) -> dict:
+    return queue_scan_schedule_batch(
+        schedule_id, advance_schedule=False, db_path=db_path
+    )
 
 
 def dispatch_due_schedules(
     now: datetime | None = None, db_path: Path = DB_PATH
 ) -> list[dict]:
-    """Dispatch at most one due schedule because the analyzer permits one active scan."""
+    """Queue at most one due batch; its chunks run sequentially on the analyzer."""
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     dispatched = []
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        active_schedule_ids = set(ACTIVE_SCHEDULE_BATCHES)
     due = [
         schedule for schedule in list_scan_schedules(db_path)
         if schedule.get("enabled") and schedule.get("next_run_at")
+        and schedule["schedule_id"] not in active_schedule_ids
         and _as_utc(schedule["next_run_at"]) <= moment
     ]
     due.sort(key=lambda item: item["next_run_at"])
     for schedule in due[:1]:
         try:
-            manifest = launch_scan_run(_scheduled_request(schedule), db_path=db_path)
+            batch = queue_scan_schedule_batch(
+                schedule["schedule_id"], advance_schedule=True, db_path=db_path
+            )
         except RuntimeError:
             schedule["last_dispatch_note"] = "waiting_for_scanner"
             _store_scan_schedule(schedule, db_path)
             break
-        record_schedule_dispatch(schedule, manifest, advance=True, db_path=db_path)
-        dispatched.append(manifest)
+        dispatched.append(batch)
     return dispatched
 
 
@@ -1683,6 +2002,43 @@ def scan_profile_history(all_versions: bool = False) -> list[dict]:
     return list_scan_profiles(all_versions=all_versions)
 
 
+@router.get("/safety/no-strike")
+def global_no_strike_list() -> dict:
+    return get_global_no_strike()
+
+
+@router.post("/safety/no-strike", status_code=201)
+def add_to_global_no_strike(request: NoStrikeUpdate) -> dict:
+    try:
+        return add_global_no_strike(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/safety/no-strike/remove-challenge")
+def global_no_strike_remove_challenge(entries: list[str]) -> dict:
+    try:
+        requested = normalize_ipv4_networks(entries, "no-strike")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    current = get_global_no_strike()["entries"]
+    if any(entry not in current for entry in requested):
+        raise HTTPException(status_code=404, detail="No-strike entry not found")
+    return issue_delete_challenge("global-no-strike", ",".join(requested))
+
+
+@router.post("/safety/no-strike/remove")
+def remove_from_global_no_strike(request: NoStrikeRemoval) -> dict:
+    try:
+        return remove_global_no_strike(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/scan-profiles/{profile_id}/versions/{version}")
 def scan_profile_detail(profile_id: str, version: int) -> dict:
     profile = get_scan_profile(profile_id, version)
@@ -1770,6 +2126,8 @@ def repin_scan_schedule_profile(schedule_id: str, request: ScheduleProfileChange
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/scan-schedules/{schedule_id}/run", status_code=202)
@@ -1799,6 +2157,8 @@ def delete_saved_scan_schedule(schedule_id: str, confirmation: DeleteConfirmatio
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/scan-runs/plans", status_code=201)
