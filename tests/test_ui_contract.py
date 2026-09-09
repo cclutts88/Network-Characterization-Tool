@@ -33,6 +33,10 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Use selected profile" in html
     assert "Addresses per chunk" in html
     assert "Pause between chunks (seconds)" in html
+    assert "Custom hours" in html
+    assert "Hours between scans" in html
+    assert "Every few minutes" not in html
+    assert "cadence_hours" in html
     assert "chunk_delay_seconds" in html
     assert "Chunks never overlap" in html
     assert "Global no-strike safety list" in html

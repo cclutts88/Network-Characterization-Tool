@@ -199,6 +199,32 @@ def test_schedule_batch_waits_after_completion_and_advances(monkeypatch, tmp_pat
     assert datetime.fromisoformat(updated["next_run_at"]) > now
 
 
+def test_custom_hour_cadence_advances_by_operator_selected_hours(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    first_run = datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc)
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Six Hour Terrain",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["198.51.100.10"],
+            interface="eth0",
+            cadence="custom_hours",
+            cadence_hours=6,
+            first_run_at=first_run,
+        ),
+        db_path,
+    )
+
+    following = poc.next_schedule_time(
+        schedule, first_run + timedelta(minutes=1)
+    )
+
+    assert schedule["cadence_hours"] == 6
+    assert following == first_run + timedelta(hours=6)
+
+
 def test_global_no_strike_is_automatic_and_requires_confirmation_to_remove(tmp_path):
     db_path = tmp_path / "analyzer.db"
     saved = add_global_no_strike(
