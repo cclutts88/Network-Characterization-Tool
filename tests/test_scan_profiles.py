@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.poc import apply_fping_fallback
+from app.poc import FallbackDecision, apply_fping_fallback
 from app.scan_profiles import build_nmap_flags, scan_display_name
 
 
@@ -63,7 +63,7 @@ def test_combined_top_port_counts_are_rejected_instead_of_misrepresented():
         )
 
 
-def test_fping_fallback_scans_the_full_approved_scope():
+def test_approved_fping_fallback_scans_the_full_approved_scope():
     manifest = {
         "profile": "Custom",
         "interface": "eth0",
@@ -82,7 +82,30 @@ def test_fping_fallback_scans_the_full_approved_scope():
     assert command[command.index("--excludefile") + 1] == "no-strike.txt"
     assert "-n" in command
     assert manifest["discovery_fallback_used"] is True
-    assert "Nmap fallback" in manifest["discovery_note"]
+    assert "discovery_note" not in manifest
+
+
+def test_fallback_decision_requires_identity_and_audit_note():
+    decision = FallbackDecision(
+        decision="approve",
+        decided_by="  Mission Partner  ",
+        authorization_note="  Approval reference 17  ",
+    )
+    assert decision.decided_by == "Mission Partner"
+    assert decision.authorization_note == "Approval reference 17"
+
+    with pytest.raises(ValueError):
+        FallbackDecision(
+            decision="approve", decided_by="   ", authorization_note="approval"
+        )
+    with pytest.raises(ValueError):
+        FallbackDecision(
+            decision="decline", decided_by="Operator", authorization_note="   "
+        )
+    with pytest.raises(ValueError):
+        FallbackDecision(
+            decision="automatic", decided_by="Operator", authorization_note="none"
+        )
 
 
 def test_human_friendly_manual_and_scheduled_names():
