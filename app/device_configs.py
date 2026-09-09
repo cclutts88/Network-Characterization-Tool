@@ -590,6 +590,21 @@ def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
     ]
 
 
+def _interactive_master_args(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
+    """Build the internal SSH command with the PTY as its controlling terminal."""
+    target = f"{plan.username}@{plan.device_address}"
+    return [
+        "setsid", "--ctty", "ssh", "-M", "-N", "-T",
+        "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
+        "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
+        "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
+        "-o", "PreferredAuthentications=keyboard-interactive,password",
+        "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
+        "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
+        "-p", str(plan.ssh_port), target,
+    ]
+
+
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     plan = session.plan
     preview = session.preview
@@ -780,24 +795,18 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
         control_dir.chmod(0o700)
         control_path = control_dir / "control.sock"
         master_fd, slave_fd = pty.openpty()
-        target = f"{plan.username}@{plan.device_address}"
-        master_args = [
-            "ssh", "-M", "-N", "-T",
-            "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
-            "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
-            "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
-            "-o", "PreferredAuthentications=keyboard-interactive,password",
-            "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
-            "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
-            "-p", str(plan.ssh_port), target,
-        ]
+        # OpenSSH reads interactive passwords from /dev/tty rather than stdin.
+        # The API process has no controlling terminal, so attach the PTY we
+        # created above as the child's controlling terminal before starting
+        # SSH. Without this, OpenSSH immediately sends an empty password and
+        # reports Permission denied before the operator dialog can appear.
+        master_args = _interactive_master_args(plan, control_path)
         master_process = subprocess.Popen(
             master_args,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
             close_fds=True,
-            start_new_session=True,
         )
         os.close(slave_fd)
         slave_fd = None
@@ -843,7 +852,10 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
             "username": plan.username,
             "ssh_port": plan.ssh_port,
             "expires_in_seconds": PASSWORD_SESSION_TTL_SECONDS,
-            "message": f"SSH is waiting for the password for {target}.",
+            "message": (
+                "SSH is waiting for the password for "
+                f"{plan.username}@{plan.device_address}."
+            ),
         }
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
         if slave_fd is not None:
