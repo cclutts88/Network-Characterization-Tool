@@ -32,6 +32,7 @@ from app.scan_profiles import (
     scan_coverage,
     scan_display_name,
 )
+from app.scan_progress import latest_nmap_stats, new_scan_progress, update_scan_progress
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -197,6 +198,8 @@ class ScanRunPlan(BaseModel):
     chunk_number: int | None = Field(default=None, ge=1)
     chunk_count: int | None = Field(default=None, ge=1)
     chunk_delay_seconds: int | None = Field(default=None, ge=0, le=3600)
+    batch_hosts_total: int | None = Field(default=None, ge=1)
+    batch_hosts_completed_before: int = Field(default=0, ge=0)
     targets: list[str] = Field(min_length=1)
     no_strike: list[str] = Field(default_factory=list)
 
@@ -427,7 +430,10 @@ def build_nmap_argv(
         if builtin is None:
             raise ValueError(f"Unknown scan profile: {profile}")
         scan_options = builtin["settings"]
-    argv = ["nmap", *build_nmap_flags(scan_options), "-e", interface, "-iL", target_file]
+    argv = [
+        "nmap", *build_nmap_flags(scan_options), "--stats-every", "2s",
+        "-e", interface, "-iL", target_file,
+    ]
     if include_no_strike:
         argv.extend(["--excludefile", "no-strike.txt"])
     argv.extend(["-oX", "scan.xml"])
@@ -509,6 +515,16 @@ def build_scan_run_manifest(
         "profile_name": profile_record["name"],
         "profile_version": profile_record["version"],
     }
+    scope_hosts_total = len(expanded_discovery_targets(targets, no_strike))
+    progress = new_scan_progress(
+        scope_hosts_total,
+        phase=status,
+        chunk_number=plan.chunk_number,
+        chunk_count=plan.chunk_count,
+        batch_hosts_total=plan.batch_hosts_total,
+        batch_hosts_completed_before=plan.batch_hosts_completed_before,
+        updated_at=created_at,
+    )
     return {
         "schema_version": 3,
         "run_id": uuid.uuid4().hex,
@@ -528,6 +544,8 @@ def build_scan_run_manifest(
         "chunk_number": plan.chunk_number,
         "chunk_count": plan.chunk_count,
         "chunk_delay_seconds": plan.chunk_delay_seconds,
+        "batch_hosts_total": plan.batch_hosts_total,
+        "batch_hosts_completed_before": plan.batch_hosts_completed_before,
         "reason": plan.reason,
         "originating_host": plan.originating_host,
         "interface": plan.interface,
@@ -548,6 +566,7 @@ def build_scan_run_manifest(
         "capture_command_argv": capture_argv,
         "exact_capture_command": shlex.join(capture_argv) if capture_argv else None,
         "artifacts": [],
+        "progress": progress,
     }
 
 
@@ -1298,6 +1317,59 @@ def write_manifest_file(manifest: dict, data_dir: Path = DATA_DIR) -> None:
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def persist_scan_progress(
+    manifest: dict,
+    *,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+    **changes,
+) -> bool:
+    """Persist a progress change to both the database and retained manifest."""
+    changed = update_scan_progress(
+        manifest["progress"], updated_at=utc_now(), **changes
+    )
+    if changed:
+        update_scan_run_manifest(manifest, db_path)
+        write_manifest_file(manifest, data_dir)
+    return changed
+
+
+def refresh_nmap_progress(
+    manifest: dict,
+    stderr_path: Path,
+    *,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+) -> bool:
+    """Read the newest Nmap status line without interfering with its output file."""
+    try:
+        with stderr_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 131072))
+            stats = latest_nmap_stats(handle.read().decode("utf-8", errors="replace"))
+    except OSError:
+        return False
+    if stats is None:
+        return False
+    completed, up = stats
+    progress = manifest["progress"]
+    if (
+        completed == progress.get("hosts_completed")
+        and up == progress.get("hosts_up")
+        and progress.get("phase") == "nmap"
+    ):
+        return False
+    return persist_scan_progress(
+        manifest,
+        phase="nmap",
+        hosts_completed=completed,
+        hosts_up=up,
+        db_path=db_path,
+        data_dir=data_dir,
+    )
+
+
 def terminate_process(process: object | None, grace_seconds: float = 3.0) -> None:
     if process is None or process.poll() is not None:
         return
@@ -1401,8 +1473,12 @@ def execute_scan_run(
         )
     manifest["started_at"] = utc_now()
     manifest["status"] = "running"
-    update_scan_run_manifest(manifest, db_path)
-    write_manifest_file(manifest, data_dir)
+    persist_scan_progress(
+        manifest,
+        phase="discovery" if manifest.get("discovery_mode") == "fping" else "nmap",
+        db_path=db_path,
+        data_dir=data_dir,
+    )
     deadline = time.monotonic() + int(manifest["timeout_seconds"])
     exit_code = None
 
@@ -1466,6 +1542,16 @@ def execute_scan_run(
                     if line.strip()
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
+                if run_nmap and alive_hosts:
+                    persist_scan_progress(
+                        manifest,
+                        phase="nmap",
+                        hosts_completed=0,
+                        hosts_total=len(alive_hosts),
+                        hosts_up=0,
+                        db_path=db_path,
+                        data_dir=data_dir,
+                    )
                 if run_nmap and not alive_hosts:
                     terminate_process(control.capture_process)
                     control.capture_process = None
@@ -1489,8 +1575,12 @@ def execute_scan_run(
                         )
                         exit_code = 0
                         run_nmap = False
-                        update_scan_run_manifest(manifest, db_path)
-                        write_manifest_file(manifest, data_dir)
+                        persist_scan_progress(
+                            manifest,
+                            phase="completed_without_nmap",
+                            db_path=db_path,
+                            data_dir=data_dir,
+                        )
                     else:
                         manifest["status"] = "awaiting_fallback_approval"
                         manifest["fallback_approval_required"] = True
@@ -1499,8 +1589,12 @@ def execute_scan_run(
                             "pending explicit operator or mission-partner approval."
                         )
                         collect_artifacts(manifest, data_dir)
-                        update_scan_run_manifest(manifest, db_path)
-                        write_manifest_file(manifest, data_dir)
+                        persist_scan_progress(
+                            manifest,
+                            phase="awaiting_approval",
+                            db_path=db_path,
+                            data_dir=data_dir,
+                        )
                         while not control.fallback_decision_event.is_set():
                             if control.cancel_event.is_set():
                                 manifest["status"] = "cancelled"
@@ -1521,6 +1615,17 @@ def execute_scan_run(
                                     "FPING found no responsive hosts. Full Nmap fallback "
                                     f"approved by {control.fallback_decided_by}: "
                                     f"{control.fallback_authorization_note}"
+                                )
+                                persist_scan_progress(
+                                    manifest,
+                                    phase="nmap",
+                                    hosts_completed=0,
+                                    hosts_total=int(
+                                        manifest["progress"].get("scope_hosts_total") or 0
+                                    ),
+                                    hosts_up=0,
+                                    db_path=db_path,
+                                    data_dir=data_dir,
                                 )
                                 deadline = time.monotonic() + int(manifest["timeout_seconds"])
                                 if manifest["capture_requested"]:
@@ -1548,8 +1653,14 @@ def execute_scan_run(
                                 )
                                 exit_code = 0
                                 run_nmap = False
-                            update_scan_run_manifest(manifest, db_path)
-                            write_manifest_file(manifest, data_dir)
+                            persist_scan_progress(
+                                manifest,
+                                phase=(
+                                    "nmap" if run_nmap else "completed_without_nmap"
+                                ),
+                                db_path=db_path,
+                                data_dir=data_dir,
+                            )
 
             if run_nmap:
                 control.nmap_process = popen_factory(
@@ -1560,9 +1671,16 @@ def execute_scan_run(
                     stderr=stderr_handle,
                     start_new_session=True,
                 )
+                last_progress_check = 0.0
                 while True:
                     exit_code = control.nmap_process.poll()
                     if exit_code is not None:
+                        refresh_nmap_progress(
+                            manifest,
+                            run_dir / "stderr.txt",
+                            db_path=db_path,
+                            data_dir=data_dir,
+                        )
                         manifest["status"] = "completed" if exit_code == 0 else "failed"
                         break
                     if control.cancel_event.is_set():
@@ -1575,6 +1693,15 @@ def execute_scan_run(
                         terminate_process(control.nmap_process)
                         exit_code = control.nmap_process.poll()
                         break
+                    now = time.monotonic()
+                    if now - last_progress_check >= 1:
+                        refresh_nmap_progress(
+                            manifest,
+                            run_dir / "stderr.txt",
+                            db_path=db_path,
+                            data_dir=data_dir,
+                        )
+                        last_progress_check = now
                     sleep_fn(0.2)
     except Exception as exc:
         manifest["status"] = "failed"
@@ -1589,6 +1716,33 @@ def execute_scan_run(
             "completed", "completed_without_nmap"
         }
         manifest["host_count"] = nmap_host_count(run_dir / "scan.xml")
+        progress = manifest["progress"]
+        if manifest["status"] == "completed":
+            update_scan_progress(
+                progress,
+                phase="completed",
+                hosts_completed=int(progress.get("hosts_total") or 0),
+                hosts_up=manifest["host_count"] or 0,
+                batch_hosts_completed=(
+                    int(progress.get("batch_hosts_completed_before") or 0)
+                    + int(progress.get("scope_hosts_total") or 0)
+                ),
+                updated_at=utc_now(),
+            )
+        elif manifest["status"] == "completed_without_nmap":
+            update_scan_progress(
+                progress,
+                phase="completed_without_nmap",
+                batch_hosts_completed=(
+                    int(progress.get("batch_hosts_completed_before") or 0)
+                    + int(progress.get("scope_hosts_total") or 0)
+                ),
+                updated_at=utc_now(),
+            )
+        else:
+            update_scan_progress(
+                progress, phase=manifest["status"], updated_at=utc_now()
+            )
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
         with ACTIVE_RUNS_LOCK:
@@ -1651,6 +1805,8 @@ def _scheduled_request(
     batch_id: str,
     chunk_number: int,
     chunk_count: int,
+    batch_hosts_total: int,
+    batch_hosts_completed_before: int,
     db_path: Path = DB_PATH,
 ) -> ScanRunRequest:
     no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
@@ -1677,6 +1833,8 @@ def _scheduled_request(
         chunk_number=chunk_number,
         chunk_count=chunk_count,
         chunk_delay_seconds=int(schedule.get("chunk_delay_seconds") or 0),
+        batch_hosts_total=batch_hosts_total,
+        batch_hosts_completed_before=batch_hosts_completed_before,
     )
 
 
@@ -1703,6 +1861,7 @@ def execute_schedule_batch(
             _store_scan_schedule(schedule, db_path)
             return
         total = len(chunks)
+        batch_hosts_total = sum(len(chunk) for chunk in chunks)
         schedule.update(
             {
                 "batch_status": "running",
@@ -1723,6 +1882,10 @@ def execute_schedule_batch(
                             batch_id=batch_id,
                             chunk_number=index,
                             chunk_count=total,
+                            batch_hosts_total=batch_hosts_total,
+                            batch_hosts_completed_before=sum(
+                                len(chunk) for chunk in chunks[: index - 1]
+                            ),
                             db_path=db_path,
                         ),
                         db_path=db_path,
