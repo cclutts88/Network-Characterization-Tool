@@ -1,5 +1,7 @@
 :80 {
     handle /nct-lab-root.crt {
+        header Content-Disposition "attachment; filename=Network-Characterization-Tool-Lab-CA.crt"
+        header Content-Type "application/x-x509-ca-cert"
         root * /srv/certs
         file_server
     }
