@@ -70,6 +70,7 @@ class CampaignSpec(BaseModel):
     terrain: list[TerrainSegment] = Field(min_length=1)
     no_strike_mode: Literal["entered", "none"]
     no_strike: list[str] = Field(default_factory=list)
+    chunking_enabled: bool = False
     chunk_size: int = Field(default=256, ge=1, le=4096)
 
     @field_validator("name")
@@ -211,6 +212,15 @@ def validate_campaign(spec: CampaignSpec) -> tuple[list[str], list[tuple[str, li
     return no_strike_addresses, segments
 
 
+def campaign_chunking_enabled(spec: CampaignSpec) -> bool:
+    """Honor explicit opt-in while preserving older API requests with chunk_size."""
+    legacy_chunk_request = (
+        "chunk_size" in spec.model_fields_set
+        and "chunking_enabled" not in spec.model_fields_set
+    )
+    return spec.chunking_enabled or legacy_chunk_request
+
+
 def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict]]:
     no_strike, segments = validate_campaign(spec)
     profile = resolve_campaign_profile(spec)
@@ -218,10 +228,12 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
     use_fping = profile["settings"].get("discovery_mode") == "fping"
     chunks: list[dict] = []
     chunk_number = 0
+    chunking_enabled = campaign_chunking_enabled(spec)
     for segment_name, addresses in segments:
-        for start in range(0, len(addresses), spec.chunk_size):
+        addresses_per_scan = spec.chunk_size if chunking_enabled else len(addresses)
+        for start in range(0, len(addresses), addresses_per_scan):
             chunk_number += 1
-            chunk_addresses = addresses[start:start + spec.chunk_size]
+            chunk_addresses = addresses[start:start + addresses_per_scan]
             stem = f"{chunk_number:03d}-{segment_name}"
             target_path = f"targets/{stem}.txt"
             output_path = f"results/{stem}.xml"
@@ -321,6 +333,7 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
         "global_no_strike": global_no_strike,
         "global_no_strike_count": len(global_no_strike),
         "no_strike_sha256": sha256_bytes(files["no-strike.txt"]),
+        "chunking_enabled": campaign_chunking_enabled(spec),
         "chunk_size": spec.chunk_size,
         "chunks": chunks,
         "coverage": {

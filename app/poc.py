@@ -138,6 +138,7 @@ class ScanScheduleCreate(BaseModel):
     reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
     originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
     timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    chunking_enabled: bool = False
     chunk_size: int = Field(default=256, ge=1, le=4096)
     chunk_delay_seconds: int = Field(default=30, ge=0, le=3600)
     fallback_policy: Literal["require_approval", "stop_without_nmap"] = "require_approval"
@@ -857,8 +858,13 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
     if not INTERFACE_RE.fullmatch(request.interface):
         raise ValueError("Interface must be a simple local interface name")
     first_run = _as_utc(request.first_run_at)
+    legacy_chunk_request = (
+        "chunk_size" in request.model_fields_set
+        and "chunking_enabled" not in request.model_fields_set
+    )
+    chunking_enabled = request.chunking_enabled or legacy_chunk_request
     definition = {
-        "schema_version": 2,
+        "schema_version": 3,
         "schedule_id": uuid.uuid4().hex,
         "name": request.name,
         "created_at": utc_now(),
@@ -879,8 +885,13 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "reason": request.reason,
         "originating_host": request.originating_host,
         "timeout_seconds": request.timeout_seconds,
+        "chunking_enabled": chunking_enabled,
         "chunk_size": request.chunk_size,
-        "chunk_delay_seconds": request.chunk_delay_seconds,
+        "chunk_delay_seconds": (
+            request.chunk_delay_seconds
+            if chunking_enabled and request.chunk_size != 256
+            else 0
+        ),
         "fallback_policy": request.fallback_policy,
         "enabled": bool(request.enabled),
         "run_count": 0,
@@ -1624,6 +1635,11 @@ def schedule_target_chunks(
     addresses = expanded_discovery_targets(
         schedule["targets"], no_strike
     )
+    chunking_enabled = bool(
+        schedule.get("chunking_enabled", "chunk_size" in schedule)
+    )
+    if not chunking_enabled:
+        return [addresses] if addresses else []
     size = int(schedule.get("chunk_size") or 256)
     return [addresses[index:index + size] for index in range(0, len(addresses), size)]
 
@@ -1831,6 +1847,9 @@ def queue_scan_schedule_batch(
         "batch_id": batch_id,
         "status": "queued",
         "chunk_count": len(chunks),
+        "chunking_enabled": bool(
+            schedule.get("chunking_enabled", "chunk_size" in schedule)
+        ),
         "chunk_size": int(schedule.get("chunk_size") or 256),
         "chunk_delay_seconds": int(schedule.get("chunk_delay_seconds") or 0),
     }
