@@ -8,6 +8,7 @@ from app.poc import (
     get_scan_profile,
     get_scan_run_plan,
     init_poc_storage,
+    list_scan_run_plans,
     router as poc_router,
     run_directory,
     schedule_worker,
@@ -16,6 +17,13 @@ from app.device_configs import router as device_config_router
 from app.device_ui import device_config_page
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
+from app.comparison import (
+    compare_analyses,
+    coverage_warnings,
+    merge_analyses,
+    representative_coverage,
+    select_same_scope_baseline,
+)
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
 import hashlib
@@ -810,6 +818,72 @@ def analyze_scan_run(run_id: str) -> dict:
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
         "metadata": manifest,
         "analysis": analysis,
+    }
+
+
+def _run_group_analysis(manifests: list[dict]) -> dict:
+    analyses = []
+    for manifest in manifests:
+        xml_path = run_directory(manifest["run_id"]) / "scan.xml"
+        if not xml_path.is_file():
+            raise FileNotFoundError(manifest["run_id"])
+        analyses.append(parse_xml(xml_path.read_bytes()))
+    return merge_analyses(analyses)
+
+
+@app.get("/api/scan-runs/{run_id}/comparison")
+def compare_scan_run_to_previous_scope(run_id: str) -> dict:
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    try:
+        selected = select_same_scope_baseline(run_id, manifests)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan run not found") from exc
+
+    status = selected["status"]
+    if status != "baseline_found":
+        messages = {
+            "current_running": "This scan or one of its chunks is still running.",
+            "current_incomplete": (
+                "This scan batch is incomplete or does not have XML evidence for every chunk."
+            ),
+            "no_baseline": (
+                "No earlier completed scan has the same effective target scope after exclusions."
+            ),
+        }
+        return {
+            "status": status,
+            "message": messages[status],
+            "current": selected["current"],
+            "baseline": None,
+        }
+
+    before_manifests = selected.pop("baseline_manifests")
+    after_manifests = selected.pop("current_manifests")
+    try:
+        before_analysis = _run_group_analysis(before_manifests)
+        after_analysis = _run_group_analysis(after_manifests)
+    except (OSError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The selected comparison evidence is incomplete or unreadable",
+        ) from exc
+    result = compare_analyses(before_analysis, after_analysis)
+    warnings = coverage_warnings(
+        representative_coverage(before_manifests),
+        representative_coverage(after_manifests),
+    )
+    return {
+        "status": "baseline_found",
+        "message": "Compared with the latest completed scan of the same effective scope.",
+        "current": selected["current"],
+        "baseline": selected["baseline"],
+        "coverage_compatible": not warnings,
+        "coverage_warnings": warnings,
+        **result,
     }
 
 

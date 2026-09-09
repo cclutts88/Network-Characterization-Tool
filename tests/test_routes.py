@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import CampaignSpec, TerrainSegment, app, build_scan_plan
 from app.device_configs import DeviceConfigPlan, _interactive_master_args
+from app.poc import insert_scan_run_manifest, run_directory
 
 
 ROUTE_XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10">
@@ -205,6 +206,54 @@ def test_import_history_raw_xml_and_both_csv_exports():
     assert "open_services" in hosts.text
     assert "protocol,port,port_state" in ports.text
     assert "192.0.2.10" in ports.text
+
+
+def test_automatic_run_comparison_uses_latest_completed_same_scope():
+    def manifest(run_id: str, when: str, targets: list[str]) -> dict:
+        return {
+            "run_id": run_id,
+            "name": run_id,
+            "display_name": run_id,
+            "created_at": when,
+            "completed_at": when,
+            "status": "completed",
+            "operator": "analyst01",
+            "reason": "Comparison route test",
+            "originating_host": "test-host",
+            "interface": "eth0",
+            "profile": "Standard",
+            "profile_id": "builtin-standard",
+            "profile_version": 1,
+            "targets": targets,
+            "no_strike": [],
+            "coverage": {
+                "targets": targets,
+                "no_strike": [],
+                "protocols": ["TCP"],
+                "tcp_scope": "common",
+            },
+        }
+
+    baseline_id, unrelated_id, current_id = "7" * 32, "8" * 32, "9" * 32
+    baseline = manifest(baseline_id, "2030-01-01T10:00:00+00:00", ["198.51.100.0/24"])
+    unrelated = manifest(unrelated_id, "2030-01-01T11:00:00+00:00", ["203.0.113.0/24"])
+    current = manifest(current_id, "2030-01-01T12:00:00+00:00", ["198.51.100.0/24"])
+    before_xml = ROUTE_XML.replace(b'portid="443"', b'portid="80"').replace(b'name="https"', b'name="http"')
+    for item, xml in ((baseline, before_xml), (unrelated, ROUTE_XML), (current, ROUTE_XML)):
+        insert_scan_run_manifest(item)
+        directory = run_directory(item["run_id"])
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "scan.xml").write_bytes(xml)
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/scan-runs/{current_id}/comparison")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "baseline_found"
+    assert data["baseline"]["run_ids"] == [baseline_id]
+    assert data["summary"]["ports_added"] == 1
+    assert data["summary"]["ports_removed"] == 1
 
 
 def device_password_plan() -> dict:

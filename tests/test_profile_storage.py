@@ -16,12 +16,15 @@ from app.poc import (
     create_scan_profile,
     create_scan_profile_version,
     create_scan_schedule,
+    delete_scan_data,
     delete_scan_profile,
+    delete_scan_schedule,
     effective_no_strike,
     execute_schedule_batch,
     get_global_no_strike,
     get_scan_profile,
     issue_delete_challenge,
+    insert_scan_run_manifest,
     NoStrikeRemoval,
     NoStrikeUpdate,
     remove_global_no_strike,
@@ -121,6 +124,53 @@ def test_built_in_profile_cannot_be_deleted(tmp_path):
     challenge = issue_delete_challenge("profile", "builtin-standard")["challenge"]
     with pytest.raises(PermissionError, match="Built-in"):
         delete_scan_profile("builtin-standard", challenge, db_path)
+
+
+def test_scan_and_schedule_deletion_accept_visible_confirmation_challenges(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    data_dir = tmp_path / "data"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Disposable Schedule",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["192.0.2.10"],
+            interface="eth0",
+            cadence="once",
+            first_run_at=datetime(2026, 9, 10, 2, 0, tzinfo=timezone.utc),
+        ),
+        db_path,
+    )
+    schedule_confirmation = issue_delete_challenge(
+        "schedule", schedule["schedule_id"]
+    )["challenge"]
+    assert delete_scan_schedule(
+        schedule["schedule_id"], schedule_confirmation, db_path
+    )["deleted"] is True
+    assert poc.get_scan_schedule(schedule["schedule_id"], db_path) is None
+
+    run_id = "f" * 32
+    manifest = {
+        "run_id": run_id,
+        "created_at": "2026-09-09T12:00:00+00:00",
+        "status": "completed",
+        "operator": "analyst01",
+        "reason": "Deletion test",
+        "originating_host": "test-host",
+        "interface": "eth0",
+        "profile": "Standard",
+    }
+    insert_scan_run_manifest(manifest, db_path)
+    run_dir = data_dir / "scan-runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "scan.xml").write_text("evidence", encoding="utf-8")
+    scan_confirmation = issue_delete_challenge("scan", run_id)["challenge"]
+    assert delete_scan_data(
+        run_id, scan_confirmation, db_path=db_path, data_dir=data_dir
+    )["deleted"] is True
+    assert not run_dir.exists()
+    assert poc.get_scan_run_plan(run_id, db_path) is None
 
 
 def test_scheduler_splits_a_slash_24_into_six_sequential_chunks(tmp_path):

@@ -50,6 +50,11 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "conflict_flagged" in html
     assert "chunk_delay_seconds" in html
     assert "Chunks never overlap" in html
+    assert 'class="delete-modal hidden"' in html
+    assert 'role="dialog"' in html
+    assert 'id="deleteStatus"' in html
+    assert "Enter the confirmation string shown above" in html
+    assert "Built-in profile protected" in html
     assert "Global no-strike safety list" in html
     assert "Profiles cannot turn this protection off" in html
     assert "/api/safety/no-strike" in html
@@ -75,3 +80,7 @@ def test_new_and_historical_results_share_the_same_renderer():
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
     assert "MAC / vendor" in html
+    assert "Automatic same-scope comparison" in html
+    assert 'id="autoCompareResult"' in html
+    assert "/comparison" in html
+    assert "coverage_warnings" in html
