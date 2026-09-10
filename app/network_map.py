@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import ipaddress
 import json
 import re
@@ -221,6 +222,19 @@ def ensure_subnet_node(nodes: dict[str, dict], network: str, source: dict | None
 def add_subnet_owner(subnet: dict, owner_id: str | None) -> None:
     if owner_id and owner_id not in subnet.setdefault("owners", []):
         subnet["owners"].append(owner_id)
+
+
+def apply_subnet_zone(subnet: dict, zone: str | None, source: dict | None = None) -> None:
+    """Attach an operator-defined interface/zone label without hiding the CIDR."""
+    clean = re.sub(r"\s+", " ", str(zone or "").strip(" \t\r\n'\""))[:80]
+    if not clean or clean.lower() in {"none", "null", "interface"}:
+        return
+    zones = subnet.setdefault("zone_names", [])
+    if clean not in zones:
+        zones.append(clean)
+    subnet["label"] = f"{' / '.join(zones)} · {subnet['network']}"
+    if source:
+        add_source(subnet, source)
 
 
 def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
@@ -550,9 +564,17 @@ def interface_name(line: str) -> str | None:
 def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
     interfaces: list[dict] = []
     routes: list[dict] = []
+    zone_by_interface: dict[str, str] = {}
     seen_interfaces: set[tuple[str | None, str]] = set()
     seen_routes: set[tuple[str, str | None, str | None, bool]] = set()
     current_iface: str | None = None
+
+    def set_zone(name: str | None, value: str | None) -> None:
+        if not name or not value:
+            return
+        clean = re.sub(r"\s+", " ", html.unescape(value).strip(" \t\r\n'\""))[:80]
+        if clean and clean.lower() not in {"none", "null", "interface"}:
+            zone_by_interface[name] = clean
 
     def add_interface(name: str | None, address: str | None) -> None:
         normalized = valid_interface_address(address) if address else None
@@ -585,6 +607,27 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             base = juniper_set.group(1)
             current_iface = f"{base}.{juniper_set.group(2)}" if juniper_set.group(2) else base
             add_interface(current_iface, juniper_set.group(3))
+
+        vyos_description = re.search(
+            r"\bset\s+interfaces\s+\S+\s+([A-Za-z0-9_.:/-]+)\s+description\s+['\"]?(.+?)['\"]?$",
+            line,
+            re.I,
+        )
+        juniper_zone = re.search(
+            r"\bsecurity\s+zones\s+security-zone\s+['\"]?([^'\"\s]+)['\"]?\s+interfaces\s+['\"]?([A-Za-z0-9_.:/-]+)",
+            line,
+            re.I,
+        )
+        nameif = re.match(r"^nameif\s+(.+)$", line, re.I)
+        description = re.match(r"^description\s+(.+)$", line, re.I)
+        if vyos_description:
+            set_zone(vyos_description.group(1), vyos_description.group(2))
+        if juniper_zone:
+            set_zone(juniper_zone.group(2), juniper_zone.group(1))
+        if nameif and current_iface:
+            set_zone(current_iface, nameif.group(1))
+        elif description and current_iface:
+            set_zone(current_iface, description.group(1))
 
         inet_match = re.search(
             r"\binet\s+((?:\d{1,3}\.){3}\d{1,3})(?:/(\d{1,2}))?\s+(?:netmask\s+([^\s]+))?",
@@ -638,6 +681,21 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
                     None,
                 )
                 add_interface(iface, address_match or network)
+    interfaces_xml = re.search(r"<interfaces>(.*?)</interfaces>", text, re.I | re.S)
+    if interfaces_xml:
+        for match in re.finditer(r"<([A-Za-z][A-Za-z0-9_-]*)>(.*?)</\1>", interfaces_xml.group(1), re.I | re.S):
+            block = match.group(2)
+            iface_match = re.search(r"<if>([^<]+)</if>", block, re.I)
+            label_match = re.search(r"<descr>([^<]+)</descr>", block, re.I)
+            if iface_match:
+                set_zone(iface_match.group(1), label_match.group(1) if label_match else match.group(1).upper())
+    for interface in interfaces:
+        name = interface.get("name")
+        zone = zone_by_interface.get(name or "")
+        if not zone and name and "." in name:
+            zone = zone_by_interface.get(name.rsplit(".", 1)[0])
+        if zone:
+            interface["zone"] = zone
     return interfaces, routes
 
 
@@ -784,12 +842,19 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             for item in interfaces
             if item.get("name")
         }
+        interface_zones = {
+            item.get("name"): item.get("zone")
+            for item in interfaces
+            if item.get("name") and item.get("zone")
+        }
         interface_nodes: dict[str, dict] = {}
         for interface in interfaces:
             name = interface.get("name") or "interface"
             interface_node = ensure_interface_node(
                 nodes, node, name, interface.get("address"), source
             )
+            if interface.get("zone"):
+                interface_node["zone"] = interface["zone"]
             interface_nodes[name] = interface_node
             add_edge(
                 edges,
@@ -856,6 +921,7 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 and not parsed_network.is_loopback
             ):
                 subnet = ensure_subnet_node(nodes, network, source)
+                apply_subnet_zone(subnet, interface_zones.get(route.get("interface")), source)
                 add_subnet_owner(subnet, route_source.get("device_id") or node["id"])
                 add_edge(
                     edges,
@@ -891,9 +957,12 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 continue
             subnet = ensure_subnet_node(nodes, network, source)
             name = interface.get("name") or "interface"
+            apply_subnet_zone(subnet, interface.get("zone"), source)
             interface_node = interface_nodes.get(name) or ensure_interface_node(
                 nodes, node, name, interface.get("address"), source
             )
+            if interface.get("zone"):
+                interface_node["zone"] = interface["zone"]
             interface_nodes[name] = interface_node
             add_subnet_owner(subnet, interface_node.get("device_id") or node["id"])
             add_edge(
