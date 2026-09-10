@@ -45,8 +45,10 @@
 - [ ] Evaluate PCAP MAC correlation only for future deployments with collectors
   on target Layer-2 segments; do not infer endpoint MACs from routed traffic.
 - [x] Add offline OUI/vendor lookup using the locally installed Nmap database.
-- [ ] Extend packet and configuration parsers for PCAPNG and LLDP/CDP-specific
-  chassis and port identity.
+- [ ] Extend the packet parser for PCAPNG when a future deployment includes
+  collectors on useful Layer-2 segments.
+- [x] Collect and parse LLDP/CDP chassis, device, local-interface, and remote-port
+  identity into confirmed network-map links.
 - [ ] Add local SearchSploit/ExploitDB references with careful
   “potentially relevant” wording.
 - [ ] Evaluate the suggested GitLab Nmap parser and identify the analyst's
