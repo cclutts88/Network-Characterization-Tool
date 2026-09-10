@@ -23,6 +23,10 @@ def test_neighbor_parser_handles_multiple_formats_and_excludes_incomplete():
 Internet  192.0.2.12  0  0011.2233.4477  ARPA  GigabitEthernet0/1
 Internet  192.0.2.13  0  Incomplete  ARPA  GigabitEthernet0/1
 ? (192.0.2.14) at (incomplete) on vtnet0
+172.22.255.1 ether bc:24:11:aa:bb:cc C * eth0
+bc:24:11:aa:bb:dd 192.0.2.16 ge-0/0/0.0 none
+inside 192.0.2.17 00:11:22:33:44:88 123
+eth0 172.22.255.2/30 bc:24:11:2b:f1:fa default 1500 u/u
 """
     observations = parse_neighbor_text(text)
 
@@ -30,6 +34,9 @@ Internet  192.0.2.13  0  Incomplete  ARPA  GigabitEthernet0/1
         ("192.0.2.10", "00:11:22:33:44:55", "eth0"),
         ("192.0.2.11", "00:11:22:33:44:66", "vtnet0"),
         ("192.0.2.12", "00:11:22:33:44:77", "GigabitEthernet0/1"),
+        ("172.22.255.1", "BC:24:11:AA:BB:CC", "eth0"),
+        ("192.0.2.16", "BC:24:11:AA:BB:DD", "ge-0/0/0.0"),
+        ("192.0.2.17", "00:11:22:33:44:88", "inside"),
     }
     assert all(item["protocol"] == "arp" for item in observations)
     assert all(item["confidence"] == "confirmed" for item in observations)
