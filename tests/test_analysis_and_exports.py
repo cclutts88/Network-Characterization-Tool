@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import json
+
 from app.exports import host_summary_rows, port_level_rows, rows_to_csv, PORT_LEVEL_FIELDS
 from app.main import parse_xml
 from app.network_map import (
     add_analysis_hosts,
+    add_edge,
     add_membership_edges,
     annotate_subnet_scan_observations,
     apply_subnet_zone,
+    configuration_devices,
     ensure_ip_node,
+    ensure_interface_node,
     ensure_subnet_node,
+    ensure_topology_neighbor_node,
     merge_device_alias,
     parse_config_text,
 )
@@ -167,3 +173,88 @@ set interfaces ge-0/0/3 unit 0 family inet address 10.60.0.1/24
     apply_subnet_zone(subnet, "OPERATIONS-LAN")
     assert subnet["label"] == "OPERATIONS-LAN · 10.40.0.0/24"
     assert subnet["zone_names"] == ["OPERATIONS-LAN"]
+
+
+def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
+    nodes, edges, aliases = {}, {}, {}
+    source = {
+        "kind": "lldp_cdp_neighbor",
+        "label": "Cisco LLDP/CDP neighbor evidence",
+        "timestamp": "2026-09-09T20:00:00+00:00",
+        "url": "/api/device-configs/example/files/stdout.txt",
+    }
+    local = ensure_ip_node(nodes, "10.20.30.1", hostname="edge-router", role="router", source=source)
+    interface = ensure_interface_node(nodes, local, "GigabitEthernet0/1", "10.20.30.1/24", source)
+    observation = {
+        "protocol": "lldp",
+        "local_interface": "GigabitEthernet0/1",
+        "remote_port": "GigabitEthernet1/0/24",
+        "neighbor_name": "core-switch",
+        "management_ip": "10.20.30.2",
+        "chassis_id": "00:11:22:33:44:55",
+        "chassis_mac": "00:11:22:33:44:55",
+        "platform": "Cisco C3850",
+        "capabilities": "Bridge Router",
+        "evidence": "retained LLDP detail",
+    }
+
+    neighbor = ensure_topology_neighbor_node(nodes, observation, source, aliases)
+    add_edge(
+        edges, interface["id"], neighbor["id"], "topology_neighbor",
+        "GigabitEthernet0/1 ↔ GigabitEthernet1/0/24 (LLDP)",
+        "confirmed", observation["evidence"], True,
+    )
+
+    assert neighbor["kind"] == "device"
+    assert neighbor["role"] == "switch"
+    assert neighbor["vendor"] == "cisco"
+    assert neighbor["hostname"] == "core-switch"
+    assert neighbor["mac"] == "00:11:22:33:44:55"
+    assert neighbor["topology_observations"][0]["remote_port"] == "GigabitEthernet1/0/24"
+    edge = next(iter(edges.values()))
+    assert edge["relation"] == "topology_neighbor"
+    assert edge["confidence"] == "confirmed"
+    assert edge["interface_label"] is True
+
+
+def test_collected_configuration_adds_lldp_link_to_complete_topology(tmp_path, monkeypatch):
+    run_id = "a" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    manifest = {
+        "run_id": run_id,
+        "operation": "interactive_configuration_pull",
+        "device_address": "10.20.30.1",
+        "device_name": "edge-router",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": "completed",
+        "created_at": "2026-09-09T20:00:00+00:00",
+        "completed_at": "2026-09-09T20:01:00+00:00",
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        """
+interface GigabitEthernet0/1
+ description TRANSIT
+ ip address 10.20.30.1 255.255.255.0
+Local interface: GigabitEthernet0/1
+Chassis ID: 00:11:22:33:44:55
+Port ID: GigabitEthernet1/0/24
+System Name: core-switch
+Management address: 10.20.30.2
+System Capabilities: Bridge Router
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    assert nodes["ip:10.20.30.1"]["hostname"] == "edge-router"
+    assert nodes["ip:10.20.30.2"]["hostname"] == "core-switch"
+    links = [edge for edge in edges.values() if edge["relation"] == "topology_neighbor"]
+    assert len(links) == 1
+    assert links[0]["label"] == "GigabitEthernet0/1 ↔ GigabitEthernet1/0/24 (LLDP)"
+    assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
