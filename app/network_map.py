@@ -729,8 +729,13 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
         juniper_physical_header = re.match(
             r"^Physical interface:\s*([^,\s]+)", line, re.I
         )
+        vyos_set_address = re.search(
+            r"\bset\s+interfaces\s+\S+\s+([A-Za-z0-9_.:/-]+)\s+address\s+['\"]?((?:\d{1,3}\.){3}\d{1,3}/\d{1,2})",
+            line,
+            re.I,
+        )
         juniper_set = re.search(
-            r"\binterfaces\s+([A-Za-z0-9_.:/-]+)(?:\s+unit\s+(\d+))?.*?\baddress\s+['\"]?((?:\d{1,3}\.){3}\d{1,3}/\d{1,2})",
+            r"\binterfaces\s+([A-Za-z0-9_.:/-]+)\s+unit\s+(\d+).*?\baddress\s+['\"]?((?:\d{1,3}\.){3}\d{1,3}/\d{1,2})",
             line,
             re.I,
         )
@@ -744,9 +749,12 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             current_iface = re.sub(r"\s+", "", cisco_oper_header.group(1))
         elif config_header:
             current_iface = config_header.group(1)
+        elif vyos_set_address:
+            current_iface = vyos_set_address.group(1)
+            add_interface(current_iface, vyos_set_address.group(2))
         elif juniper_set:
             base = juniper_set.group(1)
-            current_iface = f"{base}.{juniper_set.group(2)}" if juniper_set.group(2) else base
+            current_iface = f"{base}.{juniper_set.group(2)}"
             add_interface(current_iface, juniper_set.group(3))
 
         vyos_hw_id = re.search(
