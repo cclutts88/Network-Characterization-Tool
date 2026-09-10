@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
-from collections import defaultdict
+import math
+import re
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -15,6 +17,11 @@ TERMINAL_STATES = {
     "cancelled",
     "timed_out",
 }
+
+_CHUNK_NAME_RE = re.compile(
+    r"(?:[ _])Chunk(?:[ _])\d+(?:[ _])of(?:[ _])\d+",
+    re.IGNORECASE,
+)
 
 
 def _entries(value: object) -> list[str]:
@@ -112,10 +119,12 @@ def _timestamp(manifests: Iterable[dict]) -> datetime:
 
 def describe_run_group(manifests: list[dict]) -> dict:
     first = manifests[0]
+    display_name = str(first.get("display_name") or first.get("name") or "Scan")
+    display_name = _CHUNK_NAME_RE.sub("", display_name)
     return {
         "group_id": run_group_key(first),
         "run_ids": [item["run_id"] for item in manifests],
-        "display_name": first.get("display_name") or first.get("name") or "Scan",
+        "display_name": display_name,
         "schedule_id": first.get("schedule_id"),
         "schedule_batch_id": first.get("schedule_batch_id"),
         "created_at": min((item.get("created_at") or "" for item in manifests), default=""),
@@ -180,20 +189,39 @@ def representative_coverage(manifests: list[dict]) -> dict:
     coverage["profile_id"] = manifests[0].get("profile_id") if manifests else None
     coverage["profile_version"] = manifests[0].get("profile_version") if manifests else None
     coverage["interface"] = manifests[0].get("interface") if manifests else None
+    if manifests:
+        scope = effective_scope(manifests)
+        coverage["effective_targets"] = scope["targets"]
+        coverage["effective_address_count"] = scope["address_count"]
+        coverage["excluded_address_count"] = scope["excluded_address_count"]
     return coverage
+
+
+def _protocol_port_coverage(coverage: dict, protocol: str) -> object:
+    scan_services = sorted({
+        str(item.get("services") or "")
+        for item in coverage.get("scan_types", []) or []
+        if str(item.get("protocol") or "").upper() == protocol and item.get("services") is not None
+    })
+    if scan_services:
+        return scan_services
+    prefix = protocol.lower()
+    scope = coverage.get(f"{prefix}_scope")
+    ports = coverage.get(f"{prefix}_ports")
+    return {"scope": scope, "ports": ports} if scope is not None or ports is not None else None
 
 
 def coverage_warnings(before: dict, after: dict) -> list[str]:
     labels = {
+        "effective_targets": "Effective targets differ",
+        "target_arguments": "Scan targets differ",
         "protocols": "Protocols differ",
-        "tcp_scope": "TCP port scope differs",
-        "tcp_ports": "Custom TCP ports differ",
-        "udp_scope": "UDP port scope differs",
-        "udp_ports": "Custom UDP ports differ",
         "service_detection": "Service/version detection differs",
         "os_detection": "OS detection differs",
         "discovery_mode": "Host discovery method differs",
         "traceroute": "Traceroute collection differs",
+        "timing": "Nmap timing differs",
+        "dns_resolution_disabled": "DNS resolution behavior differs",
         "profile_id": "Saved profile differs",
         "profile_version": "Profile version differs",
         "interface": "Analyzer interface differs",
@@ -207,22 +235,176 @@ def coverage_warnings(before: dict, after: dict) -> list[str]:
             new = sorted(new or [])
         if old != new:
             warnings.append(f"{label}: {old!r} -> {new!r}")
+    for protocol in ("TCP", "UDP"):
+        old = _protocol_port_coverage(before, protocol)
+        new = _protocol_port_coverage(after, protocol)
+        if old != new and (old is not None or new is not None):
+            prefix = protocol.lower()
+            label = (
+                f"{protocol} port scope differs"
+                if before.get(f"{prefix}_scope") is not None
+                or after.get(f"{prefix}_scope") is not None
+                else f"{protocol} port coverage differs"
+            )
+            warnings.append(f"{label}: {old!r} -> {new!r}")
     return warnings
 
 
 def merge_analyses(analyses: Iterable[dict]) -> dict:
+    analysis_list = list(analyses)
+    if not analysis_list:
+        return {
+            "hosts": [], "host_count": 0, "up_count": 0, "mac_count": 0,
+            "peer_groups": [], "os_groups": [], "rare_ports": [],
+        }
+    if len(analysis_list) == 1:
+        return analysis_list[0]
+
     hosts: dict[str, dict] = {}
-    for analysis in analyses:
+    for analysis in analysis_list:
         for host in analysis.get("hosts", []) or []:
             key = canonical_host_key(host)
             if key:
-                hosts[key] = host
+                if key not in hosts:
+                    hosts[key] = dict(host)
+                    continue
+                merged = hosts[key]
+                for field in ("ports", "observed_ports"):
+                    values = {_port_key(item): item for item in merged.get(field, []) or []}
+                    values.update({_port_key(item): item for item in host.get(field, []) or []})
+                    merged[field] = [values[item] for item in sorted(values)]
+                for field, value in host.items():
+                    if field not in {"ports", "observed_ports"} and value not in (None, "", [], {}):
+                        merged[field] = value
     values = [hosts[key] for key in sorted(hosts)]
+    summary = _summarize_hosts(values)
+    first, last = analysis_list[0], analysis_list[-1]
     return {
+        **first,
+        "started": first.get("started") or "",
+        "finished": last.get("finished") or "",
+        "reported_total": sum(int(item.get("reported_total") or 0) for item in analysis_list),
+        "coverage": _merge_xml_coverage(analysis_list),
+        "warnings": list(dict.fromkeys(
+            warning
+            for item in analysis_list
+            for warning in (item.get("warnings") or [])
+        )),
         "hosts": values,
-        "host_count": len(values),
-        "up_count": sum(1 for host in values if host.get("state") == "up"),
-        "mac_count": sum(1 for host in values if host.get("mac")),
+        **summary,
+    }
+
+
+def _merge_xml_coverage(analyses: list[dict]) -> dict:
+    coverages = [item.get("coverage") or {} for item in analyses]
+    merged = dict(coverages[0]) if coverages else {}
+    merged["protocols"] = sorted({
+        str(protocol)
+        for coverage in coverages
+        for protocol in (coverage.get("protocols") or [])
+        if protocol
+    })
+    scan_types = []
+    seen_scan_types = set()
+    for coverage in coverages:
+        for scan_type in coverage.get("scan_types", []) or []:
+            key = (
+                scan_type.get("type"), scan_type.get("protocol"),
+                scan_type.get("services"), scan_type.get("service_count"),
+            )
+            if key not in seen_scan_types:
+                scan_types.append(scan_type)
+                seen_scan_types.add(key)
+    merged["scan_types"] = scan_types
+    merged["target_arguments"] = sorted({
+        str(target)
+        for coverage in coverages
+        for target in (coverage.get("target_arguments") or [])
+        if target
+    })
+    commands = list(dict.fromkeys(
+        str(coverage.get("command"))
+        for coverage in coverages
+        if coverage.get("command")
+    ))
+    merged["command"] = "\n".join(commands)
+    for field in ("dns_resolution_disabled", "traceroute"):
+        values = [coverage.get(field) for coverage in coverages]
+        merged[field] = all(values) if values else False
+    timings = {coverage.get("timing") for coverage in coverages}
+    merged["timing"] = timings.pop() if len(timings) == 1 else "mixed"
+    return merged
+
+
+def _summarize_hosts(hosts: list[dict]) -> dict:
+    up_hosts = [host for host in hosts if host.get("state") == "up"]
+    peer_groups: defaultdict[str, list[str]] = defaultdict(list)
+    grouped_hosts: defaultdict[str, list[dict]] = defaultdict(list)
+    port_frequency: Counter[tuple[str, int]] = Counter()
+    for host in hosts:
+        open_ports = host.get("ports", []) or []
+        signature = ",".join(
+            f"{port.get('port')}/{port.get('protocol')}"
+            for port in sorted(open_ports, key=_port_key)
+        ) or "no-open-ports"
+        if host.get("ip"):
+            peer_groups[signature].append(host["ip"])
+        if host.get("state") == "up":
+            grouped_hosts[str(host.get("os_group") or "Unclassified")].append(host)
+            port_frequency.update({_port_key(port) for port in open_ports})
+
+    os_groups = []
+    for group_name, members in sorted(grouped_hosts.items()):
+        port_members: defaultdict[tuple[str, int], list[dict]] = defaultdict(list)
+        port_examples: dict[tuple[str, int], dict] = {}
+        for host in members:
+            for port in host.get("ports", []) or []:
+                key = _port_key(port)
+                port_examples.setdefault(key, port)
+                if host not in port_members[key]:
+                    port_members[key].append(host)
+        outlier_limit = max(1, math.ceil(len(members) * 0.20))
+        outlier_keys = {
+            key for key, affected in port_members.items()
+            if len(members) >= 2 and len(affected) <= outlier_limit
+        }
+        for host in members:
+            for port in host.get("ports", []) or []:
+                key = _port_key(port)
+                port["outlier"] = key in outlier_keys
+                port["group_host_count"] = len(members)
+                port["group_port_host_count"] = len(port_members[key])
+        os_groups.append({
+            "name": group_name,
+            "host_count": len(members),
+            "outlier_limit": outlier_limit,
+            "outlying_ports": [{
+                "port": key[1],
+                "protocol": key[0],
+                "service": port_examples[key].get("service", "unknown"),
+                "product": port_examples[key].get("product", ""),
+                "host_count": len(port_members[key]),
+                "group_host_count": len(members),
+                "prevalence_percent": round((len(port_members[key]) / len(members)) * 100, 1),
+                "hosts": [host.get("ip") for host in port_members[key] if host.get("ip")],
+            } for key in sorted(outlier_keys, key=lambda value: (value[1], value[0]))],
+        })
+
+    rare_limit = max(1, len(up_hosts) // 10)
+    return {
+        "host_count": len(hosts),
+        "up_count": len(up_hosts),
+        "mac_count": sum(1 for host in hosts if host.get("mac")),
+        "peer_groups": [
+            {"open_ports": signature, "hosts": members}
+            for signature, members in sorted(peer_groups.items())
+        ],
+        "os_groups": os_groups,
+        "rare_ports": [
+            {"protocol": key[0], "port": key[1], "host_count": count}
+            for key, count in sorted(port_frequency.items(), key=lambda item: (item[0][1], item[0][0]))
+            if count <= rare_limit
+        ],
     }
 
 
@@ -252,6 +434,13 @@ def _service_evidence(port: dict) -> dict:
     }
 
 
+def _port_inventory(host: dict) -> dict[tuple[str, int], dict]:
+    values = host.get("observed_ports")
+    if not isinstance(values, list) or not values:
+        values = host.get("ports", []) or []
+    return {_port_key(port): port for port in values}
+
+
 def _trace_evidence(host: dict) -> dict | None:
     trace = host.get("trace")
     if not trace:
@@ -270,7 +459,13 @@ def _trace_evidence(host: dict) -> dict | None:
     }
 
 
-def compare_analyses(before_analysis: dict, after_analysis: dict) -> dict:
+def compare_analyses(
+    before_analysis: dict,
+    after_analysis: dict,
+    *,
+    before_evidence: dict | None = None,
+    after_evidence: dict | None = None,
+) -> dict:
     before = {
         canonical_host_key(host): host
         for host in before_analysis.get("hosts", []) or []
@@ -286,24 +481,39 @@ def compare_analyses(before_analysis: dict, after_analysis: dict) -> dict:
     changed = []
     for key in sorted(set(before) & set(after)):
         old_host, new_host = before[key], after[key]
-        old_ports = {_port_key(port): port for port in old_host.get("ports", []) or []}
-        new_ports = {_port_key(port): port for port in new_host.get("ports", []) or []}
+        old_ports = _port_inventory(old_host)
+        new_ports = _port_inventory(new_host)
         added_ports = [_service_evidence(new_ports[item]) for item in sorted(set(new_ports) - set(old_ports))]
         removed_ports = [_service_evidence(old_ports[item]) for item in sorted(set(old_ports) - set(new_ports))]
         service_changes = []
+        port_state_changes = []
         for port_key in sorted(set(old_ports) & set(new_ports)):
             old_service = _service_evidence(old_ports[port_key])
             new_service = _service_evidence(new_ports[port_key])
             if old_service != new_service:
+                changed_fields = [
+                    field for field in ("state", "reason", "service", "product", "version")
+                    if old_service.get(field) != new_service.get(field)
+                ]
                 service_changes.append({
                     "protocol": port_key[0],
                     "port": port_key[1],
                     "before": old_service,
                     "after": new_service,
+                    "changed_fields": changed_fields,
                 })
+                if "state" in changed_fields:
+                    port_state_changes.append({
+                        "protocol": port_key[0],
+                        "port": port_key[1],
+                        "before": old_service.get("state"),
+                        "after": new_service.get("state"),
+                        "reason_before": old_service.get("reason"),
+                        "reason_after": new_service.get("reason"),
+                    })
         identity_fields = (
-            "hostname", "state", "mac", "vendor", "os", "os_group",
-            "os_family", "os_generation", "device_type",
+            "hostname", "hostnames", "state", "mac", "vendor", "os", "os_group",
+            "os_vendor", "os_family", "os_generation", "device_type",
         )
         identity_changes = {
             field: {"before": old_host.get(field), "after": new_host.get(field)}
@@ -323,8 +533,10 @@ def compare_analyses(before_analysis: dict, after_analysis: dict) -> dict:
                 "added_ports": added_ports,
                 "removed_ports": removed_ports,
                 "service_changes": service_changes,
+                "port_state_changes": port_state_changes,
                 "identity_changes": identity_changes,
                 "route_change": route_change,
+                "evidence": {"before": before_evidence, "after": after_evidence},
             })
 
     def public_host(host: dict, key: str) -> dict:
@@ -333,7 +545,11 @@ def compare_analyses(before_analysis: dict, after_analysis: dict) -> dict:
             "ip": host.get("ip"),
             "hostname": host.get("hostname") or host.get("name"),
             "mac": host.get("mac"),
-            "ports": [_service_evidence(port) for port in host.get("ports", []) or []],
+            "vendor": host.get("vendor"),
+            "os": host.get("os"),
+            "state": host.get("state"),
+            "ports": [_service_evidence(port) for port in _port_inventory(host).values()],
+            "evidence": after_evidence if key in after else before_evidence,
         }
 
     return {
@@ -344,6 +560,7 @@ def compare_analyses(before_analysis: dict, after_analysis: dict) -> dict:
             "ports_added": sum(len(host["added_ports"]) for host in changed),
             "ports_removed": sum(len(host["removed_ports"]) for host in changed),
             "service_changes": sum(len(host["service_changes"]) for host in changed),
+            "port_state_changes": sum(len(host["port_state_changes"]) for host in changed),
             "identity_changes": sum(len(host["identity_changes"]) for host in changed),
             "route_changes": sum(1 for host in changed if host["route_change"]),
             "before_hosts": len(before),
@@ -352,4 +569,5 @@ def compare_analyses(before_analysis: dict, after_analysis: dict) -> dict:
         "hosts_added": [public_host(after[key], key) for key in added_keys],
         "hosts_removed": [public_host(before[key], key) for key in removed_keys],
         "hosts_changed": changed,
+        "evidence": {"before": before_evidence, "after": after_evidence},
     }
