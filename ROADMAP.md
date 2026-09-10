@@ -39,15 +39,19 @@
 
 ## Phase 5 — Terrain enrichment
 
-- [ ] Ingest router ARP tables while excluding unresolved/incomplete entries.
-- [ ] Correlate MAC observations from PCAP Ethernet, ARP, LLDP, CDP, and IPv6
-  neighbor discovery with source, segment, timestamps, and confidence.
-- [ ] Add offline OUI/vendor lookup.
+- [x] Ingest router ARP tables while excluding unresolved/incomplete entries.
+- [x] Correlate MAC observations from Nmap and router/firewall ARP tables with
+  source, interface, segment, timestamps, and confidence.
+- [ ] Evaluate PCAP MAC correlation only for future deployments with collectors
+  on target Layer-2 segments; do not infer endpoint MACs from routed traffic.
+- [x] Add offline OUI/vendor lookup using the locally installed Nmap database.
+- [ ] Extend packet and configuration parsers for PCAPNG and LLDP/CDP-specific
+  chassis and port identity.
 - [ ] Add local SearchSploit/ExploitDB references with careful
   “potentially relevant” wording.
 - [ ] Evaluate the suggested GitLab Nmap parser and identify the analyst's
   “Redline / Red…” network-mapping tool before integration.
-- [ ] Enrich topology with IP/MAC/interface/route/segment relationships.
+- [x] Enrich topology with IP/MAC/interface/route/segment relationships.
 
 ## Phase 6 — Device configuration collection
 
