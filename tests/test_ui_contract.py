@@ -93,6 +93,12 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "0 observations · characterization needed" in html
     assert "infrastructure_count" in html
     assert "observed_count" in html
+    assert "collapseTransitSegments" in html
+    assert "transit_segment" in html
+    assert "webLayout" in html
+    assert "Spider-web network topology" in html
+    assert "Labeled transit subnet" in html
+    assert "placeLevel(" not in html
 
 
 def test_new_and_historical_results_share_the_same_renderer():
