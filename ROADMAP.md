@@ -49,6 +49,8 @@
   collectors on useful Layer-2 segments.
 - [x] Collect and parse LLDP/CDP chassis, device, local-interface, and remote-port
   identity into confirmed network-map links.
+- [x] Collect, associate, and display router/firewall hardware addresses per
+  interface instead of relying only on one device-level MAC.
 - [ ] Add local SearchSploit/ExploitDB references with careful
   “potentially relevant” wording.
 - [ ] Evaluate the suggested GitLab Nmap parser and identify the analyst's
