@@ -175,6 +175,32 @@ set interfaces ge-0/0/3 unit 0 family inet address 10.60.0.1/24
     assert subnet["zone_names"] == ["OPERATIONS-LAN"]
 
 
+def test_configuration_parser_associates_hardware_addresses_with_interfaces():
+    interfaces, _ = parse_config_text(
+        """
+interface GigabitEthernet0/1
+ ip address 10.40.0.1 255.255.255.0
+GigabitEthernet0/1 is up, line protocol is up
+  Hardware is Gigabit Ethernet, address is 0011.2233.4455 (bia 0011.2233.4455)
+set interfaces ethernet eth0 address '10.50.0.1/24'
+set interfaces ethernet eth0 hw-id '00:11:22:33:44:66'
+set interfaces ge-0/0/3 unit 0 family inet address 10.60.0.1/24
+Physical interface: ge-0/0/3, Enabled, Physical link is Up
+  Current address: 00:11:22:33:44:77, Hardware address: 00:11:22:33:44:77
+vtnet0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
+  ether 00:11:22:33:44:88
+  inet 10.70.0.1 netmask 0xffffff00 broadcast 10.70.0.255
+"""
+    )
+
+    by_name = {item["name"]: item for item in interfaces}
+    assert by_name["GigabitEthernet0/1"]["mac"] == "00:11:22:33:44:55"
+    assert by_name["eth0"]["mac"] == "00:11:22:33:44:66"
+    assert by_name["ge-0/0/3.0"]["mac"] == "00:11:22:33:44:77"
+    assert by_name["vtnet0"]["mac"] == "00:11:22:33:44:88"
+    assert all(item.get("mac_evidence") for item in by_name.values())
+
+
 def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
     nodes, edges, aliases = {}, {}, {}
     source = {
@@ -238,6 +264,8 @@ def test_collected_configuration_adds_lldp_link_to_complete_topology(tmp_path, m
 interface GigabitEthernet0/1
  description TRANSIT
  ip address 10.20.30.1 255.255.255.0
+GigabitEthernet0/1 is up, line protocol is up
+  Hardware is Gigabit Ethernet, address is 0011.2233.4499 (bia 0011.2233.4499)
 Local interface: GigabitEthernet0/1
 Chassis ID: 00:11:22:33:44:55
 Port ID: GigabitEthernet1/0/24
@@ -253,6 +281,8 @@ System Capabilities: Bridge Router
     assert configuration_devices(nodes, edges, warnings) == 1
 
     assert nodes["ip:10.20.30.1"]["hostname"] == "edge-router"
+    assert nodes["ip:10.20.30.1"]["interfaces"][0]["mac"] == "00:11:22:33:44:99"
+    assert nodes["interface:10.20.30.1:GigabitEthernet0-1"]["mac"] == "00:11:22:33:44:99"
     assert nodes["ip:10.20.30.2"]["hostname"] == "core-switch"
     links = [edge for edge in edges.values() if edge["relation"] == "topology_neighbor"]
     assert len(links) == 1
