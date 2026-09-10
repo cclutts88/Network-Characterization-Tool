@@ -14,6 +14,12 @@ A local, Dockerized FastAPI application for building authorized Nmap scans, runn
 - Schedule definitions pinned to a specific immutable profile version.
 - Historical scans reopen through the same complete analysis renderer used for new XML uploads.
 - MAC address and vendor parsing from Nmap XML.
+- ARP/neighbor-table collection and parsing that excludes incomplete entries.
+- MAC correlation across Nmap and router/firewall ARP tables, with evidence
+  source, interface/segment, timestamps, confidence, and conflict warnings.
+  Scanner-side PCAPs are not used for endpoint MAC inference across routed boundaries.
+- Offline vendor enrichment from Nmap's locally installed OUI prefix database;
+  no external lookup service or internet access is required.
 - Separate host-summary and normalized port-level CSV exports.
 - Interactive network-device collection with no stored password, visible cleanup behavior, optional operator commands, reusable device presets, optional device names, and Nmap-discovered device selection.
 
