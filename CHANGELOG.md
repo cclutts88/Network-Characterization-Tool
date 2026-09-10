@@ -16,6 +16,8 @@
 - Fixed subnet characterization counts when Nmap discovers router or firewall
   interface addresses already represented by infrastructure nodes; the map now
   reports endpoint and scanned-device observations separately.
+- Collapsed infrastructure-only transit subnets into labeled links between their
+  connected devices and changed the map to a deterministic spider-web layout.
 
 ## 0.4.1 — Scan builder usability and path discovery
 
