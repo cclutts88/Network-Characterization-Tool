@@ -11,7 +11,9 @@ A local, Dockerized FastAPI application for building authorized Nmap scans, runn
 - First-class TCP, UDP, and TCP + UDP scans with independent common, full, custom, and ICS/OT port scopes.
 - Optional FPING pre-discovery and Nmap traceroute evidence for faster discovery and path mapping.
 - Mandatory `-n` in every generated Nmap command.
-- Schedule definitions pinned to a specific immutable profile version.
+- Active one-time, hourly, daily, weekly, monthly, and custom-hour schedules
+  pinned to a specific immutable profile version, with sequential conflict
+  handling, operator change history, and restart-safe chunk recovery.
 - Historical scans reopen through the same complete analysis renderer used for new XML uploads.
 - MAC address and vendor parsing from Nmap XML.
 - ARP/neighbor-table collection and parsing that excludes incomplete entries.
