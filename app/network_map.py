@@ -1102,13 +1102,22 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             evidence_url,
         )
         for observation in neighbors:
-            neighbor = ensure_ip_node(nodes, observation["ip"], source=neighbor_source)
+            observation_ip = observation["ip"]
+            if observation_ip in aliases and aliases[observation_ip] in nodes:
+                neighbor = nodes[aliases[observation_ip]]
+                add_source(neighbor, neighbor_source)
+            else:
+                neighbor = ensure_ip_node(nodes, observation_ip, source=neighbor_source)
             interface = observation.get("interface")
             segment = valid_network(interface_addresses.get(interface)) if interface else None
             if segment:
                 observation["segment"] = segment
-            add_mac_observation(neighbor, observation, neighbor_source)
             origin = interface_nodes.get(interface) or node
+            if neighbor["id"] == node["id"]:
+                if origin["id"] != node["id"]:
+                    add_mac_observation(origin, observation, neighbor_source)
+                continue
+            add_mac_observation(neighbor, observation, neighbor_source)
             add_edge(
                 edges,
                 origin["id"],
