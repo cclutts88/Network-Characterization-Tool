@@ -29,6 +29,10 @@ CIDR_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}(?![\w.])")
 VIA_RE = re.compile(r"\bvia\s+((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
 INTERFACE_RE = re.compile(r"\b(?:dev\s+)?([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b")
 DIRECT_MARKERS = ("directly connected", " connected", "direct/", "link#")
+MAC_CANDIDATE_RE = re.compile(
+    r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])"
+    r"|(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}(?![0-9A-Fa-f])"
+)
 
 
 def utc_now() -> str:
@@ -239,7 +243,8 @@ def apply_subnet_zone(subnet: dict, zone: str | None, source: dict | None = None
 
 
 def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
-                          address: str | None = None, source: dict | None = None) -> dict:
+                          address: str | None = None, source: dict | None = None,
+                          mac: str | None = None) -> dict:
     safe = re.sub(r"[^A-Za-z0-9_.:-]+", "-", name or "interface")[:64]
     node_id = f"interface:{device['ip']}:{safe}"
     node = nodes.setdefault(
@@ -253,6 +258,8 @@ def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
             "addresses": [address] if address else [],
             "device_id": device["id"],
             "device_ip": device["ip"],
+            "mac": normalize_mac(mac),
+            "mac_observations": [],
             "sources": [],
         },
     )
@@ -260,6 +267,9 @@ def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
         node["address"] = address
     if address and address not in node.setdefault("addresses", []):
         node["addresses"].append(address)
+    normalized_mac = normalize_mac(mac)
+    if normalized_mac and not node.get("mac"):
+        node["mac"] = normalized_mac
     if source:
         add_source(node, source)
     return node
@@ -677,6 +687,8 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
     zone_by_interface: dict[str, str] = {}
     seen_interfaces: set[tuple[str | None, str]] = set()
     seen_routes: set[tuple[str, str | None, str | None, bool]] = set()
+    interface_macs: dict[str, str] = {}
+    interface_mac_evidence: dict[str, str] = {}
     current_iface: str | None = None
 
     def set_zone(name: str | None, value: str | None) -> None:
@@ -695,6 +707,12 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             interfaces.append({"name": name, "address": normalized})
             seen_interfaces.add(key)
 
+    def set_interface_mac(name: str | None, value: str | None, evidence: str) -> None:
+        normalized = normalize_mac(value)
+        if name and normalized and name not in interface_macs:
+            interface_macs[name] = normalized
+            interface_mac_evidence[name] = evidence[:500]
+
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -702,6 +720,15 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
         ifconfig_header = re.match(r"^([A-Za-z][A-Za-z0-9_.:/-]*):\s+(?:flags|link|mtu)\b", line, re.I)
         ip_header = re.match(r"^\d+:\s+([^:@\s]+)(?:@[^:]+)?:", line)
         config_header = re.match(r"^interface\s+([A-Za-z0-9_.:/-]+)\b", line, re.I)
+        cisco_oper_header = re.match(
+            r"^([A-Za-z][A-Za-z0-9_.:/-]*(?:\s+\d+(?:/\d+)*)?)\s+is\s+"
+            r"(?:administratively\s+)?(?:up|down|reset|deleted|disabled)\b",
+            line,
+            re.I,
+        )
+        juniper_physical_header = re.match(
+            r"^Physical interface:\s*([^,\s]+)", line, re.I
+        )
         juniper_set = re.search(
             r"\binterfaces\s+([A-Za-z0-9_.:/-]+)(?:\s+unit\s+(\d+))?.*?\baddress\s+['\"]?((?:\d{1,3}\.){3}\d{1,3}/\d{1,2})",
             line,
@@ -711,12 +738,36 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             current_iface = ifconfig_header.group(1)
         elif ip_header:
             current_iface = ip_header.group(1)
+        elif juniper_physical_header:
+            current_iface = juniper_physical_header.group(1)
+        elif cisco_oper_header:
+            current_iface = re.sub(r"\s+", "", cisco_oper_header.group(1))
         elif config_header:
             current_iface = config_header.group(1)
         elif juniper_set:
             base = juniper_set.group(1)
             current_iface = f"{base}.{juniper_set.group(2)}" if juniper_set.group(2) else base
             add_interface(current_iface, juniper_set.group(3))
+
+        vyos_hw_id = re.search(
+            r"\bset\s+interfaces\s+\S+\s+([A-Za-z0-9_.:/-]+)\s+hw-id\s+['\"]?([^'\"\s]+)",
+            line,
+            re.I,
+        )
+        if vyos_hw_id:
+            current_iface = vyos_hw_id.group(1)
+            set_interface_mac(vyos_hw_id.group(1), vyos_hw_id.group(2), line)
+        mac_line = bool(
+            re.search(
+                r"\b(?:address\s+is|current\s+address|hardware\s+address|mac(?:\s+address)?|hw-id|ether|link/ether)\b",
+                line,
+                re.I,
+            )
+        )
+        if current_iface and mac_line:
+            mac_match = MAC_CANDIDATE_RE.search(line)
+            if mac_match:
+                set_interface_mac(current_iface, mac_match.group(0), line)
 
         vyos_description = re.search(
             r"\bset\s+interfaces\s+\S+\s+([A-Za-z0-9_.:/-]+)\s+description\s+['\"]?(.+?)['\"]?$",
@@ -799,6 +850,25 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             label_match = re.search(r"<descr>([^<]+)</descr>", block, re.I)
             if iface_match:
                 set_zone(iface_match.group(1), label_match.group(1) if label_match else match.group(1).upper())
+    matched_mac_interfaces: set[str] = set()
+    for interface in interfaces:
+        name = interface.get("name") or ""
+        base_name = name.rsplit(".", 1)[0] if "." in name else name
+        mac_name = name if name in interface_macs else base_name
+        if mac_name in interface_macs:
+            interface["mac"] = interface_macs[mac_name]
+            interface["mac_evidence"] = interface_mac_evidence[mac_name]
+            matched_mac_interfaces.add(mac_name)
+    for name, mac in interface_macs.items():
+        if name not in matched_mac_interfaces:
+            interfaces.append(
+                {
+                    "name": name,
+                    "address": None,
+                    "mac": mac,
+                    "mac_evidence": interface_mac_evidence[name],
+                }
+            )
     for interface in interfaces:
         name = interface.get("name")
         zone = zone_by_interface.get(name or "")
@@ -954,6 +1024,20 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             address = valid_interface_address(interface.get("address"))
             if address:
                 merge_device_alias(nodes, edges, node, str(ipaddress.ip_interface(address).ip), aliases)
+        observed_macs_by_ip = {
+            valid_ip(observation.get("ip")): observation.get("mac")
+            for observation in node.get("mac_observations") or []
+            if valid_ip(observation.get("ip")) and normalize_mac(observation.get("mac"))
+        }
+        for interface in interfaces:
+            address = valid_interface_address(interface.get("address"))
+            interface_ip = str(ipaddress.ip_interface(address).ip) if address else None
+            if not interface.get("mac") and interface_ip in observed_macs_by_ip:
+                interface["mac"] = normalize_mac(observed_macs_by_ip[interface_ip])
+                interface["mac_evidence"] = "MAC address reported for this interface IP in saved scan evidence"
+            if interface.get("mac"):
+                lookup = lookup_oui_vendor(interface["mac"])
+                interface["mac_vendor"] = lookup.get("vendor")
         interface_addresses = {
             item.get("name"): item.get("address")
             for item in interfaces
@@ -968,10 +1052,25 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
         for interface in interfaces:
             name = interface.get("name") or "interface"
             interface_node = ensure_interface_node(
-                nodes, node, name, interface.get("address"), source
+                nodes, node, name, interface.get("address"), source,
+                mac=interface.get("mac"),
             )
             if interface.get("zone"):
                 interface_node["zone"] = interface["zone"]
+            if interface.get("mac"):
+                address = valid_interface_address(interface.get("address"))
+                add_mac_observation(
+                    interface_node,
+                    {
+                        "ip": str(ipaddress.ip_interface(address).ip) if address else None,
+                        "mac": interface["mac"],
+                        "interface": name,
+                        "protocol": "device_configuration",
+                        "confidence": "confirmed",
+                        "evidence": interface.get("mac_evidence"),
+                    },
+                    source,
+                )
             interface_nodes[name] = interface_node
             add_edge(
                 edges,
