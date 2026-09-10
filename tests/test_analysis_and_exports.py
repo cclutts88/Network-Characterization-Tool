@@ -6,9 +6,11 @@ from app.network_map import (
     add_analysis_hosts,
     add_membership_edges,
     annotate_subnet_scan_observations,
+    apply_subnet_zone,
     ensure_ip_node,
     ensure_subnet_node,
     merge_device_alias,
+    parse_config_text,
 )
 
 
@@ -125,3 +127,27 @@ def test_scanned_infrastructure_counts_as_subnet_characterization():
         item["source_kind"] == "automated_nmap"
         for item in subnet["infrastructure_observations"]
     )
+
+
+def test_configuration_zone_names_label_subnets_without_hiding_cidr():
+    interfaces, _ = parse_config_text(
+        """
+interface GigabitEthernet0/1
+ description OPERATIONS-LAN
+ ip address 10.40.0.1 255.255.255.0
+interface GigabitEthernet0/2
+ nameif DMZ
+ ip address 10.50.0.1 255.255.255.0
+set security zones security-zone TRUST interfaces ge-0/0/3.0
+set interfaces ge-0/0/3 unit 0 family inet address 10.60.0.1/24
+"""
+    )
+    by_name = {item["name"]: item for item in interfaces}
+    assert by_name["GigabitEthernet0/1"]["zone"] == "OPERATIONS-LAN"
+    assert by_name["GigabitEthernet0/2"]["zone"] == "DMZ"
+    assert by_name["ge-0/0/3.0"]["zone"] == "TRUST"
+
+    subnet = ensure_subnet_node({}, "10.40.0.0/24")
+    apply_subnet_zone(subnet, "OPERATIONS-LAN")
+    assert subnet["label"] == "OPERATIONS-LAN · 10.40.0.0/24"
+    assert subnet["zone_names"] == ["OPERATIONS-LAN"]
