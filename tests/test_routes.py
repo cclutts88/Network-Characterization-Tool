@@ -247,6 +247,10 @@ def test_automatic_run_comparison_uses_latest_completed_same_scope():
 
     with TestClient(app) as client:
         response = client.get(f"/api/scan-runs/{current_id}/comparison")
+        candidates = client.get("/api/scan-comparisons/candidates")
+        selected = client.get(
+            f"/api/scan-comparisons/compare?first={baseline_id}&second={current_id}"
+        )
 
     assert response.status_code == 200
     data = response.json()
@@ -254,6 +258,19 @@ def test_automatic_run_comparison_uses_latest_completed_same_scope():
     assert data["baseline"]["run_ids"] == [baseline_id]
     assert data["summary"]["ports_added"] == 1
     assert data["summary"]["ports_removed"] == 1
+    assert candidates.status_code == 200
+    candidate = next(
+        item for item in candidates.json()
+        if item["selection_run_id"] == current_id
+    )
+    assert "Standard v1" in candidate["comparison_name"]
+    assert "198.51.100.0/24" in candidate["comparison_name"]
+    assert selected.status_code == 200
+    assert selected.json()["before"]["run_ids"] == [baseline_id]
+    assert selected.json()["after"]["run_ids"] == [current_id]
+    assert selected.json()["evidence"]["after"]["sources"][0]["url"].endswith(
+        f"/{current_id}/artifacts/xml"
+    )
 
 
 def device_password_plan() -> dict:
