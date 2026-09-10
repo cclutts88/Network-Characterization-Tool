@@ -21,8 +21,12 @@ from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
 from app.comparison import (
     compare_analyses,
     coverage_warnings,
+    describe_run_group,
+    group_is_comparable,
+    group_run_manifests,
     merge_analyses,
     representative_coverage,
+    run_group_key,
     select_same_scope_baseline,
 )
 from app.analysis_ui import analysis_page
@@ -50,7 +54,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.5.0"
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
@@ -473,6 +477,25 @@ def nmap_xml_coverage(root: ET.Element) -> dict:
             protocols.append("UDP")
         if any(flag in argument_tokens for flag in ("-sS", "-sT", "-sA")):
             protocols.append("TCP")
+    options_with_values = {
+        "-p", "--top-ports", "-e", "--exclude", "--excludefile", "-iL",
+        "-oA", "-oG", "-oN", "-oS", "-oX", "--script", "--script-args",
+        "--source-port", "-g", "--max-rate", "--min-rate", "--host-timeout",
+    }
+    target_arguments: list[str] = []
+    skip_next = False
+    for index, token in enumerate(argument_tokens):
+        if index == 0 and token.lower().endswith("nmap"):
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        if token in options_with_values:
+            skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        target_arguments.append(token)
     timing = next((token for token in argument_tokens if re.fullmatch(r"-T[0-5]", token)), None)
     return {
         "source": "nmap_xml",
@@ -482,6 +505,7 @@ def nmap_xml_coverage(root: ET.Element) -> dict:
         "timing": timing,
         "dns_resolution_disabled": "-n" in argument_tokens,
         "traceroute": "--traceroute" in argument_tokens,
+        "target_arguments": sorted(target_arguments),
     }
 
 
@@ -529,10 +553,11 @@ def parse_xml(content: bytes) -> dict:
         os_family = osclass.get("osfamily", "") if osclass is not None else ""
         os_generation = osclass.get("osgen", "") if osclass is not None else ""
         ports: list[dict] = []
+        observed_ports: list[dict] = []
         open_port_ids: list[int] = []
         for port in host.findall("./ports/port"):
             state_element = port.find("state")
-            if state_element is None or state_element.get("state") != "open":
+            if state_element is None:
                 continue
             port_id = int(port.get("portid", "0"))
             service = port.find("service")
@@ -540,7 +565,7 @@ def parse_xml(content: bytes) -> dict:
             product = service.get("product", "") if service is not None else ""
             version = service.get("version", "") if service is not None else ""
             reason = state_element.get("reason", "")
-            ports.append({
+            observation = {
                 "port": port_id,
                 "protocol": port.get("protocol", ""),
                 "state": state_element.get("state", "unknown"),
@@ -548,7 +573,11 @@ def parse_xml(content: bytes) -> dict:
                 "product": product,
                 "version": version,
                 "reason": reason,
-            })
+            }
+            observed_ports.append(observation)
+            if observation["state"] != "open":
+                continue
+            ports.append(dict(observation))
             open_port_ids.append(port_id)
             port_frequency[(port.get("protocol", ""), port_id)] += 1
 
@@ -594,6 +623,7 @@ def parse_xml(content: bytes) -> dict:
             "os_group": f"{family} {role}" if role != "Unclassified" else "Unclassified",
             "classification_basis": classification_basis,
             "ports": ports,
+            "observed_ports": observed_ports,
             "trace": trace,
         })
 
@@ -808,17 +838,23 @@ def analyze_scan_run(run_id: str) -> dict:
     manifest = get_scan_run_plan(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
-    xml_path = run_directory(run_id) / "scan.xml"
-    if not xml_path.is_file():
+    manifests = list_scan_run_plans(limit=5000)
+    group_key = run_group_key(manifest)
+    group = [item for item in manifests if run_group_key(item) == group_key]
+    if not group:
+        group = [manifest]
+    if not all((run_directory(item["run_id"]) / "scan.xml").is_file() for item in group):
         raise HTTPException(status_code=409, detail="This scan does not have completed XML results yet")
     try:
-        analysis = parse_xml(xml_path.read_bytes())
+        analysis = _run_group_analysis(group)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    description = describe_run_group(group)
     return {
         "run_id": run_id,
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
-        "metadata": manifest,
+        "comparison_name": _comparison_name(group, description),
+        "metadata": {**manifest, "group": description},
         "analysis": analysis,
     }
 
@@ -831,6 +867,104 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
             raise FileNotFoundError(manifest["run_id"])
         analyses.append(parse_xml(xml_path.read_bytes()))
     return merge_analyses(analyses)
+
+
+def _comparison_evidence(manifests: list[dict], description: dict | None = None) -> dict:
+    description = description or describe_run_group(manifests)
+    return {
+        "label": description.get("display_name") or "Automated scan",
+        "run_ids": description.get("run_ids") or [],
+        "sources": [
+            {
+                "label": f"{item.get('display_name') or item['run_id']} XML",
+                "url": f"/api/scan-runs/{item['run_id']}/artifacts/xml",
+            }
+            for item in manifests
+        ],
+    }
+
+
+def _comparison_name(manifests: list[dict], description: dict | None = None) -> str:
+    description = description or describe_run_group(manifests)
+    first = manifests[0]
+    mode = "Scheduled" if first.get("scheduled") or first.get("schedule_id") else "Manual"
+    profile = first.get("profile") or first.get("profile_name") or "Run-specific"
+    version = first.get("profile_version")
+    profile_label = f"{profile} v{version}" if version else profile
+    scope = ", ".join(description.get("scope", {}).get("targets") or []) or "scope unavailable"
+    completed = description.get("completed_at") or description.get("created_at") or "time unavailable"
+    return f"{description.get('display_name') or 'Scan'} · {mode} · {completed} · {scope} · {profile_label}"
+
+
+@app.get("/api/scan-comparisons/candidates")
+def comparison_candidates() -> list[dict]:
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    candidates = []
+    for group in group_run_manifests(manifests):
+        if not group_is_comparable(group):
+            continue
+        description = describe_run_group(group)
+        first = group[0]
+        candidates.append({
+            **description,
+            "selection_run_id": description["run_ids"][-1],
+            "comparison_name": _comparison_name(group, description),
+            "scheduled": bool(first.get("scheduled") or first.get("schedule_id")),
+            "profile": first.get("profile") or first.get("profile_name"),
+            "profile_id": first.get("profile_id"),
+            "profile_version": first.get("profile_version"),
+            "coverage": representative_coverage(group),
+            "evidence": _comparison_evidence(group, description),
+        })
+    return sorted(candidates, key=lambda item: item.get("completed_at") or item.get("created_at") or "", reverse=True)
+
+
+@app.get("/api/scan-comparisons/compare")
+def compare_selected_scan_groups(first: str, second: str) -> dict:
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    selected_groups = []
+    for selected_id in (first, second):
+        group = next(
+            (items for items in group_run_manifests(manifests) if any(item.get("run_id") == selected_id for item in items)),
+            None,
+        )
+        if group is None:
+            raise HTTPException(status_code=404, detail="One or both automated scans were not found")
+        if not group_is_comparable(group):
+            raise HTTPException(status_code=409, detail="Both scans must be completed and retain XML for every chunk")
+        selected_groups.append(group)
+    if run_group_key(selected_groups[0][0]) == run_group_key(selected_groups[1][0]):
+        raise HTTPException(status_code=422, detail="Choose two different scans")
+    selected_groups.sort(key=lambda group: describe_run_group(group).get("completed_at") or describe_run_group(group).get("created_at") or "")
+    before_group, after_group = selected_groups
+    before_description, after_description = describe_run_group(before_group), describe_run_group(after_group)
+    before_evidence = _comparison_evidence(before_group, before_description)
+    after_evidence = _comparison_evidence(after_group, after_description)
+    result = compare_analyses(
+        _run_group_analysis(before_group),
+        _run_group_analysis(after_group),
+        before_evidence=before_evidence,
+        after_evidence=after_evidence,
+    )
+    warnings = coverage_warnings(
+        representative_coverage(before_group), representative_coverage(after_group)
+    )
+    return {
+        "status": "comparison_complete",
+        "before": {**before_description, "comparison_name": _comparison_name(before_group, before_description)},
+        "after": {**after_description, "comparison_name": _comparison_name(after_group, after_description)},
+        "coverage_compatible": not warnings,
+        "coverage_warnings": warnings,
+        **result,
+    }
 
 
 @app.get("/api/scan-runs/{run_id}/comparison")
@@ -873,7 +1007,14 @@ def compare_scan_run_to_previous_scope(run_id: str) -> dict:
             status_code=409,
             detail="The selected comparison evidence is incomplete or unreadable",
         ) from exc
-    result = compare_analyses(before_analysis, after_analysis)
+    before_evidence = _comparison_evidence(before_manifests, selected["baseline"])
+    after_evidence = _comparison_evidence(after_manifests, selected["current"])
+    result = compare_analyses(
+        before_analysis,
+        after_analysis,
+        before_evidence=before_evidence,
+        after_evidence=after_evidence,
+    )
     warnings = coverage_warnings(
         representative_coverage(before_manifests),
         representative_coverage(after_manifests),
