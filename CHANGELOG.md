@@ -18,6 +18,13 @@
   reports endpoint and scanned-device observations separately.
 - Collapsed infrastructure-only transit subnets into labeled links between their
   connected devices and changed the map to a deterministic spider-web layout.
+- Added collision spacing plus draggable map boxes with live connection updates
+  and a reset control for restoring the automatic layout.
+- Added topology-aware radial placement around the most-connected network device
+  and configuration-derived zone labels for Cisco, VyOS, Juniper, and pfSense
+  interface evidence while always retaining each zone's subnet CIDR.
+- Added map zoom-out, zoom-in, 100%, and fit-to-view controls that remain
+  compatible with draggable node positioning.
 
 ## 0.4.1 — Scan builder usability and path discovery
 
