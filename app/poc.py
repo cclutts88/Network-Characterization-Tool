@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.comparison import compare_analyses, coverage_warnings
 from app.scan_profiles import (
     BUILTIN_PROFILES,
     build_nmap_flags,
@@ -1916,7 +1917,9 @@ def _scheduled_request(
         scheduled=True,
         scheduled_by=schedule["created_by"],
         executed_by="scheduler",
-        name=f"{schedule['name']} Chunk {chunk_number} of {chunk_count}",
+        # Chunk identity belongs in structured metadata so every occurrence keeps
+        # one readable Name_(S)_Date_Time label on the comparison page.
+        name=schedule["name"],
         reason=schedule["reason"],
         originating_host=schedule["originating_host"],
         interface=schedule["interface"],
@@ -2395,20 +2398,6 @@ def get_import_history_item(sha256: str, db_path: Path = DB_PATH) -> dict | None
     }
 
 
-def _comparison_port_key(port: dict) -> tuple[str, str]:
-    return (str(port.get("protocol") or ""), str(port.get("port") or ""))
-
-
-def _comparison_service(port: dict) -> dict:
-    return {
-        "protocol": port.get("protocol"),
-        "port": port.get("port"),
-        "service": port.get("service"),
-        "product": port.get("product"),
-        "version": port.get("version"),
-    }
-
-
 def compare_import_results(first_sha256: str, second_sha256: str,
                            db_path: Path = DB_PATH) -> dict:
     """Compare two retained Nmap analyses without reparsing their XML files."""
@@ -2417,51 +2406,28 @@ def compare_import_results(first_sha256: str, second_sha256: str,
     if first is None or second is None:
         raise KeyError("One or both Nmap imports were not found")
 
-    def valid_ip(value: object) -> str:
-        """Return a canonical IP address for stable host matching."""
-        try:
-            return str(ipaddress.ip_address(str(value).strip()))
-        except (ValueError, TypeError):
-            return ""
-
-    def host_map(item: dict) -> dict[str, dict]:
-        result: dict[str, dict] = {}
-        for host in item.get("analysis", {}).get("hosts", []) or []:
-            key = valid_ip(host.get("ip")) or str(host.get("hostname") or host.get("name") or "").strip().lower()
-            if key:
-                result[key] = host
-        return result
-
-    before, after = host_map(first), host_map(second)
-    added_keys = sorted(set(after) - set(before))
-    removed_keys = sorted(set(before) - set(after))
-    changed = []
-    for key in sorted(set(before) & set(after)):
-        old_ports = {_comparison_port_key(port): port for port in before[key].get("ports", []) or []}
-        new_ports = {_comparison_port_key(port): port for port in after[key].get("ports", []) or []}
-        added_ports = [_comparison_service(new_ports[item]) for item in sorted(set(new_ports) - set(old_ports))]
-        removed_ports = [_comparison_service(old_ports[item]) for item in sorted(set(old_ports) - set(new_ports))]
-        service_changes = []
-        for port_key in sorted(set(old_ports) & set(new_ports)):
-            old_service, new_service = _comparison_service(old_ports[port_key]), _comparison_service(new_ports[port_key])
-            if old_service != new_service:
-                service_changes.append({"port": new_service["port"], "protocol": new_service["protocol"], "before": old_service, "after": new_service})
-        old_identity = {field: before[key].get(field) for field in ("hostname", "name", "state", "os", "os_group")}
-        new_identity = {field: after[key].get(field) for field in ("hostname", "name", "state", "os", "os_group")}
-        identity_changes = {field: {"before": old_identity[field], "after": new_identity[field]} for field in old_identity if old_identity[field] != new_identity[field]}
-        if added_ports or removed_ports or service_changes or identity_changes:
-            changed.append({"key": key, "ip": after[key].get("ip") or before[key].get("ip"), "added_ports": added_ports, "removed_ports": removed_ports, "service_changes": service_changes, "identity_changes": identity_changes})
-
-    def public_host(host: dict, key: str) -> dict:
-        return {"key": key, "ip": host.get("ip"), "hostname": host.get("hostname") or host.get("name"), "ports": [_comparison_service(port) for port in host.get("ports", []) or []]}
-
+    before_evidence = {
+        "label": first.get("display_name") or first["filename"],
+        "sources": [{"label": "Original Nmap XML", "url": f"/api/imports/{first['sha256']}/raw"}],
+    }
+    after_evidence = {
+        "label": second.get("display_name") or second["filename"],
+        "sources": [{"label": "Original Nmap XML", "url": f"/api/imports/{second['sha256']}/raw"}],
+    }
+    result = compare_analyses(
+        first.get("analysis", {}), second.get("analysis", {}),
+        before_evidence=before_evidence, after_evidence=after_evidence,
+    )
+    warnings = coverage_warnings(
+        first.get("analysis", {}).get("coverage", {}),
+        second.get("analysis", {}).get("coverage", {}),
+    )
     return {
-        "before": {"sha256": first["sha256"], "filename": first["filename"], "imported_at": first["imported_at"]},
-        "after": {"sha256": second["sha256"], "filename": second["filename"], "imported_at": second["imported_at"]},
-        "summary": {"hosts_added": len(added_keys), "hosts_removed": len(removed_keys), "hosts_changed": len(changed), "before_hosts": len(before), "after_hosts": len(after)},
-        "hosts_added": [public_host(after[key], key) for key in added_keys],
-        "hosts_removed": [public_host(before[key], key) for key in removed_keys],
-        "hosts_changed": changed,
+        "before": {"sha256": first["sha256"], "filename": first["filename"], "display_name": first.get("display_name"), "imported_at": first["imported_at"]},
+        "after": {"sha256": second["sha256"], "filename": second["filename"], "display_name": second.get("display_name"), "imported_at": second["imported_at"]},
+        "coverage_compatible": not warnings,
+        "coverage_warnings": warnings,
+        **result,
     }
 
 
