@@ -288,3 +288,43 @@ System Capabilities: Bridge Router
     assert len(links) == 1
     assert links[0]["label"] == "GigabitEthernet0/1 ↔ GigabitEthernet1/0/24 (LLDP)"
     assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
+
+
+def test_pfsense_self_arp_entry_does_not_spawn_endpoint(tmp_path, monkeypatch):
+    run_id = "c" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    manifest = {
+        "run_id": run_id,
+        "operation": "interactive_configuration_pull",
+        "device_address": "172.22.70.1",
+        "device_name": "Core_Firewall",
+        "vendor": "pfsense",
+        "device_type": "firewall",
+        "status": "completed",
+        "created_at": "2026-09-10T02:19:00+00:00",
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        """
+vtnet3: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
+  ether bc:24:11:3a:d4:c2
+  inet 172.22.70.1 netmask 0xffffff00 broadcast 172.22.70.255
+em0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
+  ether bc:24:11:01:a1:79
+  inet 172.22.255.1 netmask 0xfffffffc broadcast 172.22.255.3
+? (172.22.255.1) at bc:24:11:01:a1:79 on em0 permanent [ethernet]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    firewall = nodes["ip:172.22.70.1"]
+    assert "172.22.255.1" in firewall["addresses"]
+    assert "ip:172.22.255.1" not in nodes
+    assert not any(edge["relation"] == "arp_neighbor" for edge in edges.values())
+    em0 = nodes["interface:172.22.70.1:em0"]
+    assert em0["mac"] == "BC:24:11:01:A1:79"
