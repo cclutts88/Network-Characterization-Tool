@@ -41,6 +41,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "One continuous unchunked scan queued" in html
     assert "Pause between chunks (seconds)" in html
     assert "Custom hours" in html
+    assert '<option value="monthly">Monthly</option>' in html
     assert "Hours between scans" in html
     assert "Every few minutes" not in html
     assert "cadence_hours" in html
@@ -48,6 +49,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Delayed occurrences" in html
     assert "Consider changing this schedule time" in html
     assert "conflict_flagged" in html
+    assert "Owner / audit" in html
+    assert "recorded change" in html
+    assert "last_occurrence_status" in html
     assert "chunk_delay_seconds" in html
     assert "Chunks never overlap" in html
     assert 'id="currentProgress"' in html
