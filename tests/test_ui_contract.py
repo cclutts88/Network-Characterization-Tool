@@ -115,6 +115,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function deviceAddressLines" in html
     assert "Primary / observed MAC" in html
     assert "iface.mac" in html
+    assert "...addresses,iface.mac" not in html
     assert "i.mac_vendor" in html
     assert "No IPv4 address" in html
     assert "function nodeDimensions" in html
