@@ -129,3 +129,11 @@ def test_new_and_historical_results_share_the_same_renderer():
     assert 'id="autoCompareResult"' in html
     assert "/comparison" in html
     assert "coverage_warnings" in html
+    assert 'id="automatedHistory"' in html
+    assert "Compare selected automated scans" in html
+    assert "/api/scan-comparisons/candidates" in html
+    assert "/api/scan-comparisons/compare" in html
+    assert "Affected hosts and evidence" in html
+    assert "Port state, service, product, or version changes" in html
+    assert "Traceroute path change" in html
+    assert "renderComparisonDetails" in html
