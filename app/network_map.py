@@ -104,6 +104,7 @@ def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
             "interfaces": [],
             "routes": [],
             "mac_observations": [],
+            "scan_observations": [],
             "sources": [],
         },
     )
@@ -313,6 +314,15 @@ def add_analysis_hosts(
             services=services,
             source=source,
         )
+        scan_observation = {
+            "ip": ip,
+            "source_kind": source.get("kind"),
+            "source_label": source.get("label"),
+            "timestamp": source.get("timestamp"),
+            "source_url": source.get("url"),
+        }
+        if scan_observation not in destination.setdefault("scan_observations", []):
+            destination["scan_observations"].append(scan_observation)
         if host.get("mac"):
             add_mac_observation(
                 destination,
@@ -680,6 +690,9 @@ def merge_device_alias(nodes: dict[str, dict], edges: dict[tuple[str, str, str],
             observation.get("source_url"),
         )
         add_mac_observation(device, observation, observation_source)
+    for observation in alias.get("scan_observations") or []:
+        if observation not in device.setdefault("scan_observations", []):
+            device["scan_observations"].append(observation)
     replace_edge_node(edges, alias_id, device["id"])
 
 
@@ -926,6 +939,44 @@ def add_membership_edges(nodes: dict[str, dict], edges: dict[tuple[str, str, str
             break
 
 
+def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
+    """Retain scanned router/firewall addresses in their owning subnet summary."""
+    infrastructure_kinds = {"device", "gateway"}
+    scanned_devices = [
+        node for node in nodes.values()
+        if node.get("kind") in infrastructure_kinds
+        and node.get("scan_observations")
+    ]
+    for subnet in (node for node in nodes.values() if node.get("kind") == "subnet"):
+        network = ipaddress.ip_network(subnet["network"])
+        observations = []
+        seen: set[tuple[str, str]] = set()
+        for device in scanned_devices:
+            for observation in device.get("scan_observations") or []:
+                ip = valid_ip(observation.get("ip"))
+                if not ip or ipaddress.ip_address(ip) not in network:
+                    continue
+                signature = (device["id"], ip)
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                observations.append(
+                    {
+                        "node_id": device["id"],
+                        "label": device.get("label") or ip,
+                        "ip": ip,
+                        "role": device.get("role") or device.get("kind"),
+                        "source_kind": observation.get("source_kind"),
+                        "source_label": observation.get("source_label"),
+                        "timestamp": observation.get("timestamp"),
+                        "source_url": observation.get("source_url"),
+                    }
+                )
+        observations.sort(key=lambda item: (item["ip"], item["label"]))
+        subnet["infrastructure_observations"] = observations
+        subnet["infrastructure_count"] = len(observations)
+
+
 def build_topology() -> dict:
     nodes: dict[str, dict] = {}
     edges: dict[tuple[str, str, str], dict] = {}
@@ -934,6 +985,7 @@ def build_topology() -> dict:
     automated_count = automated_scan_hosts(nodes, edges, warnings)
     config_count = configuration_devices(nodes, edges, warnings)
     add_membership_edges(nodes, edges)
+    annotate_subnet_scan_observations(nodes)
     node_list = sorted(
         nodes.values(),
         key=lambda item: ({"device": 0, "gateway": 1, "interface": 2, "subnet": 3, "host": 4}.get(item["kind"], 5), item["label"]),
