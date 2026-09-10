@@ -11,6 +11,8 @@ from pathlib import Path
 MAC_TOKEN = r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}|(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}"
 MAC_RE = re.compile(rf"(?<![0-9A-Fa-f])({MAC_TOKEN})(?![0-9A-Fa-f])")
 IPV4_RE = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
+IPV4_TOKEN = r"(?:\d{1,3}\.){3}\d{1,3}"
+INTERFACE_TOKEN = r"[A-Za-z0-9_.:/-]+"
 UNRESOLVED_MARKERS = ("incomplete", "failed", "unresolved", "noarp", "<incomplete>")
 DEFAULT_OUI_PATHS = (
     Path("/usr/share/nmap/nmap-mac-prefixes"),
@@ -62,6 +64,38 @@ def _interface_from_neighbor_line(line: str) -> str | None:
 
 def parse_neighbor_text(text: str) -> list[dict]:
     """Parse common ARP/neighbor table formats and omit unresolved entries."""
+    patterns = (
+        # Linux ip-neighbor output.
+        re.compile(
+            rf"^(?P<ip>{IPV4_TOKEN})\s+dev\s+(?P<interface>{INTERFACE_TOKEN})\s+lladdr\s+(?P<mac>{MAC_TOKEN})(?:\s|$)",
+            re.IGNORECASE,
+        ),
+        # FreeBSD/pfSense arp -an output.
+        re.compile(
+            rf"^\S*\s*\((?P<ip>{IPV4_TOKEN})\)\s+at\s+(?P<mac>{MAC_TOKEN})\s+on\s+(?P<interface>{INTERFACE_TOKEN})(?:\s|$)",
+            re.IGNORECASE,
+        ),
+        # Cisco IOS ARP output.
+        re.compile(
+            rf"^(?:Internet|IPv4)\s+(?P<ip>{IPV4_TOKEN})\s+\S+\s+(?P<mac>{MAC_TOKEN})\s+(?:ARPA|SNAP)\s+(?P<interface>{INTERFACE_TOKEN})(?:\s|$)",
+            re.IGNORECASE,
+        ),
+        # Linux/VyOS arp -n or show arp output.
+        re.compile(
+            rf"^(?P<ip>{IPV4_TOKEN})\s+(?:ether|lladdr)\s+(?P<mac>{MAC_TOKEN})(?:\s+\S+){{1,3}}\s+(?P<interface>{INTERFACE_TOKEN})\s*$",
+            re.IGNORECASE,
+        ),
+        # Junos show arp no-resolve output.
+        re.compile(
+            rf"^(?P<mac>{MAC_TOKEN})\s+(?P<ip>{IPV4_TOKEN})\s+(?P<interface>{INTERFACE_TOKEN})(?:\s|$)",
+            re.IGNORECASE,
+        ),
+        # Cisco ASA output: interface, address, MAC, age.
+        re.compile(
+            rf"^(?P<interface>{INTERFACE_TOKEN})\s+(?P<ip>{IPV4_TOKEN})\s+(?P<mac>{MAC_TOKEN})(?:\s|$)",
+            re.IGNORECASE,
+        ),
+    )
     observations: list[dict] = []
     seen: set[tuple[str, str, str | None]] = set()
     for raw_line in text.splitlines():
@@ -69,17 +103,20 @@ def parse_neighbor_text(text: str) -> list[dict]:
         lower = line.lower()
         if not line or any(marker in lower for marker in UNRESOLVED_MARKERS):
             continue
-        mac_match = MAC_RE.search(line)
-        if not mac_match:
+        match = None
+        for pattern in patterns:
+            match = pattern.match(line)
+            if match:
+                break
+        if not match:
             continue
-        mac = normalize_mac(mac_match.group(1))
+        mac = normalize_mac(match.group("mac"))
         if not mac or not is_unicast_mac(mac):
             continue
-        ips = [valid_ip(value) for value in IPV4_RE.findall(line)]
-        ip = next((value for value in ips if value), None)
+        ip = valid_ip(match.group("ip"))
         if not ip:
             continue
-        interface = _interface_from_neighbor_line(line)
+        interface = match.groupdict().get("interface") or _interface_from_neighbor_line(line)
         key = (ip, mac, interface)
         if key in seen:
             continue
