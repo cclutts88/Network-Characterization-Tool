@@ -9,6 +9,7 @@ from app.poc import (
     get_scan_run_plan,
     init_poc_storage,
     list_scan_run_plans,
+    recover_scheduler_state,
     router as poc_router,
     run_directory,
     schedule_worker,
@@ -49,7 +50,7 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
@@ -677,6 +678,7 @@ def parse_xml(content: bytes) -> dict:
 async def lifespan(_: FastAPI):
     init_storage()
     init_poc_storage()
+    recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
         target=schedule_worker,
