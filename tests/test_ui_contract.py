@@ -99,6 +99,18 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Spider-web network topology" in html
     assert "Labeled transit subnet" in html
     assert "placeLevel(" not in html
+    assert 'id="resetLayout"' in html
+    assert "enableNodeDrag" in html
+    assert "manualPositions" in html
+    assert "updateEdgeGeometry" in html
+    assert "Drag any box to reposition it" in html
+    assert "Config zone" in html
+    assert "node.zone_names" in html
+    assert 'id="zoomOut"' in html
+    assert 'id="zoomIn"' in html
+    assert 'id="zoomFit"' in html
+    assert "function setZoom" in html
+    assert "function fitMap" in html
 
 
 def test_new_and_historical_results_share_the_same_renderer():
