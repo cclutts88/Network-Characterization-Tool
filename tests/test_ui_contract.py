@@ -116,6 +116,10 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function nodeDimensions" in html
     assert "function edgeAnchor" in html
     assert "No interface IPs parsed" in html
+    assert 'id="topologyNeighborCount"' in html
+    assert "Confirmed LLDP/CDP neighbor" in html
+    assert "LLDP/CDP identity" in html
+    assert "edge.relation==='topology_neighbor'" in html
 
 
 def test_new_and_historical_results_share_the_same_renderer():
@@ -133,6 +137,9 @@ def test_new_and_historical_results_share_the_same_renderer():
     assert "Compare selected automated scans" in html
     assert "/api/scan-comparisons/candidates" in html
     assert "/api/scan-comparisons/compare" in html
+    assert 'class="panel previous-scans-panel"' in html
+    assert ".previous-scans-panel{height:560px;overflow-y:auto" in html
+    assert "Scroll within this window for older scans" in html
     assert "Affected hosts and evidence" in html
     assert "Port state, service, product, or version changes" in html
     assert "Traceroute path change" in html
