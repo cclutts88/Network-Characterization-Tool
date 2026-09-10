@@ -77,6 +77,16 @@ def test_navigation_is_sticky_on_every_primary_page():
         assert "aria-label=\"Primary\"" in html
 
 
+def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
+    html = network_map_page().body.decode()
+    assert 'id="macObservationCount"' in html
+    assert 'id="arpNeighborCount"' in html
+    assert "MAC evidence" in html
+    assert "Multiple MAC addresses were observed for this IP" in html
+    assert "Offline OUI database" in html
+    assert "Routed endpoint MACs are learned from router/firewall neighbor-table evidence" in html
+
+
 def test_new_and_historical_results_share_the_same_renderer():
     html = analysis_page().body.decode()
     assert "renderAnalysis(item.analysis" in html
