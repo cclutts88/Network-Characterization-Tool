@@ -111,6 +111,11 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="zoomFit"' in html
     assert "function setZoom" in html
     assert "function fitMap" in html
+    assert 'aria-label="Map scaling controls"' in html
+    assert "function deviceAddressLines" in html
+    assert "function nodeDimensions" in html
+    assert "function edgeAnchor" in html
+    assert "No interface IPs parsed" in html
 
 
 def test_new_and_historical_results_share_the_same_renderer():
