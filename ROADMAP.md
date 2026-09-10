@@ -32,10 +32,10 @@
 
 ## Phase 4 — Comparison
 
-- [ ] Expand deltas across hosts, ports, protocols, service states, products,
+- [x] Expand deltas across hosts, ports, protocols, service states, products,
   versions, OS identity, hostnames, MACs, and routes.
-- [ ] Warn when targets, protocols, port coverage, or profile versions differ.
-- [ ] Show affected hosts and evidence behind each change.
+- [x] Warn when targets, protocols, port coverage, or profile versions differ.
+- [x] Show affected hosts and evidence behind each change.
 
 ## Phase 5 — Terrain enrichment
 
