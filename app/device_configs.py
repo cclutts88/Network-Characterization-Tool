@@ -133,6 +133,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ndp -an",
             "pfctl -sr",
             "pfctl -sn",
+            "cat /cf/conf/config.xml",
         ),
         "firewall": (
             "cat /etc/version",
@@ -142,7 +143,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ndp -an",
             "pfctl -sr",
             "pfctl -sn",
-            "pfSsh.php playback config",
+            "cat /cf/conf/config.xml",
         ),
     },
 }
