@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — Confirmed neighbor topology
+
+- Constrained the Previous Scans panel to a compact fixed height with its own
+  scrollbar and sticky table headings so older automated scans and uploads
+  remain available without making the whole page excessively long.
+- Added detailed LLDP collection for VyOS, Cisco, and Juniper device profiles
+  plus detailed CDP collection for Cisco profiles.
+- Parsed LLDP/CDP local interfaces, remote ports, neighbor names, management
+  addresses, chassis identifiers/MACs, platforms, and capabilities from retained
+  configuration evidence.
+- Correlated discovered neighbors to existing device/IP/MAC nodes and added
+  confirmed, labeled interface-to-interface links to the network map.
+- Included password-prompt interactive configuration collections in network-map
+  evidence processing as well as key-based collections and manual uploads.
+- Added an LLDP/CDP link count, map legend, searchable neighbor identity, and
+  neighbor details while retaining the source configuration as evidence.
+- Applied the operator-provided Device Name to configuration-derived map nodes.
+
 ## 0.5.0 — Evidence-backed scan comparison
 
 - Added direct selection and comparison of any two completed automated scan
