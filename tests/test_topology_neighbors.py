@@ -93,5 +93,7 @@ def test_supported_templates_collect_interface_mac_evidence():
         assert "show interfaces detail" in TEMPLATES["juniper"][device_type]
     for device_type in ("router", "firewall"):
         assert "ifconfig" in TEMPLATES["pfsense"][device_type]
+        assert "cat /cf/conf/config.xml" in TEMPLATES["pfsense"][device_type]
+        assert "pfSsh.php playback config" not in TEMPLATES["pfsense"][device_type]
     for device_type in ("router", "firewall"):
         assert "show configuration commands" in TEMPLATES["vyos"][device_type]
