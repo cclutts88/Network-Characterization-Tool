@@ -19,6 +19,7 @@ from app.mac_enrichment import (
     parse_neighbor_text,
 )
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
+from app.topology_neighbors import parse_topology_neighbors
 
 
 router = APIRouter(prefix="/api/network-map", tags=["network-map"])
@@ -261,6 +262,115 @@ def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
         node["addresses"].append(address)
     if source:
         add_source(node, source)
+    return node
+
+
+def ensure_topology_neighbor_node(
+    nodes: dict[str, dict],
+    observation: dict,
+    source: dict,
+    aliases: dict[str, str],
+) -> dict:
+    """Resolve an LLDP/CDP neighbor to an existing device or a discovered one."""
+    management_ip = valid_ip(observation.get("management_ip"))
+    chassis_mac = normalize_mac(observation.get("chassis_mac"))
+    neighbor_name = str(observation.get("neighbor_name") or "").strip()
+    node = None
+    if management_ip and management_ip in aliases and aliases[management_ip] in nodes:
+        node = nodes[aliases[management_ip]]
+    if node is None and management_ip:
+        node = ensure_ip_node(
+            nodes, management_ip, hostname=neighbor_name or None, source=source
+        )
+        aliases[management_ip] = node["id"]
+    if node is None and chassis_mac:
+        node = next(
+            (
+                item for item in nodes.values()
+                if normalize_mac(item.get("mac")) == chassis_mac
+                and item.get("kind") in {"device", "gateway", "host"}
+            ),
+            None,
+        )
+    if node is None and neighbor_name:
+        lowered = neighbor_name.lower()
+        node = next(
+            (
+                item for item in nodes.values()
+                if item.get("kind") in {"device", "gateway", "host"}
+                and str(item.get("hostname") or item.get("label") or "").lower() == lowered
+            ),
+            None,
+        )
+    if node is None:
+        identity = chassis_mac or neighbor_name or observation.get("chassis_id") or "unknown"
+        safe_identity = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(identity))[:100]
+        node_id = f"topology:{safe_identity}"
+        node = nodes.setdefault(
+            node_id,
+            {
+                "id": node_id,
+                "kind": "device",
+                "label": neighbor_name or str(identity),
+                "ip": None,
+                "addresses": [],
+                "hostname": neighbor_name or None,
+                "role": None,
+                "vendor": None,
+                "mac": chassis_mac,
+                "os": None,
+                "state": "observed",
+                "services": [],
+                "interfaces": [],
+                "routes": [],
+                "mac_observations": [],
+                "scan_observations": [],
+                "sources": [],
+            },
+        )
+    if node.get("kind") != "gateway":
+        node["kind"] = "device"
+    capabilities = str(observation.get("capabilities") or "").lower()
+    observed_role = (
+        "switch" if any(value in capabilities for value in ("switch", "bridge"))
+        else "router" if "router" in capabilities
+        else "discovered neighbor"
+    )
+    node["role"] = node.get("role") or observed_role
+    if neighbor_name and not node.get("hostname"):
+        node["hostname"] = neighbor_name
+    node["label"] = node.get("hostname") or node.get("label") or management_ip or "Network device"
+    if observation.get("platform") and not node.get("platform"):
+        node["platform"] = observation["platform"]
+    if not node.get("vendor"):
+        platform = str(observation.get("platform") or "").lower()
+        node["vendor"] = next(
+            (vendor for vendor in ("cisco", "juniper", "arista", "vyos") if vendor in platform),
+            None,
+        )
+    details = {
+        field: observation.get(field)
+        for field in (
+            "protocol", "local_interface", "remote_port", "neighbor_name",
+            "management_ip", "chassis_id", "platform", "capabilities",
+        )
+        if observation.get(field)
+    }
+    if details not in node.setdefault("topology_observations", []):
+        node["topology_observations"].append(details)
+    add_source(node, source)
+    if chassis_mac:
+        add_mac_observation(
+            node,
+            {
+                "ip": management_ip,
+                "mac": chassis_mac,
+                "protocol": observation.get("protocol") or "lldp",
+                "confidence": "confirmed",
+                "evidence": observation.get("evidence"),
+            },
+            source,
+        )
     return node
 
 
@@ -786,7 +896,9 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
     for path, manifest in manifests[:300]:
         operation = manifest.get("operation")
         legacy_pull = operation is None and manifest.get("vendor") and manifest.get("device_type")
-        if operation not in {"configuration_pull", "manual_upload"} and not legacy_pull:
+        if operation not in {
+            "configuration_pull", "interactive_configuration_pull", "manual_upload",
+        } and not legacy_pull:
             continue
         ip = valid_ip(manifest.get("device_address"))
         if not ip:
@@ -805,12 +917,16 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             node = ensure_ip_node(
                 nodes,
                 ip,
+                hostname=manifest.get("device_name"),
                 role=manifest.get("device_type"),
                 vendor=manifest.get("vendor"),
                 state=manifest.get("status"),
                 source=source,
             )
             aliases[ip] = node["id"]
+        if manifest.get("device_name") and not node.get("hostname"):
+            node["hostname"] = manifest["device_name"]
+            node["label"] = manifest["device_name"]
         count += 1
         if node["id"] in parsed_devices:
             continue
@@ -822,6 +938,7 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
         parsed_devices.add(node["id"])
         interfaces, routes = parse_config_text(text)
         neighbors = parse_neighbor_text(text)
+        topology_neighbors = parse_topology_neighbors(text)
         interfaces = [
             item
             for item in interfaces
@@ -894,6 +1011,57 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 "confirmed",
                 observation.get("evidence"),
                 bool(interface),
+            )
+        topology_source = source_record(
+            "lldp_cdp_neighbor",
+            f"{manifest.get('vendor', 'device')} LLDP/CDP neighbor evidence",
+            source["timestamp"],
+            evidence_url,
+        )
+        for observation in topology_neighbors:
+            local_interface = observation.get("local_interface")
+            origin = interface_nodes.get(local_interface)
+            if origin is None and local_interface:
+                origin = ensure_interface_node(
+                    nodes,
+                    node,
+                    local_interface,
+                    interface_addresses.get(local_interface),
+                    source,
+                )
+                interface_nodes[local_interface] = origin
+                add_edge(
+                    edges,
+                    node["id"],
+                    origin["id"],
+                    "owns_interface",
+                    local_interface,
+                    "confirmed",
+                    interface_addresses.get(local_interface),
+                )
+            neighbor = ensure_topology_neighbor_node(
+                nodes, observation, topology_source, aliases
+            )
+            source_node = origin or node
+            if source_node["id"] == neighbor["id"]:
+                continue
+            protocol = str(observation.get("protocol") or "lldp").upper()
+            local_label = local_interface or node.get("label") or "local device"
+            remote_label = (
+                observation.get("remote_port")
+                or observation.get("neighbor_name")
+                or observation.get("management_ip")
+                or "remote device"
+            )
+            add_edge(
+                edges,
+                source_node["id"],
+                neighbor["id"],
+                "topology_neighbor",
+                f"{local_label} ↔ {remote_label} ({protocol})",
+                "confirmed",
+                observation.get("evidence"),
+                True,
             )
         for route in routes:
             network = route["network"]
@@ -1079,6 +1247,9 @@ def build_topology() -> dict:
         "mac_conflicts": sum(1 for node in node_list if node.get("mac_conflict")),
         "arp_neighbors": sum(
             1 for edge in edges.values() if edge.get("relation") == "arp_neighbor"
+        ),
+        "topology_neighbors": sum(
+            1 for edge in edges.values() if edge.get("relation") == "topology_neighbor"
         ),
     }
     if not node_list:
