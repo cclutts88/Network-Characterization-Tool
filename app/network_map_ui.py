@@ -71,7 +71,7 @@ function buildView() {
   for(const [interfaceId,iface] of interfaces) {
     const owner=topology.edges.find(edge=>edge.relation==='owns_interface'&&edge.target===interfaceId)?.source||iface.device_id;
     if(!owner)continue;
-    const addresses=iface.addresses?.length?iface.addresses:(iface.address?[iface.address]:[]),interfaceLabel=[iface.zone,iface.interface||iface.label,...addresses,iface.mac].filter(Boolean).join(' · ');
+    const addresses=iface.addresses?.length?iface.addresses:(iface.address?[iface.address]:[]),interfaceLabel=[iface.zone,iface.interface||iface.label,...addresses].filter(Boolean).join(' · ');
     for(const outgoing of topology.edges.filter(edge=>edge.source===interfaceId&&!hostIds.has(edge.target))) edges.push({...outgoing,id:`collapsed:${outgoing.id}`,source:owner,label:outgoing.relation==='topology_neighbor'?outgoing.label:(interfaceLabel||outgoing.label),interface_label:true});
   }
   for(const [groupId,hosts] of groupHosts) {
