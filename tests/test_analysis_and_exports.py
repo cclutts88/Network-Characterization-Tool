@@ -48,6 +48,22 @@ def test_parser_surfaces_mac_hostname_protocol_and_coverage():
     assert analysis["coverage"]["traceroute"] is True
     assert host["trace"]["hops"][0]["ip"] == "10.20.30.1"
     assert host["trace"]["hops"][0]["ttl"] == 1
+    assert len(host["observed_ports"]) == 2
+
+
+def test_parser_retains_non_open_port_observations_for_comparison():
+    xml = SAMPLE_XML.replace(
+        b'<state state="open" reason="syn-ack"/>',
+        b'<state state="filtered" reason="no-response"/>',
+        1,
+    )
+    host = parse_xml(xml)["hosts"][0]
+
+    assert len(host["ports"]) == 1
+    assert len(host["observed_ports"]) == 2
+    filtered = next(item for item in host["observed_ports"] if item["port"] == 502)
+    assert filtered["state"] == "filtered"
+    assert filtered["reason"] == "no-response"
 
 
 def test_normalized_export_has_one_row_per_ip_protocol_port():
