@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import ipaddress
 import hmac
 import json
@@ -130,7 +131,7 @@ class ScanScheduleCreate(BaseModel):
     no_strike: list[str] = Field(default_factory=list)
     interface: str = Field(min_length=1, max_length=64)
     cadence: Literal[
-        "once", "interval", "custom_hours", "hourly", "daily", "weekly"
+        "once", "interval", "custom_hours", "hourly", "daily", "weekly", "monthly"
     ] = "once"
     first_run_at: datetime
     cadence_hours: int = Field(default=2, ge=1, le=8760)
@@ -158,6 +159,15 @@ class ScheduleStateChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+    changed_by: str | None = Field(default=None, max_length=100)
+
+    @field_validator("changed_by")
+    @classmethod
+    def clean_changed_by(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class ScheduleProfileChange(BaseModel):
@@ -822,11 +832,23 @@ def _as_utc(value: datetime | str) -> datetime:
     return moment.astimezone(timezone.utc).replace(microsecond=0)
 
 
+def _next_month(moment: datetime, anchor_day: int) -> datetime:
+    year = moment.year + (1 if moment.month == 12 else 0)
+    month = 1 if moment.month == 12 else moment.month + 1
+    day = min(anchor_day, calendar.monthrange(year, month)[1])
+    return moment.replace(year=year, month=month, day=day)
+
+
 def next_schedule_time(schedule: dict, after: datetime) -> datetime | None:
     """Advance a schedule after dispatch, preserving its original cadence."""
     if schedule["cadence"] == "once":
         return None
     current = _as_utc(schedule["next_run_at"])
+    if schedule["cadence"] == "monthly":
+        anchor_day = _as_utc(schedule.get("first_run_at") or current).day
+        while current <= after:
+            current = _next_month(current, anchor_day)
+        return current
     delta = {
         "interval": timedelta(minutes=int(schedule.get("interval_minutes") or 60)),
         "custom_hours": timedelta(hours=int(schedule.get("cadence_hours") or 2)),
@@ -849,6 +871,29 @@ def get_scan_schedule(schedule_id: str, db_path: Path = DB_PATH) -> dict | None:
             (schedule_id,),
         ).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def _append_schedule_history(
+    schedule: dict,
+    event: str,
+    changed_by: str,
+    details: str,
+    *,
+    changed_at: str | None = None,
+) -> None:
+    timestamp = changed_at or utc_now()
+    history = list(schedule.get("modification_history") or [])
+    history.append(
+        {
+            "event": event,
+            "changed_at": timestamp,
+            "changed_by": changed_by,
+            "details": details,
+        }
+    )
+    schedule["modification_history"] = history[-100:]
+    schedule["last_changed_by"] = changed_by
+    schedule["last_changed_at"] = timestamp
 
 
 def _store_scan_schedule(schedule: dict, db_path: Path = DB_PATH) -> dict:
@@ -882,12 +927,13 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         and "chunking_enabled" not in request.model_fields_set
     )
     chunking_enabled = request.chunking_enabled or legacy_chunk_request
+    created_at = utc_now()
     definition = {
-        "schema_version": 3,
+        "schema_version": 4,
         "schedule_id": uuid.uuid4().hex,
         "name": request.name,
-        "created_at": utc_now(),
-        "updated_at": utc_now(),
+        "created_at": created_at,
+        "updated_at": created_at,
         "created_by": request.created_by,
         "profile_id": profile["profile_id"],
         "profile_version": profile["version"],
@@ -918,6 +964,18 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "last_run_at": None,
         "last_run_status": None,
         "last_changed_by": request.created_by,
+        "last_changed_at": created_at,
+        "modification_history": [
+            {
+                "event": "created",
+                "changed_at": created_at,
+                "changed_by": request.created_by,
+                "details": (
+                    f"Created {request.cadence} schedule pinned to "
+                    f"{profile['name']} v{profile['version']}"
+                ),
+            }
+        ],
         "conflict_count": 0,
         "conflict_flagged": False,
         "last_conflict_at": None,
@@ -926,6 +984,14 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "active_batch_id": None,
         "active_chunk_number": None,
         "active_chunk_count": None,
+        "completed_chunk_count": 0,
+        "resume_after_chunk": 0,
+        "last_occurrence_started_at": None,
+        "last_occurrence_completed_at": None,
+        "last_occurrence_status": None,
+        "last_occurrence_batch_id": None,
+        "last_occurrence_run_ids": [],
+        "recovery_count": 0,
         "implementation_status": "active_scheduler",
     }
     with sqlite3.connect(db_path) as db:
@@ -960,15 +1026,36 @@ def list_scan_schedules(db_path: Path = DB_PATH) -> list[dict]:
 
 
 def set_scan_schedule_enabled(
-    schedule_id: str, enabled: bool, db_path: Path = DB_PATH
+    schedule_id: str,
+    enabled: bool,
+    changed_by: str | None = None,
+    db_path: Path = DB_PATH,
 ) -> dict:
     schedule = get_scan_schedule(schedule_id, db_path)
     if schedule is None:
         raise KeyError("Scan schedule not found")
+    previous = bool(schedule.get("enabled"))
     schedule["enabled"] = bool(enabled)
-    schedule["last_changed_by"] = schedule.get("last_changed_by") or schedule["created_by"]
+    actor = changed_by or schedule.get("last_changed_by") or schedule["created_by"]
     if enabled:
-        if not schedule.get("next_run_at"):
+        completed_chunks = int(schedule.get("completed_chunk_count") or 0)
+        total_chunks = int(schedule.get("active_chunk_count") or 0)
+        resuming = (
+            completed_chunks
+            and total_chunks
+            and completed_chunks < total_chunks
+            and schedule.get("batch_status")
+            in {
+                "paused_after_current_chunk",
+                "interrupted_paused",
+                "failed_to_dispatch",
+            }
+        )
+        if resuming:
+            schedule["batch_status"] = "recovery_pending"
+            schedule["resume_after_chunk"] = completed_chunks
+            schedule["next_run_at"] = utc_now()
+        elif not schedule.get("next_run_at"):
             schedule["next_run_at"] = utc_now()
         elif _as_utc(schedule["next_run_at"]) < datetime.now(timezone.utc):
             if schedule["cadence"] == "once":
@@ -977,6 +1064,13 @@ def set_scan_schedule_enabled(
                 schedule["next_run_at"] = next_schedule_time(
                     schedule, datetime.now(timezone.utc)
                 ).isoformat()
+    if previous != bool(enabled):
+        _append_schedule_history(
+            schedule,
+            "enabled" if enabled else "paused",
+            actor,
+            "Enabled recurring execution" if enabled else "Paused recurring execution",
+        )
     return _store_scan_schedule(schedule, db_path)
 
 
@@ -994,6 +1088,7 @@ def change_scan_schedule_profile(
     profile = get_scan_profile(request.profile_id, request.profile_version, db_path)
     if profile is None:
         raise ValueError("The selected saved profile version does not exist")
+    previous_profile = f"{schedule['profile_name']} v{schedule['profile_version']}"
     schedule.update(
         {
             "profile_id": profile["profile_id"],
@@ -1005,9 +1100,14 @@ def change_scan_schedule_profile(
                 if profile["settings"].get("discovery_mode") == "fping"
                 else "require_approval"
             ),
-            "last_changed_by": request.changed_by,
             "profile_changed_at": utc_now(),
         }
+    )
+    _append_schedule_history(
+        schedule,
+        "profile_changed",
+        request.changed_by,
+        f"Changed pinned profile from {previous_profile} to {profile['name']} v{profile['version']}",
     )
     return _store_scan_schedule(schedule, db_path)
 
@@ -1861,18 +1961,42 @@ def execute_schedule_batch(
             _store_scan_schedule(schedule, db_path)
             return
         total = len(chunks)
+        resume_after = min(
+            max(int(schedule.get("resume_after_chunk") or 0), 0), total
+        )
         batch_hosts_total = sum(len(chunk) for chunk in chunks)
+        occurrence_run_ids = (
+            list(schedule.get("last_occurrence_run_ids") or [])
+            if resume_after
+            else []
+        )
         schedule.update(
             {
                 "batch_status": "running",
                 "active_batch_id": batch_id,
-                "active_chunk_number": 0,
+                "active_chunk_number": resume_after,
                 "active_chunk_count": total,
-                "last_dispatch_note": f"Preparing {total} sequential chunk(s)",
+                "completed_chunk_count": resume_after,
+                "last_occurrence_started_at": (
+                    schedule.get("last_occurrence_started_at")
+                    if resume_after
+                    else utc_now()
+                ),
+                "last_occurrence_completed_at": None,
+                "last_occurrence_status": "running",
+                "last_occurrence_batch_id": batch_id,
+                "last_occurrence_run_ids": occurrence_run_ids,
+                "last_dispatch_note": (
+                    f"Resuming after {resume_after} completed chunk(s)"
+                    if resume_after
+                    else f"Preparing {total} sequential chunk(s)"
+                ),
             }
         )
         _store_scan_schedule(schedule, db_path)
-        for index, targets in enumerate(chunks, start=1):
+        for index, targets in enumerate(
+            chunks[resume_after:], start=resume_after + 1
+        ):
             while True:
                 try:
                     run = launch_scan_run(
@@ -1904,6 +2028,8 @@ def execute_schedule_batch(
             schedule["last_run_status"] = run["status"]
             schedule["run_count"] = int(schedule.get("run_count") or 0) + 1
             schedule["active_chunk_number"] = index
+            occurrence_run_ids.append(run["run_id"])
+            schedule["last_occurrence_run_ids"] = occurrence_run_ids
             schedule["last_dispatch_note"] = f"Chunk {index} of {total} queued"
             _store_scan_schedule(schedule, db_path)
             while True:
@@ -1914,16 +2040,21 @@ def execute_schedule_batch(
             schedule = get_scan_schedule(schedule_id, db_path) or schedule
             schedule["last_run_status"] = current["status"]
             schedule["last_dispatch_note"] = f"Chunk {index} of {total} {current['status']}"
+            if current["status"] in successful_states:
+                schedule["completed_chunk_count"] = index
             _store_scan_schedule(schedule, db_path)
             if current["status"] not in successful_states:
                 schedule["batch_status"] = f"stopped_{current['status']}"
                 schedule["enabled"] = False
                 schedule["active_batch_id"] = None
+                schedule["last_occurrence_status"] = current["status"]
+                schedule["last_occurrence_completed_at"] = utc_now()
                 _store_scan_schedule(schedule, db_path)
                 return
             if advance_schedule and not schedule.get("enabled"):
                 schedule["batch_status"] = "paused_after_current_chunk"
                 schedule["active_batch_id"] = None
+                schedule["last_occurrence_status"] = "paused"
                 schedule["last_dispatch_note"] = "Paused before the next chunk"
                 _store_scan_schedule(schedule, db_path)
                 return
@@ -1942,8 +2073,12 @@ def execute_schedule_batch(
         schedule["batch_status"] = "completed"
         schedule["active_batch_id"] = None
         schedule["active_chunk_number"] = total
+        schedule["completed_chunk_count"] = total
+        schedule["resume_after_chunk"] = 0
         schedule["next_chunk_at"] = None
         schedule["occurrence_count"] = int(schedule.get("occurrence_count") or 0) + 1
+        schedule["last_occurrence_status"] = "completed"
+        schedule["last_occurrence_completed_at"] = utc_now()
         schedule["last_dispatch_note"] = f"All {total} chunks completed"
         if advance_schedule:
             following = next_schedule_time(schedule, datetime.now(timezone.utc))
@@ -1957,6 +2092,8 @@ def execute_schedule_batch(
             schedule["batch_status"] = "failed_to_dispatch"
             schedule["enabled"] = False
             schedule["active_batch_id"] = None
+            schedule["last_occurrence_status"] = "failed_to_dispatch"
+            schedule["last_occurrence_completed_at"] = utc_now()
             schedule["last_dispatch_note"] = f"{type(exc).__name__}: {exc}"
             _store_scan_schedule(schedule, db_path)
     finally:
@@ -1977,6 +2114,12 @@ def queue_scan_schedule_batch(
     chunks = schedule_target_chunks(schedule, db_path)
     if not chunks:
         raise ValueError("No addresses remain after no-strike filtering")
+    recovering = schedule.get("batch_status") == "recovery_pending"
+    resume_after = (
+        min(max(int(schedule.get("resume_after_chunk") or 0), 0), len(chunks))
+        if recovering
+        else 0
+    )
     with ACTIVE_SCHEDULE_BATCHES_LOCK:
         if ACTIVE_SCHEDULE_BATCHES:
             raise RuntimeError("Another scheduled batch is already active")
@@ -1984,9 +2127,15 @@ def queue_scan_schedule_batch(
     batch_id = uuid.uuid4().hex
     schedule["batch_status"] = "queued"
     schedule["active_batch_id"] = batch_id
-    schedule["active_chunk_number"] = 0
+    schedule["active_chunk_number"] = resume_after
     schedule["active_chunk_count"] = len(chunks)
-    schedule["last_dispatch_note"] = f"Queued {len(chunks)} sequential chunk(s)"
+    schedule["completed_chunk_count"] = resume_after
+    schedule["resume_after_chunk"] = resume_after
+    schedule["last_dispatch_note"] = (
+        f"Recovery queued at chunk {resume_after + 1} of {len(chunks)}"
+        if recovering and resume_after < len(chunks)
+        else f"Queued {len(chunks)} sequential chunk(s)"
+    )
     _store_scan_schedule(schedule, db_path)
     try:
         worker = threading.Thread(
@@ -2037,6 +2186,112 @@ def record_schedule_conflict(
         schedule["conflict_flagged"] = schedule["conflict_count"] > 3
     schedule["last_dispatch_note"] = "Waiting for the analyzer scanner"
     return _store_scan_schedule(schedule, db_path)
+
+
+def recover_scheduler_state(
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+) -> dict:
+    """Close orphaned runs and resume interrupted batches after completed chunks."""
+    init_poc_storage(db_path)
+    recovered_at = utc_now()
+    with sqlite3.connect(db_path) as db:
+        rows = db.execute("SELECT manifest_json FROM scan_runs").fetchall()
+    manifests = [json.loads(row[0]) for row in rows]
+    orphaned = []
+    for manifest in manifests:
+        if manifest.get("status") not in {
+            "queued",
+            "running",
+            "awaiting_fallback_approval",
+        }:
+            continue
+        manifest["status"] = "interrupted"
+        manifest["success"] = False
+        manifest["completed_at"] = recovered_at
+        manifest["error"] = "The analyzer restarted before this scan finished"
+        if isinstance(manifest.get("progress"), dict):
+            update_scan_progress(
+                manifest["progress"], phase="interrupted", updated_at=recovered_at
+            )
+        collect_artifacts(manifest, data_dir)
+        update_scan_run_manifest(manifest, db_path)
+        orphaned.append(manifest["run_id"])
+
+    recovered_schedules = []
+    for schedule in list_scan_schedules(db_path):
+        active_batch_id = schedule.get("active_batch_id")
+        if not active_batch_id and schedule.get("batch_status") not in {
+            "queued",
+            "running",
+        }:
+            continue
+        batch_manifests = [
+            manifest
+            for manifest in manifests
+            if manifest.get("schedule_batch_id") == active_batch_id
+        ]
+        completed_numbers = {
+            int(manifest.get("chunk_number") or 0)
+            for manifest in batch_manifests
+            if manifest.get("status") in {"completed", "completed_without_nmap"}
+        }
+        contiguous_completed = 0
+        while contiguous_completed + 1 in completed_numbers:
+            contiguous_completed += 1
+        stored_completed = int(schedule.get("completed_chunk_count") or 0)
+        if "completed_chunk_count" not in schedule:
+            stored_completed = max(
+                0, int(schedule.get("active_chunk_number") or 0) - 1
+            )
+        completed = max(stored_completed, contiguous_completed)
+        total = int(schedule.get("active_chunk_count") or 0)
+        if total:
+            completed = min(completed, total)
+        schedule["active_batch_id"] = None
+        schedule["active_chunk_number"] = completed
+        schedule["completed_chunk_count"] = completed
+        schedule["resume_after_chunk"] = completed
+        schedule["next_chunk_at"] = None
+        schedule["last_occurrence_status"] = "interrupted"
+        schedule["last_occurrence_completed_at"] = recovered_at
+        schedule["last_occurrence_run_ids"] = [
+            manifest["run_id"]
+            for manifest in sorted(
+                batch_manifests,
+                key=lambda item: int(item.get("chunk_number") or 0),
+            )
+        ]
+        schedule["recovery_count"] = int(schedule.get("recovery_count") or 0) + 1
+        if schedule.get("enabled"):
+            schedule["batch_status"] = "recovery_pending"
+            schedule["next_run_at"] = recovered_at
+            schedule["last_dispatch_note"] = (
+                f"Restart recovery will resume after {completed} completed chunk(s)"
+            )
+            details = (
+                f"Recovered an interrupted batch; {completed} completed chunk(s) "
+                "will not be repeated"
+            )
+        else:
+            schedule["batch_status"] = "interrupted_paused"
+            schedule["last_dispatch_note"] = (
+                f"Interrupted after {completed} completed chunk(s); enable to resume"
+            )
+            details = "Recorded an interrupted batch while the schedule was paused"
+        _append_schedule_history(
+            schedule,
+            "restart_recovery",
+            "system",
+            details,
+            changed_at=recovered_at,
+        )
+        _store_scan_schedule(schedule, db_path)
+        recovered_schedules.append(schedule["schedule_id"])
+    return {
+        "orphaned_run_ids": orphaned,
+        "recovered_schedule_ids": recovered_schedules,
+    }
 
 
 def dispatch_due_schedules(
@@ -2326,7 +2581,9 @@ def save_scan_schedule(request: ScanScheduleCreate) -> dict:
 @router.post("/scan-schedules/{schedule_id}/state")
 def change_scan_schedule_state(schedule_id: str, request: ScheduleStateChange) -> dict:
     try:
-        return set_scan_schedule_enabled(schedule_id, request.enabled)
+        return set_scan_schedule_enabled(
+            schedule_id, request.enabled, changed_by=request.changed_by
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
 
