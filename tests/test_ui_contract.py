@@ -89,6 +89,10 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Multiple MAC addresses were observed for this IP" in html
     assert "Offline OUI database" in html
     assert "Routed endpoint MACs are learned from router/firewall neighbor-table evidence" in html
+    assert "Scanned infrastructure" in html
+    assert "0 observations · characterization needed" in html
+    assert "infrastructure_count" in html
+    assert "observed_count" in html
 
 
 def test_new_and_historical_results_share_the_same_renderer():
