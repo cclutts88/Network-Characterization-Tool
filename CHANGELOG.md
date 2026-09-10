@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0 — Evidence-backed scan comparison
+
+- Added direct selection and comparison of any two completed automated scan
+  occurrences, including scheduled scans split across multiple chunks.
+- Standardized automated comparison labels around the readable scan name,
+  scheduled/manual status, completion time, effective scope, and pinned profile
+  version; legacy per-chunk names are collapsed into one scan occurrence.
+- Kept chunk numbers as structured progress metadata instead of embedding them in
+  future scheduled scan names.
+- Expanded comparison details across host presence, ports, port states, services,
+  products, versions, hostnames, MAC/vendor identity, OS identity, and traceroute
+  paths.
+- Added explicit coverage cautions for target, protocol, exact port, discovery,
+  timing, DNS, traceroute, profile/version, and analyzer-interface differences.
+- Linked every affected host back to the retained before/after XML evidence.
+- Made uploaded XML and automated runs use the same rich comparison renderer.
+- Preserved full host, OS-group, outlier, coverage, and export analysis when a
+  chunked scheduled occurrence is opened as one logical scan.
+
 ## 0.4.2 — Active recurring scheduling
 
 - Completed recurring hourly, daily, weekly, monthly, and custom-hour schedule
