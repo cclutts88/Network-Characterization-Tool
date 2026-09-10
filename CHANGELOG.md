@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.3 — Cleaner topology labels
+
+- Removed interface MAC addresses from network-map connection labels to reduce
+  visual clutter while retaining them on device cards, in search, and in the
+  Device Details interface list.
+- Prevented pfSense and other device self-ARP entries from recreating known
+  router/firewall interface IPs as separate endpoint blocks or neighbor links.
+
 ## 0.6.2 — pfSense collection repair
 
 - Replaced the nonexistent `pfSsh.php playback config` command with the
