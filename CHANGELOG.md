@@ -25,6 +25,9 @@
   interface evidence while always retaining each zone's subnet CIDR.
 - Added map zoom-out, zoom-in, 100%, and fit-to-view controls that remain
   compatible with draggable node positioning.
+- Moved map scaling controls into a persistent map overlay and enlarged network
+  device cards to list every correlated interface/IP address. Connections now
+  terminate at device-card borders and retain the matching interface evidence.
 
 ## 0.4.1 — Scan builder usability and path discovery
 
