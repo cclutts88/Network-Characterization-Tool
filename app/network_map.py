@@ -11,6 +11,12 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from app.device_configs import CONFIG_DIR
+from app.mac_enrichment import (
+    lookup_oui_vendor,
+    normalize_mac,
+    oui_database_info,
+    parse_neighbor_text,
+)
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 
 
@@ -32,7 +38,7 @@ def valid_ip(value: object) -> str | None:
         parsed = ipaddress.ip_address(str(value))
     except ValueError:
         return None
-    return str(parsed) if parsed.version == 4 else None
+    return str(parsed)
 
 
 def valid_network(value: object) -> str | None:
@@ -97,6 +103,7 @@ def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
             "services": [],
             "interfaces": [],
             "routes": [],
+            "mac_observations": [],
             "sources": [],
         },
     )
@@ -121,6 +128,72 @@ def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
         }:
             node["services"].append(service)
     return node
+
+
+def add_mac_observation(node: dict, observation: dict, source: dict) -> bool:
+    """Attach one normalized, attributable MAC observation to a topology node."""
+    mac = normalize_mac(observation.get("mac"))
+    if not mac:
+        return False
+    reported_vendor = (observation.get("vendor") or "").strip() or None
+    lookup = lookup_oui_vendor(mac)
+    vendor = reported_vendor or lookup["vendor"]
+    vendor_source = "reported_by_source" if reported_vendor else lookup["source"]
+    timestamp = observation.get("timestamp") or source.get("timestamp")
+    item = {
+        "ip": observation.get("ip") or node.get("ip"),
+        "mac": mac,
+        "vendor": vendor,
+        "vendor_source": vendor_source,
+        "protocol": observation.get("protocol") or "ethernet",
+        "interface": observation.get("interface"),
+        "segment": observation.get("segment"),
+        "confidence": observation.get("confidence") or "observed",
+        "first_observed": observation.get("first_observed") or timestamp,
+        "last_observed": observation.get("last_observed") or timestamp,
+        "packet_count": int(observation.get("packet_count") or 1),
+        "source_kind": source.get("kind"),
+        "source_label": source.get("label"),
+        "source_url": source.get("url"),
+        "evidence": observation.get("evidence"),
+    }
+    signature = (
+        item["mac"], item["protocol"], item["interface"],
+        item["source_kind"], item["source_label"],
+    )
+    existing = next(
+        (
+            value for value in node.setdefault("mac_observations", [])
+            if (
+                value.get("mac"), value.get("protocol"), value.get("interface"),
+                value.get("source_kind"), value.get("source_label"),
+            ) == signature
+        ),
+        None,
+    )
+    if existing:
+        if item["first_observed"]:
+            existing["first_observed"] = min(
+                value for value in (existing.get("first_observed"), item["first_observed"])
+                if value
+            )
+        if item["last_observed"]:
+            existing["last_observed"] = max(
+                value for value in (existing.get("last_observed"), item["last_observed"])
+                if value
+            )
+        existing["packet_count"] = int(existing.get("packet_count") or 0) + item["packet_count"]
+    else:
+        node["mac_observations"].append(item)
+    if not node.get("mac"):
+        node["mac"] = mac
+    if vendor and not node.get("vendor"):
+        node["vendor"] = vendor
+    node["mac_conflict"] = len(
+        {value.get("mac") for value in node["mac_observations"] if value.get("mac")}
+    ) > 1
+    add_source(node, source)
+    return True
 
 
 def ensure_subnet_node(nodes: dict[str, dict], network: str, source: dict | None = None) -> dict:
@@ -240,6 +313,19 @@ def add_analysis_hosts(
             services=services,
             source=source,
         )
+        if host.get("mac"):
+            add_mac_observation(
+                destination,
+                {
+                    "ip": ip,
+                    "mac": host.get("mac"),
+                    "vendor": host.get("vendor"),
+                    "protocol": "nmap",
+                    "confidence": "confirmed",
+                    "evidence": "MAC address reported in Nmap XML",
+                },
+                source,
+            )
         trace = host.get("trace") or {}
         hops = trace.get("hops") or []
         if hops:
@@ -586,6 +672,14 @@ def merge_device_alias(nodes: dict[str, dict], edges: dict[tuple[str, str, str],
     for field in ("hostname", "mac", "os"):
         if not device.get(field) and alias.get(field):
             device[field] = alias[field]
+    for observation in alias.get("mac_observations") or []:
+        observation_source = source_record(
+            observation.get("source_kind") or "merged_observation",
+            observation.get("source_label") or "Merged address evidence",
+            observation.get("last_observed"),
+            observation.get("source_url"),
+        )
+        add_mac_observation(device, observation, observation_source)
     replace_edge_node(edges, alias_id, device["id"])
 
 
@@ -656,6 +750,7 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             node["state"] = "partial"
         parsed_devices.add(node["id"])
         interfaces, routes = parse_config_text(text)
+        neighbors = parse_neighbor_text(text)
         interfaces = [
             item
             for item in interfaces
@@ -697,6 +792,30 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             add_source(
                 node,
                 source_record("configuration_output", filename or "configuration output", source["timestamp"], evidence_url),
+            )
+        neighbor_source = source_record(
+            "arp_neighbor_table",
+            f"{manifest.get('vendor', 'device')} ARP/neighbor table",
+            source["timestamp"],
+            evidence_url,
+        )
+        for observation in neighbors:
+            neighbor = ensure_ip_node(nodes, observation["ip"], source=neighbor_source)
+            interface = observation.get("interface")
+            segment = valid_network(interface_addresses.get(interface)) if interface else None
+            if segment:
+                observation["segment"] = segment
+            add_mac_observation(neighbor, observation, neighbor_source)
+            origin = interface_nodes.get(interface) or node
+            add_edge(
+                edges,
+                origin["id"],
+                neighbor["id"],
+                "arp_neighbor",
+                f"ARP neighbor{f' on {interface}' if interface else ''}",
+                "confirmed",
+                observation.get("evidence"),
+                bool(interface),
             )
         for route in routes:
             network = route["network"]
@@ -790,6 +909,8 @@ def add_membership_edges(nodes: dict[str, dict], edges: dict[tuple[str, str, str
             continue
         address = ipaddress.ip_address(ip)
         for network, subnet in networks:
+            if address.version != network.version:
+                continue
             if address not in network:
                 continue
             if (node["id"], subnet["id"]) not in linked:
@@ -819,6 +940,9 @@ def build_topology() -> dict:
     )
     for node in node_list:
         node["sources"].sort(key=lambda item: item.get("timestamp") or "", reverse=True)
+        node["mac_observations"].sort(
+            key=lambda item: item.get("last_observed") or "", reverse=True
+        ) if node.get("mac_observations") else None
         node["services"].sort(key=lambda item: (item.get("port") or 0, item.get("protocol") or "")) if node.get("services") else None
     summary = {
         "devices": sum(1 for node in node_list if node["kind"] == "device"),
@@ -829,6 +953,12 @@ def build_topology() -> dict:
         "relationships": len(edges),
         "nmap_records_read": imported_count + automated_count,
         "configuration_records_read": config_count,
+        "mac_observations": sum(len(node.get("mac_observations") or []) for node in node_list),
+        "mac_identified_hosts": sum(1 for node in node_list if node.get("mac")),
+        "mac_conflicts": sum(1 for node in node_list if node.get("mac_conflict")),
+        "arp_neighbors": sum(
+            1 for edge in edges.values() if edge.get("relation") == "arp_neighbor"
+        ),
     }
     if not node_list:
         warnings.append("No saved Nmap or network-device records are available yet.")
@@ -837,6 +967,7 @@ def build_topology() -> dict:
     return {
         "generated_at": utc_now(),
         "summary": summary,
+        "oui_database": oui_database_info(),
         "nodes": node_list,
         "edges": list(edges.values()),
         "warnings": warnings,
