@@ -13,6 +13,9 @@
 - Added restart recovery that marks orphaned runs as interrupted and resumes the
   affected occurrence after its last completed chunk without repeating successful
   chunks.
+- Fixed subnet characterization counts when Nmap discovers router or firewall
+  interface addresses already represented by infrastructure nodes; the map now
+  reports endpoint and scanned-device observations separately.
 
 ## 0.4.1 — Scan builder usability and path discovery
 
