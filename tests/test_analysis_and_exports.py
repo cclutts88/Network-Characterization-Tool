@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from app.exports import host_summary_rows, port_level_rows, rows_to_csv, PORT_LEVEL_FIELDS
 from app.main import parse_xml
-from app.network_map import add_analysis_hosts
+from app.network_map import (
+    add_analysis_hosts,
+    add_membership_edges,
+    annotate_subnet_scan_observations,
+    ensure_ip_node,
+    ensure_subnet_node,
+    merge_device_alias,
+)
 
 
 SAMPLE_XML = b'''<?xml version="1.0"?>
@@ -72,3 +79,49 @@ def test_traceroute_hops_become_observed_map_relationships():
     assert nodes["ip:10.20.30.1"]["kind"] == "gateway"
     assert nodes["ip:10.20.30.15"]["paths"][0]["hops"][0]["ttl"] == 1
     assert any(edge["relation"] == "trace_hop" for edge in edges.values())
+
+
+def test_scanned_infrastructure_counts_as_subnet_characterization():
+    nodes, edges = {}, {}
+    scan_source = {
+        "kind": "automated_nmap",
+        "label": "Automated scan test",
+        "timestamp": "2026-09-10T00:25:46+00:00",
+        "url": "/api/scan-runs/test/artifacts/xml",
+    }
+    add_analysis_hosts(
+        nodes,
+        {
+            "hosts": [
+                {"ip": "172.22.255.1", "state": "up", "ports": []},
+                {"ip": "172.22.255.2", "state": "up", "ports": []},
+            ]
+        },
+        scan_source,
+        edges,
+    )
+    config_source = {
+        "kind": "device_configuration",
+        "label": "device configuration",
+        "timestamp": "2026-09-09T23:00:00+00:00",
+        "url": None,
+    }
+    firewall = ensure_ip_node(
+        nodes, "172.22.70.1", role="firewall", source=config_source
+    )
+    merge_device_alias(nodes, edges, firewall, "172.22.255.1", {})
+    ensure_ip_node(nodes, "172.22.255.2", role="router", source=config_source)
+    subnet = ensure_subnet_node(nodes, "172.22.255.0/30", config_source)
+
+    add_membership_edges(nodes, edges)
+    annotate_subnet_scan_observations(nodes)
+
+    assert subnet["infrastructure_count"] == 2
+    assert {item["ip"] for item in subnet["infrastructure_observations"]} == {
+        "172.22.255.1",
+        "172.22.255.2",
+    }
+    assert all(
+        item["source_kind"] == "automated_nmap"
+        for item in subnet["infrastructure_observations"]
+    )
