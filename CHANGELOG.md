@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.2 — Active recurring scheduling
+
+- Completed recurring hourly, daily, weekly, monthly, and custom-hour schedule
+  execution while keeping every schedule pinned to an immutable profile version.
+- Added schedule owner and modification history for creation, enable/pause, and
+  profile-version changes.
+- Added occurrence-level start, completion, status, run IDs, and completed-chunk
+  tracking alongside next-run and last-run information.
+- Kept conflicting schedules queued behind the single scanner and retained the
+  analyst warning after more than three delayed occurrences.
+- Added restart recovery that marks orphaned runs as interrupted and resumes the
+  affected occurrence after its last completed chunk without repeating successful
+  chunks.
+
 ## 0.4.1 — Scan builder usability and path discovery
 
 - Kept the shared page navigation visible while long content scrolls.
