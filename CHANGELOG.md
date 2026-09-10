@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.1 — Interface hardware identity
+
+- Added detailed interface collection commands for Cisco and Juniper routers
+  and firewalls while continuing to use VyOS configuration `hw-id` and pfSense
+  `ifconfig` evidence.
+- Parsed Cisco dotted MACs, Juniper current/hardware addresses, VyOS `hw-id`,
+  and Linux/FreeBSD `ether` or `link/ether` output into individual interfaces.
+- Displayed each interface MAC directly beside its interface name and IP on
+  router/firewall map cards, connection evidence, search, and device details.
+- Retained the existing device-level MAC as a primary/observed summary instead
+  of using it as a substitute for every interface's hardware address.
+
 ## 0.6.0 — Confirmed neighbor topology
 
 - Constrained the Previous Scans panel to a compact fixed height with its own
