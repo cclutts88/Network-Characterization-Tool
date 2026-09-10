@@ -22,13 +22,13 @@
 
 - [x] Show live Nmap host completion progress, including whole-batch progress
   for sequential scheduled chunks.
-- [ ] Execute recurring daily, weekly, monthly, and custom schedules.
-- [ ] Retain schedule owner, modification history, next run, and last run.
+- [x] Execute recurring daily, weekly, monthly, and custom schedules.
+- [x] Retain schedule owner, modification history, next run, and last run.
 - [x] Add optional FPING pre-discovery with retained responsive-host evidence
   and an explicit warning that ICMP-blocking hosts can be omitted.
 - [x] Collect and retain Nmap traceroute hop paths and map observed hop
   relationships.
-- [ ] Offer automatic compare-to-previous for scheduled scans.
+- [x] Offer automatic compare-to-previous for scheduled scans.
 
 ## Phase 4 — Comparison
 
