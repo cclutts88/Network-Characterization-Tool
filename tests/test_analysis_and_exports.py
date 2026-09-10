@@ -66,6 +66,9 @@ def test_traceroute_hops_become_observed_map_relationships():
     )
     assert count == 1
     assert nodes["ip:10.20.30.15"]["kind"] == "host"
+    assert nodes["ip:10.20.30.15"]["mac"] == "3C:52:82:11:22:33"
+    assert nodes["ip:10.20.30.15"]["mac_observations"][0]["vendor"] == "Dell"
+    assert nodes["ip:10.20.30.15"]["mac_observations"][0]["source_kind"] == "test"
     assert nodes["ip:10.20.30.1"]["kind"] == "gateway"
     assert nodes["ip:10.20.30.15"]["paths"][0]["hops"][0]["ttl"] == 1
     assert any(edge["relation"] == "trace_hop" for edge in edges.values())
