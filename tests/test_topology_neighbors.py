@@ -84,3 +84,14 @@ def test_supported_network_device_templates_collect_neighbor_detail():
     for device_type in ("router", "firewall"):
         commands = "\n".join(TEMPLATES["cisco"][device_type]).lower()
         assert "cdp neighbors detail" in commands
+
+
+def test_supported_templates_collect_interface_mac_evidence():
+    assert "show interfaces" in TEMPLATES["cisco"]["router"]
+    assert "show interface" in TEMPLATES["cisco"]["firewall"]
+    for device_type in ("router", "firewall"):
+        assert "show interfaces detail" in TEMPLATES["juniper"][device_type]
+    for device_type in ("router", "firewall"):
+        assert "ifconfig" in TEMPLATES["pfsense"][device_type]
+    for device_type in ("router", "firewall"):
+        assert "show configuration commands" in TEMPLATES["vyos"][device_type]
