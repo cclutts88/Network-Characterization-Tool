@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 — pfSense collection repair
+
+- Replaced the nonexistent `pfSsh.php playback config` command with the
+  documented read-only `cat /cf/conf/config.xml` collection method.
+- Applied the corrected configuration collection to both pfSense router and
+  firewall profiles while retaining `ifconfig` interface-MAC evidence.
+- Added regression coverage preventing the invalid playback command from
+  returning to either pfSense template.
+
 ## 0.6.1 — Interface hardware identity
 
 - Added detailed interface collection commands for Cisco and Juniper routers
