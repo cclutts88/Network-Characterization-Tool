@@ -82,6 +82,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Manage Saved Networks" in html
     assert "Add from device configurations" in html
     assert "/api/device-configs/network-candidates" in html
+    assert "candidateSavedName" in html
+    assert "name:candidateSavedName(item)" in html
     assert 'id="scopeMode"' in html
     assert "Enter an IP or range manually" in html
     assert "Combine saved and manual scopes" in html
@@ -89,6 +91,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
+    assert "candidateSavedName" in html
+    assert "name:candidateSavedName(item)" in html
     assert "Remove selected" in html
     assert "/api/scan-schedules/" in html
     assert ".join('\n')" not in html
