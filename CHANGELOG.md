@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0-dev — Dedicated service hunting
+
+- Added a dedicated Hunt Services view for completed automated Nmap scans.
+- Classified exposed services into Remote Access, File Transfer, File Sharing,
+  Web, Identity, Databases, Email, Network Management, and uncategorized
+  exposure without hiding unknown services.
+- Distinguished exposed, port-inferred, fingerprint-observed, and correlated
+  capability evidence, including fingerprint matches on nonstandard ports.
+- Added combined host, category, protocol, evidence-level, and nonstandard-port
+  filters while allowing multiple capability categories per host.
+- Added scan-to-scan hunting comparisons with added, removed, and changed
+  findings, host category changes, coverage warnings, and retained XML links.
+- Added direct Hunt actions to completed scan history and analysis history.
+
 ## 0.11.0-dev — Unified network-device analysis
 
 - Added a dedicated Network Device Analysis view under Analyze Results, plus a

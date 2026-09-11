@@ -80,13 +80,13 @@ an optional future mode within Reachability.
 - [x] Correlate Saved Networks, Nmap hosts, device interfaces, routes, and policy
   with confidence and provenance.
 
-### Release 7 — Dedicated Hunting View — Planned
+### Release 7 — Dedicated Hunting View — Complete
 
-- [ ] Service-aware categories such as Remote Access, File Transfer, File
+- [x] Service-aware categories such as Remote Access, File Transfer, File
   Sharing, Web, Identity, Databases, Email, and Network Management.
-- [ ] Support nonstandard ports and multiple categories per host.
-- [ ] Distinguish exposed, inferred, observed, and correlated capability.
-- [ ] Add combined filters and scan-to-scan hunting changes.
+- [x] Support nonstandard ports and multiple categories per host.
+- [x] Distinguish exposed, inferred, observed, and correlated capability.
+- [x] Add combined filters and scan-to-scan hunting changes.
 
 ### Release 8 — SearchSploit Enrichment — Planned
 

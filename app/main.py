@@ -18,6 +18,8 @@ from app.device_configs import router as device_config_router
 from app.device_analysis import router as device_analysis_router
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
+from app.hunting import build_hunting_analysis, compare_hunting_results
+from app.hunting_ui import hunting_page
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
 from app.comparison import (
@@ -949,6 +951,73 @@ def _comparison_name(manifests: list[dict], description: dict | None = None) -> 
     return f"{description.get('display_name') or 'Scan'} · {mode} · {completed} · {scope} · {profile_label}"
 
 
+def _hunting_group(selected_id: str) -> list[dict]:
+    manifests = list_scan_run_plans(limit=5000)
+    group = next(
+        (
+            items
+            for items in group_run_manifests(manifests)
+            if any(item.get("run_id") == selected_id for item in items)
+        ),
+        None,
+    )
+    if group is None:
+        raise HTTPException(status_code=404, detail="Scan result was not found")
+    if not all((run_directory(item["run_id"]) / "scan.xml").is_file() for item in group):
+        raise HTTPException(
+            status_code=409,
+            detail="This scan does not retain completed XML for every chunk",
+        )
+    return group
+
+
+@app.get("/api/hunting/compare")
+def compare_hunting_scans(before: str, after: str) -> dict:
+    if before == after:
+        raise HTTPException(status_code=422, detail="Choose two different scans")
+    before_group, after_group = _hunting_group(before), _hunting_group(after)
+    before_description = describe_run_group(before_group)
+    after_description = describe_run_group(after_group)
+    before_result = build_hunting_analysis(
+        _run_group_analysis(before_group),
+        evidence={
+            **before_description,
+            "comparison_name": _comparison_name(before_group, before_description),
+            "evidence": _comparison_evidence(before_group, before_description),
+        },
+    )
+    after_result = build_hunting_analysis(
+        _run_group_analysis(after_group),
+        evidence={
+            **after_description,
+            "comparison_name": _comparison_name(after_group, after_description),
+            "evidence": _comparison_evidence(after_group, after_description),
+        },
+    )
+    warnings = coverage_warnings(
+        representative_coverage(before_group), representative_coverage(after_group)
+    )
+    return {
+        **compare_hunting_results(before_result, after_result),
+        "coverage_compatible": not warnings,
+        "coverage_warnings": warnings,
+    }
+
+
+@app.get("/api/hunting/{run_id}")
+def analyze_hunting_scan(run_id: str) -> dict:
+    group = _hunting_group(run_id)
+    description = describe_run_group(group)
+    return build_hunting_analysis(
+        _run_group_analysis(group),
+        evidence={
+            **description,
+            "comparison_name": _comparison_name(group, description),
+            "evidence": _comparison_evidence(group, description),
+        },
+    )
+
+
 @app.get("/api/scan-comparisons/candidates")
 def comparison_candidates() -> list[dict]:
     manifests = list_scan_run_plans(limit=5000)
@@ -1252,6 +1321,10 @@ def device_config():
 @app.get('/device-analysis')
 def device_analysis():
     return device_analysis_page()
+
+@app.get('/hunting')
+def hunting():
+    return hunting_page()
 
 from app.network_map import router as network_map_router
 from app.network_map_ui import network_map_page

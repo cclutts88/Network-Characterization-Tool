@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.analysis_ui import analysis_page
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
+from app.hunting_ui import hunting_page
 from app.network_map_ui import network_map_page
 from app.ui import operator_page
 
@@ -114,7 +115,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
 
 
 def test_navigation_is_sticky_on_every_primary_page():
-    pages = [operator_page(), analysis_page(), device_analysis_page(), device_config_page(), network_map_page()]
+    pages = [operator_page(), analysis_page(), device_analysis_page(), hunting_page(), device_config_page(), network_map_page()]
     for page in pages:
         html = page.body.decode()
         assert "position:sticky" in html
@@ -176,10 +177,36 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "Firewall / ACL added" in html
 
 
+def test_hunting_view_has_categories_combined_filters_and_change_analysis():
+    analysis_html = analysis_page().body.decode()
+    device_html = device_analysis_page().body.decode()
+    html = hunting_page().body.decode()
+    assert "Hunt Services" in analysis_html
+    assert "Hunt Services" in device_html
+    assert 'id="currentRun"' in html
+    assert 'id="baselineRun"' in html
+    assert 'id="search"' in html
+    assert 'id="category"' in html
+    assert 'id="protocol"' in html
+    assert 'id="capability"' in html
+    assert 'id="nonstandard"' in html
+    assert "Exposed" in html
+    assert "Inferred" in html
+    assert "Observed" in html
+    assert "Correlated" in html
+    assert "/api/hunting/compare" in html
+    assert "/api/hunting/${encodeURIComponent(id)}" in html
+    assert "Findings added" in html
+    assert "Host category changes" in html
+    assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
+
+
 def test_scan_history_keeps_run_actions_on_one_line():
     html = operator_page().body.decode()
     assert ".history-run-actions{display:flex;flex-wrap:nowrap" in html
     assert '<div class="history-run-actions"><button class="secondary" data-open=' in html
+    assert 'data-hunt="${esc(run.run_id)}">Hunt</button>' in html
+    assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}' in html
 
 
 def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
