@@ -59,6 +59,34 @@ def test_parser_surfaces_mac_hostname_protocol_and_coverage():
     assert len(host["observed_ports"]) == 2
 
 
+def test_parser_warns_when_reset_responses_make_an_entire_subnet_look_online():
+    hosts = "".join(
+        f'''<host><status state="up" reason="reset" reason_ttl="63"/>
+        <address addr="10.0.0.{index}" addrtype="ipv4"/></host>'''
+        for index in range(1, 65)
+    )
+    xml = f'''<?xml version="1.0"?>
+    <nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 10.0.0.0/26">
+      <scaninfo type="syn" protocol="tcp" numservices="1" services="80"/>
+      {hosts}
+      <runstats><finished timestr="done"/><hosts up="64" down="0" total="64"/></runstats>
+    </nmaprun>'''.encode()
+
+    analysis = parse_xml(xml)
+
+    assert analysis["discovery_reason_counts"] == {"reset": 64}
+    assert analysis["hosts"][0]["state_reason"] == "reset"
+    assert analysis["hosts"][0]["state_reason_ttl"] == "63"
+    assert any("Docker Desktop NAT" in warning for warning in analysis["warnings"])
+
+
+def test_parser_does_not_warn_for_a_small_directly_observed_scan():
+    analysis = parse_xml(SAMPLE_XML)
+
+    assert analysis["discovery_reason_counts"] == {"arp-response": 1}
+    assert not any("Scan-quality warning" in warning for warning in analysis["warnings"])
+
+
 def test_parser_retains_non_open_port_observations_for_comparison():
     xml = SAMPLE_XML.replace(
         b'<state state="open" reason="syn-ack"/>',

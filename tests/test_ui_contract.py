@@ -168,6 +168,9 @@ def test_new_and_historical_results_share_the_same_renderer():
     html = analysis_page().body.decode()
     assert "renderAnalysis(item.analysis" in html
     assert "renderAnalysis(data.analysis" in html
+    assert 'id="analysisWarnings"' in html
+    assert "renderAnalysisWarnings" in html
+    assert "Analysis cautions" in html
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
     assert "MAC / vendor" in html

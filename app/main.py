@@ -531,6 +531,8 @@ def parse_xml(content: bytes) -> dict:
     for host in root.findall("host"):
         state_node = host.find("status")
         state = state_node.get("state", "unknown") if state_node is not None else "unknown"
+        state_reason = state_node.get("reason", "") if state_node is not None else ""
+        state_reason_ttl = state_node.get("reason_ttl", "") if state_node is not None else ""
         ipv4 = ""
         mac = ""
         vendor = ""
@@ -615,6 +617,8 @@ def parse_xml(content: bytes) -> dict:
             "hostname": hostnames[0] if hostnames else "",
             "hostnames": hostnames,
             "state": state,
+            "state_reason": state_reason,
+            "state_reason_ttl": state_reason_ttl,
             "mac": mac,
             "vendor": vendor,
             "os": os_name,
@@ -630,6 +634,32 @@ def parse_xml(content: bytes) -> dict:
         })
 
     up_hosts = [host for host in hosts if host["state"] == "up"]
+    reported_total = int(hosts_stats.get("total", "0")) if hosts_stats is not None else len(hosts)
+    discovery_reason_counts = Counter(
+        host["state_reason"] for host in up_hosts if host.get("state_reason")
+    )
+    reset_discovered = sum(
+        count
+        for reason, count in discovery_reason_counts.items()
+        if "reset" in reason.lower()
+    )
+    mac_count = sum(1 for host in hosts if host["mac"])
+    nearly_every_target_up = (
+        reported_total >= 64
+        and len(up_hosts) >= math.ceil(reported_total * 0.95)
+    )
+    reset_dominated = (
+        reset_discovered >= 16
+        and reset_discovered >= math.ceil(max(1, len(up_hosts)) * 0.50)
+    )
+    if nearly_every_target_up and mac_count == 0 and reset_dominated:
+        warnings.append(
+            "Scan-quality warning: nearly every target was reported up, no MAC addresses "
+            f"were observed, and {reset_discovered} hosts were marked up by TCP reset "
+            "responses. A translated or proxying path such as Docker Desktop NAT may be "
+            "creating false-positive host discovery. Prefer FPING pre-scan or a directly "
+            "attached Linux analyzer."
+        )
     grouped_hosts: defaultdict[str, list[dict]] = defaultdict(list)
     for host in up_hosts:
         grouped_hosts[host["os_group"]].append(host)
@@ -690,10 +720,11 @@ def parse_xml(content: bytes) -> dict:
         "nmap_version": root.get("version", ""),
         "started": root.get("startstr", ""),
         "finished": finished.get("timestr", "") if finished is not None else "",
-        "reported_total": int(hosts_stats.get("total", "0")) if hosts_stats is not None else len(hosts),
+        "reported_total": reported_total,
         "host_count": len(hosts),
         "up_count": len(up_hosts),
-        "mac_count": sum(1 for host in hosts if host["mac"]),
+        "mac_count": mac_count,
+        "discovery_reason_counts": dict(sorted(discovery_reason_counts.items())),
         "coverage": nmap_xml_coverage(root),
         "warnings": warnings,
         "hosts": hosts,
