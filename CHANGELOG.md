@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0-dev — Network-device collection usability
+
+- Added structured, collapsible review sections for interfaces, routes,
+  neighbors, VLANs, firewall/ACL evidence, NAT evidence, executed commands,
+  configuration text, and raw output.
+- Added route-type filtering, result search, route counts, and bounded table
+  rendering for large collection results.
+- Added confirmation-protected deletion of one device collection result with
+  strict run-directory validation and active-session protection.
+- Removed duplicate artifact links when an uploaded file also matches the
+  normal collected-configuration filename pattern.
+- Kept Open, Analyze, Compare, and Delete scan-history actions on one row so
+  the Delete control no longer wraps onto a line by itself.
+- Shortened host and port CSV export filenames to a compact NCT label and
+  eight-character result identifier for reliable opening on Windows.
+
 ## 0.8.0-dev — Subnet-grouped scan history
 
 - Replaced the flat Nmap run table with collapsible groups based on the immutable

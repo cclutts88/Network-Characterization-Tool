@@ -207,6 +207,12 @@ def test_import_history_raw_xml_and_both_csv_exports():
     assert "open_services" in hosts.text
     assert "protocol,port,port_state" in ports.text
     assert "192.0.2.10" in ports.text
+    host_download = hosts.headers["content-disposition"].split('filename="', 1)[1].rstrip('"')
+    port_download = ports.headers["content-disposition"].split('filename="', 1)[1].rstrip('"')
+    assert host_download.startswith("NCT-") and host_download.endswith("-hosts.csv")
+    assert port_download.startswith("NCT-") and port_download.endswith("-ports.csv")
+    assert len(host_download) <= 64
+    assert len(port_download) <= 64
 
 
 def test_automatic_run_comparison_uses_latest_completed_same_scope():

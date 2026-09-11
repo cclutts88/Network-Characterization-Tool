@@ -1091,15 +1091,23 @@ def csv_download(content: bytes, filename: str) -> StreamingResponse:
     )
 
 
+def compact_export_filename(label: str, identifier: str, suffix: str) -> str:
+    """Keep recognizable NCT exports comfortably below Windows path limits."""
+    stem = safe_name(Path(label).stem, "results")[:36].rstrip("-._") or "results"
+    short_id = safe_name(identifier, "export")[:8]
+    return f"NCT-{stem}-{short_id}-{suffix}.csv"
+
+
 @app.get("/api/imports/{sha256}/exports/hosts.csv")
 def export_import_host_summary(sha256: str) -> StreamingResponse:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
-    stem = safe_name(item.get("display_name") or item["filename"], "nmap-results")
     return csv_download(
         rows_to_csv(host_summary_rows(item["analysis"]), HOST_SUMMARY_FIELDS),
-        f"{stem}-host-summary.csv",
+        compact_export_filename(
+            item.get("display_name") or item["filename"], sha256, "hosts"
+        ),
     )
 
 
@@ -1108,10 +1116,11 @@ def export_import_ports(sha256: str) -> StreamingResponse:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
-    stem = safe_name(item.get("display_name") or item["filename"], "nmap-results")
     return csv_download(
         rows_to_csv(port_level_rows(item["analysis"]), PORT_LEVEL_FIELDS),
-        f"{stem}-port-level.csv",
+        compact_export_filename(
+            item.get("display_name") or item["filename"], sha256, "ports"
+        ),
     )
 
 

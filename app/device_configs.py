@@ -36,6 +36,8 @@ ARTIFACT_NAMES = ("manifest.json", "stdout.txt", "stderr.txt", "accountability.p
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_SUMMARY_TEXT_BYTES = 2 * 1024 * 1024
+MAX_SUMMARY_ITEMS = 500
 PASSWORD_SESSION_TTL_SECONDS = 90
 MAX_ADDITIONAL_COMMANDS = 20
 READ_ONLY_COMMAND_PREFIXES = {
@@ -456,6 +458,12 @@ class InteractivePasswordSubmission(BaseModel):
     password: SecretStr = Field(min_length=1, max_length=1024)
 
 
+class DeviceDeleteConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str = Field(min_length=1, max_length=100)
+
+
 @dataclass
 class InteractiveSshSession:
     session_id: str
@@ -761,6 +769,9 @@ def artifact_records(run_id: str, run_dir: Path) -> list[dict]:
         path.name for path in sorted(run_dir.glob("*-config.txt"))
         if path.is_file() and COLLECTION_ARTIFACT_RE.fullmatch(path.name)
     )
+    # An uploaded filename can also match the normal collection-result suffix.
+    # Preserve display order while ensuring it appears only once in history.
+    names = list(dict.fromkeys(names))
     return [
         {
             "name": name,
@@ -770,6 +781,162 @@ def artifact_records(run_id: str, run_dir: Path) -> list[dict]:
         for name in names
         if (run_dir / name).is_file()
     ]
+
+
+def device_collection_directory(run_id: str, config_dir: Path | None = None) -> Path:
+    """Resolve one collection directory without permitting path traversal."""
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("Invalid device collection identifier")
+    root = (CONFIG_DIR if config_dir is None else config_dir).resolve()
+    candidate = (root / run_id).resolve()
+    if candidate.parent != root:
+        raise ValueError("Invalid device collection path")
+    return candidate
+
+
+def _read_summary_text(run_dir: Path, filenames: list[str]) -> tuple[str, str | None, bool]:
+    for filename in filenames:
+        path = run_dir / filename
+        if not path.is_file():
+            continue
+        raw = path.read_bytes()
+        truncated = len(raw) > MAX_SUMMARY_TEXT_BYTES
+        return raw[:MAX_SUMMARY_TEXT_BYTES].decode("utf-8", errors="replace"), filename, truncated
+    return "", None, False
+
+
+def _configuration_source_names(run_dir: Path) -> list[str]:
+    uploaded = [
+        path.name for path in sorted(run_dir.glob("uploaded-*"))
+        if path.is_file() and UPLOADED_ARTIFACT_RE.fullmatch(path.name)
+    ]
+    collected = [
+        path.name for path in sorted(run_dir.glob("*-config.txt"))
+        if path.is_file() and COLLECTION_ARTIFACT_RE.fullmatch(path.name)
+    ]
+    return list(dict.fromkeys(uploaded + collected + ["stdout.txt"]))
+
+
+def _evidence_lines(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[dict]:
+    records: list[dict] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line in seen or not any(pattern.search(line) for pattern in patterns):
+            continue
+        seen.add(line)
+        records.append({"line_number": line_number, "evidence": line[:1000]})
+        if len(records) >= MAX_SUMMARY_ITEMS:
+            break
+    return records
+
+
+VLAN_PATTERNS = (
+    re.compile(r"^vlan\s+\d+\b", re.I),
+    re.compile(r"\bswitchport\s+(?:access|trunk).*\bvlan\b", re.I),
+    re.compile(r"\bset\s+vlans\s+\S+\s+vlan-id\s+\d+\b", re.I),
+    re.compile(r"\bvif\s+\d+\b", re.I),
+    re.compile(r"<(?:vlan|vlanif)>", re.I),
+)
+FIREWALL_ACL_PATTERNS = (
+    re.compile(r"^(?:ip\s+)?access-list\b", re.I),
+    re.compile(r"\bset\s+(?:firewall|security\s+policies)\b", re.I),
+    re.compile(r"^(?:pass|block)\s+(?:in|out)\b", re.I),
+    re.compile(r"^(?:iptables\s+-A|nft\s+add\s+rule)\b", re.I),
+    re.compile(r"<rule>", re.I),
+)
+NAT_PATTERNS = (
+    re.compile(r"\bset\s+nat\b", re.I),
+    re.compile(r"^ip\s+nat\b", re.I),
+    re.compile(r"^nat\s*\(", re.I),
+    re.compile(r"\b(?:source-nat|destination-nat)\b", re.I),
+    re.compile(r"<(?:nat|outbound)>", re.I),
+)
+
+
+def device_collection_summary(run_id: str, config_dir: Path | None = None) -> dict:
+    """Create a bounded, review-oriented summary from retained device evidence."""
+    run_dir = device_collection_directory(run_id, config_dir)
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError("Device collection was not found")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
+    configuration_text, source_filename, configuration_truncated = _read_summary_text(
+        run_dir, _configuration_source_names(run_dir)
+    )
+    raw_output, raw_filename, raw_truncated = _read_summary_text(
+        run_dir, ["stdout.txt"] + _configuration_source_names(run_dir)
+    )
+
+    from app.mac_enrichment import parse_neighbor_text
+    from app.network_map import parse_config_text
+    from app.topology_neighbors import parse_topology_neighbors
+
+    interfaces, routes = parse_config_text(configuration_text)
+    neighbors = parse_neighbor_text(configuration_text)
+    topology_neighbors = parse_topology_neighbors(configuration_text)
+    vlans = _evidence_lines(configuration_text, VLAN_PATTERNS)
+    firewall_acl = _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS)
+    nat = _evidence_lines(configuration_text, NAT_PATTERNS)
+    commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
+    routes = [
+        {
+            **route,
+            "route_type": (
+                "default" if route.get("network") in {"0.0.0.0/0", "::/0"}
+                else "connected" if route.get("direct")
+                else "routed"
+            ),
+        }
+        for route in routes
+    ]
+    result = {
+        "run_id": run_id,
+        "source_filename": source_filename,
+        "raw_filename": raw_filename,
+        "configuration_truncated": configuration_truncated,
+        "raw_truncated": raw_truncated,
+        "counts": {
+            "interfaces": len(interfaces),
+            "routes": len(routes),
+            "neighbors": len(neighbors),
+            "topology_neighbors": len(topology_neighbors),
+            "vlans": len(vlans),
+            "firewall_acl": len(firewall_acl),
+            "nat": len(nat),
+            "commands": len(commands),
+            "lines": len(configuration_text.splitlines()),
+        },
+        "interfaces": interfaces[:MAX_SUMMARY_ITEMS],
+        "routes": routes[:MAX_SUMMARY_ITEMS],
+        "neighbors": neighbors[:MAX_SUMMARY_ITEMS],
+        "topology_neighbors": topology_neighbors[:MAX_SUMMARY_ITEMS],
+        "vlans": vlans,
+        "firewall_acl": firewall_acl,
+        "nat": nat,
+        "commands": commands,
+        "configuration_text": configuration_text,
+        "raw_output": raw_output,
+    }
+    return result
+
+
+def delete_device_collection(
+    run_id: str, confirmation: str, config_dir: Path | None = None
+) -> dict:
+    """Delete exactly one inactive collection after a valid short-lived challenge."""
+    run_dir = device_collection_directory(run_id, config_dir)
+    if not (run_dir / "manifest.json").is_file():
+        raise FileNotFoundError("Device collection was not found")
+    with _INTERACTIVE_SESSIONS_LOCK:
+        if any(session.preview.get("run_id") == run_id for session in _INTERACTIVE_SESSIONS.values()):
+            raise RuntimeError("An active SSH collection cannot be deleted")
+    from app.poc import consume_delete_challenge
+
+    if not consume_delete_challenge("device-collection", run_id, confirmation):
+        raise PermissionError("The confirmation code is invalid or expired")
+    shutil.rmtree(run_dir)
+    return {"deleted": True, "run_id": run_id}
 
 
 def classify_ssh_failure(stderr: str, key_status: str) -> str:
@@ -1202,6 +1369,39 @@ def network_candidates() -> dict:
     from app.network_map import configuration_network_candidates
 
     return {"candidates": configuration_network_candidates()}
+
+
+@router.get("/{run_id}/summary")
+def collection_summary(run_id: str) -> dict:
+    try:
+        return device_collection_summary(run_id)
+    except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+
+
+@router.post("/{run_id}/delete-challenge")
+def collection_delete_challenge(run_id: str) -> dict:
+    try:
+        run_dir = device_collection_directory(run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    if not (run_dir / "manifest.json").is_file():
+        raise HTTPException(status_code=404, detail="Device collection was not found")
+    from app.poc import issue_delete_challenge
+
+    return issue_delete_challenge("device-collection", run_id)
+
+
+@router.post("/{run_id}/delete")
+def delete_collection(run_id: str, body: DeviceDeleteConfirmation) -> dict:
+    try:
+        return delete_device_collection(run_id, body.confirmation)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @router.get("/{run_id}/files/{filename}")

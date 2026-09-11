@@ -125,6 +125,36 @@ def test_device_configs_offer_reviewed_network_candidates():
     assert "does not start a scan" in html
 
 
+def test_device_collection_history_has_structured_review_and_confirmed_delete():
+    html = device_config_page().body.decode()
+    assert 'id="historySearch"' in html
+    assert 'id="routeFilter"' in html
+    assert "All routes" in html
+    assert "Connected routes" in html
+    assert "/summary`" in html
+    assert "/delete-challenge`" in html
+    assert 'id="deleteCollectionDialog"' in html
+    for section in (
+        "Interfaces",
+        "Routes",
+        "Neighbors",
+        "VLANs",
+        "Firewall / ACL",
+        "NAT",
+        "Commands",
+        "Configuration",
+        "Raw output",
+    ):
+        assert section in html
+    assert "Showing ${shown.length} of ${availableTotal} rows" in html
+
+
+def test_scan_history_keeps_run_actions_on_one_line():
+    html = operator_page().body.decode()
+    assert ".history-run-actions{display:flex;flex-wrap:nowrap" in html
+    assert '<div class="history-run-actions"><button class="secondary" data-open=' in html
+
+
 def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     html = network_map_page().body.decode()
     assert 'id="macObservationCount"' in html
@@ -182,6 +212,9 @@ def test_new_and_historical_results_share_the_same_renderer():
     assert "Select one more automated scan" in html
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
+    assert "compactExportLabel" in html
+    assert "`${currentLabel}-hosts.csv`" in html
+    assert "`${currentLabel}-ports.csv`" in html
     assert "MAC / vendor" in html
     assert "Automatic same-scope comparison" in html
     assert 'id="autoCompareResult"' in html
