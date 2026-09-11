@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from app.poc import ScanRunPlan, build_scan_run_manifest
+from app.poc import (
+    ScanRunPlan,
+    build_scan_run_manifest,
+    group_scan_runs_by_saved_network,
+)
 from app.saved_networks import (
     SavedNetworkArchive,
     SavedNetworkCreate,
@@ -159,3 +163,65 @@ def test_archived_saved_network_cannot_start_a_new_scan(tmp_path: Path):
         build_scan_run_manifest(
             scan_plan(saved_network_ids=[saved["saved_network_id"]]), db_path=db_path
         )
+
+
+def test_scan_history_groups_preserve_saved_network_snapshots():
+    saved_run = {
+        "run_id": "a" * 32,
+        "name": "Servers baseline",
+        "created_at": "2026-09-10T10:00:00+00:00",
+        "completed_at": "2026-09-10T10:10:00+00:00",
+        "host_count": 12,
+        "saved_networks": [{
+            "saved_network_id": "servers-id",
+            "name": "Mission Servers",
+            "cidr": "10.10.10.0/24",
+            "description": "Historical snapshot",
+            "category": "Mission",
+            "tags": ["servers"],
+        }],
+    }
+    newer_saved_run = {
+        **saved_run,
+        "run_id": "b" * 32,
+        "created_at": "2026-09-11T10:00:00+00:00",
+        "completed_at": "2026-09-11T10:08:00+00:00",
+        "host_count": 14,
+    }
+    multi_run = {
+        "run_id": "c" * 32,
+        "created_at": "2026-09-11T11:00:00+00:00",
+        "host_count": 20,
+        "saved_networks": [
+            saved_run["saved_networks"][0],
+            {
+                "saved_network_id": "users-id",
+                "name": "Mission Users",
+                "cidr": "10.10.20.0/24",
+            },
+        ],
+    }
+    manual_run = {
+        "run_id": "d" * 32,
+        "created_at": "2026-09-11T12:00:00+00:00",
+        "host_count": 3,
+        "manual_targets": ["192.0.2.0/29"],
+    }
+
+    groups = group_scan_runs_by_saved_network(
+        [manual_run, multi_run, newer_saved_run, saved_run]
+    )
+
+    assert [group["kind"] for group in groups] == [
+        "saved_network",
+        "multiple_saved_networks",
+        "manual",
+    ]
+    saved_group = groups[0]
+    assert saved_group["name"] == "Mission Servers"
+    assert saved_group["cidr"] == "10.10.10.0/24"
+    assert saved_group["scan_count"] == 2
+    assert saved_group["latest_host_count"] == 14
+    assert saved_group["runs"][0]["run_id"] == "b" * 32
+    assert groups[1]["scan_count"] == 1
+    assert groups[2]["name"] == "Ad Hoc / Manual Scans"

@@ -1,78 +1,141 @@
-# Net Characterization Tool Roadmap
+# Network Characterization Tool — Revised Release Roadmap
 
-## Phase 1 — Usability and history
+The application direction is:
 
-- [x] Reopen previous scans through the complete analysis renderer.
-- [x] Add human-friendly manual and scheduled scan names.
-- [x] Retain creator, scheduler, executor, and execution-method metadata.
-- [x] Show explicit scan coverage in history.
-- [x] Preserve host-summary CSV and add normalized port-level CSV.
-- [x] Parse and surface MAC addresses and Nmap-reported vendors.
+**Nmap → Net Devices → Analysis → Hunt → Map → Reachability / Hardening**
 
-## Phase 2 — Scan profiles
+Nmap and Net Devices are collection sources. Analysis interprets and correlates
+their results. Hunt focuses analyst attention, Map visualizes selected results,
+and Reachability evaluates possible communication paths. Hardening Validation is
+an optional future mode within Reachability.
 
-- [x] Consolidate all Nmap scan construction on one page.
-- [x] Save, clone, reuse, and version profiles.
-- [x] Add TCP, UDP, and TCP + UDP modes.
-- [x] Add common, full, custom, and ICS-focused port scopes.
-- [x] Enforce `-n` in the shared command builder.
-- [x] Persist schedule definitions against an immutable profile version.
+## Release status
 
-## Phase 3 — Scheduling and discovery
+### Release 1 — Saved Network / Target Foundation — Complete
 
-- [x] Show live Nmap host completion progress, including whole-batch progress
-  for sequential scheduled chunks.
-- [x] Execute recurring daily, weekly, monthly, and custom schedules.
-- [x] Retain schedule owner, modification history, next run, and last run.
-- [x] Add optional FPING pre-discovery with retained responsive-host evidence
-  and an explicit warning that ICMP-blocking hosts can be omitted.
-- [x] Collect and retain Nmap traceroute hop paths and map observed hop
-  relationships.
-- [x] Offer automatic compare-to-previous for scheduled scans.
+- [x] Persistent Saved Networks with standardized name, CIDR, description,
+  category, and tags.
+- [x] Saved-only, manual-only, and combined scan scopes.
+- [x] Multiple Saved Networks in a combined scan.
+- [x] Copy a manual target into the Saved Networks editor.
+- [x] Add reviewed subnet candidates derived from device configurations.
+- [x] Reject invalid or duplicate names and CIDRs; warn on overlaps and normalize
+  host-bit CIDRs.
+- [x] Retain an immutable Saved Network snapshot with scan history.
+- [x] Preserve existing data across the local Docker development workflow.
 
-## Phase 4 — Comparison
+### Release 2 — Subnet-Grouped Scan History — In development
 
-- [x] Expand deltas across hosts, ports, protocols, service states, products,
-  versions, OS identity, hostnames, MACs, and routes.
-- [x] Warn when targets, protocols, port coverage, or profile versions differ.
-- [x] Show affected hosts and evidence behind each change.
+- [x] Group runs by their retained Saved Network snapshot.
+- [x] Keep multi-network runs in a distinct group without duplicating scans.
+- [x] Keep scans without a Saved Network snapshot under Ad Hoc / Manual Scans.
+- [x] Show scan count, latest scan, latest run time, and latest host count.
+- [x] Nest status, date, profile, actual targets, host count, ownership, evidence,
+  Analyze, Compare, and Delete actions under collapsible groups.
+- [ ] Complete browser validation against migrated scan history and package the
+  release for rollback-safe deployment.
 
-## Phase 5 — Terrain enrichment
+### Release 3 — Global No-Strike Redesign — Mostly complete, absorbed early
 
-- [x] Ingest router ARP tables while excluding unresolved/incomplete entries.
-- [x] Correlate MAC observations from Nmap and router/firewall ARP tables with
-  source, interface, segment, timestamps, and confidence.
-- [ ] Evaluate PCAP MAC correlation only for future deployments with collectors
-  on target Layer-2 segments; do not infer endpoint MACs from routed traffic.
-- [x] Add offline OUI/vendor lookup using the locally installed Nmap database.
-- [ ] Extend the packet parser for PCAPNG when a future deployment includes
-  collectors on useful Layer-2 segments.
-- [x] Collect and parse LLDP/CDP chassis, device, local-interface, and remote-port
-  identity into confirmed network-map links.
-- [x] Collect, associate, and display router/firewall hardware addresses per
-  interface instead of relying only on one device-level MAC.
-- [ ] Add local SearchSploit/ExploitDB references with careful
-  “potentially relevant” wording.
-- [ ] Evaluate the suggested GitLab Nmap parser and identify the analyst's
-  “Redline / Red…” network-mapping tool before integration.
-- [x] Enrich topology with IP/MAC/interface/route/segment relationships.
+- [x] Store a persistent global protection list.
+- [x] Apply global and scan-specific exclusions before FPING and Nmap.
+- [x] Keep the editor in a compact collapsible panel.
+- [x] Require confirmation before removing protected entries.
+- [x] Preserve No-Strike settings after restart through persistent storage.
+- [ ] Add a concise pre-launch breakdown of requested addresses, global
+  exclusions, scan-specific exclusions, and effective addresses.
+- [ ] Expand regression coverage for overlapping global and scan-specific ranges.
 
-## Phase 6 — Device configuration collection
+### Release 4 — Network Device Collection Usability — Partially implemented
 
-- [ ] Redesign zero-touch collection around secure session-only credentials,
-  SSH-agent use, NETCONF, RESTCONF, vendor APIs, and platform constraints.
-- [ ] Keep manual configuration retrieval and upload as the supported workflow
-  until the automated design is proven safe and reliable.
+- [x] Group collection history by device.
+- [x] Keep collection runs and raw evidence collapsible.
+- [x] Derive review-only Saved Network candidates from collected configurations.
+- [ ] Add confirmed deletion of individual device collection results.
+- [ ] Add structured collapsible summaries for interfaces, routes, neighbors,
+  VLANs, firewall/ACL, NAT, commands, configuration, and raw output.
+- [ ] Add route counts, search, filtering, and large-table handling.
 
-## Phase 7 — Operator feedback
+### Release 5 — Scan Execution Engine Upgrade — Partially implemented
 
-- [ ] Add an **Operator Feedback** page as the final navigation tab.
-- [ ] Let operators classify feedback as a feature to add, change, or remove,
-  or as a problem encountered while using the tool.
-- [ ] Capture the affected page/feature, operator comments, submission time,
-  application version, and optional scan/run reference for troubleshooting.
-- [ ] Provide a simple review queue with status such as New, Under Review,
-  Planned, Completed, or Declined while preserving the original submission.
-- [ ] Add a safe export path for sharing selected feedback with the project
-  backlog without including scan evidence, credentials, or sensitive network
-  details by default.
+- [x] FPING pre-discovery with retained evidence and explicit fallback approval.
+- [x] Live Nmap percentage, elapsed time, ETA, heartbeat, and host completion when
+  Nmap provides reliable values.
+- [x] Chunk and scheduled-batch progress.
+- [ ] Split combined work into Discovery → TCP → UDP → Merge → Analysis.
+- [ ] Preserve successful TCP results when UDP fails or times out.
+- [ ] Tune UDP ports, retries, timing, service detection, host timeouts, and
+  recovery behavior.
+
+### Release 6 — Unified Analysis Framework — Partially implemented
+
+- [x] Nmap host, port, service, OS, coverage, outlier, and change analysis.
+- [x] Retained evidence and scan-quality warnings.
+- [x] Initial device interface, route, neighbor, MAC, LLDP/CDP, and topology
+  parsing.
+- [ ] Add a dedicated Network Device Analysis view.
+- [ ] Add route protocol/default/next-hop/multipath summaries and review items.
+- [ ] Add device collection comparison for routes, interfaces, firewall/ACL,
+  NAT, and network objects.
+- [ ] Correlate Saved Networks, Nmap hosts, device interfaces, routes, and policy
+  with confidence and provenance.
+
+### Release 7 — Dedicated Hunting View — Planned
+
+- [ ] Service-aware categories such as Remote Access, File Transfer, File
+  Sharing, Web, Identity, Databases, Email, and Network Management.
+- [ ] Support nonstandard ports and multiple categories per host.
+- [ ] Distinguish exposed, inferred, observed, and correlated capability.
+- [ ] Add combined filters and scan-to-scan hunting changes.
+
+### Release 8 — SearchSploit Enrichment — Planned
+
+- [ ] Normalize product/version evidence and query a staged local Exploit-DB
+  dataset.
+- [ ] Show candidate references, match counts, platform, and type.
+- [ ] Clearly label results as potential matches requiring analyst validation.
+- [ ] Do not execute exploit code.
+
+### Release 9 — Network Map Core Redesign — Planned as an independent release
+
+- [ ] Pan-and-zoom canvas with cursor-centered zoom, node drag, selection, and
+  Fit.
+- [ ] Saved-network grouping and collapsible subnet groups.
+- [ ] Compact nodes with full detail in a side panel.
+- [ ] Consolidate router/firewall interfaces into one device identity.
+
+### Release 10 — Advanced Map Usability — Planned
+
+- [ ] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
+- [ ] Pan, zoom, and highlight search results.
+- [ ] Add zoom-dependent detail and optional analytical overlays.
+- [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
+
+### Future major capability — Reachability Analysis
+
+- [ ] Evaluate source, destination, and service using open ports, routes,
+  interfaces, firewall/ACL policy, NAT, Saved Networks, and device identity.
+- [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
+- [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not
+  Exposed without claiming unsupported certainty.
+- [ ] Group source-exposure reports by Saved Network and preserve policy objects
+  and evidence.
+- [ ] Send saved reachability results to the map for focused visualization.
+
+### Future extension — Hardening Validation
+
+- [ ] Simulate proposed firewall, ACL, or routing controls without changing
+  production devices.
+- [ ] Compare current and proposed paths, alternate paths, and collateral impact.
+- [ ] Export evidence-backed hardening reports and map comparisons.
+
+## Release discipline
+
+Every release should be built and tested locally, checked against existing and
+new data, packaged with offline dependencies where required, deployed by a short
+final swap, smoke-tested, and kept independently rollbackable. Scan-engine,
+device-analysis, map, and reachability redesigns must remain separate releases.
+
+Regression checks include scan creation, Saved Networks, manual targets,
+No-Strike behavior, FPING, TCP, UDP, storage, history, analysis, deletion, device
+collection/history, migration, and map loading.

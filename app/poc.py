@@ -1250,6 +1250,106 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
     return [with_host_count(json.loads(row[0])) for row in rows]
 
 
+def group_scan_runs_by_saved_network(runs: list[dict]) -> list[dict]:
+    """Group history by the Saved Network snapshots retained by each run."""
+    groups: dict[str, dict] = {}
+    for run in runs:
+        target_selection = run.get("target_selection") or {}
+        snapshots = run.get("saved_networks") or target_selection.get("saved_networks") or []
+        unique_snapshots: list[dict] = []
+        seen: set[str] = set()
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict):
+                continue
+            identity = str(
+                snapshot.get("saved_network_id")
+                or snapshot.get("cidr")
+                or snapshot.get("name")
+                or ""
+            )
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            unique_snapshots.append(snapshot)
+
+        if len(unique_snapshots) == 1:
+            network = unique_snapshots[0]
+            identity = str(
+                network.get("saved_network_id")
+                or network.get("cidr")
+                or network.get("name")
+            )
+            group_id = f"saved:{identity}"
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "kind": "saved_network",
+                    "name": network.get("name") or "Unnamed Saved Network",
+                    "cidr": network.get("cidr") or "",
+                    "description": network.get("description") or "",
+                    "category": network.get("category") or "",
+                    "tags": list(network.get("tags") or []),
+                    "runs": [],
+                },
+            )
+        elif len(unique_snapshots) > 1:
+            group_id = "multiple-saved-networks"
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "kind": "multiple_saved_networks",
+                    "name": "Multiple Saved Networks",
+                    "cidr": "",
+                    "description": "Scans spanning more than one Saved Network snapshot.",
+                    "category": "",
+                    "tags": [],
+                    "runs": [],
+                },
+            )
+        else:
+            group_id = "ad-hoc-manual"
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "kind": "manual",
+                    "name": "Ad Hoc / Manual Scans",
+                    "cidr": "",
+                    "description": "Scans created without a Saved Network snapshot.",
+                    "category": "",
+                    "tags": [],
+                    "runs": [],
+                },
+            )
+        group["runs"].append(run)
+
+    for group in groups.values():
+        group["runs"].sort(
+            key=lambda item: item.get("created_at") or "", reverse=True
+        )
+        latest = group["runs"][0]
+        group["scan_count"] = len(group["runs"])
+        group["latest_scan_at"] = latest.get("completed_at") or latest.get("created_at")
+        group["latest_scan_name"] = latest.get("display_name") or latest.get("name")
+        group["latest_host_count"] = latest.get("host_count")
+
+    kind_order = {
+        "saved_network": 0,
+        "multiple_saved_networks": 1,
+        "manual": 2,
+    }
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            kind_order.get(item["kind"], 99),
+            str(item["name"]).casefold(),
+            str(item.get("cidr") or ""),
+        ),
+    )
+
+
 def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
     if not RUN_ID_RE.fullmatch(run_id):
         return None
@@ -2818,6 +2918,13 @@ def scan_interfaces() -> dict:
 @router.get("/scan-runs")
 def scan_run_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
     return list_scan_run_plans(limit=limit)
+
+
+@router.get("/scan-runs-grouped")
+def grouped_scan_run_history(
+    limit: int = Query(default=200, ge=1, le=200),
+) -> list[dict]:
+    return group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit))
 
 
 @router.get("/scan-runs/{run_id}")

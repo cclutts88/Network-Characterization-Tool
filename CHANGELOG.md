@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0-dev — Subnet-grouped scan history
+
+- Replaced the flat Nmap run table with collapsible groups based on the immutable
+  Saved Network snapshots retained with each scan.
+- Kept scans spanning several Saved Networks in a dedicated multi-network group
+  and legacy/manual scans in an Ad Hoc / Manual group without duplicating runs.
+- Added group summaries for scan count, latest scan, completion time, and latest
+  host count while preserving per-run scope, profile, ownership, evidence, and
+  deletion controls.
+- Added direct Analyze and Compare actions from grouped history; Compare opens
+  Analysis with the selected run preselected for a second-run comparison.
+- Reconciled the repository roadmap with the revised Nmap → Net Devices →
+  Analysis → Hunt → Map → Reachability / Hardening release sequence.
+
 ## 0.7.1-dev — Scan workspace layout
 
 - Added expandable Saved Networks and No-Strikes panels directly below the

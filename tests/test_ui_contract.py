@@ -91,6 +91,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
+    assert "/api/scan-runs-grouped?limit=200" in html
+    assert 'class="history-group"' in html
+    assert 'data-compare="' in html
     assert "candidateSavedName" in html
     assert "name:candidateSavedName(item)" in html
     assert "Remove selected" in html
@@ -171,6 +174,8 @@ def test_new_and_historical_results_share_the_same_renderer():
     assert 'id="analysisWarnings"' in html
     assert "renderAnalysisWarnings" in html
     assert "Analysis cautions" in html
+    assert "prepareRunComparison" in html
+    assert "Select one more automated scan" in html
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
     assert "MAC / vendor" in html
