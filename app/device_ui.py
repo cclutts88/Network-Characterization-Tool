@@ -134,6 +134,7 @@ function renderStructuredResults(runId,target) {
     resultSection('VLANs',filtered(data.vlans),[{label:'Line',value:'line_number'},{label:'Evidence',value:'evidence'}],{total:data.counts?.vlans??null}),
     resultSection('Firewall / ACL',filtered(data.firewall_acl),[{label:'Line',value:'line_number'},{label:'Evidence',value:'evidence'}],{total:data.counts?.firewall_acl??null}),
     resultSection('NAT',filtered(data.nat),[{label:'Line',value:'line_number'},{label:'Evidence',value:'evidence'}],{total:data.counts?.nat??null}),
+    resultSection('Network objects',filtered(data.network_objects),[{label:'Line',value:'line_number'},{label:'Evidence',value:'evidence'}],{total:data.counts?.network_objects??null}),
     resultSection('Commands',filtered((data.commands||[]).map((command,index)=>({number:index+1,command}))),[{label:'#',value:'number'},{label:'Command',value:'command'}],{total:data.counts?.commands??null}),
     textResultSection('Configuration',data.configuration_text||'',{filename:data.source_filename,truncated:data.configuration_truncated}),
     textResultSection('Raw output',data.raw_output||'',{filename:data.raw_filename,truncated:data.raw_truncated})
@@ -186,7 +187,7 @@ function renderHistory(records) {
       const artifacts=element('div','artifacts');
       for(const artifact of (run.artifacts||[])) { const link=element('a','',`${artifact.name} · ${formatBytes(artifact.size||0)}`); link.href=artifact.url; link.setAttribute('download',''); artifacts.append(link); }
       if(artifacts.childElementCount) body.append(element('label','','Saved files'),artifacts);
-      const actions=element('div','run-actions'); const deleteButton=element('button','danger','Delete result'); deleteButton.type='button'; deleteButton.onclick=event=>beginDeleteCollection(run,event); actions.append(deleteButton); body.append(actions);
+      const actions=element('div','run-actions'); const analyzeButton=element('button','secondary','Analyze'); analyzeButton.type='button'; analyzeButton.onclick=event=>{event.preventDefault();event.stopPropagation();location.href=`/device-analysis?run=${encodeURIComponent(run.run_id)}`;}; const deleteButton=element('button','danger','Delete result'); deleteButton.type='button'; deleteButton.onclick=event=>beginDeleteCollection(run,event); actions.append(analyzeButton,deleteButton); body.append(actions);
       const structured=element('div','structured-results'); structured.dataset.runId=run.run_id; body.append(structured); renderStructuredResults(run.run_id,structured);
       card.addEventListener('toggle',()=>{if(card.open) loadStructuredResults(run.run_id,structured);}); card.append(body); runList.append(card);
     }

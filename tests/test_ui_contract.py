@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.analysis_ui import analysis_page
+from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.network_map_ui import network_map_page
 from app.ui import operator_page
@@ -113,7 +114,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
 
 
 def test_navigation_is_sticky_on_every_primary_page():
-    pages = [operator_page(), analysis_page(), device_config_page(), network_map_page()]
+    pages = [operator_page(), analysis_page(), device_analysis_page(), device_config_page(), network_map_page()]
     for page in pages:
         html = page.body.decode()
         assert "position:sticky" in html
@@ -147,12 +148,32 @@ def test_device_collection_history_has_structured_review_and_confirmed_delete():
         "VLANs",
         "Firewall / ACL",
         "NAT",
+        "Network objects",
         "Commands",
         "Configuration",
         "Raw output",
     ):
         assert section in html
     assert "Showing ${shown.length} of ${availableTotal} rows" in html
+    assert "Analyze" in html
+    assert "/device-analysis?run=" in html
+
+
+def test_network_device_analysis_has_unified_evidence_and_comparison_views():
+    nmap_html = analysis_page().body.decode()
+    html = device_analysis_page().body.decode()
+    assert "Network Device Analysis" in nmap_html
+    assert 'id="currentRun"' in html
+    assert 'id="baselineRun"' in html
+    assert "/api/device-analysis/compare" in html
+    assert "/api/device-analysis/${encodeURIComponent(id)}" in html
+    assert "Routing and interfaces" in html
+    assert "Policy, NAT, and network objects" in html
+    assert "Saved Networks" in html
+    assert "Nmap hosts on device interfaces" in html
+    assert "confidence" in html
+    assert "Interfaces changed" in html
+    assert "Firewall / ACL added" in html
 
 
 def test_scan_history_keeps_run_actions_on_one_line():

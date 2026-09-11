@@ -67,17 +67,17 @@ an optional future mode within Reachability.
 - [x] Tune UDP ports, retries, timing, service detection, host timeouts, and
   recovery behavior.
 
-### Release 6 — Unified Analysis Framework — Partially implemented
+### Release 6 — Unified Analysis Framework — Complete
 
 - [x] Nmap host, port, service, OS, coverage, outlier, and change analysis.
 - [x] Retained evidence and scan-quality warnings.
 - [x] Initial device interface, route, neighbor, MAC, LLDP/CDP, and topology
   parsing.
-- [ ] Add a dedicated Network Device Analysis view.
-- [ ] Add route protocol/default/next-hop/multipath summaries and review items.
-- [ ] Add device collection comparison for routes, interfaces, firewall/ACL,
+- [x] Add a dedicated Network Device Analysis view.
+- [x] Add route protocol/default/next-hop/multipath summaries and review items.
+- [x] Add device collection comparison for routes, interfaces, firewall/ACL,
   NAT, and network objects.
-- [ ] Correlate Saved Networks, Nmap hosts, device interfaces, routes, and policy
+- [x] Correlate Saved Networks, Nmap hosts, device interfaces, routes, and policy
   with confidence and provenance.
 
 ### Release 7 — Dedicated Hunting View — Planned

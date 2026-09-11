@@ -852,6 +852,13 @@ NAT_PATTERNS = (
     re.compile(r"\b(?:source-nat|destination-nat)\b", re.I),
     re.compile(r"<(?:nat|outbound)>", re.I),
 )
+NETWORK_OBJECT_PATTERNS = (
+    re.compile(r"^(?:object|object-group)\s+network\b", re.I),
+    re.compile(r"^network-object\b", re.I),
+    re.compile(r"\bset\s+(?:firewall\s+group|security\s+address-book)\b", re.I),
+    re.compile(r"^(?:host|subnet)\s+(?:\d{1,3}\.){3}\d{1,3}\b", re.I),
+    re.compile(r"<(?:alias|network)>\b", re.I),
+)
 
 
 def device_collection_summary(run_id: str, config_dir: Path | None = None) -> dict:
@@ -878,6 +885,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     vlans = _evidence_lines(configuration_text, VLAN_PATTERNS)
     firewall_acl = _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS)
     nat = _evidence_lines(configuration_text, NAT_PATTERNS)
+    network_objects = _evidence_lines(configuration_text, NETWORK_OBJECT_PATTERNS)
     commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
     routes = [
         {
@@ -904,6 +912,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "vlans": len(vlans),
             "firewall_acl": len(firewall_acl),
             "nat": len(nat),
+            "network_objects": len(network_objects),
             "commands": len(commands),
             "lines": len(configuration_text.splitlines()),
         },
@@ -914,6 +923,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         "vlans": vlans,
         "firewall_acl": firewall_acl,
         "nat": nat,
+        "network_objects": network_objects,
         "commands": commands,
         "configuration_text": configuration_text,
         "raw_output": raw_output,

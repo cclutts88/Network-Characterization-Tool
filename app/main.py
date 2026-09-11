@@ -15,6 +15,8 @@ from app.poc import (
     schedule_worker,
 )
 from app.device_configs import router as device_config_router
+from app.device_analysis import router as device_analysis_router
+from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
@@ -760,6 +762,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifespan)
 app.include_router(poc_router)
 app.include_router(device_config_router)
+app.include_router(device_analysis_router)
 
 
 @app.get("/health")
@@ -1245,6 +1248,10 @@ def analysis():
 @app.get('/device-config')
 def device_config():
     return device_config_page()
+
+@app.get('/device-analysis')
+def device_analysis():
+    return device_analysis_page()
 
 from app.network_map import router as network_map_router
 from app.network_map_ui import network_map_page

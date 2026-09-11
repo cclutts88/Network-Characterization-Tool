@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.0-dev — Unified network-device analysis
+
+- Added a dedicated Network Device Analysis view under Analyze Results, plus a
+  direct Analyze action on each retained device collection.
+- Added route protocol, default-route, next-hop, multipath, interface-role, and
+  review-item summaries derived from retained configuration evidence.
+- Added collection-to-collection comparison for interfaces, routes,
+  firewall/ACL rules, NAT statements, and network objects.
+- Correlated Saved Networks and retained Nmap hosts with parsed interfaces,
+  routes, policy, NAT, and network objects, including confidence labels and
+  links back to source evidence.
+- Added network-object extraction to the structured device-configuration view.
+
 ## 0.10.0-dev — Split scan execution engine
 
 - Split local scan execution into visible Discovery, TCP, UDP, Merge, and

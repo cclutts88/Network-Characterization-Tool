@@ -24,6 +24,8 @@ vlan 80
  name USERS
 access-list 101 permit tcp any host 10.80.0.10 eq 443
 ip nat inside source list 1 interface GigabitEthernet0/0 overload
+object network WEB_SERVER
+ host 10.80.0.10
 """
 
 
@@ -61,6 +63,8 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["vlans"][0]["evidence"] == "vlan 80"
     assert "access-list 101" in result["firewall_acl"][0]["evidence"]
     assert "ip nat inside" in result["nat"][0]["evidence"]
+    assert result["counts"]["network_objects"] == 2
+    assert result["network_objects"][0]["evidence"] == "object network WEB_SERVER"
     assert result["commands"] == ["show running-config", "show ip route"]
 
 
