@@ -24,7 +24,7 @@ an optional future mode within Reachability.
 - [x] Retain an immutable Saved Network snapshot with scan history.
 - [x] Preserve existing data across the local Docker development workflow.
 
-### Release 2 — Subnet-Grouped Scan History — In development
+### Release 2 — Subnet-Grouped Scan History — Complete
 
 - [x] Group runs by their retained Saved Network snapshot.
 - [x] Keep multi-network runs in a distinct group without duplicating scans.
@@ -32,7 +32,7 @@ an optional future mode within Reachability.
 - [x] Show scan count, latest scan, latest run time, and latest host count.
 - [x] Nest status, date, profile, actual targets, host count, ownership, evidence,
   Analyze, Compare, and Delete actions under collapsible groups.
-- [ ] Complete browser validation against migrated scan history and package the
+- [x] Complete browser validation against migrated scan history and package the
   release for rollback-safe deployment.
 
 ### Release 3 — Global No-Strike Redesign — Complete, absorbed early
