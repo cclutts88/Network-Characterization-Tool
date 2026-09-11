@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1-dev — Scan workspace layout
+
+- Added expandable Saved Networks and No-Strikes panels directly below the
+  primary page navigation.
+- Consolidated manual Saved Network management and review-only subnet
+  suggestions from device configurations into the Saved Networks panel.
+- Added an explicit scan-scope selector for a Saved Network, manual IPv4 host
+  or CIDR entry, or a combination of both sources.
+- Kept global No-Strikes separate from per-scan exclusions while placing all
+  global safety-list management in one expandable panel.
+
 ## 0.6.3 — Cleaner topology labels
 
 - Removed interface MAC addresses from network-map connection labels to reduce

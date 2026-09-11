@@ -63,26 +63,33 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="deleteStatus"' in html
     assert "Enter the confirmation string shown above" in html
     assert "Built-in profile protected" in html
-    assert "Global no-strike safety list" in html
-    assert html.index("Creator / operator") < html.index("Global no-strike safety list")
-    assert "Profiles cannot turn this protection off" in html
-    assert "Changes are recorded under Creator / operator above" in html
+    assert 'id="noStrikePanel"' in html
+    assert "Global No-Strikes are protected addresses" in html
+    assert "Profiles cannot turn them off" in html
+    assert 'id="noStrikeOperator"' in html
     assert 'id="globalNoStrikeStatus" class="status" role="status"' in html
     assert "setGlobalSafetyStatus(error.message,'bad')" in html
     assert "/api/safety/no-strike" in html
-    assert "Remove a global no-strike entry" in html
+    assert "Remove a global No-Strike entry" in html
     assert "Pause and require operator approval before Nmap" in html
     assert "Estimated time left" in html
     assert "Timeout limit in" in html
     assert "Live update" in html
     assert "exact_execution_command" in html
+    assert 'id="savedNetworkPanel"' in html
+    assert 'id="savedNetworkManageSelect"' in html
     assert 'id="savedNetworkSelect"' in html
     assert "Manage Saved Networks" in html
+    assert "Add from device configurations" in html
+    assert "/api/device-configs/network-candidates" in html
+    assert 'id="scopeMode"' in html
+    assert "Enter an IP or range manually" in html
+    assert "Combine saved and manual scopes" in html
     assert "manual_targets" in html
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
-    assert "Archive selected" in html
+    assert "Remove selected" in html
     assert "/api/scan-schedules/" in html
     assert ".join('\n')" not in html
     assert r".join('\n')" in html
