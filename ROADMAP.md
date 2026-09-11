@@ -46,15 +46,15 @@ an optional future mode within Reachability.
   exclusions, scan-specific exclusions, and effective addresses.
 - [x] Expand regression coverage for overlapping global and scan-specific ranges.
 
-### Release 4 — Network Device Collection Usability — Partially implemented
+### Release 4 — Network Device Collection Usability — Complete
 
 - [x] Group collection history by device.
 - [x] Keep collection runs and raw evidence collapsible.
 - [x] Derive review-only Saved Network candidates from collected configurations.
-- [ ] Add confirmed deletion of individual device collection results.
-- [ ] Add structured collapsible summaries for interfaces, routes, neighbors,
-  VLANs, firewall/ACL, NAT, commands, configuration, and raw output.
-- [ ] Add route counts, search, filtering, and large-table handling.
+- [x] Add confirmed deletion of individual device collection results.
+- [x] Add structured collapsible summaries for interfaces, routes, neighbors,
+    VLANs, firewall/ACL, NAT, commands, configuration, and raw output.
+- [x] Add route counts, search, filtering, and large-table handling.
 
 ### Release 5 — Scan Execution Engine Upgrade — Partially implemented
 
