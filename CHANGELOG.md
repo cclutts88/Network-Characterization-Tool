@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0-dev — Split scan execution engine
+
+- Split local scan execution into visible Discovery, TCP, UDP, Merge, and
+  Analysis preparation phases with separate retained evidence for each stage.
+- Added a dedicated Nmap host-discovery pass; responsive targets are certified
+  once and passed to protocol scans without repeating discovery.
+- Preserved successful TCP XML as the canonical analyzable result when the UDP
+  phase fails or reaches its time limit, while clearly marking the run partial.
+- Bounded UDP work with profile-aware retry limits and per-host timeouts, used
+  light service detection, and kept OS detection in the TCP phase.
+- Added phase-aware progress labels and command accountability to the scan page.
+- Added regression coverage for phase commands, TCP/UDP XML merging, and the
+  TCP-success/UDP-failure recovery path.
+
 ## 0.9.0-dev — Network-device collection usability
 
 - Added structured, collapsible review sections for interfaces, routes,

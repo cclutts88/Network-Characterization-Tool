@@ -31,6 +31,7 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.scan_profiles import (
     BUILTIN_PROFILES,
     build_nmap_flags,
+    build_phase_nmap_flags,
     normalize_scan_options,
     scan_coverage,
     scan_display_name,
@@ -77,6 +78,16 @@ ARTIFACT_FILES = {
     "capture_stderr": ("capture-stderr.txt", "text/plain"),
     "fping_alive": ("fping-alive.txt", "text/plain"),
     "fping_stderr": ("fping-stderr.txt", "text/plain"),
+    "discovery_xml": ("discovery.xml", "application/xml"),
+    "discovery_stdout": ("discovery-stdout.txt", "text/plain"),
+    "discovery_stderr": ("discovery-stderr.txt", "text/plain"),
+    "discovery_alive": ("discovery-alive.txt", "text/plain"),
+    "tcp_xml": ("tcp-scan.xml", "application/xml"),
+    "tcp_stdout": ("tcp-stdout.txt", "text/plain"),
+    "tcp_stderr": ("tcp-stderr.txt", "text/plain"),
+    "udp_xml": ("udp-scan.xml", "application/xml"),
+    "udp_stdout": ("udp-stdout.txt", "text/plain"),
+    "udp_stderr": ("udp-stderr.txt", "text/plain"),
 }
 
 router = APIRouter(prefix="/api", tags=["poc"])
@@ -531,6 +542,75 @@ def build_nmap_argv(
     return argv
 
 
+def build_nmap_discovery_argv(interface: str, *, include_no_strike: bool) -> list[str]:
+    argv = [
+        "nmap", "-sn", "-n", "--reason", "--stats-every", "2s",
+        "-e", interface, "-iL", "targets.txt",
+    ]
+    if include_no_strike:
+        argv.extend(["--excludefile", "no-strike.txt"])
+    argv.extend(["-oX", "discovery.xml"])
+    return argv
+
+
+def build_scan_phase_argv(
+    interface: str,
+    scan_options: dict,
+    protocol: str,
+    *,
+    include_no_strike: bool,
+    target_file: str,
+    pre_discovered: bool,
+) -> list[str]:
+    argv = [
+        "nmap",
+        *build_phase_nmap_flags(
+            scan_options, protocol, pre_discovered=pre_discovered
+        ),
+        "--stats-every", "2s", "-e", interface, "-iL", target_file,
+    ]
+    if include_no_strike:
+        argv.extend(["--excludefile", "no-strike.txt"])
+    argv.extend(["-oX", f"{protocol}-scan.xml"])
+    return argv
+
+
+def build_execution_phases(
+    interface: str,
+    scan_options: dict,
+    *,
+    include_no_strike: bool,
+    target_file: str,
+    pre_discovered: bool,
+) -> list[dict]:
+    selected = scan_options.get("protocol", "tcp")
+    protocols = ["tcp", "udp"] if selected == "tcp_udp" else [selected]
+    phases = []
+    for protocol in protocols:
+        command = build_scan_phase_argv(
+            interface,
+            scan_options,
+            protocol,
+            include_no_strike=include_no_strike,
+            target_file=target_file,
+            pre_discovered=pre_discovered,
+        )
+        execution = build_nmap_execution_argv(command)
+        phases.append({
+            "name": protocol,
+            "protocol": protocol.upper(),
+            "status": "pending",
+            "command_argv": command,
+            "exact_command": shlex.join(command),
+            "execution_command_argv": execution,
+            "exact_execution_command": shlex.join(execution),
+            "xml_filename": f"{protocol}-scan.xml",
+            "stdout_filename": f"{protocol}-stdout.txt",
+            "stderr_filename": f"{protocol}-stderr.txt",
+        })
+    return phases
+
+
 def build_nmap_execution_argv(
     nmap_argv: list[str], *, platform_name: str | None = None
 ) -> list[str]:
@@ -582,6 +662,13 @@ def apply_fping_fallback(manifest: dict) -> None:
     manifest["exact_execution_command"] = shlex.join(
         manifest["execution_command_argv"]
     )
+    manifest["execution_phases"] = build_execution_phases(
+        manifest["interface"],
+        manifest["profile_settings"],
+        include_no_strike=bool(manifest.get("no_strike")),
+        target_file="targets.txt",
+        pre_discovered=False,
+    )
     manifest["discovery_fallback_used"] = True
 
 
@@ -626,7 +713,25 @@ def build_scan_run_manifest(
         target_file="fping-alive.txt" if use_fping else "targets.txt",
     )
     execution_argv = build_nmap_execution_argv(nmap_argv)
-    discovery_argv = build_fping_argv(plan.interface) if use_fping else None
+    discovery_argv = (
+        build_fping_argv(plan.interface)
+        if use_fping
+        else build_nmap_discovery_argv(
+            plan.interface, include_no_strike=bool(no_strike)
+        )
+    )
+    discovery_execution_argv = (
+        discovery_argv
+        if use_fping
+        else build_nmap_execution_argv(discovery_argv)
+    )
+    execution_phases = build_execution_phases(
+        plan.interface,
+        settings,
+        include_no_strike=bool(no_strike),
+        target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
+        pre_discovered=True,
+    )
     capture_argv = build_tcpdump_argv(plan.interface) if capture else None
     created_at = utc_now()
     creator = plan.created_by or plan.operator
@@ -655,7 +760,7 @@ def build_scan_run_manifest(
         updated_at=created_at,
     )
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "application_version": APP_VERSION,
         "build_id": BUILD_ID,
         "build_commit": BUILD_COMMIT,
@@ -701,11 +806,18 @@ def build_scan_run_manifest(
         "discovery_mode": settings.get("discovery_mode", "nmap"),
         "discovery_command_argv": discovery_argv,
         "exact_discovery_command": shlex.join(discovery_argv) if discovery_argv else None,
+        "discovery_execution_command_argv": discovery_execution_argv,
+        "exact_discovery_execution_command": (
+            shlex.join(discovery_execution_argv)
+            if discovery_execution_argv else None
+        ),
         "timeout_seconds": timeout_seconds,
         "command_argv": nmap_argv,
         "exact_command": shlex.join(nmap_argv),
         "execution_command_argv": execution_argv,
         "exact_execution_command": shlex.join(execution_argv),
+        "execution_phases": execution_phases,
+        "workflow": ["discovery", *[item["name"] for item in execution_phases], "merge", "analysis"],
         "capture_command_argv": capture_argv,
         "exact_capture_command": shlex.join(capture_argv) if capture_argv else None,
         "artifacts": [],
@@ -1438,6 +1550,103 @@ def nmap_host_count(xml_path: Path) -> int | None:
     )
 
 
+def nmap_up_addresses(xml_path: Path) -> list[str]:
+    """Return unique IPv4 addresses marked up in an Nmap XML document."""
+    if not xml_path.is_file():
+        return []
+    try:
+        root = ET.parse(xml_path).getroot()
+    except (ET.ParseError, OSError):
+        return []
+    addresses = []
+    for host in root.findall("host"):
+        status = host.find("status")
+        if status is not None and status.get("state") != "up":
+            continue
+        address = next(
+            (
+                item.get("addr")
+                for item in host.findall("address")
+                if item.get("addrtype") == "ipv4" and item.get("addr")
+            ),
+            None,
+        )
+        if address and address not in addresses:
+            addresses.append(address)
+    return addresses
+
+
+def merge_nmap_xml(source_paths: list[Path], destination: Path) -> int:
+    """Merge successful protocol XML into the canonical analysis artifact."""
+    roots = []
+    for path in source_paths:
+        if not path.is_file():
+            continue
+        try:
+            roots.append(ET.parse(path).getroot())
+        except (ET.ParseError, OSError):
+            continue
+    if not roots:
+        raise ValueError("No readable Nmap phase XML was available to merge")
+    merged = ET.Element("nmaprun", dict(roots[0].attrib))
+    for root in roots:
+        for scaninfo in root.findall("scaninfo"):
+            merged.append(ET.fromstring(ET.tostring(scaninfo, encoding="unicode")))
+    hosts: dict[str, ET.Element] = {}
+    for root in roots:
+        for host in root.findall("host"):
+            address = next(
+                (
+                    item.get("addr")
+                    for item in host.findall("address")
+                    if item.get("addrtype") == "ipv4" and item.get("addr")
+                ),
+                ET.tostring(host, encoding="unicode"),
+            )
+            if address not in hosts:
+                copy = ET.fromstring(ET.tostring(host, encoding="unicode"))
+                hosts[address] = copy
+                merged.append(copy)
+                continue
+            existing = hosts[address]
+            existing_ports = existing.find("ports")
+            source_ports = host.find("ports")
+            if source_ports is None:
+                continue
+            if existing_ports is None:
+                existing_ports = ET.SubElement(existing, "ports")
+            known = {
+                (port.get("protocol"), port.get("portid"))
+                for port in existing_ports.findall("port")
+            }
+            for port in source_ports.findall("port"):
+                key = (port.get("protocol"), port.get("portid"))
+                if key not in known:
+                    existing_ports.append(
+                        ET.fromstring(ET.tostring(port, encoding="unicode"))
+                    )
+                    known.add(key)
+            for extraports in source_ports.findall("extraports"):
+                existing_ports.append(
+                    ET.fromstring(ET.tostring(extraports, encoding="unicode"))
+                )
+    finished = roots[-1].find("runstats/finished")
+    hosts_up = sum(
+        1
+        for host in hosts.values()
+        if host.find("status") is None or host.find("status").get("state") == "up"
+    )
+    runstats = ET.SubElement(merged, "runstats")
+    ET.SubElement(runstats, "finished", dict(finished.attrib) if finished is not None else {})
+    ET.SubElement(
+        runstats,
+        "hosts",
+        {"up": str(hosts_up), "down": "0", "total": str(len(hosts))},
+    )
+    ET.ElementTree(merged).write(destination, encoding="utf-8", xml_declaration=True)
+    return hosts_up
+
+
 def with_host_count(manifest: dict, data_dir: Path = DATA_DIR) -> dict:
     if manifest.get("host_count") is None:
         manifest["host_count"] = nmap_host_count(
@@ -1672,6 +1881,7 @@ def refresh_nmap_progress(
     manifest: dict,
     output_path: Path,
     *,
+    phase: str = "nmap",
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
 ) -> bool:
@@ -1690,7 +1900,7 @@ def refresh_nmap_progress(
         return False
     return persist_scan_progress(
         manifest,
-        phase="nmap",
+        phase=phase,
         **status,
         db_path=db_path,
         data_dir=data_dir,
@@ -1800,67 +2010,99 @@ def execute_scan_run(
         )
     manifest["started_at"] = utc_now()
     manifest["status"] = "running"
-    persist_scan_progress(
-        manifest,
-        phase="discovery" if manifest.get("discovery_mode") == "fping" else "nmap",
-        db_path=db_path,
-        data_dir=data_dir,
-    )
-    deadline = time.monotonic() + int(manifest["timeout_seconds"])
+    persist_scan_progress(manifest, phase="discovery", db_path=db_path, data_dir=data_dir)
+    started = time.monotonic()
+    deadline = started + int(manifest["timeout_seconds"])
     exit_code = None
+    successful_xml: list[Path] = []
+
+    def watch_process(
+        argv: list[str],
+        stdout_path: Path,
+        stderr_path: Path,
+        *,
+        phase: str,
+        process_attr: str,
+        allowed_exit_codes: set[int],
+        track_nmap: bool,
+    ) -> tuple[str, int | None]:
+        with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            process = popen_factory(
+                argv,
+                cwd=run_dir,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                start_new_session=True,
+            )
+            setattr(control, process_attr, process)
+            last_progress_check = 0.0
+            while True:
+                code = process.poll()
+                if code is not None:
+                    if track_nmap:
+                        refresh_nmap_progress(
+                            manifest, stdout_path, phase=phase,
+                            db_path=db_path, data_dir=data_dir,
+                        )
+                    return ("completed" if code in allowed_exit_codes else "failed", code)
+                if control.cancel_event.is_set():
+                    terminate_process(process)
+                    return "cancelled", process.poll()
+                if time.monotonic() >= deadline:
+                    terminate_process(process)
+                    return "timed_out", process.poll()
+                now = time.monotonic()
+                if now - last_progress_check >= 1:
+                    if track_nmap:
+                        refresh_nmap_progress(
+                            manifest, stdout_path, phase=phase,
+                            db_path=db_path, data_dir=data_dir,
+                        )
+                    persist_scan_progress(
+                        manifest,
+                        phase=phase,
+                        elapsed_seconds=max(0, int(now - started)),
+                        deadline_remaining_seconds=max(0, int(deadline - now)),
+                        db_path=db_path,
+                        data_dir=data_dir,
+                    )
+                    last_progress_check = now
+                sleep_fn(0.2)
 
     try:
         capture_error_path = run_dir / "capture-stderr.txt"
-        with (
-            (run_dir / "stdout.txt").open("wb") as stdout_handle,
-            (run_dir / "stderr.txt").open("wb") as stderr_handle,
-            capture_error_path.open("wb") as capture_error_handle,
-        ):
-            if manifest["capture_requested"]:
+        with capture_error_path.open("wb") as capture_error_handle:
+            def start_capture(label: str = "the scan") -> None:
+                if not manifest["capture_requested"]:
+                    return
                 control.capture_process = popen_factory(
-                    manifest["capture_command_argv"],
-                    cwd=run_dir,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=capture_error_handle,
-                    start_new_session=True,
+                    manifest["capture_command_argv"], cwd=run_dir,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=capture_error_handle, start_new_session=True,
                 )
                 sleep_fn(0.25)
                 capture_exit = control.capture_process.poll()
                 if capture_exit is not None:
-                    raise RuntimeError(f"tcpdump exited before the scan with status {capture_exit}")
-
-            run_nmap = True
-            if manifest.get("discovery_mode") == "fping":
-                with (
-                    (run_dir / "fping-alive.txt").open("wb") as alive_handle,
-                    (run_dir / "fping-stderr.txt").open("wb") as fping_error_handle,
-                ):
-                    control.discovery_process = popen_factory(
-                        manifest["discovery_command_argv"],
-                        cwd=run_dir,
-                        stdin=subprocess.DEVNULL,
-                        stdout=alive_handle,
-                        stderr=fping_error_handle,
-                        start_new_session=True,
+                    raise RuntimeError(
+                        f"tcpdump exited before {label} with status {capture_exit}"
                     )
-                    while True:
-                        discovery_exit = control.discovery_process.poll()
-                        if discovery_exit is not None:
-                            if discovery_exit not in {0, 1}:
-                                raise RuntimeError(f"fping failed with status {discovery_exit}")
-                            break
-                        if control.cancel_event.is_set():
-                            manifest["status"] = "cancelled"
-                            terminate_process(control.discovery_process)
-                            run_nmap = False
-                            break
-                        if time.monotonic() >= deadline:
-                            manifest["status"] = "timed_out"
-                            terminate_process(control.discovery_process)
-                            run_nmap = False
-                            break
-                        sleep_fn(0.2)
+
+            start_capture()
+            run_phases = True
+            alive_hosts: list[str] = []
+            if manifest.get("discovery_mode") == "fping":
+                discovery_status, discovery_exit = watch_process(
+                    manifest["discovery_command_argv"],
+                    run_dir / "fping-alive.txt",
+                    run_dir / "fping-stderr.txt",
+                    phase="discovery", process_attr="discovery_process",
+                    allowed_exit_codes={0, 1}, track_nmap=False,
+                )
+                exit_code = discovery_exit
+                if discovery_status != "completed":
+                    manifest["status"] = discovery_status
+                    run_phases = False
                 alive_hosts = [
                     line.strip()
                     for line in (run_dir / "fping-alive.txt").read_text(
@@ -1869,22 +2111,11 @@ def execute_scan_run(
                     if line.strip()
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
-                if run_nmap and alive_hosts:
-                    persist_scan_progress(
-                        manifest,
-                        phase="nmap",
-                        hosts_completed=0,
-                        hosts_total=len(alive_hosts),
-                        hosts_up=0,
-                        db_path=db_path,
-                        data_dir=data_dir,
-                    )
-                if run_nmap and not alive_hosts:
+                if run_phases and not alive_hosts:
                     terminate_process(control.capture_process)
                     control.capture_process = None
                     fallback_argv = build_nmap_argv(
-                        manifest["profile"],
-                        manifest["interface"],
+                        manifest["profile"], manifest["interface"],
                         include_no_strike=bool(manifest.get("no_strike")),
                         scan_options=manifest["profile_settings"],
                         target_file="targets.txt",
@@ -1892,22 +2123,17 @@ def execute_scan_run(
                     manifest["fallback_command_argv"] = fallback_argv
                     manifest["exact_fallback_command"] = shlex.join(fallback_argv)
                     if manifest.get("fallback_policy") == "stop_without_nmap":
-                        manifest["status"] = "completed_without_nmap"
-                        manifest["fallback_approval_required"] = False
-                        manifest["fallback_decision"] = "policy_stop"
-                        manifest["fallback_decided_at"] = utc_now()
-                        manifest["discovery_note"] = (
-                            "FPING found no responsive hosts. The pinned scheduled-scan "
-                            "policy finished without starting the full Nmap fallback."
-                        )
-                        exit_code = 0
-                        run_nmap = False
-                        persist_scan_progress(
-                            manifest,
-                            phase="completed_without_nmap",
-                            db_path=db_path,
-                            data_dir=data_dir,
-                        )
+                        manifest.update({
+                            "status": "completed_without_nmap",
+                            "fallback_approval_required": False,
+                            "fallback_decision": "policy_stop",
+                            "fallback_decided_at": utc_now(),
+                            "discovery_note": (
+                                "FPING found no responsive hosts. The pinned scheduled-scan "
+                                "policy finished without starting the full Nmap fallback."
+                            ),
+                        })
+                        exit_code, run_phases = 0, False
                     else:
                         manifest["status"] = "awaiting_fallback_approval"
                         manifest["fallback_approval_required"] = True
@@ -1917,24 +2143,21 @@ def execute_scan_run(
                         )
                         collect_artifacts(manifest, data_dir)
                         persist_scan_progress(
-                            manifest,
-                            phase="awaiting_approval",
-                            db_path=db_path,
-                            data_dir=data_dir,
+                            manifest, phase="awaiting_approval",
+                            db_path=db_path, data_dir=data_dir,
                         )
                         while not control.fallback_decision_event.is_set():
                             if control.cancel_event.is_set():
-                                manifest["status"] = "cancelled"
-                                run_nmap = False
+                                manifest["status"], run_phases = "cancelled", False
                                 break
                             sleep_fn(0.2)
-                        if run_nmap:
-                            manifest["fallback_decision"] = control.fallback_decision
-                            manifest["fallback_decided_by"] = control.fallback_decided_by
-                            manifest["fallback_authorization_note"] = (
-                                control.fallback_authorization_note
-                            )
-                            manifest["fallback_decided_at"] = utc_now()
+                        if run_phases:
+                            manifest.update({
+                                "fallback_decision": control.fallback_decision,
+                                "fallback_decided_by": control.fallback_decided_by,
+                                "fallback_authorization_note": control.fallback_authorization_note,
+                                "fallback_decided_at": utc_now(),
+                            })
                             if control.fallback_decision == "approve":
                                 apply_fping_fallback(manifest)
                                 manifest["status"] = "running"
@@ -1943,34 +2166,9 @@ def execute_scan_run(
                                     f"approved by {control.fallback_decided_by}: "
                                     f"{control.fallback_authorization_note}"
                                 )
-                                persist_scan_progress(
-                                    manifest,
-                                    phase="nmap",
-                                    hosts_completed=0,
-                                    hosts_total=int(
-                                        manifest["progress"].get("scope_hosts_total") or 0
-                                    ),
-                                    hosts_up=0,
-                                    db_path=db_path,
-                                    data_dir=data_dir,
-                                )
-                                deadline = time.monotonic() + int(manifest["timeout_seconds"])
-                                if manifest["capture_requested"]:
-                                    control.capture_process = popen_factory(
-                                        manifest["capture_command_argv"],
-                                        cwd=run_dir,
-                                        stdin=subprocess.DEVNULL,
-                                        stdout=subprocess.DEVNULL,
-                                        stderr=capture_error_handle,
-                                        start_new_session=True,
-                                    )
-                                    sleep_fn(0.25)
-                                    capture_exit = control.capture_process.poll()
-                                    if capture_exit is not None:
-                                        raise RuntimeError(
-                                            "tcpdump exited before the approved fallback "
-                                            f"with status {capture_exit}"
-                                        )
+                                started = time.monotonic()
+                                deadline = started + int(manifest["timeout_seconds"])
+                                start_capture("the approved fallback")
                             else:
                                 manifest["status"] = "completed_without_nmap"
                                 manifest["discovery_note"] = (
@@ -1978,83 +2176,122 @@ def execute_scan_run(
                                     f"{control.fallback_decided_by} chose to finish without "
                                     f"Nmap fallback: {control.fallback_authorization_note}"
                                 )
-                                exit_code = 0
-                                run_nmap = False
-                            persist_scan_progress(
-                                manifest,
-                                phase=(
-                                    "nmap" if run_nmap else "completed_without_nmap"
-                                ),
-                                db_path=db_path,
-                                data_dir=data_dir,
-                            )
-
-            if run_nmap:
-                execution_argv = manifest.get("execution_command_argv")
-                if not execution_argv:
-                    execution_argv = build_nmap_execution_argv(
-                        manifest["command_argv"]
-                    )
-                    manifest["execution_command_argv"] = execution_argv
-                    manifest["exact_execution_command"] = shlex.join(execution_argv)
-                control.nmap_process = popen_factory(
-                    execution_argv,
-                    cwd=run_dir,
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_handle,
-                    stderr=stderr_handle,
-                    start_new_session=True,
+                                exit_code, run_phases = 0, False
+            else:
+                discovery_status, discovery_exit = watch_process(
+                    manifest["discovery_execution_command_argv"],
+                    run_dir / "discovery-stdout.txt",
+                    run_dir / "discovery-stderr.txt",
+                    phase="discovery", process_attr="nmap_process",
+                    allowed_exit_codes={0}, track_nmap=True,
                 )
-                last_progress_check = 0.0
-                while True:
-                    exit_code = control.nmap_process.poll()
-                    if exit_code is not None:
-                        refresh_nmap_progress(
-                            manifest,
-                            run_dir / "stdout.txt",
-                            db_path=db_path,
-                            data_dir=data_dir,
+                exit_code = discovery_exit
+                if discovery_status != "completed":
+                    manifest["status"] = discovery_status
+                    run_phases = False
+                else:
+                    alive_hosts = nmap_up_addresses(run_dir / "discovery.xml")
+                    (run_dir / "discovery-alive.txt").write_text(
+                        "\n".join(alive_hosts) + ("\n" if alive_hosts else ""),
+                        encoding="utf-8",
+                    )
+                    manifest["discovery_host_count"] = len(alive_hosts)
+                    if not alive_hosts:
+                        shutil.copyfile(run_dir / "discovery.xml", run_dir / "scan.xml")
+                        manifest["status"] = "completed"
+                        manifest["discovery_note"] = (
+                            "Nmap discovery completed, but no responsive hosts were found; "
+                            "TCP and UDP port phases were skipped."
                         )
-                        manifest["status"] = "completed" if exit_code == 0 else "failed"
-                        break
-                    if control.cancel_event.is_set():
-                        manifest["status"] = "cancelled"
-                        terminate_process(control.nmap_process)
-                        exit_code = control.nmap_process.poll()
-                        break
-                    if time.monotonic() >= deadline:
-                        manifest["status"] = "timed_out"
-                        terminate_process(control.nmap_process)
-                        exit_code = control.nmap_process.poll()
-                        break
-                    now = time.monotonic()
-                    if now - last_progress_check >= 1:
-                        refresh_nmap_progress(
-                            manifest,
-                            run_dir / "stdout.txt",
-                            db_path=db_path,
-                            data_dir=data_dir,
+                        run_phases = False
+
+            if run_phases:
+                hosts_total = len(alive_hosts) or int(
+                    manifest["progress"].get("scope_hosts_total") or 0
+                )
+                for phase in manifest.get("execution_phases") or []:
+                    phase_name = phase["name"]
+                    phase["status"] = "running"
+                    phase["started_at"] = utc_now()
+                    persist_scan_progress(
+                        manifest, phase=phase_name, hosts_completed=0,
+                        hosts_total=hosts_total, hosts_up=0,
+                        db_path=db_path, data_dir=data_dir,
+                    )
+                    phase_status, phase_exit = watch_process(
+                        phase["execution_command_argv"],
+                        run_dir / phase["stdout_filename"],
+                        run_dir / phase["stderr_filename"],
+                        phase=phase_name, process_attr="nmap_process",
+                        allowed_exit_codes={0}, track_nmap=True,
+                    )
+                    xml_path = run_dir / phase["xml_filename"]
+                    if phase_status == "completed" and not xml_path.is_file():
+                        phase_status = "failed"
+                    exit_code = phase_exit
+                    phase["status"] = phase_status
+                    phase["exit_code"] = phase_exit
+                    phase["completed_at"] = utc_now()
+                    if phase_status == "completed" and xml_path.is_file():
+                        successful_xml.append(xml_path)
+                        continue
+                    tcp_succeeded = any(
+                        item.get("name") == "tcp" and item.get("status") == "completed"
+                        for item in manifest.get("execution_phases") or []
+                    )
+                    if phase_name == "udp" and tcp_succeeded:
+                        manifest["partial_results"] = True
+                        manifest["execution_note"] = (
+                            f"TCP results were preserved. The UDP phase {phase_status}"
+                            + (f" with exit code {phase_exit}." if phase_exit is not None else ".")
                         )
-                        persist_scan_progress(
-                            manifest,
-                            elapsed_seconds=max(
-                                0,
-                                int(
-                                    now
-                                    - (
-                                        deadline
-                                        - int(manifest["timeout_seconds"])
-                                    )
-                                ),
-                            ),
-                            deadline_remaining_seconds=max(
-                                0, int(deadline - now)
-                            ),
-                            db_path=db_path,
-                            data_dir=data_dir,
-                        )
-                        last_progress_check = now
-                    sleep_fn(0.2)
+                        manifest["status"] = "completed"
+                        break
+                    manifest["status"] = phase_status
+                    break
+                else:
+                    manifest["status"] = "completed"
+
+                if successful_xml:
+                    persist_scan_progress(
+                        manifest, phase="merge", db_path=db_path, data_dir=data_dir
+                    )
+                    merge_nmap_xml(successful_xml, run_dir / "scan.xml")
+                    persist_scan_progress(
+                        manifest, phase="analysis", db_path=db_path, data_dir=data_dir
+                    )
+                    successful_protocols = [
+                        item["protocol"]
+                        for item in manifest.get("execution_phases") or []
+                        if item.get("status") == "completed"
+                    ]
+                    manifest["coverage"]["actual_protocols"] = successful_protocols
+                    manifest["coverage"]["partial_results"] = bool(
+                        manifest.get("partial_results")
+                    )
+                    if manifest.get("partial_results"):
+                        manifest["coverage"]["requested_protocols"] = manifest[
+                            "coverage"
+                        ].get("protocols", [])
+                        manifest["coverage"]["protocols"] = successful_protocols
+
+            output_sources = [
+                run_dir / "discovery-stdout.txt",
+                run_dir / "tcp-stdout.txt",
+                run_dir / "udp-stdout.txt",
+            ]
+            error_sources = [
+                run_dir / "discovery-stderr.txt",
+                run_dir / "fping-stderr.txt",
+                run_dir / "tcp-stderr.txt",
+                run_dir / "udp-stderr.txt",
+            ]
+            (run_dir / "stdout.txt").write_bytes(
+                b"\n".join(path.read_bytes() for path in output_sources if path.is_file())
+            )
+            (run_dir / "stderr.txt").write_bytes(
+                b"\n".join(path.read_bytes() for path in error_sources if path.is_file())
+            )
     except Exception as exc:
         manifest["status"] = "failed"
         manifest["error"] = f"{type(exc).__name__}: {exc}"
@@ -2064,9 +2301,7 @@ def execute_scan_run(
         terminate_process(control.capture_process)
         manifest["completed_at"] = utc_now()
         manifest["exit_code"] = exit_code
-        manifest["success"] = manifest["status"] in {
-            "completed", "completed_without_nmap"
-        }
+        manifest["success"] = manifest["status"] in {"completed", "completed_without_nmap"}
         manifest["host_count"] = nmap_host_count(run_dir / "scan.xml")
         progress = manifest["progress"]
         if manifest["status"] == "completed":

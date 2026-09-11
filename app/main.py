@@ -904,7 +904,19 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
         if not xml_path.is_file():
             raise FileNotFoundError(manifest["run_id"])
         analyses.append(parse_xml(xml_path.read_bytes()))
-    return merge_analyses(analyses)
+    merged = merge_analyses(analyses)
+    partial_notes = [
+        str(manifest.get("execution_note") or "A scan phase did not complete.")
+        for manifest in manifests
+        if manifest.get("partial_results")
+    ]
+    if partial_notes:
+        merged["warnings"] = list(dict.fromkeys([
+            *(merged.get("warnings") or []),
+            *[f"Partial scan evidence: {note}" for note in partial_notes],
+        ]))
+        merged.setdefault("coverage", {})["partial_results"] = True
+    return merged
 
 
 def _comparison_evidence(manifests: list[dict], description: dict | None = None) -> dict:

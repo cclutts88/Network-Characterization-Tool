@@ -7,10 +7,12 @@ import pytest
 from app.poc import (
     FallbackDecision,
     apply_fping_fallback,
+    build_execution_phases,
     build_nmap_argv,
     build_nmap_execution_argv,
+    merge_nmap_xml,
 )
-from app.scan_profiles import build_nmap_flags, scan_display_name
+from app.scan_profiles import build_nmap_flags, build_phase_nmap_flags, scan_display_name
 
 
 @pytest.mark.parametrize(
@@ -89,6 +91,67 @@ def test_combined_top_port_counts_are_rejected_instead_of_misrepresented():
         build_nmap_flags(
             {"protocol": "tcp_udp", "tcp_scope": "top_1000", "udp_scope": "top_100"}
         )
+
+
+def test_split_protocol_phases_allow_independent_top_port_counts_and_bound_udp():
+    settings = {
+        "protocol": "tcp_udp",
+        "tcp_scope": "top_1000",
+        "udp_scope": "top_100",
+        "service_detection": True,
+        "os_detection": True,
+        "timing": "fast",
+    }
+    tcp = build_phase_nmap_flags(settings, "tcp", pre_discovered=True)
+    udp = build_phase_nmap_flags(settings, "udp", pre_discovered=True)
+
+    assert tcp[tcp.index("--top-ports") + 1] == "1000"
+    assert "-Pn" in tcp
+    assert udp[udp.index("--top-ports") + 1] == "100"
+    assert "-Pn" in udp
+    assert "-O" not in udp
+    assert "--version-light" in udp
+    assert udp[udp.index("--max-retries") + 1] == "1"
+    assert udp[udp.index("--host-timeout") + 1] == "3m"
+
+
+def test_combined_workflow_builds_tcp_then_udp_with_separate_evidence():
+    phases = build_execution_phases(
+        "eth0",
+        {
+            "protocol": "tcp_udp",
+            "tcp_scope": "common",
+            "udp_scope": "common",
+        },
+        include_no_strike=True,
+        target_file="discovery-alive.txt",
+        pre_discovered=True,
+    )
+
+    assert [item["name"] for item in phases] == ["tcp", "udp"]
+    assert phases[0]["xml_filename"] == "tcp-scan.xml"
+    assert phases[1]["xml_filename"] == "udp-scan.xml"
+    assert phases[0]["command_argv"][phases[0]["command_argv"].index("-iL") + 1] == "discovery-alive.txt"
+    assert "--excludefile" in phases[1]["command_argv"]
+
+
+def test_tcp_and_udp_xml_merge_preserves_both_protocols(tmp_path):
+    tcp_xml = tmp_path / "tcp.xml"
+    udp_xml = tmp_path / "udp.xml"
+    merged_xml = tmp_path / "scan.xml"
+    tcp_xml.write_text(
+        '<nmaprun scanner="nmap"><scaninfo type="syn" protocol="tcp"/><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="tcp" portid="443"><state state="open"/></port></ports></host><runstats><finished time="1"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>',
+        encoding="utf-8",
+    )
+    udp_xml.write_text(
+        '<nmaprun scanner="nmap"><scaninfo type="udp" protocol="udp"/><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="udp" portid="53"><state state="open"/></port></ports></host><runstats><finished time="2"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>',
+        encoding="utf-8",
+    )
+
+    assert merge_nmap_xml([tcp_xml, udp_xml], merged_xml) == 1
+    text = merged_xml.read_text(encoding="utf-8")
+    assert 'protocol="tcp" portid="443"' in text
+    assert 'protocol="udp" portid="53"' in text
 
 
 def test_approved_fping_fallback_scans_the_full_approved_scope():

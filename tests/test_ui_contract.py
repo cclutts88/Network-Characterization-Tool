@@ -57,6 +57,12 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="currentProgress"' in html
     assert 'role="progressbar"' in html
     assert "FPING discovery" in html
+    assert "Nmap discovery" in html
+    assert "TCP scan" in html
+    assert "UDP scan" in html
+    assert "Merging results" in html
+    assert "Preparing analysis" in html
+    assert "completed · partial" in html
     assert "batch_hosts_completed" in html
     assert 'class="delete-modal hidden"' in html
     assert 'role="dialog"' in html

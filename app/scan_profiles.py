@@ -213,6 +213,42 @@ def build_nmap_flags(value: Mapping[str, object] | None = None) -> list[str]:
     return flags
 
 
+def build_phase_nmap_flags(
+    value: Mapping[str, object] | None,
+    protocol: str,
+    *,
+    pre_discovered: bool,
+) -> list[str]:
+    """Build one protocol phase without losing the parent profile's settings."""
+    if protocol not in {"tcp", "udp"}:
+        raise ValueError("A scan phase must be TCP or UDP")
+    phase_options = {**DEFAULT_SCAN_OPTIONS, **dict(value or {}), "protocol": protocol}
+    # OS fingerprinting is TCP-oriented and traceroute only needs to run once in
+    # a split TCP+UDP workflow. Keep the UDP phase focused and bounded.
+    if protocol == "udp":
+        phase_options["os_detection"] = False
+        if str((value or {}).get("protocol", "tcp")) == "tcp_udp":
+            phase_options["traceroute"] = False
+    flags = build_nmap_flags(phase_options)
+    if pre_discovered and "-Pn" not in flags:
+        insert_at = max(
+            (flags.index(item) + 1 for item in ("-sS", "-sU") if item in flags),
+            default=1,
+        )
+        flags.insert(insert_at, "-Pn")
+    if protocol == "udp":
+        timing = str(phase_options.get("timing", "fast"))
+        retries, host_timeout = {
+            "conservative": ("2", "10m"),
+            "normal": ("1", "5m"),
+            "fast": ("1", "3m"),
+        }[timing]
+        flags.extend(["--max-retries", retries, "--host-timeout", host_timeout])
+        if "-sV" in flags:
+            flags.append("--version-light")
+    return flags
+
+
 def scan_coverage(value: Mapping[str, object] | None = None) -> dict:
     options = normalize_scan_options(value)
     protocols = {

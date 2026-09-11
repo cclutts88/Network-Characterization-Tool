@@ -56,15 +56,15 @@ an optional future mode within Reachability.
     VLANs, firewall/ACL, NAT, commands, configuration, and raw output.
 - [x] Add route counts, search, filtering, and large-table handling.
 
-### Release 5 — Scan Execution Engine Upgrade — Partially implemented
+### Release 5 — Scan Execution Engine Upgrade — Complete
 
 - [x] FPING pre-discovery with retained evidence and explicit fallback approval.
 - [x] Live Nmap percentage, elapsed time, ETA, heartbeat, and host completion when
   Nmap provides reliable values.
 - [x] Chunk and scheduled-batch progress.
-- [ ] Split combined work into Discovery → TCP → UDP → Merge → Analysis.
-- [ ] Preserve successful TCP results when UDP fails or times out.
-- [ ] Tune UDP ports, retries, timing, service detection, host timeouts, and
+- [x] Split combined work into Discovery → TCP → UDP → Merge → Analysis.
+- [x] Preserve successful TCP results when UDP fails or times out.
+- [x] Tune UDP ports, retries, timing, service detection, host timeouts, and
   recovery behavior.
 
 ### Release 6 — Unified Analysis Framework — Partially implemented
