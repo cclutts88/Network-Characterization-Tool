@@ -11,6 +11,10 @@
   deletion controls.
 - Added direct Analyze and Compare actions from grouped history; Compare opens
   Analysis with the selected run preselected for a second-run comparison.
+- Added a live pre-launch scope and safety summary showing requested, globally
+  excluded, scan-specific excluded, and effective scan address counts.
+- Standardized the No-Strike interface on “excluded” wording and prevented
+  overlapping global and scan-specific exclusions from being double-counted.
 - Reconciled the repository roadmap with the revised Nmap → Net Devices →
   Analysis → Hunt → Map → Reachability / Hardening release sequence.
 

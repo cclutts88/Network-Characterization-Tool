@@ -35,16 +35,16 @@ an optional future mode within Reachability.
 - [ ] Complete browser validation against migrated scan history and package the
   release for rollback-safe deployment.
 
-### Release 3 — Global No-Strike Redesign — Mostly complete, absorbed early
+### Release 3 — Global No-Strike Redesign — Complete, absorbed early
 
-- [x] Store a persistent global protection list.
+- [x] Store a persistent global exclusion list.
 - [x] Apply global and scan-specific exclusions before FPING and Nmap.
 - [x] Keep the editor in a compact collapsible panel.
-- [x] Require confirmation before removing protected entries.
+- [x] Require confirmation before removing excluded entries.
 - [x] Preserve No-Strike settings after restart through persistent storage.
-- [ ] Add a concise pre-launch breakdown of requested addresses, global
+- [x] Add a concise pre-launch breakdown of requested addresses, global
   exclusions, scan-specific exclusions, and effective addresses.
-- [ ] Expand regression coverage for overlapping global and scan-specific ranges.
+- [x] Expand regression coverage for overlapping global and scan-specific ranges.
 
 ### Release 4 — Network Device Collection Usability — Partially implemented
 

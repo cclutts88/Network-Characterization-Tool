@@ -64,13 +64,17 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Enter the confirmation string shown above" in html
     assert "Built-in profile protected" in html
     assert 'id="noStrikePanel"' in html
-    assert "Global No-Strikes are protected addresses" in html
+    assert "Global No-Strikes are excluded addresses" in html
     assert "Profiles cannot turn them off" in html
     assert 'id="noStrikeOperator"' in html
     assert 'id="globalNoStrikeStatus" class="status" role="status"' in html
     assert "setGlobalSafetyStatus(error.message,'bad')" in html
     assert "/api/safety/no-strike" in html
-    assert "Remove a global No-Strike entry" in html
+    assert "/api/safety/scan-summary" in html
+    assert "Pre-launch scope &amp; safety check" in html
+    assert 'id="safetyEffective"' in html
+    assert "globalNoStrikeSummary').textContent=`${entries.length} excluded`" in html
+    assert "Remove a global No-Strike exclusion" in html
     assert "Pause and require operator approval before Nmap" in html
     assert "Estimated time left" in html
     assert "Timeout limit in" in html

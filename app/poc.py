@@ -284,6 +284,15 @@ class NoStrikeUpdate(BaseModel):
         return cleaned
 
 
+class ScanSafetySummaryRequest(BaseModel):
+    """Calculate the effective scan scope without starting a scan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    targets: list[str] = Field(min_length=1)
+    no_strike: list[str] = Field(default_factory=list)
+
+
 class NoStrikeRemoval(NoStrikeUpdate):
     confirmation: str = Field(min_length=1, max_length=64)
 
@@ -361,7 +370,7 @@ def normalize_ipv4_networks(entries: list[str], label: str) -> list[str]:
 
 
 def get_global_no_strike(db_path: Path = DB_PATH) -> dict:
-    """Return the protected no-strike list that applies to every scan path."""
+    """Return the excluded no-strike list that applies to every scan path."""
     init_poc_storage(db_path)
     with sqlite3.connect(db_path) as db:
         row = db.execute(
@@ -421,6 +430,59 @@ def effective_no_strike(
         normalize_ipv4_networks(combined, "no-strike") if combined else [],
         global_entries,
     )
+
+
+def scan_safety_summary(
+    targets: list[str],
+    additional: list[str] | None = None,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Return additive address counts for a pre-launch safety review."""
+    normalized_targets = normalize_ipv4_networks(targets, "target")
+    normalized_additional = (
+        normalize_ipv4_networks(additional, "no-strike") if additional else []
+    )
+    global_entries = get_global_no_strike(db_path)["entries"]
+
+    target_addresses = {
+        str(address)
+        for network in (
+            ipaddress.ip_network(entry, strict=False) for entry in normalized_targets
+        )
+        for address in network
+    }
+    global_addresses = {
+        str(address)
+        for network in (
+            ipaddress.ip_network(entry, strict=False) for entry in global_entries
+        )
+        for address in network
+        if str(address) in target_addresses
+    }
+    additional_addresses = {
+        str(address)
+        for network in (
+            ipaddress.ip_network(entry, strict=False)
+            for entry in normalized_additional
+        )
+        for address in network
+        if str(address) in target_addresses
+    }
+    overlap_addresses = global_addresses & additional_addresses
+    additional_unique = additional_addresses - global_addresses
+    excluded_addresses = global_addresses | additional_addresses
+
+    return {
+        "targets": normalized_targets,
+        "requested_address_count": len(target_addresses),
+        "global_entry_count": len(global_entries),
+        "global_excluded_address_count": len(global_addresses),
+        "additional_entry_count": len(normalized_additional),
+        "additional_excluded_address_count": len(additional_unique),
+        "overlap_address_count": len(overlap_addresses),
+        "excluded_address_count": len(excluded_addresses),
+        "effective_address_count": len(target_addresses - excluded_addresses),
+    }
 
 
 def remove_global_no_strike(
@@ -2669,6 +2731,14 @@ def archive_saved_network_record(
 @router.get("/safety/no-strike")
 def global_no_strike_list() -> dict:
     return get_global_no_strike()
+
+
+@router.post("/safety/scan-summary")
+def preview_scan_safety(request: ScanSafetySummaryRequest) -> dict:
+    try:
+        return scan_safety_summary(request.targets, request.no_strike)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/safety/no-strike", status_code=201)

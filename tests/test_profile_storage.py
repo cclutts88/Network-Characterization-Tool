@@ -30,6 +30,7 @@ from app.poc import (
     remove_global_no_strike,
     recover_scheduler_state,
     record_schedule_conflict,
+    scan_safety_summary,
     schedule_target_chunks,
     set_scan_schedule_enabled,
 )
@@ -514,3 +515,29 @@ def test_global_no_strike_is_automatic_and_requires_confirmation_to_remove(tmp_p
     removed = remove_global_no_strike(request, db_path)
     assert removed["removed"] == ["203.0.113.9/32"]
     assert removed["entries"] == []
+
+
+def test_scan_safety_summary_does_not_double_count_overlapping_exclusions(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.0/30"], changed_by="safety-officer"),
+        db_path,
+    )
+
+    summary = scan_safety_summary(
+        ["192.0.2.0/29"],
+        ["192.0.2.2/31", "192.0.2.6"],
+        db_path,
+    )
+
+    assert summary == {
+        "targets": ["192.0.2.0/29"],
+        "requested_address_count": 8,
+        "global_entry_count": 1,
+        "global_excluded_address_count": 4,
+        "additional_entry_count": 2,
+        "additional_excluded_address_count": 1,
+        "overlap_address_count": 2,
+        "excluded_address_count": 5,
+        "effective_address_count": 3,
+    }
