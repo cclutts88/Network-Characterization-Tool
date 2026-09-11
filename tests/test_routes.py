@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -369,3 +370,55 @@ def test_device_page_has_one_time_password_dialog_and_history_presets():
     assert "Choose a device found by Nmap" in response.text
     assert "loadDiscoveredDevices" in response.text
     assert "credentials_stored" not in response.text
+
+
+def test_config_candidate_can_be_added_to_saved_networks_and_then_disappears(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("b" * 32)
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "b" * 32,
+                "status": "uploaded",
+                "device_name": "Distribution Router",
+                "device_address": "192.0.2.10",
+                "vendor": "cisco",
+            }
+        )
+    )
+    (run_dir / "uploaded-running-config.txt").write_text(
+        """interface GigabitEthernet0/2
+description USERS
+ip address 10.80.0.1 255.255.255.0
+"""
+    )
+    monkeypatch.setattr("app.poc.DB_PATH", db_path)
+    monkeypatch.setattr("app.network_map.DB_PATH", db_path)
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", config_dir)
+
+    with TestClient(app) as client:
+        pending = client.get("/api/device-configs/network-candidates")
+        candidate = pending.json()["candidates"][0]
+        saved = client.post(
+            "/api/saved-networks",
+            json={
+                "name": candidate["suggested_name"],
+                "cidr": candidate["cidr"],
+                "description": candidate["description"],
+                "category": candidate["category"],
+                "tags": candidate["tags"],
+                "created_by": "operator",
+            },
+        )
+        remaining = client.get("/api/device-configs/network-candidates")
+        saved_list = client.get("/api/saved-networks")
+
+    assert pending.status_code == 200
+    assert candidate["cidr"] == "10.80.0.0/24"
+    assert saved.status_code == 201
+    assert remaining.json()["candidates"] == []
+    assert saved_list.json()[0]["cidr"] == "10.80.0.0/24"

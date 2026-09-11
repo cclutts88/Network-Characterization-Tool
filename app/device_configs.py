@@ -1196,6 +1196,14 @@ def history(limit: int = Query(default=30, ge=1, le=100)) -> list[dict]:
     return records
 
 
+@router.get("/network-candidates")
+def network_candidates() -> dict:
+    """List config-derived subnets that still need explicit operator review."""
+    from app.network_map import configuration_network_candidates
+
+    return {"candidates": configuration_network_candidates()}
+
+
 @router.get("/{run_id}/files/{filename}")
 def download_artifact(run_id: str, filename: str) -> FileResponse:
     """Download one allowlisted artifact from a recorded device collection."""

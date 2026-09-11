@@ -10,6 +10,7 @@ from app.network_map import (
     add_membership_edges,
     annotate_subnet_scan_observations,
     apply_subnet_zone,
+    configuration_network_candidates,
     configuration_devices,
     ensure_ip_node,
     ensure_interface_node,
@@ -18,6 +19,7 @@ from app.network_map import (
     merge_device_alias,
     parse_config_text,
 )
+from app.saved_networks import SavedNetworkCreate, create_saved_network
 
 
 SAMPLE_XML = b'''<?xml version="1.0"?>
@@ -328,3 +330,49 @@ em0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
     assert not any(edge["relation"] == "arp_neighbor" for edge in edges.values())
     em0 = nodes["interface:172.22.70.1:em0"]
     assert em0["mac"] == "BC:24:11:01:A1:79"
+
+
+def test_config_identified_subnet_disappears_after_it_is_saved(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("a" * 32)
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "a" * 32,
+                "status": "uploaded",
+                "device_name": "Core Firewall",
+                "device_address": "192.0.2.1",
+                "vendor": "cisco",
+                "completed_at": "2026-09-11T12:00:00+00:00",
+            }
+        )
+    )
+    (run_dir / "uploaded-config.txt").write_text(
+        """interface GigabitEthernet0/1
+description OPERATIONS-LAN
+ip address 10.40.0.1 255.255.255.0
+ip route 10.50.0.0/24 192.0.2.2
+ip route 0.0.0.0/0 192.0.2.254
+"""
+    )
+
+    candidates = configuration_network_candidates(
+        config_dir=config_dir, db_path=db_path
+    )
+    assert [item["cidr"] for item in candidates] == ["10.40.0.0/24", "10.50.0.0/24"]
+    interface_candidate = candidates[0]
+    assert interface_candidate["suggested_name"] == "OPERATIONS-LAN · 10.40.0.0/24"
+    assert interface_candidate["sources"][0]["device_name"] == "Core Firewall"
+
+    create_saved_network(
+        SavedNetworkCreate(
+            name=interface_candidate["suggested_name"],
+            cidr=interface_candidate["cidr"],
+            created_by="operator",
+        ),
+        db_path,
+    )
+    remaining = configuration_network_candidates(config_dir=config_dir, db_path=db_path)
+    assert [item["cidr"] for item in remaining] == ["10.50.0.0/24"]

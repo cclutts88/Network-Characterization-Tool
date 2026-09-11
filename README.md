@@ -8,6 +8,9 @@ A local, Dockerized FastAPI application for building authorized Nmap scans, runn
 - Human-readable `Name_Date_Time` scan names. Scheduled execution manifests use `Name_(S)_Date_Time`.
 - Creator, scheduler, executor, execution method, target, protocol, port scope, interface, profile, and profile-version metadata in scan history.
 - Reusable scan profiles with protected built-ins, clone, save, reuse, and immutable save-as-new-version behavior.
+- Saved Networks with normalized IPv4 CIDRs, operator ownership, tags,
+  categories, archive behavior, and immutable scan-time snapshots. Scans can
+  combine multiple Saved Networks with manual targets.
 - First-class TCP, UDP, and TCP + UDP scans with independent common, full, custom, and ICS/OT port scopes.
 - Optional FPING pre-discovery and Nmap traceroute evidence for faster discovery and path mapping.
 - Mandatory `-n` in every generated Nmap command.
@@ -24,6 +27,9 @@ A local, Dockerized FastAPI application for building authorized Nmap scans, runn
   no external lookup service or internet access is required.
 - Separate host-summary and normalized port-level CSV exports.
 - Interactive network-device collection with no stored password, visible cleanup behavior, optional operator commands, reusable device presets, optional device names, and Nmap-discovered device selection.
+- Review-only subnet suggestions parsed from saved device configurations. An
+  operator must explicitly add a suggestion to Saved Networks before it can be
+  selected as scan scope; saved suggestions leave the pending list.
 
 ## Run
 

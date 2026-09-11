@@ -76,6 +76,13 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Timeout limit in" in html
     assert "Live update" in html
     assert "exact_execution_command" in html
+    assert 'id="savedNetworkSelect"' in html
+    assert "Manage Saved Networks" in html
+    assert "manual_targets" in html
+    assert "saved_network_ids" in html
+    assert "selectedSavedNetworkIds" in html
+    assert "/api/saved-networks" in html
+    assert "Archive selected" in html
     assert "/api/scan-schedules/" in html
     assert ".join('\n')" not in html
     assert r".join('\n')" in html
@@ -87,6 +94,17 @@ def test_navigation_is_sticky_on_every_primary_page():
         html = page.body.decode()
         assert "position:sticky" in html
         assert "aria-label=\"Primary\"" in html
+
+
+def test_device_configs_offer_reviewed_network_candidates():
+    html = device_config_page().body.decode()
+    assert "Networks identified in configuration files" in html
+    assert 'id="configNetworkCandidate"' in html
+    assert "Add selected to Saved Networks" in html
+    assert "/api/device-configs/network-candidates" in html
+    assert "/api/saved-networks" in html
+    assert "removed from this pending list" in html
+    assert "does not start a scan" in html
 
 
 def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():

@@ -36,6 +36,18 @@ from app.scan_profiles import (
     scan_display_name,
 )
 from app.scan_progress import latest_nmap_status, new_scan_progress, update_scan_progress
+from app.saved_networks import (
+    SavedNetworkArchive,
+    SavedNetworkCreate,
+    SavedNetworkUpdate,
+    archive_saved_network,
+    create_saved_network,
+    get_saved_network,
+    init_saved_network_storage,
+    list_saved_networks,
+    resolve_saved_network_targets,
+    update_saved_network,
+)
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -215,7 +227,9 @@ class ScanRunPlan(BaseModel):
     chunk_delay_seconds: int | None = Field(default=None, ge=0, le=3600)
     batch_hosts_total: int | None = Field(default=None, ge=1)
     batch_hosts_completed_before: int = Field(default=0, ge=0)
-    targets: list[str] = Field(min_length=1)
+    targets: list[str] = Field(default_factory=list)
+    manual_targets: list[str] = Field(default_factory=list)
+    saved_network_ids: list[str] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
 
     @field_validator("operator", "name", "reason", "originating_host", "interface", "profile")
@@ -524,7 +538,20 @@ def build_scan_run_manifest(
     status: str = "planned",
     db_path: Path = DB_PATH,
 ) -> dict:
-    targets = normalize_ipv4_networks(plan.targets, "target")
+    # New clients send resolved ``targets`` for legacy preview/package paths as
+    # well as explicit Saved Network IDs.  When IDs are present, only the
+    # explicit manual list belongs in the ad-hoc snapshot.
+    manual_source = (
+        plan.manual_targets
+        if plan.manual_targets or plan.saved_network_ids
+        else plan.targets
+    )
+    targets, saved_network_snapshots, manual_targets = resolve_saved_network_targets(
+        plan.saved_network_ids,
+        manual_source,
+        db_path,
+        max_addresses=MAX_EXPANDED_ADDRESSES,
+    )
     no_strike, global_no_strike = effective_no_strike(plan.no_strike, db_path)
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
@@ -566,7 +593,7 @@ def build_scan_run_manifest(
         updated_at=created_at,
     )
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "application_version": APP_VERSION,
         "build_id": BUILD_ID,
         "build_commit": BUILD_COMMIT,
@@ -597,6 +624,15 @@ def build_scan_run_manifest(
         "profile_version": profile_record["version"],
         "profile_settings": settings,
         "targets": targets,
+        "manual_targets": manual_targets,
+        "saved_network_ids": [
+            item["saved_network_id"] for item in saved_network_snapshots
+        ],
+        "saved_networks": saved_network_snapshots,
+        "target_selection": {
+            "saved_networks": saved_network_snapshots,
+            "manual_targets": manual_targets,
+        },
         "no_strike": no_strike,
         "coverage": coverage,
         "capture_requested": capture,
@@ -616,6 +652,7 @@ def build_scan_run_manifest(
 
 
 def init_poc_storage(db_path: Path = DB_PATH) -> None:
+    init_saved_network_storage(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as db:
         db.execute(
@@ -2486,6 +2523,47 @@ def compare_import_results(first_sha256: str, second_sha256: str,
 @router.get("/scan-profiles")
 def scan_profile_history(all_versions: bool = False) -> list[dict]:
     return list_scan_profiles(all_versions=all_versions)
+
+
+@router.get("/saved-networks")
+def saved_network_history(include_archived: bool = False) -> list[dict]:
+    return list_saved_networks(DB_PATH, include_archived=include_archived)
+
+
+@router.get("/saved-networks/{saved_network_id}")
+def saved_network_detail(saved_network_id: str) -> dict:
+    record = get_saved_network(saved_network_id, DB_PATH)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Saved Network not found")
+    return record
+
+
+@router.post("/saved-networks", status_code=201)
+def save_saved_network(request: SavedNetworkCreate) -> dict:
+    try:
+        return create_saved_network(request, DB_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/saved-networks/{saved_network_id}")
+def edit_saved_network(saved_network_id: str, request: SavedNetworkUpdate) -> dict:
+    try:
+        return update_saved_network(saved_network_id, request, DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Saved Network not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/saved-networks/{saved_network_id}/archive")
+def archive_saved_network_record(
+    saved_network_id: str, request: SavedNetworkArchive
+) -> dict:
+    try:
+        return archive_saved_network(saved_network_id, request, DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Saved Network not found") from exc
 
 
 @router.get("/safety/no-strike")

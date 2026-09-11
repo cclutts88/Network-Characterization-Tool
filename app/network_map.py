@@ -27,6 +27,7 @@ router = APIRouter(prefix="/api/network-map", tags=["network-map"])
 IPV4_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 CIDR_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}(?![\w.])")
 VIA_RE = re.compile(r"\bvia\s+((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
+NEXT_HOP_RE = re.compile(r"\bnext-hop\s+['\"]?((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
 INTERFACE_RE = re.compile(r"\b(?:dev\s+)?([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b")
 DIRECT_MARKERS = ("directly connected", " connected", "direct/", "link#")
 MAC_CANDIDATE_RE = re.compile(
@@ -821,10 +822,53 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             if prefix is not None:
                 add_interface(current_iface, f"{cisco_address.group(1)}/{prefix}")
 
+        route_parts = line.strip(" ;").split()
+        lower_route_parts = [value.lower() for value in route_parts]
+        explicit_route: tuple[str, str | None, str | None] | None = None
+        if len(route_parts) >= 4 and lower_route_parts[:2] == ["ip", "route"]:
+            destination = route_parts[2]
+            remaining = route_parts[3:]
+            network = valid_network(destination) if "/" in destination else None
+            if network is None and remaining:
+                prefix = prefix_from_netmask(remaining[0])
+                if prefix is not None:
+                    network = valid_network(f"{destination}/{prefix}")
+                    remaining = remaining[1:]
+            gateway = next((valid_ip(value) for value in remaining if valid_ip(value)), None)
+            route_interface = next(
+                (value for value in remaining if not valid_ip(value)), None
+            )
+            if network and gateway:
+                explicit_route = (network, gateway, route_interface)
+        elif len(route_parts) >= 5 and lower_route_parts[0] == "route":
+            prefix = prefix_from_netmask(route_parts[3])
+            gateway = valid_ip(route_parts[4])
+            network = (
+                valid_network(f"{route_parts[2]}/{prefix}")
+                if prefix is not None
+                else None
+            )
+            if network and gateway:
+                explicit_route = (network, gateway, route_parts[1])
+        if explicit_route:
+            network, gateway, route_interface = explicit_route
+            route_key = (network, gateway, route_interface, False)
+            if route_key not in seen_routes:
+                routes.append(
+                    {
+                        "network": network,
+                        "via": gateway,
+                        "interface": route_interface,
+                        "direct": False,
+                        "line": line[:500],
+                    }
+                )
+                seen_routes.add(route_key)
+
         lower = f" {line.lower()}"
         cidrs = [valid_network(value) for value in CIDR_RE.findall(line)]
         cidrs = [value for value in cidrs if value]
-        via_match = VIA_RE.search(line)
+        via_match = VIA_RE.search(line) or NEXT_HOP_RE.search(line)
         via = valid_ip(via_match.group(1)) if via_match else None
         direct = any(marker in lower for marker in DIRECT_MARKERS)
         iface = interface_name(line)
@@ -885,6 +929,155 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
         if zone:
             interface["zone"] = zone
     return interfaces, routes
+
+
+def configuration_network_candidates(
+    *,
+    config_dir: Path | None = None,
+    db_path: Path | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Return review-only IPv4 subnet candidates found in saved device configs."""
+    from app.saved_networks import list_saved_networks
+
+    config_dir = CONFIG_DIR if config_dir is None else config_dir
+    db_path = DB_PATH if db_path is None else db_path
+    saved_by_cidr = {
+        item["cidr"]: item
+        for item in list_saved_networks(db_path, include_archived=True)
+    }
+    candidates: dict[str, dict] = {}
+
+    def add_candidate(network_value: str, source: dict) -> None:
+        network = ipaddress.ip_network(network_value, strict=False)
+        if (
+            network.version != 4
+            or network.prefixlen in {0, 32}
+            or network.is_loopback
+            or network.is_link_local
+            or network.is_multicast
+            or network.is_unspecified
+        ):
+            return
+        cidr = str(network)
+        if cidr in saved_by_cidr:
+            return
+        label = source.get("zone") or source.get("device_name") or source.get("interface")
+        suggested_name = f"{label} · {cidr}" if label else cidr
+        if len(suggested_name) > 100:
+            suggested_name = f"{suggested_name[: max(0, 97 - len(cidr))].rstrip()} · {cidr}"
+        record = candidates.setdefault(
+            cidr,
+            {
+                "cidr": cidr,
+                "suggested_name": suggested_name,
+                "category": "Device configuration",
+                "tags": ["config-derived"],
+                "description": "",
+                "sources": [],
+            },
+        )
+        signature = (
+            source.get("run_id"),
+            source.get("interface"),
+            source.get("kind"),
+            source.get("evidence"),
+        )
+        if signature not in {
+            (
+                item.get("run_id"), item.get("interface"), item.get("kind"),
+                item.get("evidence"),
+            )
+            for item in record["sources"]
+        }:
+            record["sources"].append(source)
+
+    if not config_dir.exists():
+        return []
+    manifests = sorted(
+        config_dir.glob("*/manifest.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    for manifest_path in manifests:
+        try:
+            manifest = json.loads(manifest_path.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("status") not in {"completed", "uploaded"}:
+            continue
+        run_dir = manifest_path.parent
+        artifacts = sorted(path for path in run_dir.glob("uploaded-*") if path.is_file())
+        if not artifacts:
+            artifacts = sorted(path for path in run_dir.glob("*-config.txt") if path.is_file())
+        if not artifacts and (run_dir / "stdout.txt").is_file():
+            artifacts = [run_dir / "stdout.txt"]
+        if not artifacts:
+            continue
+        try:
+            text = "\n".join(path.read_text(errors="replace") for path in artifacts)
+        except OSError:
+            continue
+        interfaces, routes = parse_config_text(text)
+        device_name = manifest.get("device_name") or manifest.get("device_address")
+        common = {
+            "run_id": manifest.get("run_id") or run_dir.name,
+            "device_name": device_name,
+            "device_address": manifest.get("device_address"),
+            "vendor": manifest.get("vendor"),
+            "observed_at": manifest.get("completed_at") or manifest.get("created_at"),
+        }
+        for interface in interfaces:
+            address = valid_interface_address(interface.get("address"))
+            if not address:
+                continue
+            network = str(ipaddress.ip_interface(address).network)
+            add_candidate(
+                network,
+                {
+                    **common,
+                    "kind": "interface",
+                    "interface": interface.get("name"),
+                    "zone": interface.get("zone"),
+                    "evidence": address,
+                },
+            )
+        for route in routes:
+            network = valid_network(route.get("network"))
+            if not network:
+                continue
+            add_candidate(
+                network,
+                {
+                    **common,
+                    "kind": "connected route" if route.get("direct") else "route",
+                    "interface": route.get("interface"),
+                    "zone": None,
+                    "evidence": route.get("line"),
+                },
+            )
+
+    for record in candidates.values():
+        source_labels = []
+        for source in record["sources"]:
+            label = source.get("device_name") or source.get("device_address") or "device config"
+            if source.get("zone"):
+                label += f" zone {source['zone']}"
+            elif source.get("interface"):
+                label += f" interface {source['interface']}"
+            if label not in source_labels:
+                source_labels.append(label)
+        record["description"] = (
+            "Identified from " + ", ".join(source_labels[:4])
+            + ". Review authorization before scanning."
+        )[:500]
+    return sorted(
+        candidates.values(),
+        key=lambda item: (
+            int(ipaddress.ip_network(item["cidr"]).network_address),
+            ipaddress.ip_network(item["cidr"]).prefixlen,
+        ),
+    )
 
 
 def replace_edge_node(edges: dict[tuple[str, str, str], dict], old_id: str, new_id: str) -> None:
