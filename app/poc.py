@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.comparison import compare_analyses, coverage_warnings
+from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.scan_profiles import (
     BUILTIN_PROFILES,
     build_nmap_flags,
@@ -34,7 +35,7 @@ from app.scan_profiles import (
     scan_coverage,
     scan_display_name,
 )
-from app.scan_progress import latest_nmap_stats, new_scan_progress, update_scan_progress
+from app.scan_progress import latest_nmap_status, new_scan_progress, update_scan_progress
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -54,6 +55,9 @@ LEGACY_PROFILE_IDS = {
 }
 ARTIFACT_FILES = {
     "manifest": ("manifest.json", "application/json"),
+    "targets": ("targets.txt", "text/plain"),
+    "discovery_targets": ("discovery-targets.txt", "text/plain"),
+    "no_strike": ("no-strike.txt", "text/plain"),
     "xml": ("scan.xml", "application/xml"),
     "stdout": ("stdout.txt", "text/plain"),
     "stderr": ("stderr.txt", "text/plain"),
@@ -451,6 +455,24 @@ def build_nmap_argv(
     return argv
 
 
+def build_nmap_execution_argv(
+    nmap_argv: list[str], *, platform_name: str | None = None
+) -> list[str]:
+    """Give Nmap a terminal on Linux so --stats-every emits live progress."""
+    platform_name = platform_name or os.name
+    if platform_name != "posix":
+        return list(nmap_argv)
+    return [
+        "script",
+        "--quiet",
+        "--return",
+        "--flush",
+        "--command",
+        shlex.join(nmap_argv),
+        "/dev/null",
+    ]
+
+
 def build_fping_argv(interface: str) -> list[str]:
     """Build the optional fast discovery command from a pre-certified address list."""
     return ["fping", "-a", "-I", interface, "-f", "discovery-targets.txt"]
@@ -478,6 +500,12 @@ def apply_fping_fallback(manifest: dict) -> None:
         target_file="targets.txt",
     )
     manifest["exact_command"] = shlex.join(manifest["command_argv"])
+    manifest["execution_command_argv"] = build_nmap_execution_argv(
+        manifest["command_argv"]
+    )
+    manifest["exact_execution_command"] = shlex.join(
+        manifest["execution_command_argv"]
+    )
     manifest["discovery_fallback_used"] = True
 
 
@@ -508,6 +536,7 @@ def build_scan_run_manifest(
         scan_options=settings,
         target_file="fping-alive.txt" if use_fping else "targets.txt",
     )
+    execution_argv = build_nmap_execution_argv(nmap_argv)
     discovery_argv = build_fping_argv(plan.interface) if use_fping else None
     capture_argv = build_tcpdump_argv(plan.interface) if capture else None
     created_at = utc_now()
@@ -538,6 +567,9 @@ def build_scan_run_manifest(
     )
     return {
         "schema_version": 3,
+        "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "run_id": uuid.uuid4().hex,
         "name": plan.name,
         "display_name": display_name,
@@ -574,6 +606,8 @@ def build_scan_run_manifest(
         "timeout_seconds": timeout_seconds,
         "command_argv": nmap_argv,
         "exact_command": shlex.join(nmap_argv),
+        "execution_command_argv": execution_argv,
+        "exact_execution_command": shlex.join(execution_argv),
         "capture_command_argv": capture_argv,
         "exact_capture_command": shlex.join(capture_argv) if capture_argv else None,
         "artifacts": [],
@@ -1437,35 +1471,28 @@ def persist_scan_progress(
 
 def refresh_nmap_progress(
     manifest: dict,
-    stderr_path: Path,
+    output_path: Path,
     *,
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
 ) -> bool:
-    """Read the newest Nmap status line without interfering with its output file."""
+    """Read the newest Nmap terminal status without interfering with its output."""
     try:
-        with stderr_path.open("rb") as handle:
+        with output_path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
             handle.seek(max(0, size - 131072))
-            stats = latest_nmap_stats(handle.read().decode("utf-8", errors="replace"))
+            status = latest_nmap_status(
+                handle.read().decode("utf-8", errors="replace")
+            )
     except OSError:
         return False
-    if stats is None:
-        return False
-    completed, up = stats
-    progress = manifest["progress"]
-    if (
-        completed == progress.get("hosts_completed")
-        and up == progress.get("hosts_up")
-        and progress.get("phase") == "nmap"
-    ):
+    if status is None:
         return False
     return persist_scan_progress(
         manifest,
         phase="nmap",
-        hosts_completed=completed,
-        hosts_up=up,
+        **status,
         db_path=db_path,
         data_dir=data_dir,
     )
@@ -1764,8 +1791,15 @@ def execute_scan_run(
                             )
 
             if run_nmap:
+                execution_argv = manifest.get("execution_command_argv")
+                if not execution_argv:
+                    execution_argv = build_nmap_execution_argv(
+                        manifest["command_argv"]
+                    )
+                    manifest["execution_command_argv"] = execution_argv
+                    manifest["exact_execution_command"] = shlex.join(execution_argv)
                 control.nmap_process = popen_factory(
-                    manifest["command_argv"],
+                    execution_argv,
                     cwd=run_dir,
                     stdin=subprocess.DEVNULL,
                     stdout=stdout_handle,
@@ -1778,7 +1812,7 @@ def execute_scan_run(
                     if exit_code is not None:
                         refresh_nmap_progress(
                             manifest,
-                            run_dir / "stderr.txt",
+                            run_dir / "stdout.txt",
                             db_path=db_path,
                             data_dir=data_dir,
                         )
@@ -1798,7 +1832,25 @@ def execute_scan_run(
                     if now - last_progress_check >= 1:
                         refresh_nmap_progress(
                             manifest,
-                            run_dir / "stderr.txt",
+                            run_dir / "stdout.txt",
+                            db_path=db_path,
+                            data_dir=data_dir,
+                        )
+                        persist_scan_progress(
+                            manifest,
+                            elapsed_seconds=max(
+                                0,
+                                int(
+                                    now
+                                    - (
+                                        deadline
+                                        - int(manifest["timeout_seconds"])
+                                    )
+                                ),
+                            ),
+                            deadline_remaining_seconds=max(
+                                0, int(deadline - now)
+                            ),
                             db_path=db_path,
                             data_dir=data_dir,
                         )

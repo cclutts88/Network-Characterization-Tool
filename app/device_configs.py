@@ -20,6 +20,8 @@ from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
+
+from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -326,6 +328,9 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
 
 def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: object) -> dict:
     value = {
+        "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "run_id": preview["run_id"],
         "created_at": utc_now(),
         "operator": plan.operator,
@@ -1145,6 +1150,9 @@ async def upload_result(
     (run_dir / stored_name).write_bytes(content)
     completed_at = utc_now()
     manifest = {
+        "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "run_id": run_id,
         "created_at": completed_at,
         "completed_at": completed_at,

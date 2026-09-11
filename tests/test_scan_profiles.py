@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.poc import FallbackDecision, apply_fping_fallback, build_nmap_argv
+from app.poc import (
+    FallbackDecision,
+    apply_fping_fallback,
+    build_nmap_argv,
+    build_nmap_execution_argv,
+)
 from app.scan_profiles import build_nmap_flags, scan_display_name
 
 
@@ -40,6 +45,17 @@ def test_generated_nmap_command_enables_real_host_progress_statistics():
 
     assert command[command.index("--stats-every") + 1] == "2s"
     assert "-n" in command
+
+
+def test_linux_nmap_execution_uses_a_terminal_and_preserves_exit_status():
+    command = ["nmap", "-n", "-iL", "targets.txt", "-oX", "scan.xml"]
+
+    execution = build_nmap_execution_argv(command, platform_name="posix")
+
+    assert execution[:4] == ["script", "--quiet", "--return", "--flush"]
+    assert execution[-1] == "/dev/null"
+    assert "nmap -n -iL targets.txt -oX scan.xml" in execution
+    assert build_nmap_execution_argv(command, platform_name="nt") == command
 
 
 def test_combined_scan_uses_independent_protocol_port_scopes():
@@ -94,6 +110,9 @@ def test_approved_fping_fallback_scans_the_full_approved_scope():
     assert command[command.index("--excludefile") + 1] == "no-strike.txt"
     assert "-n" in command
     assert command[command.index("--stats-every") + 1] == "2s"
+    assert manifest["execution_command_argv"][0] == (
+        "script" if __import__("os").name == "posix" else "nmap"
+    )
     assert manifest["discovery_fallback_used"] is True
     assert "discovery_note" not in manifest
 

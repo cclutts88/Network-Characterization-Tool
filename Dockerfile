@@ -1,13 +1,20 @@
 FROM python:3.12-slim
 
+ARG NCT_APP_VERSION=0.6.4-dev
+ARG NCT_BUILD_COMMIT=uncommitted
+ARG NCT_BUILD_ID
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    ANALYZER_DATA_DIR=/data
+    ANALYZER_DATA_DIR=/data \
+    NCT_APP_VERSION=${NCT_APP_VERSION} \
+    NCT_BUILD_COMMIT=${NCT_BUILD_COMMIT} \
+    NCT_BUILD_ID=${NCT_BUILD_ID}
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nmap fping tcpdump openssh-client \
+    && apt-get install -y --no-install-recommends nmap fping tcpdump openssh-client util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

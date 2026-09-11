@@ -64,10 +64,18 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Enter the confirmation string shown above" in html
     assert "Built-in profile protected" in html
     assert "Global no-strike safety list" in html
+    assert html.index("Creator / operator") < html.index("Global no-strike safety list")
     assert "Profiles cannot turn this protection off" in html
+    assert "Changes are recorded under Creator / operator above" in html
+    assert 'id="globalNoStrikeStatus" class="status" role="status"' in html
+    assert "setGlobalSafetyStatus(error.message,'bad')" in html
     assert "/api/safety/no-strike" in html
     assert "Remove a global no-strike entry" in html
     assert "Pause and require operator approval before Nmap" in html
+    assert "Estimated time left" in html
+    assert "Timeout limit in" in html
+    assert "Live update" in html
+    assert "exact_execution_command" in html
     assert "/api/scan-schedules/" in html
     assert ".join('\n')" not in html
     assert r".join('\n')" in html

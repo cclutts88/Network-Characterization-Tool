@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi.responses import HTMLResponse
 
+from app.build_info import APP_VERSION, BUILD_ID
+
 
 def operator_page() -> HTMLResponse:
     return HTMLResponse(
@@ -29,14 +31,20 @@ def operator_page() -> HTMLResponse:
     <section class="panel builder">
       <h2>Build scan</h2>
       <p class="hint">All Nmap commands generated here include <code>-n</code>. Saved schedules will remain pinned to the selected profile version.</p>
+      <div class="grid">
+        <div class="span-6"><label for="operator">Creator / operator</label><input id="operator" placeholder="Analyst name"><p class="hint">Used to record scan, profile, schedule, and safety-list changes.</p></div>
+        <div class="span-6"><label for="origin">Originating host</label><input id="origin" placeholder="kali-blue"></div>
+        <div class="span-12"><label for="reason">Reason / authorization note</label><input id="reason" placeholder="Authorized terrain characterization"></div>
+      </div>
       <div class="profile-note">
         <strong>Global no-strike safety list</strong>
-        <p class="hint">These protected addresses are automatically excluded from every preview, package, manual scan, and scheduled chunk. Profiles cannot turn this protection off.</p>
+        <p class="hint">These protected addresses are automatically excluded from every preview, package, manual scan, and scheduled chunk. Profiles cannot turn this protection off. Changes are recorded under Creator / operator above.</p>
         <div class="grid">
           <div class="span-6"><label for="globalNoStrikeAdd">Add protected addresses</label><textarea id="globalNoStrikeAdd" placeholder="172.22.10.1&#10;172.22.10.10/32"></textarea></div>
           <div class="span-6"><label>Protected list</label><div id="globalNoStrikeList" class="meta">Loading protected addresses…</div></div>
         </div>
-        <div class="actions"><button id="addGlobalNoStrike" class="secondary" type="button">Add to global no-strike list</button><span id="globalNoStrikeStatus" class="meta"></span></div>
+        <div class="actions"><button id="addGlobalNoStrike" class="secondary" type="button">Add to global no-strike list</button></div>
+        <div id="globalNoStrikeStatus" class="status" role="status" aria-live="polite"></div>
       </div>
       <div class="grid">
         <div class="span-4"><label for="scanName">Scan name</label><input id="scanName" value="Terrain_Baseline" maxlength="100"></div>
@@ -56,9 +64,6 @@ def operator_page() -> HTMLResponse:
         <div class="span-3"><label for="timeout">Run timeout (seconds)</label><input id="timeout" type="number" min="10" max="3600" value="900"></div>
         <div class="span-3"><label class="check"><input id="chunkingEnabled" type="checkbox">Use chunked scan strategy</label><p class="hint">Off by default. An authorized /16 can run as one continuous scan.</p></div>
         <div id="chunkSizeBox" class="span-3 hidden"><label for="chunkSize">Addresses per chunk</label><input id="chunkSize" type="number" min="1" max="4096" value="256"><p class="hint">Used by portable packages and scheduled scans.</p></div>
-        <div class="span-6"><label for="operator">Creator / operator</label><input id="operator" placeholder="Analyst name"></div>
-        <div class="span-6"><label for="origin">Originating host</label><input id="origin" placeholder="kali-blue"></div>
-        <div class="span-12"><label for="reason">Reason / authorization note</label><input id="reason" placeholder="Authorized terrain characterization"></div>
         <div class="span-12 check-row"><label class="check"><input id="serviceDetection" type="checkbox" checked>Service/version detection</label><label class="check"><input id="osDetection" type="checkbox" checked>OS detection</label><label class="check"><input id="traceroute" type="checkbox">Collect traceroute paths for the network map</label></div>
       </div>
       <div id="profileNote" class="profile-note meta">Select a saved profile or customize these settings.</div>
@@ -134,7 +139,7 @@ def operator_page() -> HTMLResponse:
       <div id="history" class="meta">Loading…</div>
       <div id="deleteConfirm" class="delete-modal hidden" role="dialog" aria-modal="true" aria-labelledby="deleteTitle"><div class="delete-dialog"><h2 id="deleteTitle">Confirm deletion</h2><p id="deletePrompt"></p><p>Type this one-time confirmation string exactly: <code id="deleteChallenge"></code></p><label for="deleteInput">Confirmation string</label><input id="deleteInput" autocomplete="off" spellcheck="false"><div id="deleteStatus" class="status" role="status" aria-live="assertive"></div><div class="actions"><button id="confirmDelete" class="danger">Confirm deletion</button><button id="cancelDelete" class="secondary">Cancel</button></div></div></div>
     </section>
-    <div class="footer">Nmap execution requires the analyzer VM and always records tcpdump accountability evidence. Portable packages can be run from an authorized scanning host.</div>
+    <div class="footer">Nmap execution requires the analyzer VM and always records tcpdump accountability evidence. Portable packages can be run from an authorized scanning host.<br>Build <code>{APP_VERSION}</code> · <code>{BUILD_ID}</code></div>
   </main>
 <script>
 const $=id=>document.getElementById(id),esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -157,6 +162,8 @@ const SCOPE_DETAILS={
   }
 };
 function status(message,kind=''){const node=$('builderStatus');node.textContent=message;node.className='status '+kind}
+function setGlobalSafetyStatus(message,kind=''){const node=$('globalNoStrikeStatus');node.textContent=message;node.className='status '+kind}
+function formatDuration(value){const total=Math.max(0,Math.floor(Number(value)));if(!Number.isFinite(total))return'';const hours=Math.floor(total/3600),minutes=Math.floor((total%3600)/60),seconds=total%60;return[hours?`${hours}h`:'',minutes?`${minutes}m`:'',(!hours&&!minutes)||seconds?`${seconds}s`:''].filter(Boolean).join(' ')}
 function settings(){return{protocol:$('protocol').value,tcp_scope:$('tcpScope').value,tcp_ports:$('tcpPorts').value.trim(),udp_scope:$('udpScope').value,udp_ports:$('udpPorts').value.trim(),service_detection:$('serviceDetection').checked,os_detection:$('osDetection').checked,timing:$('timing').value,discovery_mode:$('discoveryMode').value,traceroute:$('traceroute').checked}}
 function scopeCard(kind){const scope=$(kind+'Scope').value,detail=SCOPE_DETAILS[kind][scope],custom=$(kind+'Ports').value.trim(),ports=scope==='custom'?(custom||'No custom ports entered yet.'):detail.ports;return `<div class="scope-card"><h3>${esc(detail.label)}</h3><div class="scope-ports">${esc(ports)}</div><p class="scope-why">${esc(detail.why)}</p></div>`}
 function renderScopeDetails(){const protocol=$('protocol').value,cards=[];if(protocol!=='udp')cards.push(scopeCard('tcp'));if(protocol!=='tcp')cards.push(scopeCard('udp'));$('scopeDetails').innerHTML=`<strong>What this port scope includes</strong><div class="scope-grid">${cards.join('')}</div>`}
@@ -173,9 +180,9 @@ function profilePayload(){if(selectedProfile&&!profileDirty)return{profile:selec
 function commonPayload(){return{name:$('scanName').value.trim(),operator:$('operator').value.trim(),created_by:$('operator').value.trim(),reason:$('reason').value.trim(),originating_host:$('origin').value.trim()||location.hostname,interface:$('interface').value,targets:lines('targets'),no_strike:lines('noStrike'),...profilePayload()}}
 function validatePortSelections(){const protocol=$('protocol').value;if(protocol==='tcp_udp'&&($('tcpScope').value.startsWith('top_')||$('udpScope').value.startsWith('top_')))throw new Error('TCP + UDP needs independent Common, ICS / OT, Custom, or All port scopes.');if(protocol!=='udp'&&$('tcpScope').value==='custom'&&!$('tcpPorts').value.trim())throw new Error('Enter custom TCP ports, or choose Common, ICS / OT, or All TCP ports.');if(protocol!=='tcp'&&$('udpScope').value==='custom'&&!$('udpPorts').value.trim())throw new Error('Enter custom UDP ports, or choose Common, ICS / OT, or All UDP ports.')}
 function validateCommon(requireRun=false){validatePortSelections();const p=commonPayload();if(!p.name||!p.operator||!p.reason||!p.targets.length)throw new Error('Scan name, creator/operator, reason, and at least one target are required.');if(requireRun&&!p.interface)throw new Error('Choose an analyzer interface before running.');return p}
-async function loadGlobalNoStrike(){try{const r=await fetch('/api/safety/no-strike'),data=await r.json();if(!r.ok)throw new Error(data.detail||'Protected list could not be loaded');const entries=data.entries||[];$('globalNoStrikeList').innerHTML=entries.length?entries.map(entry=>`<div class="profile-note"><code>${esc(entry)}</code> <button class="danger" type="button" data-remove-global="${esc(entry)}">Remove…</button></div>`).join(''):'<span class="meta">No global exclusions have been set yet.</span>';document.querySelectorAll('[data-remove-global]').forEach(button=>button.onclick=()=>beginGlobalNoStrikeRemoval(button.dataset.removeGlobal));$('globalNoStrikeStatus').textContent=entries.length?`${entries.length} protected network entr${entries.length===1?'y':'ies'} · last changed by ${data.updated_by||'unknown'}`:''}catch(error){$('globalNoStrikeStatus').textContent=error.message}}
-async function addGlobalNoStrike(){try{const entries=lines('globalNoStrikeAdd'),changed_by=$('operator').value.trim();if(!entries.length)throw new Error('Enter at least one address or network to protect.');if(!changed_by)throw new Error('Enter the creator/operator so the safety change is recorded.');const r=await fetch('/api/safety/no-strike',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries,changed_by})}),data=await r.json();if(!r.ok)throw new Error(data.detail||'Protected addresses could not be saved');$('globalNoStrikeAdd').value='';await loadGlobalNoStrike();status(`${data.entries.length} global no-strike entr${data.entries.length===1?'y':'ies'} now protect every scan path.`,'good')}catch(error){status(error.message,'bad')}}
-async function beginGlobalNoStrikeRemoval(entry){try{const r=await fetch('/api/safety/no-strike/remove-challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify([entry])}),data=await r.json();if(!r.ok)throw new Error(data.detail||'Could not prepare the safety-list change');pendingDelete={scope:'global-no-strike',identifier:entry};$('deleteTitle').textContent='Remove a global no-strike entry';$('deletePrompt').textContent=`This is a safety-critical change. ${entry} will become eligible for future scans unless another exclusion still covers it.`;$('deleteChallenge').textContent=data.challenge;$('deleteInput').value='';$('deleteStatus').textContent='';$('deleteStatus').className='status';$('deleteConfirm').classList.remove('hidden');setTimeout(()=>$('deleteInput').focus(),0)}catch(error){status(error.message,'bad')}}
+async function loadGlobalNoStrike(){try{const r=await fetch('/api/safety/no-strike'),data=await r.json();if(!r.ok)throw new Error(data.detail||'Protected list could not be loaded');const entries=data.entries||[];$('globalNoStrikeList').innerHTML=entries.length?entries.map(entry=>`<div class="profile-note"><code>${esc(entry)}</code> <button class="danger" type="button" data-remove-global="${esc(entry)}">Remove…</button></div>`).join(''):'<span class="meta">No global exclusions have been set yet.</span>';document.querySelectorAll('[data-remove-global]').forEach(button=>button.onclick=()=>beginGlobalNoStrikeRemoval(button.dataset.removeGlobal));setGlobalSafetyStatus(entries.length?`${entries.length} protected network entr${entries.length===1?'y':'ies'} · last changed by ${data.updated_by||'unknown'}`:'No global exclusions have been set yet.')}catch(error){setGlobalSafetyStatus(error.message,'bad')}}
+async function addGlobalNoStrike(){try{const entries=lines('globalNoStrikeAdd'),changed_by=$('operator').value.trim();if(!entries.length)throw new Error('Enter at least one address or network to protect.');if(!changed_by){$('operator').focus();throw new Error('Enter the creator/operator above so the safety change is recorded.')}setGlobalSafetyStatus('Saving protected addresses…','warn');const r=await fetch('/api/safety/no-strike',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries,changed_by})}),data=await r.json();if(!r.ok)throw new Error(data.detail||'Protected addresses could not be saved');$('globalNoStrikeAdd').value='';await loadGlobalNoStrike();setGlobalSafetyStatus(`${data.entries.length} global no-strike entr${data.entries.length===1?'y':'ies'} now protect every scan path.`,'good')}catch(error){setGlobalSafetyStatus(error.message,'bad')}}
+async function beginGlobalNoStrikeRemoval(entry){try{const r=await fetch('/api/safety/no-strike/remove-challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify([entry])}),data=await r.json();if(!r.ok)throw new Error(data.detail||'Could not prepare the safety-list change');pendingDelete={scope:'global-no-strike',identifier:entry};$('deleteTitle').textContent='Remove a global no-strike entry';$('deletePrompt').textContent=`This is a safety-critical change. ${entry} will become eligible for future scans unless another exclusion still covers it.`;$('deleteChallenge').textContent=data.challenge;$('deleteInput').value='';$('deleteStatus').textContent='';$('deleteStatus').className='status';$('deleteConfirm').classList.remove('hidden');setTimeout(()=>$('deleteInput').focus(),0)}catch(error){setGlobalSafetyStatus(error.message,'bad')}}
 async function loadProfiles(selectId=null){const r=await fetch('/api/scan-profiles');const data=await r.json();if(!r.ok)throw new Error(data.detail||'Profiles could not be loaded');profiles=data||[];$('profileSelect').innerHTML=profiles.map(p=>`<option value="${esc(p.profile_id)}:${p.version}">${esc(p.name)} · v${p.version}${p.built_in?' · built-in':''}</option>`).join('');const chosen=profiles.find(p=>`${p.profile_id}:${p.version}`===selectId)||profiles[0];if(chosen){$('profileSelect').value=`${chosen.profile_id}:${chosen.version}`;applyProfile(chosen)}}
 async function loadInterfaces(){try{const r=await fetch('/api/scan-runs/interfaces'),data=await r.json();$('interface').innerHTML=(data.interfaces||[]).map(i=>`<option value="${esc(i)}">${esc(i)}</option>`).join('')||'<option value="">No interfaces found</option>'}catch(error){status('Interfaces unavailable: '+error.message,'warn')}}
 async function preview(){try{const p=validateCommon(false),body={name:p.name,created_by:p.created_by,profile:p.profile,profile_id:p.profile_id,profile_version:p.profile_version,scan_options:p.scan_options,terrain:[{name:'Target_scope',targets:p.targets}],no_strike_mode:p.no_strike.length?'entered':'none',no_strike:p.no_strike,chunking_enabled:$('chunkingEnabled').checked,chunk_size:Number($('chunkSize').value)};status('Generating validated command preview…');const r=await fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await r.json();if(!r.ok)throw new Error(data.detail||'Preview failed');$('commandPreview').textContent=data.copy_text;status(`Validated ${data.profile} v${data.profile_version}; mandatory -n is present.`,'good')}catch(error){status(error.message,'bad')}}
@@ -195,23 +202,31 @@ async function runSchedule(id){try{setScheduleStatus('Starting the scheduled sca
 async function repinSchedule(id){try{if(!selectedProfile||profileDirty)throw new Error('Select an unchanged saved profile version in the builder first.');const changed_by=$('operator').value.trim();if(!changed_by)throw new Error('Creator/operator is required to record who changed the schedule.');const r=await fetch(`/api/scan-schedules/${encodeURIComponent(id)}/profile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:selectedProfile.profile_id,profile_version:selectedProfile.version,changed_by})}),data=await r.json();if(!r.ok)throw new Error(data.detail||'Schedule profile could not be changed');await loadSchedules();setScheduleStatus(`${data.name} now uses ${data.profile_name} v${data.profile_version}.`,'good')}catch(error){setScheduleStatus(error.message,'bad')}}
 function renderCurrentProgress(run){
   const p=run.progress||{},state=String(run.status||'unknown'),phase=String(p.phase||state),chunkCount=Number(p.chunk_count||run.chunk_count||1),chunkNumber=Number(p.chunk_number||run.chunk_number||1),showBatch=chunkCount>1&&Number(p.batch_hosts_total)>0;
-  const total=Number(showBatch?p.batch_hosts_total:p.hosts_total),completed=Number(showBatch?p.batch_hosts_completed:p.hosts_completed),rawPercent=Number(showBatch?p.batch_percent:p.percent),percent=Number.isFinite(rawPercent)?Math.max(0,Math.min(100,rawPercent)):0;
+  const total=Number(showBatch?p.batch_hosts_total:p.hosts_total),completed=Number(showBatch?p.batch_hosts_completed:p.hosts_completed),rawPercent=Number(showBatch?p.batch_percent:p.percent),hostPercent=Number.isFinite(rawPercent)?Math.max(0,Math.min(100,rawPercent)):0,rawPhasePercent=Number(p.phase_percent),hasPhasePercent=p.phase_percent!==null&&p.phase_percent!==undefined&&Number.isFinite(rawPhasePercent);
+  let percent=hostPercent;if(phase==='nmap'&&hasPhasePercent){percent=showBatch&&Number(p.batch_hosts_total)>0?Math.max(hostPercent,Math.min(100,((Number(p.batch_hosts_completed_before)||0)+(Number(p.hosts_total)||0)*rawPhasePercent/100)/Number(p.batch_hosts_total)*100)):Math.max(hostPercent,Math.min(100,rawPhasePercent))}
   const box=$('currentProgress'),fill=$('progressFill'),track=$('progressTrack');
   box.classList.toggle('hidden',!(total>0||['queued','running','awaiting_fallback_approval'].includes(state)));
   fill.classList.toggle('indeterminate',phase==='discovery');
   if(phase!=='discovery')fill.style.width=percent+'%';else fill.style.width='';
   const labels={queued:'Queued',discovery:'FPING discovery',nmap:'Nmap scan',awaiting_approval:'Waiting for fallback approval',completed:'Scan complete',completed_without_nmap:'Finished without Nmap',failed:'Scan failed',cancelled:'Scan cancelled',timed_out:'Scan timed out'};
   $('progressLabel').textContent=labels[phase]||'Scan progress';
-  $('progressCount').textContent=phase==='discovery'?`${Number(p.scope_hosts_total||total).toLocaleString()} authorized addresses`:`${completed.toLocaleString()} of ${total.toLocaleString()} ${showBatch?'addresses processed':'hosts completed'} · ${percent.toFixed(1)}%`;
+  const phaseProgress=phase==='nmap'&&hasPhasePercent?` · ${String(p.activity||'current phase')} ${rawPhasePercent.toFixed(1)}%`:'';
+  $('progressCount').textContent=phase==='discovery'?`${Number(p.scope_hosts_total||total).toLocaleString()} authorized addresses`:`${completed.toLocaleString()} of ${total.toLocaleString()} ${showBatch?'addresses processed':'hosts completed'}${phaseProgress}`;
   const details=[];
   if(showBatch)details.push(`Scheduled batch · chunk ${chunkNumber} of ${chunkCount}`);
   if(phase==='nmap'&&Number(p.scope_hosts_total)>Number(p.hosts_total))details.push(`FPING selected ${Number(p.hosts_total).toLocaleString()} responsive hosts from ${Number(p.scope_hosts_total).toLocaleString()} authorized addresses`);
+  if(phase==='nmap'&&p.activity&&!hasPhasePercent)details.push(String(p.activity));
+  if(phase==='nmap'&&Number(p.active_hosts)>0)details.push(`${Number(p.active_hosts).toLocaleString()} active in this phase`);
+  if(phase==='nmap'&&p.remaining_seconds!==null&&p.remaining_seconds!==undefined)details.push(`Estimated time left ${formatDuration(p.remaining_seconds)}`);
+  if(['running','queued'].includes(state)&&p.elapsed_seconds!==null&&p.elapsed_seconds!==undefined)details.push(`Elapsed ${formatDuration(p.elapsed_seconds)}`);
+  if(state==='running'&&p.deadline_remaining_seconds!==null&&p.deadline_remaining_seconds!==undefined)details.push(`Timeout limit in ${formatDuration(p.deadline_remaining_seconds)}`);
+  if(['running','queued'].includes(state)&&p.updated_at)details.push(`Live update ${new Date(p.updated_at).toLocaleTimeString()}`);
   if(phase==='awaiting_approval')details.push('Progress is paused until the fallback decision is recorded');
   if(phase==='completed_without_nmap')details.push('No full Nmap fallback was run');
   if(Number(p.hosts_up)>0)details.push(`${Number(p.hosts_up).toLocaleString()} up so far`);
   $('progressDetail').textContent=details.join(' · ');
   track.setAttribute('aria-valuenow',String(Math.round(percent)));
-  track.setAttribute('aria-valuetext',phase==='discovery'?'FPING discovery in progress':`${completed} of ${total} complete`);
+  track.setAttribute('aria-valuetext',phase==='discovery'?'FPING discovery in progress':phaseProgress?`${p.activity||'Nmap phase'} ${rawPhasePercent.toFixed(1)} percent; ${completed} of ${total} hosts complete`:`${completed} of ${total} complete`);
 }
 function setCurrent(run){
   const changedRun=currentId!==run.run_id;currentId=run.run_id;
@@ -226,7 +241,7 @@ function setCurrent(run){
   renderCurrentProgress(run);
   $('currentMetadata').textContent='Created by '+(run.created_by||run.operator||'—')+' · Executed by '+(run.executed_by||'—')+' · '+(run.targets||[]).join(', ')+' · '+coverageLabel(run);
   const note=run.discovery_note||'';$('currentDiscoveryNote').textContent=note;$('currentDiscoveryNote').classList.toggle('hidden',!note);
-  $('currentCommand').textContent=[run.exact_discovery_command?'Discovery: '+run.exact_discovery_command:'',run.exact_command?'Planned Nmap: '+run.exact_command:'',run.capture_requested?'Capture: '+(run.exact_capture_command||''):'Capture: not requested'].filter(Boolean).join('\n');
+  $('currentCommand').textContent=[run.exact_discovery_command?'Discovery: '+run.exact_discovery_command:'',run.exact_command?'Planned Nmap: '+run.exact_command:'',run.exact_execution_command&&run.exact_execution_command!==run.exact_command?'Executed Nmap: '+run.exact_execution_command:'',run.capture_requested?'Capture: '+(run.exact_capture_command||''):'Capture: not requested'].filter(Boolean).join('\n');
   const needsApproval=state==='awaiting_fallback_approval';$('fallbackApproval').classList.toggle('hidden',!needsApproval);
   $('fallbackCommand').textContent=run.exact_fallback_command||'Full-target command is not available.';
   if(changedRun){$('fallbackApprover').value='';$('fallbackNote').value=''}
@@ -249,5 +264,5 @@ $('scheduleCadence').onchange=()=>$('scheduleIntervalBox').classList.toggle('hid
 $('preview').onclick=preview;$('generatePackage').onclick=generatePackage;$('runNow').onclick=runNow;$('addGlobalNoStrike').onclick=addGlobalNoStrike;$('saveProfile').onclick=saveProfile;$('saveVersion').onclick=saveVersion;$('cloneProfile').onclick=cloneProfile;$('deleteProfile').onclick=()=>{if(selectedProfile&&!selectedProfile.built_in)beginDelete('profile',selectedProfile.profile_id)};$('saveSchedule').onclick=saveSchedule;$('refreshSchedules').onclick=loadSchedules;$('refresh').onclick=loadHistory;$('cancel').onclick=async()=>{if(!currentId)return;const r=await fetch(`/api/scan-runs/${encodeURIComponent(currentId)}/cancel`,{method:'POST'});if(r.ok)poll()};$('approveFallback').onclick=()=>submitFallbackDecision('approve');$('declineFallback').onclick=()=>submitFallbackDecision('decline');$('analyzeCurrent').onclick=()=>{if(currentId)location.href=`/analysis?run=${encodeURIComponent(currentId)}`};$('deleteAll').onclick=()=>beginDelete('all');$('confirmDelete').onclick=confirmDelete;$('cancelDelete').onclick=()=>{pendingDelete=null;$('deleteConfirm').classList.add('hidden')};$('deleteInput').addEventListener('keydown',event=>{if(event.key==='Enter')confirmDelete()});
 $('origin').value=location.hostname;showChunkingOptions();const firstRun=new Date(Date.now()+10*60*1000);firstRun.setSeconds(0,0);$('scheduleFirstRun').value=new Date(firstRun.getTime()-firstRun.getTimezoneOffset()*60000).toISOString().slice(0,16);Promise.all([loadProfiles(),loadInterfaces(),loadHistory(),loadSchedules(),loadGlobalNoStrike()]).catch(error=>status(error.message,'bad'));
 </script>
-</body></html>'''
+</body></html>'''.replace("{APP_VERSION}", APP_VERSION).replace("{BUILD_ID}", BUILD_ID)
     )

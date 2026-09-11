@@ -31,6 +31,7 @@ from app.comparison import (
 )
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
+from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 import hashlib
 import io
 import ipaddress
@@ -54,7 +55,6 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 
-APP_VERSION = "0.6.3"
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
@@ -325,6 +325,8 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
     manifest = {
         "schema_version": 2,
         "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "campaign": spec.name,
         "display_name": display_name,
         "created_at": created_at,
@@ -731,7 +733,12 @@ app.include_router(device_config_router)
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "version": APP_VERSION}
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
+    }
 
 
 @app.post("/api/packages")
