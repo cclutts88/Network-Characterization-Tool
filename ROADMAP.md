@@ -138,8 +138,12 @@ an optional future mode within Reachability.
 - [x] Fit the viewport to the actual device and subnet boundary instead of empty
   mission-workspace borders when the topology is sparse.
 - [x] Auto-pan the mission workspace when an analyst drags a node near any edge.
-- [ ] Consider a minimap overview for rapid navigation across very large mission
-  workspaces after the core map interaction model is stable.
+- [x] Add Shift-click multi-object selection and group dragging that preserves
+  relative placement, updates relationship lines, and supports edge auto-pan.
+- [x] Add zoom-dependent detail levels that move automatically between overview,
+  summary, full, and evidence views while showing the active level.
+- [x] Add a live minimap in the expanded workspace with selected-node markers, a
+  viewport frame, and click-drag navigation across large mission areas.
 - [x] Add per-subnet endpoint display modes: collapsed by default, individual
   endpoint lines, or an organized endpoint-group box.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP

@@ -353,7 +353,13 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "cancelAnimationFrame(panFrame)" in html
     assert "manualPositions" in html
     assert "updateEdgeGeometry" in html
-    assert "Drag any box to reposition it" in html
+    assert "Shift-click boxes to select and move them together" in html
+    assert "const selectedNodeIds=new Set()" in html
+    assert "function selectMapNode" in html
+    assert "function clearMapSelection" in html
+    assert "dragIds=selectedNodeIds.has(node.id)" in html
+    assert "currentNodeElements.get(id)?.setAttribute" in html
+    assert 'id="selectionStatus"' in html
     assert "Config zone" in html
     assert "node.zone_names" in html
     assert 'id="zoomOut"' in html
@@ -366,6 +372,18 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "currentPositions=new Map()" in html
     assert "currentPositions=positions" in html
     assert "function enableCanvasNavigation" in html
+    assert "function zoomDetailLevel" in html
+    assert "lod-overview" in html
+    assert "lod-summary" in html
+    assert "lod-evidence" in html
+    assert 'id="detailLevel"' in html
+    assert "function nodeZoomDetail" in html
+    assert "class:'node-zoom-detail'" in html
+    assert 'id="miniMap"' in html
+    assert "id:'miniViewport'" in html
+    assert "function renderMinimap" in html
+    assert "function navigateFromMinimap" in html
+    assert "canvas.addEventListener('scroll',updateMinimapViewport" in html
     assert "event.deltaY<0?1.12:.89" in html
     assert "contentX=(canvas.scrollLeft+point.x)/previous" in html
     assert "canvas.classList.add('panning')" in html
@@ -418,7 +436,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="expandAll" class="secondary">Expand all' in html
     assert 'id="collapseAll" class="secondary">Collapse all' in html
     assert 'id="endpointSort"' in html
-    assert "const endpointModes=new Map()" in html
+    assert "endpointModes=new Map()" in html
     assert "endpointStyles=new Map()" in html
     assert "mode==='collapsed'" in html
     assert "Individual connection lines" in html
