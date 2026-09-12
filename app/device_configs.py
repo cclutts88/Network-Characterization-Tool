@@ -22,6 +22,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.request_identity import bind_signed_in_actor, signed_in_username
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -592,6 +593,7 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         )
     return {
         "run_id": run_id,
+        "operator": plan.operator,
         "vendor": plan.vendor,
         "device_type": plan.device_type,
         "device_address": plan.device_address,
@@ -1270,7 +1272,8 @@ def vendors() -> dict:
 
 
 @router.post("/preview")
-def preview(plan: DeviceConfigPlan) -> dict:
+def preview(plan: DeviceConfigPlan, request: Request) -> dict:
+    plan = bind_signed_in_actor(request, plan, "operator")
     value = build_plan(plan)
     value.pop("ssh_args", None)
     value.pop("remote_input", None)
@@ -1281,6 +1284,7 @@ def preview(plan: DeviceConfigPlan) -> dict:
 def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     """Open a short-lived SSH control session and stop at the device password prompt."""
     _require_secure_password_transport(request)
+    plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "password_prompt":
         raise HTTPException(status_code=422, detail="Choose password-prompt authentication for this workflow")
     preview_data = build_plan(plan)
@@ -1453,8 +1457,9 @@ def cancel_interactive_session(session_id: str) -> dict:
 
 
 @router.post("/preflight")
-def preflight(plan: DeviceConfigPlan) -> dict:
+def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     """Validate the key and capture every non-interactive SSH access check."""
+    plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     key = key_preflight(plan.key_path)
@@ -1511,7 +1516,8 @@ def preflight(plan: DeviceConfigPlan) -> dict:
 
 
 @router.post("/execute")
-def execute(plan: DeviceConfigPlan) -> dict:
+def execute(plan: DeviceConfigPlan, request: Request) -> dict:
+    plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     preview_data = build_plan(plan)
@@ -1586,6 +1592,7 @@ def execute(plan: DeviceConfigPlan) -> dict:
 
 @router.post("/upload")
 async def upload_result(
+    request: Request,
     operator: str = Form(...),
     reason: str = Form(...),
     originating_host: str = Form(...),
@@ -1597,7 +1604,7 @@ async def upload_result(
 ) -> dict:
     """Import an existing router, firewall, or switch result without contacting a device."""
     values = {
-        "operator": operator.strip(),
+        "operator": signed_in_username(request) or operator.strip(),
         "reason": reason.strip(),
         "originating_host": originating_host.strip(),
         "device_address": device_address.strip(),

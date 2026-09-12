@@ -62,6 +62,7 @@ from app.comparison import (
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
 from app.session_ui import analyst_admin_page, session_script
+from app.request_identity import bind_signed_in_actor
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.auth import (
     SESSION_COOKIE,
@@ -1102,8 +1103,12 @@ def save_os_inference_review(
 
 
 @app.post("/api/packages")
-def create_package(spec: CampaignSpec) -> StreamingResponse:
+def create_package(http_request: Request, spec: CampaignSpec) -> StreamingResponse:
     try:
+        fields = ["created_by"]
+        if spec.scheduled:
+            fields.append("scheduled_by")
+        spec = bind_signed_in_actor(http_request, spec, *fields)
         filename, content = build_package(spec)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

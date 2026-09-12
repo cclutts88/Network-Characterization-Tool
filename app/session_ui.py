@@ -19,6 +19,13 @@ SESSION_SCRIPT = r"""
       identity.textContent = `${analyst.display_name || analyst.username} · ${analyst.role}`;
       identity.title = `Signed in as ${analyst.username}`;
       controls.append(identity);
+      for (const id of ['operator', 'noStrikeOperator', 'fallbackApprover']) {
+        const field = document.getElementById(id);
+        if (!field) continue;
+        field.value = analyst.username;
+        field.readOnly = true;
+        field.title = 'Bound to the signed-in analyst';
+      }
       if (analyst.role === 'admin') {
         const admin = document.createElement('a');
         admin.href = '/admin/users';

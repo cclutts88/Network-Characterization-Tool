@@ -132,6 +132,60 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         )
         assert reviewed_inference.status_code == 200
         assert reviewed_inference.json()["analyst"] == "nctadmin"
+        saved_network = admin.post(
+            "/api/saved-networks",
+            json={
+                "name": "Authenticated ownership test",
+                "cidr": "198.51.100.252/30",
+                "created_by": "spoofed-client-name",
+            },
+        )
+        assert saved_network.status_code == 201
+        assert saved_network.json()["created_by"] == "nctadmin"
+        profile = admin.post(
+            "/api/scan-profiles",
+            json={
+                "name": "Authenticated ownership profile",
+                "created_by": "spoofed-client-name",
+                "settings": {},
+            },
+        )
+        assert profile.status_code == 201
+        assert profile.json()["created_by"] == "nctadmin"
+        scan_plan = admin.post(
+            "/api/scan-runs/plans",
+            json={
+                "operator": "spoofed-client-name",
+                "created_by": "spoofed-client-name",
+                "executed_by": "spoofed-client-name",
+                "name": "Authenticated ownership scan",
+                "reason": "Ownership test",
+                "originating_host": "test-host",
+                "interface": "eth0",
+                "profile": "standard",
+                "targets": ["203.0.113.254"],
+            },
+        )
+        assert scan_plan.status_code == 201
+        assert scan_plan.json()["operator"] == "nctadmin"
+        assert scan_plan.json()["created_by"] == "nctadmin"
+        assert scan_plan.json()["executed_by"] == "nctadmin"
+        device_plan = admin.post(
+            "/api/device-configs/preview",
+            json={
+                "operator": "spoofed-client-name",
+                "reason": "Authorized ownership test",
+                "originating_host": "test-host",
+                "vendor": "cisco",
+                "device_type": "router",
+                "device_address": "192.0.2.1",
+                "username": "admin",
+                "authentication_mode": "password_prompt",
+                "accountability_interface": "eth0",
+            },
+        )
+        assert device_plan.status_code == 200
+        assert device_plan.json()["operator"] == "nctadmin"
         saved = admin.post(
             "/api/workspaces/layouts",
             json={"name": "Reviewed map", "snapshot": {"zoomLevel": 1.25}},

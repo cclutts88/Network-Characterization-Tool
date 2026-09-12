@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -49,6 +49,7 @@ from app.saved_networks import (
     resolve_saved_network_targets,
     update_saved_network,
 )
+from app.request_identity import bind_signed_in_actor
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -2936,16 +2937,20 @@ def saved_network_detail(saved_network_id: str) -> dict:
 
 
 @router.post("/saved-networks", status_code=201)
-def save_saved_network(request: SavedNetworkCreate) -> dict:
+def save_saved_network(request: SavedNetworkCreate, http_request: Request) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_saved_network(request, DB_PATH)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.put("/saved-networks/{saved_network_id}")
-def edit_saved_network(saved_network_id: str, request: SavedNetworkUpdate) -> dict:
+def edit_saved_network(
+    saved_network_id: str, request: SavedNetworkUpdate, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "updated_by")
         return update_saved_network(saved_network_id, request, DB_PATH)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Saved Network not found") from exc
@@ -2955,9 +2960,10 @@ def edit_saved_network(saved_network_id: str, request: SavedNetworkUpdate) -> di
 
 @router.post("/saved-networks/{saved_network_id}/archive")
 def archive_saved_network_record(
-    saved_network_id: str, request: SavedNetworkArchive
+    saved_network_id: str, request: SavedNetworkArchive, http_request: Request
 ) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return archive_saved_network(saved_network_id, request, DB_PATH)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Saved Network not found") from exc
@@ -2977,8 +2983,9 @@ def preview_scan_safety(request: ScanSafetySummaryRequest) -> dict:
 
 
 @router.post("/safety/no-strike", status_code=201)
-def add_to_global_no_strike(request: NoStrikeUpdate) -> dict:
+def add_to_global_no_strike(request: NoStrikeUpdate, http_request: Request) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return add_global_no_strike(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2997,8 +3004,11 @@ def global_no_strike_remove_challenge(entries: list[str]) -> dict:
 
 
 @router.post("/safety/no-strike/remove")
-def remove_from_global_no_strike(request: NoStrikeRemoval) -> dict:
+def remove_from_global_no_strike(
+    request: NoStrikeRemoval, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return remove_global_no_strike(request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -3017,16 +3027,20 @@ def scan_profile_detail(profile_id: str, version: int) -> dict:
 
 
 @router.post("/scan-profiles", status_code=201)
-def save_scan_profile(request: ScanProfileCreate) -> dict:
+def save_scan_profile(request: ScanProfileCreate, http_request: Request) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_profile(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-profiles/{profile_id}/versions", status_code=201)
-def save_scan_profile_version(profile_id: str, request: ScanProfileVersionCreate) -> dict:
+def save_scan_profile_version(
+    profile_id: str, request: ScanProfileVersionCreate, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_profile_version(profile_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -3035,8 +3049,11 @@ def save_scan_profile_version(profile_id: str, request: ScanProfileVersionCreate
 
 
 @router.post("/scan-profiles/{profile_id}/clone", status_code=201)
-def clone_saved_scan_profile(profile_id: str, request: ScanProfileClone) -> dict:
+def clone_saved_scan_profile(
+    profile_id: str, request: ScanProfileClone, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return clone_scan_profile(profile_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -3072,16 +3089,20 @@ def scan_schedule_history() -> list[dict]:
 
 
 @router.post("/scan-schedules", status_code=201)
-def save_scan_schedule(request: ScanScheduleCreate) -> dict:
+def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_schedule(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-schedules/{schedule_id}/state")
-def change_scan_schedule_state(schedule_id: str, request: ScheduleStateChange) -> dict:
+def change_scan_schedule_state(
+    schedule_id: str, request: ScheduleStateChange, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return set_scan_schedule_enabled(
             schedule_id, request.enabled, changed_by=request.changed_by
         )
@@ -3090,8 +3111,11 @@ def change_scan_schedule_state(schedule_id: str, request: ScheduleStateChange) -
 
 
 @router.post("/scan-schedules/{schedule_id}/profile")
-def repin_scan_schedule_profile(schedule_id: str, request: ScheduleProfileChange) -> dict:
+def repin_scan_schedule_profile(
+    schedule_id: str, request: ScheduleProfileChange, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return change_scan_schedule_profile(schedule_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
@@ -3133,16 +3157,24 @@ def delete_saved_scan_schedule(schedule_id: str, confirmation: DeleteConfirmatio
 
 
 @router.post("/scan-runs/plans", status_code=201)
-def create_scan_run_plan(plan: ScanRunPlan) -> dict:
+def create_scan_run_plan(plan: ScanRunPlan, http_request: Request) -> dict:
     try:
+        actor_fields = ["operator", "created_by", "executed_by"]
+        if plan.scheduled:
+            actor_fields.append("scheduled_by")
+        plan = bind_signed_in_actor(http_request, plan, *actor_fields)
         return save_scan_run_plan(plan)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-runs", status_code=202)
-def start_scan_run(request: ScanRunRequest) -> dict:
+def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
     try:
+        actor_fields = ["operator", "created_by", "executed_by"]
+        if request.scheduled:
+            actor_fields.append("scheduled_by")
+        request = bind_signed_in_actor(http_request, request, *actor_fields)
         return launch_scan_run(request)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -3151,7 +3183,10 @@ def start_scan_run(request: ScanRunRequest) -> dict:
 
 
 @router.post("/scan-runs/{run_id}/fallback-decision", status_code=202)
-def decide_scan_fallback(run_id: str, request: FallbackDecision) -> dict:
+def decide_scan_fallback(
+    run_id: str, request: FallbackDecision, http_request: Request
+) -> dict:
+    request = bind_signed_in_actor(http_request, request, "decided_by")
     manifest = get_scan_run_plan(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")

@@ -30,6 +30,11 @@ accounts can read shared evidence but cannot perform mutations. Analysts can
 work and save personal layouts. Administrator actions are required to create
 accounts or publish and unpublish a Map layout.
 
+When authentication is enabled, audit ownership for scans, generated packages,
+profiles, schedules, safety exclusions, Saved Networks, OS reviews, and device
+collection plans is taken from the signed-in server session. A client-supplied
+operator label cannot impersonate a different analyst.
+
 Named Map layouts become server-persistent and owner-scoped in authenticated
 mode. Updates include a version so a stale browser cannot silently overwrite a
 newer layout. Shared layouts remain owned by their creator; another analyst can

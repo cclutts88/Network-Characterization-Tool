@@ -28,6 +28,10 @@
 - Added compact signed-in account controls to every primary page, including the
   active display name and role, sign-out, and an Administrator-only account
   screen for creating and reviewing named analyst accounts.
+- Bound authenticated scan plans, packages, profiles, schedules, Saved Network
+  changes, No-Strike changes, fallback decisions, and device collection plans
+  to the signed-in server identity while preserving typed operator labels in
+  authentication-disabled Test mode.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility
