@@ -248,6 +248,15 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "SearchSploit enrichment" in html
     assert 'id="searchsploitRun"' in html
     assert 'id="matchedOnly"' in html
+    assert 'id="cveFilter"' in html
+    assert 'id="cveYearFilter"' in html
+    assert 'id="cveStatusFilter"' in html
+    assert 'id="cveSummary"' in html
+    assert "SearchSploit CVEs / common names" in html
+    assert "SearchSploit candidate title" in html
+    assert "configureCveFilters" in html
+    assert "applySearchSploitFilters" in html
+    assert "renderHostCveDropdowns" in html
     assert "/api/searchsploit/status" in html
     assert "/api/searchsploit/hunting/network" in html
     assert 'id="searchsploitOnline"' in html

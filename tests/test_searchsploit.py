@@ -87,6 +87,18 @@ def test_searchsploit_enrichment_sanitizes_queries_and_returns_candidates(monkey
         "ip:10.0.0.10|tcp|443|example server; touch /tmp/not-allowed|2.4.1"
     )
     assert result["matches"][0]["candidates"][0]["edb_id"] == "12345"
+    assert result["matches"][0]["candidates"][0]["cves"] == ["CVE-2026-1234"]
+    assert result["matches"][0]["cves"] == ["CVE-2026-1234"]
+    assert result["cve_count"] == 1
+    assert result["cve_candidate_count"] == 1
+    assert result["non_cve_candidate_count"] == 0
+    assert result["cve_facets"] == [{
+        "cve": "CVE-2026-1234",
+        "year": "2026",
+        "candidate_count": 1,
+        "matched_host_count": 1,
+        "common_names": ["Example candidate"],
+    }]
 
 
 def test_searchsploit_reports_when_no_product_fingerprints_are_searchable(monkeypatch):

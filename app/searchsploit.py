@@ -346,14 +346,23 @@ def _finding_match_key(finding: dict) -> str:
     return "|".join(str(value or "").strip().lower() for value in values)
 
 
+def _extract_cves(value: object) -> list[str]:
+    return sorted({
+        item.upper()
+        for item in re.findall(r"\bCVE-\d{4}-\d{4,}\b", str(value or ""), re.IGNORECASE)
+    })
+
+
 def _candidate(item: dict) -> dict:
     edb_id = str(item.get("EDB-ID") or "").strip()
+    codes = item.get("Codes")
     return {
         "edb_id": edb_id or None,
         "title": item.get("Title"),
         "platform": item.get("Platform"),
         "type": item.get("Type"),
-        "codes": item.get("Codes"),
+        "codes": codes,
+        "cves": _extract_cves(codes),
         "verified": str(item.get("Verified") or "").strip() in {"1", "true", "True"},
         "date_published": item.get("Date_Published"),
         "path": item.get("Path"),
@@ -399,6 +408,10 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
             "skipped_no_product_count": 0,
             "matched_host_count": 0,
             "match_count": 0,
+            "cve_count": 0,
+            "cve_candidate_count": 0,
+            "non_cve_candidate_count": 0,
+            "cve_facets": [],
             "matches": [],
             "warnings": [status["message"]],
             "disclaimer": "Potential product/version matches require analyst validation.",
@@ -454,6 +467,40 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
                 "candidates": candidates,
             })
     matched_hosts = {item.get("host_key") for item in matches if item.get("host_key")}
+    cve_hosts: dict[str, set[str]] = {}
+    cve_candidate_counts: dict[str, int] = {}
+    cve_common_names: dict[str, set[str]] = {}
+    cve_candidate_count = 0
+    non_cve_candidate_count = 0
+    for match in matches:
+        host_key = str(match.get("host_key") or "")
+        match_cves: set[str] = set()
+        for candidate in match.get("candidates") or []:
+            cves = candidate.get("cves") or _extract_cves(candidate.get("codes"))
+            candidate["cves"] = cves
+            if cves:
+                cve_candidate_count += 1
+            else:
+                non_cve_candidate_count += 1
+            for cve in cves:
+                match_cves.add(cve)
+                cve_candidate_counts[cve] = cve_candidate_counts.get(cve, 0) + 1
+                title = str(candidate.get("title") or "").strip()
+                if title:
+                    cve_common_names.setdefault(cve, set()).add(title)
+                if host_key:
+                    cve_hosts.setdefault(cve, set()).add(host_key)
+        match["cves"] = sorted(match_cves)
+    cve_facets = [
+        {
+            "cve": cve,
+            "year": cve.split("-")[1],
+            "candidate_count": cve_candidate_counts[cve],
+            "matched_host_count": len(cve_hosts.get(cve, set())),
+            "common_names": sorted(cve_common_names.get(cve, set())),
+        }
+        for cve in sorted(cve_candidate_counts, reverse=True)
+    ]
     return {
         "status": "searchsploit_complete",
         "provider": status,
@@ -462,6 +509,10 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         "skipped_no_product_count": skipped_no_product_count,
         "matched_host_count": len(matched_hosts),
         "match_count": sum(item["candidate_count"] for item in matches),
+        "cve_count": len(cve_facets),
+        "cve_candidate_count": cve_candidate_count,
+        "non_cve_candidate_count": non_cve_candidate_count,
+        "cve_facets": cve_facets,
         "matches": matches,
         "warnings": warnings,
         "disclaimer": "Potential product/version matches require analyst validation.",
