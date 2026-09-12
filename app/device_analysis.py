@@ -284,6 +284,13 @@ def analyze_device_collection(
             "title": "No firewall or ACL evidence was parsed",
             "detail": "Confirm that the selected collection profile returned the active policy configuration.",
         })
+    switching_count = len(summary.get("switching", []))
+    if manifest.get("device_type") == "switch" and not switching_count:
+        review_items.append({
+            "severity": "warning", "category": "switching",
+            "title": "No switching evidence was parsed",
+            "detail": "Confirm the vendor profile matches the switch platform and review per-command status in the retained raw output.",
+        })
     policy_items = [
         *summary.get("firewall_acl", []),
         *summary.get("nat", []),
@@ -354,6 +361,7 @@ def analyze_device_collection(
         },
         "neighbors": summary.get("neighbors", []),
         "topology_neighbors": summary.get("topology_neighbors", []),
+        "switching": summary.get("switching", []),
         "saved_network_correlations": saved_matches,
         "nmap_host_correlations": nmap_matches,
         "review_items": review_items,
@@ -388,6 +396,14 @@ def compare_device_analyses(before: dict, after: dict) -> dict:
     firewall_added, firewall_removed = evidence_delta("firewall_acl")
     nat_added, nat_removed = evidence_delta("nat")
     objects_added, objects_removed = evidence_delta("network_objects")
+    before_switching = _index(before.get("switching", []), ("evidence",))
+    after_switching = _index(after.get("switching", []), ("evidence",))
+    switching_added = [
+        after_switching[key] for key in sorted(after_switching.keys() - before_switching.keys())
+    ]
+    switching_removed = [
+        before_switching[key] for key in sorted(before_switching.keys() - after_switching.keys())
+    ]
     shared_interfaces = before_interfaces.keys() & after_interfaces.keys()
     interface_fields = ("address", "network", "role", "zone", "mac")
     interfaces_changed = []
@@ -419,12 +435,18 @@ def compare_device_analyses(before: dict, after: dict) -> dict:
             "nat_removed": len(nat_removed),
             "network_objects_added": len(objects_added),
             "network_objects_removed": len(objects_removed),
+            "switching_added": len(switching_added),
+            "switching_removed": len(switching_removed),
         },
         "interfaces_added": [after_interfaces[key] for key in sorted(after_interfaces.keys() - before_interfaces.keys())],
         "interfaces_removed": [before_interfaces[key] for key in sorted(before_interfaces.keys() - after_interfaces.keys())],
         "interfaces_changed": interfaces_changed,
         "routes_added": [after_routes[key] for key in sorted(after_routes.keys() - before_routes.keys())],
         "routes_removed": [before_routes[key] for key in sorted(before_routes.keys() - after_routes.keys())],
+        "switching_changes": {
+            "added": switching_added,
+            "removed": switching_removed,
+        },
         "policy_changes": {
             "firewall_acl_added": firewall_added,
             "firewall_acl_removed": firewall_removed,

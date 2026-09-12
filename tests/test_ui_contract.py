@@ -197,9 +197,13 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "step.location" in html
     assert "step.kind" in html
     assert "VyOS and pfSense create a named temporary output file" in html
-    assert "Cisco, Juniper, and UniFi OS gateways return output directly through SSH and do not run SCP" in html
-    assert '<option value="unifi">UniFi OS Gateway</option>' in html
-    assert "Current UniFi consoles and gateways normally use the root SSH account" in html
+    assert "Cisco, Juniper, and UniFi devices return output directly through SSH and do not run SCP" in html
+    assert '<option value="unifi">UniFi</option>' in html
+    assert '<option value="switch">Switch</option>' in html
+    assert "supportsSwitch=['cisco','juniper','unifi'].includes(vendor)" in html
+    assert "Switch collection is available for this vendor" in html
+    assert "$('type').onchange=updateVendorHint" in html
+    assert "Current consoles and gateways normally use the root SSH account" in html
     assert "EdgeRouter devices should continue to use the VyOS template" in html
     assert 'id="captureCommand"' not in html
     assert 'id="scp"' not in html
@@ -220,6 +224,7 @@ def test_device_collection_history_has_structured_review_and_confirmed_delete():
         "Routes",
         "Neighbors",
         "VLANs",
+        "Switching",
         "Firewall / ACL",
         "NAT",
         "Network objects",
@@ -403,6 +408,11 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "cancelAnimationFrame(panFrame)" in html
     assert "manualPositions" in html
     assert "updateEdgeGeometry" in html
+    assert 'id="edgeStyle"' in html
+    assert "Lines: Right-angle trunks" in html
+    assert "edgeStyle==='orthogonal'" in html
+    assert "edgeStyle=snapshot.edgeStyle||'direct'" in html
+    assert "connection line style" in html
     assert "Shift-click boxes to select and move them together" in html
     assert "const selectedNodeIds=new Set()" in html
     assert "function selectMapNode" in html
@@ -432,7 +442,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="wanBoundaryInterface"' in html
     assert "wanBoundaryRail.id='wanBoundaryRail'" in html
     assert "function updateWanBoundaryMarker" in html
-    assert "marker.hidden=!wanAnchor" in html
+    assert "active=Boolean(wanAnchor&&!hiddenNodeIds.has(wanAnchor.nodeId))" in html
     assert "function updateWanUplinkGeometry" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
@@ -442,6 +452,19 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "rail.hidden=!deviceVisible" in html
     assert "addEventListener('scroll',updateWanUplinkGeometry" in html
     assert 'data-context-action="wan"' in html
+    assert 'data-context-action="external-wan"' in html
+    assert "Mark as External WAN gateway" in html
+    assert "function setExternalWanGateway" in html
+    assert "function clearExternalWanGateway" in html
+    assert "externalWanGatewayId" in html
+    assert "presentation_role:'external_wan_gateway'" in html
+    assert 'id="hideSelection"' in html
+    assert 'id="hiddenObjectsPanel"' in html
+    assert 'id="hiddenObjectsList"' in html
+    assert 'id="restoreAllHidden"' in html
+    assert "function hideMapObjects" in html
+    assert "function restoreHiddenObjects" in html
+    assert "hiddenNodeIds:[...hiddenNodeIds]" in html
     assert 'id="layoutName"' in html
     assert 'id="savedLayouts"' in html
     assert 'id="saveLayout"' in html

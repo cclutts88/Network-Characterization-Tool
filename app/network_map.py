@@ -122,7 +122,7 @@ def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
     for key in ("hostname", "role", "vendor", "mac", "os", "state"):
         if values.get(key) and not node.get(key):
             node[key] = values[key]
-    if values.get("role") in {"router", "firewall"}:
+    if values.get("role") in {"router", "firewall", "switch"}:
         node["kind"] = "device"
     elif values.get("kind") == "gateway" and node["kind"] == "host":
         node["kind"] = "gateway"
@@ -243,6 +243,21 @@ def apply_subnet_zone(subnet: dict, zone: str | None, source: dict | None = None
     subnet["label"] = f"{' / '.join(zones)} · {subnet['network']}"
     if source:
         add_source(subnet, source)
+
+
+def apply_saved_network_names(nodes: dict[str, dict], saved_networks: list[dict]) -> None:
+    """Prefer analyst-assigned Saved Network names while retaining the CIDR."""
+    names_by_cidr = {
+        str(item.get("cidr") or ""): str(item.get("name") or "").strip()
+        for item in saved_networks
+        if item.get("active", True)
+    }
+    for subnet in (node for node in nodes.values() if node.get("kind") == "subnet"):
+        name = names_by_cidr.get(str(subnet.get("network") or ""))
+        if not name:
+            continue
+        subnet["saved_network_name"] = name
+        subnet["label"] = f"{name} · {subnet['network']}"
 
 
 def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
@@ -1507,7 +1522,7 @@ def add_membership_edges(nodes: dict[str, dict], edges: dict[tuple[str, str, str
 
 
 def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
-    """Retain scanned router/firewall addresses in their owning subnet summary."""
+    """Retain scanned router/firewall/switch addresses in their owning subnet summary."""
     infrastructure_kinds = {"device", "gateway"}
     scanned_devices = [
         node for node in nodes.values()
@@ -1563,6 +1578,12 @@ def build_topology() -> dict:
     annotate_os_inferences(nodes)
     add_membership_edges(nodes, edges)
     annotate_subnet_scan_observations(nodes)
+    try:
+        from app.saved_networks import list_saved_networks
+
+        apply_saved_network_names(nodes, list_saved_networks(DB_PATH))
+    except sqlite3.Error as exc:
+        warnings.append(f"Saved Network names could not be loaded for the map: {exc}")
     node_list = sorted(
         nodes.values(),
         key=lambda item: (

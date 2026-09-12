@@ -22,6 +22,11 @@ ip route 0.0.0.0 0.0.0.0 192.0.2.1
 Internet 10.80.0.2 5 0011.2233.4455 ARPA GigabitEthernet0/1
 vlan 80
  name USERS
+interface GigabitEthernet0/2
+ switchport mode access
+ switchport access vlan 80
+ spanning-tree portfast
+ channel-group 1 mode active
 access-list 101 permit tcp any host 10.80.0.10 eq 443
 ip nat inside source list 1 interface GigabitEthernet0/0 overload
 object network WEB_SERVER
@@ -61,6 +66,9 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["routes"][0]["route_type"] == "default"
     assert result["neighbors"][0]["ip"] == "10.80.0.2"
     assert result["vlans"][0]["evidence"] == "vlan 80"
+    assert result["counts"]["switching"] >= 4
+    assert any("switchport access vlan 80" in item["evidence"] for item in result["switching"])
+    assert any("channel-group 1" in item["evidence"] for item in result["switching"])
     assert "access-list 101" in result["firewall_acl"][0]["evidence"]
     assert "ip nat inside" in result["nat"][0]["evidence"]
     assert result["counts"]["network_objects"] == 2

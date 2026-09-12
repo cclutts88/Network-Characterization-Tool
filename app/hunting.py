@@ -237,6 +237,11 @@ def _configuration_categories(node: dict) -> list[tuple[str, list[str]]]:
         if interfaces:
             basis.append(f"{interfaces} configured interface{'s' if interfaces != 1 else ''}")
         categories.append(("Firewall, NAT & Policy", basis))
+    if role == "switch":
+        basis = ["retained device configuration identifies a switch"]
+        if interfaces:
+            basis.append(f"{interfaces} configured interface{'s' if interfaces != 1 else ''}")
+        categories.append(("Routing & Network Control Plane", basis))
     return categories
 
 

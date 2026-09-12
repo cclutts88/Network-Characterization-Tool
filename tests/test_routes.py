@@ -412,6 +412,62 @@ def test_unifi_gateway_preview_uses_guarded_read_only_linux_collection_without_s
     assert "Command unavailable or returned a non-zero status" in collection
 
 
+def test_cisco_switch_preview_uses_switch_specific_read_only_evidence_commands():
+    body = device_password_plan()
+    body.update({"vendor": "cisco", "device_type": "switch"})
+
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    commands = response.json()["commands"]
+    assert "show interfaces switchport" in commands
+    assert "show vlan brief" in commands
+    assert "show mac address-table" in commands
+    assert "show spanning-tree" in commands
+    assert "show etherchannel summary" in commands
+    assert "show power inline" in commands
+    assert "show cdp neighbors detail" in commands
+
+
+def test_juniper_and_unifi_switch_profiles_cover_switching_evidence():
+    with TestClient(app) as client:
+        juniper = client.post(
+            "/api/device-configs/preview",
+            json={**device_password_plan(), "vendor": "juniper", "device_type": "switch"},
+        )
+        unifi = client.post(
+            "/api/device-configs/preview",
+            json={**device_password_plan(), "vendor": "unifi", "device_type": "switch"},
+        )
+
+    assert juniper.status_code == 200
+    assert "show ethernet-switching table" in juniper.json()["commands"]
+    assert "show spanning-tree bridge" in juniper.json()["commands"]
+    assert "show lacp interfaces" in juniper.json()["commands"]
+    assert unifi.status_code == 200
+    assert "bridge vlan show" in unifi.json()["commands"]
+    assert "bridge fdb show" in unifi.json()["commands"]
+    assert unifi.json()["transfer_method"] == "ssh_stdout"
+
+
+def test_switch_profile_rejects_vendors_without_a_switch_command_set():
+    with TestClient(app) as client:
+        rejected = client.post(
+            "/api/device-configs/preview",
+            json={**device_password_plan(), "vendor": "vyos", "device_type": "switch"},
+        )
+        capabilities = client.get("/api/device-configs/vendors")
+
+    assert rejected.status_code == 422
+    assert "does not provide a switch collection profile" in str(rejected.json())
+    assert capabilities.status_code == 200
+    assert capabilities.json()["device_types_by_vendor"]["vyos"] == ["router", "firewall"]
+    assert capabilities.json()["device_types_by_vendor"]["cisco"] == [
+        "router", "firewall", "switch"
+    ]
+
+
 def test_key_preview_never_claims_a_remote_temporary_file_workflow():
     body = device_password_plan()
     body.update({"authentication_mode": "key", "key_path": "/keys/operator-key"})

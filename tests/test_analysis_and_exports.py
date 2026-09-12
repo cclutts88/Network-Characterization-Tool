@@ -9,6 +9,7 @@ from app.network_map import (
     add_edge,
     add_membership_edges,
     annotate_subnet_scan_observations,
+    apply_saved_network_names,
     apply_subnet_zone,
     configuration_network_candidates,
     configuration_devices,
@@ -203,6 +204,27 @@ set interfaces ge-0/0/3 unit 0 family inet address 10.60.0.1/24
     apply_subnet_zone(subnet, "OPERATIONS-LAN")
     assert subnet["label"] == "OPERATIONS-LAN · 10.40.0.0/24"
     assert subnet["zone_names"] == ["OPERATIONS-LAN"]
+
+
+def test_saved_network_name_labels_matching_map_subnet_without_hiding_cidr():
+    subnet = ensure_subnet_node({}, "10.40.0.0/24")
+    apply_subnet_zone(subnet, "OPERATIONS-LAN")
+
+    apply_saved_network_names(
+        {subnet["id"]: subnet},
+        [{"name": "Plant Operations", "cidr": "10.40.0.0/24", "active": True}],
+    )
+
+    assert subnet["label"] == "Plant Operations · 10.40.0.0/24"
+    assert subnet["saved_network_name"] == "Plant Operations"
+    assert subnet["zone_names"] == ["OPERATIONS-LAN"]
+
+
+def test_switch_role_promotes_scanned_ip_to_map_device():
+    node = ensure_ip_node({}, "10.40.0.2", role="switch")
+
+    assert node["kind"] == "device"
+    assert node["role"] == "switch"
 
 
 def test_configuration_parser_associates_hardware_addresses_with_interfaces():

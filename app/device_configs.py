@@ -22,7 +22,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 CONFIG_DIR = DATA_DIR / "device-configs"
@@ -50,7 +50,7 @@ READ_ONLY_FILTER_PREFIXES = {
 }
 
 VENDORS = ("vyos", "cisco", "juniper", "pfsense", "unifi")
-DEVICE_TYPES = ("router", "firewall")
+DEVICE_TYPES = ("router", "firewall", "switch")
 
 TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
     "vyos": {
@@ -102,6 +102,28 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show lldp neighbors detail",
             "show access-list",
         ),
+        "switch": (
+            "terminal length 0",
+            "show version",
+            "show running-config",
+            "show ip interface brief",
+            "show interfaces status",
+            "show interfaces description",
+            "show interfaces switchport",
+            "show interfaces trunk",
+            "show vlan brief",
+            "show mac address-table",
+            "show spanning-tree summary",
+            "show spanning-tree",
+            "show etherchannel summary",
+            "show port-channel summary",
+            "show power inline",
+            "show ip arp",
+            "show ipv6 neighbors",
+            "show cdp neighbors detail",
+            "show lldp neighbors detail",
+            "show ip route",
+        ),
     },
     "juniper": {
         "router": (
@@ -126,6 +148,23 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show lldp neighbors detail",
             "show security policies",
             "show firewall",
+        ),
+        "switch": (
+            "show version",
+            "show configuration | display set",
+            "show interfaces terse",
+            "show interfaces descriptions",
+            "show ethernet-switching interfaces detail",
+            "show ethernet-switching table",
+            "show vlans detail",
+            "show spanning-tree bridge",
+            "show spanning-tree interface",
+            "show lacp interfaces",
+            "show poe interface all",
+            "show arp no-resolve",
+            "show ipv6 neighbors",
+            "show lldp neighbors detail",
+            "show route",
         ),
     },
     "pfsense": {
@@ -181,7 +220,28 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "nft list ruleset",
             "lldpcli show neighbors details",
         ),
+        "switch": (
+            "uname -a",
+            "cat /etc/os-release",
+            "ubnt-device-info",
+            "ip -details address show",
+            "ip -details link show",
+            "ip -4 route show table all",
+            "ip -6 route show table all",
+            "ip -4 neigh show",
+            "ip -6 neigh show",
+            "bridge link show",
+            "bridge vlan show",
+            "bridge fdb show",
+            "lldpcli show neighbors details",
+            "ss -lntup",
+        ),
     },
+}
+
+DEVICE_TYPES_BY_VENDOR = {
+    vendor: tuple(templates)
+    for vendor, templates in TEMPLATES.items()
 }
 
 router = APIRouter(prefix="/api/device-configs", tags=["device-configs"])
@@ -203,7 +263,7 @@ class DeviceConfigPlan(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
     originating_host: str = Field(min_length=1, max_length=255)
     vendor: Literal["vyos", "cisco", "juniper", "pfsense", "unifi"]
-    device_type: Literal["router", "firewall"]
+    device_type: Literal["router", "firewall", "switch"]
     device_address: str = Field(min_length=1, max_length=255)
     device_name: str | None = Field(default=None, max_length=100)
     username: str = Field(min_length=1, max_length=64)
@@ -212,6 +272,16 @@ class DeviceConfigPlan(BaseModel):
     authentication_mode: Literal["password_prompt", "key"] = "key"
     accountability_interface: str = Field(min_length=1, max_length=64)
     additional_commands: list[str] = Field(default_factory=list, max_length=MAX_ADDITIONAL_COMMANDS)
+
+    @model_validator(mode="after")
+    def validate_vendor_device_type(self) -> "DeviceConfigPlan":
+        if self.device_type not in TEMPLATES.get(self.vendor, {}):
+            supported = ", ".join(DEVICE_TYPES_BY_VENDOR.get(self.vendor, ()))
+            raise ValueError(
+                f"{self.vendor} does not provide a {self.device_type} collection profile; "
+                f"choose one of: {supported}"
+            )
+        return self
 
     @field_validator("operator", "reason", "originating_host", "device_address", "username")
     @classmethod
@@ -1058,6 +1128,16 @@ NETWORK_OBJECT_PATTERNS = (
     re.compile(r"^(?:host|subnet)\s+(?:\d{1,3}\.){3}\d{1,3}\b", re.I),
     re.compile(r"<(?:alias|network)>\b", re.I),
 )
+SWITCHING_PATTERNS = (
+    re.compile(r"\bswitchport\b", re.I),
+    re.compile(r"\b(?:mac\s+address-table|ethernet-switching\s+table|bridge\s+fdb)\b", re.I),
+    re.compile(r"\bspanning[- ]tree\b", re.I),
+    re.compile(r"\b(?:channel-group|port-channel|etherchannel|lacp|802\.3ad)\b", re.I),
+    re.compile(r"\b(?:power\s+inline|poe)\b", re.I),
+    re.compile(r"\b(?:interface-mode|port-mode)\s+(?:access|trunk)\b", re.I),
+    re.compile(r"\bvlan\s+members\b", re.I),
+    re.compile(r"^[0-9A-Fa-f:.]{11,17}\s+dev\s+[A-Za-z0-9_.:/-]+", re.I),
+)
 
 
 def device_collection_summary(run_id: str, config_dir: Path | None = None) -> dict:
@@ -1085,6 +1165,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     firewall_acl = _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS)
     nat = _evidence_lines(configuration_text, NAT_PATTERNS)
     network_objects = _evidence_lines(configuration_text, NETWORK_OBJECT_PATTERNS)
+    switching = _evidence_lines(configuration_text, SWITCHING_PATTERNS)
     commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
     routes = [
         {
@@ -1112,6 +1193,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "firewall_acl": len(firewall_acl),
             "nat": len(nat),
             "network_objects": len(network_objects),
+            "switching": len(switching),
             "commands": len(commands),
             "lines": len(configuration_text.splitlines()),
         },
@@ -1123,6 +1205,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         "firewall_acl": firewall_acl,
         "nat": nat,
         "network_objects": network_objects,
+        "switching": switching,
         "commands": commands,
         "configuration_text": configuration_text,
         "raw_output": raw_output,
@@ -1163,7 +1246,17 @@ def classify_ssh_failure(stderr: str, key_status: str) -> str:
 
 @router.get("/vendors")
 def vendors() -> dict:
-    return {"vendors": list(VENDORS), "device_types": list(DEVICE_TYPES), "templates": {k: list(v) for k, v in TEMPLATES.items()}}
+    return {
+        "vendors": list(VENDORS),
+        "device_types": list(DEVICE_TYPES),
+        "device_types_by_vendor": {
+            vendor: list(types) for vendor, types in DEVICE_TYPES_BY_VENDOR.items()
+        },
+        "templates": {
+            vendor: {device_type: list(commands) for device_type, commands in templates.items()}
+            for vendor, templates in TEMPLATES.items()
+        },
+    }
 
 
 @router.post("/preview")
@@ -1492,7 +1585,7 @@ async def upload_result(
     device_name: str = Form(""),
     result_file: UploadFile = File(...),
 ) -> dict:
-    """Import an existing router/firewall configuration result without contacting a device."""
+    """Import an existing router, firewall, or switch result without contacting a device."""
     values = {
         "operator": operator.strip(),
         "reason": reason.strip(),
@@ -1506,7 +1599,11 @@ async def upload_result(
     clean_device_name = device_name.strip()
     if len(clean_device_name) > 100:
         raise HTTPException(status_code=422, detail="Device name is limited to 100 characters")
-    if vendor not in VENDORS or device_type not in DEVICE_TYPES:
+    if (
+        vendor not in VENDORS
+        or device_type not in DEVICE_TYPES
+        or device_type not in TEMPLATES.get(vendor, {})
+    ):
         raise HTTPException(status_code=422, detail="Choose a supported vendor and device type")
     if not HOST_RE.fullmatch(values["device_address"]):
         raise HTTPException(status_code=422, detail="Use a hostname or IP address without shell characters")

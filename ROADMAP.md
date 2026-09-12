@@ -144,6 +144,17 @@ within Reachability.
   directly through SSH, tolerate unavailable version-specific utilities while
   retaining their status, parse Linux interface and route evidence into Device
   Analysis and Map, and keep EdgeRouter on the existing VyOS path.
+- [x] Add **Switch** as a first-class Device collection type instead of relying
+  on router profiles. Provide vendor/platform capability choices so unsupported
+  combinations are disabled rather than sending inappropriate commands.
+- [x] Add guarded read-only switch profiles for Cisco IOS / IOS-XE / NX-OS,
+  Juniper EX, and UniFi switches. Collect version and configuration plus VLANs,
+  access/trunk mode, interface status and descriptions, MAC address tables,
+  spanning tree, link aggregation, PoE status where supported, and LLDP/CDP.
+- [ ] Parse switch evidence into Device Analysis and Map so learned MACs,
+  VLAN membership, uplinks, port channels, and neighbor relationships can refine
+  endpoint placement. Retain per-command success/failure because model and
+  software-version command support varies.
 - [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [x] Highlight search results, step forward and backward through matches, fit
   the active match, and optionally isolate matching topology branches.
@@ -195,6 +206,12 @@ within Reachability.
   to the anchored device. Keep the marker aligned with that uplink during device
   movement, zoom, and pan, and hide the WAN presentation when its device is not
   visible.
+- [x] Let an analyst designate a discovered device or host as the External WAN
+  gateway, promote it to the top WAN uplink, and retain that private
+  presentation choice with saved layouts.
+- [x] Let analysts hide one or several Map objects without deleting evidence,
+  list them in a collapsible Hidden objects section, and restore objects
+  individually or all at once.
 - [x] Present interface connection details as stacked, zoom-aware labels with a
   concise interface and IP summary plus the complete relationship and evidence
   in hover text.
@@ -221,6 +238,11 @@ within Reachability.
   device identity.
 - [x] Add named private layouts that persist in the current analyst's browser,
   restore the complete presentation, and can be replaced or deleted.
+- [x] Add Direct and Right-angle trunks connection styles so analysts can switch
+  between compact web lines and conventional vertical-drop/horizontal-backbone
+  diagram presentation without changing topology evidence.
+- [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
+  the Map while retaining each CIDR as the stable technical identifier.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst
   workspace and permissions model is introduced.
 

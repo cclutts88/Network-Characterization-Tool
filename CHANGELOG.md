@@ -2,6 +2,23 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added an analyst-local External WAN gateway designation that promotes a
+  selected device or discovered host to the top WAN uplink and preserves the
+  choice with private saved Map layouts.
+- Added reversible object hiding, multi-object hiding, and a collapsible Hidden
+  objects list with individual restore and Restore all controls. Hidden objects
+  remain in the underlying evidence.
+- Map subnet titles now prefer matching analyst-assigned Saved Network names
+  while retaining the CIDR on the map.
+- Added Direct and Right-angle trunks Map line styles. The right-angle option
+  creates vertical drops and horizontal backbones while preserving the same
+  topology evidence, hover detail, undo history, and private layout storage.
+- Added Switch as a first-class Device collection type for Cisco, Juniper, and
+  UniFi, with guarded vendor-specific read-only profiles for VLAN, port,
+  forwarding-table, spanning-tree, aggregation, PoE, neighbor, and routing
+  evidence. Unsupported VyOS and pfSense switch combinations are blocked.
+- Added structured Switching evidence to Device history, Device Analysis, and
+  device-to-device comparison.
 - Added conservative evidence-based OS inference across Analyze, Hunt, and Map.
   Inferences include a confidence level and concise service/device evidence,
   while direct Nmap OS identification remains authoritative and unchanged.
