@@ -1509,7 +1509,7 @@ document.getElementById('analysisHistoryRefresh')?.addEventListener('click',load
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return operator_page()
+    return device_config_page()
 
 @app.get('/operator')
 def operator():

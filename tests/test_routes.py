@@ -22,14 +22,18 @@ ROUTE_XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2
 
 def test_primary_pages_and_profiles_are_available():
     with TestClient(app) as client:
-        scan_page = client.get("/")
+        device_page = client.get("/")
+        scan_page = client.get("/scans")
         analysis_page = client.get("/analysis")
         profiles = client.get("/api/scan-profiles")
 
+    assert device_page.status_code == 200
+    assert "Build a collection plan" in device_page.text
     assert scan_page.status_code == 200
     assert "Build scan" in scan_page.text
     assert analysis_page.status_code == 200
-    assert "Previous scans" in analysis_page.text
+    assert "Compare scans" in analysis_page.text
+    assert "Previous scans" not in analysis_page.text
     assert profiles.status_code == 200
     assert {item["profile_id"] for item in profiles.json()} >= {
         "builtin-standard",

@@ -2,12 +2,13 @@
 
 The application direction is:
 
-**Nmap → Net Devices → Analysis → Hunt → Map → Reachability / Hardening**
+**Device → Nmap → Analyze → Hunt → Map → Reachability / Hardening**
 
-Nmap and Net Devices are collection sources. Analysis interprets and correlates
-their results. Hunt focuses analyst attention, Map visualizes selected results,
-and Reachability evaluates possible communication paths. Hardening Validation is
-an optional future mode within Reachability.
+Device configuration establishes the network core and candidate subnets before
+Nmap scanning. Analyze interprets retained scan and device evidence, Hunt focuses
+analyst attention, Map visualizes selected results, and Reachability evaluates
+possible communication paths. Hardening Validation is an optional future mode
+within Reachability.
 
 ## Release status
 
@@ -120,6 +121,15 @@ an optional future mode within Reachability.
 
 ### Release 10 — Advanced Map Usability — In progress
 
+- [x] Reorder the primary workflow as Device, Nmap, Analyze, Hunt, and Map and
+  make Device the default NCT landing page so subnet evidence can guide scans.
+- [x] Compact the Map inventory counts, remove Relationships and Evidence
+  records from the visual summary, and make the complete summary collapsible.
+- [x] Move Expand workspace into a sticky top-center control that remains in the
+  same predictable position for entering and exiting the mission workspace.
+- [x] Make Analyze open directly on the selected scan results without jumping
+  into comparison output; replace the large Previous scans panel with a compact
+  top comparison selector that stays collapsed until requested.
 - [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [x] Highlight search results, step forward and backward through matches, fit
   the active match, and optionally isolate matching topology branches.

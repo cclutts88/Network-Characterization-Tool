@@ -306,11 +306,11 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "openSearchSploitMatch" in html
     assert "contains no specific product/version fingerprints to search" in html
     assert "Service/version detection enabled" in html
-    assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
+    assert '/hunting?run=${encodeURIComponent(runId)}' in analysis_html
 
 
-def test_primary_navigation_orders_nmap_device_analyze_hunt_and_map():
-    expected = [">Nmap</a>", ">Device</a>", ">Analyze</a>", ">Hunt</a>", ">Map</a>"]
+def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():
+    expected = [">Device</a>", ">Nmap</a>", ">Analyze</a>", ">Hunt</a>", ">Map</a>"]
     for page in (operator_page(), analysis_page(), device_config_page(), hunting_page(), network_map_page()):
         html = page.body.decode()
         positions = [html.index(label) for label in expected]
@@ -514,8 +514,17 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function nodeDimensions" in html
     assert "w:250,h:68" in html
     assert "interfaceCount" in html
+    assert 'id="mapSummary" open' in html
+    assert 'id="summaryCompact"' in html
+    assert '.summary-panel>summary::before' in html
+    assert '.summary-panel[open]>summary::before' in html
+    assert 'id="edgeCount"' not in html
+    assert 'id="sourceCount"' not in html
     assert ".workspace>aside { position:sticky" in html
     assert 'id="toggleWorkspace"' in html
+    assert 'class="workspace-toggle-dock"' in html
+    assert '.workspace-toggle-dock{position:sticky;top:126px' in html
+    assert 'body.map-expanded .workspace-toggle-dock{position:fixed;top:14px;left:50%' in html
     assert 'id="toggleDetails"' in html
     assert 'class="details-control"' in html
     assert 'id="workspaceSize"' in html
@@ -604,7 +613,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "edge.relation==='topology_neighbor'" in html
 
 
-def test_new_and_historical_results_share_the_same_renderer():
+def test_automated_and_imported_results_share_the_same_renderer():
     html = analysis_page().body.decode()
     assert "renderAnalysis(item.analysis" in html
     assert "renderAnalysis(data.analysis" in html
@@ -612,24 +621,27 @@ def test_new_and_historical_results_share_the_same_renderer():
     assert "renderAnalysisWarnings" in html
     assert "Analysis cautions" in html
     assert "prepareRunComparison" in html
-    assert "Select one more automated scan" in html
+    assert "Comparison opened with the selected scan as the later scan" in html
+    assert "$('comparisonPanel').scrollIntoView({behavior:'smooth',block:'start'})" in html
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
     assert "compactExportLabel" in html
     assert "`${currentLabel}-hosts.csv`" in html
     assert "`${currentLabel}-ports.csv`" in html
     assert "MAC / vendor" in html
-    assert "Automatic same-scope comparison" in html
-    assert 'id="autoCompareResult"' in html
-    assert "/comparison" in html
+    assert 'id="comparisonPanel" class="panel comparison-panel"' in html
+    assert 'id="comparisonBaseline"' in html
+    assert 'id="comparisonCurrent"' in html
+    assert "Comparison stays out of the way until you need it" in html
+    assert "await openRun(runId);await candidatePromise" in html
     assert "coverage_warnings" in html
-    assert 'id="automatedHistory"' in html
-    assert "Compare selected automated scans" in html
+    assert 'id="comparisonResult"' in html
+    assert ">Compare scans</button>" in html
     assert "/api/scan-comparisons/candidates" in html
     assert "/api/scan-comparisons/compare" in html
-    assert 'class="panel previous-scans-panel"' in html
-    assert ".previous-scans-panel{height:560px;overflow-y:auto" in html
-    assert "Scroll within this window for older scans" in html
+    assert "Previous scans" not in html
+    assert 'id="automatedHistory"' not in html
+    assert 'class="panel previous-scans-panel"' not in html
     assert "Affected hosts and evidence" in html
     assert "Port state, service, product, or version changes" in html
     assert "Traceroute path change" in html

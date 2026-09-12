@@ -2,6 +2,18 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Reordered the primary workflow to Device, Nmap, Analyze, Hunt, and Map, and
+  made Device the default landing page so network-device and subnet evidence
+  naturally precedes scan construction.
+- Replaced the Map's large count cards with a compact, collapsible network
+  inventory summary and removed Relationships and Evidence records from that
+  visual header.
+- Moved Expand workspace to a sticky top-center control that stays available in
+  the same location as Exit expanded workspace.
+- Changed Analyze actions to open directly on the selected scan results instead
+  of automatically jumping into comparison output. Comparison now lives in a
+  compact collapsible section near the top with simple earlier/later selectors,
+  replacing the large Previous scans panel.
 - Added an expanded map workspace that uses the available browser window and
   returns to the standard workspace with its button or Escape.
 - Kept subnet endpoints collapsed by default and added individual-line and

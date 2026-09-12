@@ -27,7 +27,7 @@ def operator_page() -> HTMLResponse:
 <body>
   <header>
     <div class="header-workspace"><h1 class="sr-only">Nmap</h1><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div></div>
-    <nav class="nav" aria-label="Primary"><a class="active" href="/scans" aria-current="page">Nmap</a><a href="/device-config">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/network-map">Map</a></nav>
+    <nav class="nav" aria-label="Primary"><a href="/device-config">Device</a><a class="active" href="/scans" aria-current="page">Nmap</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/network-map">Map</a></nav>
     <div class="activity-origin-banner"><strong>Network activity origin</strong> · All scan traffic started here originates from the NCT host at <code class="activity-origin-host">this host</code>.</div>
   </header>
   <main>
