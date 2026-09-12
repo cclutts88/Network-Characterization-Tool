@@ -26,6 +26,24 @@
   anchoring it inside the map canvas border. Expanded mode starts with the panel
   hidden and provides Show details / Hide details without letting it escape the
   map area at narrower browser widths.
+- Moved the expanded-workspace details toggle to the map's upper-right control
+  area and made the SVG coordinate space follow the expanded canvas aspect ratio,
+  allowing the full map width to be used for layout, dragging, and panning.
+- Replaced the expanded map's fixed height estimate with a flexible canvas that
+  consumes all remaining space down to the workspace's bottom border.
+- Expanded the SVG coordinate boundary itself to match the entire visible canvas
+  at its current aspect ratio, eliminating inactive space to the right and below
+  the former fixed 1120-by-720 map boundary.
+- Made expanded workspace the topology's 1:1 working surface and retained that
+  coordinate extent when returning to the standard form, where the same layout
+  is scaled down as an overview instead of being rebuilt or rearranged.
+- Kept Show details / Hide details independent of map scale so opening the
+  floating panel never changes an expanded 100% workspace into a fitted view.
+- Added a Large network workspace option providing four times the screen area
+  (twice the width and twice the height) at 100%, while standard mode retains a
+  fitted overview of the selected mission workspace.
+- Changed Fit to Fit devices, calculating the visible node boundary so a sparse
+  topology fills the viewport without sacrificing unused mission workspace.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

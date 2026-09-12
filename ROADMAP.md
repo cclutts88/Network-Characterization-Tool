@@ -125,6 +125,18 @@ an optional future mode within Reachability.
 - [x] Keep the fixed-height map as the default workspace, with an operator option
   to expand it into a full-width workspace and show or hide a floating details
   panel anchored inside the map canvas border.
+- [x] Let the expanded map use its complete visible width for node placement and
+  keep the details toggle with the map controls instead of the page toolbar.
+- [x] Size the expanded canvas from the actual remaining vertical space so its
+  full width and height remain usable across browser window sizes.
+- [x] Expand the SVG coordinate boundary with the visible canvas so every part of
+  the expanded workspace supports node placement, dragging, and panning.
+- [x] Treat expanded Map as the canonical 1:1 topology workspace and preserve its
+  layout as a scaled overview when returning to the smaller standard viewport.
+- [x] Offer a four-times-area large-network workspace for missions requiring more
+  topology construction room while preserving 100% scale and pan navigation.
+- [x] Fit the viewport to the actual device and subnet boundary instead of empty
+  mission-workspace borders when the topology is sparse.
 - [x] Add per-subnet endpoint display modes: collapsed by default, individual
   endpoint lines, or an organized endpoint-group box.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP

@@ -353,8 +353,12 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="zoomOut"' in html
     assert 'id="zoomIn"' in html
     assert 'id="zoomFit"' in html
+    assert ">Fit devices</button>" in html
     assert "function setZoom" in html
     assert "function fitMap" in html
+    assert "function currentContentBounds" in html
+    assert "currentPositions=new Map()" in html
+    assert "currentPositions=positions" in html
     assert "function enableCanvasNavigation" in html
     assert "event.deltaY<0?1.12:.89" in html
     assert "contentX=(canvas.scrollLeft+point.x)/previous" in html
@@ -373,6 +377,12 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert ".workspace>aside { position:sticky" in html
     assert 'id="toggleWorkspace"' in html
     assert 'id="toggleDetails"' in html
+    assert 'class="details-control"' in html
+    assert 'id="workspaceSize"' in html
+    assert "Large network · 4× area" in html
+    assert ".workspace.map-expanded .details-control" in html
+    assert ".workspace.map-expanded .map-shell { display:flex; flex:1 1 auto" in html
+    assert ".workspace.map-expanded .canvas { flex:1 1 auto; height:auto; min-height:0" in html
     assert "workspace.map-expanded" in html
     assert "workspace.map-expanded.details-collapsed" in html
     assert "workspace.map-expanded.details-collapsed .map-shell>#details" in html
@@ -381,6 +391,18 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "shell.appendChild(details)" in html
     assert "workspace.appendChild(details)" in html
     assert "function toggleDetailsVisibility" in html
+    assert "requestAnimationFrame(syncExpandedDetailsBounds)" in html
+    assert "availableWidth=Math.max(canvas.clientWidth-22,1)" in html
+    assert "width=Math.max(width,availableWidth)" in html
+    assert "height=Math.max(height,availableHeight)" in html
+    assert "if(width/height<canvasRatio)width=Math.ceil(height*canvasRatio)" in html
+    assert "expandedMapExtent=null" in html
+    assert "workspaceAreaScale=1" in html
+    assert "dimensionScale=Math.sqrt(workspaceAreaScale)" in html
+    assert "$('workspaceSize').onchange" in html
+    assert "expandedMapExtent={width,height}" in html
+    assert "else if(expandedMapExtent)" in html
+    assert "if(expanded){setZoom(1);centerMap();}else fitMap()" in html
     assert "toggleDetailsVisibility(false)" in html
     assert "Show details" in html
     assert "Hide details" in html
