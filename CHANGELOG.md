@@ -22,6 +22,10 @@
 - Color-coded grouped host rows by observed OS family, with exact OS text and a
   legend so a mixed Windows, Linux, macOS, network, other, or unknown pool is
   immediately distinguishable.
+- Kept expanded-workspace details available as an optional floating panel while
+  anchoring it inside the map canvas border. Expanded mode starts with the panel
+  hidden and provides Show details / Hide details without letting it escape the
+  map area at narrower browser widths.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

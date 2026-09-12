@@ -372,7 +372,18 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "interfaceCount" in html
     assert ".workspace>aside { position:sticky" in html
     assert 'id="toggleWorkspace"' in html
+    assert 'id="toggleDetails"' in html
     assert "workspace.map-expanded" in html
+    assert "workspace.map-expanded.details-collapsed" in html
+    assert "workspace.map-expanded.details-collapsed .map-shell>#details" in html
+    assert ".workspace.map-expanded .map-shell>#details" in html
+    assert "function syncExpandedDetailsBounds" in html
+    assert "shell.appendChild(details)" in html
+    assert "workspace.appendChild(details)" in html
+    assert "function toggleDetailsVisibility" in html
+    assert "toggleDetailsVisibility(false)" in html
+    assert "Show details" in html
+    assert "Hide details" in html
     assert "Exit expanded workspace" in html
     assert "event.key==='Escape'" in html
     assert 'id="groupAll"' not in html
