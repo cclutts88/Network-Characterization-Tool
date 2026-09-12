@@ -541,6 +541,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Individual connection lines" in html
     assert "Grouped inside subnet" in html
     assert "function groupedEndpointSections" in html
+    assert "numeric:true,sensitivity:'base'" in html
     assert "function groupedNodeDimensions" in html
     assert "return [...grouped].map" in html
     assert "return 'IP addresses'" in html

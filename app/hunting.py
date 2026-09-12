@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 import ipaddress
 
 from app.comparison import canonical_host_key
+from app.ip_sort import ip_sort_key
 
 
 DATASET_RULES = {
@@ -284,12 +285,12 @@ def _summarize_hunting(
     hosts: list[dict], findings: list[dict], *, source: dict, warnings: list[str]
 ) -> dict:
     findings.sort(key=lambda item: (
-        item.get("ip") or item.get("hostname") or "",
+        ip_sort_key(item.get("ip") or item.get("hostname")),
         CATEGORY_ORDER.index(item["category"]),
         int(item.get("port") or 0),
         item.get("protocol") or "",
     ))
-    hosts.sort(key=lambda item: item.get("ip") or item.get("hostname") or "")
+    hosts.sort(key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     category_counts = Counter(item["category"] for item in findings)
     state_counts = Counter(
         state for item in findings for state in item["evidence_states"]

@@ -25,6 +25,7 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
+from app.ip_sort import ip_sort_key
 from app.searchsploit import (
     MAX_ARCHIVE_BYTES,
     enrich_hunting_with_searchsploit,
@@ -652,6 +653,7 @@ def parse_xml(content: bytes) -> dict:
             "trace": trace,
         })
 
+    hosts.sort(key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     up_hosts = [host for host in hosts if host["state"] == "up"]
     reported_total = int(hosts_stats.get("total", "0")) if hosts_stats is not None else len(hosts)
     discovery_reason_counts = Counter(
@@ -748,7 +750,7 @@ def parse_xml(content: bytes) -> dict:
         "warnings": warnings,
         "hosts": hosts,
         "peer_groups": [
-            {"open_ports": signature, "hosts": values}
+            {"open_ports": signature, "hosts": sorted(values, key=ip_sort_key)}
             for signature, values in sorted(peer_groups.items())
         ],
         "os_groups": os_groups,

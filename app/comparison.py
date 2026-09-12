@@ -9,6 +9,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Iterable
 
+from app.ip_sort import ip_sort_key
+
 
 TERMINAL_STATES = {
     "completed",
@@ -276,7 +278,7 @@ def merge_analyses(analyses: Iterable[dict]) -> dict:
                 for field, value in host.items():
                     if field not in {"ports", "observed_ports"} and value not in (None, "", [], {}):
                         merged[field] = value
-    values = [hosts[key] for key in sorted(hosts)]
+    values = sorted(hosts.values(), key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     summary = _summarize_hosts(values)
     first, last = analysis_list[0], analysis_list[-1]
     return {
@@ -476,10 +478,10 @@ def compare_analyses(
         for host in after_analysis.get("hosts", []) or []
         if canonical_host_key(host)
     }
-    added_keys = sorted(set(after) - set(before))
-    removed_keys = sorted(set(before) - set(after))
+    added_keys = sorted(set(after) - set(before), key=ip_sort_key)
+    removed_keys = sorted(set(before) - set(after), key=ip_sort_key)
     changed = []
-    for key in sorted(set(before) & set(after)):
+    for key in sorted(set(before) & set(after), key=ip_sort_key):
         old_host, new_host = before[key], after[key]
         old_ports = _port_inventory(old_host)
         new_ports = _port_inventory(new_host)

@@ -170,6 +170,8 @@ an optional future mode within Reachability.
   address, hostname, or operating system, with useful counts and breakdowns for
   the selected investigation view; IP is one sorted pool, while subgroup
   headings appear only for actual hostname or OS differences.
+- [x] Use numeric IP-address ordering across scan analysis, Hunt, comparisons,
+  device candidates, and Map host collections instead of lexical text order.
 - [x] Let analysts resize grouped endpoint boxes and reflow their host pools
   across the available columns without changing shared evidence.
 - [x] Put grouped-versus-individual and expand-versus-collapse toggles on each

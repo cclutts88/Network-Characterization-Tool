@@ -90,6 +90,9 @@
   type is inferred, leaving color available for analytical overlays.
 - Added explanatory hover text to the Map search navigation arrows and Isolate
   control.
+- Standardized host and network presentation on numeric IP ordering across scan
+  analysis, Hunt, comparisons, device candidates, and Map collections, including
+  IPv4, IPv6, CIDR, and canonical host identifiers.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

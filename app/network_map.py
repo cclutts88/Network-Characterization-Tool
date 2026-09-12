@@ -19,6 +19,7 @@ from app.mac_enrichment import (
     parse_neighbor_text,
 )
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
+from app.ip_sort import ip_sort_key
 from app.topology_neighbors import parse_topology_neighbors
 
 
@@ -1518,7 +1519,7 @@ def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
                         "source_url": observation.get("source_url"),
                     }
                 )
-        observations.sort(key=lambda item: (item["ip"], item["label"]))
+        observations.sort(key=lambda item: (ip_sort_key(item["ip"]), item["label"].casefold()))
         subnet["infrastructure_observations"] = observations
         subnet["infrastructure_count"] = len(observations)
 
@@ -1534,7 +1535,11 @@ def build_topology() -> dict:
     annotate_subnet_scan_observations(nodes)
     node_list = sorted(
         nodes.values(),
-        key=lambda item: ({"device": 0, "gateway": 1, "interface": 2, "subnet": 3, "host": 4}.get(item["kind"], 5), item["label"]),
+        key=lambda item: (
+            {"device": 0, "gateway": 1, "interface": 2, "subnet": 3, "host": 4}.get(item["kind"], 5),
+            ip_sort_key(item.get("ip") or item.get("network") or item.get("address") or item.get("label")),
+            str(item.get("label") or "").casefold(),
+        ),
     )
     for node in node_list:
         node["sources"].sort(key=lambda item: item.get("timestamp") or "", reverse=True)
