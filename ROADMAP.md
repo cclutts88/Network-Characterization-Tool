@@ -134,6 +134,8 @@ an optional future mode within Reachability.
   across the available columns without changing shared evidence.
 - [x] Put grouped-versus-individual and expand-versus-collapse toggles on each
   subnet box, with map-wide Expand all and Collapse all controls.
+- [x] Color-code grouped host rows by observed operating-system family while
+  retaining exact OS text and an Unknown OS treatment.
 - [ ] Add zoom-dependent detail and optional analytical overlays.
 - [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
 

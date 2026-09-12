@@ -399,6 +399,15 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function toggleGroupVisibility" in html
     assert "function setAllEndpointVisibility" in html
     assert "IP address (one sorted pool)" in html
+    assert "function endpointOsFamily" in html
+    assert "group-host-row os-${endpointOsFamily(host)}" in html
+    assert "Operating system: ${host.os||'Unknown OS'}" in html
+    assert "Windows host" in html
+    assert "Linux host" in html
+    assert "Unknown OS" in html
+    assert ".group-host-row.os-windows rect" in html
+    assert ".group-host-row.os-linux rect" in html
+    assert ".group-host-row.os-unknown rect" in html
     assert "function enableGroupedResize" in html
     assert "group-resize-handle" in html
     assert "Resize grouped boxes from the lower-right corner" in html
