@@ -130,6 +130,8 @@ within Reachability.
 - [x] Make Analyze open directly on the selected scan results without jumping
   into comparison output; replace the large Previous scans panel with a compact
   top comparison selector that stays collapsed until requested.
+- [x] Present original operator scan scopes and exclusion counts in Analyze
+  instead of exposing fragmented post-exclusion CIDRs as the main title.
 - [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [x] Highlight search results, step forward and backward through matches, fit
   the active match, and optionally isolate matching topology branches.

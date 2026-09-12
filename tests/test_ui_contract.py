@@ -626,6 +626,12 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
     assert "compactExportLabel" in html
+    assert "function readableScope" in html
+    assert "function analysisScopeLabel" in html
+    assert "item.display_name||'Automated scan analysis'" in html
+    assert "metadata.saved_networks" in html
+    assert "metadata.group?.scope?.excluded_address_count" in html
+    assert "item.coverage?.targets||item.scope?.targets" in html
     assert "`${currentLabel}-hosts.csv`" in html
     assert "`${currentLabel}-ports.csv`" in html
     assert "MAC / vendor" in html

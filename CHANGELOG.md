@@ -14,6 +14,9 @@
   of automatically jumping into comparison output. Comparison now lives in a
   compact collapsible section near the top with simple earlier/later selectors,
   replacing the large Previous scans panel.
+- Replaced fragmented effective-CIDR labels in Analyze and comparison selectors
+  with the operator's original scan scope plus a concise excluded-address count;
+  exact post-exclusion CIDRs remain retained as comparison evidence.
 - Added an expanded map workspace that uses the available browser window and
   returns to the standard workspace with its button or Escape.
 - Kept subnet endpoints collapsed by default and added individual-line and
