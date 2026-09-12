@@ -11,9 +11,9 @@ from app.ui import operator_page
 def test_scan_builder_is_one_page_with_requested_actions():
     html = operator_page().body.decode()
     assert '<h1 class="sr-only">Nmap</h1>' in html
-    assert "All scan activity originates from the NCT analyzer host" in html
-    assert 'id="trafficOriginValue"' in html
-    assert "updateTrafficOrigin" in html
+    assert "All scan activity originates from the NCT analyzer host" not in html
+    assert 'id="trafficOriginValue"' not in html
+    assert "updateTrafficOrigin" not in html
     assert 'id="reason"' not in html
     assert "NCT network characterization initiated through the operator workspace" in html
     assert html.index("Build scan") < html.index("Scan history")
@@ -141,8 +141,10 @@ def test_navigation_is_sticky_on_every_primary_page():
         html = page.body.decode()
         assert "position:sticky" in html
         assert "aria-label=\"Primary\"" in html
-        assert '<div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span>Network Characterization Tool</span></div>' in html
+        assert '<div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div>' in html
         assert "border-top:1px solid var(--accent)" in html
+        assert "font-size:40px" in html
+        assert "padding-top:6px!important" in html
 
 
 def test_device_configs_offer_reviewed_network_candidates():

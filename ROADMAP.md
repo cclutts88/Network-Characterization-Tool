@@ -104,6 +104,8 @@ an optional future mode within Reachability.
   checks, database validation, atomic replacement, and rollback retention.
 - [x] Display database source, version/update time, and previous-version rollback
   controls in the NCT interface.
+- [x] Complete the pre-map interface cleanup with a shared centered NCT brand,
+  emphasized acronym letters, compact navigation, and active-button page identity.
 
 ### Release 9 — Network Map Core Redesign — Planned as an independent release
 
