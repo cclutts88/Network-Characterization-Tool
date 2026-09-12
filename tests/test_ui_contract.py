@@ -627,6 +627,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "M7 15h16M15 7v16M7 15l3-2" in html
     assert "symbol-firewall" in html
     assert "symbol-switch" in html
+    assert "Switch-port placement evidence" in html
+    assert "switchport_learning" in html
+    assert "Learned forwarding entries" in html
     assert "symbol-wireless" in html
     assert "device-identity-inferred" in html
     assert "Confirmed from collected device configuration" in html

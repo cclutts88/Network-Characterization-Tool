@@ -57,6 +57,14 @@
   evidence. Unsupported VyOS and pfSense switch combinations are blocked.
 - Added structured Switching evidence to Device history, Device Analysis, and
   device-to-device comparison.
+- Expanded that switching evidence into structured Layer-2 ports,
+  access/native/allowed VLANs, learned MAC tables, port channels,
+  spanning-tree state, PoE state, and inferred uplinks, with honest
+  per-command completion, unavailable, or not-individually-reported status.
+- Correlated learned switch MAC entries to existing Nmap/MAC identities without
+  inventing IP addresses. Matching hosts retain attributable switch-port and
+  VLAN evidence, and Individual Map views can show confirmed switch-to-host
+  connections while grouped subnets remain uncluttered.
 - Added conservative evidence-based OS inference across Analyze, Hunt, and Map.
   Inferences include a confidence level and concise service/device evidence,
   while direct Nmap OS identification remains authoritative and unchanged.

@@ -362,6 +362,8 @@ def analyze_device_collection(
         "neighbors": summary.get("neighbors", []),
         "topology_neighbors": summary.get("topology_neighbors", []),
         "switching": summary.get("switching", []),
+        "switch_detail": summary.get("switch_detail", {}),
+        "command_results": summary.get("command_results", []),
         "saved_network_correlations": saved_matches,
         "nmap_host_correlations": nmap_matches,
         "review_items": review_items,

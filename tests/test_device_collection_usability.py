@@ -59,7 +59,7 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     result = device_collection_summary("d" * 32, config_dir=config_dir)
 
     assert result["source_filename"] == "uploaded-router-config.txt"
-    assert result["counts"]["interfaces"] == 1
+    assert result["counts"]["interfaces"] == 2
     assert result["interfaces"][0]["address"] == "10.80.0.1/24"
     assert result["counts"]["routes"] == 1
     assert result["routes"][0]["network"] == "0.0.0.0/0"
@@ -69,6 +69,10 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["counts"]["switching"] >= 4
     assert any("switchport access vlan 80" in item["evidence"] for item in result["switching"])
     assert any("channel-group 1" in item["evidence"] for item in result["switching"])
+    assert result["counts"]["switch_ports"] == 1
+    assert result["switch_detail"]["ports"][0]["interface"] == "GigabitEthernet0/2"
+    assert result["switch_detail"]["ports"][0]["access_vlan"] == 80
+    assert result["command_results"][0]["status"] == "not_individually_reported"
     assert "access-list 101" in result["firewall_acl"][0]["evidence"]
     assert "ip nat inside" in result["nat"][0]["evidence"]
     assert result["counts"]["network_objects"] == 2

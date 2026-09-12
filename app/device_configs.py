@@ -1156,9 +1156,12 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
 
     from app.mac_enrichment import parse_neighbor_text
     from app.network_map import parse_config_text
+    from app.switching import merge_switch_interfaces, parse_switch_evidence
     from app.topology_neighbors import parse_topology_neighbors
 
     interfaces, routes = parse_config_text(configuration_text)
+    switch_detail = parse_switch_evidence(configuration_text, manifest.get("commands", []))
+    interfaces = merge_switch_interfaces(interfaces, switch_detail)
     neighbors = parse_neighbor_text(configuration_text)
     topology_neighbors = parse_topology_neighbors(configuration_text)
     vlans = _evidence_lines(configuration_text, VLAN_PATTERNS)
@@ -1194,6 +1197,11 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "nat": len(nat),
             "network_objects": len(network_objects),
             "switching": len(switching),
+            "learned_macs": len(switch_detail["mac_table"]),
+            "switch_ports": len(switch_detail["ports"]),
+            "port_channels": len(switch_detail["port_channels"]),
+            "spanning_tree": len(switch_detail["spanning_tree"]),
+            "command_results": len(switch_detail["command_results"]),
             "commands": len(commands),
             "lines": len(configuration_text.splitlines()),
         },
@@ -1206,6 +1214,8 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         "nat": nat,
         "network_objects": network_objects,
         "switching": switching,
+        "switch_detail": switch_detail,
+        "command_results": switch_detail["command_results"],
         "commands": commands,
         "configuration_text": configuration_text,
         "raw_output": raw_output,

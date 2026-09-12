@@ -400,6 +400,48 @@ System Capabilities: Bridge Router
     assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
 
 
+def test_switch_mac_table_correlates_known_nmap_mac_to_physical_port(tmp_path, monkeypatch):
+    run_id = "b" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": run_id,
+        "operation": "configuration_pull",
+        "device_address": "10.80.0.2",
+        "device_name": "access-switch",
+        "vendor": "cisco",
+        "device_type": "switch",
+        "status": "completed",
+        "commands": ["show interfaces switchport", "show mac address-table"],
+        "created_at": "2026-09-12T20:00:00+00:00",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        """
+interface GigabitEthernet1/0/10
+ switchport mode access
+ switchport access vlan 80
+80 0011.2233.4455 DYNAMIC Gi1/0/10
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    source = {
+        "kind": "automated_nmap", "label": "Nmap", "timestamp": "2026-09-12T19:00:00+00:00", "url": "/scan.xml",
+    }
+    nodes, edges, warnings = {}, {}, []
+    host = ensure_ip_node(nodes, "10.80.0.25", mac="00:11:22:33:44:55", source=source)
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    switch = nodes["ip:10.80.0.2"]
+    assert switch["switching"]["mac_table"][0]["interface"] == "Gi1/0/10"
+    assert host["switchport_observations"][0]["switch_label"] == "access-switch"
+    link = next(edge for edge in edges.values() if edge["relation"] == "switchport_learning")
+    assert link["source"] == "interface:10.80.0.2:GigabitEthernet1-0-10"
+    assert link["target"] == "ip:10.80.0.25"
+    assert link["label"] == "Gi1/0/10 · VLAN 80 · learned MAC"
+
+
 def test_pfsense_self_arp_entry_does_not_spawn_endpoint(tmp_path, monkeypatch):
     run_id = "c" * 32
     run_dir = tmp_path / run_id

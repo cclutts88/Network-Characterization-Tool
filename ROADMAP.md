@@ -151,7 +151,7 @@ within Reachability.
   Juniper EX, and UniFi switches. Collect version and configuration plus VLANs,
   access/trunk mode, interface status and descriptions, MAC address tables,
   spanning tree, link aggregation, PoE status where supported, and LLDP/CDP.
-- [ ] Parse switch evidence into Device Analysis and Map so learned MACs,
+- [x] Parse switch evidence into Device Analysis and Map so learned MACs,
   VLAN membership, uplinks, port channels, and neighbor relationships can refine
   endpoint placement. Retain per-command success/failure because model and
   software-version command support varies.

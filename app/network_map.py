@@ -21,6 +21,7 @@ from app.mac_enrichment import (
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.ip_sort import ip_sort_key
 from app.os_inference import infer_os_identity, os_display
+from app.switching import interface_key, merge_switch_interfaces, parse_switch_evidence
 from app.topology_neighbors import parse_topology_neighbors
 
 
@@ -1273,6 +1274,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             node["state"] = "partial"
         parsed_devices.add(node["id"])
         interfaces, routes = parse_config_text(text)
+        switch_detail = parse_switch_evidence(text, manifest.get("commands", []))
+        interfaces = merge_switch_interfaces(interfaces, switch_detail)
         neighbors = parse_neighbor_text(text)
         topology_neighbors = parse_topology_neighbors(text)
         interfaces = [
@@ -1286,6 +1289,7 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
         ]
         node["interfaces"] = interfaces
         node["routes"] = routes
+        node["switching"] = switch_detail
         for interface in interfaces:
             address = valid_interface_address(interface.get("address"))
             if address:
@@ -1338,6 +1342,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                     source,
                 )
             interface_nodes[name] = interface_node
+            if interface.get("switching"):
+                interface_node["switching"] = interface["switching"]
             add_edge(
                 edges,
                 node["id"],
@@ -1437,6 +1443,71 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 observation.get("evidence"),
                 True,
             )
+            if local_interface:
+                local_key = interface_key(local_interface)
+                for switch_port in switch_detail.get("ports", []):
+                    if interface_key(switch_port.get("interface")) == local_key:
+                        switch_port["uplink"] = True
+                        switch_port["neighbor"] = (
+                            observation.get("neighbor_name")
+                            or observation.get("management_ip")
+                            or observation.get("chassis_id")
+                        )
+                        break
+        switch_source = source_record(
+            "switch_forwarding_table",
+            f"{manifest.get('vendor', 'device')} learned MAC table",
+            source["timestamp"],
+            evidence_url,
+        )
+        interface_nodes_by_key = {
+            interface_key(name): interface_node for name, interface_node in interface_nodes.items()
+        }
+        for observation in switch_detail.get("mac_table", []):
+            learned_mac = normalize_mac(observation.get("mac"))
+            if not learned_mac:
+                continue
+            candidates = []
+            for candidate in nodes.values():
+                if candidate["id"] == node["id"] or candidate.get("kind") in {"interface", "subnet"}:
+                    continue
+                candidate_macs = {normalize_mac(candidate.get("mac"))}
+                candidate_macs.update(
+                    normalize_mac(item.get("mac"))
+                    for item in candidate.get("mac_observations") or []
+                )
+                if learned_mac in candidate_macs:
+                    candidates.append(candidate)
+            if not candidates:
+                continue
+            origin = interface_nodes_by_key.get(interface_key(observation.get("interface"))) or node
+            for candidate in candidates:
+                add_source(candidate, switch_source)
+                port_observation = {
+                    **observation,
+                    "switch_id": node["id"],
+                    "switch_label": node.get("label"),
+                    "source_kind": switch_source["kind"],
+                    "source_label": switch_source["label"],
+                    "source_url": switch_source["url"],
+                    "timestamp": switch_source["timestamp"],
+                }
+                if port_observation not in candidate.setdefault("switchport_observations", []):
+                    candidate["switchport_observations"].append(port_observation)
+                label_parts = [observation.get("interface") or "switch port"]
+                if observation.get("vlan_id") is not None:
+                    label_parts.append(f"VLAN {observation['vlan_id']}")
+                label_parts.append("learned MAC")
+                add_edge(
+                    edges,
+                    origin["id"],
+                    candidate["id"],
+                    "switchport_learning",
+                    " · ".join(label_parts),
+                    "confirmed",
+                    observation.get("evidence"),
+                    True,
+                )
         for route in routes:
             network = route["network"]
             parsed_network = ipaddress.ip_network(network)
@@ -1644,6 +1715,9 @@ def build_topology() -> dict:
         ),
         "topology_neighbors": sum(
             1 for edge in edges.values() if edge.get("relation") == "topology_neighbor"
+        ),
+        "switchport_links": sum(
+            1 for edge in edges.values() if edge.get("relation") == "switchport_learning"
         ),
     }
     if not node_list:
