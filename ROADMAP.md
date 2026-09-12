@@ -386,13 +386,15 @@ within Reachability.
 
 ### Future extension — Evidence-Based OS Inference
 
-- [ ] Infer possible Windows, Linux, network-appliance, and other operating
+- [x] Infer possible Windows, Linux, network-appliance, and other operating
   system families from service fingerprints, banners, protocols, and retained
   device evidence when an authoritative OS identification is unavailable.
-- [ ] Mark inferred operating systems with distinct text styling, an explicit
+- [x] Mark inferred operating systems with distinct text styling, an explicit
   `inferred` label, confidence, and the evidence that contributed to the result.
-- [ ] Keep Nmap-detected and analyst-confirmed operating systems authoritative;
-  inferred values must never silently overwrite either source.
+- [x] Keep Nmap-detected operating systems authoritative; inferred values never
+  silently overwrite direct scanner evidence.
+- [ ] When analyst identity overrides are implemented, keep analyst-confirmed
+  operating systems authoritative over inferred values as well.
 - [ ] Let analysts confirm, dismiss, or investigate an inference while retaining
   its original evidence and audit history.
 

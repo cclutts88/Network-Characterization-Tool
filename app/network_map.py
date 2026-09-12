@@ -20,6 +20,7 @@ from app.mac_enrichment import (
 )
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.ip_sort import ip_sort_key
+from app.os_inference import infer_os_identity, os_display
 from app.topology_neighbors import parse_topology_neighbors
 
 
@@ -1543,6 +1544,15 @@ def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
         subnet["infrastructure_count"] = len(observations)
 
 
+def annotate_os_inferences(nodes: dict[str, dict]) -> None:
+    """Add non-destructive OS hints after all service and device evidence is merged."""
+    for node in nodes.values():
+        if node.get("kind") not in {"host", "device", "gateway"}:
+            continue
+        node["os_inference"] = infer_os_identity(node)
+        node["os_display"] = os_display(node)
+
+
 def build_topology() -> dict:
     nodes: dict[str, dict] = {}
     edges: dict[tuple[str, str, str], dict] = {}
@@ -1550,6 +1560,7 @@ def build_topology() -> dict:
     imported_count = imported_hosts(nodes, edges, warnings)
     automated_count = automated_scan_hosts(nodes, edges, warnings)
     config_count = configuration_devices(nodes, edges, warnings)
+    annotate_os_inferences(nodes)
     add_membership_edges(nodes, edges)
     annotate_subnet_scan_observations(nodes)
     node_list = sorted(

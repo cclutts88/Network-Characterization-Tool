@@ -141,6 +141,35 @@ def test_hunting_inventory_keeps_hosts_without_findings_and_builds_filter_facets
     }
 
 
+def test_hunting_exposes_service_based_os_inference_without_overwriting_os():
+    result = build_hunting_analysis({
+        "hosts": [{
+            "ip": "10.0.0.100",
+            "hostname": "",
+            "state": "up",
+            "os": "",
+            "os_group": "Unclassified",
+            "ports": [
+                port(135, "msrpc", "Microsoft Windows RPC"),
+                port(139, "netbios-ssn", "Microsoft Windows netbios-ssn"),
+                port(445, "microsoft-ds"),
+            ],
+        }]
+    })
+
+    host_item = result["hosts"][0]
+    assert host_item["os"] == ""
+    assert host_item["os_inference"]["family"] == "Windows"
+    assert host_item["os_filter"] == "Windows (inferred)"
+    assert result["facets"]["operating_systems"] == [{
+        "name": "Windows (inferred)", "host_count": 1,
+    }]
+    assert all(
+        finding["os_inference"]["family"] == "Windows"
+        for finding in result["findings"]
+    )
+
+
 def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
     newer = build_hunting_analysis(
         {"hosts": [host("10.0.0.10", [port(22, "ssh", "OpenSSH", "9.2")])]},

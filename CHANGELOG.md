@@ -2,6 +2,12 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added conservative evidence-based OS inference across Analyze, Hunt, and Map.
+  Inferences include a confidence level and concise service/device evidence,
+  while direct Nmap OS identification remains authoritative and unchanged.
+- Styled inferred OS families distinctly, exposed their basis on hover and in
+  details, included them in Hunt filtering/search, and preserved inference
+  fields in analysis CSV exports.
 - Added an inferred File Transfer finding for SSH fingerprints because SSH may
   expose SCP or SFTP. Direct `scp` or `sftp` identification remains observed
   evidence, while File Sharing stays reserved for SMB, NFS, AFP, and similar

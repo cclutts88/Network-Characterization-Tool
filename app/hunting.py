@@ -5,6 +5,7 @@ import ipaddress
 
 from app.comparison import canonical_host_key
 from app.ip_sort import ip_sort_key
+from app.os_inference import authoritative_os, infer_os_identity
 
 
 DATASET_RULES = {
@@ -274,6 +275,18 @@ def _device_type(host: dict, categories: set[str]) -> str:
     return "Unclassified"
 
 
+def _apply_host_os_identity(host: dict) -> None:
+    """Attach a display/filter identity while retaining the original OS fields."""
+    direct = authoritative_os(host)
+    inference = None
+    if not direct:
+        stored = host.get("os_inference")
+        inference = stored if isinstance(stored, dict) else infer_os_identity(host)
+    host["os_inference"] = inference
+    host["os_display"] = direct or (inference or {}).get("display") or "Unclassified"
+    host["os_filter"] = host["os_display"]
+
+
 def _facet_values(items: list[dict], field: str) -> list[dict]:
     counts = Counter(str(item.get(field) or "Unclassified") for item in items)
     return [
@@ -439,18 +452,20 @@ def build_hunting_analysis(
                 host_findings.append(finding)
         categories = {item["category"] for item in host_findings}
         subnet = _scope_subnet(host.get("ip"), subnets)
-        os_name = str(host.get("os") or "").strip()
         os_group = str(host.get("os_group") or "Unclassified").strip()
-        os_filter = os_name if os_name.lower() not in UNKNOWN_IDENTITY else os_group
-        if os_filter.lower() in UNKNOWN_IDENTITY:
-            os_filter = "Unclassified"
         device_type = _device_type(host, categories)
+        os_identity = dict(host)
+        os_identity["os_group"] = os_group
+        os_identity["device_type"] = device_type
+        _apply_host_os_identity(os_identity)
         source_refs = list((evidence or {}).get("evidence", {}).get("sources") or [])
         for finding in host_findings:
             finding.update({
                 "subnet": subnet,
                 "device_type": device_type,
-                "os_filter": os_filter,
+                "os_display": os_identity["os_display"],
+                "os_filter": os_identity["os_filter"],
+                "os_inference": os_identity["os_inference"],
                 "source_refs": source_refs,
                 "last_observed": (evidence or {}).get("completed_at")
                 or (evidence or {}).get("created_at"),
@@ -463,7 +478,9 @@ def build_hunting_analysis(
             "vendor": host.get("vendor"),
             "os": host.get("os"),
             "os_group": os_group,
-            "os_filter": os_filter,
+            "os_display": os_identity["os_display"],
+            "os_filter": os_identity["os_filter"],
+            "os_inference": os_identity["os_inference"],
             "subnet": subnet,
             "device_type": device_type,
             "categories": sorted(
@@ -741,6 +758,13 @@ def correlate_hunting_identity(
             for field in ("evidence_origin", "has_configuration_evidence"):
                 if field in identity:
                     finding[field] = identity[field]
+    for host in hosts:
+        _apply_host_os_identity(host)
+    for finding in findings:
+        identity = hosts_by_key.get(str(finding.get("host_key") or ""), {})
+        for field in ("os", "os_group", "os_display", "os_filter", "os_inference"):
+            if field in identity:
+                finding[field] = identity[field]
     return _summarize_hunting(
         hosts,
         findings,

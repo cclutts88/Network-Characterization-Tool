@@ -310,6 +310,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "function anyHuntFilterActive()" in html
     assert "Combined view · one entry per IP with all ports visible." in html
     assert "Filtered view · individual matching findings." in html
+    assert "function osIdentity(item)" in html
+    assert "item.os_inference?.evidence" in html
+    assert "os-inferred-label" in html
     assert "Observed" in html
     assert "Correlated" in html
     assert "Configuration" in html
@@ -645,7 +648,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "IP address (one sorted pool)" in html
     assert "function endpointOsFamily" in html
     assert "group-host-row os-${endpointOsFamily(host)}" in html
-    assert "Operating system: ${host.os||'Unknown OS'}" in html
+    assert "rowTip.textContent=osInferenceTitle(host)" in html
+    assert "function osIdentityHtml(host)" in html
+    assert "host.os_inference?' os-inferred':''" in html
     assert "Windows host" in html
     assert "Linux host" in html
     assert "Unknown OS" in html
