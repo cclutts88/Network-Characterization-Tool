@@ -14,6 +14,11 @@
 - Added lower-right resize handles to grouped endpoint boxes; widening a box
   reflows its host pool into additional columns, and Reset layout restores the
   automatic size.
+- Changed IP presentation to one numerically sorted host pool instead of
+  arbitrary address-range subgroups; hostname and OS headings now appear only
+  when the selected field contains multiple meaningful values.
+- Moved individual-versus-grouped and expand-versus-collapse controls into each
+  subnet box, and simplified the map toolbar to Expand all and Collapse all.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

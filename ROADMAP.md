@@ -128,9 +128,12 @@ an optional future mode within Reachability.
   endpoint lines, or an organized endpoint-group box.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP
   address, hostname, or operating system, with useful counts and breakdowns for
-  the selected investigation view.
+  the selected investigation view; IP is one sorted pool, while subgroup
+  headings appear only for actual hostname or OS differences.
 - [x] Let analysts resize grouped endpoint boxes and reflow their host pools
   across the available columns without changing shared evidence.
+- [x] Put grouped-versus-individual and expand-versus-collapse toggles on each
+  subnet box, with map-wide Expand all and Collapse all controls.
 - [ ] Add zoom-dependent detail and optional analytical overlays.
 - [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
 
