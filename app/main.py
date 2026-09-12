@@ -1043,18 +1043,27 @@ def get_os_override_history(identity_key: str) -> list[dict]:
 
 
 @app.post("/api/os-overrides")
-def save_os_override(request: OsOverrideRequest) -> dict:
+def save_os_override(http_request: Request, request: OsOverrideRequest) -> dict:
     try:
-        return set_os_override(DB_PATH, **request.model_dump())
+        values = request.model_dump()
+        if http_request.state.analyst:
+            values["analyst"] = http_request.state.analyst["username"]
+        return set_os_override(DB_PATH, **values)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.delete("/api/os-overrides/{identity_key}")
-def remove_os_override(identity_key: str, request: OsOverrideDeleteRequest) -> dict:
+def remove_os_override(
+    http_request: Request, identity_key: str, request: OsOverrideDeleteRequest
+) -> dict:
     try:
+        analyst = (
+            http_request.state.analyst["username"]
+            if http_request.state.analyst else request.analyst
+        )
         return delete_os_override(
-            DB_PATH, identity_key, analyst=request.analyst, reason=request.reason
+            DB_PATH, identity_key, analyst=analyst, reason=request.reason
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="OS correction not found") from exc
@@ -1068,9 +1077,14 @@ def get_os_inference_review_history(identity_key: str) -> list[dict]:
 
 
 @app.post("/api/os-inference-reviews")
-def save_os_inference_review(request: OsInferenceReviewRequest) -> dict:
+def save_os_inference_review(
+    http_request: Request, request: OsInferenceReviewRequest
+) -> dict:
     try:
-        return set_inference_review(DB_PATH, **request.model_dump())
+        values = request.model_dump()
+        if http_request.state.analyst:
+            values["analyst"] = http_request.state.analyst["username"]
+        return set_inference_review(DB_PATH, **values)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -98,6 +98,35 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
                 "password": "observer password 123",
             },
         ).status_code == 200
+        corrected_os = admin.post(
+            "/api/os-overrides",
+            json={
+                "ip": "192.0.2.44",
+                "os_name": "Windows 11",
+                "analyst": "spoofed-client-name",
+                "reason": "Console confirmation",
+                "scanner_os": "",
+            },
+        )
+        assert corrected_os.status_code == 200
+        assert corrected_os.json()["analyst"] == "nctadmin"
+        reviewed_inference = admin.post(
+            "/api/os-inference-reviews",
+            json={
+                "ip": "192.0.2.45",
+                "inference": {
+                    "family": "Linux",
+                    "display": "Likely Linux",
+                    "confidence": "medium",
+                    "evidence": ["22/tcp SSH"],
+                },
+                "status": "investigate",
+                "analyst": "spoofed-client-name",
+                "reason": "Needs console confirmation",
+            },
+        )
+        assert reviewed_inference.status_code == 200
+        assert reviewed_inference.json()["analyst"] == "nctadmin"
         saved = admin.post(
             "/api/workspaces/layouts",
             json={"name": "Reviewed map", "snapshot": {"zoomLevel": 1.25}},

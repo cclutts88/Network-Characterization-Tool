@@ -261,6 +261,9 @@ def test_nmap_analysis_labels_direct_and_correlated_mac_provenance():
     assert "correlated by IP" in html
     assert "direct Nmap" in html
     assert "dataset.macProvenance" in html
+    assert "loadAuthenticatedAnalyst" in html
+    assert "Bound to the signed-in analyst" in html
+    assert "authenticatedAnalyst?.username" in html
 
 
 def test_hunting_view_has_categories_combined_filters_and_change_analysis():

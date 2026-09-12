@@ -22,6 +22,9 @@
   startup, personal server-side Map layouts, optimistic version conflicts, and
   administrator-only explicit layout publishing. Authentication remains off by
   default for the current single-user Test workflow.
+- Bound authenticated OS corrections and inference reviews to the signed-in
+  analyst on the server, preventing a client-supplied name from changing the
+  audit identity.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility
