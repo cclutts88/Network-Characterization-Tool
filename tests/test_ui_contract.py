@@ -284,6 +284,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "headerOffset+guideHeight+14" in html
     assert "Exposed" in html
     assert "Inferred" in html
+    assert "Why inferred:" in html
+    assert "stateChipTitle(item,state)" in html
+    assert "basis-inferred" in html
+    assert "renderMatchBasis(item)" in html
     assert "Observed" in html
     assert "Correlated" in html
     assert "Configuration" in html
@@ -293,6 +297,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "direct Nmap" in html
     assert "/api/hunting/compare" in html
     assert "/api/hunting/${encodeURIComponent(id)}" in html
+    assert "item.profile_version?`v${item.profile_version}`" in html
+    assert "item.comparison_name||label(item)" in html
     assert "Findings added" in html
     assert "Capability datasets" in html
     assert '<label for="category">Dataset</label>' in html

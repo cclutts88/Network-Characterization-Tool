@@ -41,10 +41,29 @@ def test_category_rules_support_nonstandard_ports_and_multiple_categories():
     assert ssh[0]["category"] == "Remote Access & Administration"
     assert ssh[0]["capability_state"] == "observed"
     assert ssh[0]["nonstandard_port"] is True
+    assert ssh[1]["category"] == "File Transfer"
+    assert ssh[1]["capability_state"] == "inferred"
+    assert ssh[1]["evidence_states"] == ["exposed", "inferred"]
+    assert ssh[1]["match_basis"] == [
+        "capability inference: SSH may provide SCP/SFTP file transfer"
+    ]
     assert {item["category"] for item in mixed} == {
         "Web Applications & APIs", "Directory & Identity",
     }
     assert {item["capability_state"] for item in mixed} == {"inferred", "observed"}
+
+
+def test_explicit_sftp_is_observed_file_transfer_evidence():
+    findings = categorize_port(port(22, "sftp", "OpenSSH"))
+    file_transfer = next(
+        item for item in findings if item["category"] == "File Transfer"
+    )
+
+    assert file_transfer["capability_state"] == "observed"
+    assert "observed" in file_transfer["evidence_states"]
+    assert any(
+        basis.startswith("fingerprint:") for basis in file_transfer["match_basis"]
+    )
 
 
 def test_dataset_catalog_supports_authentication_and_only_activates_matches():
@@ -80,18 +99,25 @@ def test_hunting_analysis_distinguishes_capability_evidence_and_keeps_unknown_se
     )
 
     assert result["host_count"] == 1
-    assert result["finding_count"] == 3
+    assert result["finding_count"] == 5
     assert result["nonstandard_finding_count"] == 1
     assert result["categories"] == [
         {"name": "Remote Access & Administration", "finding_count": 2},
+        {"name": "File Transfer", "finding_count": 2},
         {"name": "Unknown / Other Exposed Service", "finding_count": 1},
     ]
     assert result["capability_states"]["correlated"] == 1
     assert result["capability_states"]["observed"] == 2
-    assert result["capability_states"]["exposed"] == 3
+    assert result["capability_states"]["inferred"] == 3
+    assert result["capability_states"]["exposed"] == 5
     assert result["warnings"] == ["Limited UDP coverage"]
     unknown = next(item for item in result["findings"] if item["port"] == 31337)
     assert unknown["capability_state"] == "exposed"
+    transfers = [
+        item for item in result["findings"] if item["category"] == "File Transfer"
+    ]
+    assert len(transfers) == 2
+    assert {item["capability_state"] for item in transfers} == {"inferred"}
 
 
 def test_hunting_inventory_keeps_hosts_without_findings_and_builds_filter_facets():
@@ -130,8 +156,11 @@ def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
     result = merge_hunting_analyses([newer, older])
 
     assert result["host_count"] == 1
-    assert result["finding_count"] == 1
-    assert result["findings"][0]["version"] == "9.2"
+    assert result["finding_count"] == 2
+    assert {item["category"] for item in result["findings"]} == {
+        "Remote Access & Administration", "File Transfer",
+    }
+    assert {item["version"] for item in result["findings"]} == {"9.2"}
 
 
 def test_network_hunt_adds_configuration_devices_without_claiming_nmap_observation():
@@ -262,16 +291,18 @@ def test_hunting_comparison_reports_added_removed_and_changed_capabilities():
     result = compare_hunting_results(before, after)
 
     assert result["summary"] == {
-        "findings_added": 1,
+        "findings_added": 2,
         "findings_removed": 0,
         "findings_changed": 1,
         "hosts_with_category_changes": 1,
     }
-    assert result["findings_added"][0]["category"] == "Remote Access & Administration"
+    assert {item["category"] for item in result["findings_added"]} == {
+        "Remote Access & Administration", "File Transfer",
+    }
     assert "version" in result["findings_changed"][0]["changes"]
-    assert result["host_category_changes"][0]["categories_added"] == [
-        "Remote Access & Administration"
-    ]
+    assert set(result["host_category_changes"][0]["categories_added"]) == {
+        "Remote Access & Administration", "File Transfer",
+    }
 
 
 def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
@@ -318,12 +349,19 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
         )
 
     assert analysis.status_code == 200
-    assert analysis.json()["findings"][0]["nonstandard_port"] is True
+    findings = analysis.json()["findings"]
+    remote = next(
+        item for item in findings
+        if item["category"] == "Remote Access & Administration"
+    )
+    transfer = next(item for item in findings if item["category"] == "File Transfer")
+    assert remote["nonstandard_port"] is True
+    assert transfer["capability_state"] == "inferred"
     assert analysis.json()["source"]["evidence"]["sources"][0]["url"].endswith(
         f"/{after_id}/artifacts/xml"
     )
     assert comparison.status_code == 200
-    assert comparison.json()["summary"]["findings_added"] == 1
+    assert comparison.json()["summary"]["findings_added"] == 2
     assert comparison.json()["summary"]["findings_removed"] == 1
     assert network.status_code == 200
     assert network.json()["status"] == "hunting_network_complete"

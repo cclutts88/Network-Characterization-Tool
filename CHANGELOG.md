@@ -2,6 +2,14 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added an inferred File Transfer finding for SSH fingerprints because SSH may
+  expose SCP or SFTP. Direct `scp` or `sftp` identification remains observed
+  evidence, while File Sharing stays reserved for SMB, NFS, AFP, and similar
+  persistent shared-filesystem services.
+- Added per-finding hover explanations to Inferred evidence badges so analysts
+  can see the exact port or capability relationship behind the inference.
+- Shortened Hunt scan-selection entries to name, completion time, and profile;
+  the full comparison scope remains available as option hover text.
 - Reordered the primary workflow to Device, Nmap, Analyze, Hunt, and Map, and
   made Device the default landing page so network-device and subnet evidence
   naturally precedes scan construction.

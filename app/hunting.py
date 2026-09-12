@@ -35,6 +35,7 @@ DATASET_RULES = {
     },
     "File Transfer": {
         "services": ("ftp", "tftp", "sftp", "scp", "rsync"),
+        "inferred_services": ("ssh",),
         "ports": {20, 21, 69, 115, 873, 989, 990},
         "source_types": ("nmap",),
     },
@@ -356,8 +357,12 @@ def categorize_port(port: dict) -> list[dict]:
         service_matches = sorted({
             marker for marker in rules["services"] if marker in service_text
         })
+        inferred_service_matches = sorted({
+            marker for marker in rules.get("inferred_services", ())
+            if marker in service_text
+        })
         port_matches = number in rules["ports"]
-        if not service_matches and not port_matches:
+        if not service_matches and not inferred_service_matches and not port_matches:
             continue
         if service_matches and port_matches:
             capability_state = "correlated"
@@ -366,7 +371,7 @@ def categorize_port(port: dict) -> list[dict]:
         else:
             capability_state = "inferred"
         evidence_states = ["exposed"]
-        if port_matches:
+        if port_matches or inferred_service_matches:
             evidence_states.append("inferred")
         if service_matches:
             evidence_states.append("observed")
@@ -377,6 +382,10 @@ def categorize_port(port: dict) -> list[dict]:
             basis.append(f"port {number}/{str(port.get('protocol') or '').lower()}")
         if service_matches:
             basis.append("fingerprint: " + ", ".join(service_matches))
+        if inferred_service_matches:
+            basis.append(
+                "capability inference: SSH may provide SCP/SFTP file transfer"
+            )
         categories.append({
             "category": category,
             "capability_state": capability_state,
