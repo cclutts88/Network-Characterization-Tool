@@ -97,11 +97,11 @@ an optional future mode within Reachability.
 - [x] Do not execute exploit code.
 - [ ] Package and validate the offline Exploit-DB dataset under the persistent
   NCT data volume.
-- [ ] Add a connected **Update from internet** workflow that stages, validates,
+- [x] Add a connected **Update from internet** workflow that stages, validates,
   and atomically activates official Exploit-DB data.
-- [ ] Add an air-gapped **Upload offline update** workflow with archive safety
+- [x] Add an air-gapped **Upload offline update** workflow with archive safety
   checks, database validation, atomic replacement, and rollback retention.
-- [ ] Display database source, version/update time, and previous-version rollback
+- [x] Display database source, version/update time, and previous-version rollback
   controls in the NCT interface.
 
 ### Release 9 — Network Map Core Redesign — Planned as an independent release

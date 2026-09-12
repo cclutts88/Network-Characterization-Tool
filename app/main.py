@@ -25,7 +25,14 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
-from app.searchsploit import enrich_hunting_with_searchsploit, searchsploit_status
+from app.searchsploit import (
+    MAX_ARCHIVE_BYTES,
+    enrich_hunting_with_searchsploit,
+    install_searchsploit_archive,
+    rollback_searchsploit_database,
+    searchsploit_status,
+    update_searchsploit_from_internet,
+)
 from app.identity import enrich_analysis_macs
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
@@ -53,6 +60,7 @@ import re
 import shlex
 import sqlite3
 import threading
+import uuid
 import zipfile
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
@@ -1159,6 +1167,52 @@ def analyze_hunting_scan(run_id: str) -> dict:
 @app.get("/api/searchsploit/status")
 def get_searchsploit_status() -> dict:
     return searchsploit_status()
+
+
+@app.post("/api/searchsploit/database/update-online")
+def update_searchsploit_database_online() -> dict:
+    try:
+        return update_searchsploit_from_internet()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/searchsploit/database/upload")
+async def upload_searchsploit_database(file: UploadFile = File(...)) -> dict:
+    incoming = DATA_DIR / "searchsploit" / ".incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+    archive_path = incoming / f"upload-{uuid.uuid4().hex}.archive"
+    total = 0
+    try:
+        with archive_path.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_ARCHIVE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="The update archive is larger than the 1.5 GB limit.",
+                    )
+                output.write(chunk)
+        try:
+            return install_searchsploit_archive(
+                archive_path,
+                source=f"uploaded:{Path(file.filename or 'offline-update').name}",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        await file.close()
+        archive_path.unlink(missing_ok=True)
+
+
+@app.post("/api/searchsploit/database/rollback/{version_id}")
+def rollback_searchsploit_database_version(version_id: str) -> dict:
+    try:
+        return rollback_searchsploit_database(version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/searchsploit/hunting/network")

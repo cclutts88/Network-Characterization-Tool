@@ -229,6 +229,12 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="matchedOnly"' in html
     assert "/api/searchsploit/status" in html
     assert "/api/searchsploit/hunting/network" in html
+    assert 'id="searchsploitOnline"' in html
+    assert 'id="searchsploitUpload"' in html
+    assert 'id="searchsploitRollback"' in html
+    assert "/api/searchsploit/database/update-online" in html
+    assert "/api/searchsploit/database/upload" in html
+    assert "/api/searchsploit/database/rollback/" in html
     assert "Potential product/version matches require analyst validation" in html
     assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
 

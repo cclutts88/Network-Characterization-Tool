@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from app.searchsploit import enrich_hunting_with_searchsploit
+import json
+import subprocess
+import zipfile
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.searchsploit import (
+    _search,
+    enrich_hunting_with_searchsploit,
+    install_searchsploit_archive,
+    rollback_searchsploit_database,
+)
 
 
 def finding(product: str, version: str = "") -> dict:
@@ -69,3 +82,95 @@ def test_searchsploit_enrichment_sanitizes_queries_and_returns_candidates(monkey
     assert result["matched_host_count"] == 1
     assert result["match_count"] == 1
     assert result["matches"][0]["candidates"][0]["edb_id"] == "12345"
+
+
+def database_archive(path, marker: str):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("exploitdb/searchsploit", "#!/usr/bin/env bash\n" + "#" * 1200)
+        archive.writestr(
+            "exploitdb/.searchsploit_rc",
+            'files_array+=("files_exploits.csv")\npath_array+=("/opt/exploitdb")\n',
+        )
+        archive.writestr(
+            "exploitdb/files_exploits.csv",
+            "id,file,description,date,author,type,platform,port\n"
+            f"1,exploits/{marker}.txt,{marker},2026-01-01,NCT,remote,linux,80\n",
+        )
+
+
+def test_database_upload_stages_versions_and_supports_rollback(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANALYZER_DATA_DIR", str(tmp_path / "data"))
+    first_archive = tmp_path / "first.zip"
+    second_archive = tmp_path / "second.zip"
+    database_archive(first_archive, "first")
+    database_archive(second_archive, "second")
+
+    first = install_searchsploit_archive(first_archive, source="uploaded:first.zip")
+    second = install_searchsploit_archive(second_archive, source="uploaded:second.zip")
+
+    assert first["available"] is True
+    assert second["available"] is True
+    assert first["active_version"] != second["active_version"]
+    assert len(second["versions"]) == 2
+    active_rc = (
+        tmp_path / "data" / "searchsploit" / "versions"
+        / second["active_version"] / ".searchsploit_rc"
+    ).read_text(encoding="utf-8")
+    assert "/opt/exploitdb" not in active_rc
+    assert second["active_version"] in active_rc
+
+    rolled_back = rollback_searchsploit_database(first["active_version"])
+
+    assert rolled_back["active_version"] == first["active_version"]
+    assert sum(1 for item in rolled_back["versions"] if item["active"]) == 1
+
+
+def test_database_upload_rejects_archive_path_escape(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANALYZER_DATA_DIR", str(tmp_path / "data"))
+    archive_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../escape", "no")
+
+    with pytest.raises(ValueError, match="unsafe path"):
+        install_searchsploit_archive(archive_path, source="uploaded:unsafe.zip")
+
+    assert not (tmp_path / "data" / "searchsploit" / "escape").exists()
+
+
+def test_searchsploit_parser_accepts_official_singular_json_key(monkeypatch):
+    payload = {"RESULTS_EXPLOIT": [{
+        "Title": "Example remote candidate",
+        "EDB-ID": "54321",
+        "Platform": "linux",
+        "Type": "remote",
+        "Codes": "CVE-2026-54321",
+        "Verified": "1",
+        "Path": "/opt/exploitdb/exploits/54321.py",
+    }]}
+    monkeypatch.setattr("app.searchsploit.subprocess.run", lambda *args, **kwargs: (
+        subprocess.CompletedProcess(args[0], 0, json.dumps(payload), "")
+    ))
+
+    results, warning = _search("/opt/exploitdb/searchsploit", "Example 1.0")
+
+    assert warning is None
+    assert results[0]["edb_id"] == "54321"
+    assert results[0]["verified"] is True
+
+
+def test_database_upload_api_activates_valid_offline_package(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("ANALYZER_DATA_DIR", str(data_dir))
+    monkeypatch.setattr("app.main.DATA_DIR", data_dir)
+    archive_path = tmp_path / "offline-update.zip"
+    database_archive(archive_path, "api-upload")
+
+    with TestClient(app) as client, archive_path.open("rb") as source:
+        response = client.post(
+            "/api/searchsploit/database/upload",
+            files={"file": (archive_path.name, source, "application/zip")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["available"] is True
+    assert response.json()["source"] == "uploaded:offline-update.zip"

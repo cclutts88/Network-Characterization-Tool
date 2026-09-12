@@ -1,16 +1,32 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import shutil
 import subprocess
+import tarfile
+import threading
+import urllib.request
+import uuid
+import zipfile
 
 
 MAX_QUERIES = 40
 MAX_RESULTS_PER_QUERY = 25
+MAX_ARCHIVE_BYTES = 1_500_000_000
+MAX_EXTRACTED_BYTES = 4_000_000_000
+MAX_ARCHIVE_FILES = 120_000
+OFFICIAL_ARCHIVE_URL = (
+    "https://gitlab.com/exploit-database/exploitdb/-/archive/main/"
+    "exploitdb-main.tar.gz"
+)
+_UPDATE_LOCK = threading.Lock()
 GENERIC_PRODUCTS = {
     "", "unknown", "http", "https", "ssh", "ftp", "smtp", "dns", "domain",
     "microsoft", "windows", "linux", "network", "server",
@@ -21,24 +37,46 @@ def _configured_command() -> str:
     return str(os.environ.get("NCT_SEARCHSPLOIT_COMMAND") or "searchsploit").strip()
 
 
+def _storage_root() -> Path:
+    data_root = Path(os.environ.get("ANALYZER_DATA_DIR") or "/data")
+    return data_root / "searchsploit"
+
+
+def _active_database_path() -> Path | None:
+    root = _storage_root()
+    pointer = root / "active.json"
+    try:
+        payload = json.loads(pointer.read_text(encoding="utf-8"))
+        candidate = (root / str(payload.get("directory") or "")).resolve()
+        versions = (root / "versions").resolve()
+        if candidate.is_relative_to(versions) and candidate.is_dir():
+            return candidate
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    legacy = root / "current"
+    return legacy if legacy.is_dir() else None
+
+
 def _command_path() -> str | None:
     command = _configured_command()
+    active = _active_database_path()
     candidates = [
         Path(command),
-        Path("/data/searchsploit/current/searchsploit"),
+        active / "searchsploit" if active else None,
         Path("/opt/exploit-database/searchsploit"),
     ]
     for candidate in candidates:
-        if candidate.is_file():
+        if candidate and candidate.is_file():
             return str(candidate)
     return shutil.which(command)
 
 
 def _database_path(command_path: str | None) -> Path | None:
     configured = str(os.environ.get("NCT_SEARCHSPLOIT_DB") or "").strip()
+    active = _active_database_path()
     candidates = [
         Path(configured) if configured else None,
-        Path("/data/searchsploit/current"),
+        active,
         Path(command_path).resolve().parent if command_path else None,
         Path("/opt/exploit-database"),
         Path("/usr/share/exploitdb"),
@@ -57,6 +95,14 @@ def searchsploit_status() -> dict:
     if csv_files:
         updated_at = max(path.stat().st_mtime for path in csv_files)
     available = bool(command_path and database_path)
+    active_metadata = {}
+    if database_path:
+        try:
+            active_metadata = json.loads(
+                (database_path / "nct-database.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            pass
     return {
         "status": "ready" if available else "unavailable",
         "available": available,
@@ -65,6 +111,11 @@ def searchsploit_status() -> dict:
         "database_path": str(database_path) if database_path else None,
         "database_files": len(csv_files),
         "database_updated_epoch": updated_at,
+        "active_version": active_metadata.get("version_id"),
+        "installed_at": active_metadata.get("installed_at"),
+        "source": active_metadata.get("source"),
+        "archive_sha256": active_metadata.get("archive_sha256"),
+        "versions": list_searchsploit_versions(),
         "mode": "offline_read_only",
         "message": (
             "Offline SearchSploit database is ready."
@@ -72,6 +123,203 @@ def searchsploit_status() -> dict:
             "SearchSploit and its offline Exploit-DB data have not been staged in this build."
         ),
     }
+
+
+def list_searchsploit_versions() -> list[dict]:
+    root = _storage_root()
+    active = _active_database_path()
+    versions = []
+    versions_root = root / "versions"
+    if not versions_root.is_dir():
+        return versions
+    for path in versions_root.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            metadata = json.loads(
+                (path / "nct-database.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            continue
+        versions.append({
+            **metadata,
+            "active": bool(active and path.resolve() == active.resolve()),
+        })
+    versions.sort(key=lambda item: str(item.get("installed_at") or ""), reverse=True)
+    return versions
+
+
+def _safe_archive_name(name: str) -> PurePosixPath:
+    normalized = PurePosixPath(str(name or "").replace("\\", "/"))
+    if normalized.is_absolute() or ".." in normalized.parts:
+        raise ValueError("The update archive contains an unsafe path.")
+    return normalized
+
+
+def _extract_archive(archive_path: Path, destination: Path) -> None:
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_ARCHIVE_FILES:
+                raise ValueError("The update archive contains too many files.")
+            if sum(item.file_size for item in members) > MAX_EXTRACTED_BYTES:
+                raise ValueError("The expanded update archive is too large.")
+            for member in members:
+                relative = _safe_archive_name(member.filename)
+                mode = member.external_attr >> 16
+                if mode and (mode & 0o170000) == 0o120000:
+                    raise ValueError("Symbolic links are not allowed in update archives.")
+                target = destination.joinpath(*relative.parts)
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+        return
+    if not tarfile.is_tarfile(archive_path):
+        raise ValueError("Upload a ZIP, TAR, TAR.GZ, or TGZ Exploit-DB package.")
+    with tarfile.open(archive_path, mode="r:*") as archive:
+        members = archive.getmembers()
+        regular = [item for item in members if item.isfile()]
+        if len(members) > MAX_ARCHIVE_FILES:
+            raise ValueError("The update archive contains too many files.")
+        if sum(item.size for item in regular) > MAX_EXTRACTED_BYTES:
+            raise ValueError("The expanded update archive is too large.")
+        if any(not (item.isfile() or item.isdir()) for item in members):
+            raise ValueError("Links and special files are not allowed in update archives.")
+        for member in members:
+            relative = _safe_archive_name(member.name)
+            target = destination.joinpath(*relative.parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise ValueError("The update archive contains an unreadable file.")
+            with source, target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+
+
+def _find_repository_root(staging: Path) -> Path:
+    candidates = []
+    for csv_path in staging.rglob("files_exploits.csv"):
+        parent = csv_path.parent
+        if (parent / "searchsploit").is_file() and (parent / ".searchsploit_rc").is_file():
+            candidates.append(parent)
+    if len(candidates) != 1:
+        raise ValueError(
+            "The package must contain one Exploit-DB repository with searchsploit, "
+            ".searchsploit_rc, and files_exploits.csv."
+        )
+    repository = candidates[0]
+    with (repository / "files_exploits.csv").open("r", encoding="utf-8", errors="replace") as source:
+        header = source.readline().lower()
+    if "id" not in header or "file" not in header or "description" not in header:
+        raise ValueError("The Exploit-DB index header is not recognized.")
+    if (repository / "searchsploit").stat().st_size < 1000:
+        raise ValueError("The SearchSploit program in the package is incomplete.")
+    return repository
+
+
+def _archive_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _activate_version(version_path: Path) -> None:
+    root = _storage_root()
+    relative = version_path.resolve().relative_to(root.resolve())
+    temporary = root / f"active-{uuid.uuid4().hex}.json"
+    temporary.write_text(
+        json.dumps({"directory": relative.as_posix()}, indent=2), encoding="utf-8"
+    )
+    os.replace(temporary, root / "active.json")
+
+
+def install_searchsploit_archive(archive_path: Path, *, source: str) -> dict:
+    if archive_path.stat().st_size > MAX_ARCHIVE_BYTES:
+        raise ValueError("The update archive is larger than the 1.5 GB limit.")
+    with _UPDATE_LOCK:
+        root = _storage_root()
+        versions_root = root / "versions"
+        staging = root / ".staging" / uuid.uuid4().hex
+        versions_root.mkdir(parents=True, exist_ok=True)
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            _extract_archive(archive_path, staging)
+            repository = _find_repository_root(staging)
+            archive_sha256 = _archive_digest(archive_path)
+            installed_at = datetime.now(timezone.utc).isoformat()
+            version_id = (
+                datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                + "-" + archive_sha256[:12]
+            )
+            target = versions_root / version_id
+            if target.exists():
+                version_id += "-" + uuid.uuid4().hex[:6]
+                target = versions_root / version_id
+            shutil.move(str(repository), str(target))
+            resource = target / ".searchsploit_rc"
+            resource_text = resource.read_text(encoding="utf-8", errors="replace")
+            resource_text = resource_text.replace(
+                '"/opt/exploitdb"', f'"{target.as_posix()}"'
+            )
+            resource.write_text(resource_text, encoding="utf-8")
+            (target / "searchsploit").chmod(0o755)
+            metadata = {
+                "version_id": version_id,
+                "installed_at": installed_at,
+                "source": source,
+                "archive_sha256": archive_sha256,
+            }
+            (target / "nct-database.json").write_text(
+                json.dumps(metadata, indent=2), encoding="utf-8"
+            )
+            _activate_version(target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    return searchsploit_status()
+
+
+def update_searchsploit_from_internet() -> dict:
+    root = _storage_root()
+    incoming = root / ".incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+    archive_path = incoming / f"exploitdb-{uuid.uuid4().hex}.tar.gz"
+    try:
+        request = urllib.request.Request(
+            OFFICIAL_ARCHIVE_URL,
+            headers={"User-Agent": "NCT-SearchSploit-Updater/1"},
+        )
+        with urllib.request.urlopen(request, timeout=45) as response, archive_path.open("wb") as output:
+            total = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_ARCHIVE_BYTES:
+                    raise ValueError("The downloaded update exceeds the 1.5 GB limit.")
+                output.write(chunk)
+        return install_searchsploit_archive(archive_path, source=OFFICIAL_ARCHIVE_URL)
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def rollback_searchsploit_database(version_id: str) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9._-]{8,80}", str(version_id or "")):
+        raise ValueError("Invalid SearchSploit database version.")
+    target = _storage_root() / "versions" / version_id
+    if not target.is_dir() or not (target / "nct-database.json").is_file():
+        raise FileNotFoundError("SearchSploit database version was not found.")
+    with _UPDATE_LOCK:
+        _activate_version(target)
+    return searchsploit_status()
 
 
 def _safe_term(value: object) -> str:
@@ -121,7 +369,9 @@ def _search(command_path: str, query: str) -> tuple[list[dict], str | None]:
     except json.JSONDecodeError:
         return [], f"SearchSploit returned unreadable JSON for {query}."
     results = [
-        _candidate(item) for item in (payload.get("RESULTS_EXPLOITS") or [])
+        _candidate(item) for item in (
+            payload.get("RESULTS_EXPLOIT") or payload.get("RESULTS_EXPLOITS") or []
+        )
         if isinstance(item, dict)
     ]
     return results[:MAX_RESULTS_PER_QUERY], None
