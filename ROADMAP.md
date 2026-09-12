@@ -132,6 +132,12 @@ within Reachability.
   top comparison selector that stays collapsed until requested.
 - [x] Present original operator scan scopes and exclusion counts in Analyze
   instead of exposing fragmented post-exclusion CIDRs as the main title.
+- [x] Replace Device's disconnected command blocks with one ordered,
+  vendor-specific execution plan that distinguishes NCT host commands, device
+  commands, and local evidence writes; show SCP, remote-file creation, and
+  cleanup only for the VyOS and pfSense password workflows that actually use
+  them, while identifying Cisco, Juniper, and key-based collection as direct
+  SSH streaming.
 - [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [x] Highlight search results, step forward and backward through matches, fit
   the active match, and optionally isolate matching topology branches.

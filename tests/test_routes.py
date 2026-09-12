@@ -339,6 +339,71 @@ def test_device_preview_appends_auditable_operator_commands_and_describes_cleanu
     assert "delete the remote file" in data["cleanup_plan"]
 
 
+def test_vyos_password_preview_lists_the_real_temporary_file_workflow_in_order():
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=device_password_plan())
+
+    assert response.status_code == 200
+    data = response.json()
+    phases = [step["phase"] for step in data["execution_steps"]]
+    commands = "\n".join(step["command"] for step in data["execution_steps"])
+    assert phases == [
+        "Start accountability capture",
+        "Open one-time SSH session",
+        "Verify authenticated SSH session",
+        "Run read-only device collection",
+        "Copy temporary output to NCT",
+        "Normalize retained output",
+        "Remove temporary device file",
+        "Close one-time SSH session",
+    ]
+    assert data["transfer_method"] == "scp_control_session"
+    assert data["remote_output_path"] in commands
+    assert "vbash -s >" in commands
+    assert "scp -q" in data["scp_command"]
+    assert "rm -f --" in commands
+
+
+def test_cisco_password_preview_streams_output_without_claiming_scp_or_remote_cleanup():
+    body = device_password_plan()
+    body["vendor"] = "cisco"
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    phases = [step["phase"] for step in data["execution_steps"]]
+    commands = "\n".join(step["command"] for step in data["execution_steps"])
+    assert data["transfer_method"] == "ssh_stdout"
+    assert data["remote_output_path"] is None
+    assert data["scp_command"] is None
+    assert "Copy temporary output to NCT" not in phases
+    assert "Remove temporary device file" not in phases
+    assert "Retain streamed output" in phases
+    assert "scp " not in commands
+    assert "terminal length 0" in commands
+
+
+def test_key_preview_never_claims_a_remote_temporary_file_workflow():
+    body = device_password_plan()
+    body.update({"authentication_mode": "key", "key_path": "/keys/operator-key"})
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    phases = [step["phase"] for step in data["execution_steps"]]
+    assert data["transfer_method"] == "ssh_stdout"
+    assert data["remote_output_path"] is None
+    assert data["scp_command"] is None
+    assert phases == [
+        "Validate local SSH key",
+        "Start accountability capture",
+        "Run read-only device collection",
+        "Retain streamed output",
+    ]
+
+
 def test_device_preview_rejects_configuration_and_shell_control_commands():
     for command in ("configure", "show version; reboot", "show version | sh"):
         body = device_password_plan()

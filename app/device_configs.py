@@ -257,6 +257,54 @@ class DeviceConfigPlan(BaseModel):
         return cleaned
 
 
+def _control_ssh_args_for_plan(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
+    return [
+        "ssh", "-S", str(control_path), "-p", str(plan.ssh_port),
+        f"{plan.username}@{plan.device_address}",
+    ]
+
+
+def _interactive_master_args(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
+    """Build the internal SSH command with the PTY as its controlling terminal."""
+    target = f"{plan.username}@{plan.device_address}"
+    return [
+        "setsid", "--ctty", "ssh", "-M", "-N", "-T",
+        "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
+        "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
+        "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
+        "-o", "PreferredAuthentications=keyboard-interactive,password",
+        "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
+        "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
+        "-p", str(plan.ssh_port), target,
+    ]
+
+
+def _interactive_collection_command(
+    plan: DeviceConfigPlan,
+    commands: list[str],
+    remote_output: str | None,
+) -> tuple[str | None, str]:
+    """Return the stdin and remote command used by the interactive collector."""
+    if plan.vendor == "vyos":
+        if not remote_output:
+            raise ValueError("VyOS interactive collection requires a remote output path")
+        remote_input = "\n".join(
+            ["source /opt/vyatta/etc/functions/script-template"]
+            + [f"run {command}" for command in commands]
+            + ["exit"]
+        ) + "\n"
+        return remote_input, f"vbash -s > {shlex.quote(remote_output)}"
+    if plan.vendor == "pfsense":
+        if not remote_output:
+            raise ValueError("pfSense interactive collection requires a remote output path")
+        labeled_commands: list[str] = []
+        for command in commands:
+            labeled_commands.extend([f"printf '\\n===== {command} =====\\n'", command])
+        remote_script = "{ " + "; ".join(labeled_commands) + f"; }} > {shlex.quote(remote_output)}"
+        return None, f"sh -c {shlex.quote(remote_script)}"
+    return None, "; ".join(commands)
+
+
 def build_plan(plan: DeviceConfigPlan) -> dict:
     template_commands = list(TEMPLATES[plan.vendor][plan.device_type])
     additional_commands = list(plan.additional_commands)
@@ -292,11 +340,136 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         remote_input = None
         ssh_args += [target, "; ".join(commands)]
         ssh_command = shlex.join(ssh_args)
+    run_dir = CONFIG_DIR / run_id
     local_file = f"{name}-{run_id[:12]}-config.txt"
-    scp_args = ["scp", "-P", str(plan.ssh_port)]
-    if plan.key_path:
-        scp_args += ["-i", plan.key_path]
-    scp_args += [f"{target}:/tmp/{local_file}", f"./{local_file}"]
+    local_output = run_dir / local_file
+    retained_output = run_dir / "stdout.txt"
+    remote_file_workflow = interactive and plan.vendor in {"vyos", "pfsense"}
+    remote_output = f"/tmp/{local_file}" if remote_file_workflow else None
+    transfer_method = "scp_control_session" if remote_file_workflow else "ssh_stdout"
+    scp_args: list[str] | None = None
+    cleanup_args: list[str] | None = None
+    execution_steps: list[dict[str, str]] = []
+
+    def add_step(phase: str, location: str, kind: str, command: str, detail: str) -> None:
+        execution_steps.append(
+            {
+                "phase": phase,
+                "location": location,
+                "kind": kind,
+                "command": command,
+                "detail": detail,
+            }
+        )
+
+    if not interactive and plan.key_path:
+        add_step(
+            "Validate local SSH key",
+            "NCT host",
+            "system command",
+            shlex.join(["ssh-keygen", "-y", "-f", plan.key_path]),
+            "Confirms that the analyzer can read and parse the selected private key without exposing its contents.",
+        )
+    add_step(
+        "Start accountability capture",
+        "NCT host",
+        "system command",
+        shlex.join(capture_argv(plan.accountability_interface, run_dir / "accountability.pcap")),
+        "Starts before the SSH connection and is stopped after the session closes.",
+    )
+    if interactive:
+        control_path = Path("<runtime-ssh-control-socket>")
+        control_args = _control_ssh_args_for_plan(plan, control_path)
+        add_step(
+            "Open one-time SSH session",
+            "NCT host",
+            "system command",
+            shlex.join(_interactive_master_args(plan, control_path)),
+            "The runtime replaces the displayed control-socket placeholder with a private temporary path. The password is entered through the protected prompt and never added to this command.",
+        )
+        add_step(
+            "Verify authenticated SSH session",
+            "NCT host",
+            "system command",
+            shlex.join(control_args[:-1] + ["-O", "check", control_args[-1]]),
+            "Checks the private control session after immediate authentication or again after the one-time password prompt succeeds.",
+        )
+        remote_input, remote_command = _interactive_collection_command(plan, commands, remote_output)
+        collection_args = control_args + [remote_command]
+        collection_command = shlex.join(collection_args)
+        if remote_input:
+            script_lines = remote_input.rstrip("\n").splitlines()
+            collection_command = f"printf '%s\\n' {shlex.join(script_lines)} | {collection_command}"
+        add_step(
+            "Run read-only device collection",
+            "Network device over SSH",
+            "device command",
+            collection_command,
+            (
+                f"The device writes the command output to the temporary file {remote_output}."
+                if remote_file_workflow
+                else "The device returns the command output directly through the authenticated SSH stream; no remote file is created."
+            ),
+        )
+        if remote_file_workflow:
+            scp_args = [
+                "scp", "-q", "-P", str(plan.ssh_port),
+                "-o", f"ControlPath={control_path}",
+                f"{target}:{remote_output}", str(local_output),
+            ]
+            add_step(
+                "Copy temporary output to NCT",
+                "NCT host",
+                "system command",
+                shlex.join(scp_args),
+                f"Creates the retained local collection file {local_output}.",
+            )
+        else:
+            add_step(
+                "Retain streamed output",
+                "NCT evidence storage",
+                "internal file write",
+                str(local_output),
+                "NCT writes the SSH standard output directly to this local file.",
+            )
+        add_step(
+            "Normalize retained output",
+            "NCT evidence storage",
+            "internal file write",
+            str(retained_output),
+            "NCT stores a bounded analysis copy of the collected output alongside the manifest and accountability capture.",
+        )
+        if remote_file_workflow:
+            cleanup_args = control_args + [f"rm -f -- {shlex.quote(remote_output)}"]
+            add_step(
+                "Remove temporary device file",
+                "Network device over SSH",
+                "cleanup command",
+                shlex.join(cleanup_args),
+                "Runs even when collection or copy-back fails; the saved manifest records whether cleanup was confirmed.",
+            )
+        add_step(
+            "Close one-time SSH session",
+            "NCT host",
+            "system command",
+            shlex.join(control_args[:-1] + ["-O", "exit", control_args[-1]]),
+            "Closes the in-memory authenticated connection and removes its temporary control socket.",
+        )
+    else:
+        add_step(
+            "Run read-only device collection",
+            "Network device over SSH",
+            "device command",
+            ssh_command,
+            "The device returns output through SSH; key-based collection does not create or copy a remote temporary file.",
+        )
+        add_step(
+            "Retain streamed output",
+            "NCT evidence storage",
+            "internal file write",
+            str(retained_output),
+            "NCT writes the captured SSH standard output to this local evidence file.",
+        )
     return {
         "run_id": run_id,
         "vendor": plan.vendor,
@@ -305,23 +478,25 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "device_name": plan.device_name,
         "username": plan.username,
         "accountability_interface": plan.accountability_interface,
-        "capture_command": shlex.join([
-            "tcpdump", "-i", plan.accountability_interface, "-p", "-nn", "-U", "-s", "0",
-            "-w", "accountability.pcap",
-        ]),
+        "capture_command": next(
+            step["command"] for step in execution_steps
+            if step["phase"] == "Start accountability capture"
+        ),
         "template_commands": template_commands,
         "additional_commands": additional_commands,
         "commands": commands,
         "ssh_command": ssh_command,
         "ssh_args": ssh_args,
         "remote_input": remote_input,
-        "scp_command": shlex.join(scp_args),
-        "remote_output_path": f"/tmp/{local_file}",
+        "scp_command": shlex.join(scp_args) if scp_args else None,
+        "remote_output_path": remote_output,
         "local_output_name": local_file,
         "authentication_mode": plan.authentication_mode,
+        "transfer_method": transfer_method,
+        "execution_steps": execution_steps,
         "cleanup_plan": (
             "Create a temporary output file on the device, copy it back to the analyzer, delete the remote file, and close the SSH session."
-            if plan.vendor in {"vyos", "pfsense"}
+            if remote_file_workflow
             else "Collect through the SSH output stream, create no remote file, and close the SSH session."
         ),
         "notes": "The template and validated operator additions are read-only except for session-only terminal pagination settings on Cisco devices.",
@@ -354,6 +529,9 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "commands": preview["commands"],
         "ssh_command": preview["ssh_command"],
         "scp_command": preview["scp_command"],
+        "transfer_method": preview["transfer_method"],
+        "remote_output_path": preview["remote_output_path"],
+        "execution_steps": preview["execution_steps"],
         "cleanup_plan": preview["cleanup_plan"],
         "status": status,
     }
@@ -626,25 +804,7 @@ def _expire_interactive_session(session_id: str) -> None:
 
 
 def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
-    return [
-        "ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port),
-        f"{session.plan.username}@{session.plan.device_address}",
-    ]
-
-
-def _interactive_master_args(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
-    """Build the internal SSH command with the PTY as its controlling terminal."""
-    target = f"{plan.username}@{plan.device_address}"
-    return [
-        "setsid", "--ctty", "ssh", "-M", "-N", "-T",
-        "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
-        "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
-        "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
-        "-o", "PreferredAuthentications=keyboard-interactive,password",
-        "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
-        "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
-        "-p", str(plan.ssh_port), target,
-    ]
+    return _control_ssh_args_for_plan(session.plan, session.control_path)
 
 
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
@@ -662,20 +822,9 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
         if plan.vendor in {"vyos", "pfsense"}:
             transfer_method = "scp_control_session"
             remote_created = True
-            if plan.vendor == "vyos":
-                remote_input = "\n".join(
-                    ["source /opt/vyatta/etc/functions/script-template"]
-                    + [f"run {command}" for command in preview["commands"]]
-                    + ["exit"]
-                ) + "\n"
-                remote_command = f"vbash -s > {shlex.quote(remote_output)}"
-            else:
-                remote_input = None
-                labeled_commands = []
-                for command in preview["commands"]:
-                    labeled_commands.extend([f"printf '\\n===== {command} =====\\n'", command])
-                remote_script = "{ " + "; ".join(labeled_commands) + f"; }} > {shlex.quote(remote_output)}"
-                remote_command = f"sh -c {shlex.quote(remote_script)}"
+            remote_input, remote_command = _interactive_collection_command(
+                plan, preview["commands"], remote_output
+            )
             collected = subprocess.run(
                 _control_ssh_args(session) + [remote_command],
                 input=remote_input,

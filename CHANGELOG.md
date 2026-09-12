@@ -17,6 +17,12 @@
 - Replaced fragmented effective-CIDR labels in Analyze and comparison selectors
   with the operator's original scan scope plus a concise excluded-address count;
   exact post-exclusion CIDRs remain retained as comparison evidence.
+- Replaced Device's generic SSH/SCP/cleanup preview blocks with one ordered
+  execution plan generated from the selected vendor and authentication path.
+  The preview now identifies where each action runs, shows the exact temporary
+  file creation, SCP copy-back, and removal steps for interactive VyOS and
+  pfSense collection, and correctly shows Cisco, Juniper, and key-based
+  collection as direct SSH streams with no remote temporary file.
 - Added an expanded map workspace that uses the available browser window and
   returns to the standard workspace with its button or Escape.
 - Kept subnet endpoints collapsed by default and added individual-line and

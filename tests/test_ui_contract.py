@@ -172,6 +172,22 @@ def test_device_configs_offer_reviewed_network_candidates():
     assert "does not start a scan" in html
 
 
+def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
+    html = device_config_page().body.decode()
+    assert "Collection execution preview" in html
+    assert "Complete read-only device command set" in html
+    assert "Actual ordered execution plan" in html
+    assert 'id="executionPlan"' in html
+    assert "data.execution_steps" in html
+    assert "step.location" in html
+    assert "step.kind" in html
+    assert "VyOS and pfSense create a named temporary output file" in html
+    assert "Cisco and Juniper return output directly through SSH and do not run SCP" in html
+    assert 'id="captureCommand"' not in html
+    assert 'id="scp"' not in html
+    assert 'id="cleanupPlan"' not in html
+
+
 def test_device_collection_history_has_structured_review_and_confirmed_delete():
     html = device_config_page().body.decode()
     assert 'id="historySearch"' in html
