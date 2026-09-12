@@ -427,7 +427,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="lineMagnet"' in html
     assert "lineMagnet" in html
     assert 'id="annotationTools"' in html
-    assert 'id="addLabel"' in html
+    assert 'id="addLabel"' not in html
     assert 'id="addBox"' in html
     assert 'id="addEllipse"' in html
     assert "annotations=new Map()" in html
@@ -438,6 +438,22 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function applyGatewayCompoundLayout" in html
     assert "function renderGatewayCompounds" in html
     assert "function expandGatewayCompanions" in html
+    assert 'id="toggleEditMode"' in html
+    assert 'id="parkingLot"' in html
+    assert 'id="connectionQueue"' in html
+    assert 'id="parkSelection"' in html
+    assert "Start with blank canvas" in html
+    assert "Endpoints stay grouped inside their subnet" in html
+    assert "parkedNodeIds=new Set()" in html
+    assert "function renderParkingLot" in html
+    assert "function stagedMapView" in html
+    assert "function relationshipDirection" in html
+    assert "function dependencyEntries" in html
+    assert "function parkMapObjects" in html
+    assert "function placeMapObjects" in html
+    assert "function startBlankMap" in html
+    assert "if(!editMode)return" in html
+    assert "event.key==='Delete'||event.key==='Backspace'" in html
     assert "Shift-click boxes to select and move them together" in html
     assert "const selectedNodeIds=new Set()" in html
     assert "function selectMapNode" in html
@@ -467,7 +483,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="wanBoundaryInterface"' in html
     assert "wanBoundaryRail.id='wanBoundaryRail'" in html
     assert "function updateWanBoundaryMarker" in html
-    assert "active=Boolean(wanAnchor&&!hiddenNodeIds.has(wanAnchor.nodeId))" in html
+    assert "active=Boolean(wanAnchor&&!hiddenNodeIds.has(wanAnchor.nodeId)&&!parkedNodeIds.has(wanAnchor.nodeId))" in html
     assert "function updateWanUplinkGeometry" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
@@ -658,7 +674,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function fitWorkspace" in html
     assert "function preserveLockedNodePositions" in html
     assert "if(!expanded){preserveLockedNodePositions();expandedMapExtent={...mapSize};}" in html
-    assert "if(expanded){setZoom(1);centerMap();}else fitWorkspace()" in html
+    assert "if(expanded){setZoom(1);centerMap();}else fitMap()" in html
     assert ".canvas.map-centered-x { justify-content:center; }" in html
     assert ".canvas.map-centered-y { align-items:center; }" in html
     assert "renderedWidth<=canvas.clientWidth" in html

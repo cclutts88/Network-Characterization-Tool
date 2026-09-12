@@ -247,11 +247,25 @@ within Reachability.
 - [x] Add optional 20- and 40-pixel object grids and visual line magnets for
   aligning compatible nearby trunks without creating or merging topology
   evidence.
-- [x] Add an analyst-local Map markup layer with colored labels, rectangles, and
-  ellipses that can be moved, resized, edited, and retained in private layouts.
+- [x] Add an analyst-local Map markup layer with colored rectangles and ellipses
+  that can contain text, be moved, resized, edited, deleted from their controls
+  or the keyboard, and be retained in private layouts.
 - [x] Add an optional joined gateway presentation that visually groups a routed
   next-hop device with the subnet containing its address, moves both parts as
   one, and keeps their separate evidence records and outgoing routes intact.
+- [x] Add an explicit Map Edit mode and keep line routing, object movement,
+  layout construction, alignment, locking, markup, and destructive presentation
+  controls out of the normal investigation view.
+- [x] Add a type-organized Map parking lot for blank-slate construction. Keep
+  endpoints bundled inside subnet objects, preserve all topology evidence while
+  objects are parked, restore lines automatically when both ends are placed, and
+  queue parked upstream, downstream, and peer dependencies for the active item.
+- [x] Preserve parked objects in private named layouts and let analysts park or
+  place joined gateway/subnet pairs as one visual construction unit.
+- [x] Exclude the Docker runtime's private bridge gateway from mission topology
+  and layout calculations while retaining it as tool-local raw traceroute path
+  evidence. Fit the standard viewer to placed content instead of empty expanded
+  workspace borders so locked objects do not appear to jump toward the corner.
 - [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
   the Map while retaining each CIDR as the stable technical identifier.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst

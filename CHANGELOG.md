@@ -2,6 +2,21 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added an explicit Map Edit mode. Line routing, node movement, alignment,
+  locking, markup, and other map-building controls stay hidden and inactive in
+  the normal investigation view.
+- Added a type-organized Map parking lot and blank-canvas workflow. Parked
+  objects keep their evidence and upstream/downstream/peer dependencies,
+  endpoints remain bundled in subnet groups, and connections reappear only when
+  both objects are placed.
+- Persisted parked presentation objects in private layouts and kept joined
+  gateway/subnet pairs together while parking or placing them.
+- Excluded Docker's private bridge gateway from mission-map topology while
+  retaining it in raw traceroute path evidence, and changed the standard viewer
+  to fit placed content instead of empty expanded-workspace borders.
+- Removed the redundant standalone label annotation. Colored boxes and ellipses
+  still support text, and selected shapes can now be deleted with Delete or
+  Backspace in Edit mode.
 - Added an analyst-local External WAN gateway designation that promotes a
   selected device or discovered host to the top WAN uplink and preserves the
   choice with private saved Map layouts.

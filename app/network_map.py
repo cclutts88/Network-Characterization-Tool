@@ -50,6 +50,28 @@ def valid_ip(value: object) -> str | None:
     return str(parsed)
 
 
+def container_default_gateway() -> str | None:
+    """Return Docker's private bridge gateway without classifying it as mission evidence."""
+    if not Path("/.dockerenv").exists():
+        return None
+    try:
+        rows = Path("/proc/net/route").read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        return None
+    for row in rows:
+        fields = row.split()
+        if len(fields) < 4 or fields[1] != "00000000":
+            continue
+        try:
+            if not int(fields[3], 16) & 0x2:
+                continue
+            octets = bytes.fromhex(fields[2])[::-1]
+            return valid_ip(".".join(str(value) for value in octets))
+        except (ValueError, IndexError):
+            continue
+    return None
+
+
 def valid_network(value: object) -> str | None:
     try:
         parsed = ipaddress.ip_network(str(value), strict=False)
@@ -440,6 +462,7 @@ def add_analysis_hosts(
     edges: dict[tuple[str, str, str], dict] | None = None,
 ) -> int:
     added = 0
+    tool_gateway = container_default_gateway()
     for host in analysis.get("hosts") or []:
         ip = valid_ip(host.get("ip"))
         if not ip:
@@ -497,6 +520,20 @@ def add_analysis_hosts(
                 hop_ip = valid_ip(hop.get("ip"))
                 if not hop_ip:
                     continue
+                path.append(
+                    {
+                        "ttl": hop.get("ttl"),
+                        "rtt": hop.get("rtt"),
+                        "ip": hop_ip,
+                        "hostname": hop.get("hostname"),
+                        "tool_local": bool(not previous_id and tool_gateway == hop_ip),
+                    }
+                )
+                # Docker's bridge gateway is part of the scanner runtime, not the
+                # assessed network. Preserve it in the raw path while keeping it
+                # out of the mission topology and layout calculations.
+                if not previous_id and tool_gateway == hop_ip:
+                    continue
                 hop_node = (
                     destination
                     if hop_ip == ip
@@ -507,14 +544,6 @@ def add_analysis_hosts(
                         kind="gateway",
                         source=source,
                     )
-                )
-                path.append(
-                    {
-                        "ttl": hop.get("ttl"),
-                        "rtt": hop.get("rtt"),
-                        "ip": hop_ip,
-                        "hostname": hop.get("hostname"),
-                    }
                 )
                 if edges is not None and previous_id and previous_id != hop_node["id"]:
                     add_edge(

@@ -136,6 +136,43 @@ def test_traceroute_hops_become_observed_map_relationships():
     assert any(edge["relation"] == "trace_hop" for edge in edges.values())
 
 
+def test_docker_bridge_gateway_stays_in_path_but_out_of_mission_map(monkeypatch):
+    monkeypatch.setattr(
+        "app.network_map.container_default_gateway", lambda: "172.17.0.1"
+    )
+    nodes, edges = {}, {}
+    add_analysis_hosts(
+        nodes,
+        {
+            "hosts": [
+                {
+                    "ip": "10.0.0.20",
+                    "ports": [],
+                    "trace": {
+                        "hops": [
+                            {"ttl": 1, "ip": "172.17.0.1", "rtt": "0.10"},
+                            {"ttl": 2, "ip": "10.0.0.1", "rtt": "0.50"},
+                            {"ttl": 3, "ip": "10.0.0.20", "rtt": "0.90"},
+                        ]
+                    },
+                }
+            ]
+        },
+        {"kind": "automated_nmap", "label": "container scan"},
+        edges,
+    )
+
+    assert "ip:172.17.0.1" not in nodes
+    path = nodes["ip:10.0.0.20"]["paths"][0]
+    assert path["hops"][0]["ip"] == "172.17.0.1"
+    assert path["hops"][0]["tool_local"] is True
+    assert any(
+        edge["source"] == "ip:10.0.0.1"
+        and edge["target"] == "ip:10.0.0.20"
+        for edge in edges.values()
+    )
+
+
 def test_scanned_infrastructure_counts_as_subnet_characterization():
     nodes, edges = {}, {}
     scan_source = {
