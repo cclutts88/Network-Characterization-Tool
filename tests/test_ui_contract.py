@@ -388,6 +388,11 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Math.floor(index/section.rows)" in html
     assert "(continued)" not in html
     assert "group-host-row" in html
+    assert "const endpointModes=new Map(),endpointSortModes=new Map(),manualPositions=new Map(),groupedSizes=new Map()" in html
+    assert "function enableGroupedResize" in html
+    assert "group-resize-handle" in html
+    assert "Resize grouped boxes from the lower-right corner" in html
+    assert "groupedSizes.clear()" in html
     assert "Group / sort by IP" in html
     assert "Group / sort by hostname" in html
     assert "Group / sort by OS" in html

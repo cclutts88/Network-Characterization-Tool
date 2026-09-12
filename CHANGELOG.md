@@ -11,6 +11,9 @@
   host evidence in the details panel.
 - Kept each endpoint breakdown as one logical pool when it flows into multiple
   columns, with one centered heading and one total spanning the entire group.
+- Added lower-right resize handles to grouped endpoint boxes; widening a box
+  reflows its host pool into additional columns, and Reset layout restores the
+  automatic size.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

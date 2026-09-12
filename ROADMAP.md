@@ -129,6 +129,8 @@ an optional future mode within Reachability.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP
   address, hostname, or operating system, with useful counts and breakdowns for
   the selected investigation view.
+- [x] Let analysts resize grouped endpoint boxes and reflow their host pools
+  across the available columns without changing shared evidence.
 - [ ] Add zoom-dependent detail and optional analytical overlays.
 - [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
 
