@@ -202,6 +202,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="subnetFilter"' in html
     assert 'id="deviceTypeFilter"' in html
     assert 'id="hostRows"' in html
+    assert '<details class="panel" id="inventoryPanel">' in html
+    assert 'id="inventorySummary"' in html
     assert 'class="panel evidence-guide"' in html
     assert "position:sticky;top:var(--hunt-header-offset)" in html
     assert "new ResizeObserver(updateStickyOffset)" in html
@@ -219,6 +221,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "Capability datasets" in html
     assert '<label for="category">Dataset</label>' in html
     assert "All datasets" in html
+    assert "data.datasets||data.categories||[]" in html
     assert "Host dataset changes" in html
     assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
 

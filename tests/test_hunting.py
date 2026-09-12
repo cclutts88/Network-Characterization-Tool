@@ -37,11 +37,27 @@ def test_category_rules_support_nonstandard_ports_and_multiple_categories():
     ssh = categorize_port(port(2222, "ssh", "OpenSSH"))
     mixed = categorize_port(port(443, "ldap", "Directory gateway"))
 
-    assert ssh[0]["category"] == "Remote Access"
+    assert ssh[0]["category"] == "Remote Access & Administration"
     assert ssh[0]["capability_state"] == "observed"
     assert ssh[0]["nonstandard_port"] is True
-    assert {item["category"] for item in mixed} == {"Web", "Identity"}
+    assert {item["category"] for item in mixed} == {
+        "Web Applications & APIs", "Directory & Identity",
+    }
     assert {item["capability_state"] for item in mixed} == {"inferred", "observed"}
+
+
+def test_dataset_catalog_supports_authentication_and_only_activates_matches():
+    result = build_hunting_analysis({
+        "hosts": [host("10.0.0.10", [port(88, "kerberos-sec")])]
+    })
+
+    assert {item["name"] for item in result["datasets"]} == {"Authentication"}
+    assert result["categories"] == result["datasets"]
+    catalog = {item["name"]: item for item in result["dataset_catalog"]}
+    assert len(catalog) == 26
+    assert catalog["Authentication"]["active"] is True
+    assert catalog["Routing & Network Control Plane"]["active"] is False
+    assert catalog["Firewall, NAT & Policy"]["source_types"] == ["network_device"]
 
 
 def test_hunting_analysis_distinguishes_capability_evidence_and_keeps_unknown_services():
@@ -66,8 +82,8 @@ def test_hunting_analysis_distinguishes_capability_evidence_and_keeps_unknown_se
     assert result["finding_count"] == 3
     assert result["nonstandard_finding_count"] == 1
     assert result["categories"] == [
-        {"name": "Remote Access", "finding_count": 2},
-        {"name": "Other Exposed Service", "finding_count": 1},
+        {"name": "Remote Access & Administration", "finding_count": 2},
+        {"name": "Unknown / Other Exposed Service", "finding_count": 1},
     ]
     assert result["capability_states"]["correlated"] == 1
     assert result["capability_states"]["observed"] == 2
@@ -172,9 +188,11 @@ def test_hunting_comparison_reports_added_removed_and_changed_capabilities():
         "findings_changed": 1,
         "hosts_with_category_changes": 1,
     }
-    assert result["findings_added"][0]["category"] == "Remote Access"
+    assert result["findings_added"][0]["category"] == "Remote Access & Administration"
     assert "version" in result["findings_changed"][0]["changes"]
-    assert result["host_category_changes"][0]["categories_added"] == ["Remote Access"]
+    assert result["host_category_changes"][0]["categories_added"] == [
+        "Remote Access & Administration"
+    ]
 
 
 def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):

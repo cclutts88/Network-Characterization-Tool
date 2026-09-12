@@ -6,45 +6,156 @@ import ipaddress
 from app.comparison import canonical_host_key
 
 
-CATEGORY_RULES = {
-    "Remote Access": {
+DATASET_RULES = {
+    "Authentication": {
+        "services": ("kerberos", "kpasswd", "radius", "tacacs", "diameter", "ntlm"),
+        "ports": {49, 88, 464, 1645, 1646, 1812, 1813, 3868},
+        "source_types": ("nmap",),
+    },
+    "Directory & Identity": {
+        "services": ("ldap", "ldaps", "globalcatldap", "active directory"),
+        "ports": {389, 636, 3268, 3269},
+        "source_types": ("nmap",),
+    },
+    "Remote Access & Administration": {
         "services": ("ssh", "telnet", "rdp", "ms-wbt", "vnc", "winrm", "pcanywhere", "x11"),
         "ports": {22, 23, 3389, 5800, 5900, 5901, 5985, 5986},
+        "source_types": ("nmap",),
     },
-    "File Transfer": {
-        "services": ("ftp", "tftp", "sftp", "scp", "rsync"),
-        "ports": {20, 21, 69, 115, 873, 989, 990},
+    "Web Applications & APIs": {
+        "services": ("http", "https", "http-proxy", "ssl/http", "web"),
+        "ports": {80, 443, 8000, 8008, 8080, 8081, 8088, 8443, 8888},
+        "source_types": ("nmap",),
     },
     "File Sharing": {
         "services": ("smb", "microsoft-ds", "netbios-ssn", "nfs", "afp"),
         "ports": {111, 137, 138, 139, 445, 548, 2049},
+        "source_types": ("nmap",),
     },
-    "Web": {
-        "services": ("http", "https", "http-proxy", "ssl/http", "web"),
-        "ports": {80, 443, 8000, 8008, 8080, 8081, 8088, 8443, 8888},
+    "File Transfer": {
+        "services": ("ftp", "tftp", "sftp", "scp", "rsync"),
+        "ports": {20, 21, 69, 115, 873, 989, 990},
+        "source_types": ("nmap",),
     },
-    "Identity": {
-        "services": ("ldap", "kerberos", "kpasswd", "radius", "tacacs"),
-        "ports": {49, 88, 389, 464, 636, 1812, 1813, 3268, 3269},
-    },
-    "Databases": {
+    "Databases & Data Stores": {
         "services": (
             "mysql", "mariadb", "postgres", "ms-sql", "mssql", "oracle",
             "mongodb", "redis", "cassandra", "couchdb", "db2", "sybase",
+            "elasticsearch", "opensearch",
         ),
-        "ports": {1433, 1521, 3306, 5432, 5984, 6379, 9042, 27017},
+        "ports": {1433, 1521, 3306, 5432, 5984, 6379, 9042, 9200, 27017},
+        "source_types": ("nmap",),
     },
-    "Email": {
-        "services": ("smtp", "submission", "pop3", "imap"),
-        "ports": {25, 110, 143, 465, 587, 993, 995},
+    "Name Resolution": {
+        "services": ("domain", "dns", "mdns", "llmnr", "netbios-ns"),
+        "ports": {53, 137, 5353, 5355},
+        "source_types": ("nmap",),
+    },
+    "Address Assignment": {
+        "services": ("bootps", "bootpc", "dhcp", "dhcpv6"),
+        "ports": {67, 68, 546, 547},
+        "source_types": ("nmap",),
     },
     "Network Management": {
-        "services": ("snmp", "netconf", "restconf", "syslog", "gnmi"),
-        "ports": {161, 162, 514, 6514, 830, 9339},
+        "services": ("snmp", "netconf", "restconf", "gnmi"),
+        "ports": {161, 162, 830, 9339},
+        "source_types": ("nmap", "network_device"),
+    },
+    "Monitoring, Logging & Security": {
+        "services": (
+            "syslog", "zabbix", "nagios", "nrpe", "splunk", "beats",
+            "kibana", "prometheus", "grafana",
+        ),
+        "ports": {514, 5044, 5601, 5666, 6514, 9090, 10050, 10051},
+        "source_types": ("nmap",),
+    },
+    "VPN & Tunneling": {
+        "services": ("isakmp", "ike", "ipsec", "openvpn", "wireguard", "pptp", "l2tp", "sstp"),
+        "ports": {500, 1194, 1701, 1723, 4500, 51820},
+        "source_types": ("nmap", "network_device"),
+    },
+    "Proxies, Gateways & Load Balancers": {
+        "services": ("socks", "squid", "http-proxy", "haproxy", "load balancer", "reverse proxy"),
+        "ports": {1080, 3128},
+        "source_types": ("nmap",),
+    },
+    "Email & Messaging": {
+        "services": (
+            "smtp", "submission", "pop3", "imap", "amqp", "rabbitmq",
+            "kafka", "xmpp",
+        ),
+        "ports": {25, 110, 143, 465, 587, 993, 995, 5222, 5269, 5671, 5672, 9092},
+        "source_types": ("nmap",),
+    },
+    "Virtualization & Containers": {
+        "services": (
+            "vmware", "vcenter", "docker", "kubernetes", "kube", "libvirt",
+            "proxmox", "openstack",
+        ),
+        "ports": {902, 903, 2375, 2376, 6443, 8006, 10250, 16509},
+        "source_types": ("nmap",),
+    },
+    "Backup & Storage": {
+        "services": ("iscsi", "ndmp", "bacula", "veeam", "backup", "storage"),
+        "ports": {3260, 9101, 9102, 9103, 10000},
+        "source_types": ("nmap",),
+    },
+    "Development & Automation": {
+        "services": ("git", "svn", "jenkins", "gitea", "gitlab", "artifactory", "nexus repository"),
+        "ports": {3690, 9418},
+        "source_types": ("nmap",),
+    },
+    "Time Synchronization": {
+        "services": ("ntp", "ptp", "precision time"),
+        "ports": {123, 319, 320},
+        "source_types": ("nmap",),
+    },
+    "Voice, Video & Collaboration": {
+        "services": ("sip", "h323", "rtsp", "mgcp", "voip"),
+        "ports": {554, 1720, 2427, 2727, 5060, 5061},
+        "source_types": ("nmap",),
+    },
+    "Printing & Imaging": {
+        "services": ("ipp", "printer", "jetdirect", "pdl-datastream", "lpd"),
+        "ports": {515, 631, 9100},
+        "source_types": ("nmap",),
+    },
+    "Discovery & Device Advertisement": {
+        "services": ("ssdp", "upnp", "ws-discovery", "slp", "mdns"),
+        "ports": {427, 1900, 3702, 5353},
+        "source_types": ("nmap",),
+    },
+    "IoT & Building Automation": {
+        "services": ("mqtt", "coap", "bacnet", "home assistant", "building automation"),
+        "ports": {1883, 5683, 5684, 8883, 47808},
+        "source_types": ("nmap",),
+    },
+    "Industrial / OT": {
+        "services": (
+            "modbus", "dnp3", "ethernet-ip", "enip", "s7", "opcua",
+            "bacnet", "iec-104", "fox",
+        ),
+        "ports": {102, 502, 1911, 2404, 4840, 20000, 44818, 47808},
+        "source_types": ("nmap",),
+    },
+    "Routing & Network Control Plane": {
+        "services": ("bgp", "ospf", "rip", "bfd", "ldp", "isis", "vrrp"),
+        "ports": {179, 520, 521, 646, 3784, 3785},
+        "source_types": ("nmap", "network_device"),
+    },
+    "Firewall, NAT & Policy": {
+        "services": ("firewall", "pfsense", "opnsense", "pan-os", "fortigate", "cisco asa"),
+        "ports": set(),
+        "source_types": ("network_device",),
     },
 }
 
-CATEGORY_ORDER = (*CATEGORY_RULES.keys(), "Other Exposed Service")
+# CATEGORY_RULES remains as a compatibility alias for older integrations while
+# the analyst-facing language uses datasets.
+CATEGORY_RULES = DATASET_RULES
+OTHER_DATASET = "Unknown / Other Exposed Service"
+DATASET_ORDER = (*DATASET_RULES.keys(), OTHER_DATASET)
+CATEGORY_ORDER = DATASET_ORDER
 STATE_ORDER = ("exposed", "inferred", "observed", "correlated")
 UNKNOWN_IDENTITY = {"", "unknown", "unclassified", "unknown server"}
 
@@ -98,11 +209,18 @@ def _device_type(host: dict, categories: set[str]) -> str:
         if marker in identity:
             return label
     for category, label in (
-        ("Identity", "Identity server"), ("Databases", "Database server"),
-        ("Email", "Mail server"), ("File Sharing", "File server"),
+        ("Authentication", "Authentication server"),
+        ("Directory & Identity", "Identity server"),
+        ("Databases & Data Stores", "Database server"),
+        ("Email & Messaging", "Messaging server"), ("File Sharing", "File server"),
         ("File Transfer", "File-transfer host"),
-        ("Network Management", "Network device"), ("Web", "Web host"),
-        ("Remote Access", "Remote-access host"),
+        ("Virtualization & Containers", "Virtualization host"),
+        ("Printing & Imaging", "Printer"),
+        ("Industrial / OT", "Industrial / OT device"),
+        ("IoT & Building Automation", "IoT / building device"),
+        ("Network Management", "Network device"),
+        ("Web Applications & APIs", "Web host"),
+        ("Remote Access & Administration", "Remote-access host"),
     ):
         if category in categories:
             return label
@@ -131,6 +249,11 @@ def _summarize_hunting(
     state_counts = Counter(
         state for item in findings for state in item["evidence_states"]
     )
+    active_datasets = [
+        {"name": name, "finding_count": category_counts.get(name, 0)}
+        for name in DATASET_ORDER
+        if category_counts.get(name)
+    ]
     return {
         "status": "hunting_complete",
         "source": source,
@@ -142,10 +265,18 @@ def _summarize_hunting(
         "nonstandard_finding_count": sum(
             1 for item in findings if item["nonstandard_port"]
         ),
-        "categories": [
-            {"name": name, "finding_count": category_counts.get(name, 0)}
-            for name in CATEGORY_ORDER
-            if category_counts.get(name)
+        "datasets": active_datasets,
+        "categories": active_datasets,
+        "dataset_catalog": [
+            {
+                "name": name,
+                "active": bool(category_counts.get(name)),
+                "finding_count": category_counts.get(name, 0),
+                "source_types": list(
+                    DATASET_RULES.get(name, {}).get("source_types", ("nmap",))
+                ),
+            }
+            for name in DATASET_ORDER
         ],
         "capability_states": {
             state: state_counts.get(state, 0) for state in STATE_ORDER
@@ -202,7 +333,7 @@ def categorize_port(port: dict) -> list[dict]:
     if categories:
         return categories
     return [{
-        "category": "Other Exposed Service",
+        "category": OTHER_DATASET,
         "capability_state": "exposed",
         "evidence_states": ["exposed"],
         "standard_port": False,

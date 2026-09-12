@@ -17,6 +17,12 @@
   scrolling through host and finding tables.
 - Renamed Hunt's analyst-facing capability categories to datasets throughout
   the summary, filter, findings table, and comparison language.
+- Expanded Hunt to a 26-dataset classification catalog including authentication,
+  identity, name resolution, VPN, monitoring, virtualization, storage, OT, IoT,
+  routing, and policy domains while keeping only active datasets in the summary
+  and filter dropdown.
+- Made the Host and device inventory collapsible and kept its current host count
+  visible in the collapsed heading.
 
 ## 0.12.0-dev — Dedicated service hunting
 
