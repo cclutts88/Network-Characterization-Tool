@@ -50,6 +50,9 @@
 - Added Shift-click multi-object selection and group dragging. Selected boxes
   retain their relative positions while moving, relationship lines update live,
   and edge-triggered auto-pan continues to work for the complete selection.
+- Made Shift-click on an expanded subnet in Individual view select or deselect
+  that subnet and every dependent host node, allowing the complete branch to be
+  repositioned together.
 - Added automatic zoom-dependent detail levels: Overview, Summary, Full detail,
   and Evidence detail. The active level is visible beside the map scale, and
   labels, endpoint rows, controls, and evidence summaries adapt to the scale.

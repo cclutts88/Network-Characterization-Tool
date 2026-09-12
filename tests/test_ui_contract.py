@@ -356,6 +356,11 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Shift-click boxes to select and move them together" in html
     assert "const selectedNodeIds=new Set()" in html
     assert "function selectMapNode" in html
+    assert "function selectionBranchIds" in html
+    assert "endpointModes.get(id)==='individual'" in html
+    assert "groupHosts.get(id)||[]" in html
+    assert "targets.every(target=>selectedNodeIds.has(target))" in html
+    assert "Shift-click a subnet to select its full host branch" in html
     assert "function clearMapSelection" in html
     assert "dragIds=selectedNodeIds.has(node.id)" in html
     assert "currentNodeElements.get(id)?.setAttribute" in html

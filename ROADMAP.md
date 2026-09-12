@@ -140,6 +140,9 @@ an optional future mode within Reachability.
 - [x] Auto-pan the mission workspace when an analyst drags a node near any edge.
 - [x] Add Shift-click multi-object selection and group dragging that preserves
   relative placement, updates relationship lines, and supports edge auto-pan.
+- [x] In an expanded Individual endpoint view, let Shift-clicking the parent
+  subnet select or deselect the subnet and all of its dependent host nodes as
+  one movable branch.
 - [x] Add zoom-dependent detail levels that move automatically between overview,
   summary, full, and evidence views while showing the active level.
 - [x] Add a live minimap in the expanded workspace with selected-node markers, a
