@@ -167,7 +167,7 @@ class ScanScheduleCreate(BaseModel):
     interval_minutes: int = Field(default=60, ge=5, le=10080)
     reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
     originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
-    timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    timeout_seconds: int = Field(default=2700, ge=10, le=3600)
     chunking_enabled: bool = False
     chunk_size: int = Field(default=256, ge=1, le=4096)
     chunk_delay_seconds: int = Field(default=30, ge=0, le=3600)
@@ -269,7 +269,7 @@ class ScanRunPlan(BaseModel):
 
 class ScanRunRequest(ScanRunPlan):
     capture: Literal[True] = True
-    timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    timeout_seconds: int = Field(default=2700, ge=10, le=3600)
 
 
 class DeleteConfirmation(BaseModel):
@@ -2415,7 +2415,7 @@ def _scheduled_request(
         targets=targets,
         no_strike=no_strike,
         capture=True,
-        timeout_seconds=int(schedule.get("timeout_seconds") or 900),
+        timeout_seconds=int(schedule.get("timeout_seconds") or 2700),
         fallback_policy=schedule.get("fallback_policy", "require_approval"),
         schedule_id=schedule["schedule_id"],
         schedule_batch_id=batch_id,

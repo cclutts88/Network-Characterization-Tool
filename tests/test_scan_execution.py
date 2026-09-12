@@ -35,6 +35,19 @@ class FakeProcess:
         return 0
 
 
+def test_scan_run_default_timeout_is_45_minutes():
+    request = ScanRunRequest(
+        operator="Tester",
+        reason="Verify default timeout",
+        originating_host="test-host",
+        interface="eth0",
+        targets=["192.0.2.10/32"],
+        capture=True,
+    )
+
+    assert request.timeout_seconds == 45 * 60
+
+
 def test_udp_failure_preserves_tcp_xml_as_analyzable_partial_result(tmp_path):
     db_path = tmp_path / "nct.db"
     data_dir = tmp_path / "data"

@@ -92,6 +92,10 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Pause and require operator approval before Nmap" in html
     assert "Estimated time left" in html
     assert "Timeout limit in" in html
+    assert 'for="timeout">Run timeout (minutes)' in html
+    assert 'id="timeout" type="number" min="1" max="60" step="1" value="45"' in html
+    assert "You can stop the scan at any time from Current run" in html
+    assert "timeout_seconds:timeoutSeconds()" in html
     assert "Live update" in html
     assert "exact_execution_command" in html
     assert 'id="savedNetworkPanel"' in html

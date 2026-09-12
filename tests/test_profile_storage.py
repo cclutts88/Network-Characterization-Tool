@@ -59,6 +59,7 @@ def test_profile_versions_are_immutable_and_schedules_remain_pinned(tmp_path):
         ),
         db_path,
     )
+    assert schedule["timeout_seconds"] == 45 * 60
     version_two = create_scan_profile_version(
         version_one["profile_id"],
         ScanProfileVersionCreate(
