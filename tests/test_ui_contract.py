@@ -404,6 +404,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "if(!event.ctrlKey&&!event.metaKey)return" not in html
     assert "syncLockedPresentationGeometry" not in html
     assert "Reset zoom · Use the wheel to zoom" in html
+    assert "parentParkedHosts" in html
+    assert "(!editMode||node.kind!=='host')" not in html
+    assert "if(editMode){buildGroups();for" not in html
     assert "const autoPanDrag=" in html
     assert "requestAnimationFrame(autoPanDrag)" in html
     assert "canvas.scrollLeft+=panX" in html

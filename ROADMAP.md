@@ -271,6 +271,9 @@ within Reachability.
 - [x] Keep viewport navigation separate from object geometry so navigating never
   rewrites or snaps object and line coordinates. Use click-and-drag to pan and
   ordinary wheel movement for pointer-centered zoom.
+- [x] Preserve each subnet's Grouped or Individual endpoint presentation while
+  entering Edit mode. Show individual host objects when their subnet is placed,
+  and keep those dependent hosts off-canvas while the subnet is parked.
 - [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
   the Map while retaining each CIDR as the stable technical identifier.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst
