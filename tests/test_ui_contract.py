@@ -238,6 +238,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert '<details class="panel evidence-guide" open>' in html
     assert '<details class="panel" open><summary>Capability datasets</summary>' in html
     assert '<details class="panel" open><summary>Capability findings</summary>' in html
+    assert "details.panel>summary::before" in html
+    assert "details.panel[open]>summary::before" in html
     assert "position:sticky;top:var(--hunt-header-offset)" in html
     assert "scroll-margin-top:var(--hunt-result-offset" in html
     assert "stickyOffsetObserver.observe(pageHeader)" in html
