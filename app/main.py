@@ -1098,7 +1098,7 @@ def analyze_hunting_network() -> dict:
             "scope_summaries": scope_summaries,
             "evidence": {"label": "Latest network evidence", "sources": sources},
         },
-    ), build_topology())
+    ), build_topology(), include_configuration_devices=True)
     result["status"] = "hunting_network_complete"
     return result
 

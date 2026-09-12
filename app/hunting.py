@@ -156,7 +156,7 @@ CATEGORY_RULES = DATASET_RULES
 OTHER_DATASET = "Unknown / Other Exposed Service"
 DATASET_ORDER = (*DATASET_RULES.keys(), OTHER_DATASET)
 CATEGORY_ORDER = DATASET_ORDER
-STATE_ORDER = ("exposed", "inferred", "observed", "correlated")
+STATE_ORDER = ("exposed", "inferred", "observed", "correlated", "configuration")
 UNKNOWN_IDENTITY = {"", "unknown", "unclassified", "unknown server"}
 
 
@@ -190,6 +190,51 @@ def _scope_subnet(ip_value: object, subnets: list[str] | None) -> str:
     if not matches:
         return "Unmapped"
     return str(max(matches, key=lambda network: network.prefixlen))
+
+
+def _configured_subnet(node: dict) -> str:
+    """Choose the most relevant configured network for a topology device."""
+    try:
+        management_ip = ipaddress.ip_address(str(node.get("ip") or ""))
+    except ValueError:
+        management_ip = None
+    networks = []
+    for interface in node.get("interfaces") or []:
+        try:
+            network = ipaddress.ip_interface(str(interface.get("address") or "")).network
+        except ValueError:
+            continue
+        if network.is_loopback:
+            continue
+        networks.append(network)
+    if not networks:
+        return "Unmapped"
+    containing = [
+        network for network in networks
+        if management_ip and management_ip.version == network.version and management_ip in network
+    ]
+    return str(max(containing, key=lambda network: network.prefixlen) if containing else networks[0])
+
+
+def _configuration_categories(node: dict) -> list[tuple[str, list[str]]]:
+    """Map explicit retained device roles to non-port configuration evidence."""
+    role = str(node.get("role") or "").strip().lower()
+    interfaces = len(node.get("interfaces") or [])
+    routes = len(node.get("routes") or [])
+    categories = []
+    if role == "router":
+        basis = ["retained device configuration identifies a router"]
+        if interfaces:
+            basis.append(f"{interfaces} configured interface{'s' if interfaces != 1 else ''}")
+        if routes:
+            basis.append(f"{routes} retained route{'s' if routes != 1 else ''}")
+        categories.append(("Routing & Network Control Plane", basis))
+    if role == "firewall":
+        basis = ["retained device configuration identifies a firewall"]
+        if interfaces:
+            basis.append(f"{interfaces} configured interface{'s' if interfaces != 1 else ''}")
+        categories.append(("Firewall, NAT & Policy", basis))
+    return categories
 
 
 def _device_type(host: dict, categories: set[str]) -> str:
@@ -241,8 +286,8 @@ def _summarize_hunting(
     findings.sort(key=lambda item: (
         item.get("ip") or item.get("hostname") or "",
         CATEGORY_ORDER.index(item["category"]),
-        item["port"],
-        item["protocol"],
+        int(item.get("port") or 0),
+        item.get("protocol") or "",
     ))
     hosts.sort(key=lambda item: item.get("ip") or item.get("hostname") or "")
     category_counts = Counter(item["category"] for item in findings)
@@ -258,6 +303,15 @@ def _summarize_hunting(
         "status": "hunting_complete",
         "source": source,
         "host_count": len(hosts),
+        "nmap_host_count": sum(
+            1 for item in hosts if item.get("evidence_origin") != "configuration_only"
+        ),
+        "configuration_device_count": sum(
+            1 for item in hosts if item.get("has_configuration_evidence")
+        ),
+        "configuration_only_device_count": sum(
+            1 for item in hosts if item.get("evidence_origin") == "configuration_only"
+        ),
         "hosts_with_findings_count": sum(
             1 for item in hosts if item.get("finding_count")
         ),
@@ -423,6 +477,8 @@ def build_hunting_analysis(
                 if any(state in item["evidence_states"] for item in host_findings)
             ],
             "finding_count": len(host_findings),
+            "evidence_origin": "nmap",
+            "has_configuration_evidence": False,
             "source_refs": source_refs,
             "last_observed": (evidence or {}).get("completed_at")
             or (evidence or {}).get("created_at"),
@@ -478,7 +534,9 @@ def merge_hunting_analyses(
     )
 
 
-def correlate_hunting_identity(result: dict, topology: dict) -> dict:
+def correlate_hunting_identity(
+    result: dict, topology: dict, *, include_configuration_devices: bool = False
+) -> dict:
     """Add attributable topology identity without replacing direct scan evidence."""
     nodes_by_ip = {}
     for node in topology.get("nodes") or []:
@@ -488,9 +546,12 @@ def correlate_hunting_identity(result: dict, topology: dict) -> dict:
 
     hosts = [dict(item) for item in result.get("hosts") or []]
     hosts_by_key = {}
+    hosts_by_ip = {}
     for host in hosts:
         key = str(host.get("host_key") or "")
         hosts_by_key[key] = host
+        if host.get("ip"):
+            hosts_by_ip[str(host["ip"])] = host
         direct_mac = str(host.get("mac") or "").strip()
         if direct_mac:
             source_ref = next(iter(host.get("source_refs") or []), {})
@@ -564,6 +625,112 @@ def correlate_hunting_identity(result: dict, topology: dict) -> dict:
             if identity.get(field) not in (None, "", {}):
                 finding[field] = identity[field]
         findings.append(finding)
+
+    if include_configuration_devices:
+        for node in topology.get("nodes") or []:
+            if node.get("kind") != "device":
+                continue
+            configuration_sources = [
+                dict(item) for item in (node.get("sources") or [])
+                if item.get("kind") in {"device_configuration", "configuration_output"}
+            ]
+            if not configuration_sources:
+                continue
+            addresses = [
+                str(value) for value in [node.get("ip"), *(node.get("addresses") or [])]
+                if value
+            ]
+            host = next((hosts_by_ip[value] for value in addresses if value in hosts_by_ip), None)
+            role = str(node.get("role") or "network_device").strip()
+            timestamp = max(
+                (str(item.get("timestamp") or "") for item in configuration_sources),
+                default="",
+            ) or None
+            if host is None:
+                host_key = f"configuration:{node.get('id') or node.get('ip') or node.get('hostname')}"
+                os_name = str(node.get("os") or "").strip()
+                os_filter = os_name if os_name.lower() not in UNKNOWN_IDENTITY else "Unclassified"
+                host = {
+                    "host_key": host_key,
+                    "ip": node.get("ip"),
+                    "hostname": node.get("hostname") or node.get("label"),
+                    "mac": node.get("mac"),
+                    "vendor": node.get("vendor"),
+                    "os": node.get("os"),
+                    "os_group": "Network device",
+                    "os_filter": os_filter,
+                    "subnet": _configured_subnet(node),
+                    "device_type": role.replace("_", " ").title(),
+                    "categories": [],
+                    "protocols": ["configuration"],
+                    "services": [],
+                    "nonstandard_port": False,
+                    "capability_states": ["configuration"],
+                    "finding_count": 0,
+                    "evidence_origin": "configuration_only",
+                    "has_configuration_evidence": True,
+                    "source_refs": configuration_sources,
+                    "last_observed": timestamp,
+                }
+                hosts.append(host)
+                hosts_by_key[host_key] = host
+                for value in addresses:
+                    hosts_by_ip[value] = host
+            else:
+                host["has_configuration_evidence"] = True
+                host["evidence_origin"] = "nmap_and_configuration"
+                known_urls = {item.get("url") for item in host.get("source_refs") or []}
+                host.setdefault("source_refs", []).extend(
+                    item for item in configuration_sources if item.get("url") not in known_urls
+                )
+                if timestamp and timestamp > str(host.get("last_observed") or ""):
+                    host["last_observed"] = timestamp
+
+            configuration_findings = []
+            for category, basis in _configuration_categories(node):
+                configuration_findings.append({
+                    "host_key": host["host_key"],
+                    "ip": host.get("ip"),
+                    "hostname": host.get("hostname"),
+                    "mac": host.get("mac"),
+                    "vendor": host.get("vendor"),
+                    "os": host.get("os"),
+                    "os_group": host.get("os_group"),
+                    "os_filter": host.get("os_filter"),
+                    "subnet": host.get("subnet"),
+                    "device_type": host.get("device_type"),
+                    "protocol": "configuration",
+                    "port": None,
+                    "state": "retained",
+                    "service": f"{role.replace('_', ' ')} configuration",
+                    "product": node.get("vendor"),
+                    "version": None,
+                    "outlier": False,
+                    "category": category,
+                    "capability_state": "configuration",
+                    "evidence_states": ["configuration"],
+                    "evidence_kind": "device_configuration",
+                    "standard_port": False,
+                    "nonstandard_port": False,
+                    "match_basis": basis,
+                    "source_refs": configuration_sources,
+                    "last_observed": timestamp,
+                })
+            findings.extend(configuration_findings)
+            if configuration_findings:
+                categories = set(host.get("categories") or [])
+                categories.update(item["category"] for item in configuration_findings)
+                host["categories"] = sorted(
+                    categories, key=lambda item: CATEGORY_ORDER.index(item)
+                )
+                host["finding_count"] = int(host.get("finding_count") or 0) + len(configuration_findings)
+                if "configuration" not in (host.get("capability_states") or []):
+                    host.setdefault("capability_states", []).append("configuration")
+        for finding in findings:
+            identity = hosts_by_key.get(str(finding.get("host_key") or ""), {})
+            for field in ("evidence_origin", "has_configuration_evidence"):
+                if field in identity:
+                    finding[field] = identity[field]
     return _summarize_hunting(
         hosts,
         findings,

@@ -6,6 +6,7 @@ from app.hunting import (
     build_hunting_analysis,
     categorize_port,
     compare_hunting_results,
+    correlate_hunting_identity,
     merge_hunting_analyses,
 )
 from app.main import app
@@ -131,6 +132,84 @@ def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
     assert result["host_count"] == 1
     assert result["finding_count"] == 1
     assert result["findings"][0]["version"] == "9.2"
+
+
+def test_network_hunt_adds_configuration_devices_without_claiming_nmap_observation():
+    result = build_hunting_analysis({
+        "hosts": [host("10.0.0.10", [port(22, "ssh", "OpenSSH")])]
+    })
+    topology = {"nodes": [{
+        "id": "ip:192.0.2.10",
+        "kind": "device",
+        "ip": "192.0.2.10",
+        "addresses": ["192.0.2.10", "10.80.0.1"],
+        "hostname": "Core router",
+        "role": "router",
+        "vendor": "cisco",
+        "interfaces": [{"name": "Gi0/1", "address": "10.80.0.1/24"}],
+        "routes": [],
+        "sources": [{
+            "kind": "device_configuration",
+            "label": "cisco router configuration",
+            "timestamp": "2026-09-11T12:00:00+00:00",
+            "url": "/api/device-configs/config/files/manifest.json",
+        }],
+    }]}
+
+    correlated = correlate_hunting_identity(
+        result, topology, include_configuration_devices=True
+    )
+
+    assert correlated["host_count"] == 2
+    assert correlated["nmap_host_count"] == 1
+    assert correlated["configuration_device_count"] == 1
+    assert correlated["configuration_only_device_count"] == 1
+    device = next(item for item in correlated["hosts"] if item["device_type"] == "Router")
+    assert device["evidence_origin"] == "configuration_only"
+    assert device["subnet"] == "10.80.0.0/24"
+    finding = next(
+        item for item in correlated["findings"]
+        if item["category"] == "Routing & Network Control Plane"
+    )
+    assert finding["port"] is None
+    assert finding["evidence_states"] == ["configuration"]
+    assert finding["evidence_kind"] == "device_configuration"
+
+
+def test_network_hunt_correlates_matching_configuration_device_without_duplication():
+    result = build_hunting_analysis({
+        "hosts": [host("10.0.0.1", [port(443, "https")])]
+    })
+    topology = {"nodes": [{
+        "id": "ip:10.0.0.1",
+        "kind": "device",
+        "ip": "10.0.0.1",
+        "addresses": ["10.0.0.1"],
+        "hostname": "Edge firewall",
+        "role": "firewall",
+        "vendor": "pfsense",
+        "interfaces": [],
+        "routes": [],
+        "sources": [{
+            "kind": "configuration_output",
+            "label": "firewall config.xml",
+            "timestamp": "2026-09-11T12:00:00+00:00",
+            "url": "/api/device-configs/firewall/files/config.xml",
+        }],
+    }]}
+
+    correlated = correlate_hunting_identity(
+        result, topology, include_configuration_devices=True
+    )
+
+    assert correlated["host_count"] == 1
+    assert correlated["nmap_host_count"] == 1
+    assert correlated["configuration_device_count"] == 1
+    assert correlated["configuration_only_device_count"] == 0
+    assert correlated["hosts"][0]["evidence_origin"] == "nmap_and_configuration"
+    assert {item["category"] for item in correlated["findings"]} == {
+        "Web Applications & APIs", "Firewall, NAT & Policy",
+    }
 
 
 def test_analysis_mac_enrichment_prefers_router_neighbor_evidence_and_marks_provenance():
