@@ -14,9 +14,9 @@
 - Excluded Docker's private bridge gateway from mission-map topology while
   retaining it in raw traceroute path evidence, and changed the standard viewer
   to fit placed content instead of empty expanded-workspace borders.
-- Kept locked Map boxes synchronized with their saved coordinates and attached
-  lines while navigating. Ordinary wheel movement now scrolls the workspace;
-  Ctrl+wheel performs pointer-centered zoom.
+- Made Map scrolling viewport-only so it cannot rewrite or snap object and line
+  coordinates. Ordinary wheel movement scrolls the workspace; Ctrl+wheel
+  performs pointer-centered zoom.
 - Removed the redundant standalone label annotation. Colored boxes and ellipses
   still support text, and selected shapes can now be deleted with Delete or
   Backspace in Edit mode.
