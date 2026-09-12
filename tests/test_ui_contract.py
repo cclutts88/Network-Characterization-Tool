@@ -216,7 +216,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "/api/hunting/compare" in html
     assert "/api/hunting/${encodeURIComponent(id)}" in html
     assert "Findings added" in html
-    assert "Host category changes" in html
+    assert "Capability datasets" in html
+    assert '<label for="category">Dataset</label>' in html
+    assert "All datasets" in html
+    assert "Host dataset changes" in html
     assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
 
 

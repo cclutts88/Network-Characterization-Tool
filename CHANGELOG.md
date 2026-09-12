@@ -15,6 +15,8 @@
 - Added a future audited analyst OS-override capability to the rollout roadmap.
 - Kept the capability evidence guide pinned below the Hunt navigation while
   scrolling through host and finding tables.
+- Renamed Hunt's analyst-facing capability categories to datasets throughout
+  the summary, filter, findings table, and comparison language.
 
 ## 0.12.0-dev — Dedicated service hunting
 
