@@ -67,7 +67,8 @@
   row or column alignment, even distribution, and compact arrangement.
 - Added box selection, right-click node actions, and keyboard controls for
   Undo / Redo, fit, lock, box select, zoom, selection clearing, and coarse or
-  precise arrow-key movement.
+  precise arrow-key movement. Shift+R aligns an unlocked multi-selection into a
+  row and Shift+C aligns it into a column.
 - Added Spider web, Hierarchy, and Grid automatic layout presets.
 - Added an analyst-selectable WAN anchor. Device details suggest interfaces
   named WAN, outside, internet, uplink, or external, permit any interface to be
@@ -75,6 +76,13 @@
   the map's top center.
 - Expanded map search with result counts, previous/next navigation, automatic
   focus on the active match, and an isolate-matches presentation mode.
+- Added named private browser layouts that save and restore manual placement,
+  group sizes and modes, locks, WAN anchor, map preset, workspace size, zoom,
+  minimap presentation, sorting, and analytical overlay selection.
+- Added optional OS-family, service-exposure, and identity-gap overlays with a
+  concise legend. Service exposure is presented as port-density context rather
+  than a vulnerability finding, while identity gaps distinguish missing
+  OS/MAC/evidence from conflicting observations.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

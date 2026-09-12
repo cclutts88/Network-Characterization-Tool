@@ -156,7 +156,8 @@ an optional future mode within Reachability.
 - [x] Add a selection action bar for fit, lock, row/column alignment,
   distribution, and compact arrangement.
 - [x] Add drag-box selection, contextual right-click actions, keyboard fit,
-  lock, box-select, zoom, Escape, and precise/coarse arrow-key movement.
+  lock, box-select, zoom, row/column alignment, Escape, and precise/coarse
+  arrow-key movement.
 - [x] Add Spider web, Hierarchy, and Grid layout presets while continuing to
   honor explicitly positioned objects.
 - [x] Let an analyst choose a device interface as the WAN / outside path, place
@@ -175,9 +176,12 @@ an optional future mode within Reachability.
   subnet box, with map-wide Expand all and Collapse all controls.
 - [x] Color-code grouped host rows by observed operating-system family while
   retaining exact OS text and an Unknown OS treatment.
-- [ ] Add optional analytical overlays.
-- [ ] Add named persistent layouts that can be saved, restored, duplicated, and
-  kept private to an analyst or deliberately shared.
+- [x] Add optional OS-family, service-exposure, and identity-gap analytical
+  overlays with an explicit map legend and neutral default view.
+- [x] Add named private layouts that persist in the current analyst's browser,
+  restore the complete presentation, and can be replaced or deleted.
+- [ ] Add authenticated deliberately shared layouts when the multi-analyst
+  workspace and permissions model is introduced.
 
 ### Future extension — Analyst Identity Overrides
 

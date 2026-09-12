@@ -380,6 +380,22 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "wanAnchor:wanAnchor?{...wanAnchor}:null" in html
     assert "WAN OUT · ${wanAnchor.label}" in html
     assert 'data-context-action="wan"' in html
+    assert 'id="layoutName"' in html
+    assert 'id="savedLayouts"' in html
+    assert 'id="saveLayout"' in html
+    assert 'id="loadLayout"' in html
+    assert 'id="deleteLayout"' in html
+    assert "layoutStorageKey='nct-map-layouts-v1'" in html
+    assert "function readNamedLayouts" in html
+    assert "function saveNamedLayout" in html
+    assert "function loadNamedLayout" in html
+    assert "private browser layout" in html
+    assert 'id="overlayMode"' in html
+    assert 'id="overlayLegend"' in html
+    assert "function overlayClass" in html
+    assert "function updateOverlayLegend" in html
+    assert "overlay-exposure-dense" in html
+    assert "overlay-gap-conflict" in html
     assert "dragIds=(selectedNodeIds.has(node.id)" in html
     assert "currentNodeElements.get(id)?.setAttribute" in html
     assert 'id="selectionStatus"' in html
@@ -425,6 +441,8 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="undoLayout"' in html
     assert 'id="redoLayout"' in html
     assert "function capturePresentation" in html
+    assert "minimapSize:$('minimapSize')?.value||'medium'" in html
+    assert "defaultEndpointSort" in html
     assert "function undoPresentation" in html
     assert "function redoPresentation" in html
     assert "undoStack.length>50" in html
@@ -443,6 +461,16 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "group.oncontextmenu" in html
     assert "function handleMapKeydown" in html
     assert "ArrowLeft:[-1,0]" in html
+    assert "event.shiftKey&&key==='r'" in html
+    assert "alignSelection('row')" in html
+    assert "event.shiftKey&&key==='c'" in html
+    assert "alignSelection('column')" in html
+    assert 'title="Shift+R"' in html
+    assert 'title="Shift+C"' in html
+    assert 'aria-keyshortcuts="Shift+R"' in html
+    assert 'aria-keyshortcuts="Shift+C"' in html
+    assert "$('toggleLasso').title='B'" in html
+    assert "Ctrl+Z · Undo" in html
     assert 'aria-label="Map scaling controls"' in html
     assert "function deviceAddressLines" in html
     assert "Primary / observed MAC" in html
