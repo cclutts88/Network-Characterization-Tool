@@ -49,6 +49,21 @@ SearchSploit database, and visualizes retained topology evidence.
 
 ## Run
 
+For a controlled Linux Docker Test or Range deployment, start with the rapid
+launcher in check-only mode. It validates the Docker runtime, existing NCT
+instance and data volume, active operations, access address, ports, firewall
+plan, image availability, disk space, and rollback prerequisites without
+changing containers:
+
+```bash
+sh scripts/nct-deploy.sh --profile test --access local \
+  --image network-characterization-tool:VERSION --check-only
+```
+
+See [Rapid deployment](docs/RAPID_DEPLOYMENT.md) before using LAN, offline,
+upgrade, TLS, or Range options. The Mission profile remains intentionally
+blocked until authentication and the formal mission-readiness gate are complete.
+
 For a first-time private-lab HTTPS installation:
 
 ```bash

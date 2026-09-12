@@ -2,6 +2,15 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added the first rapid-deployment checkpoint for controlled Linux Docker Test
+  and Range hosts. The launcher performs Docker/Compose and compatibility
+  preflight, explicit local or selected-address binding, image/offline archive
+  validation, existing-instance and active-work checks, conflict handling,
+  backup, health verification, application/HTTPS proxy rollback, narrow
+  opt-in firewall handling, a concise deployment log, and the requested NCT
+  success banner. Mission deployment remains deliberately fail-closed pending
+  authentication and promotion-gate work.
+
 - Added an explicit Map Edit mode. Line routing, node movement, alignment,
   locking, markup, and other map-building controls stay hidden and inactive in
   the normal investigation view.

@@ -281,7 +281,7 @@ within Reachability.
 
 ### Future release — Rapid Deployment and Upgrade Automation
 
-- [ ] Provide an operator-friendly rapid deployment launcher that performs a
+- [x] Provide an operator-friendly rapid deployment launcher that performs a
   complete preflight, deployment or upgrade, health check, and final access
   handoff without requiring the operator to assemble Docker commands manually.
 - [ ] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
@@ -306,11 +306,11 @@ within Reachability.
   deployment profile, test results, compatibility findings, known limitations,
   and rollback proof so a successful lab launch alone cannot be reported as
   mission-ready.
-- [ ] Detect whether Docker Engine or Docker Desktop is installed, running, and
+- [x] Detect whether Docker Engine or Docker Desktop is installed, running, and
   reachable; compare its server/API version with NCT's documented minimum and
   tested versions, and explain the exact supported workaround when the local
   version is too old or exposes an incompatible API.
-- [ ] Detect and validate both the modern `docker compose` plugin and legacy
+- [x] Detect and validate both the modern `docker compose` plugin and legacy
   `docker-compose`. Prefer the supported Compose path, fall back to a compatible
   direct-Docker deployment when Compose is absent or too old, and stop with a
   clear corrective action only when no safe path is available.
@@ -342,7 +342,7 @@ within Reachability.
   services. Test and Range modes may retain an approved alternate port; Mission
   mode must preserve its declared stable URL or stop for an explicit operator
   decision. Save the selected ports so restarts use the same addresses.
-- [ ] Make access mode explicit before deployment: **Local only** binds to
+- [x] Make access mode explicit before deployment: **Local only** binds to
   loopback, while **LAN accessible** binds only to the operator-selected host
   interface or approved addresses. Never advertise a LAN URL when Docker is
   listening only on `127.0.0.1`, and never expose NCT on every interface merely
@@ -391,10 +391,10 @@ within Reachability.
   the bound LAN address separately. Recheck after a container restart, report
   whether automatic restart is enabled, and provide a diagnostic summary when
   Docker, firewall, TLS, routing, or application readiness fails.
-- [ ] Support connected and air-gapped deployment packages. Use a validated
+- [x] Support connected and air-gapped deployment packages. Use a validated
   local NCT image/archive when supplied, pull only when permitted and necessary,
   and verify the image version and integrity before the final swap.
-- [ ] Perform the container swap only after preflight succeeds, retain the
+- [x] Perform the container swap only after preflight succeeds, retain the
   existing data volume, wait for the NCT health endpoint, verify the reported
   build/version, and automatically restore the prior known-good container when
   startup or migration validation fails.
@@ -402,10 +402,10 @@ within Reachability.
   successful health check. Print a copyable final message such as
   `NCT is available at https://x.x.x.x:443`; when several addresses are valid,
   clearly distinguish local-only and LAN-accessible URLs rather than guessing.
-- [ ] Write a concise deployment log containing the preflight decisions,
+- [x] Write a concise deployment log containing the preflight decisions,
   versions, selected ports, upgrade/rollback outcome, and final URL without
   recording credentials or sensitive application evidence.
-- [ ] Show a terminal-safe NCT success banner only after the deployed health
+- [x] Show a terminal-safe NCT success banner only after the deployed health
   check passes, including a skull with a sombrero and mustache, followed by the
   verified access URL. The intended spirit is:
 
