@@ -268,6 +268,9 @@ within Reachability.
   and layout calculations while retaining it as tool-local raw traceroute path
   evidence. Fit the standard viewer to placed content instead of empty expanded
   workspace borders so locked objects do not appear to jump toward the corner.
+- [x] Keep locked object boxes synchronized with their saved map coordinates and
+  attached lines during viewport navigation. Use ordinary wheel movement for
+  workspace scrolling and Ctrl+wheel for pointer-centered zoom.
 - [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
   the Map while retaining each CIDR as the stable technical identifier.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst
