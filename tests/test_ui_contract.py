@@ -378,7 +378,12 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function setWanAnchor" in html
     assert "function clearWanAnchor" in html
     assert "wanAnchor:wanAnchor?{...wanAnchor}:null" in html
-    assert "WAN OUT · ${wanAnchor.label}" in html
+    assert 'id="wanBoundaryMarker"' in html
+    assert 'id="wanBoundaryInterface"' in html
+    assert "function updateWanBoundaryMarker" in html
+    assert "function updateWanUplinkGeometry" in html
+    assert "class:'wan-uplink'" in html
+    assert "WAN through ${wanAnchor.label}" in html
     assert 'data-context-action="wan"' in html
     assert 'id="layoutName"' in html
     assert 'id="savedLayouts"' in html
@@ -494,6 +499,10 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'title="Previous search result"' in html
     assert 'title="Next search result"' in html
     assert "Restore all devices, hosts, and connections" in html
+    assert "function connectionLabelLines" in html
+    assert "edge-label-line edge-label-detail" in html
+    assert "#map.lod-summary .edge-label-detail" in html
+    assert "cursor:help; pointer-events:auto" in html
     assert "function nodeDimensions" in html
     assert "w:250,h:68" in html
     assert "interfaceCount" in html

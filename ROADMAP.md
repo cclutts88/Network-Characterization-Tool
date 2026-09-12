@@ -163,7 +163,12 @@ an optional future mode within Reachability.
 - [x] Let an analyst choose a device interface as the WAN / outside path, place
   that device at the top center, and lock and label it as the visual topology
   anchor. Suggest explicitly named WAN, outside, internet, uplink, or external
-  interfaces while allowing a manual choice when the source is ambiguous.
+  interfaces while allowing a manual choice when the source is ambiguous. Show
+  the selected path as a WAN marker outside the map border with a visible uplink
+  to the anchored device.
+- [x] Present interface connection details as stacked, zoom-aware labels with a
+  concise interface and IP summary plus the complete relationship and evidence
+  in hover text.
 - [x] Add per-subnet endpoint display modes: collapsed by default, individual
   endpoint lines, or an organized endpoint-group box.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP

@@ -74,7 +74,11 @@
 - Added an analyst-selectable WAN anchor. Device details suggest interfaces
   named WAN, outside, internet, uplink, or external, permit any interface to be
   chosen when evidence is ambiguous, and place, label, and lock that device at
-  the map's top center.
+  the map's top center. An external WAN marker now sits above the map border and
+  connects directly to the anchored device with a visible uplink.
+- Reworked interface connection labels into stacked interface, IP, and zone
+  lines. Lower zoom levels suppress extra detail, while hover text preserves the
+  complete relationship and evidence.
 - Expanded map search with result counts, previous/next navigation, automatic
   focus on the active match, and an isolate-matches presentation mode.
 - Added named private browser layouts that save and restore manual placement,
