@@ -26,7 +26,7 @@ def device_config_page() -> HTMLResponse:
   </style>
 </head>
 <body>
-  <header><div class="eyebrow">Proof of concept · no authentication</div><h1>Device Configurations</h1><p class="sub">Generate accountable, read-only collection commands for authorized network devices.</p><nav class="nav" aria-label="Primary"><a href="/scans">Nmap Scans</a><a href="/analysis">Analyze Results</a><a class="active" href="/device-config" aria-current="page">Device Configurations</a><a href="/network-map">Network Map</a></nav></header>
+  <header><div class="eyebrow">Proof of concept · no authentication</div><h1>Device Configurations</h1><p class="sub">Generate accountable, read-only collection commands for authorized network devices.</p><nav class="nav" aria-label="Primary"><a href="/scans">Nmap</a><a class="active" href="/device-config" aria-current="page">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/network-map">Map</a></nav></header>
   <main>
     <div id="notice"></div>
     <div class="grid">

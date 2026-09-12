@@ -181,8 +181,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     analysis_html = analysis_page().body.decode()
     device_html = device_analysis_page().body.decode()
     html = hunting_page().body.decode()
-    assert "Hunt Services" in analysis_html
-    assert "Hunt Services" in device_html
+    assert '<a href="/hunting">Hunt</a>' in analysis_html
+    assert '<a href="/hunting">Hunt</a>' in device_html
     assert 'id="currentRun"' in html
     assert 'id="baselineRun"' in html
     assert 'id="search"' in html
@@ -190,15 +190,29 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="protocol"' in html
     assert 'id="capability"' in html
     assert 'id="nonstandard"' in html
+    assert 'id="osFilter"' in html
+    assert 'id="subnetFilter"' in html
+    assert 'id="deviceTypeFilter"' in html
+    assert 'id="hostRows"' in html
     assert "Exposed" in html
     assert "Inferred" in html
     assert "Observed" in html
     assert "Correlated" in html
+    assert "They do not, by themselves, prove a vulnerability or compromise" in html
+    assert "/api/hunting/network" in html
     assert "/api/hunting/compare" in html
     assert "/api/hunting/${encodeURIComponent(id)}" in html
     assert "Findings added" in html
     assert "Host category changes" in html
     assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
+
+
+def test_primary_navigation_orders_nmap_device_analyze_hunt_and_map():
+    expected = [">Nmap</a>", ">Device</a>", ">Analyze</a>", ">Hunt</a>", ">Map</a>"]
+    for page in (operator_page(), analysis_page(), device_config_page(), hunting_page(), network_map_page()):
+        html = page.body.decode()
+        positions = [html.index(label) for label in expected]
+        assert positions == sorted(positions)
 
 
 def test_scan_history_keeps_run_actions_on_one_line():

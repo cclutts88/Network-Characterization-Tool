@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1-dev — Network-wide hunting workflow
+
+- Made Hunt a top-level page in the Nmap, Device, Analyze, Hunt, Map workflow.
+- Made Hunt load a network-wide view by default using the newest completed
+  evidence for each retained network scope.
+- Added a complete host/device inventory alongside capability findings, keeping
+  hosts even when no matching service capability is present.
+- Added operating-system, subnet, and device-type filters and expanded the
+  capability-evidence explanations.
+- Added a future audited analyst OS-override capability to the rollout roadmap.
+
 ## 0.12.0-dev — Dedicated service hunting
 
 - Added a dedicated Hunt Services view for completed automated Nmap scans.

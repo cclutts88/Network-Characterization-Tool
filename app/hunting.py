@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import ipaddress
 
 from app.comparison import canonical_host_key
 
@@ -45,6 +46,7 @@ CATEGORY_RULES = {
 
 CATEGORY_ORDER = (*CATEGORY_RULES.keys(), "Other Exposed Service")
 STATE_ORDER = ("exposed", "inferred", "observed", "correlated")
+UNKNOWN_IDENTITY = {"", "unknown", "unclassified", "unknown server"}
 
 
 def _port_number(port: dict) -> int:
@@ -59,6 +61,104 @@ def _service_text(port: dict) -> str:
         str(port.get(field) or "").strip().lower()
         for field in ("service", "product")
     ).strip()
+
+
+def _scope_subnet(ip_value: object, subnets: list[str] | None) -> str:
+    try:
+        address = ipaddress.ip_address(str(ip_value or ""))
+    except ValueError:
+        return "Unmapped"
+    matches = []
+    for value in subnets or []:
+        try:
+            network = ipaddress.ip_network(str(value), strict=False)
+        except ValueError:
+            continue
+        if address.version == network.version and address in network:
+            matches.append(network)
+    if not matches:
+        return "Unmapped"
+    return str(max(matches, key=lambda network: network.prefixlen))
+
+
+def _device_type(host: dict, categories: set[str]) -> str:
+    explicit = str(host.get("device_type") or host.get("role") or "").strip()
+    if explicit:
+        return explicit.replace("_", " ").title()
+    identity = " ".join(
+        str(host.get(field) or "").strip().lower()
+        for field in ("os", "os_group")
+    )
+    for marker, label in (
+        ("firewall", "Firewall"), ("router", "Router"), ("switch", "Switch"),
+        ("access point", "Wireless access point"), ("printer", "Printer"),
+        ("phone", "Phone"), ("workstation", "Workstation"),
+        ("server", "Server"),
+    ):
+        if marker in identity:
+            return label
+    for category, label in (
+        ("Identity", "Identity server"), ("Databases", "Database server"),
+        ("Email", "Mail server"), ("File Sharing", "File server"),
+        ("File Transfer", "File-transfer host"),
+        ("Network Management", "Network device"), ("Web", "Web host"),
+        ("Remote Access", "Remote-access host"),
+    ):
+        if category in categories:
+            return label
+    return "Unclassified"
+
+
+def _facet_values(items: list[dict], field: str) -> list[dict]:
+    counts = Counter(str(item.get(field) or "Unclassified") for item in items)
+    return [
+        {"name": name, "host_count": count}
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _summarize_hunting(
+    hosts: list[dict], findings: list[dict], *, source: dict, warnings: list[str]
+) -> dict:
+    findings.sort(key=lambda item: (
+        item.get("ip") or item.get("hostname") or "",
+        CATEGORY_ORDER.index(item["category"]),
+        item["port"],
+        item["protocol"],
+    ))
+    hosts.sort(key=lambda item: item.get("ip") or item.get("hostname") or "")
+    category_counts = Counter(item["category"] for item in findings)
+    state_counts = Counter(
+        state for item in findings for state in item["evidence_states"]
+    )
+    return {
+        "status": "hunting_complete",
+        "source": source,
+        "host_count": len(hosts),
+        "hosts_with_findings_count": sum(
+            1 for item in hosts if item.get("finding_count")
+        ),
+        "finding_count": len(findings),
+        "nonstandard_finding_count": sum(
+            1 for item in findings if item["nonstandard_port"]
+        ),
+        "categories": [
+            {"name": name, "finding_count": category_counts.get(name, 0)}
+            for name in CATEGORY_ORDER
+            if category_counts.get(name)
+        ],
+        "capability_states": {
+            state: state_counts.get(state, 0) for state in STATE_ORDER
+        },
+        "facets": {
+            "operating_systems": _facet_values(hosts, "os_filter"),
+            "subnets": _facet_values(hosts, "subnet"),
+            "device_types": _facet_values(hosts, "device_type"),
+        },
+        "hosts": hosts,
+        "findings": findings,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
 
 
 def categorize_port(port: dict) -> list[dict]:
@@ -111,7 +211,12 @@ def categorize_port(port: dict) -> list[dict]:
     }]
 
 
-def build_hunting_analysis(analysis: dict, *, evidence: dict | None = None) -> dict:
+def build_hunting_analysis(
+    analysis: dict,
+    *,
+    evidence: dict | None = None,
+    subnets: list[str] | None = None,
+) -> dict:
     findings = []
     hosts = []
     for host in analysis.get("hosts", []) or []:
@@ -137,51 +242,109 @@ def build_hunting_analysis(analysis: dict, *, evidence: dict | None = None) -> d
                 }
                 findings.append(finding)
                 host_findings.append(finding)
-        if host_findings:
-            hosts.append({
-                "host_key": canonical_host_key(host),
-                "ip": host.get("ip"),
-                "hostname": host.get("hostname"),
-                "os": host.get("os"),
-                "os_group": host.get("os_group"),
-                "categories": sorted(
-                    {item["category"] for item in host_findings},
-                    key=lambda item: CATEGORY_ORDER.index(item),
-                ),
-                "capability_states": [
-                    state for state in STATE_ORDER
-                    if any(state in item["evidence_states"] for item in host_findings)
-                ],
-                "finding_count": len(host_findings),
+        categories = {item["category"] for item in host_findings}
+        subnet = _scope_subnet(host.get("ip"), subnets)
+        os_name = str(host.get("os") or "").strip()
+        os_group = str(host.get("os_group") or "Unclassified").strip()
+        os_filter = os_name if os_name.lower() not in UNKNOWN_IDENTITY else os_group
+        if os_filter.lower() in UNKNOWN_IDENTITY:
+            os_filter = "Unclassified"
+        device_type = _device_type(host, categories)
+        source_refs = list((evidence or {}).get("evidence", {}).get("sources") or [])
+        for finding in host_findings:
+            finding.update({
+                "subnet": subnet,
+                "device_type": device_type,
+                "os_filter": os_filter,
+                "source_refs": source_refs,
+                "last_observed": (evidence or {}).get("completed_at")
+                or (evidence or {}).get("created_at"),
             })
-    findings.sort(key=lambda item: (
-        item.get("ip") or item.get("hostname") or "",
-        CATEGORY_ORDER.index(item["category"]),
-        item["port"],
-        item["protocol"],
-    ))
-    category_counts = Counter(item["category"] for item in findings)
-    state_counts = Counter(
-        state for item in findings for state in item["evidence_states"]
+        hosts.append({
+            "host_key": canonical_host_key(host),
+            "ip": host.get("ip"),
+            "hostname": host.get("hostname"),
+            "mac": host.get("mac"),
+            "vendor": host.get("vendor"),
+            "os": host.get("os"),
+            "os_group": os_group,
+            "os_filter": os_filter,
+            "subnet": subnet,
+            "device_type": device_type,
+            "categories": sorted(
+                categories, key=lambda item: CATEGORY_ORDER.index(item)
+            ),
+            "protocols": sorted({
+                item["protocol"] for item in host_findings if item.get("protocol")
+            }),
+            "services": [{
+                "port": item.get("port"),
+                "protocol": item.get("protocol"),
+                "service": item.get("service"),
+                "product": item.get("product"),
+                "version": item.get("version"),
+            } for item in host_findings],
+            "nonstandard_port": any(
+                item.get("nonstandard_port") for item in host_findings
+            ),
+            "capability_states": [
+                state for state in STATE_ORDER
+                if any(state in item["evidence_states"] for item in host_findings)
+            ],
+            "finding_count": len(host_findings),
+            "source_refs": source_refs,
+            "last_observed": (evidence or {}).get("completed_at")
+            or (evidence or {}).get("created_at"),
+        })
+    return _summarize_hunting(
+        hosts,
+        findings,
+        source=evidence or {},
+        warnings=list(analysis.get("warnings") or []),
     )
-    return {
-        "status": "hunting_complete",
-        "source": evidence or {},
-        "host_count": len(hosts),
-        "finding_count": len(findings),
-        "nonstandard_finding_count": sum(1 for item in findings if item["nonstandard_port"]),
-        "categories": [
-            {"name": name, "finding_count": category_counts.get(name, 0)}
-            for name in CATEGORY_ORDER
-            if category_counts.get(name)
-        ],
-        "capability_states": {
-            state: state_counts.get(state, 0) for state in STATE_ORDER
-        },
-        "hosts": hosts,
-        "findings": findings,
-        "warnings": list(analysis.get("warnings") or []),
-    }
+
+
+def merge_hunting_analyses(
+    analyses: list[dict], *, source: dict | None = None
+) -> dict:
+    """Combine newest-first hunting results while retaining one current host/service view."""
+    hosts: dict[str, dict] = {}
+    findings: dict[tuple[str, str, int, str], dict] = {}
+    warnings = []
+    for analysis in analyses:
+        warnings.extend(analysis.get("warnings") or [])
+        for host in analysis.get("hosts") or []:
+            key = str(host.get("host_key") or "")
+            if not key:
+                continue
+            if key not in hosts:
+                hosts[key] = dict(host)
+            else:
+                known_sources = {
+                    item.get("url") for item in hosts[key].get("source_refs") or []
+                }
+                hosts[key].setdefault("source_refs", []).extend(
+                    item for item in host.get("source_refs") or []
+                    if item.get("url") not in known_sources
+                )
+        for finding in analysis.get("findings") or []:
+            key = _finding_key(finding)
+            if key not in findings:
+                findings[key] = dict(finding)
+            else:
+                known_sources = {
+                    item.get("url") for item in findings[key].get("source_refs") or []
+                }
+                findings[key].setdefault("source_refs", []).extend(
+                    item for item in finding.get("source_refs") or []
+                    if item.get("url") not in known_sources
+                )
+    return _summarize_hunting(
+        list(hosts.values()),
+        list(findings.values()),
+        source=source or {},
+        warnings=warnings,
+    )
 
 
 def _finding_key(item: dict) -> tuple[str, str, int, str]:

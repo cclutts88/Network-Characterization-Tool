@@ -111,6 +111,15 @@ an optional future mode within Reachability.
 - [ ] Add zoom-dependent detail and optional analytical overlays.
 - [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
 
+### Future extension — Analyst Identity Overrides
+
+- [ ] Allow an analyst to append or correct a host operating system when it is
+  known from trusted local knowledge.
+- [ ] Preserve the scanner-detected OS beside the analyst value instead of
+  overwriting evidence.
+- [ ] Record who made the change, when it changed, and the reason, and flag a
+  later scan when its fingerprint disagrees with the analyst override.
+
 ### Future major capability — Reachability Analysis
 
 - [ ] Evaluate source, destination, and service using open ports, routes,

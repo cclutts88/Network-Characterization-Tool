@@ -6,6 +6,7 @@ from app.hunting import (
     build_hunting_analysis,
     categorize_port,
     compare_hunting_results,
+    merge_hunting_analyses,
 )
 from app.main import app
 
@@ -73,6 +74,46 @@ def test_hunting_analysis_distinguishes_capability_evidence_and_keeps_unknown_se
     assert result["warnings"] == ["Limited UDP coverage"]
     unknown = next(item for item in result["findings"] if item["port"] == 31337)
     assert unknown["capability_state"] == "exposed"
+
+
+def test_hunting_inventory_keeps_hosts_without_findings_and_builds_filter_facets():
+    result = build_hunting_analysis(
+        {
+            "hosts": [
+                host("10.0.0.10", [port(443, "https")]),
+                {**host("10.0.0.20", []), "os": "Windows 11", "device_type": "workstation"},
+            ]
+        },
+        evidence={"completed_at": "2026-09-11T12:00:00+00:00"},
+        subnets=["10.0.0.0/24"],
+    )
+
+    assert result["host_count"] == 2
+    assert result["hosts_with_findings_count"] == 1
+    assert result["hosts"][1]["finding_count"] == 0
+    assert {item["name"] for item in result["facets"]["subnets"]} == {"10.0.0.0/24"}
+    assert {item["name"] for item in result["facets"]["device_types"]} >= {
+        "Server", "Workstation",
+    }
+
+
+def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
+    newer = build_hunting_analysis(
+        {"hosts": [host("10.0.0.10", [port(22, "ssh", "OpenSSH", "9.2")])]},
+        evidence={"completed_at": "2026-09-11T12:00:00+00:00"},
+        subnets=["10.0.0.0/24"],
+    )
+    older = build_hunting_analysis(
+        {"hosts": [host("10.0.0.10", [port(22, "ssh", "OpenSSH", "8.9")])]},
+        evidence={"completed_at": "2026-09-10T12:00:00+00:00"},
+        subnets=["10.0.0.0/24"],
+    )
+
+    result = merge_hunting_analyses([newer, older])
+
+    assert result["host_count"] == 1
+    assert result["finding_count"] == 1
+    assert result["findings"][0]["version"] == "9.2"
 
 
 def test_hunting_comparison_reports_added_removed_and_changed_capabilities():
@@ -145,6 +186,7 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
 
     with TestClient(app) as client:
         analysis = client.get(f"/api/hunting/{after_id}")
+        network = client.get("/api/hunting/network")
         comparison = client.get(
             f"/api/hunting/compare?before={before_id}&after={after_id}"
         )
@@ -157,3 +199,7 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     assert comparison.status_code == 200
     assert comparison.json()["summary"]["findings_added"] == 1
     assert comparison.json()["summary"]["findings_removed"] == 1
+    assert network.status_code == 200
+    assert network.json()["status"] == "hunting_network_complete"
+    assert network.json()["source"]["scan_count"] == 1
+    assert network.json()["facets"]["subnets"][0]["name"] == "10.0.0.0/24"

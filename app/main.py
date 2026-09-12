@@ -18,7 +18,11 @@ from app.device_configs import router as device_config_router
 from app.device_analysis import router as device_analysis_router
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
-from app.hunting import build_hunting_analysis, compare_hunting_results
+from app.hunting import (
+    build_hunting_analysis,
+    compare_hunting_results,
+    merge_hunting_analyses,
+)
 from app.hunting_ui import hunting_page
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
@@ -971,6 +975,116 @@ def _hunting_group(selected_id: str) -> list[dict]:
     return group
 
 
+def _hunting_scope_tokens(group: list[dict]) -> tuple[str, ...]:
+    first = group[0]
+    saved_ids = sorted({
+        str(item)
+        for manifest in group
+        for item in (manifest.get("saved_network_ids") or [])
+        if item
+    })
+    if saved_ids:
+        return tuple(f"saved:{item}" for item in saved_ids)
+    targets = sorted({
+        str(item)
+        for manifest in group
+        for item in (
+            (manifest.get("target_selection") or {}).get("manual_targets")
+            or manifest.get("targets")
+            or (manifest.get("coverage") or {}).get("targets")
+            or []
+        )
+        if item
+    })
+    return tuple(f"target:{item}" for item in targets) or (
+        f"run:{first.get('run_id')}",
+    )
+
+
+def _hunting_subnets(group: list[dict]) -> list[str]:
+    values = []
+    for manifest in group:
+        values.extend(
+            item.get("cidr")
+            for item in (manifest.get("saved_networks") or [])
+            if item.get("cidr")
+        )
+        values.extend(
+            (manifest.get("target_selection") or {}).get("manual_targets")
+            or manifest.get("targets")
+            or (manifest.get("coverage") or {}).get("targets")
+            or []
+        )
+    return list(dict.fromkeys(str(item) for item in values if item))
+
+
+def _latest_hunting_groups() -> list[list[dict]]:
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    groups = [
+        group for group in group_run_manifests(manifests)
+        if group_is_comparable(group)
+    ]
+    groups.sort(
+        key=lambda group: describe_run_group(group).get("completed_at")
+        or describe_run_group(group).get("created_at") or "",
+        reverse=True,
+    )
+    selected, covered = [], set()
+    for group in groups:
+        tokens = set(_hunting_scope_tokens(group))
+        if tokens and tokens.issubset(covered):
+            continue
+        selected.append(group)
+        covered.update(tokens)
+    return selected
+
+
+@app.get("/api/hunting/network")
+def analyze_hunting_network() -> dict:
+    groups = _latest_hunting_groups()
+    analyses, sources, scope_summaries = [], [], []
+    for group in groups:
+        description = describe_run_group(group)
+        evidence = _comparison_evidence(group, description)
+        source = {
+            **description,
+            "comparison_name": _comparison_name(group, description),
+            "evidence": evidence,
+        }
+        analyses.append(build_hunting_analysis(
+            _run_group_analysis(group),
+            evidence=source,
+            subnets=_hunting_subnets(group),
+        ))
+        sources.extend(evidence.get("sources") or [])
+        scope_summaries.append({
+            "display_name": description.get("display_name"),
+            "completed_at": description.get("completed_at")
+            or description.get("created_at"),
+            "subnets": _hunting_subnets(group),
+            "run_ids": description.get("run_ids") or [],
+        })
+    result = merge_hunting_analyses(
+        analyses,
+        source={
+            "display_name": "Latest network-wide evidence",
+            "comparison_name": (
+                f"Newest completed evidence from {len(groups)} network scope"
+                f"{'s' if len(groups) != 1 else ''}"
+            ),
+            "scan_count": len(groups),
+            "scope_summaries": scope_summaries,
+            "evidence": {"label": "Latest network evidence", "sources": sources},
+        },
+    )
+    result["status"] = "hunting_network_complete"
+    return result
+
+
 @app.get("/api/hunting/compare")
 def compare_hunting_scans(before: str, after: str) -> dict:
     if before == after:
@@ -985,6 +1099,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
             "comparison_name": _comparison_name(before_group, before_description),
             "evidence": _comparison_evidence(before_group, before_description),
         },
+        subnets=_hunting_subnets(before_group),
     )
     after_result = build_hunting_analysis(
         _run_group_analysis(after_group),
@@ -993,6 +1108,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
             "comparison_name": _comparison_name(after_group, after_description),
             "evidence": _comparison_evidence(after_group, after_description),
         },
+        subnets=_hunting_subnets(after_group),
     )
     warnings = coverage_warnings(
         representative_coverage(before_group), representative_coverage(after_group)
@@ -1015,6 +1131,7 @@ def analyze_hunting_scan(run_id: str) -> dict:
             "comparison_name": _comparison_name(group, description),
             "evidence": _comparison_evidence(group, description),
         },
+        subnets=_hunting_subnets(group),
     )
 
 

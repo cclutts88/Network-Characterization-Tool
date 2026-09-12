@@ -26,7 +26,7 @@ def operator_page() -> HTMLResponse:
     <div class="eyebrow">Unified scan workspace</div>
     <h1>Nmap Scans</h1>
     <p class="sub">Build once, then save the profile, run it now, or generate a portable scan package.</p>
-    <nav class="nav" aria-label="Primary"><a class="active" href="/scans" aria-current="page">Nmap Scans</a><a href="/analysis">Analyze Results</a><a href="/device-config">Device Configurations</a><a href="/network-map">Network Map</a></nav>
+    <nav class="nav" aria-label="Primary"><a class="active" href="/scans" aria-current="page">Nmap</a><a href="/device-config">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/network-map">Map</a></nav>
   </header>
   <main>
     <section class="management-grid" aria-label="Network and safety management">
