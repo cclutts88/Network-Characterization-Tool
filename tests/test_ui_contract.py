@@ -306,6 +306,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "if(!(item.evidence_states||[]).includes('inferred'))return[]" in html
     assert 'id="findingSummaryRows"' in html
     assert "renderFindingSummaries(data.findings||[])" in html
+    assert "renderFindingSummaries(data.findings||[]);applyFilters()" in html
     assert "function anyHuntFilterActive()" in html
     assert "Combined view · one entry per IP with all ports visible." in html
     assert "Filtered view · individual matching findings." in html
