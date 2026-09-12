@@ -34,7 +34,8 @@
   and active Nmap, Device, Analyze, Hunt, and Map navigation state.
 - Enlarged and spaced the NCT wordmark, highlighted the N/C/T initials in its
   full-name underline, and shortened the shared navigation buttons.
-- Removed the originating-host banner from the Nmap page header.
+- Removed the originating-host banner and operator-entered host field from the
+  Nmap page while continuing to record the analyzer hostname automatically.
 
 ## 0.12.0-dev — Dedicated service hunting
 

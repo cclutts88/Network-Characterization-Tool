@@ -14,6 +14,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "All scan activity originates from the NCT analyzer host" not in html
     assert 'id="trafficOriginValue"' not in html
     assert "updateTrafficOrigin" not in html
+    assert 'id="origin"' not in html
+    assert "originating_host:location.hostname" in html
     assert 'id="reason"' not in html
     assert "NCT network characterization initiated through the operator workspace" in html
     assert html.index("Build scan") < html.index("Scan history")
