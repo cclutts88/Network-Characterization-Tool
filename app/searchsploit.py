@@ -335,6 +335,17 @@ def _query_for_finding(finding: dict) -> str | None:
     return " ".join(value for value in (product, version) if value).strip() or None
 
 
+def _finding_match_key(finding: dict) -> str:
+    values = (
+        finding.get("host_key"),
+        finding.get("protocol"),
+        finding.get("port"),
+        finding.get("product"),
+        finding.get("version"),
+    )
+    return "|".join(str(value or "").strip().lower() for value in values)
+
+
 def _candidate(item: dict) -> dict:
     edb_id = str(item.get("EDB-ID") or "").strip()
     return {
@@ -384,6 +395,8 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
             "status": "searchsploit_unavailable",
             "provider": status,
             "query_count": 0,
+            "searched_finding_count": 0,
+            "skipped_no_product_count": 0,
             "matched_host_count": 0,
             "match_count": 0,
             "matches": [],
@@ -391,14 +404,16 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
             "disclaimer": "Potential product/version matches require analyst validation.",
         }
 
-    query_findings: dict[str, list[dict]] = {}
+    query_findings: dict[str, dict[str, dict]] = {}
+    skipped_no_product_count = 0
     for finding in hunting.get("findings") or []:
         if finding.get("evidence_kind") == "device_configuration":
             continue
         query = _query_for_finding(finding)
         if not query:
+            skipped_no_product_count += 1
             continue
-        query_findings.setdefault(query, []).append(finding)
+        query_findings.setdefault(query, {})[_finding_match_key(finding)] = finding
         if len(query_findings) >= MAX_QUERIES:
             break
 
@@ -419,12 +434,13 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
                     warnings.append(warning)
 
     matches = []
-    for query, findings in query_findings.items():
+    for query, keyed_findings in query_findings.items():
         candidates = query_results.get(query, [])
         if not candidates:
             continue
-        for finding in findings:
+        for match_key, finding in keyed_findings.items():
             matches.append({
+                "match_key": match_key,
                 "host_key": finding.get("host_key"),
                 "ip": finding.get("ip"),
                 "hostname": finding.get("hostname"),
@@ -442,6 +458,8 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         "status": "searchsploit_complete",
         "provider": status,
         "query_count": len(query_findings),
+        "searched_finding_count": sum(len(items) for items in query_findings.values()),
+        "skipped_no_product_count": skipped_no_product_count,
         "matched_host_count": len(matched_hosts),
         "match_count": sum(item["candidate_count"] for item in matches),
         "matches": matches,

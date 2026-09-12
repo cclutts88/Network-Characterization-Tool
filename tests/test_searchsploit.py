@@ -79,9 +79,38 @@ def test_searchsploit_enrichment_sanitizes_queries_and_returns_candidates(monkey
     )]
     assert result["status"] == "searchsploit_complete"
     assert result["query_count"] == 1
+    assert result["searched_finding_count"] == 1
+    assert result["skipped_no_product_count"] == 1
     assert result["matched_host_count"] == 1
     assert result["match_count"] == 1
+    assert result["matches"][0]["match_key"] == (
+        "ip:10.0.0.10|tcp|443|example server; touch /tmp/not-allowed|2.4.1"
+    )
     assert result["matches"][0]["candidates"][0]["edb_id"] == "12345"
+
+
+def test_searchsploit_reports_when_no_product_fingerprints_are_searchable(monkeypatch):
+    monkeypatch.setattr("app.searchsploit.searchsploit_status", lambda: {
+        "available": True,
+        "command_path": "/opt/exploit-database/searchsploit",
+        "message": "ready",
+    })
+    monkeypatch.setattr(
+        "app.searchsploit._search",
+        lambda *_: pytest.fail("A generic service must not trigger a SearchSploit query"),
+    )
+
+    result = enrich_hunting_with_searchsploit({
+        "findings": [
+            finding(""),
+            {**finding(""), "service": "ssh", "port": 22},
+        ]
+    })
+
+    assert result["query_count"] == 0
+    assert result["searched_finding_count"] == 0
+    assert result["skipped_no_product_count"] == 2
+    assert result["matches"] == []
 
 
 def database_archive(path, marker: str):

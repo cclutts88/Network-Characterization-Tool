@@ -236,6 +236,11 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "/api/searchsploit/database/upload" in html
     assert "/api/searchsploit/database/rollback/" in html
     assert "Potential product/version matches require analyst validation" in html
+    assert 'class="finding-match-slot"' in html
+    assert "Potential matches: ${Number(match.candidate_count||0)}" in html
+    assert "openSearchSploitMatch" in html
+    assert "contains no specific product/version fingerprints to search" in html
+    assert "Service/version detection enabled" in html
     assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
 
 
