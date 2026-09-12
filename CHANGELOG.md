@@ -44,6 +44,9 @@
   fitted overview of the selected mission workspace.
 - Changed Fit to Fit devices, calculating the visible node boundary so a sparse
   topology fills the viewport without sacrificing unused mission workspace.
+- Added edge-triggered auto-pan during node dragging. Holding a node near any map
+  edge now scrolls the mission workspace in that direction, allowing placement
+  throughout 1× and 4× areas without repeatedly zooming out.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 
