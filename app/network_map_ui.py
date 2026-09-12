@@ -10,7 +10,7 @@ def network_map_page() -> HTMLResponse:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Nmap Terrain Analyzer · Network Map</title>
+  <title>NCT · Map</title>
   <style>
     :root { color-scheme:dark; --bg:#08141d; --panel:#0f1d27; --line:#243b47; --text:#e7eef8; --muted:#9eb0b8; --accent:#57d6bf; --device:#5cc8ff; --interface:#ff9f68; --subnet:#c99cff; --host:#61d095; --gateway:#f4c95d; --bad:#ff7b7b; }
     * { box-sizing:border-box; } body { margin:0; background:linear-gradient(135deg,#08141d,#10242e); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -26,9 +26,10 @@ def network_map_page() -> HTMLResponse:
     @media (max-width:1200px) { header,main { padding-left:4vw; padding-right:4vw; } } @media (max-width:900px) { .workspace { grid-template-columns:1fr; } .summary { grid-template-columns:repeat(2,1fr); } }
     header { position:sticky; top:0; z-index:100; padding-top:16px; padding-bottom:14px; background:rgba(8,20,29,.96); backdrop-filter:blur(14px); box-shadow:0 9px 24px rgba(0,0,0,.38); } header h1 { font-size:25px; } .nav { margin-top:12px; }
   </style>
+  <style>.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;color:var(--text);line-height:1;text-align:center}.nct-brand strong{padding-left:.18em;font-size:30px;letter-spacing:.18em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:750;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}.nav{justify-content:center;margin-top:10px!important}</style>
 </head>
 <body>
-  <header><div class="eyebrow">Proof of concept · no authentication</div><h1>Network Map</h1><p class="sub">Visualize hosts, routed subnets, and network devices from saved analyzer evidence. Across routed boundaries, endpoint MACs come from the router or firewall neighbor table—not ordinary transit packets.</p><nav class="nav" aria-label="Primary"><a href="/scans">Nmap</a><a href="/device-config">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a class="active" href="/network-map" aria-current="page">Map</a></nav></header>
+  <header><h1 class="sr-only">Map</h1><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span>Network Characterization Tool</span></div><nav class="nav" aria-label="Primary"><a href="/scans">Nmap</a><a href="/device-config">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a class="active" href="/network-map" aria-current="page">Map</a></nav></header>
   <main>
     <section class="summary"><div class="stat"><strong id="deviceCount">—</strong><span>Network devices</span></div><div class="stat"><strong id="interfaceCount">—</strong><span>Interfaces</span></div><div class="stat"><strong id="subnetCount">—</strong><span>Subnet groups</span></div><div class="stat"><strong id="hostCount">—</strong><span>Observed hosts</span></div><div class="stat"><strong id="edgeCount">—</strong><span>Relationships</span></div><div class="stat"><strong id="sourceCount">—</strong><span>Evidence records</span></div><div class="stat"><strong id="macObservationCount">—</strong><span>MAC observations</span></div><div class="stat"><strong id="arpNeighborCount">—</strong><span>ARP neighbors</span></div><div class="stat"><strong id="topologyNeighborCount">—</strong><span>LLDP/CDP links</span></div></section>
     <div class="workspace">

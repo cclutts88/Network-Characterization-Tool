@@ -1,8 +1,11 @@
-# Nmap Terrain Analyzer
+# NCT — Network Characterization Tool
 
-A local, Dockerized FastAPI application for building authorized Nmap scans, running scans with accountability capture, generating portable scan packages, collecting network-device configurations, and analyzing current or historical Nmap XML.
+A local, Dockerized application for authorized network characterization. NCT
+collects Nmap and network-device evidence, analyzes and correlates it, presents
+network-wide Hunt datasets, enriches observed products with an offline
+SearchSploit database, and visualizes retained topology evidence.
 
-## Phase 1 and 2 capabilities
+## Current capabilities
 
 - One **Nmap Scans** page with a scan builder at the top and actions to **Save as profile**, **Run now**, or **Generate package**.
 - Human-readable `Name_Date_Time` scan names. Scheduled execution manifests use `Name_(S)_Date_Time`.
@@ -30,6 +33,12 @@ A local, Dockerized FastAPI application for building authorized Nmap scans, runn
 - Review-only subnet suggestions parsed from saved device configurations. An
   operator must explicitly add a suggestion to Saved Networks before it can be
   selected as scan scope; saved suggestions leave the pending list.
+- A dedicated network-wide Hunt view with service-aware datasets, combined
+  host/network/evidence filters, CVE categorization, collapsible result panels,
+  and scan-to-scan change analysis.
+- Offline SearchSploit enrichment using a managed Exploit-DB database with
+  connected updates, air-gapped uploads, source/version details, archive safety
+  validation, atomic activation, and prior-version rollback.
 
 ## Run
 
@@ -55,6 +64,20 @@ docker compose up -d --no-build
 ```
 
 Rebuild and export a new image whenever source changes are incorporated into an offline release.
+
+### Air-gapped SearchSploit updates
+
+On an internet-connected transfer system, download the official Exploit-DB
+archive from the [Exploit-DB GitLab repository](https://gitlab.com/exploit-database/exploitdb/-/archive/main/exploitdb-main.tar.gz).
+Move the unchanged archive to the NCT system using the approved transfer
+process. In **Hunt**, expand **SearchSploit enrichment** and **Manage offline
+database**, choose the archive, and select **Upload offline update**.
+
+NCT accepts ZIP, TAR, TAR.GZ, and TGZ packages. It validates the archive before
+atomically activating it and retains the previous version for rollback. The
+official archive validated during Release 8 was approximately 47 MB compressed
+and approximately 309 MB after installation. Retaining another database version
+requires roughly the same additional installed space.
 
 ## Persistent and sensitive data
 

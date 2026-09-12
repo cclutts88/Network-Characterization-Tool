@@ -23,6 +23,15 @@
   and filter dropdown.
 - Made the Host and device inventory collapsible and kept its current host count
   visible in the collapsed heading.
+- Added offline SearchSploit enrichment with CVE categorization, candidate-title
+  filtering, network-wide filters, database provenance, connected updates,
+  air-gapped archive uploads, and retained-version rollback.
+- Validated the official Exploit-DB archive on an empty NCT data volume through
+  upload, activation, restart persistence, second-version staging, and rollback.
+- Made the major Hunt panels collapsible, added clear open/closed chevrons, and
+  kept active Network and SearchSploit filters visible in collapsed headings.
+- Replaced the separate visible page-title blocks with a centered NCT wordmark
+  and active Nmap, Device, Analyze, Hunt, and Map navigation state.
 
 ## 0.12.0-dev — Dedicated service hunting
 

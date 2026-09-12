@@ -10,7 +10,7 @@ from app.ui import operator_page
 
 def test_scan_builder_is_one_page_with_requested_actions():
     html = operator_page().body.decode()
-    assert "Unified scan workspace" in html
+    assert '<h1 class="sr-only">Nmap</h1>' in html
     assert "All scan activity originates from the NCT analyzer host" in html
     assert 'id="trafficOriginValue"' in html
     assert "updateTrafficOrigin" in html
@@ -141,6 +141,8 @@ def test_navigation_is_sticky_on_every_primary_page():
         html = page.body.decode()
         assert "position:sticky" in html
         assert "aria-label=\"Primary\"" in html
+        assert '<div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span>Network Characterization Tool</span></div>' in html
+        assert "border-top:1px solid var(--accent)" in html
 
 
 def test_device_configs_offer_reviewed_network_candidates():

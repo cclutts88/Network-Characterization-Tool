@@ -88,15 +88,16 @@ an optional future mode within Reachability.
 - [x] Distinguish exposed, inferred, observed, and correlated capability.
 - [x] Add combined filters and scan-to-scan hunting changes.
 
-### Release 8 — SearchSploit Enrichment — In progress
+### Release 8 — SearchSploit Enrichment — Complete
 
 - [x] Normalize product/version evidence and query a staged local Exploit-DB
   dataset.
 - [x] Show candidate references, match counts, platform, and type.
 - [x] Clearly label results as potential matches requiring analyst validation.
 - [x] Do not execute exploit code.
-- [ ] Package and validate the offline Exploit-DB dataset under the persistent
-  NCT data volume.
+- [x] Package and validate the official offline Exploit-DB archive against an
+  empty persistent NCT data volume, including restart persistence, a second
+  staged version, and rollback to the prior version.
 - [x] Add a connected **Update from internet** workflow that stages, validates,
   and atomically activates official Exploit-DB data.
 - [x] Add an air-gapped **Upload offline update** workflow with archive safety

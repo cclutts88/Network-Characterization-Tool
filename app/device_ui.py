@@ -10,7 +10,7 @@ def device_config_page() -> HTMLResponse:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Nmap Terrain Analyzer · Device Configurations</title>
+  <title>NCT · Device</title>
   <style>
     :root { color-scheme:dark; --bg:#08141d; --panel:#0f1d27; --line:#243b47; --text:#e7eef8; --muted:#9eb0b8; --accent:#57d6bf; --good:#61d095; --warn:#f4c95d; --bad:#ff7b7b; }
     * { box-sizing:border-box; } body { margin:0; background:linear-gradient(135deg,#08141d,#10242e); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -24,9 +24,10 @@ def device_config_page() -> HTMLResponse:
     @media (max-width:1080px) { header,main { padding-left:5vw; padding-right:5vw; } } @media (max-width:900px) { .grid { grid-template-columns:1fr; } .wide { grid-column:auto; } .two,.three,.run-grid,.history-tools { grid-template-columns:1fr; } .device-summary,.run-summary,.section-head { align-items:flex-start; flex-direction:column; } .history-latest { text-align:left; } }
     header { position:sticky; top:0; z-index:100; padding-top:16px; padding-bottom:14px; background:rgba(8,20,29,.96); backdrop-filter:blur(14px); box-shadow:0 9px 24px rgba(0,0,0,.38); } header h1 { font-size:25px; } .nav { margin-top:12px; }
   </style>
+  <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;color:var(--text);line-height:1;text-align:center}.nct-brand strong{padding-left:.18em;font-size:30px;letter-spacing:.18em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:750;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}.nav{justify-content:center;margin-top:10px!important}</style>
 </head>
 <body>
-  <header><div class="eyebrow">Proof of concept · no authentication</div><h1>Device Configurations</h1><p class="sub">Generate accountable, read-only collection commands for authorized network devices.</p><nav class="nav" aria-label="Primary"><a href="/scans">Nmap</a><a class="active" href="/device-config" aria-current="page">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/network-map">Map</a></nav></header>
+  <header><h1 class="sr-only">Device</h1><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span>Network Characterization Tool</span></div><nav class="nav" aria-label="Primary"><a href="/scans">Nmap</a><a class="active" href="/device-config" aria-current="page">Device</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/network-map">Map</a></nav></header>
   <main>
     <div id="notice"></div>
     <div class="grid">
