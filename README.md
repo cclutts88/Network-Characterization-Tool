@@ -29,7 +29,7 @@ SearchSploit database, and visualizes retained topology evidence.
 - Offline vendor enrichment from Nmap's locally installed OUI prefix database;
   no external lookup service or internet access is required.
 - Separate host-summary and normalized port-level CSV exports.
-- Interactive network-device collection with no stored password, visible cleanup behavior, optional operator commands, reusable device presets, optional device names, and Nmap-discovered device selection.
+- Interactive VyOS, Cisco, Juniper, pfSense, and UniFi OS Gateway collection with no stored password, visible cleanup behavior, optional operator commands, reusable device presets, optional device names, and Nmap-discovered device selection.
 - Review-only subnet suggestions parsed from saved device configurations. An
   operator must explicitly add a suggestion to Saved Networks before it can be
   selected as scan scope; saved suggestions leave the pending list.

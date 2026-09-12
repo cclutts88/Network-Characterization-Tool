@@ -23,6 +23,13 @@
   file creation, SCP copy-back, and removal steps for interactive VyOS and
   pfSense collection, and correctly shows Cisco, Juniper, and key-based
   collection as direct SSH streams with no remote temporary file.
+- Added UniFi OS Gateway to the Device Router and Firewall vendor choices with
+  a guarded, read-only Linux SSH evidence set covering platform, interfaces,
+  IPv4/IPv6 routes, neighbor tables, bridge VLANs, listening services,
+  iptables/nftables, and LLDP. UniFi output streams directly to NCT without SCP;
+  unavailable firmware-specific utilities are recorded without discarding the
+  rest of the collection. Linux interface MACs, connected routes, and default
+  routes are now normalized for Device Analysis and Map.
 - Added an expanded map workspace that uses the available browser window and
   returns to the standard workspace with its button or Escape.
 - Kept subnet endpoints collapsed by default and added individual-line and

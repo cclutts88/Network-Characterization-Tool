@@ -182,7 +182,10 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "step.location" in html
     assert "step.kind" in html
     assert "VyOS and pfSense create a named temporary output file" in html
-    assert "Cisco and Juniper return output directly through SSH and do not run SCP" in html
+    assert "Cisco, Juniper, and UniFi OS gateways return output directly through SSH and do not run SCP" in html
+    assert '<option value="unifi">UniFi OS Gateway</option>' in html
+    assert "Current UniFi consoles and gateways normally use the root SSH account" in html
+    assert "EdgeRouter devices should continue to use the VyOS template" in html
     assert 'id="captureCommand"' not in html
     assert 'id="scp"' not in html
     assert 'id="cleanupPlan"' not in html

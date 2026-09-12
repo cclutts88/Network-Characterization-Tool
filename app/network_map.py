@@ -30,7 +30,7 @@ CIDR_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}(?![\w.])")
 VIA_RE = re.compile(r"\bvia\s+((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
 NEXT_HOP_RE = re.compile(r"\bnext-hop\s+['\"]?((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
 INTERFACE_RE = re.compile(r"\b(?:dev\s+)?([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b")
-DIRECT_MARKERS = ("directly connected", " connected", "direct/", "link#")
+DIRECT_MARKERS = ("directly connected", " connected", "direct/", "link#", "scope link")
 MAC_CANDIDATE_RE = re.compile(
     r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])"
     r"|(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}(?![0-9A-Fa-f])"
@@ -679,6 +679,9 @@ def interface_name(line: str) -> str | None:
         re.I,
     ):
         return first
+    linux_dev = re.search(r"\bdev\s+([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b", line, re.I)
+    if linux_dev:
+        return linux_dev.group(1)
     direct = re.search(r"directly connected,\s*([A-Za-z0-9_.:/-]+)", line, re.I)
     return direct.group(1).rstrip(",") if direct else None
 
@@ -858,6 +861,22 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
                 routes.append(
                     {
                         "network": network,
+                        "via": gateway,
+                        "interface": route_interface,
+                        "direct": False,
+                        "line": line[:500],
+                    }
+                )
+                seen_routes.add(route_key)
+
+        if route_parts and lower_route_parts[0] == "default":
+            gateway = next((valid_ip(value) for value in route_parts[1:] if valid_ip(value)), None)
+            route_interface = interface_name(line)
+            route_key = ("0.0.0.0/0", gateway, route_interface, False)
+            if (gateway or route_interface) and route_key not in seen_routes:
+                routes.append(
+                    {
+                        "network": "0.0.0.0/0",
                         "via": gateway,
                         "interface": route_interface,
                         "direct": False,

@@ -49,7 +49,7 @@ READ_ONLY_FILTER_PREFIXES = {
     "head", "tail", "count", "no-more",
 }
 
-VENDORS = ("vyos", "cisco", "juniper", "pfsense")
+VENDORS = ("vyos", "cisco", "juniper", "pfsense", "unifi")
 DEVICE_TYPES = ("router", "firewall")
 
 TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
@@ -150,6 +150,38 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "cat /cf/conf/config.xml",
         ),
     },
+    "unifi": {
+        "router": (
+            "uname -a",
+            "cat /etc/os-release",
+            "ubnt-device-info",
+            "ip -details address show",
+            "ip -4 route show table all",
+            "ip -6 route show table all",
+            "ip -4 neigh show",
+            "ip -6 neigh show",
+            "bridge vlan show",
+            "ss -lntup",
+            "iptables-save",
+            "nft list ruleset",
+            "lldpcli show neighbors details",
+        ),
+        "firewall": (
+            "uname -a",
+            "cat /etc/os-release",
+            "ubnt-device-info",
+            "ip -details address show",
+            "ip -4 route show table all",
+            "ip -6 route show table all",
+            "ip -4 neigh show",
+            "ip -6 neigh show",
+            "bridge vlan show",
+            "ss -lntup",
+            "iptables-save",
+            "nft list ruleset",
+            "lldpcli show neighbors details",
+        ),
+    },
 }
 
 router = APIRouter(prefix="/api/device-configs", tags=["device-configs"])
@@ -170,7 +202,7 @@ class DeviceConfigPlan(BaseModel):
     operator: str = Field(min_length=1, max_length=100)
     reason: str = Field(min_length=1, max_length=500)
     originating_host: str = Field(min_length=1, max_length=255)
-    vendor: Literal["vyos", "cisco", "juniper", "pfsense"]
+    vendor: Literal["vyos", "cisco", "juniper", "pfsense", "unifi"]
     device_type: Literal["router", "firewall"]
     device_address: str = Field(min_length=1, max_length=255)
     device_name: str | None = Field(default=None, max_length=100)
@@ -302,6 +334,20 @@ def _interactive_collection_command(
             labeled_commands.extend([f"printf '\\n===== {command} =====\\n'", command])
         remote_script = "{ " + "; ".join(labeled_commands) + f"; }} > {shlex.quote(remote_output)}"
         return None, f"sh -c {shlex.quote(remote_script)}"
+    if plan.vendor == "unifi":
+        labeled_commands = []
+        for command in commands:
+            labeled_commands.extend(
+                [
+                    f"printf '\\n===== {command} =====\\n'",
+                    (
+                        f"{command} 2>&1 || "
+                        "printf '\\n[NCT] Command unavailable or returned a non-zero status.\\n'"
+                    ),
+                ]
+            )
+        remote_script = "{ " + "; ".join(labeled_commands) + "; }"
+        return None, f"sh -c {shlex.quote(remote_script)}"
     return None, "; ".join(commands)
 
 
@@ -336,6 +382,10 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         ssh_args += [target, remote]
         script_lines = remote_input.rstrip("\n").splitlines()
         ssh_command = f"printf '%s\\n' {shlex.join(script_lines)} | {shlex.join(ssh_args)}"
+    elif plan.vendor == "unifi":
+        remote_input, remote = _interactive_collection_command(plan, commands, None)
+        ssh_args += [target, remote]
+        ssh_command = shlex.join(ssh_args)
     else:
         remote_input = None
         ssh_args += [target, "; ".join(commands)]

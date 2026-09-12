@@ -231,6 +231,27 @@ vtnet0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
     assert all(item.get("mac_evidence") for item in by_name.values())
 
 
+def test_configuration_parser_reads_unifi_linux_interfaces_connected_and_default_routes():
+    interfaces, routes = parse_config_text(
+        """
+2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
+    link/ether 00:11:22:33:44:99 brd ff:ff:ff:ff:ff:ff
+    inet 10.80.0.1/24 brd 10.80.0.255 scope global br0
+10.80.0.0/24 dev br0 proto kernel scope link src 10.80.0.1
+default via 192.0.2.254 dev eth8 proto static
+"""
+    )
+
+    by_name = {item["name"]: item for item in interfaces}
+    assert by_name["br0"]["address"] == "10.80.0.1/24"
+    assert by_name["br0"]["mac"] == "00:11:22:33:44:99"
+    by_network = {item["network"]: item for item in routes}
+    assert by_network["10.80.0.0/24"]["interface"] == "br0"
+    assert by_network["10.80.0.0/24"]["direct"] is True
+    assert by_network["0.0.0.0/0"]["via"] == "192.0.2.254"
+    assert by_network["0.0.0.0/0"]["interface"] == "eth8"
+
+
 def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
     nodes, edges, aliases = {}, {}, {}
     source = {

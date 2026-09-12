@@ -384,6 +384,34 @@ def test_cisco_password_preview_streams_output_without_claiming_scp_or_remote_cl
     assert "terminal length 0" in commands
 
 
+def test_unifi_gateway_preview_uses_guarded_read_only_linux_collection_without_scp():
+    body = device_password_plan()
+    body.update({"vendor": "unifi", "username": "root"})
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    phases = [step["phase"] for step in data["execution_steps"]]
+    collection = next(
+        step["command"] for step in data["execution_steps"]
+        if step["phase"] == "Run read-only device collection"
+    )
+    assert data["transfer_method"] == "ssh_stdout"
+    assert data["remote_output_path"] is None
+    assert data["scp_command"] is None
+    assert "Retain streamed output" in phases
+    assert "ubnt-device-info" in data["commands"]
+    assert "ip -details address show" in data["commands"]
+    assert "ip -4 neigh show" in data["commands"]
+    assert "ip -6 neigh show" in data["commands"]
+    assert "iptables-save" in data["commands"]
+    assert "nft list ruleset" in data["commands"]
+    assert "lldpcli show neighbors details" in data["commands"]
+    assert "sh -c" in collection
+    assert "Command unavailable or returned a non-zero status" in collection
+
+
 def test_key_preview_never_claims_a_remote_temporary_file_workflow():
     body = device_password_plan()
     body.update({"authentication_mode": "key", "key_path": "/keys/operator-key"})

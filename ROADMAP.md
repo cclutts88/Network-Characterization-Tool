@@ -138,6 +138,12 @@ within Reachability.
   cleanup only for the VyOS and pfSense password workflows that actually use
   them, while identifying Cisco, Juniper, and key-based collection as direct
   SSH streaming.
+- [x] Add UniFi OS gateways as Router and Firewall collection targets using a
+  guarded read-only Linux evidence set for platform, interfaces, routes,
+  neighbors, VLANs, listening services, firewall rules, and LLDP. Stream results
+  directly through SSH, tolerate unavailable version-specific utilities while
+  retaining their status, parse Linux interface and route evidence into Device
+  Analysis and Map, and keep EdgeRouter on the existing VyOS path.
 - [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [x] Highlight search results, step forward and backward through matches, fit
   the active match, and optionally isolate matching topology branches.
@@ -223,6 +229,28 @@ within Reachability.
 - [ ] Provide an operator-friendly rapid deployment launcher that performs a
   complete preflight, deployment or upgrade, health check, and final access
   handoff without requiring the operator to assemble Docker commands manually.
+- [ ] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
+  profiles with different acceptance rules rather than treating every host as
+  equivalent:
+  - **Test** keeps the current developer workflow local, permits alternate
+    ports, and prioritizes fast rebuild, reset, and rollback.
+  - **Range** assumes older or inconsistent host software, limited or absent
+    internet access, occupied ports, and disposable training infrastructure. It
+    prioritizes compatibility and useful diagnostics without silently upgrading
+    or reconfiguring the range host.
+  - **Mission** requires the supported modern Docker baseline, stable hostname
+    and ports, trusted HTTPS, authenticated access, backups, monitoring, and a
+    fail-closed readiness check. Required prerequisites may be installed only
+    through an explicitly approved and logged administrator workflow.
+- [ ] Use one immutable, versioned, checksummed NCT application image across all
+  three profiles. Keep configuration, credentials, ports, certificates, and
+  data volumes environment-specific, and never promote test or range data into
+  a mission environment implicitly.
+- [ ] Define promotion gates from local testing to range evaluation and then to
+  mission readiness. Preserve the exact NCT image digest, build version,
+  deployment profile, test results, compatibility findings, known limitations,
+  and rollback proof so a successful lab launch alone cannot be reported as
+  mission-ready.
 - [ ] Detect whether Docker Engine or Docker Desktop is installed, running, and
   reachable; compare its server/API version with NCT's documented minimum and
   tested versions, and explain the exact supported workaround when the local
@@ -231,6 +259,22 @@ within Reachability.
   `docker-compose`. Prefer the supported Compose path, fall back to a compatible
   direct-Docker deployment when Compose is absent or too old, and stop with a
   clear corrective action only when no safe path is available.
+- [ ] Implement a documented Range compatibility ladder: modern Compose v2,
+  legacy `docker-compose`, direct Docker Engine, and finally a self-contained
+  offline NCT VM/appliance when the installed Docker API, kernel, image format,
+  networking, or security model is too old to support safely. Do not disguise
+  an unsupported Docker host with fragile command-line workarounds.
+- [ ] Package the range fallback so it can be transferred without internet
+  access and booted with a known-compatible runtime while still requiring the
+  operator to choose its network attachment, address, ports, and authorized
+  target ranges. Treat the VM/appliance as a separately versioned artifact with
+  its own checksum, resource minimums, upgrade path, and rollback instructions.
+- [ ] Maintain a repeatable Range compatibility test matrix covering Compose v2,
+  legacy Compose v1, Docker Engine without Compose, the oldest supported Docker
+  API and Linux kernel, supported CPU architectures, offline image loading,
+  occupied ports and container names, bridge/VPN subnet overlap, existing older
+  NCT deployments, preserved data, `NET_RAW`, packet capture, and scan
+  reachability. Record pass, degraded, workaround, and unsupported outcomes.
 - [ ] Make the launcher idempotent: identify an existing NCT container, image,
   persistent data volume, configured ports, and running version before making
   changes. Distinguish an upgrade from a new installation, preserve evidence
@@ -240,7 +284,9 @@ within Reachability.
   an older NCT instance versus an unrelated application. Reuse the existing NCT
   ports during an upgrade when safe; otherwise choose or request available HTTP,
   HTTPS, and application ports without stopping or reconfiguring unrelated
-  services. Save the selected ports so restarts use the same addresses.
+  services. Test and Range modes may retain an approved alternate port; Mission
+  mode must preserve its declared stable URL or stop for an explicit operator
+  decision. Save the selected ports so restarts use the same addresses.
 - [ ] Make access mode explicit before deployment: **Local only** binds to
   loopback, while **LAN accessible** binds only to the operator-selected host
   interface or approved addresses. Never advertise a LAN URL when Docker is
@@ -385,6 +431,13 @@ Every release should be built and tested locally, checked against existing and
 new data, packaged with offline dependencies where required, deployed by a short
 final swap, smoke-tested, and kept independently rollbackable. Scan-engine,
 device-analysis, map, and reachability redesigns must remain separate releases.
+
+Local completion means development-ready only. Range-ready requires the pinned
+artifact to pass the documented compatibility matrix on representative older
+hosts and real network equipment, with limitations and workarounds recorded.
+Mission-ready requires that same artifact to pass the modern server baseline,
+security, authentication, TLS, backup/restore, monitoring, restart, and rollback
+gates; no successful local or range run may waive those controls.
 
 Regression checks include scan creation, Saved Networks, manual targets,
 No-Strike behavior, FPING, TCP, UDP, storage, history, analysis, deletion, device
