@@ -149,6 +149,18 @@ def test_navigation_is_sticky_on_every_primary_page():
         assert "padding-top:6px!important" in html
 
 
+def test_activity_origin_banner_only_appears_on_outbound_pages():
+    outbound_pages = [operator_page(), device_config_page(), hunting_page()]
+    passive_pages = [analysis_page(), device_analysis_page(), network_map_page()]
+    for page in outbound_pages:
+        html = page.body.decode()
+        assert 'class="activity-origin-banner"' in html
+        assert 'class="activity-origin-host"' in html
+        assert "node.textContent=location.hostname" in html
+    for page in passive_pages:
+        assert 'class="activity-origin-banner"' not in page.body.decode()
+
+
 def test_device_configs_offer_reviewed_network_candidates():
     html = device_config_page().body.decode()
     assert "Networks identified in configuration files" in html

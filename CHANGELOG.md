@@ -36,6 +36,9 @@
   full-name underline, and shortened the shared navigation buttons.
 - Removed the originating-host banner and operator-entered host field from the
   Nmap page while continuing to record the analyzer hostname automatically.
+- Added a slim origin notice beneath the sticky navigation on Nmap, Device, and
+  Hunt so outbound scan, collection, and connected-update traffic is attributed
+  to the current NCT host without an operator-entered field.
 
 ## 0.12.0-dev — Dedicated service hunting
 

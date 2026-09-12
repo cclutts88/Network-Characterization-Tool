@@ -106,6 +106,8 @@ an optional future mode within Reachability.
   controls in the NCT interface.
 - [x] Complete the pre-map interface cleanup with a shared centered NCT brand,
   emphasized acronym letters, compact navigation, and active-button page identity.
+- [x] Show the automatic NCT host in a slim sticky origin banner on pages that
+  can initiate scans, device collection, or connected database updates.
 
 ### Release 9 — Network Map Core Redesign — Planned as an independent release
 
