@@ -371,6 +371,24 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "w:250,h:68" in html
     assert "interfaceCount" in html
     assert ".workspace>aside { position:sticky" in html
+    assert 'id="toggleWorkspace"' in html
+    assert "workspace.map-expanded" in html
+    assert "Exit expanded workspace" in html
+    assert "event.key==='Escape'" in html
+    assert 'id="groupAll"' in html
+    assert 'id="endpointSort"' in html
+    assert "const endpointModes=new Map()" in html
+    assert "mode==='collapsed'" in html
+    assert "Individual connection lines" in html
+    assert "Organized inside subnet" in html
+    assert "function groupedEndpointSections" in html
+    assert "function groupedNodeDimensions" in html
+    assert "group-host-row" in html
+    assert "Group / sort by IP" in html
+    assert "Group / sort by hostname" in html
+    assert "Group / sort by OS" in html
+    assert "local to the current analyst browser" in html
+    assert "does not change shared evidence or another analyst's view" in html
     assert "function edgeAnchor" in html
     assert "No interface IPs parsed" in html
     assert 'id="topologyNeighborCount"' in html

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0-dev — Advanced Map Usability
+
+- Added an expanded map workspace that uses the available browser window and
+  returns to the standard workspace with its button or Escape.
+- Kept subnet endpoints collapsed by default and added individual-line and
+  organized grouped-box presentation modes.
+- Added per-subnet and map-wide endpoint sorting and breakdowns by IP address,
+  hostname, or operating system, with grouped host rows opening the retained
+  host evidence in the details panel.
+- Kept map presentation state local to each analyst browser so display changes
+  do not modify shared evidence or another analyst's view.
+
 ## 0.13.0-dev — Network Map Core
 
 - Added cursor-centered wheel zoom and click-drag canvas panning while retaining

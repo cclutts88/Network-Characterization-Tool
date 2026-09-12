@@ -42,6 +42,10 @@ SearchSploit database, and visualizes retained topology evidence.
 - A network map with consolidated router/firewall identities, Saved Network and
   subnet grouping, collapsible endpoint groups, compact topology nodes, a sticky
   evidence panel, cursor-centered zoom, drag-to-pan, draggable nodes, and Fit.
+  Endpoint subnets can remain collapsed, fan out into individual connection
+  lines, or organize hosts inside a larger box with IP, hostname, or OS
+  breakdowns. An expanded workspace uses the available browser area while map
+  presentation choices remain local to each analyst browser.
 
 ## Run
 

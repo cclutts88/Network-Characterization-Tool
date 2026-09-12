@@ -122,11 +122,11 @@ an optional future mode within Reachability.
 
 - [ ] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [ ] Pan, zoom, and highlight search results.
-- [ ] Keep the fixed-height map as the default workspace, with an operator option
+- [x] Keep the fixed-height map as the default workspace, with an operator option
   to expand it or open a full-screen map workspace.
-- [ ] Add per-subnet endpoint display modes: collapsed by default, individual
+- [x] Add per-subnet endpoint display modes: collapsed by default, individual
   endpoint lines, or an organized endpoint-group box.
-- [ ] In the grouped endpoint view, let the analyst sort and divide hosts by IP
+- [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP
   address, hostname, or operating system, with useful counts and breakdowns for
   the selected investigation view.
 - [ ] Add zoom-dependent detail and optional analytical overlays.
@@ -140,6 +140,17 @@ an optional future mode within Reachability.
   overwriting evidence.
 - [ ] Record who made the change, when it changed, and the reason, and flag a
   later scan when its fingerprint disagrees with the analyst override.
+
+### Future foundation — Multi-Analyst Workspaces
+
+- [ ] Add authenticated analyst identities and role-based permissions for shared
+  collection, safety, evidence, and administrative actions.
+- [ ] Give each analyst a persistent personal workspace for saved map layouts,
+  filters, investigation notes, scan drafts, and interface preferences.
+- [ ] Keep shared evidence authoritative while requiring an explicit publish or
+  share action to move personal layouts and investigations into a team workspace.
+- [ ] Add version checks, conflict handling, scan ownership and queuing, live
+  status updates, and an audit trail for every shared change.
 
 ### Future major capability — Reachability Analysis
 
