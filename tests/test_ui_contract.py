@@ -149,6 +149,21 @@ def test_navigation_is_sticky_on_every_primary_page():
         assert "padding-top:6px!important" in html
 
 
+def test_table_headers_stay_visible_without_overlapping_sticky_page_content():
+    page_tables = [operator_page(), analysis_page(), device_analysis_page(), hunting_page()]
+    for page in page_tables:
+        html = page.body.decode()
+        assert "thead th{position:sticky" in html
+        assert "table-wrap" in html
+    for page in (operator_page(), analysis_page(), device_analysis_page()):
+        html = page.body.decode()
+        assert "--table-sticky-offset" in html
+        assert "syncTableStickyOffset" in html
+        assert "ResizeObserver(syncTableStickyOffset)" in html
+    assert "top:var(--hunt-result-offset" in hunting_page().body.decode()
+    assert "#details thead th{position:sticky;top:0" in network_map_page().body.decode()
+
+
 def test_activity_origin_banner_only_appears_on_outbound_pages():
     outbound_pages = [operator_page(), device_config_page(), hunting_page()]
     passive_pages = [analysis_page(), device_analysis_page(), network_map_page()]

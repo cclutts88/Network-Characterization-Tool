@@ -1440,6 +1440,8 @@ HTML = r'''<!doctype html>
     .analysis-history-muted { color:#9eb0b8; }
     .analysis-history-good { color:#61d095; }
     .analysis-history-warning { color:#f4c95d; }
+    .table-wrap { overflow:visible; }
+    .table-wrap thead th,.analysis-history-table thead th { position:sticky; top:0; z-index:2; background:#0b141b; box-shadow:0 2px 0 #344754; }
 </style></head><body><main class="wrap">
 <header><div><h1>Nmap Terrain Analyzer</h1><p>Build on PythonTool · scan from Kali · return XML for terrain analysis.</p></div><span class="badge">Generator only · never executes Nmap</span></header>
 <div class="tabs"><button class="tab active" data-target="generate">Build scan package</button><button class="tab" data-target="analyze">Analyze Nmap XML</button><a href='/operator' style='display:inline-block;margin-left:.5rem;padding:.55rem .9rem;border:1px solid #3b82f6;border-radius:.5rem;color:#bfdbfe;text-decoration:none'>Automated Scan</a><a href='/device-config' style='display:inline-block;margin-left:.5rem;padding:.55rem .9rem;border:1px solid #3b82f6;border-radius:.5rem;color:#bfdbfe;text-decoration:none'>Device Configurations</a><a href="/network-map" style="display:inline-block;margin-left:.5rem;padding:.55rem .9rem;border:1px solid #3b82f6;border-radius:.5rem;color:#bfdbfe;text-decoration:none">Network Map</a></div>

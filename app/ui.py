@@ -23,6 +23,7 @@ def operator_page() -> HTMLResponse:
   <style>
     .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;color:var(--text);line-height:1;text-align:center}.nct-brand>strong{padding-left:.24em;font-size:40px;letter-spacing:.24em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}.nct-brand span b{color:var(--accent);font-size:1.16em;font-weight:950}.header-workspace{display:flex;min-height:56px;justify-content:center;align-items:flex-start}.nav{justify-content:center!important;margin-top:8px!important}.nav a{padding-top:6px!important;padding-bottom:6px!important}.activity-origin-banner{margin:8px auto -6px;padding:6px 10px 0;border-top:1px solid var(--line);color:var(--muted);font-size:11px;text-align:center}.activity-origin-banner strong{color:var(--accent);letter-spacing:.04em;text-transform:uppercase}.activity-origin-banner code{font-weight:850}
   </style>
+  <style>:root{--table-sticky-offset:132px}.table-wrap{overflow:visible}.history-group{overflow:clip}.table-wrap thead th{position:sticky;top:var(--table-sticky-offset);z-index:70;background:#0a1720;box-shadow:0 2px 0 #365268}</style>
 </head>
 <body>
   <header>
@@ -191,6 +192,7 @@ def operator_page() -> HTMLResponse:
   </main>
 <script>
 const $=id=>document.getElementById(id),esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const tableStickyHeader=document.querySelector('header');function syncTableStickyOffset(){document.documentElement.style.setProperty('--table-sticky-offset',`${Math.ceil(tableStickyHeader.getBoundingClientRect().height)+6}px`)}syncTableStickyOffset();new ResizeObserver(syncTableStickyOffset).observe(tableStickyHeader);window.addEventListener('resize',syncTableStickyOffset);
 const lines=id=>$(id).value.split(/[\r\n,]+/).map(value=>value.trim()).filter(Boolean);
 let profiles=[],schedules=[],savedNetworks=[],networkCandidates=[],editingSavedNetworkId=null,selectedProfile=null,profileDirty=false,currentId=null,pollTimer=null,safetyTimer=null,pendingDelete=null;
 const SCOPE_DETAILS={

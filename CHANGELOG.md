@@ -10,6 +10,8 @@
   can see the exact port or capability relationship behind the inference.
 - Shortened Hunt scan-selection entries to name, completion time, and profile;
   the full comparison scope remains available as option hover text.
+- Made table header rows remain visible while scrolling throughout NCT, with
+  live offsets that keep them below each page's sticky navigation and guides.
 - Reordered the primary workflow to Device, Nmap, Analyze, Hunt, and Map, and
   made Device the default landing page so network-device and subnet evidence
   naturally precedes scan construction.
