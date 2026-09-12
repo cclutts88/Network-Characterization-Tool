@@ -24,6 +24,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Collect traceroute paths" in html
     assert "normalizeCombinedScopes" in html
     assert 'id="fallbackApproval"' in html
+    assert html.index("<h2>Profile behavior</h2>") < html.index('id="fallbackApproval"')
     assert "Full Nmap fallback requires approval" in html
     assert "Authorize full Nmap fallback" in html
     assert "Finish without Nmap" in html
@@ -58,6 +59,11 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Chunks never overlap" in html
     assert 'id="currentProgress"' in html
     assert 'role="progressbar"' in html
+    assert 'id="currentHostsLabel">Nmap-reported hosts' in html
+    assert "addresses in scope" in html
+    assert "scan targets completed" in html
+    assert "targets currently being scanned" in html
+    assert "Broad reset responses can cause this" in html
     assert "FPING discovery" in html
     assert "Nmap discovery" in html
     assert "TCP scan" in html

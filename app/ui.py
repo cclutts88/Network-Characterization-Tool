@@ -134,7 +134,7 @@ def operator_page() -> HTMLResponse:
         <div id="currentEmpty" class="meta">No scan selected. Run a scan or open one from history.</div>
         <div id="current" class="hidden">
           <div><span id="currentStatus" class="pill">—</span> <strong id="currentName"></strong></div>
-          <div class="summary"><div><strong id="currentHosts">—</strong>hosts</div><div><strong id="currentProtocols">—</strong>protocols</div><div><strong id="currentProfile">—</strong>profile</div><div><strong id="currentMethod">—</strong>method</div></div>
+          <div class="summary"><div><strong id="currentHosts">—</strong><span id="currentHostsLabel">Nmap-reported hosts</span></div><div><strong id="currentProtocols">—</strong>protocols</div><div><strong id="currentProfile">—</strong>profile</div><div><strong id="currentMethod">—</strong>method</div></div>
           <div id="currentProgress" class="scan-progress hidden">
             <div class="progress-heading"><strong id="progressLabel">Scan progress</strong><span id="progressCount"></span></div>
             <div id="progressTrack" class="progress-track" role="progressbar" aria-label="Scan progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressFill" class="progress-fill"></div></div>
@@ -143,17 +143,6 @@ def operator_page() -> HTMLResponse:
           <p class="meta" id="currentMetadata"></p>
           <p class="meta hidden" id="currentDiscoveryNote"></p>
           <details open><summary>Command accountability</summary><pre id="currentCommand"></pre></details>
-          <div id="fallbackApproval" class="confirm-panel approval-panel hidden" aria-live="assertive">
-            <strong>Full Nmap fallback requires approval</strong>
-            <p>FPING found no responsive hosts. No Nmap fallback will start until an operator or mission partner explicitly authorizes it.</p>
-            <label for="fallbackCommand">Exact full-target command awaiting authorization</label>
-            <pre id="fallbackCommand"></pre>
-            <label for="fallbackApprover">Approver / mission partner</label>
-            <input id="fallbackApprover" maxlength="100" placeholder="Name, role, or mission partner">
-            <label for="fallbackNote">Approval or mission-constraint note</label>
-            <textarea id="fallbackNote" maxlength="500" placeholder="Record the approval reference, or explain why Nmap must not run."></textarea>
-            <div class="actions"><button id="approveFallback" class="primary">Authorize full Nmap fallback</button><button id="declineFallback" class="secondary">Finish without Nmap</button></div>
-          </div>
           <div id="currentArtifacts" class="artifacts"></div>
           <div class="actions"><button id="analyzeCurrent" class="secondary" disabled>Open &amp; analyze</button><button id="cancel" class="danger" disabled>Cancel active scan</button></div>
         </div>
@@ -163,6 +152,17 @@ def operator_page() -> HTMLResponse:
         <p>Built-in profiles are protected templates. Clone one to customize it.</p>
         <p>Saving a new version preserves older versions. Future schedule definitions retain their exact profile version until explicitly changed.</p>
         <p class="hint">Schedules execute from the analyzer and retain the exact saved profile version. Changing the schedule profile is an explicit, audited action.</p>
+        <div id="fallbackApproval" class="confirm-panel approval-panel hidden" aria-live="assertive">
+          <strong>Full Nmap fallback requires approval</strong>
+          <p>FPING found no responsive hosts. No Nmap fallback will start until an operator or mission partner explicitly authorizes it.</p>
+          <label for="fallbackCommand">Exact full-target command awaiting authorization</label>
+          <pre id="fallbackCommand"></pre>
+          <label for="fallbackApprover">Approver / mission partner</label>
+          <input id="fallbackApprover" maxlength="100" placeholder="Name, role, or mission partner">
+          <label for="fallbackNote">Approval or mission-constraint note</label>
+          <textarea id="fallbackNote" maxlength="500" placeholder="Record the approval reference, or explain why Nmap must not run."></textarea>
+          <div class="actions"><button id="approveFallback" class="primary">Authorize full Nmap fallback</button><button id="declineFallback" class="secondary">Finish without Nmap</button></div>
+        </div>
       </section>
     </div>
 
@@ -280,22 +280,24 @@ function renderCurrentProgress(run){
   const labels={queued:'Queued',discovery:run.discovery_mode==='fping'?'FPING discovery':'Nmap discovery',tcp:'TCP scan',udp:'UDP scan',merge:'Merging results',analysis:'Preparing analysis',nmap:'Nmap scan',awaiting_approval:'Waiting for fallback approval',completed:run.partial_results?'Scan complete with partial results':'Scan complete',completed_without_nmap:'Finished without Nmap',failed:'Scan failed',cancelled:'Scan cancelled',timed_out:'Scan timed out'};
   $('progressLabel').textContent=labels[phase]||'Scan progress';
   const phaseProgress=measuredPhase&&hasPhasePercent?` · ${String(p.activity||'current phase')} ${rawPhasePercent.toFixed(1)}%`:'';
-  $('progressCount').textContent=phase==='discovery'&&!hasPhasePercent?`${Number(p.scope_hosts_total||total).toLocaleString()} authorized addresses`:`${completed.toLocaleString()} of ${total.toLocaleString()} ${showBatch?'addresses processed':'hosts completed'}${phaseProgress}`;
+  $('progressCount').textContent=phase==='discovery'&&!hasPhasePercent?`${Number(p.scope_hosts_total||total).toLocaleString()} authorized addresses`:`${completed.toLocaleString()} of ${total.toLocaleString()} ${showBatch?'batch addresses processed':'scan targets completed'}${phaseProgress}`;
   const details=[];
   if(showBatch)details.push(`Scheduled batch · chunk ${chunkNumber} of ${chunkCount}`);
   if(['tcp','udp'].includes(phase)&&Number(p.scope_hosts_total)>Number(p.hosts_total))details.push(`Discovery selected ${Number(p.hosts_total).toLocaleString()} responsive hosts from ${Number(p.scope_hosts_total).toLocaleString()} authorized addresses`);
   if(measuredPhase&&p.activity&&!hasPhasePercent)details.push(String(p.activity));
-  if(measuredPhase&&Number(p.active_hosts)>0)details.push(`${Number(p.active_hosts).toLocaleString()} active in this phase`);
+  if(measuredPhase&&Number(p.active_hosts)>0)details.push(`${Number(p.active_hosts).toLocaleString()} targets currently being scanned`);
+  const discoveryTotal=Number(p.scope_hosts_total||0),discoveryReported=Number(run.discovery_host_count||0);
+  if(run.discovery_mode==='nmap'&&discoveryTotal>0&&discoveryReported>=discoveryTotal*.95)details.push(`Caution: Nmap discovery reported ${discoveryReported.toLocaleString()} of ${discoveryTotal.toLocaleString()} authorized addresses as responsive. Broad reset responses can cause this; verify the count or use FPING pre-scan.`);
   if(measuredPhase&&p.remaining_seconds!==null&&p.remaining_seconds!==undefined)details.push(`Estimated time left ${formatDuration(p.remaining_seconds)}`);
   if(['running','queued'].includes(state)&&p.elapsed_seconds!==null&&p.elapsed_seconds!==undefined)details.push(`Elapsed ${formatDuration(p.elapsed_seconds)}`);
   if(state==='running'&&p.deadline_remaining_seconds!==null&&p.deadline_remaining_seconds!==undefined)details.push(`Timeout limit in ${formatDuration(p.deadline_remaining_seconds)}`);
   if(['running','queued'].includes(state)&&p.updated_at)details.push(`Live update ${new Date(p.updated_at).toLocaleTimeString()}`);
   if(phase==='awaiting_approval')details.push('Progress is paused until the fallback decision is recorded');
   if(phase==='completed_without_nmap')details.push('No full Nmap fallback was run');
-  if(Number(p.hosts_up)>0)details.push(`${Number(p.hosts_up).toLocaleString()} up so far`);
+  if(Number(p.hosts_up)>0)details.push(`${Number(p.hosts_up).toLocaleString()} reported up by Nmap so far`);
   $('progressDetail').textContent=details.join(' · ');
   track.setAttribute('aria-valuenow',String(Math.round(percent)));
-  track.setAttribute('aria-valuetext',phase==='discovery'&&!hasPhasePercent?'Host discovery in progress':phaseProgress?`${p.activity||'Nmap phase'} ${rawPhasePercent.toFixed(1)} percent; ${completed} of ${total} hosts complete`:`${completed} of ${total} complete`);
+  track.setAttribute('aria-valuetext',phase==='discovery'&&!hasPhasePercent?'Host discovery in progress':phaseProgress?`${p.activity||'Nmap phase'} ${rawPhasePercent.toFixed(1)} percent; ${completed} of ${total} scan targets complete`:`${completed} of ${total} complete`);
 }
 function setCurrent(run){
   const changedRun=currentId!==run.run_id;currentId=run.run_id;
@@ -303,7 +305,7 @@ function setCurrent(run){
   const state=String(run.status||'unknown');
   $('currentStatus').textContent=run.partial_results?'completed · partial':state;$('currentStatus').className='pill '+(run.partial_results?'partial':state);
   $('currentName').textContent=run.display_name||run.name||run.run_id;
-  $('currentHosts').textContent=run.host_count??'—';
+  const scopeCount=Number(run.progress?.scope_hosts_total||0),hasHostCount=run.host_count!==null&&run.host_count!==undefined;$('currentHosts').textContent=hasHostCount?run.host_count:(scopeCount||'—');$('currentHostsLabel').textContent=hasHostCount?'Nmap-reported hosts':scopeCount?'addresses in scope':'Nmap-reported hosts';
   $('currentProtocols').textContent=(run.coverage?.protocols||[]).join('+')||'—';
   $('currentProfile').textContent=(run.profile||'—')+' v'+(run.profile_version||'—');
   $('currentMethod').textContent=run.execution_method||'—';
