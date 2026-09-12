@@ -10,6 +10,12 @@ from app.ui import operator_page
 
 def test_scan_builder_is_one_page_with_requested_actions():
     html = operator_page().body.decode()
+    assert "Unified scan workspace" in html
+    assert "All scan activity originates from the NCT analyzer host" in html
+    assert 'id="trafficOriginValue"' in html
+    assert "updateTrafficOrigin" in html
+    assert 'id="reason"' not in html
+    assert "NCT network characterization initiated through the operator workspace" in html
     assert html.index("Build scan") < html.index("Scan history")
     assert "Save as profile" in html
     assert "Run now" in html
@@ -97,6 +103,11 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "You can stop the scan at any time from Current run" in html
     assert "timeout_seconds:timeoutSeconds()" in html
     assert "Live update" in html
+    assert 'id="currentRunHeading"' in html
+    assert "'Active run':'Current run'" in html
+    assert "async function loadActiveRun()" in html
+    assert "/api/scan-runs?limit=200" in html
+    assert "loadActiveRun()" in html
     assert "exact_execution_command" in html
     assert 'id="savedNetworkPanel"' in html
     assert 'id="savedNetworkManageSelect"' in html
