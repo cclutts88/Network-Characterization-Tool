@@ -62,6 +62,27 @@ from app.comparison import (
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.auth import (
+    SESSION_COOKIE,
+    auth_enabled,
+    cookie_secure,
+    create_session,
+    create_user,
+    end_session,
+    init_auth_storage,
+    list_users,
+    session_hours,
+    session_identity,
+    verify_credentials,
+)
+from app.workspaces import (
+    WorkspaceConflict,
+    delete_layout,
+    init_workspace_storage,
+    list_layouts,
+    publish_layout,
+    save_layout,
+)
 import hashlib
 import io
 import ipaddress
@@ -81,8 +102,8 @@ from pathlib import Path
 from typing import Annotated, Literal
 from defusedxml import ElementTree as ET
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -144,6 +165,29 @@ class OsInferenceReviewRequest(BaseModel):
     status: Literal["confirmed", "dismissed", "investigate"]
     analyst: str = Field(min_length=1, max_length=100)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AnalystUserRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    role: Literal["admin", "analyst", "viewer"]
+    password: str = Field(min_length=12, max_length=256)
+
+
+class WorkspaceLayoutRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    snapshot: dict
+    layout_id: str | None = Field(default=None, max_length=64)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class WorkspacePublishRequest(BaseModel):
+    shared: bool
 
 
 def utc_now() -> str:
@@ -799,6 +843,8 @@ def parse_xml(content: bytes) -> dict:
 async def lifespan(_: FastAPI):
     init_storage()
     init_poc_storage()
+    init_auth_storage(DB_PATH)
+    init_workspace_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -821,6 +867,32 @@ app.include_router(device_config_router)
 app.include_router(device_analysis_router)
 
 
+@app.middleware("http")
+async def local_authentication_guard(request: Request, call_next):
+    request.state.analyst = None
+    if not auth_enabled():
+        return await call_next(request)
+    public_paths = {"/health", "/login", "/api/auth/login"}
+    if request.url.path in public_paths:
+        return await call_next(request)
+    analyst = session_identity(DB_PATH, request.cookies.get(SESSION_COOKIE))
+    if analyst is None:
+        if not request.url.path.startswith("/api/"):
+            destination = request.url.path
+            if request.url.query:
+                destination += f"?{request.url.query}"
+            return RedirectResponse(f"/login?next={destination}", status_code=303)
+        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+    request.state.analyst = analyst
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
+            return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
+        if analyst["role"] == "viewer" and request.url.path != "/api/auth/logout":
+            return JSONResponse({"detail": "Viewer accounts cannot make changes"}, status_code=403)
+    return await call_next(request)
+
+
 @app.get("/health")
 def health() -> dict:
     return {
@@ -829,6 +901,135 @@ def health() -> dict:
         "build_id": BUILD_ID,
         "build_commit": BUILD_COMMIT,
     }
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page() -> HTMLResponse:
+    if not auth_enabled():
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse('''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NCT · Sign in</title><style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#07121a;color:#eaf4f8;font:16px system-ui}.card{width:min(420px,calc(100vw - 32px));padding:28px;border:1px solid #315367;border-radius:14px;background:#0d1c26;box-shadow:0 24px 70px #0009}h1{margin:0;text-align:center;letter-spacing:.25em}p{color:#a9c3cf}form{display:grid;gap:12px}label{font-weight:750}input,button{width:100%;padding:12px;border:1px solid #3c6072;border-radius:8px;background:#091722;color:inherit;font:inherit}button{margin-top:6px;background:#57d6bf;color:#06201d;font-weight:850;cursor:pointer}.bad{color:#ff9f9f}</style></head><body><main class="card"><h1>N C T</h1><p>Network Characterization Tool · Analyst sign in</p><form id="login"><label for="username">Username</label><input id="username" autocomplete="username" required><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required><div id="status" role="status"></div><button>Sign in</button></form></main><script>const form=document.getElementById('login'),status=document.getElementById('status');form.onsubmit=async event=>{event.preventDefault();status.textContent='Signing in…';status.className='';const response=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})}),data=await response.json();if(!response.ok){status.textContent=data.detail||'Sign in failed';status.className='bad';return}const next=new URLSearchParams(location.search).get('next')||'/';location.href=next.startsWith('/')&&!next.startsWith('//')?next:'/'};</script></body></html>''')
+
+
+@app.post("/api/auth/login")
+def login(request: LoginRequest) -> Response:
+    if not auth_enabled():
+        raise HTTPException(status_code=409, detail="Local authentication is disabled")
+    analyst = verify_credentials(DB_PATH, request.username, request.password)
+    if analyst is None:
+        raise HTTPException(status_code=401, detail="Username or password is incorrect")
+    token, expires_at = create_session(DB_PATH, analyst["username"])
+    response = JSONResponse({"authenticated": True, "analyst": analyst, "expires_at": expires_at})
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=session_hours() * 3600,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request) -> Response:
+    end_session(DB_PATH, request.cookies.get(SESSION_COOKIE))
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(SESSION_COOKIE, path="/", samesite="strict")
+    return response
+
+
+@app.get("/api/auth/me")
+def current_analyst(request: Request) -> dict:
+    return {
+        "authentication_enabled": auth_enabled(),
+        "analyst": request.state.analyst,
+    }
+
+
+def require_admin(request: Request) -> dict:
+    analyst = request.state.analyst
+    if analyst is None or analyst.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Administrator role required")
+    return analyst
+
+
+@app.get("/api/auth/users")
+def analyst_users(request: Request) -> list[dict]:
+    require_admin(request)
+    return list_users(DB_PATH)
+
+
+@app.post("/api/auth/users")
+def add_analyst_user(request: Request, user: AnalystUserRequest) -> dict:
+    actor = require_admin(request)
+    try:
+        return create_user(DB_PATH, **user.model_dump(), created_by=actor["username"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/layouts")
+def workspace_layouts(request: Request) -> dict:
+    if not auth_enabled():
+        return {"server_persistence": False, "layouts": []}
+    analyst = request.state.analyst
+    return {
+        "server_persistence": True,
+        "analyst": analyst,
+        "layouts": list_layouts(DB_PATH, analyst["username"]),
+    }
+
+
+@app.post("/api/workspaces/layouts")
+def store_workspace_layout(request: Request, layout: WorkspaceLayoutRequest) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    try:
+        return save_layout(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            **layout.model_dump(),
+        )
+    except WorkspaceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal layout not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/layouts/{layout_id}")
+def remove_workspace_layout(request: Request, layout_id: str, expected_version: int) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    try:
+        return delete_layout(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            layout_id=layout_id,
+            expected_version=expected_version,
+        )
+    except WorkspaceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal layout not found") from exc
+
+
+@app.post("/api/workspaces/layouts/{layout_id}/publish")
+def share_workspace_layout(
+    request: Request, layout_id: str, publish: WorkspacePublishRequest
+) -> dict:
+    actor = require_admin(request)
+    try:
+        return publish_layout(
+            DB_PATH,
+            layout_id=layout_id,
+            actor=actor["username"],
+            shared=publish.shared,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Layout not found") from exc
 
 
 @app.get("/api/os-overrides")

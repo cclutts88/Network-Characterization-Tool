@@ -470,10 +470,21 @@ within Reachability.
 
 - [ ] Add authenticated analyst identities and role-based permissions for shared
   collection, safety, evidence, and administrative actions.
+  - [x] Add opt-in local analyst authentication with PBKDF2 password hashes,
+    expiring HttpOnly sessions, same-origin mutation checks, fail-closed first
+    startup, and Admin / Analyst / Viewer enforcement. Keep authentication
+    disabled by default while this remains a single-user Test build.
 - [ ] Give each analyst a persistent personal workspace for saved map layouts,
   filters, investigation notes, scan drafts, and interface preferences.
+  - [x] Move named Map layouts to owner-scoped server storage when authentication
+    is enabled, while retaining browser-local layouts in disabled Test mode.
+    Reject stale replacements and prevent one analyst from deleting another's
+    personal layout.
 - [ ] Keep shared evidence authoritative while requiring an explicit publish or
   share action to move personal layouts and investigations into a team workspace.
+  - [x] Allow only an Administrator to deliberately publish or unpublish a
+    versioned personal Map layout; other analysts can load shared layouts but do
+    not overwrite the owner's copy.
 - [ ] Add version checks, conflict handling, scan ownership and queuing, live
   status updates, and an audit trail for every shared change.
 

@@ -17,6 +17,11 @@
 - Extended deployment port handling to detect both Docker and host-process
   listeners, reuse recognized NCT bindings during upgrades, and atomically
   retain the validated application and HTTPS ports for later runs.
+- Added an opt-in local-authentication foundation with hardened password hashes,
+  expiring HttpOnly sessions, Admin / Analyst / Viewer roles, fail-closed first
+  startup, personal server-side Map layouts, optimistic version conflicts, and
+  administrator-only explicit layout publishing. Authentication remains off by
+  default for the current single-user Test workflow.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility

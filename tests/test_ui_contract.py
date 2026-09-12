@@ -523,11 +523,17 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="saveLayout"' in html
     assert 'id="loadLayout"' in html
     assert 'id="deleteLayout"' in html
+    assert 'id="shareLayout"' in html
     assert "layoutStorageKey='nct-map-layouts-v1'" in html
     assert "function readNamedLayouts" in html
     assert "function saveNamedLayout" in html
     assert "function loadNamedLayout" in html
     assert "private browser layout" in html
+    assert "function initializeNamedLayouts" in html
+    assert "'/api/workspaces/layouts'" in html
+    assert "serverWorkspaceAnalyst" in html
+    assert "expected_version" in html
+    assert "function publishSelectedLayout" in html
     assert 'id="overlayMode"' in html
     assert 'id="overlayLegend"' in html
     assert "function overlayClass" in html
