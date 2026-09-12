@@ -84,6 +84,12 @@
   concise legend. Service exposure is presented as port-density context rather
   than a vulnerability finding, while identity gaps distinguish missing
   OS/MAC/evidence from conflicting observations.
+- Added zoom-safe network-diagram symbols for routers, firewalls, switches,
+  wireless devices, and unknown infrastructure. Device borders remain solid
+  when identity is confirmed by configuration evidence and dashed when the
+  type is inferred, leaving color available for analytical overlays.
+- Added explanatory hover text to the Map search navigation arrows and Isolate
+  control.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 

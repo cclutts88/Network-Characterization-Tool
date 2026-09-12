@@ -482,6 +482,18 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "...addresses,iface.mac" not in html
     assert "i.mac_vendor" in html
     assert "No IPv4 address" in html
+    assert "function networkDeviceType" in html
+    assert "function networkDeviceEvidence" in html
+    assert "function appendDeviceSymbol" in html
+    assert "symbol-router" in html
+    assert "symbol-firewall" in html
+    assert "symbol-switch" in html
+    assert "symbol-wireless" in html
+    assert "device-identity-inferred" in html
+    assert "Confirmed from collected device configuration" in html
+    assert 'title="Previous search result"' in html
+    assert 'title="Next search result"' in html
+    assert "Restore all devices, hosts, and connections" in html
     assert "function nodeDimensions" in html
     assert "w:250,h:68" in html
     assert "interfaceCount" in html
@@ -564,7 +576,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function edgeAnchor" in html
     assert "No interface IPs parsed" in html
     assert 'id="topologyNeighborCount"' in html
-    assert "Confirmed LLDP/CDP neighbor" in html
+    assert "Confirmed identity" in html
     assert "LLDP/CDP identity" in html
     assert "edge.relation==='topology_neighbor'" in html
 

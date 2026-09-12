@@ -178,6 +178,10 @@ an optional future mode within Reachability.
   retaining exact OS text and an Unknown OS treatment.
 - [x] Add optional OS-family, service-exposure, and identity-gap analytical
   overlays with an explicit map legend and neutral default view.
+- [x] Distinguish routers, firewalls, switches, wireless devices, and unknown
+  infrastructure with compact network-diagram symbols. Keep analytical color
+  available for overlays and use solid versus dashed borders for confirmed
+  versus inferred device identity.
 - [x] Add named private layouts that persist in the current analyst's browser,
   restore the complete presentation, and can be replaced or deleted.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst
