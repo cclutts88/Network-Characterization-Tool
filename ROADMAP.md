@@ -218,6 +218,117 @@ within Reachability.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst
   workspace and permissions model is introduced.
 
+### Future release — Rapid Deployment and Upgrade Automation
+
+- [ ] Provide an operator-friendly rapid deployment launcher that performs a
+  complete preflight, deployment or upgrade, health check, and final access
+  handoff without requiring the operator to assemble Docker commands manually.
+- [ ] Detect whether Docker Engine or Docker Desktop is installed, running, and
+  reachable; compare its server/API version with NCT's documented minimum and
+  tested versions, and explain the exact supported workaround when the local
+  version is too old or exposes an incompatible API.
+- [ ] Detect and validate both the modern `docker compose` plugin and legacy
+  `docker-compose`. Prefer the supported Compose path, fall back to a compatible
+  direct-Docker deployment when Compose is absent or too old, and stop with a
+  clear corrective action only when no safe path is available.
+- [ ] Make the launcher idempotent: identify an existing NCT container, image,
+  persistent data volume, configured ports, and running version before making
+  changes. Distinguish an upgrade from a new installation, preserve evidence
+  and databases, run migration checks, keep the previous container/image as a
+  rollback target, and avoid creating duplicate active instances.
+- [ ] Detect host-port conflicts before startup, including conflicts caused by
+  an older NCT instance versus an unrelated application. Reuse the existing NCT
+  ports during an upgrade when safe; otherwise choose or request available HTTP,
+  HTTPS, and application ports without stopping or reconfiguring unrelated
+  services. Save the selected ports so restarts use the same addresses.
+- [ ] Make access mode explicit before deployment: **Local only** binds to
+  loopback, while **LAN accessible** binds only to the operator-selected host
+  interface or approved addresses. Never advertise a LAN URL when Docker is
+  listening only on `127.0.0.1`, and never expose NCT on every interface merely
+  because a port is available.
+- [ ] Include a firewall preflight for the selected address and port. On Windows,
+  distinguish Domain, Private, and Public profiles; detect an existing matching
+  rule; and explain why traffic is blocked. Offer to create a narrowly named NCT
+  inbound rule only with explicit operator approval and required elevation,
+  defaulting to Domain/Private and approved source subnets rather than Public or
+  Any. Record rules created by NCT and remove or restore them during rollback.
+- [ ] Validate the complete HTTPS path, not just the container port: reverse
+  proxy health, certificate/key availability, certificate expiration and host/IP
+  names, system time, and client trust requirements. Connected and air-gapped
+  deployments must each have a documented certificate path, and failed TLS
+  validation must not be reported as a successful LAN deployment.
+- [ ] Check that Docker is using Linux containers on a supported CPU architecture
+  and that virtualization/WSL prerequisites, daemon context, disk space, memory,
+  persistent-volume permissions, and host-path sharing are usable before pulling,
+  importing, or replacing an image.
+- [ ] Detect Docker bridge-subnet overlap with the mission LAN, VPN, and Saved
+  Networks before creating the deployment network. Choose a non-conflicting
+  private bridge range and verify container DNS, gateway reachability, and the
+  operator-selected host interface without modifying the host's routes or VPN.
+- [ ] Verify NCT's required container capabilities and runtime behavior,
+  including `NET_RAW`, Nmap, FPING, tcpdump, SSH, the accountability capture
+  interface, outbound target reachability, and the host IP that devices will
+  actually observe. A web health check alone is not sufficient proof that scan
+  and capture workflows can operate.
+- [ ] Refuse an upgrade while a scan, scheduled batch, device collection,
+  database update, or schema migration is active unless the operator explicitly
+  stops or defers it. Use a deployment lock so two launcher instances cannot
+  change containers or ports concurrently.
+- [ ] Validate free space and create a restorable data/database backup before a
+  schema-changing upgrade. Check forward and rollback schema compatibility,
+  preserve file ownership and permissions, and never treat an older image as a
+  valid rollback target when it cannot safely read the upgraded data.
+- [ ] Handle cancellation, terminal closure, reboot, or power loss at every
+  transition. Use staged files and atomic state changes, label temporary and
+  rollback resources, resume or clean up an incomplete attempt on the next run,
+  and leave the last known-good NCT instance available whenever possible.
+- [ ] Account for connected-environment DNS, proxy, and `NO_PROXY` settings while
+  keeping air-gapped mode free of mandatory network calls. Verify downloaded or
+  imported checksums and available disk space before unpacking large images or
+  offline SearchSploit data.
+- [ ] After deployment, test local access and, when LAN mode was selected, test
+  the bound LAN address separately. Recheck after a container restart, report
+  whether automatic restart is enabled, and provide a diagnostic summary when
+  Docker, firewall, TLS, routing, or application readiness fails.
+- [ ] Support connected and air-gapped deployment packages. Use a validated
+  local NCT image/archive when supplied, pull only when permitted and necessary,
+  and verify the image version and integrity before the final swap.
+- [ ] Perform the container swap only after preflight succeeds, retain the
+  existing data volume, wait for the NCT health endpoint, verify the reported
+  build/version, and automatically restore the prior known-good container when
+  startup or migration validation fails.
+- [ ] Discover the actual bound host address and selected HTTPS port after a
+  successful health check. Print a copyable final message such as
+  `NCT is available at https://x.x.x.x:443`; when several addresses are valid,
+  clearly distinguish local-only and LAN-accessible URLs rather than guessing.
+- [ ] Write a concise deployment log containing the preflight decisions,
+  versions, selected ports, upgrade/rollback outcome, and final URL without
+  recording credentials or sensitive application evidence.
+- [ ] Show a terminal-safe NCT success banner only after the deployed health
+  check passes, including a skull with a sombrero and mustache, followed by the
+  verified access URL. The intended spirit is:
+
+```text
+                 __..---..__
+            _.-'             '-._
+       _.-'___     /\ /\     ___'-._
+     .'_______\___/  V  \___/_______'.
+    /_________________________________\
+             .-============-.
+            /    _      _    \
+           |    (x)    (x)    |
+           |         /\        |
+           |    __.-'  '-.__   |
+           | .-'   \____/   '-.|
+            \      ||||||     /
+             '._   ||||||  _.'
+                '--|_||_|--'
+
+                    N C T
+        Network Characterization Tool
+       Available at https://x.x.x.x:443
+```
+
 ### Future extension — Analyst Identity Overrides
 
 - [ ] Allow an analyst to append or correct a host operating system when it is
