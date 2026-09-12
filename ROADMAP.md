@@ -122,6 +122,13 @@ an optional future mode within Reachability.
 
 - [ ] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
 - [ ] Pan, zoom, and highlight search results.
+- [ ] Keep the fixed-height map as the default workspace, with an operator option
+  to expand it or open a full-screen map workspace.
+- [ ] Add per-subnet endpoint display modes: collapsed by default, individual
+  endpoint lines, or an organized endpoint-group box.
+- [ ] In the grouped endpoint view, let the analyst sort and divide hosts by IP
+  address, hostname, or operating system, with useful counts and breakdowns for
+  the selected investigation view.
 - [ ] Add zoom-dependent detail and optional analytical overlays.
 - [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
 
