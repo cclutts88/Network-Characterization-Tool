@@ -193,10 +193,34 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
     }
 fi
 
+case "$image" in
+    *:latest|latest)
+        [ "$profile" = "test" ] || die "Range and Mission deployments require a versioned image reference, not :latest."
+        warn "Test is using the mutable :latest tag; record a versioned image before range evaluation."
+        ;;
+    *@sha256:*|*:*) ;;
+    *)
+        [ "$profile" = "test" ] || die "Range and Mission deployments require an explicit version tag or digest."
+        warn "Test image has no explicit version tag."
+        ;;
+esac
+
+target_image_id=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || printf unknown)
+target_repo_digests=$(docker image inspect --format '{{range .RepoDigests}}{{.}} {{end}}' "$image" 2>/dev/null || printf '')
+target_build=$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" 2>/dev/null | awk -F= '$1 == "NCT_BUILD_ID" {print substr($0, index($0, "=") + 1); exit}')
+target_version=$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" 2>/dev/null | awk -F= '$1 == "NCT_APP_VERSION" {print substr($0, index($0, "=") + 1); exit}')
+target_build=${target_build:-unknown}
+target_version=${target_version:-unknown}
+[ "$target_image_id" != "unknown" ] || [ "$check_only" = "yes" ] || die "The selected image identity could not be inspected."
+[ "$profile" != "range" ] || [ "$target_build" != "unknown" ] || die "Range images must declare NCT_BUILD_ID."
+printf 'image_id=%s\nimage_repo_digests=%s\ntarget_version=%s\ntarget_build=%s\n' "$target_image_id" "$target_repo_digests" "$target_version" "$target_build" >> "$log_file"
+
 existing_id=$(docker ps -aq --filter "name=^/${container}$" | head -n 1)
 existing_image="none"
+existing_image_id="none"
 if [ -n "$existing_id" ]; then
     existing_image=$(docker inspect --format '{{.Config.Image}}' "$container")
+    existing_image_id=$(docker inspect --format '{{.Image}}' "$container")
     set +e
     docker exec "$container" python -c 'import glob,json,sys; active=[]
 for p in glob.glob("/data/**/manifest.json",recursive=True):
@@ -258,10 +282,20 @@ if [ "$access" = "lan" ]; then
 fi
 
 say "Profile: $profile · Docker $server_version/API $server_api · Compose $compose_mode $compose_version"
-say "Image: $image · Existing: $existing_image · Data: $data_volume"
+say "Image: $image · ID: $target_image_id · Build: $target_build · Existing: $existing_image · Data: $data_volume"
 say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled"
 say "Deployment log: $log_file"
 [ "$check_only" = "no" ] || { say "Preflight complete; no container, firewall, or image state was changed."; exit 0; }
+
+if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "$tls_enabled" = "no" ]; then
+    existing_binding=$(docker port "$container" 8080/tcp 2>/dev/null | head -n 1 || printf '')
+    if [ "$existing_binding" = "$bind_address:$app_port" ] && docker exec "$container" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2)); assert d.get("status")=="ok"' >/dev/null 2>&1; then
+        access_url="http://$bind_address:$app_port"
+        printf 'completed=%s\nreported_build=%s\nresult=already-current\nurl=%s\n' "$(date -u +%FT%TZ)" "$target_build" "$access_url" >> "$log_file"
+        say "This exact image is already healthy at $access_url; no backup or container swap was needed."
+        exit 0
+    fi
+fi
 
 if [ "$tls_enabled" = "yes" ]; then
     docker image inspect caddy:2-alpine >/dev/null 2>&1 || { [ "$offline" = "no" ] && docker pull caddy:2-alpine >/dev/null; }
@@ -363,6 +397,25 @@ while [ "$attempt" -lt 30 ]; do
 done
 [ "$healthy" = "yes" ] || rollback
 
+runtime_tools=$(docker exec "$container" sh -c '
+set -eu
+command -v nmap >/dev/null
+command -v fping >/dev/null
+command -v tcpdump >/dev/null
+command -v ssh >/dev/null
+nmap --version >/dev/null
+fping -v >/dev/null 2>&1
+tcpdump --version >/dev/null 2>&1
+ssh -V >/dev/null 2>&1
+tcpdump -D >/dev/null 2>&1
+printf ready
+' 2>/dev/null || printf failed)
+[ "$runtime_tools" = "ready" ] || rollback
+capabilities=$(docker inspect --format '{{range .HostConfig.CapAdd}}{{.}} {{end}}' "$container" 2>/dev/null || printf '')
+printf '%s' "$capabilities" | grep -F NET_RAW >/dev/null 2>&1 || rollback
+raw_socket=$(docker exec "$container" python -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_ICMP); s.close(); print("ready")' 2>/dev/null || printf failed)
+[ "$raw_socket" = "ready" ] || rollback
+
 if [ "$tls_enabled" = "yes" ]; then
     network_name="${container}-network"
     docker network inspect "$network_name" >/dev/null 2>&1 || docker network create "$network_name" >/dev/null
@@ -385,6 +438,7 @@ if [ "$configure_firewall" = "yes" ]; then
 fi
 
 reported_build=$(docker exec "$container" python -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8080/health"))["build_id"])' 2>/dev/null || printf unknown)
+[ "$target_build" = "unknown" ] || [ "$reported_build" = "$target_build" ] || rollback
 if [ "$tls_enabled" = "yes" ]; then
     access_url="https://$bind_address:$https_port"
     if [ -n "$tls_ca" ]; then
@@ -398,7 +452,7 @@ else
     curl --fail --silent --show-error "$access_url/health" >/dev/null || rollback
 fi
 
-printf 'completed=%s\nreported_build=%s\nbackup=%s\nurl=%s\nrollback_container=%s\n' "$(date -u +%FT%TZ)" "$reported_build" "$backup_file" "$access_url" "${rollback_name:-none}" >> "$log_file"
+printf 'completed=%s\nreported_build=%s\nruntime_tools=%s\nnet_raw=%s\nbackup=%s\nurl=%s\nrollback_container=%s\n' "$(date -u +%FT%TZ)" "$reported_build" "$runtime_tools" "$raw_socket" "$backup_file" "$access_url" "${rollback_name:-none}" >> "$log_file"
 swap_started="no"
 
 cat <<EOF

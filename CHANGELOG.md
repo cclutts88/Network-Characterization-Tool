@@ -10,6 +10,10 @@
   operating systems. Each decision retains the exact inference evidence it
   reviewed, becomes stale when that evidence changes, and is reflected in
   Analyze, Hunt, and Map without rewriting scanner observations.
+- Hardened the rapid-deployment launcher with content-addressed image and build
+  receipts, versioned-image enforcement for Range, an already-current no-op,
+  exact running-build validation, and runtime checks for Nmap, FPING, tcpdump,
+  SSH, packet-capture visibility, `NET_RAW`, and raw sockets.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility

@@ -30,6 +30,32 @@ def test_launcher_supports_offline_integrity_backup_health_and_rollback():
         assert required in SCRIPT
 
 
+def test_launcher_records_immutable_image_identity_and_exact_build():
+    for required in (
+        'target_image_id=$(docker image inspect', 'target_repo_digests=',
+        'target_build=', 'target_version=', 'Range images must declare NCT_BUILD_ID',
+        'reported_build" = "$target_build',
+    ):
+        assert required in SCRIPT
+    assert 'require a versioned image reference, not :latest' in SCRIPT
+
+
+def test_launcher_is_idempotent_for_an_already_current_direct_deployment():
+    assert 'existing_image_id=$(docker inspect' in SCRIPT
+    assert 'existing_image_id" = "$target_image_id' in SCRIPT
+    assert 'result=already-current' in SCRIPT
+    assert 'no backup or container swap was needed' in SCRIPT
+
+
+def test_launcher_validates_scanning_tools_and_raw_packet_capability():
+    for required in (
+        'command -v nmap', 'command -v fping', 'command -v tcpdump',
+        'command -v ssh', 'tcpdump -D', 'socket.SOCK_RAW',
+        'grep -F NET_RAW', 'runtime_tools=%s',
+    ):
+        assert required in SCRIPT
+
+
 def test_launcher_requires_mission_tls_and_narrow_firewall_authority():
     assert 'Mission deployment is intentionally fail-closed' in SCRIPT
     assert 'Mission profile requires a validated TLS certificate and key' in SCRIPT

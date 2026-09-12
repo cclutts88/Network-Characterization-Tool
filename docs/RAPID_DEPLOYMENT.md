@@ -5,6 +5,13 @@ runtime, image, ports, access boundary, firewall posture, TLS material,
 persistent volume, active work, backup, health, and rollback path before it
 reports NCT as available.
 
+Range images must use an explicit version tag or digest and declare their NCT
+build identity. The launcher records the local content-addressed image ID and
+any registry digest in its deployment log, then verifies that the running
+application reports the same build. Re-running the launcher against the exact
+same healthy direct-HTTP image, bind address, port, and data volume is a safe
+no-op rather than an unnecessary replacement.
+
 This checkpoint supports **Test** and **Range** deployment. The **Mission**
 profile is present but intentionally stops before making changes until NCT's
 authenticated access and formal mission-promotion gate are implemented. A
@@ -53,4 +60,6 @@ under the site's retention procedure.
 
 The deployment log records decisions and results but never credentials or NCT
 evidence. A success banner and access URL are printed only after the final
-health check passes.
+health check passes. Final readiness also proves that Nmap, FPING, tcpdump, and
+SSH are installed inside the application container, packet-capture interfaces
+can be enumerated, `NET_RAW` is present, and a raw ICMP socket can be created.

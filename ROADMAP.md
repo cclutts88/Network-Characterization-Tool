@@ -306,6 +306,10 @@ within Reachability.
   deployment profile, test results, compatibility findings, known limitations,
   and rollback proof so a successful lab launch alone cannot be reported as
   mission-ready.
+  - [x] Record the content-addressed local image ID, registry digest when
+    available, declared version/build, and exact running build in every Test or
+    Range deployment receipt; reject `:latest` and missing build identity for
+    Range.
 - [x] Detect whether Docker Engine or Docker Desktop is installed, running, and
   reachable; compare its server/API version with NCT's documented minimum and
   tested versions, and explain the exact supported workaround when the local
@@ -335,6 +339,9 @@ within Reachability.
   changes. Distinguish an upgrade from a new installation, preserve evidence
   and databases, run migration checks, keep the previous container/image as a
   rollback target, and avoid creating duplicate active instances.
+  - [x] Treat an already-running healthy direct deployment with the exact image
+    ID, bind address, port, and data volume as already current without taking a
+    backup or replacing its container.
 - [ ] Detect host-port conflicts before startup, including conflicts caused by
   an older NCT instance versus an unrelated application. Reuse the existing NCT
   ports during an upgrade when safe; otherwise choose or request available HTTP,
@@ -371,6 +378,9 @@ within Reachability.
   interface, outbound target reachability, and the host IP that devices will
   actually observe. A web health check alone is not sufficient proof that scan
   and capture workflows can operate.
+  - [x] Before reporting success, verify Nmap, FPING, tcpdump, SSH,
+    packet-capture interface enumeration, the `NET_RAW` grant, and raw-socket
+    creation inside the deployed application container.
 - [ ] Refuse an upgrade while a scan, scheduled batch, device collection,
   database update, or schema migration is active unless the operator explicitly
   stops or defers it. Use a deployment lock so two launcher instances cannot
