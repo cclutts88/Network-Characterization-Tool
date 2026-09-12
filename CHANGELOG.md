@@ -29,6 +29,10 @@
 - Moved the expanded-workspace details toggle to the map's upper-right control
   area and made the SVG coordinate space follow the expanded canvas aspect ratio,
   allowing the full map width to be used for layout, dragging, and panning.
+- Changed map details to an automatic, selection-driven pane in both workspace
+  sizes. With no selection it disappears and returns its space to the map;
+  Hide details suppresses it even while an object remains selected, and Show
+  details restores the selected object's information.
 - Replaced the expanded map's fixed height estimate with a flexible canvas that
   consumes all remaining space down to the workspace's bottom border.
 - Expanded the SVG coordinate boundary itself to match the entire visible canvas
@@ -93,7 +97,8 @@
 - Added zoom-safe network-diagram symbols for routers, firewalls, switches,
   wireless devices, and unknown infrastructure. Device borders remain solid
   when identity is confirmed by configuration evidence and dashed when the
-  type is inferred, leaving color available for analytical overlays.
+  type is inferred, leaving color available for analytical overlays. Shortened
+  the router arrowheads so its crossed arrows remain distinct at map scale.
 - Added explanatory hover text to the Map search navigation arrows and Isolate
   control.
 - Standardized host and network presentation on numeric IP ordering across scan

@@ -498,6 +498,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function networkDeviceEvidence" in html
     assert "function appendDeviceSymbol" in html
     assert "symbol-router" in html
+    assert "M7 15h16M15 7v16M7 15l3-2" in html
     assert "symbol-firewall" in html
     assert "symbol-switch" in html
     assert "symbol-wireless" in html
@@ -530,6 +531,12 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "shell.appendChild(details)" in html
     assert "workspace.appendChild(details)" in html
     assert "function toggleDetailsVisibility" in html
+    assert "function syncDetailsVisibility" in html
+    assert "detailsSuppressed=false" in html
+    assert "workspace.classList.toggle('details-empty',!hasSelection)" in html
+    assert "workspace.classList.toggle('details-collapsed',detailsSuppressed)" in html
+    assert ".workspace.details-empty,.workspace.details-collapsed" in html
+    assert "Details: Auto" in html
     assert "requestAnimationFrame(syncExpandedDetailsBounds)" in html
     assert "availableWidth=Math.max(canvas.clientWidth-22,1)" in html
     assert "width=Math.max(width,availableWidth)" in html
@@ -542,7 +549,6 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "expandedMapExtent={width,height}" in html
     assert "else if(expandedMapExtent)" in html
     assert "if(expanded){setZoom(1);centerMap();}else fitMap()" in html
-    assert "toggleDetailsVisibility(false)" in html
     assert "Show details" in html
     assert "Hide details" in html
     assert "Exit expanded workspace" in html

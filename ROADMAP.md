@@ -128,6 +128,9 @@ an optional future mode within Reachability.
   panel anchored inside the map canvas border.
 - [x] Let the expanded map use its complete visible width for node placement and
   keep the details toggle with the map controls instead of the page toolbar.
+- [x] Reclaim the details area whenever no map object is selected, open details
+  automatically on selection, and let the analyst suppress the pane without
+  clearing that selection in either the standard or expanded workspace.
 - [x] Size the expanded canvas from the actual remaining vertical space so its
   full width and height remain usable across browser window sizes.
 - [x] Expand the SVG coordinate boundary with the visible canvas so every part of
@@ -188,9 +191,10 @@ an optional future mode within Reachability.
 - [x] Add optional OS-family, service-exposure, and identity-gap analytical
   overlays with an explicit map legend and neutral default view.
 - [x] Distinguish routers, firewalls, switches, wireless devices, and unknown
-  infrastructure with compact network-diagram symbols. Keep analytical color
-  available for overlays and use solid versus dashed borders for confirmed
-  versus inferred device identity.
+  infrastructure with compact network-diagram symbols, including a clearly
+  separated crossed-arrow router mark. Keep analytical color available for
+  overlays and use solid versus dashed borders for confirmed versus inferred
+  device identity.
 - [x] Add named private layouts that persist in the current analyst's browser,
   restore the complete presentation, and can be replaced or deleted.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst
