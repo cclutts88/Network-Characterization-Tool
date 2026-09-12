@@ -380,10 +380,17 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "wanAnchor:wanAnchor?{...wanAnchor}:null" in html
     assert 'id="wanBoundaryMarker"' in html
     assert 'id="wanBoundaryInterface"' in html
+    assert "wanBoundaryRail.id='wanBoundaryRail'" in html
     assert "function updateWanBoundaryMarker" in html
+    assert "marker.hidden=!wanAnchor" in html
     assert "function updateWanUplinkGeometry" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
+    assert "idealScreenX=sourceX*zoomLevel-canvas.scrollLeft" in html
+    assert "targetX=(canvas.scrollLeft+targetScreenX)/zoomLevel" in html
+    assert "deviceVisible=!isolated" in html
+    assert "rail.hidden=!deviceVisible" in html
+    assert "addEventListener('scroll',updateWanUplinkGeometry" in html
     assert 'data-context-action="wan"' in html
     assert 'id="layoutName"' in html
     assert 'id="savedLayouts"' in html

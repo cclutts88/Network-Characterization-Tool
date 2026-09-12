@@ -165,7 +165,9 @@ an optional future mode within Reachability.
   anchor. Suggest explicitly named WAN, outside, internet, uplink, or external
   interfaces while allowing a manual choice when the source is ambiguous. Show
   the selected path as a WAN marker outside the map border with a visible uplink
-  to the anchored device.
+  to the anchored device. Keep the marker aligned with that uplink during device
+  movement, zoom, and pan, and hide the WAN presentation when its device is not
+  visible.
 - [x] Present interface connection details as stacked, zoom-aware labels with a
   concise interface and IP summary plus the complete relationship and evidence
   in hover text.

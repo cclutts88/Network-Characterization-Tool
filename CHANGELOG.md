@@ -75,7 +75,9 @@
   named WAN, outside, internet, uplink, or external, permit any interface to be
   chosen when evidence is ambiguous, and place, label, and lock that device at
   the map's top center. An external WAN marker now sits above the map border and
-  connects directly to the anchored device with a visible uplink.
+  connects directly to the anchored device with a visible uplink. The marker
+  follows the uplink during movement, zoom, and pan and disappears when its
+  anchored device is outside the visible map or removed by an isolated search.
 - Reworked interface connection labels into stacked interface, IP, and zone
   lines. Lower zoom levels suppress extra detail, while hover text preserves the
   complete relationship and evidence.
