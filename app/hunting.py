@@ -278,10 +278,7 @@ def _device_type(host: dict, categories: set[str]) -> str:
 def _apply_host_os_identity(host: dict) -> None:
     """Attach a display/filter identity while retaining the original OS fields."""
     direct = authoritative_os(host)
-    inference = None
-    if not direct:
-        stored = host.get("os_inference")
-        inference = stored if isinstance(stored, dict) else infer_os_identity(host)
+    inference = infer_os_identity(host) if not direct else None
     host["os_inference"] = inference
     host["os_display"] = direct or (inference or {}).get("display") or "Unclassified"
     host["os_filter"] = host["os_display"]

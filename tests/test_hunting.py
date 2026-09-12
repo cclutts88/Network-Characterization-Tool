@@ -170,6 +170,30 @@ def test_hunting_exposes_service_based_os_inference_without_overwriting_os():
     )
 
 
+def test_topology_vendor_enrichment_recalculates_os_inference():
+    result = build_hunting_analysis({
+        "hosts": [{
+            "ip": "10.0.0.2",
+            "state": "up",
+            "os_group": "Unclassified",
+            "ports": [port(22, "ssh", "Dropbear sshd")],
+        }]
+    })
+    assert result["hosts"][0]["os_inference"]["family"] == "Linux / Unix-like"
+
+    correlated = correlate_hunting_identity(result, {"nodes": [{
+        "ip": "10.0.0.2",
+        "addresses": ["10.0.0.2"],
+        "vendor": "Ubiquiti",
+    }]})
+
+    assert correlated["hosts"][0]["os_inference"]["family"] == "Network appliance"
+    assert all(
+        finding["os_inference"]["family"] == "Network appliance"
+        for finding in correlated["findings"]
+    )
+
+
 def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
     newer = build_hunting_analysis(
         {"hosts": [host("10.0.0.10", [port(22, "ssh", "OpenSSH", "9.2")])]},
