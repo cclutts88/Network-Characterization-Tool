@@ -42,6 +42,9 @@
 - Added lower-right resize handles to grouped endpoint boxes; widening a box
   reflows its host pool into additional columns, and Reset layout restores the
   automatic size.
+- Preserved analyst-positioned map boxes when endpoint groups are expanded,
+  collapsed, switched between grouped and individual views, or re-sorted. A
+  new layout preset or Reset layout remains the explicit way to reflow them.
 - Changed IP presentation to one numerically sorted host pool instead of
   arbitrary address-range subgroups; hostname and OS headings now appear only
   when the selected field contains multiple meaningful values.

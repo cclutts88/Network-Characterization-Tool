@@ -624,6 +624,14 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Group / sort by OS" in html
     assert "local to the current analyst browser" in html
     assert "does not change shared evidence or another analyst's view" in html
+    refresh_group = html.split("function refreshGroupPresentation", 1)[1].split("function setGroupStyle", 1)[0]
+    all_visibility = html.split("function setAllEndpointVisibility", 1)[1].split("function syncExpandedDetailsBounds", 1)[0]
+    endpoint_sort = html.split("$('endpointSort').onchange", 1)[1].split("$('workspaceSize').onchange", 1)[0]
+    assert "clearUnlockedManualPositions" not in refresh_group
+    assert "clearUnlockedManualPositions" not in all_visibility
+    assert "clearUnlockedManualPositions" not in endpoint_sort
+    layout_preset = html.split("$('layoutPreset').onchange", 1)[1].split("$('resetLayout').onclick", 1)[0]
+    assert "clearUnlockedManualPositions" in layout_preset
     assert "function edgeAnchor" in html
     assert "No interface IPs parsed" in html
     assert 'id="topologyNeighborCount"' in html
