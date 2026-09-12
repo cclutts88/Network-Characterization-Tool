@@ -5,9 +5,11 @@ from fastapi.testclient import TestClient
 from app.identity_overrides import (
     apply_analysis_os_overrides,
     delete_os_override,
+    inference_review_history,
     list_os_overrides,
     os_override_history,
     set_os_override,
+    set_inference_review,
 )
 from app.main import app
 from app.os_inference import authoritative_os, infer_os_identity
@@ -114,3 +116,61 @@ def test_os_override_api_validates_and_audits(monkeypatch, tmp_path):
         })
         assert deleted.status_code == 200
         assert client.get("/api/os-overrides").json() == []
+
+
+def test_inference_review_tracks_exact_evidence_and_stales_on_change(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    inference = {
+        "family": "Windows",
+        "display": "Windows (inferred)",
+        "confidence": "medium",
+        "evidence": ["445/tcp · microsoft-ds"],
+        "source": "service_and_device_evidence",
+    }
+    review = set_inference_review(
+        db_path,
+        ip="10.0.0.30",
+        inference=inference,
+        status="investigate",
+        analyst="Riley",
+        reason="Need console confirmation",
+    )
+    analysis = {"hosts": [{
+        "ip": "10.0.0.30", "os": "", "os_inference": inference, "ports": [],
+    }]}
+
+    apply_analysis_os_overrides(analysis, db_path)
+    assert analysis["hosts"][0]["os_inference_review"]["current"] is True
+    assert review["status"] == "investigate"
+
+    analysis["hosts"][0]["os_inference"] = {
+        **inference, "evidence": ["445/tcp · microsoft-ds", "135/tcp · msrpc"],
+    }
+    apply_analysis_os_overrides(analysis, db_path)
+    assert analysis["hosts"][0]["os_inference_review"]["current"] is False
+    assert len(inference_review_history(db_path, review["identity_key"])) == 1
+
+
+def test_inference_review_api_retains_decision(monkeypatch, tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    payload = {
+        "ip": "10.0.0.31",
+        "inference": {
+            "family": "Linux / Unix-like", "confidence": "high",
+            "evidence": ["Linux fingerprint: 22/tcp OpenSSH"],
+        },
+        "status": "confirmed",
+        "analyst": "Avery",
+        "reason": "Banner agrees with managed host inventory",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/api/os-inference-reviews", json=payload)
+        assert response.status_code == 200
+        key = response.json()["identity_key"]
+        history = client.get(
+            "/api/os-inference-reviews/history", params={"identity_key": key}
+        )
+        assert history.status_code == 200
+        assert history.json()[0]["status"] == "confirmed"

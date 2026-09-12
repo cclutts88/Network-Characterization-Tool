@@ -6,6 +6,10 @@
   scanner OS, records the analyst, reason, and timestamp for set/update/remove
   events, gives the confirmed value precedence over inference in Hunt and Map,
   includes both values in exports, and flags later scanner disagreement.
+- Added audited Confirm, Dismiss, and Needs investigation decisions for inferred
+  operating systems. Each decision retains the exact inference evidence it
+  reviewed, becomes stale when that evidence changes, and is reflected in
+  Analyze, Hunt, and Map without rewriting scanner observations.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility
@@ -19,6 +23,9 @@
 - Added an explicit Map Edit mode. Line routing, node movement, alignment,
   locking, markup, and other map-building controls stay hidden and inactive in
   the normal investigation view.
+- Simplified the Map selection shortcuts: `F` fits the current selection (or
+  the whole map when nothing is selected), and `L` locks or unlocks selected
+  objects. Button hover text now shows those exact keys.
 - Added a type-organized Map parking lot and blank-canvas workflow. Parked
   objects keep their evidence and upstream/downstream/peer dependencies,
   endpoints remain bundled in subnet groups, and connections reappear only when
@@ -207,8 +214,8 @@
 - Added box selection, right-click node actions, and keyboard controls for
   Undo / Redo, fit, lock, box select, zoom, selection clearing, and coarse or
   precise arrow-key movement. Shift+R aligns an unlocked multi-selection into a
-  row, Shift+C aligns it into a column, Shift+F fits a selection, and Shift+L
-  locks or unlocks it. F remains the whole-map Fit Devices shortcut.
+  row, Shift+C aligns it into a column, F fits a selection (or the whole map
+  when nothing is selected), and L locks or unlocks selected objects.
 - Added Spider web, Hierarchy, and Grid automatic layout presets.
 - Added an analyst-selectable WAN anchor. Device details suggest interfaces
   named WAN, outside, internet, uplink, or external, permit any interface to be

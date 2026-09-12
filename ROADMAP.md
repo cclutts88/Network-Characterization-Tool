@@ -450,7 +450,7 @@ within Reachability.
   silently overwrite direct scanner evidence.
 - [x] When analyst identity overrides are implemented, keep analyst-confirmed
   operating systems authoritative over inferred values as well.
-- [ ] Let analysts confirm, dismiss, or investigate an inference while retaining
+- [x] Let analysts confirm, dismiss, or investigate an inference while retaining
   its original evidence and audit history.
 
 ### Future foundation — Multi-Analyst Workspaces

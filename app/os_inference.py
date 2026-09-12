@@ -240,4 +240,11 @@ def os_display(record: dict) -> str:
     inference = record.get("os_inference")
     if not isinstance(inference, dict):
         inference = infer_os_identity(record)
+    review = record.get("os_inference_review")
+    if (
+        isinstance(review, dict)
+        and review.get("current")
+        and review.get("status") == "dismissed"
+    ):
+        return "Unclassified"
     return _clean((inference or {}).get("display")) or "Unclassified"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import ipaddress
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -51,6 +53,32 @@ def init_os_override_storage(db_path: Path) -> None:
                 scanner_os_at_change TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )"""
+        )
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS host_os_inference_reviews (
+                identity_key TEXT PRIMARY KEY,
+                ip TEXT,
+                mac TEXT,
+                inference_signature TEXT NOT NULL,
+                inference_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                analyst TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS host_os_inference_review_audit (
+                audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identity_key TEXT NOT NULL,
+                inference_signature TEXT NOT NULL,
+                inference_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                analyst TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                changed_at TEXT NOT NULL
             )"""
         )
         db.execute(
@@ -188,6 +216,115 @@ def os_override_history(db_path: Path, key: str) -> list[dict]:
         ).fetchall()]
 
 
+def inference_signature(inference: dict) -> str:
+    retained = {
+        "family": str(inference.get("family") or "").strip(),
+        "confidence": str(inference.get("confidence") or "").strip(),
+        "evidence": [str(item) for item in (inference.get("evidence") or [])],
+        "source": str(inference.get("source") or "").strip(),
+    }
+    return hashlib.sha256(
+        json.dumps(retained, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def set_inference_review(
+    db_path: Path,
+    *,
+    ip: object = None,
+    mac: object = None,
+    inference: dict,
+    status: object,
+    analyst: object,
+    reason: object,
+) -> dict:
+    key = identity_key(ip, mac)
+    clean_status = str(status or "").strip().lower()
+    if clean_status not in {"confirmed", "dismissed", "investigate"}:
+        raise ValueError("Inference review must be confirmed, dismissed, or investigate")
+    if not isinstance(inference, dict) or not str(inference.get("family") or "").strip():
+        raise ValueError("Current inference evidence is required")
+    clean_analyst = _clean_required(analyst, "Analyst", 100)
+    clean_reason = _clean_required(reason, "Review reason", 500)
+    normalized_ip, normalized_mac = normalize_ip(ip), normalize_mac(mac)
+    signature = inference_signature(inference)
+    retained_json = json.dumps(inference, sort_keys=True)
+    changed_at = utc_now()
+    init_os_override_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.row_factory = sqlite3.Row
+        existing = db.execute(
+            "SELECT created_at FROM host_os_inference_reviews WHERE identity_key = ?",
+            (key,),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else changed_at
+        db.execute(
+            """INSERT INTO host_os_inference_reviews (
+                identity_key, ip, mac, inference_signature, inference_json,
+                status, analyst, reason, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(identity_key) DO UPDATE SET
+                ip=excluded.ip, mac=excluded.mac,
+                inference_signature=excluded.inference_signature,
+                inference_json=excluded.inference_json, status=excluded.status,
+                analyst=excluded.analyst, reason=excluded.reason,
+                updated_at=excluded.updated_at
+            """,
+            (
+                key, normalized_ip, normalized_mac, signature, retained_json,
+                clean_status, clean_analyst, clean_reason, created_at, changed_at,
+            ),
+        )
+        db.execute(
+            """INSERT INTO host_os_inference_review_audit (
+                identity_key, inference_signature, inference_json, status,
+                analyst, reason, changed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                key, signature, retained_json, clean_status, clean_analyst,
+                clean_reason, changed_at,
+            ),
+        )
+        return dict(db.execute(
+            "SELECT * FROM host_os_inference_reviews WHERE identity_key = ?", (key,)
+        ).fetchone())
+
+
+def inference_review_history(db_path: Path, key: str) -> list[dict]:
+    init_os_override_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.row_factory = sqlite3.Row
+        return [dict(row) for row in db.execute(
+            """SELECT * FROM host_os_inference_review_audit
+               WHERE identity_key = ? ORDER BY audit_id DESC""",
+            (key,),
+        ).fetchall()]
+
+
+def apply_inference_reviews(records: list[dict], db_path: Path) -> list[dict]:
+    init_os_override_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.row_factory = sqlite3.Row
+        reviews = [dict(row) for row in db.execute(
+            "SELECT * FROM host_os_inference_reviews"
+        ).fetchall()]
+    by_key = {item["identity_key"]: item for item in reviews}
+    by_ip = {item["ip"]: item for item in reviews if item.get("ip")}
+    for record in records:
+        mac = normalize_mac(record.get("mac"))
+        ip = normalize_ip(record.get("ip") or record.get("address"))
+        review = by_key.get(f"mac:{mac}") if mac else None
+        review = review or (by_ip.get(ip) if ip else None)
+        inference = record.get("os_inference")
+        if not review or not isinstance(inference, dict):
+            record.pop("os_inference_review", None)
+            continue
+        value = dict(review)
+        value["current"] = value["inference_signature"] == inference_signature(inference)
+        record["os_inference_review"] = value
+    return records
+
+
 def _meaningful_os(value: object) -> str | None:
     text = str(value or "").strip()
     return text if text.lower() not in UNKNOWN_OS else None
@@ -235,5 +372,7 @@ def apply_os_overrides(records: list[dict], db_path: Path) -> list[dict]:
 
 
 def apply_analysis_os_overrides(analysis: dict, db_path: Path) -> dict:
-    apply_os_overrides(analysis.get("hosts") or [], db_path)
+    records = analysis.get("hosts") or []
+    apply_os_overrides(records, db_path)
+    apply_inference_reviews(records, db_path)
     return analysis

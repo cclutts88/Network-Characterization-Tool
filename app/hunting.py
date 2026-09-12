@@ -5,6 +5,7 @@ import ipaddress
 
 from app.comparison import canonical_host_key
 from app.ip_sort import ip_sort_key
+from app.identity_overrides import inference_signature
 from app.os_inference import authoritative_os, infer_os_identity
 
 
@@ -285,7 +286,13 @@ def _apply_host_os_identity(host: dict) -> None:
     direct = authoritative_os(host)
     inference = infer_os_identity(host) if not direct else None
     host["os_inference"] = inference
-    host["os_display"] = direct or (inference or {}).get("display") or "Unclassified"
+    review = host.get("os_inference_review") or {}
+    if review and inference:
+        review["current"] = review.get("inference_signature") == inference_signature(inference)
+    dismissed = review.get("current") and review.get("status") == "dismissed"
+    host["os_display"] = direct or (
+        None if dismissed else (inference or {}).get("display")
+    ) or "Unclassified"
     host["os_filter"] = host["os_display"]
 
 
@@ -445,6 +452,7 @@ def build_hunting_analysis(
                     "effective_os": host.get("effective_os"),
                     "analyst_os_override": host.get("analyst_os_override"),
                     "os_disagreement": bool(host.get("os_disagreement")),
+                    "os_inference_review": host.get("os_inference_review"),
                     "protocol": str(port.get("protocol") or "").lower(),
                     "port": _port_number(port),
                     "state": port.get("state") or "open",
@@ -487,6 +495,7 @@ def build_hunting_analysis(
             "effective_os": host.get("effective_os"),
             "analyst_os_override": host.get("analyst_os_override"),
             "os_disagreement": bool(host.get("os_disagreement")),
+            "os_inference_review": host.get("os_inference_review"),
             "os_group": os_group,
             "os_display": os_identity["os_display"],
             "os_filter": os_identity["os_filter"],
@@ -698,6 +707,7 @@ def correlate_hunting_identity(
                     "effective_os": node.get("effective_os"),
                     "analyst_os_override": node.get("analyst_os_override"),
                     "os_disagreement": bool(node.get("os_disagreement")),
+                    "os_inference_review": node.get("os_inference_review"),
                     "os_group": "Network device",
                     "os_filter": os_filter,
                     "subnet": _configured_subnet(node),
@@ -778,7 +788,8 @@ def correlate_hunting_identity(
         identity = hosts_by_key.get(str(finding.get("host_key") or ""), {})
         for field in (
             "os", "scanner_os", "effective_os", "analyst_os_override",
-            "os_disagreement", "os_group", "os_display", "os_filter", "os_inference",
+            "os_disagreement", "os_inference_review", "os_group", "os_display",
+            "os_filter", "os_inference",
         ):
             if field in identity:
                 finding[field] = identity[field]

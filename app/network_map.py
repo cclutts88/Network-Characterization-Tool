@@ -20,7 +20,7 @@ from app.mac_enrichment import (
 )
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.ip_sort import ip_sort_key
-from app.identity_overrides import apply_os_overrides
+from app.identity_overrides import apply_inference_reviews, apply_os_overrides
 from app.os_inference import infer_os_identity, os_display
 from app.switching import interface_key, merge_switch_interfaces, parse_switch_evidence
 from app.topology_neighbors import parse_topology_neighbors
@@ -1684,6 +1684,13 @@ def build_topology() -> dict:
         DB_PATH,
     )
     annotate_os_inferences(nodes)
+    identity_nodes = [
+        node for node in nodes.values()
+        if node.get("kind") in {"host", "device", "gateway"}
+    ]
+    apply_inference_reviews(identity_nodes, DB_PATH)
+    for node in identity_nodes:
+        node["os_display"] = os_display(node)
     add_membership_edges(nodes, edges)
     annotate_subnet_scan_observations(nodes)
     try:

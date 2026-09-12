@@ -39,9 +39,11 @@ from app.identity import enrich_analysis_macs
 from app.identity_overrides import (
     apply_analysis_os_overrides,
     delete_os_override,
+    inference_review_history,
     init_os_override_storage,
     list_os_overrides,
     os_override_history,
+    set_inference_review,
     set_os_override,
 )
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
@@ -131,6 +133,15 @@ class OsOverrideRequest(BaseModel):
 
 
 class OsOverrideDeleteRequest(BaseModel):
+    analyst: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class OsInferenceReviewRequest(BaseModel):
+    ip: str | None = Field(default=None, max_length=64)
+    mac: str | None = Field(default=None, max_length=32)
+    inference: dict
+    status: Literal["confirmed", "dismissed", "investigate"]
     analyst: str = Field(min_length=1, max_length=100)
     reason: str = Field(min_length=1, max_length=500)
 
@@ -846,6 +857,19 @@ def remove_os_override(identity_key: str, request: OsOverrideDeleteRequest) -> d
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="OS correction not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/os-inference-reviews/history")
+def get_os_inference_review_history(identity_key: str) -> list[dict]:
+    return inference_review_history(DB_PATH, identity_key)
+
+
+@app.post("/api/os-inference-reviews")
+def save_os_inference_review(request: OsInferenceReviewRequest) -> dict:
+    try:
+        return set_inference_review(DB_PATH, **request.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
