@@ -9,6 +9,8 @@
 - Added per-subnet and map-wide endpoint sorting and breakdowns by IP address,
   hostname, or operating system, with grouped host rows opening the retained
   host evidence in the details panel.
+- Corrected multi-column endpoint breakdown headings to show each block's host
+  range instead of repeating the full OS or hostname group total.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 
