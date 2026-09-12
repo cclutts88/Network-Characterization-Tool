@@ -362,7 +362,15 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "targets.every(target=>selectedNodeIds.has(target))" in html
     assert "Shift-click a subnet to select its full host branch" in html
     assert "function clearMapSelection" in html
-    assert "dragIds=selectedNodeIds.has(node.id)" in html
+    assert 'id="selectionTools"' in html
+    assert 'id="toggleSelectionLock"' in html
+    assert "function toggleSelectedLocks" in html
+    assert "function alignSelection" in html
+    assert "function distributeSelectedNodes" in html
+    assert "function arrangeSelectedNodes" in html
+    assert "lockedNodeIds=new Set()" in html
+    assert "lockedNodeIds.has(node.id)" in html
+    assert "dragIds=(selectedNodeIds.has(node.id)" in html
     assert "currentNodeElements.get(id)?.setAttribute" in html
     assert 'id="selectionStatus"' in html
     assert "Config zone" in html
@@ -377,6 +385,13 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "currentPositions=new Map()" in html
     assert "currentPositions=positions" in html
     assert "function enableCanvasNavigation" in html
+    assert 'id="searchResultCount"' in html
+    assert 'id="searchPrevious"' in html
+    assert 'id="searchNext"' in html
+    assert 'id="toggleIsolate"' in html
+    assert "function navigateSearch" in html
+    assert "classList.toggle('search-match'" in html
+    assert "classList.toggle('isolated-out'" in html
     assert "function zoomDetailLevel" in html
     assert "lod-overview" in html
     assert "lod-summary" in html
@@ -389,10 +404,35 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function renderMinimap" in html
     assert "function navigateFromMinimap" in html
     assert "canvas.addEventListener('scroll',updateMinimapViewport" in html
+    assert 'id="minimapSize"' in html
+    assert 'id="toggleMinimap"' in html
+    assert "function setMinimapSize" in html
+    assert "function setMinimapVisibility" in html
     assert "event.deltaY<0?1.12:.89" in html
     assert "contentX=(canvas.scrollLeft+point.x)/previous" in html
     assert "canvas.classList.add('panning')" in html
     assert "requestAnimationFrame(centerMap)" in html
+    assert 'id="undoLayout"' in html
+    assert 'id="redoLayout"' in html
+    assert "function capturePresentation" in html
+    assert "function undoPresentation" in html
+    assert "function redoPresentation" in html
+    assert "undoStack.length>50" in html
+    assert 'id="layoutPreset"' in html
+    assert "function gridLayout" in html
+    assert "function hierarchyLayout" in html
+    assert "function layoutForView" in html
+    assert "layoutMode==='grid'" in html
+    assert 'id="toggleLasso"' in html
+    assert "class:'lasso-box'" in html
+    assert "function setLassoMode" in html
+    assert "lassoState={start,current:start,rect" in html
+    assert 'id="mapContextMenu"' in html
+    assert "function showContextMenu" in html
+    assert "function runContextAction" in html
+    assert "group.oncontextmenu" in html
+    assert "function handleMapKeydown" in html
+    assert "ArrowLeft:[-1,0]" in html
     assert 'aria-label="Map scaling controls"' in html
     assert "function deviceAddressLines" in html
     assert "Primary / observed MAC" in html

@@ -118,10 +118,11 @@ an optional future mode within Reachability.
 - [x] Consolidate router/firewall interfaces into one device identity while
   retaining their addresses and evidence in device details.
 
-### Release 10 — Advanced Map Usability — Planned
+### Release 10 — Advanced Map Usability — In progress
 
-- [ ] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
-- [ ] Pan, zoom, and highlight search results.
+- [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
+- [x] Highlight search results, step forward and backward through matches, fit
+  the active match, and optionally isolate matching topology branches.
 - [x] Keep the fixed-height map as the default workspace, with an operator option
   to expand it into a full-width workspace and show or hide a floating details
   panel anchored inside the map canvas border.
@@ -147,6 +148,17 @@ an optional future mode within Reachability.
   summary, full, and evidence views while showing the active level.
 - [x] Add a live minimap in the expanded workspace with selected-node markers, a
   viewport frame, and click-drag navigation across large mission areas.
+- [x] Add Small, Medium, Large, and hidden minimap presentation controls.
+- [x] Add a reversible 50-step map-presentation history with toolbar and
+  keyboard Undo / Redo controls.
+- [x] Let analysts lock selected objects against accidental dragging or group
+  layout changes while retaining them in the visible selection.
+- [x] Add a selection action bar for fit, lock, row/column alignment,
+  distribution, and compact arrangement.
+- [x] Add drag-box selection, contextual right-click actions, keyboard fit,
+  lock, box-select, zoom, Escape, and precise/coarse arrow-key movement.
+- [x] Add Spider web, Hierarchy, and Grid layout presets while continuing to
+  honor explicitly positioned objects.
 - [x] Add per-subnet endpoint display modes: collapsed by default, individual
   endpoint lines, or an organized endpoint-group box.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP
@@ -159,8 +171,9 @@ an optional future mode within Reachability.
   subnet box, with map-wide Expand all and Collapse all controls.
 - [x] Color-code grouped host rows by observed operating-system family while
   retaining exact OS text and an Unknown OS treatment.
-- [ ] Add zoom-dependent detail and optional analytical overlays.
-- [ ] Evaluate saved layouts, minimap, reset layout, and alternate layouts.
+- [ ] Add optional analytical overlays.
+- [ ] Add named persistent layouts that can be saved, restored, duplicated, and
+  kept private to an analyst or deliberately shared.
 
 ### Future extension — Analyst Identity Overrides
 

@@ -59,6 +59,18 @@
 - Added a live minimap to the expanded workspace with topology and selection
   markers, a current-viewport frame, and click-drag navigation across 1× and 4×
   mission areas.
+- Added Small, Medium, Large, and hidden minimap controls.
+- Added a 50-step presentation Undo / Redo history covering map moves, grouped
+  box resizing, endpoint presentation changes, sorting, workspace size, layout
+  reset, layout presets, locking, and selection arrangement.
+- Added object locking plus a contextual selection bar for fitting, locking,
+  row or column alignment, even distribution, and compact arrangement.
+- Added box selection, right-click node actions, and keyboard controls for
+  Undo / Redo, fit, lock, box select, zoom, selection clearing, and coarse or
+  precise arrow-key movement.
+- Added Spider web, Hierarchy, and Grid automatic layout presets.
+- Expanded map search with result counts, previous/next navigation, automatic
+  focus on the active match, and an isolate-matches presentation mode.
 - Kept map presentation state local to each analyst browser so display changes
   do not modify shared evidence or another analyst's view.
 
