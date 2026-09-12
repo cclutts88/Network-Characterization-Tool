@@ -222,10 +222,22 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="osFilter"' in html
     assert 'id="subnetFilter"' in html
     assert 'id="deviceTypeFilter"' in html
+    assert html.index("Network filters") < html.index("SearchSploit enrichment")
+    assert "Filters apply to SearchSploit results" in html
+    assert 'id="networkFiltersPanel"' in html
+    assert 'id="activeFilterSummary"' in html
+    assert 'id="searchsploitFilterSummary"' in html
+    assert "updateFilterSummaries" in html
+    assert "searchSploitMatchesNetworkFilters" in html
+    assert "annotateSearchSploitNetworkData" in html
+    assert "after all active filters" in html
     assert 'id="hostRows"' in html
     assert '<details class="panel" id="inventoryPanel">' in html
     assert 'id="inventorySummary"' in html
     assert 'class="panel evidence-guide"' in html
+    assert '<details class="panel evidence-guide" open>' in html
+    assert '<details class="panel" open><summary>Capability datasets</summary>' in html
+    assert '<details class="panel" open><summary>Capability findings</summary>' in html
     assert "position:sticky;top:var(--hunt-header-offset)" in html
     assert "scroll-margin-top:var(--hunt-result-offset" in html
     assert "stickyOffsetObserver.observe(pageHeader)" in html
