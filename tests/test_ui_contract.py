@@ -355,6 +355,11 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="zoomFit"' in html
     assert "function setZoom" in html
     assert "function fitMap" in html
+    assert "function enableCanvasNavigation" in html
+    assert "event.deltaY<0?1.12:.89" in html
+    assert "contentX=(canvas.scrollLeft+point.x)/previous" in html
+    assert "canvas.classList.add('panning')" in html
+    assert "requestAnimationFrame(centerMap)" in html
     assert 'aria-label="Map scaling controls"' in html
     assert "function deviceAddressLines" in html
     assert "Primary / observed MAC" in html
@@ -363,6 +368,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "i.mac_vendor" in html
     assert "No IPv4 address" in html
     assert "function nodeDimensions" in html
+    assert "w:250,h:68" in html
+    assert "interfaceCount" in html
+    assert ".workspace>aside { position:sticky" in html
     assert "function edgeAnchor" in html
     assert "No interface IPs parsed" in html
     assert 'id="topologyNeighborCount"' in html

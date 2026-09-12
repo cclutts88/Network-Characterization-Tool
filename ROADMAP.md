@@ -109,13 +109,14 @@ an optional future mode within Reachability.
 - [x] Show the automatic NCT host in a slim sticky origin banner on pages that
   can initiate scans, device collection, or connected database updates.
 
-### Release 9 — Network Map Core Redesign — Planned as an independent release
+### Release 9 — Network Map Core Redesign — Complete
 
-- [ ] Pan-and-zoom canvas with cursor-centered zoom, node drag, selection, and
+- [x] Pan-and-zoom canvas with cursor-centered zoom, node drag, selection, and
   Fit.
-- [ ] Saved-network grouping and collapsible subnet groups.
-- [ ] Compact nodes with full detail in a side panel.
-- [ ] Consolidate router/firewall interfaces into one device identity.
+- [x] Saved-network grouping and collapsible subnet groups.
+- [x] Compact nodes with full detail in a sticky side panel.
+- [x] Consolidate router/firewall interfaces into one device identity while
+  retaining their addresses and evidence in device details.
 
 ### Release 10 — Advanced Map Usability — Planned
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0-dev — Network Map Core
+
+- Added cursor-centered wheel zoom and click-drag canvas panning while retaining
+  toolbar zoom, Fit, node dragging, and centered layout reset behavior.
+- Replaced oversized interface-expanded device boxes with compact device nodes;
+  complete addresses, interfaces, routes, services, MACs, and provenance remain
+  available in the sticky details panel.
+
 ## 0.12.1-dev — Network-wide hunting workflow
 
 - Made Hunt a top-level page in the Nmap, Device, Analyze, Hunt, Map workflow.

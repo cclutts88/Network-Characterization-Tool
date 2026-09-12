@@ -39,6 +39,9 @@ SearchSploit database, and visualizes retained topology evidence.
 - Offline SearchSploit enrichment using a managed Exploit-DB database with
   connected updates, air-gapped uploads, source/version details, archive safety
   validation, atomic activation, and prior-version rollback.
+- A network map with consolidated router/firewall identities, Saved Network and
+  subnet grouping, collapsible endpoint groups, compact topology nodes, a sticky
+  evidence panel, cursor-centered zoom, drag-to-pan, draggable nodes, and Fit.
 
 ## Run
 
