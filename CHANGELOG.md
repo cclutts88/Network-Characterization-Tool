@@ -12,6 +12,8 @@
   the full comparison scope remains available as option hover text.
 - Made table header rows remain visible while scrolling throughout NCT, with
   live offsets that keep them below each page's sticky navigation and guides.
+- Limited inference coloring in Match Basis to findings that actually carry
+  Inferred evidence, preventing observed-only evidence from appearing inferred.
 - Reordered the primary workflow to Device, Nmap, Analyze, Hunt, and Map, and
   made Device the default landing page so network-device and subnet evidence
   naturally precedes scan construction.
