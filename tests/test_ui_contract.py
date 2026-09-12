@@ -211,6 +211,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "Inferred" in html
     assert "Observed" in html
     assert "Correlated" in html
+    assert "Configuration" in html
     assert "They do not, by themselves, prove a vulnerability or compromise" in html
     assert "/api/hunting/network" in html
     assert "correlated by IP" in html
@@ -223,6 +224,12 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "All datasets" in html
     assert "data.datasets||data.categories||[]" in html
     assert "Host dataset changes" in html
+    assert "SearchSploit enrichment" in html
+    assert 'id="searchsploitRun"' in html
+    assert 'id="matchedOnly"' in html
+    assert "/api/searchsploit/status" in html
+    assert "/api/searchsploit/hunting/network" in html
+    assert "Potential product/version matches require analyst validation" in html
     assert '/hunting?run=${encodeURIComponent(item.selection_run_id)}' in analysis_html
 
 

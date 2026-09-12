@@ -25,6 +25,7 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
+from app.searchsploit import enrich_hunting_with_searchsploit, searchsploit_status
 from app.identity import enrich_analysis_macs
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
@@ -1153,6 +1154,21 @@ def analyze_hunting_scan(run_id: str) -> dict:
         },
         subnets=_hunting_subnets(group),
     ), build_topology())
+
+
+@app.get("/api/searchsploit/status")
+def get_searchsploit_status() -> dict:
+    return searchsploit_status()
+
+
+@app.post("/api/searchsploit/hunting/network")
+def searchsploit_hunting_network() -> dict:
+    return enrich_hunting_with_searchsploit(analyze_hunting_network())
+
+
+@app.post("/api/searchsploit/hunting/{run_id}")
+def searchsploit_hunting_scan(run_id: str) -> dict:
+    return enrich_hunting_with_searchsploit(analyze_hunting_scan(run_id))
 
 
 @app.get("/api/scan-comparisons/candidates")
