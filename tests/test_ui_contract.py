@@ -370,6 +370,16 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function arrangeSelectedNodes" in html
     assert "lockedNodeIds=new Set()" in html
     assert "lockedNodeIds.has(node.id)" in html
+    assert "function clearUnlockedManualPositions" in html
+    assert "manualPositions.set(id,{x:box.x,y:box.y})" in html
+    assert "WAN / outside interface" in html
+    assert "Anchor WAN at top center" in html
+    assert "function suggestedWanInterface" in html
+    assert "function setWanAnchor" in html
+    assert "function clearWanAnchor" in html
+    assert "wanAnchor:wanAnchor?{...wanAnchor}:null" in html
+    assert "WAN OUT · ${wanAnchor.label}" in html
+    assert 'data-context-action="wan"' in html
     assert "dragIds=(selectedNodeIds.has(node.id)" in html
     assert "currentNodeElements.get(id)?.setAttribute" in html
     assert 'id="selectionStatus"' in html

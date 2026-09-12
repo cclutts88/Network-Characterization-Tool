@@ -159,6 +159,10 @@ an optional future mode within Reachability.
   lock, box-select, zoom, Escape, and precise/coarse arrow-key movement.
 - [x] Add Spider web, Hierarchy, and Grid layout presets while continuing to
   honor explicitly positioned objects.
+- [x] Let an analyst choose a device interface as the WAN / outside path, place
+  that device at the top center, and lock and label it as the visual topology
+  anchor. Suggest explicitly named WAN, outside, internet, uplink, or external
+  interfaces while allowing a manual choice when the source is ambiguous.
 - [x] Add per-subnet endpoint display modes: collapsed by default, individual
   endpoint lines, or an organized endpoint-group box.
 - [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP

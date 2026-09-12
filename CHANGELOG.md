@@ -69,6 +69,10 @@
   Undo / Redo, fit, lock, box select, zoom, selection clearing, and coarse or
   precise arrow-key movement.
 - Added Spider web, Hierarchy, and Grid automatic layout presets.
+- Added an analyst-selectable WAN anchor. Device details suggest interfaces
+  named WAN, outside, internet, uplink, or external, permit any interface to be
+  chosen when evidence is ambiguous, and place, label, and lock that device at
+  the map's top center.
 - Expanded map search with result counts, previous/next navigation, automatic
   focus on the active match, and an isolate-matches presentation mode.
 - Kept map presentation state local to each analyst browser so display changes
