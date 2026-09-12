@@ -383,8 +383,10 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Organized inside subnet" in html
     assert "function groupedEndpointSections" in html
     assert "function groupedNodeDimensions" in html
-    assert "range_start:index+1" in html
-    assert "section.range_start" in html
+    assert "return [...grouped].map" in html
+    assert "'text-anchor':'middle'" in html
+    assert "Math.floor(index/section.rows)" in html
+    assert "(continued)" not in html
     assert "group-host-row" in html
     assert "Group / sort by IP" in html
     assert "Group / sort by hostname" in html
