@@ -17,6 +17,9 @@
 - Kept viewport navigation separate from object geometry so moving around the
   workspace cannot rewrite or snap object and line coordinates. The wheel
   performs pointer-centered zoom; click-and-drag pans the map.
+- Fixed locked objects from older or incomplete browser layouts drifting during
+  responsive zoom redraws. Every locked object now receives a concrete manual
+  coordinate before and after layout calculation.
 - Restored Individual endpoint expansion while editing a Map. Hosts now remain
   attached to a placed subnet and stay off-canvas only when their subnet is in
   the parking lot.

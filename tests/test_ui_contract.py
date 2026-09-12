@@ -479,6 +479,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "lockedNodeIds.has(node.id)" in html
     assert "function clearUnlockedManualPositions" in html
     assert "manualPositions.set(id,{x:box.x,y:box.y})" in html
+    assert "function ensureLockedNodePositions" in html
+    assert "ensureLockedNodePositions();svg.replaceChildren()" in html
+    assert "ensureLockedNodePositions(positions);currentPositions=positions" in html
     assert "WAN / outside interface" in html
     assert "Anchor WAN at top center" in html
     assert "function suggestedWanInterface" in html
