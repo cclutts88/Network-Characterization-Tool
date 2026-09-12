@@ -36,6 +36,14 @@ from app.searchsploit import (
     update_searchsploit_from_internet,
 )
 from app.identity import enrich_analysis_macs
+from app.identity_overrides import (
+    apply_analysis_os_overrides,
+    delete_os_override,
+    init_os_override_storage,
+    list_os_overrides,
+    os_override_history,
+    set_os_override,
+)
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
 from app.comparison import (
@@ -113,6 +121,20 @@ class CampaignSpec(BaseModel):
         return value.strip()
 
 
+class OsOverrideRequest(BaseModel):
+    ip: str | None = Field(default=None, max_length=64)
+    mac: str | None = Field(default=None, max_length=32)
+    os_name: str = Field(min_length=1, max_length=120)
+    analyst: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+    scanner_os: str | None = Field(default=None, max_length=240)
+
+
+class OsOverrideDeleteRequest(BaseModel):
+    analyst: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -143,6 +165,7 @@ def init_storage() -> None:
             db.execute(
                 "ALTER TABLE imports ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
             )
+    init_os_override_storage(DB_PATH)
 
 
 def parse_networks(entries: list[str], label: str) -> list[ipaddress.IPv4Network]:
@@ -797,6 +820,36 @@ def health() -> dict:
     }
 
 
+@app.get("/api/os-overrides")
+def get_os_overrides() -> list[dict]:
+    return list_os_overrides(DB_PATH)
+
+
+@app.get("/api/os-overrides/history")
+def get_os_override_history(identity_key: str) -> list[dict]:
+    return os_override_history(DB_PATH, identity_key)
+
+
+@app.post("/api/os-overrides")
+def save_os_override(request: OsOverrideRequest) -> dict:
+    try:
+        return set_os_override(DB_PATH, **request.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/os-overrides/{identity_key}")
+def remove_os_override(identity_key: str, request: OsOverrideDeleteRequest) -> dict:
+    try:
+        return delete_os_override(
+            DB_PATH, identity_key, analyst=request.analyst, reason=request.reason
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="OS correction not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/api/packages")
 def create_package(spec: CampaignSpec) -> StreamingResponse:
     try:
@@ -893,6 +946,7 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
         direct_source_label=original_name,
         direct_source_url=f"/api/imports/{digest}/raw",
     )
+    apply_analysis_os_overrides(response_analysis, DB_PATH)
     return {
         "sha256": digest,
         "duplicate": duplicate,
@@ -927,6 +981,7 @@ def analyze_scan_run(run_id: str) -> dict:
         direct_source_label=description.get("display_name") or "Automated Nmap scan",
         direct_source_url=f"/api/scan-runs/{run_id}/artifacts/xml",
     )
+    apply_analysis_os_overrides(analysis, DB_PATH)
     return {
         "run_id": run_id,
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
@@ -956,6 +1011,11 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
         ]))
         merged.setdefault("coverage", {})["partial_results"] = True
     return merged
+
+
+def _run_group_analysis_with_overrides(manifests: list[dict]) -> dict:
+    """Apply current analyst identity only to presentation/correlation views."""
+    return apply_analysis_os_overrides(_run_group_analysis(manifests), DB_PATH)
 
 
 def _comparison_evidence(manifests: list[dict], description: dict | None = None) -> dict:
@@ -1088,7 +1148,7 @@ def analyze_hunting_network() -> dict:
             "evidence": evidence,
         }
         analyses.append(build_hunting_analysis(
-            _run_group_analysis(group),
+            _run_group_analysis_with_overrides(group),
             evidence=source,
             subnets=_hunting_subnets(group),
         ))
@@ -1125,7 +1185,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
     before_description = describe_run_group(before_group)
     after_description = describe_run_group(after_group)
     before_result = build_hunting_analysis(
-        _run_group_analysis(before_group),
+        _run_group_analysis_with_overrides(before_group),
         evidence={
             **before_description,
             "comparison_name": _comparison_name(before_group, before_description),
@@ -1134,7 +1194,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
         subnets=_hunting_subnets(before_group),
     )
     after_result = build_hunting_analysis(
-        _run_group_analysis(after_group),
+        _run_group_analysis_with_overrides(after_group),
         evidence={
             **after_description,
             "comparison_name": _comparison_name(after_group, after_description),
@@ -1159,7 +1219,7 @@ def analyze_hunting_scan(run_id: str) -> dict:
     group = _hunting_group(run_id)
     description = describe_run_group(group)
     return correlate_hunting_identity(build_hunting_analysis(
-        _run_group_analysis(group),
+        _run_group_analysis_with_overrides(group),
         evidence={
             **description,
             "comparison_name": _comparison_name(group, description),
@@ -1399,6 +1459,7 @@ def export_import_host_summary(sha256: str) -> StreamingResponse:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
+    apply_analysis_os_overrides(item["analysis"], DB_PATH)
     return csv_download(
         rows_to_csv(host_summary_rows(item["analysis"]), HOST_SUMMARY_FIELDS),
         compact_export_filename(
@@ -1412,6 +1473,7 @@ def export_import_ports(sha256: str) -> StreamingResponse:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
+    apply_analysis_os_overrides(item["analysis"], DB_PATH)
     return csv_download(
         rows_to_csv(port_level_rows(item["analysis"]), PORT_LEVEL_FIELDS),
         compact_export_filename(

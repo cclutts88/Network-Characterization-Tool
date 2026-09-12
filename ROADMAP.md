@@ -432,11 +432,11 @@ within Reachability.
 
 ### Future extension — Analyst Identity Overrides
 
-- [ ] Allow an analyst to append or correct a host operating system when it is
+- [x] Allow an analyst to append or correct a host operating system when it is
   known from trusted local knowledge.
-- [ ] Preserve the scanner-detected OS beside the analyst value instead of
+- [x] Preserve the scanner-detected OS beside the analyst value instead of
   overwriting evidence.
-- [ ] Record who made the change, when it changed, and the reason, and flag a
+- [x] Record who made the change, when it changed, and the reason, and flag a
   later scan when its fingerprint disagrees with the analyst override.
 
 ### Future extension — Evidence-Based OS Inference
@@ -448,7 +448,7 @@ within Reachability.
   `inferred` label, confidence, and the evidence that contributed to the result.
 - [x] Keep Nmap-detected operating systems authoritative; inferred values never
   silently overwrite direct scanner evidence.
-- [ ] When analyst identity overrides are implemented, keep analyst-confirmed
+- [x] When analyst identity overrides are implemented, keep analyst-confirmed
   operating systems authoritative over inferred values as well.
 - [ ] Let analysts confirm, dismiss, or investigate an inference while retaining
   its original evidence and audit history.

@@ -50,6 +50,11 @@ def _known(value: object) -> bool:
 
 def authoritative_os(record: dict) -> str | None:
     """Return direct scanner/analyst OS evidence, never an inferred value."""
+    override = record.get("analyst_os_override")
+    if isinstance(override, dict) and _known(override.get("os_name")):
+        return _clean(override["os_name"])
+    if _known(record.get("effective_os")) and record.get("os_source") == "analyst":
+        return _clean(record["effective_os"])
     if _known(record.get("os")):
         return _clean(record["os"])
     group = record.get("os_group")

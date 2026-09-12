@@ -3290,4 +3290,6 @@ def import_history_detail(sha256: str) -> dict:
         direct_source_label=item.get("filename") or "Imported Nmap XML",
         direct_source_url=f"/api/imports/{sha256}/raw",
     )
+    from app.identity_overrides import apply_analysis_os_overrides
+    item["analysis"] = apply_analysis_os_overrides(item["analysis"], DB_PATH)
     return item

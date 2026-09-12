@@ -441,6 +441,10 @@ def build_hunting_analysis(
                     "hostname": host.get("hostname"),
                     "os": host.get("os"),
                     "os_group": host.get("os_group"),
+                    "scanner_os": host.get("scanner_os") or host.get("os"),
+                    "effective_os": host.get("effective_os"),
+                    "analyst_os_override": host.get("analyst_os_override"),
+                    "os_disagreement": bool(host.get("os_disagreement")),
                     "protocol": str(port.get("protocol") or "").lower(),
                     "port": _port_number(port),
                     "state": port.get("state") or "open",
@@ -479,6 +483,10 @@ def build_hunting_analysis(
             "mac": host.get("mac"),
             "vendor": host.get("vendor"),
             "os": host.get("os"),
+            "scanner_os": host.get("scanner_os") or host.get("os"),
+            "effective_os": host.get("effective_os"),
+            "analyst_os_override": host.get("analyst_os_override"),
+            "os_disagreement": bool(host.get("os_disagreement")),
             "os_group": os_group,
             "os_display": os_identity["os_display"],
             "os_filter": os_identity["os_filter"],
@@ -686,6 +694,10 @@ def correlate_hunting_identity(
                     "mac": node.get("mac"),
                     "vendor": node.get("vendor"),
                     "os": node.get("os"),
+                    "scanner_os": node.get("scanner_os") or node.get("os"),
+                    "effective_os": node.get("effective_os"),
+                    "analyst_os_override": node.get("analyst_os_override"),
+                    "os_disagreement": bool(node.get("os_disagreement")),
                     "os_group": "Network device",
                     "os_filter": os_filter,
                     "subnet": _configured_subnet(node),
@@ -764,7 +776,10 @@ def correlate_hunting_identity(
         _apply_host_os_identity(host)
     for finding in findings:
         identity = hosts_by_key.get(str(finding.get("host_key") or ""), {})
-        for field in ("os", "os_group", "os_display", "os_filter", "os_inference"):
+        for field in (
+            "os", "scanner_os", "effective_os", "analyst_os_override",
+            "os_disagreement", "os_group", "os_display", "os_filter", "os_inference",
+        ):
             if field in identity:
                 finding[field] = identity[field]
     return _summarize_hunting(

@@ -36,6 +36,9 @@ SearchSploit database, and visualizes retained topology evidence.
 - A dedicated network-wide Hunt view with service-aware datasets, combined
   host/network/evidence filters, CVE categorization, collapsible result panels,
   and scan-to-scan change analysis.
+- Audited analyst OS corrections from the Nmap host inventory. Scanner evidence
+  remains visible and unchanged; the confirmed value is used for Hunt and Map
+  presentation, and later scanner disagreement is flagged.
 - Offline SearchSploit enrichment using a managed Exploit-DB database with
   connected updates, air-gapped uploads, source/version details, archive safety
   validation, atomic activation, and prior-version rollback.

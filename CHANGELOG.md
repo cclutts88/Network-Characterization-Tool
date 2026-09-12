@@ -2,6 +2,11 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added audited analyst OS corrections in Analyze. NCT preserves the original
+  scanner OS, records the analyst, reason, and timestamp for set/update/remove
+  events, gives the confirmed value precedence over inference in Hunt and Map,
+  includes both values in exports, and flags later scanner disagreement.
+
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility
   preflight, explicit local or selected-address binding, image/offline archive
