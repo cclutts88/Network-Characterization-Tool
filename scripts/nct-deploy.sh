@@ -9,7 +9,9 @@ profile="test"
 access="local"
 bind_address=""
 app_port="8766"
+port_supplied="no"
 https_port="443"
+https_port_supplied="no"
 image="network-characterization-tool:latest"
 image_archive=""
 image_sha256=""
@@ -63,8 +65,8 @@ while [ "$#" -gt 0 ]; do
         --profile) profile=${2:?missing profile}; shift 2 ;;
         --access) access=${2:?missing access mode}; shift 2 ;;
         --bind) bind_address=${2:?missing address}; shift 2 ;;
-        --port) app_port=${2:?missing port}; shift 2 ;;
-        --https-port) https_port=${2:?missing HTTPS port}; shift 2 ;;
+        --port) app_port=${2:?missing port}; port_supplied="yes"; shift 2 ;;
+        --https-port) https_port=${2:?missing HTTPS port}; https_port_supplied="yes"; shift 2 ;;
         --image) image=${2:?missing image}; shift 2 ;;
         --image-archive) image_archive=${2:?missing archive}; shift 2 ;;
         --image-sha256) image_sha256=${2:?missing checksum}; shift 2 ;;
@@ -87,6 +89,13 @@ done
 
 case "$profile" in test|range|mission) ;; *) die "Profile must be test, range, or mission." ;; esac
 case "$access" in local|lan) ;; *) die "Access must be local or lan." ;; esac
+state_file="$state_dir/current.env"
+if [ -r "$state_file" ]; then
+    saved_app_port=$(awk -F= '$1 == "app_port" {print $2; exit}' "$state_file")
+    saved_https_port=$(awk -F= '$1 == "https_port" {print $2; exit}' "$state_file")
+    [ "$port_supplied" = "yes" ] || app_port=${saved_app_port:-$app_port}
+    [ "$https_port_supplied" = "yes" ] || https_port=${saved_https_port:-$https_port}
+fi
 case "$app_port:$https_port" in *[!0-9:]*|:*) die "Ports must be numeric." ;; esac
 [ "$app_port" -ge 1 ] && [ "$app_port" -le 65535 ] || die "Application port is outside 1-65535."
 [ "$https_port" -ge 1 ] && [ "$https_port" -le 65535 ] || die "HTTPS port is outside 1-65535."
@@ -249,14 +258,43 @@ sys.exit(42 if active else 0)' >/dev/null 2>&1
     fi
 fi
 
+proxy_name="${container}-https"
+existing_app_binding=$(docker port "$container" 8080/tcp 2>/dev/null | head -n 1 || printf '')
+existing_proxy_binding=$(docker port "$proxy_name" 443/tcp 2>/dev/null | head -n 1 || printf '')
+existing_app_port=${existing_app_binding##*:}
+existing_proxy_port=${existing_proxy_binding##*:}
+if [ "$tls_enabled" = "no" ] && [ "$port_supplied" = "no" ] && [ -n "$existing_app_port" ]; then
+    app_port=$existing_app_port
+fi
+if [ "$tls_enabled" = "yes" ] && [ "$https_port_supplied" = "no" ] && [ -n "$existing_proxy_port" ]; then
+    https_port=$existing_proxy_port
+fi
+
+listener_tool="none"
+command -v ss >/dev/null 2>&1 && listener_tool="ss"
+[ "$listener_tool" != "none" ] || ! command -v netstat >/dev/null 2>&1 || listener_tool="netstat"
+if [ "$listener_tool" = "none" ]; then
+    [ "$profile" = "test" ] || die "Range port preflight requires ss or netstat so non-Docker listeners can be detected."
+    warn "Neither ss nor netstat is available; Test can detect Docker port conflicts only."
+fi
+
+port_conflict_owner() {
+    checked_port=$1
+    docker ps --format '{{.Names}}|{{.Ports}}' | awk -F'|' -v keep="$container" -v proxy="$proxy_name" -v port=":$checked_port->" '$1 != keep && $1 != proxy && index($2,port) {print $1; exit}'
+    case "$checked_port" in "$existing_app_port"|"$existing_proxy_port") return 0 ;; esac
+    case "$listener_tool" in
+        ss) ss -H -ltn 2>/dev/null | awk -v suffix=":$checked_port" '$4 ~ (suffix "$") {print "host listener at " $4; exit}' ;;
+        netstat) netstat -ltn 2>/dev/null | awk -v suffix=":$checked_port" '$4 ~ (suffix "$") {print "host listener at " $4; exit}' ;;
+    esac
+}
+
 published_port=$app_port
 [ "$tls_enabled" = "no" ] || published_port=$https_port
-proxy_name="${container}-https"
-conflict=$(docker ps --format '{{.Names}}|{{.Ports}}' | awk -F'|' -v keep="$container" -v proxy="$proxy_name" -v port=":$published_port->" '$1 != keep && $1 != proxy && index($2,port) {print $1; exit}')
+conflict=$(port_conflict_owner "$published_port")
 if [ -n "$conflict" ]; then
     if [ "$profile" = "test" ] || [ "$profile" = "range" ]; then
         original=$published_port
-        while [ "$published_port" -lt 65535 ] && docker ps --format '{{.Names}}|{{.Ports}}' | awk -F'|' -v keep="$container" -v proxy="$proxy_name" -v port=":$published_port->" '$1 != keep && $1 != proxy && index($2,port) {found=1} END {exit !found}'; do published_port=$((published_port + 1)); done
+        while [ "$published_port" -lt 65535 ] && [ -n "$(port_conflict_owner "$published_port")" ]; do published_port=$((published_port + 1)); done
         [ "$published_port" -le 65535 ] || die "No alternate port could be selected."
         warn "Port $original is used by $conflict; selected $published_port for this $profile deployment."
         if [ "$tls_enabled" = "yes" ]; then https_port=$published_port; else app_port=$published_port; fi
@@ -264,6 +302,7 @@ if [ -n "$conflict" ]; then
         die "Mission port $published_port is occupied by $conflict; choose an explicit stable port or resolve the conflict."
     fi
 fi
+printf 'selected_app_port=%s\nselected_https_port=%s\nlistener_tool=%s\n' "$app_port" "$https_port" "$listener_tool" >> "$log_file"
 
 firewall_tool="none"
 firewall_changed="no"
@@ -291,6 +330,9 @@ if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "
     existing_binding=$(docker port "$container" 8080/tcp 2>/dev/null | head -n 1 || printf '')
     if [ "$existing_binding" = "$bind_address:$app_port" ] && docker exec "$container" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2)); assert d.get("status")=="ok"' >/dev/null 2>&1; then
         access_url="http://$bind_address:$app_port"
+        state_tmp="${state_file}.tmp.$$"
+        printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimage=%s\nimage_id=%s\nbuild=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port" "$image" "$target_image_id" "$target_build" > "$state_tmp"
+        mv "$state_tmp" "$state_file"
         printf 'completed=%s\nreported_build=%s\nresult=already-current\nurl=%s\n' "$(date -u +%FT%TZ)" "$target_build" "$access_url" >> "$log_file"
         say "This exact image is already healthy at $access_url; no backup or container swap was needed."
         exit 0
@@ -451,6 +493,10 @@ else
     access_url="http://$bind_address:$app_port"
     curl --fail --silent --show-error "$access_url/health" >/dev/null || rollback
 fi
+
+state_tmp="${state_file}.tmp.$$"
+printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimage=%s\nimage_id=%s\nbuild=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port" "$image" "$target_image_id" "$reported_build" > "$state_tmp"
+mv "$state_tmp" "$state_file"
 
 printf 'completed=%s\nreported_build=%s\nruntime_tools=%s\nnet_raw=%s\nbackup=%s\nurl=%s\nrollback_container=%s\n' "$(date -u +%FT%TZ)" "$reported_build" "$runtime_tools" "$raw_socket" "$backup_file" "$access_url" "${rollback_name:-none}" >> "$log_file"
 swap_started="no"

@@ -45,6 +45,17 @@ def test_launcher_is_idempotent_for_an_already_current_direct_deployment():
     assert 'existing_image_id" = "$target_image_id' in SCRIPT
     assert 'result=already-current' in SCRIPT
     assert 'no backup or container swap was needed' in SCRIPT
+    assert 'state_file="$state_dir/current.env"' in SCRIPT
+    assert 'mv "$state_tmp" "$state_file"' in SCRIPT
+
+
+def test_launcher_detects_docker_and_host_port_listeners():
+    assert 'port_conflict_owner()' in SCRIPT
+    assert 'command -v ss' in SCRIPT
+    assert 'command -v netstat' in SCRIPT
+    assert 'host listener at ' in SCRIPT
+    assert 'selected_app_port=%s' in SCRIPT
+    assert 'existing_app_port=${existing_app_binding##*:}' in SCRIPT
 
 
 def test_launcher_validates_scanning_tools_and_raw_packet_capability():

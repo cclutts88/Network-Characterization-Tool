@@ -349,6 +349,9 @@ within Reachability.
   services. Test and Range modes may retain an approved alternate port; Mission
   mode must preserve its declared stable URL or stop for an explicit operator
   decision. Save the selected ports so restarts use the same addresses.
+  - [x] Detect other Docker publishers plus host listeners reported by `ss` or
+    `netstat`, reuse a recognized existing NCT binding, and atomically retain
+    successful Test/Range port selections for the next launcher run.
 - [x] Make access mode explicit before deployment: **Local only** binds to
   loopback, while **LAN accessible** binds only to the operator-selected host
   interface or approved addresses. Never advertise a LAN URL when Docker is

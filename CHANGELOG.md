@@ -14,6 +14,9 @@
   receipts, versioned-image enforcement for Range, an already-current no-op,
   exact running-build validation, and runtime checks for Nmap, FPING, tcpdump,
   SSH, packet-capture visibility, `NET_RAW`, and raw sockets.
+- Extended deployment port handling to detect both Docker and host-process
+  listeners, reuse recognized NCT bindings during upgrades, and atomically
+  retain the validated application and HTTPS ports for later runs.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility

@@ -12,6 +12,14 @@ application reports the same build. Re-running the launcher against the exact
 same healthy direct-HTTP image, bind address, port, and data volume is a safe
 no-op rather than an unnecessary replacement.
 
+The selected application and HTTPS ports are stored in
+`nct-deployment/current.env` after successful validation. Unless an operator
+supplies a new port explicitly, later runs reuse that stable selection and also
+reuse a safely recognized existing NCT binding. Port preflight checks both
+other Docker containers and host listeners through `ss` or `netstat`; Test and
+Range may advance to an available port, while Mission must stop rather than
+silently changing its declared URL.
+
 This checkpoint supports **Test** and **Range** deployment. The **Mission**
 profile is present but intentionally stops before making changes until NCT's
 authenticated access and formal mission-promotion gate are implemented. A
