@@ -18,8 +18,10 @@
   still support text, and selected shapes can now be deleted with Delete or
   Backspace in Edit mode.
 - Added an analyst-local External WAN gateway designation that promotes a
-  selected device or discovered host to the top WAN uplink and preserves the
-  choice with private saved Map layouts.
+  selected device or discovered host into a single top-boundary WAN object,
+  removes its duplicate canvas node, connects the boundary to the nearest
+  visible internal device, and preserves the choice with private saved Map
+  layouts.
 - Added reversible object hiding, multi-object hiding, and a collapsible Hidden
   objects list with individual restore and Restore all controls. Hidden objects
   remain in the underlying evidence.

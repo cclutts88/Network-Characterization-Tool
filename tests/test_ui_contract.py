@@ -485,11 +485,15 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function updateWanBoundaryMarker" in html
     assert "active=Boolean(wanAnchor&&!hiddenNodeIds.has(wanAnchor.nodeId)&&!parkedNodeIds.has(wanAnchor.nodeId))" in html
     assert "function updateWanUplinkGeometry" in html
+    assert "function externalWanAttachmentId" in html
+    assert "function wanUplinkSourceId" in html
+    assert ").filter(node=>node.id!==externalWanGatewayId)" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
     assert "idealScreenX=originX+sourceX*zoomLevel" in html
     assert "targetX=(targetScreenX-originX)/zoomLevel" in html
     assert "deviceVisible=!isolated" in html
+    assert "searchMatches.includes(sourceId)" in html
     assert "rail.hidden=!deviceVisible" in html
     assert "addEventListener('scroll',updateWanUplinkGeometry" in html
     assert 'data-context-action="wan"' in html
@@ -498,7 +502,6 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function setExternalWanGateway" in html
     assert "function clearExternalWanGateway" in html
     assert "externalWanGatewayId" in html
-    assert "presentation_role:'external_wan_gateway'" in html
     assert 'id="hideSelection"' in html
     assert 'id="hiddenObjectsPanel"' in html
     assert 'id="hiddenObjectsList"' in html

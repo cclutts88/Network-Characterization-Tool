@@ -207,8 +207,10 @@ within Reachability.
   movement, zoom, and pan, and hide the WAN presentation when its device is not
   visible.
 - [x] Let an analyst designate a discovered device or host as the External WAN
-  gateway, promote it to the top WAN uplink, and retain that private
-  presentation choice with saved layouts.
+  gateway, promote it into a single top-boundary WAN object instead of leaving
+  a duplicate node on the canvas, connect that boundary to the nearest visible
+  internal device, and retain the private presentation choice with saved
+  layouts.
 - [x] Let analysts hide one or several Map objects without deleting evidence,
   list them in a collapsible Hidden objects section, and restore objects
   individually or all at once.
