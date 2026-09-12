@@ -13,6 +13,8 @@
   evidence in Hunt and Nmap Analysis, with direct-versus-correlated source
   labels, hover detail, timestamps, and links to the supplying collection.
 - Added a future audited analyst OS-override capability to the rollout roadmap.
+- Kept the capability evidence guide pinned below the Hunt navigation while
+  scrolling through host and finding tables.
 
 ## 0.12.0-dev — Dedicated service hunting
 

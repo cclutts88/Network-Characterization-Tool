@@ -202,6 +202,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="subnetFilter"' in html
     assert 'id="deviceTypeFilter"' in html
     assert 'id="hostRows"' in html
+    assert 'class="panel evidence-guide"' in html
+    assert "position:sticky;top:var(--hunt-header-offset)" in html
+    assert "new ResizeObserver(updateStickyOffset)" in html
     assert "Exposed" in html
     assert "Inferred" in html
     assert "Observed" in html
