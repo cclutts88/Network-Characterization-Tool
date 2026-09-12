@@ -14,6 +14,10 @@ NCT_SESSION_HOURS=12
 NCT_COOKIE_SECURE=1
 ```
 
+After sign-in, every primary page shows the active analyst and role. An
+Administrator can open **Accounts** from that control to create named Admin,
+Analyst, or Viewer accounts; passwords are never displayed after creation.
+
 The password file should be mounted read-only, contain only the initial
 password, and be removed from the deployment after the first Administrator has
 been created. Supplying `NCT_BOOTSTRAP_PASSWORD` directly is retained for

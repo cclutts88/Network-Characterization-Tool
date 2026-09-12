@@ -61,6 +61,7 @@ from app.comparison import (
 )
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
+from app.session_ui import analyst_admin_page, session_script
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.auth import (
     SESSION_COOKIE,
@@ -945,6 +946,17 @@ def current_analyst(request: Request) -> dict:
         "authentication_enabled": auth_enabled(),
         "analyst": request.state.analyst,
     }
+
+
+@app.get("/assets/nct-session.js")
+def account_controls_script() -> Response:
+    return session_script()
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def analyst_accounts_page(request: Request) -> HTMLResponse:
+    require_admin(request)
+    return analyst_admin_page()
 
 
 def require_admin(request: Request) -> dict:

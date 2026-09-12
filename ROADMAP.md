@@ -476,6 +476,8 @@ within Reachability.
     disabled by default while this remains a single-user Test build.
   - [x] Bind authenticated OS corrections and inference reviews to the signed-in
     server session instead of trusting a client-supplied analyst label.
+  - [x] Show the signed-in identity and role on every primary page, provide
+    sign-out, and give Administrators a focused account creation/listing screen.
 - [ ] Give each analyst a persistent personal workspace for saved map layouts,
   filters, investigation notes, scan drafts, and interface preferences.
   - [x] Move named Map layouts to owner-scoped server storage when authentication

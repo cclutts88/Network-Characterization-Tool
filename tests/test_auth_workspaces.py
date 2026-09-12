@@ -89,6 +89,11 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert signed_in.status_code == 200
         assert signed_in.cookies.get("nct_session")
         assert admin.get("/api/auth/me").json()["analyst"]["role"] == "admin"
+        assert "Analyst accounts" in admin.get("/admin/users").text
+        account_script = admin.get("/assets/nct-session.js")
+        assert account_script.status_code == 200
+        assert "Sign out" in account_script.text
+        assert "Accounts" in account_script.text
         assert admin.post(
             "/api/auth/users",
             json={
@@ -150,3 +155,4 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
             "/api/workspaces/layouts",
             json={"name": "Viewer edit", "snapshot": {}},
         ).status_code == 403
+        assert viewer.get("/admin/users").status_code == 403

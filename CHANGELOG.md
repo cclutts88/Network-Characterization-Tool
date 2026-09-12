@@ -25,6 +25,9 @@
 - Bound authenticated OS corrections and inference reviews to the signed-in
   analyst on the server, preventing a client-supplied name from changing the
   audit identity.
+- Added compact signed-in account controls to every primary page, including the
+  active display name and role, sign-out, and an Administrator-only account
+  screen for creating and reviewing named analyst accounts.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility

@@ -147,6 +147,7 @@ def test_navigation_is_sticky_on_every_primary_page():
         assert "border-top:1px solid var(--accent)" in html
         assert "font-size:40px" in html
         assert "padding-top:6px!important" in html
+        assert '<script src="/assets/nct-session.js" defer></script>' in html
 
 
 def test_table_headers_stay_visible_without_overlapping_sticky_page_content():
