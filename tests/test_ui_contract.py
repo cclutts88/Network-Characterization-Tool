@@ -405,8 +405,8 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function updateWanUplinkGeometry" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
-    assert "idealScreenX=sourceX*zoomLevel-canvas.scrollLeft" in html
-    assert "targetX=(canvas.scrollLeft+targetScreenX)/zoomLevel" in html
+    assert "idealScreenX=originX+sourceX*zoomLevel" in html
+    assert "targetX=(targetScreenX-originX)/zoomLevel" in html
     assert "deviceVisible=!isolated" in html
     assert "rail.hidden=!deviceVisible" in html
     assert "addEventListener('scroll',updateWanUplinkGeometry" in html
@@ -576,7 +576,16 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "$('workspaceSize').onchange" in html
     assert "expandedMapExtent={width,height}" in html
     assert "else if(expandedMapExtent)" in html
-    assert "if(expanded){setZoom(1);centerMap();}else fitMap()" in html
+    assert "function fitWorkspace" in html
+    assert "function preserveLockedNodePositions" in html
+    assert "if(!expanded){preserveLockedNodePositions();expandedMapExtent={...mapSize};}" in html
+    assert "if(expanded){setZoom(1);centerMap();}else fitWorkspace()" in html
+    assert ".canvas.map-centered-x { justify-content:center; }" in html
+    assert ".canvas.map-centered-y { align-items:center; }" in html
+    assert "renderedWidth<=canvas.clientWidth" in html
+    assert "renderedHeight<=canvas.clientHeight" in html
+    assert "svgRect.left-canvasRect.left" in html
+    assert "renderMap();setZoom(zoomLevel);" in html
     assert "Show details" in html
     assert "Hide details" in html
     assert "Exit expanded workspace" in html

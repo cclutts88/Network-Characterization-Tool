@@ -45,6 +45,13 @@
 - Preserved analyst-positioned map boxes when endpoint groups are expanded,
   collapsed, switched between grouped and individual views, or re-sorted. A
   new layout preset or Reset layout remains the explicit way to reflow them.
+- Made the standard map a true scaled overview of the complete expanded mission
+  workspace instead of fitting only the occupied device boundary. Locked boxes
+  retain their exact map coordinates when leaving expanded mode.
+- Stopped details, endpoint visibility, and endpoint sorting redraws from
+  automatically invoking Fit devices in the standard viewer. The current view
+  now remains under analyst control, and a fully fitted workspace is centered
+  instead of snapping into the upper-left corner.
 - Changed IP presentation to one numerically sorted host pool instead of
   arbitrary address-range subgroups; hostname and OS headings now appear only
   when the selected field contains multiple meaningful values.
