@@ -3282,4 +3282,12 @@ def import_history_detail(sha256: str) -> dict:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
+    from app.identity import enrich_analysis_macs
+    from app.network_map import build_topology
+    item["analysis"] = enrich_analysis_macs(
+        item.get("analysis") or {},
+        build_topology(),
+        direct_source_label=item.get("filename") or "Imported Nmap XML",
+        direct_source_url=f"/api/imports/{sha256}/raw",
+    )
     return item

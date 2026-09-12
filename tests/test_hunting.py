@@ -9,6 +9,7 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.main import app
+from app.identity import enrich_analysis_macs
 
 
 def host(ip: str, ports: list[dict]) -> dict:
@@ -116,6 +117,33 @@ def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
     assert result["findings"][0]["version"] == "9.2"
 
 
+def test_analysis_mac_enrichment_prefers_router_neighbor_evidence_and_marks_provenance():
+    analysis = {"hosts": [host("10.0.0.10", [])], "mac_count": 0}
+    topology = {"nodes": [{
+        "ip": "10.0.0.10",
+        "addresses": ["10.0.0.10"],
+        "mac_observations": [{
+            "mac": "00:11:22:33:44:55",
+            "vendor": "Example Vendor",
+            "protocol": "arp",
+            "interface": "lan0",
+            "segment": "10.0.0.0/24",
+            "source_kind": "arp_neighbor_table",
+            "source_label": "Core firewall ARP table",
+            "source_url": "/api/device-configs/abc/files/stdout.txt",
+            "last_observed": "2026-09-11T12:00:00+00:00",
+        }],
+    }]}
+
+    result = enrich_analysis_macs(analysis, topology)
+
+    assert result["hosts"][0]["mac"] == "00:11:22:33:44:55"
+    assert result["hosts"][0]["vendor"] == "Example Vendor"
+    assert result["hosts"][0]["mac_provenance"]["indirect"] is True
+    assert result["hosts"][0]["mac_provenance"]["origin"] == "Router/firewall neighbor table"
+    assert result["correlated_mac_count"] == 1
+
+
 def test_hunting_comparison_reports_added_removed_and_changed_capabilities():
     before = build_hunting_analysis(
         {"hosts": [host("10.0.0.10", [port(8080, "http", "nginx", "1.20")])]},
@@ -183,6 +211,7 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
         )
     monkeypatch.setattr("app.main.list_scan_run_plans", lambda limit=5000: manifests)
     monkeypatch.setattr("app.main.run_directory", lambda run_id: tmp_path / run_id)
+    monkeypatch.setattr("app.network_map.build_topology", lambda: {"nodes": []})
 
     with TestClient(app) as client:
         analysis = client.get(f"/api/hunting/{after_id}")

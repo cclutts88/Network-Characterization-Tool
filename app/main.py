@@ -21,9 +21,11 @@ from app.device_ui import device_config_page
 from app.hunting import (
     build_hunting_analysis,
     compare_hunting_results,
+    correlate_hunting_identity,
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
+from app.identity import enrich_analysis_macs
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
 from app.comparison import (
@@ -870,13 +872,20 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
     if row:
         imported_at = row[0]
         metadata = json.loads(row[1] or "{}")
+    from app.network_map import build_topology
+    response_analysis = enrich_analysis_macs(
+        analysis,
+        build_topology(),
+        direct_source_label=original_name,
+        direct_source_url=f"/api/imports/{digest}/raw",
+    )
     return {
         "sha256": digest,
         "duplicate": duplicate,
         "original_preserved": True,
         "imported_at": imported_at,
         "metadata": metadata,
-        "analysis": analysis,
+        "analysis": response_analysis,
     }
 
 
@@ -897,6 +906,13 @@ def analyze_scan_run(run_id: str) -> dict:
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     description = describe_run_group(group)
+    from app.network_map import build_topology
+    analysis = enrich_analysis_macs(
+        analysis,
+        build_topology(),
+        direct_source_label=description.get("display_name") or "Automated Nmap scan",
+        direct_source_url=f"/api/scan-runs/{run_id}/artifacts/xml",
+    )
     return {
         "run_id": run_id,
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
@@ -1045,6 +1061,8 @@ def _latest_hunting_groups() -> list[list[dict]]:
 
 @app.get("/api/hunting/network")
 def analyze_hunting_network() -> dict:
+    from app.network_map import build_topology
+
     groups = _latest_hunting_groups()
     analyses, sources, scope_summaries = [], [], []
     for group in groups:
@@ -1068,7 +1086,7 @@ def analyze_hunting_network() -> dict:
             "subnets": _hunting_subnets(group),
             "run_ids": description.get("run_ids") or [],
         })
-    result = merge_hunting_analyses(
+    result = correlate_hunting_identity(merge_hunting_analyses(
         analyses,
         source={
             "display_name": "Latest network-wide evidence",
@@ -1080,7 +1098,7 @@ def analyze_hunting_network() -> dict:
             "scope_summaries": scope_summaries,
             "evidence": {"label": "Latest network evidence", "sources": sources},
         },
-    )
+    ), build_topology())
     result["status"] = "hunting_network_complete"
     return result
 
@@ -1122,9 +1140,11 @@ def compare_hunting_scans(before: str, after: str) -> dict:
 
 @app.get("/api/hunting/{run_id}")
 def analyze_hunting_scan(run_id: str) -> dict:
+    from app.network_map import build_topology
+
     group = _hunting_group(run_id)
     description = describe_run_group(group)
-    return build_hunting_analysis(
+    return correlate_hunting_identity(build_hunting_analysis(
         _run_group_analysis(group),
         evidence={
             **description,
@@ -1132,7 +1152,7 @@ def analyze_hunting_scan(run_id: str) -> dict:
             "evidence": _comparison_evidence(group, description),
         },
         subnets=_hunting_subnets(group),
-    )
+    ), build_topology())
 
 
 @app.get("/api/scan-comparisons/candidates")

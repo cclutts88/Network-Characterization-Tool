@@ -347,6 +347,100 @@ def merge_hunting_analyses(
     )
 
 
+def correlate_hunting_identity(result: dict, topology: dict) -> dict:
+    """Add attributable topology identity without replacing direct scan evidence."""
+    nodes_by_ip = {}
+    for node in topology.get("nodes") or []:
+        for value in [node.get("ip"), *(node.get("addresses") or [])]:
+            if value:
+                nodes_by_ip[str(value)] = node
+
+    hosts = [dict(item) for item in result.get("hosts") or []]
+    hosts_by_key = {}
+    for host in hosts:
+        key = str(host.get("host_key") or "")
+        hosts_by_key[key] = host
+        direct_mac = str(host.get("mac") or "").strip()
+        if direct_mac:
+            source_ref = next(iter(host.get("source_refs") or []), {})
+            host["mac_provenance"] = {
+                "indirect": False,
+                "origin": "Selected Nmap scan",
+                "source_kind": "nmap",
+                "source_label": source_ref.get("label") or "Selected Nmap XML",
+                "source_url": source_ref.get("url"),
+                "timestamp": host.get("last_observed"),
+                "detail": "MAC address reported directly in the selected Nmap evidence.",
+            }
+        node = nodes_by_ip.get(str(host.get("ip") or ""))
+        if not node:
+            continue
+        if not host.get("hostname") and node.get("hostname"):
+            host["hostname"] = node["hostname"]
+        if not host.get("vendor") and node.get("vendor"):
+            host["vendor"] = node["vendor"]
+        if not host.get("os") and node.get("os"):
+            host["os"] = node["os"]
+        role = str(node.get("role") or "").strip()
+        if role and host.get("device_type") in {None, "", "Unclassified"}:
+            host["device_type"] = role.replace("_", " ").title()
+        if direct_mac:
+            continue
+        observations = [
+            item for item in (node.get("mac_observations") or []) if item.get("mac")
+        ]
+        observations.sort(
+            key=lambda item: (
+                item.get("source_kind") == "arp_neighbor_table",
+                item.get("source_kind") in {
+                    "device_configuration", "configuration_output", "lldp_cdp_neighbor",
+                },
+                item.get("last_observed") or "",
+            ),
+            reverse=True,
+        )
+        if not observations:
+            continue
+        observation = observations[0]
+        host["mac"] = observation.get("mac")
+        if not host.get("vendor") and observation.get("vendor"):
+            host["vendor"] = observation["vendor"]
+        is_neighbor = observation.get("source_kind") == "arp_neighbor_table"
+        detail_parts = [
+            "MAC address was correlated by IP and was not reported in the selected Nmap scan.",
+            f"Protocol: {observation.get('protocol')}" if observation.get("protocol") else None,
+            f"Interface: {observation.get('interface')}" if observation.get("interface") else None,
+            f"Segment: {observation.get('segment')}" if observation.get("segment") else None,
+        ]
+        host["mac_provenance"] = {
+            "indirect": True,
+            "origin": (
+                "Router/firewall neighbor table" if is_neighbor
+                else "Other retained topology evidence"
+            ),
+            "source_kind": observation.get("source_kind"),
+            "source_label": observation.get("source_label") or "Saved topology evidence",
+            "source_url": observation.get("source_url"),
+            "timestamp": observation.get("last_observed"),
+            "detail": " ".join(item for item in detail_parts if item),
+        }
+
+    findings = []
+    for item in result.get("findings") or []:
+        finding = dict(item)
+        identity = hosts_by_key.get(str(finding.get("host_key") or ""), {})
+        for field in ("hostname", "mac", "vendor", "device_type", "mac_provenance"):
+            if identity.get(field) not in (None, "", {}):
+                finding[field] = identity[field]
+        findings.append(finding)
+    return _summarize_hunting(
+        hosts,
+        findings,
+        source=result.get("source") or {},
+        warnings=list(result.get("warnings") or []),
+    )
+
+
 def _finding_key(item: dict) -> tuple[str, str, int, str]:
     return (
         str(item.get("host_key") or ""),

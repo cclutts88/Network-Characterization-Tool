@@ -177,6 +177,14 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "Firewall / ACL added" in html
 
 
+def test_nmap_analysis_labels_direct_and_correlated_mac_provenance():
+    html = analysis_page().body.decode()
+    assert "mac-provenance" in html
+    assert "correlated by IP" in html
+    assert "direct Nmap" in html
+    assert "dataset.macProvenance" in html
+
+
 def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     analysis_html = analysis_page().body.decode()
     device_html = device_analysis_page().body.decode()
@@ -200,6 +208,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "Correlated" in html
     assert "They do not, by themselves, prove a vulnerability or compromise" in html
     assert "/api/hunting/network" in html
+    assert "correlated by IP" in html
+    assert "direct Nmap" in html
     assert "/api/hunting/compare" in html
     assert "/api/hunting/${encodeURIComponent(id)}" in html
     assert "Findings added" in html

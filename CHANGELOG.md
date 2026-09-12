@@ -9,6 +9,9 @@
   hosts even when no matching service capability is present.
 - Added operating-system, subnet, and device-type filters and expanded the
   capability-evidence explanations.
+- Cross-referenced Nmap IPs with retained router/firewall neighbor-table MAC
+  evidence in Hunt and Nmap Analysis, with direct-versus-correlated source
+  labels, hover detail, timestamps, and links to the supplying collection.
 - Added a future audited analyst OS-override capability to the rollout roadmap.
 
 ## 0.12.0-dev — Dedicated service hunting
