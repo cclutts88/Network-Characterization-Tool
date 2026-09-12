@@ -68,7 +68,8 @@
 - Added box selection, right-click node actions, and keyboard controls for
   Undo / Redo, fit, lock, box select, zoom, selection clearing, and coarse or
   precise arrow-key movement. Shift+R aligns an unlocked multi-selection into a
-  row and Shift+C aligns it into a column.
+  row, Shift+C aligns it into a column, Shift+F fits a selection, and Shift+L
+  locks or unlocks it. F remains the whole-map Fit Devices shortcut.
 - Added Spider web, Hierarchy, and Grid automatic layout presets.
 - Added an analyst-selectable WAN anchor. Device details suggest interfaces
   named WAN, outside, internet, uplink, or external, permit any interface to be

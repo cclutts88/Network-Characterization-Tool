@@ -469,6 +469,10 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'title="Shift+C"' in html
     assert 'aria-keyshortcuts="Shift+R"' in html
     assert 'aria-keyshortcuts="Shift+C"' in html
+    assert 'id="fitSelection" class="secondary" title="Shift+F" aria-keyshortcuts="Shift+F"' in html
+    assert 'id="toggleSelectionLock" class="secondary" title="Shift+L" aria-keyshortcuts="Shift+L"' in html
+    assert "event.shiftKey&&key==='f'&&selectedNodeIds.size" in html
+    assert "event.shiftKey&&key==='l'&&selectedNodeIds.size" in html
     assert "$('toggleLasso').title='B'" in html
     assert "Ctrl+Z · Undo" in html
     assert 'aria-label="Map scaling controls"' in html
