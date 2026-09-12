@@ -141,6 +141,18 @@ an optional future mode within Reachability.
 - [ ] Record who made the change, when it changed, and the reason, and flag a
   later scan when its fingerprint disagrees with the analyst override.
 
+### Future extension — Evidence-Based OS Inference
+
+- [ ] Infer possible Windows, Linux, network-appliance, and other operating
+  system families from service fingerprints, banners, protocols, and retained
+  device evidence when an authoritative OS identification is unavailable.
+- [ ] Mark inferred operating systems with distinct text styling, an explicit
+  `inferred` label, confidence, and the evidence that contributed to the result.
+- [ ] Keep Nmap-detected and analyst-confirmed operating systems authoritative;
+  inferred values must never silently overwrite either source.
+- [ ] Let analysts confirm, dismiss, or investigate an inference while retaining
+  its original evidence and audit history.
+
 ### Future foundation — Multi-Analyst Workspaces
 
 - [ ] Add authenticated analyst identities and role-based permissions for shared
