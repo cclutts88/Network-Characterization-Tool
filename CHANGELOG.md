@@ -13,6 +13,18 @@
 - Added Direct and Right-angle trunks Map line styles. The right-angle option
   creates vertical drops and horizontal backbones while preserving the same
   topology evidence, hover detail, undo history, and private layout storage.
+- Added a Hybrid backbone map style that uses structured right-angle routes for
+  infrastructure links and direct lines for endpoint membership. Any selected
+  connection can override the map default and use a movable vertical-first or
+  horizontal-first bend.
+- Added optional 20- and 40-pixel object grids plus visual line magnets that
+  align nearby compatible trunks without inventing or combining evidence.
+- Added private Map markup with colored labels, rectangles, and ellipses. These
+  presentation objects can be moved, resized, edited, and saved in named browser
+  layouts without changing the shared network record.
+- Added Joined and Separate gateway presentation modes. Joined mode visually
+  combines a routed next-hop gateway with its containing subnet, moves the pair
+  together, and keeps router, subnet, and route evidence independently selectable.
 - Added Switch as a first-class Device collection type for Cisco, Juniper, and
   UniFi, with guarded vendor-specific read-only profiles for VLAN, port,
   forwarding-table, spanning-tree, aggregation, PoE, neighbor, and routing

@@ -241,6 +241,17 @@ within Reachability.
 - [x] Add Direct and Right-angle trunks connection styles so analysts can switch
   between compact web lines and conventional vertical-drop/horizontal-backbone
   diagram presentation without changing topology evidence.
+- [x] Add a Hybrid backbone default that keeps infrastructure links structured
+  and endpoint membership direct, plus per-connection style and direction
+  overrides with draggable, grid-aware bend handles.
+- [x] Add optional 20- and 40-pixel object grids and visual line magnets for
+  aligning compatible nearby trunks without creating or merging topology
+  evidence.
+- [x] Add an analyst-local Map markup layer with colored labels, rectangles, and
+  ellipses that can be moved, resized, edited, and retained in private layouts.
+- [x] Add an optional joined gateway presentation that visually groups a routed
+  next-hop device with the subnet containing its address, moves both parts as
+  one, and keeps their separate evidence records and outgoing routes intact.
 - [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
   the Map while retaining each CIDR as the stable technical identifier.
 - [ ] Add authenticated deliberately shared layouts when the multi-analyst

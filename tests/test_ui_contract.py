@@ -410,9 +410,34 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "updateEdgeGeometry" in html
     assert 'id="edgeStyle"' in html
     assert "Lines: Right-angle trunks" in html
-    assert "edgeStyle==='orthogonal'" in html
+    assert "function selectedEdgeIsOrthogonal" in html
     assert "edgeStyle=snapshot.edgeStyle||'direct'" in html
     assert "connection line style" in html
+    assert "Lines: Hybrid backbone" in html
+    assert 'id="edgeTools"' in html
+    assert 'id="edgeRouteStyle"' in html
+    assert "function effectiveConnectionStyle" in html
+    assert "function enableEdgeRouteHandle" in html
+    assert "edgeRoutes=new Map()" in html
+    assert 'id="gridSnap"' in html
+    assert "Grid: 20 px" in html
+    assert "Grid: 40 px" in html
+    assert "function snapCoordinate" in html
+    assert "gridSize" in html
+    assert 'id="lineMagnet"' in html
+    assert "lineMagnet" in html
+    assert 'id="annotationTools"' in html
+    assert 'id="addLabel"' in html
+    assert 'id="addBox"' in html
+    assert 'id="addEllipse"' in html
+    assert "annotations=new Map()" in html
+    assert "function renderAnnotations" in html
+    assert 'id="gatewayGrouping"' in html
+    assert "Gateway groups: Joined" in html
+    assert "Gateway groups: Separate" in html
+    assert "function applyGatewayCompoundLayout" in html
+    assert "function renderGatewayCompounds" in html
+    assert "function expandGatewayCompanions" in html
     assert "Shift-click boxes to select and move them together" in html
     assert "const selectedNodeIds=new Set()" in html
     assert "function selectMapNode" in html
@@ -481,7 +506,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function updateOverlayLegend" in html
     assert "overlay-exposure-dense" in html
     assert "overlay-gap-conflict" in html
-    assert "dragIds=(selectedNodeIds.has(node.id)" in html
+    assert "dragIds=expandGatewayCompanions(selectedNodeIds.has(node.id)" in html
     assert "currentNodeElements.get(id)?.setAttribute" in html
     assert 'id="selectionStatus"' in html
     assert "Config zone" in html
