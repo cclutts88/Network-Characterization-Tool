@@ -304,6 +304,11 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "basis-inferred" in html
     assert "renderMatchBasis(item)" in html
     assert "if(!(item.evidence_states||[]).includes('inferred'))return[]" in html
+    assert 'id="findingSummaryRows"' in html
+    assert "renderFindingSummaries(data.findings||[])" in html
+    assert "function anyHuntFilterActive()" in html
+    assert "Combined view · one entry per IP with all ports visible." in html
+    assert "Filtered view · individual matching findings." in html
     assert "Observed" in html
     assert "Correlated" in html
     assert "Configuration" in html
