@@ -5,6 +5,7 @@ import pytest
 from app import main
 from app.iptables_policy import parse_iptables_policy
 from app.reachability import (
+    build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
     parse_endpoint,
@@ -543,3 +544,52 @@ COMMIT
 
     assert result["matches"][0]["exposure"]["classification"] == "external_reachable"
     assert "not proof" in result["exposure_disclaimer"]
+
+
+def test_source_exposure_report_groups_unique_services_and_preserves_evidence_objects():
+    hunting = {
+        **HUNTING,
+        "findings": [
+            {**HUNTING["findings"][0], "category": "Web"},
+            {**HUNTING["findings"][0], "category": "Authentication"},
+        ],
+    }
+    searchsploit = {
+        "status": "searchsploit_complete",
+        "provider": {"available": True, "active_version": "test"},
+        "warnings": [],
+        "disclaimer": "Potential matches require validation.",
+        "matches": [{
+            "ip": "10.90.0.10",
+            "protocol": "tcp",
+            "port": 443,
+            "candidates": [{
+                "edb_id": "12345",
+                "title": "Example candidate",
+                "cves": ["CVE-2026-12345"],
+            }],
+        }],
+    }
+
+    result = build_source_exposure_report(
+        hunting=hunting,
+        saved_networks=SAVED,
+        device_analyses=[DEVICE],
+        searchsploit=searchsploit,
+    )
+
+    assert result["status"] == "source_exposure_report_complete"
+    assert result["service_count"] == 1
+    assert result["source_count"] == 3
+    assert result["evaluated_path_count"] == 3
+    assert result["searchsploit_candidate_count"] == 1
+    service = result["services"][0]
+    assert service["categories"] == ["Authentication", "Web"]
+    assert service["searchsploit"]["cves"] == ["CVE-2026-12345"]
+    sources = {item["name"]: item for item in result["sources"]}
+    assert sources["Servers"]["results"][0]["outcome"] == "Local"
+    users_path = sources["Users"]["results"][0]
+    assert users_path["outcome"] == "Expected Allowed"
+    assert users_path["retained_objects"]["routes"]
+    assert users_path["retained_objects"]["policy"]
+    assert "sends no network traffic" in result["disclaimer"]

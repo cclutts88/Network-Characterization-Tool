@@ -2,6 +2,11 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added on-demand source exposure reports to Reach. NCT now evaluates every
+  unique retained observed service from Internet and each Saved Network, groups
+  and filters the results, associates local SearchSploit candidates, preserves
+  complete route/policy/NAT objects and evidence, and exports a complete JSON
+  report without generating network traffic.
 - Added retained-path exposure classifications to Hunt SearchSploit matches.
   Potential CVE candidates can now be filtered by externally reachable,
   internal-only, local-segment, externally blocked, not exposed, or unknown,

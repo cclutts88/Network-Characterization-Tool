@@ -595,8 +595,11 @@ within Reachability.
     Show and filter conservative external, internal-only, local-segment,
     externally-blocked, not-exposed, and unknown classifications per matched
     service while keeping exploitability explicitly unconfirmed.
-- [ ] Group source-exposure reports by Saved Network and preserve policy objects
-  and evidence.
+- [x] Group on-demand source-exposure reports by Internet and Saved Network,
+  deduplicate Hunt dataset rows into unique observed services, preserve complete
+  route, ordered-policy, and NAT objects plus rendered evidence, correlate local
+  SearchSploit candidates, filter by source/outcome/candidate presence, and
+  export the complete evidence report as JSON without generating network traffic.
 - [ ] Send saved reachability results to the map for focused visualization.
 
 ### Device-role and switch evidence follow-up

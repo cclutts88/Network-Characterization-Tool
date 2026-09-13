@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from app.iptables_policy import evaluate_iptables_flow, evaluate_iptables_nat
+from app.ip_sort import ip_sort_key
 from app.vendor_policy import evaluate_vendor_policy
 
 
@@ -855,6 +857,11 @@ def evaluate_reachability(
         "service_observation": service["state"],
         "path": path,
         "evidence": evidence,
+        "retained_objects": {
+            "routes": routes,
+            "policy": policy,
+            "nat": translations,
+        },
         "caveats": list(dict.fromkeys(caveats)),
         "counts": {
             "routes": len(routes),
@@ -1059,5 +1066,228 @@ def classify_searchsploit_exposure(
         "exposure_disclaimer": (
             "Exposure describes the retained path to the matched service, not proof "
             "that a SearchSploit candidate is exploitable."
+        ),
+    }
+
+
+REPORT_OUTCOMES = (
+    "Expected Allowed",
+    "Routed",
+    "Local",
+    "Unknown",
+    "Expected Blocked",
+    "Not Exposed",
+)
+
+
+def _report_service_key(ip: object, protocol: object, port: object) -> str | None:
+    try:
+        address = ipaddress.ip_address(str(ip or "").strip())
+        protocol_text = str(protocol or "").strip().lower()
+        port_number = int(port or 0)
+    except (TypeError, ValueError):
+        return None
+    if address.version != 4 or protocol_text not in {"tcp", "udp"}:
+        return None
+    if not 1 <= port_number <= 65535:
+        return None
+    return f"{address}|{protocol_text}|{port_number}"
+
+
+def _exposure_report_services(hunting: dict, searchsploit: dict) -> list[dict]:
+    hosts_by_ip = {
+        str(item.get("ip") or ""): item for item in hunting.get("hosts") or []
+        if item.get("ip")
+    }
+    services: dict[str, dict] = {}
+    for finding in hunting.get("findings") or []:
+        if finding.get("evidence_kind") == "device_configuration":
+            continue
+        key = _report_service_key(
+            finding.get("ip"), finding.get("protocol"), finding.get("port")
+        )
+        if not key:
+            continue
+        host = hosts_by_ip.get(str(finding.get("ip") or ""), {})
+        service = services.setdefault(key, {
+            "service_key": key,
+            "host_key": finding.get("host_key") or host.get("host_key"),
+            "ip": str(finding.get("ip")),
+            "hostname": finding.get("hostname") or host.get("hostname"),
+            "mac": finding.get("mac") or host.get("mac"),
+            "vendor": finding.get("vendor") or host.get("vendor"),
+            "os": finding.get("os") or host.get("os"),
+            "subnet": finding.get("subnet") or host.get("subnet"),
+            "protocol": str(finding.get("protocol")).lower(),
+            "port": int(finding.get("port")),
+            "state": finding.get("state") or "open",
+            "service": finding.get("service"),
+            "product": finding.get("product"),
+            "version": finding.get("version"),
+            "categories": [],
+            "source_refs": [],
+            "searchsploit": {"candidate_count": 0, "cves": [], "candidates": []},
+        })
+        category = str(finding.get("category") or "").strip()
+        if category and category not in service["categories"]:
+            service["categories"].append(category)
+        for reference in finding.get("source_refs") or []:
+            if reference not in service["source_refs"]:
+                service["source_refs"].append(reference)
+        for field in ("hostname", "mac", "vendor", "os", "subnet", "service", "product", "version"):
+            if not service.get(field) and finding.get(field):
+                service[field] = finding.get(field)
+
+    candidate_keys: dict[str, set[tuple[str, str]]] = {}
+    for match in searchsploit.get("matches") or []:
+        key = _report_service_key(match.get("ip"), match.get("protocol"), match.get("port"))
+        if not key or key not in services:
+            continue
+        service = services[key]
+        seen = candidate_keys.setdefault(key, set())
+        for candidate in match.get("candidates") or []:
+            candidate_key = (
+                str(candidate.get("edb_id") or ""),
+                str(candidate.get("title") or ""),
+            )
+            if candidate_key in seen:
+                continue
+            seen.add(candidate_key)
+            service["searchsploit"]["candidates"].append(dict(candidate))
+    for service in services.values():
+        candidates = service["searchsploit"]["candidates"]
+        cves = sorted({
+            str(cve)
+            for candidate in candidates
+            for cve in candidate.get("cves") or []
+            if cve
+        })
+        service["categories"].sort()
+        service["searchsploit"]["candidate_count"] = len(candidates)
+        service["searchsploit"]["cves"] = cves
+    return sorted(
+        services.values(),
+        key=lambda item: (*ip_sort_key(item.get("ip")), item.get("protocol"), item.get("port")),
+    )
+
+
+def build_source_exposure_report(
+    *,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+    searchsploit: dict | None = None,
+) -> dict:
+    """Evaluate retained observed services from Internet and each Saved Network."""
+    searchsploit = searchsploit or {"status": "not_requested", "matches": []}
+    services = _exposure_report_services(hunting, searchsploit)
+    sources = [{
+        "source_id": "external:internet",
+        "kind": "external",
+        "name": "Internet",
+        "cidr": None,
+        "query": "Internet",
+    }]
+    seen_networks = set()
+    for network in saved_networks:
+        cidr = str(network.get("cidr") or "").strip()
+        if not cidr or cidr in seen_networks:
+            continue
+        try:
+            parsed = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if parsed.version != 4:
+            continue
+        seen_networks.add(cidr)
+        sources.append({
+            "source_id": f"saved:{network.get('saved_network_id') or cidr}",
+            "saved_network_id": network.get("saved_network_id"),
+            "kind": "saved_network",
+            "name": network.get("name") or cidr,
+            "cidr": cidr,
+            "query": cidr,
+        })
+
+    grouped_sources = []
+    outcome_order = {value: index for index, value in enumerate(REPORT_OUTCOMES)}
+    services_by_key = {item["service_key"]: item for item in services}
+    for source in sources:
+        counts = {outcome: 0 for outcome in REPORT_OUTCOMES}
+        results = []
+        for service in services:
+            try:
+                evaluation = evaluate_reachability(
+                    source_text=source["query"],
+                    destination_text=service["ip"],
+                    protocol=service["protocol"],
+                    port=service["port"],
+                    hunting=hunting,
+                    saved_networks=saved_networks,
+                    device_analyses=device_analyses,
+                )
+            except ValueError as exc:
+                evaluation = {
+                    "outcome": "Unknown",
+                    "confidence": "low",
+                    "explanation": str(exc),
+                    "query": {
+                        "source": source["query"],
+                        "destination": service["ip"],
+                        "protocol": service["protocol"],
+                        "port": service["port"],
+                    },
+                    "path": [],
+                    "evidence": [],
+                    "retained_objects": {"routes": [], "policy": [], "nat": []},
+                    "caveats": ["The retained service could not be evaluated."],
+                }
+            outcome = str(evaluation.get("outcome") or "Unknown")
+            counts[outcome] = counts.get(outcome, 0) + 1
+            results.append({
+                "service_key": service["service_key"],
+                "outcome": outcome,
+                "confidence": evaluation.get("confidence"),
+                "explanation": evaluation.get("explanation"),
+                "query": evaluation.get("query") or {},
+                "path": evaluation.get("path") or [],
+                "evidence": evaluation.get("evidence") or [],
+                "retained_objects": evaluation.get("retained_objects") or {},
+                "caveats": evaluation.get("caveats") or [],
+            })
+        results.sort(key=lambda item: (
+            outcome_order.get(item["outcome"], len(outcome_order)),
+            *ip_sort_key(services_by_key.get(item["service_key"], {}).get("ip")),
+            item.get("query", {}).get("port") or 0,
+        ))
+        grouped_sources.append({
+            **source,
+            "service_count": len(results),
+            "counts": counts,
+            "results": results,
+        })
+
+    candidate_count = sum(
+        int(service.get("searchsploit", {}).get("candidate_count") or 0)
+        for service in services
+    )
+    return {
+        "status": "source_exposure_report_complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "service_count": len(services),
+        "source_count": len(grouped_sources),
+        "evaluated_path_count": len(services) * len(grouped_sources),
+        "searchsploit_candidate_count": candidate_count,
+        "searchsploit": {
+            "status": searchsploit.get("status"),
+            "provider": searchsploit.get("provider"),
+            "warnings": list(searchsploit.get("warnings") or []),
+            "disclaimer": searchsploit.get("disclaimer"),
+        },
+        "services": services,
+        "sources": grouped_sources,
+        "disclaimer": (
+            "This report evaluates retained evidence only and sends no network traffic. "
+            "Expected reachability does not prove that a SearchSploit candidate is exploitable."
         ),
     }

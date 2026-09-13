@@ -65,6 +65,39 @@ def test_reachability_api_is_conservative_without_retained_evidence():
     assert result["confidence"] == "low"
 
 
+def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
+    hunting = {"hosts": [], "findings": []}
+    saved = [{"saved_network_id": "one", "name": "One", "cidr": "10.0.0.0/24"}]
+    devices = [{"run_id": "retained-device"}]
+    enrichment = {"status": "searchsploit_complete", "matches": []}
+    captured = {}
+
+    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: hunting)
+    monkeypatch.setattr("app.main.list_saved_networks", lambda _path: saved)
+    monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: devices)
+    monkeypatch.setattr(
+        "app.main.enrich_hunting_with_searchsploit", lambda value: enrichment
+    )
+
+    def fake_report(**values):
+        captured.update(values)
+        return {"status": "source_exposure_report_complete"}
+
+    monkeypatch.setattr("app.main.build_source_exposure_report", fake_report)
+
+    with TestClient(app) as client:
+        response = client.post("/api/reachability/exposure-report")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "source_exposure_report_complete"
+    assert captured == {
+        "hunting": hunting,
+        "saved_networks": saved,
+        "device_analyses": devices,
+        "searchsploit": enrichment,
+    }
+
+
 def test_preview_and_package_use_the_same_udp_settings_and_required_n():
     body = {
         "name": "UDP Baseline",

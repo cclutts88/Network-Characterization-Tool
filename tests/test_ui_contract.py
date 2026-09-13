@@ -5,6 +5,7 @@ from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
 from app.network_map_ui import network_map_page
+from app.reachability_ui import reachability_page
 from app.ui import operator_page
 
 
@@ -375,6 +376,15 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "contains no specific product/version fingerprints to search" in html
     assert "Service/version detection enabled" in html
     assert '/hunting?run=${encodeURIComponent(runId)}' in analysis_html
+
+
+def test_reachability_view_has_grouped_source_exposure_reports():
+    html = reachability_page().body.decode()
+    assert 'id="exposureReportPanel"' in html
+    assert 'id="generateReport"' in html
+    assert 'id="exportReport"' in html
+    assert "/api/reachability/exposure-report" in html
+    assert "Retained route, policy, and NAT objects" in html
 
 
 def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():

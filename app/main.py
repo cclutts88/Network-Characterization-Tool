@@ -25,7 +25,11 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
-from app.reachability import classify_searchsploit_exposure, evaluate_reachability
+from app.reachability import (
+    build_source_exposure_report,
+    classify_searchsploit_exposure,
+    evaluate_reachability,
+)
 from app.reachability_ui import reachability_page
 from app.saved_networks import list_saved_networks
 from app.ip_sort import ip_sort_key
@@ -1856,6 +1860,17 @@ def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.post("/api/reachability/exposure-report")
+def generate_source_exposure_report() -> dict:
+    hunting = analyze_hunting_network()
+    return build_source_exposure_report(
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+        searchsploit=enrich_hunting_with_searchsploit(hunting),
+    )
 
 
 @app.get("/api/hunting/compare")
