@@ -2,6 +2,16 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added a guided Test/Range installer that prompts for access, address, TLS,
+  ports, firewall scope, legacy-runtime consent, immutable image/offline
+  archive, acceptance receipt, authentication, and initial Administrator. It
+  supports a non-mutating plan, always preflights before deployment, and saves
+  only non-sensitive reset defaults after success. Fresh air-gapped hosts get a
+  separate checksum-verified image-staging prompt before exact-image preflight.
+- Made private-lab TLS generation certificate-only: it accepts an isolated
+  output directory, handles IP or DNS SANs, refuses to overwrite existing
+  material, and can no longer start Compose or rebuild containers as a side
+  effect.
 - Expanded Linux Range firewall preflight to identify active versus inactive
   firewalld/UFW, detect and reuse an existing exact rule, require an approved
   source CIDR before Range/Mission changes, verify created rules after reload,

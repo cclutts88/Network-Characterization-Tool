@@ -52,7 +52,7 @@ shell_result="pass"
 if ! sh -n "$script_dir/nct-deploy.sh"; then shell_result="fail"; fi
 
 test_result="pass"
-if ! (cd "$repo_dir" && python -m pytest -q -p no:cacheprovider tests/test_deploy_launcher.py) > "$tmp_test" 2>&1; then
+if ! (cd "$repo_dir" && python -m pytest -q -p no:cacheprovider tests/test_deploy_launcher.py tests/test_guided_installer.py) > "$tmp_test" 2>&1; then
     test_result="fail"
 fi
 
@@ -75,7 +75,7 @@ overall="pass"
     printf 'completed=%s\noverall=%s\nimage=%s\n' "$(date -u +%FT%TZ)" "$overall" "${image:-not-supplied}"
     printf '\n%-34s %-12s %s\n' "Scenario" "Result" "Evidence"
     printf '%-34s %-12s %s\n' "Launcher shell syntax" "$shell_result" "sh -n"
-    printf '%-34s %-12s %s\n' "Automated deployment matrix" "$test_result" "tests/test_deploy_launcher.py"
+    printf '%-34s %-12s %s\n' "Automated deployment matrix" "$test_result" "deployment and guided-installer pytest"
     printf '%-34s %-12s %s\n' "Compose v2" "$test_result" "simulated supported tier"
     printf '%-34s %-12s %s\n' "Legacy Compose v1" "$test_result" "simulated degraded tier"
     printf '%-34s %-12s %s\n' "Direct Docker Engine" "$test_result" "simulated degraded tier"
@@ -85,6 +85,7 @@ overall="pass"
     printf '%-34s %-12s %s\n' "Offline image checksum" "$test_result" "valid, missing, and mismatch paths"
     printf '%-34s %-12s %s\n' "Occupied host port" "$test_result" "alternate-port selection"
     printf '%-34s %-12s %s\n' "Range firewall preflight" "$test_result" "active/present/missing/inactive fixtures"
+    printf '%-34s %-12s %s\n' "Guided installer prompts" "$test_result" "Test/Range plans and TLS generation"
     printf '%-34s %-12s %s\n' "Existing NCT and active work" "$test_result" "preserve idle; reject active"
     printf '%-34s %-12s %s\n' "Promotion receipt identity" "$test_result" "exact match and mismatch"
     printf '%-34s %-12s %s\n' "Real host/image preflight" "$preflight_result" "optional --image check-only"

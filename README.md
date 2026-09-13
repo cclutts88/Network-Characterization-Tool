@@ -81,8 +81,22 @@ SearchSploit database, and visualizes retained topology evidence.
 
 ## Run
 
-For a controlled Linux Docker Test or Range deployment, start with the rapid
-launcher in check-only mode. Every profile requires an explicit versioned image
+For a controlled Linux Docker Test or Range deployment, start with the guided
+installer. It asks for the deployment type, address, ports, firewall scope,
+TLS choice, image, acceptance receipt, and initial Administrator, then runs a
+non-destructive preflight before asking for final installation approval:
+
+```bash
+sudo sh scripts/install-nct.sh
+```
+
+Use `--plan-only` to review the questions and resulting plan without generating
+certificates, loading images, changing the firewall, or starting containers.
+After a successful installation, non-sensitive answers are retained under
+`nct-deployment` for the next reset; passwords are never stored in that preset.
+
+For advanced or unattended operation, use the rapid launcher directly in
+check-only mode. Every profile requires an explicit versioned image
 with embedded application/build identity; mutable `:latest` references are
 rejected. The launcher validates the Docker runtime, existing NCT
 instance and data volume, active operations, access address, ports, firewall
@@ -104,25 +118,29 @@ Use the [Range compatibility matrix](docs/RANGE_COMPATIBILITY_MATRIX.md) to run
 the repeatable non-destructive deployment scenarios and optionally include a
 real `--check-only` preflight for one immutable local image.
 
-For a first-time private-lab HTTPS installation:
+To generate private-lab TLS material without starting any containers:
 
 ```bash
-sh scripts/setup-lab-https.sh SERVER_IP
+sh scripts/setup-lab-https.sh SERVER_IP nct-deployment/tls-material
 ```
 
-Install `http://SERVER-IP/nct-lab-root.crt` once in each operator computer's **Trusted Root Certification Authorities** store. Then open `https://SERVER-IP`.
-
-The HTTPS proxy exposes ports 80 and 443. Analyzer port 8080 is bound only to the server's loopback interface. See [Private-lab HTTPS setup](docs/HTTPS_LAB_SETUP.md) for the complete setup and certificate-trust steps.
+Transfer the generated public `nct-lab-root.crt` to each operator workstation
+through the approved process and install it in **Trusted Root Certification
+Authorities**. Never transfer the CA or server private key. The guided installer
+automates this generation option and prints the verified final address. See
+[Private-lab HTTPS setup](docs/HTTPS_LAB_SETUP.md) for the complete trust steps.
 
 The automated **Run now** path requires the container capabilities and bundled Nmap/FPING/tcpdump tools. It starts tcpdump on the selected analyzer interface and retains the PCAP with the scan evidence. **Generate package** creates a portable certified package without starting a scan on the analyzer.
 
 ## Air-gapped run
 
-If an offline image is supplied with a release package, load it and start the containers without building:
+If an offline image is supplied with a release package, start the guided
+installer and choose **Air-gapped / offline installation**. It will request the
+versioned image name and archive, calculate or confirm the SHA-256, run the safe
+preflight, and deploy without building or pulling:
 
 ```bash
-docker load -i offline-images/IMAGE_NAME.tar.gz
-docker compose up -d --no-build
+sudo sh scripts/install-nct.sh
 ```
 
 Rebuild and export a new image whenever source changes are incorporated into an offline release.
@@ -143,7 +161,10 @@ requires roughly the same additional installed space.
 
 ## Persistent and sensitive data
 
-Runtime data is stored in `./data`; logs and optional device keys use `./logs` and `./keys`. Certificates and Caddy runtime state use `./certs`, `./tls`, `./caddy-data`, and `./caddy-config`. These paths, databases, PCAPs, key material, offline images, and generated packages are excluded from Git by `.gitignore`.
+Runtime data is stored in `./data`; logs and optional device keys use `./logs`
+and `./keys`. Deployment receipts, presets, generated TLS material, and backups
+use `./nct-deployment`. These paths, databases, PCAPs, key material, offline
+images, and generated packages are excluded from Git by `.gitignore`.
 
 Never commit operational scan evidence, credentials, private certificate keys, or device configuration captures.
 

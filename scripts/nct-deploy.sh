@@ -259,7 +259,9 @@ if [ -n "$image_archive" ]; then
     command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify the image archive."
     actual_sha=$(sha256sum "$image_archive" | awk '{print $1}')
     [ "$actual_sha" = "$image_sha256" ] || die "Image archive checksum does not match."
-    [ "$check_only" = "yes" ] || docker load -i "$image_archive" >/dev/null
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+        [ "$check_only" = "yes" ] || docker load -i "$image_archive" >/dev/null
+    fi
 fi
 
 if ! docker image inspect "$image" >/dev/null 2>&1; then

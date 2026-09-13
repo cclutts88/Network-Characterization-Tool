@@ -1,5 +1,29 @@
 # NCT rapid deployment launcher
 
+The normal operator entry point is the guided installer:
+
+```sh
+sudo sh scripts/install-nct.sh
+```
+
+It supplies built-in prompts for Test/Range selection, local or LAN access,
+server address, HTTPS generation or existing certificate paths, available port,
+firewall approval and source CIDR, legacy-runtime consent when detected,
+versioned image and offline archive, Test acceptance receipt, authentication,
+and the initial Administrator. It shows a concise review, runs the launcher's
+non-mutating preflight, and asks once more before deployment. `--plan-only`
+completes the guided review without changing any state.
+
+On a fresh air-gapped host, the installer explicitly asks before verifying and
+loading the offline image into Docker's local cache. This staging step changes
+no container, port, firewall rule, or NCT data; it makes the exact image
+available so the subsequent preflight can verify its build and Test receipt.
+
+After a successful deployment it saves only non-sensitive defaults in
+`nct-deployment/range-preset.env`. Passwords are generated or entered through
+the underlying secret-file workflow and never enter the preset. Operators who
+need automation can continue to call `nct-deploy.sh` directly.
+
 The launcher is intended for controlled Linux Docker hosts. It validates the
 runtime, image, ports, access boundary, firewall posture, TLS material,
 persistent volume, active work, backup, health, and rollback path before it

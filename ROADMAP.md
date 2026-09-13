@@ -291,6 +291,10 @@ within Reachability.
 - [x] Provide an operator-friendly rapid deployment launcher that performs a
   complete preflight, deployment or upgrade, health check, and final access
   handoff without requiring the operator to assemble Docker commands manually.
+  - [x] Add a guided Test/Range installer with built-in prompts, a final review,
+    a non-mutating plan mode, automatic preflight before deployment, private-lab
+    TLS generation, initial Administrator setup, and a reusable non-sensitive
+    Range preset for frequently reset VMs.
 - [x] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
   profiles with different acceptance rules rather than treating every host as
   equivalent:
