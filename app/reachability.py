@@ -78,7 +78,9 @@ def _is_transit_device(analysis: dict) -> bool:
 def _default_route_interface(analysis: dict) -> str | None:
     for route in (analysis.get("route_analysis") or {}).get("routes") or []:
         if str(route.get("network") or "") in {"0.0.0.0/0", "default"}:
-            return str(route.get("interface") or "") or None
+            interface = str(route.get("interface") or "") or None
+            if interface:
+                return interface
     return None
 
 
@@ -174,13 +176,17 @@ def _endpoint_interface(endpoint: Endpoint, analysis: dict, *, role: str | None 
             if item.get("role") == "external":
                 candidates.append((0, str(item.get("name") or "")))
             continue
-        if endpoint.kind != "host" or endpoint.value is None:
+        if endpoint.kind not in {"host", "network"} or endpoint.value is None:
             continue
         try:
             network = ipaddress.ip_network(str(item.get("network") or ""), strict=False)
         except ValueError:
             continue
-        if endpoint.value in network:
+        if (
+            endpoint.kind == "host" and endpoint.value in network
+        ) or (
+            endpoint.kind == "network" and endpoint.value.subnet_of(network)
+        ):
             candidates.append((network.prefixlen, str(item.get("name") or "")))
     if endpoint.kind == "external" and not candidates:
         default_interface = _default_route_interface(analysis)

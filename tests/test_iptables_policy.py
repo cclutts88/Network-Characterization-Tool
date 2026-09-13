@@ -57,7 +57,101 @@ def test_ordered_policy_continues_to_later_deny_when_set_does_not_match():
     assert result["rule"]["rule_order"] == 2
 
 
-def test_unsupported_application_match_stops_without_guessing():
+def test_subnet_query_and_earlier_drop_or_continue_branch_converge_on_deny():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+:THREAT_CHECK - [0:0]
+:WAN_TO_LAN - [0:0]
+-A FORWARD -j THREAT_CHECK
+-A FORWARD -i wan -o lan -j WAN_TO_LAN
+-A THREAT_CHECK -m set --match-set THREAT_SOURCES src -j DROP
+-A WAN_TO_LAN -m set --match-set DEFAULT_NET dst -m set --match-set SSH_PORT dst -j DROP
+COMMIT
+create THREAT_SOURCES hash:net family inet
+add THREAT_SOURCES 203.0.113.0/24
+create DEFAULT_NET hash:net family inet
+add DEFAULT_NET 10.0.0.0/24
+create SSH_PORT bitmap:port range 0-65535
+add SSH_PORT 22
+""")
+
+    result = evaluate_iptables_flow(
+        policy,
+        source=None, destination="10.0.0.0/24",
+        protocol="tcp", port=22, source_external=True,
+        input_interface="wan", output_interface="lan",
+    )
+
+    assert result["status"] == "decided"
+    assert result["verdict"] == "deny"
+    assert result["rule"]["chain"] == "WAN_TO_LAN"
+    assert "same verdict" in " ".join(result["match_basis"])
+
+
+def test_subnet_query_only_matches_when_fully_covered_by_policy_network():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -d 10.0.0.0/24 -j ACCEPT
+COMMIT
+""")
+
+    covered = evaluate_iptables_flow(
+        policy, source="192.0.2.10", destination="10.0.0.0/25",
+        protocol="tcp", port=443,
+    )
+    partial = evaluate_iptables_flow(
+        policy, source="192.0.2.10", destination="10.0.0.0/23",
+        protocol="tcp", port=443,
+    )
+
+    assert covered["verdict"] == "allow"
+    assert partial["status"] == "unknown"
+
+
+def test_external_source_never_matches_unspecified_ipv4_sentinel():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -s 0.0.0.0/32 -j RETURN
+-A FORWARD -p tcp --dport 22 -j DROP
+COMMIT
+""")
+
+    result = evaluate_iptables_flow(
+        policy, source=None, destination="10.0.0.2",
+        protocol="tcp", port=22, source_external=True,
+    )
+
+    assert result["status"] == "decided"
+    assert result["verdict"] == "deny"
+    assert result["rule"]["rule_order"] == 2
+
+
+def test_uncertain_return_or_drop_precheck_converges_on_later_deny():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+:GEO_PRECHECK - [0:0]
+:WAN_TO_LAN - [0:0]
+-A FORWARD -i wan -j GEO_PRECHECK
+-A FORWARD -i wan -o lan -j WAN_TO_LAN
+-A GEO_PRECHECK -s 198.51.100.0/24 -j RETURN
+-A GEO_PRECHECK -m geoip --source-country ZZ -j DROP
+-A GEO_PRECHECK -j RETURN
+-A WAN_TO_LAN -p tcp --dport 22 -j DROP
+COMMIT
+""")
+
+    result = evaluate_iptables_flow(
+        policy, source=None, destination="10.0.0.2",
+        protocol="tcp", port=22, source_external=True,
+        input_interface="wan", output_interface="lan",
+    )
+
+    assert result["status"] == "decided"
+    assert result["verdict"] == "deny"
+    assert result["rule"]["chain"] == "WAN_TO_LAN"
+
+
+def test_unsupported_drop_match_can_converge_with_later_drop():
     text = POLICY.replace(
         "-A USER_POLICY -p tcp -m set --match-set CLIENTS src -m set --match-set WEB_PORTS dst -j ACCEPT",
         "-A USER_POLICY -m set --match-set CLIENTS src -m dpi32 --cat-app 4,112 -j DROP",
@@ -68,9 +162,9 @@ def test_unsupported_application_match_stops_without_guessing():
         protocol="tcp", port=443, input_interface="br0", output_interface="br5",
     )
 
-    assert result["status"] == "unknown"
-    assert "unresolved match criteria" in result["reason"]
-    assert "Unsupported match: dpi32" in result["match_basis"]
+    assert result["status"] == "decided"
+    assert result["verdict"] == "deny"
+    assert "same verdict" in " ".join(result["match_basis"])
 
 
 def test_incomplete_retained_membership_never_returns_a_verdict():

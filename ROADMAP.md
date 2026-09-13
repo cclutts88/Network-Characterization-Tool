@@ -555,6 +555,11 @@ within Reachability.
     preview, and resolve IP/network/port sets while walking ordered `FORWARD` and
     user chains. Stop at Unknown for unsupported DPI, GeoIP, missing membership,
     or truncated policy evidence rather than inferring a verdict.
+    - [x] Match host and subnet Reach inputs against retained network objects,
+      select a usable WAN route when metadata-only defaults have no interface,
+      and carry drop-or-continue prechecks forward when every possible branch
+      converges on the same explicit deny. Unsupported criteria remain Unknown
+      whenever they could change the final verdict.
   - [x] Walk retained UniFi NAT `PREROUTING` and nested chains before firewall
     evaluation. Resolve supported DNAT address/port changes and local redirects,
     show the original and effective destination in Reach, and use the translated

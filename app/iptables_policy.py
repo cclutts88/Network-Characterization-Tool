@@ -225,9 +225,20 @@ def _network_match(endpoint: object, network_text: str, *, external: bool) -> bo
     if network.version != 4:
         return False
     if external:
+        if network.prefixlen == 32 and network.network_address.is_unspecified:
+            return False
         return True if network.prefixlen == 0 else None
-    address = _endpoint_ip(endpoint)
-    return address in network if address is not None else None
+    try:
+        selected = ipaddress.ip_network(str(endpoint), strict=False)
+    except ValueError:
+        return None
+    if selected.version != 4:
+        return False
+    if selected.subnet_of(network):
+        return True
+    if not selected.overlaps(network):
+        return False
+    return None
 
 
 def _port_match(port: int, specification: str) -> bool | None:
@@ -419,12 +430,32 @@ def evaluate_iptables_flow(
     }
     trace = []
 
+    def chain_verdicts(chain: str, stack: tuple[str, ...] = ()) -> tuple[set[str], bool]:
+        if chain in stack or len(stack) >= 24 or chain not in rules_by_chain:
+            return set(), False
+        verdicts: set[str] = set()
+        complete = True
+        for rule in rules_by_chain[chain]:
+            action = str(rule.get("action") or "").upper()
+            if action in TERMINAL_TARGETS:
+                verdicts.add(TERMINAL_TARGETS[action])
+            elif action in NON_TERMINAL_TARGETS or action in {"", "RETURN"}:
+                continue
+            else:
+                nested_verdicts, nested_complete = chain_verdicts(action, stack + (chain,))
+                verdicts.update(nested_verdicts)
+                complete = complete and nested_complete
+        return verdicts, complete
+
     def walk(chain: str, stack: tuple[str, ...]) -> dict:
         if chain in stack or len(stack) >= 24:
             return {"status": "unknown", "reason": f"Policy chain recursion could not be resolved at {chain}."}
         if chain not in rules_by_chain and chain not in (policy.get("chain_policies") or {}):
             return {"status": "unknown", "reason": f"Referenced policy chain {chain} was not retained."}
-        for rule in rules_by_chain.get(chain, []):
+        possible_prior_verdicts: set[str] = set()
+        possible_prior_rules = []
+        chain_rules = rules_by_chain.get(chain, [])
+        for rule_index, rule in enumerate(chain_rules):
             matched, basis = _rule_matches(rule, context, ipsets)
             if matched is False:
                 continue
@@ -432,6 +463,38 @@ def evaluate_iptables_flow(
             if matched is None:
                 if action in NON_TERMINAL_TARGETS:
                     continue
+                if action in TERMINAL_TARGETS:
+                    possible_prior_verdicts.add(TERMINAL_TARGETS[action])
+                    possible_prior_rules.append(f"{chain} #{rule.get('rule_order')}")
+                    continue
+                if action == "RETURN":
+                    remaining_verdicts: set[str] = set()
+                    remaining_complete = True
+                    for later_rule in chain_rules[rule_index + 1:]:
+                        later_action = str(later_rule.get("action") or "").upper()
+                        if later_action in TERMINAL_TARGETS:
+                            remaining_verdicts.add(TERMINAL_TARGETS[later_action])
+                        elif later_action in NON_TERMINAL_TARGETS or later_action in {"", "RETURN"}:
+                            continue
+                        else:
+                            nested_verdicts, nested_complete = chain_verdicts(later_action)
+                            remaining_verdicts.update(nested_verdicts)
+                            remaining_complete = remaining_complete and nested_complete
+                    if remaining_complete:
+                        return {
+                            "status": "return", "trace": trace.copy(),
+                            "possible_verdicts": sorted(possible_prior_verdicts | remaining_verdicts),
+                            "possible_rules": [
+                                *possible_prior_rules,
+                                f"{chain} #{rule.get('rule_order')}",
+                            ],
+                        }
+                if action not in {"", "RETURN"}:
+                    possible, complete = chain_verdicts(action)
+                    if complete:
+                        possible_prior_verdicts.update(possible)
+                        possible_prior_rules.append(f"{chain} #{rule.get('rule_order')}")
+                        continue
                 return {
                     "status": "unknown",
                     "reason": f"Rule {chain} #{rule.get('rule_order')} may affect the flow but contains unresolved match criteria.",
@@ -444,10 +507,22 @@ def evaluate_iptables_flow(
                 "action": action, "evidence": rule.get("evidence"), "match_basis": basis,
             })
             if action in TERMINAL_TARGETS:
+                verdict = TERMINAL_TARGETS[action]
+                if possible_prior_verdicts - {verdict}:
+                    return {
+                        "status": "unknown",
+                        "reason": "Earlier unresolved match criteria could produce a conflicting verdict.",
+                        "rule": rule, "match_basis": basis, "trace": trace.copy(),
+                    }
+                if possible_prior_verdicts:
+                    basis = [
+                        *basis,
+                        "Earlier unresolved branches could only reach the same verdict or continue",
+                    ]
                 return {
-                    "status": "decided", "verdict": TERMINAL_TARGETS[action],
+                    "status": "decided", "verdict": verdict,
                     "action": action, "rule": rule, "match_basis": basis,
-                    "trace": trace.copy(),
+                    "trace": trace.copy(), "converged_rules": possible_prior_rules,
                 }
             if action == "RETURN":
                 return {"status": "return", "trace": trace.copy()}
@@ -455,16 +530,51 @@ def evaluate_iptables_flow(
                 continue
             nested = walk(action, stack + (chain,))
             if nested["status"] == "return":
+                possible_prior_verdicts.update(nested.get("possible_verdicts") or [])
+                possible_prior_rules.extend(nested.get("possible_rules") or [])
                 continue
+            if (
+                nested.get("status") == "decided"
+                and possible_prior_verdicts
+                and not (possible_prior_verdicts - {nested.get("verdict")})
+            ):
+                nested["match_basis"] = [
+                    *(nested.get("match_basis") or []),
+                    "Earlier unresolved branches could only reach the same verdict or continue",
+                ]
+                nested["converged_rules"] = [
+                    *possible_prior_rules, *(nested.get("converged_rules") or []),
+                ]
+            elif nested.get("status") == "decided" and possible_prior_verdicts:
+                return {
+                    "status": "unknown",
+                    "reason": "Earlier unresolved match criteria could produce a conflicting verdict.",
+                    "trace": nested.get("trace") or trace.copy(),
+                }
             return nested
         policy_action = str((policy.get("chain_policies") or {}).get(chain) or "-").upper()
         if not stack and policy_action in TERMINAL_TARGETS:
+            verdict = TERMINAL_TARGETS[policy_action]
+            if possible_prior_verdicts - {verdict}:
+                return {
+                    "status": "unknown",
+                    "reason": "Earlier unresolved match criteria could produce a conflicting verdict.",
+                    "trace": trace.copy(),
+                }
             return {
-                "status": "decided", "verdict": TERMINAL_TARGETS[policy_action],
+                "status": "decided", "verdict": verdict,
                 "action": policy_action, "rule": None,
-                "match_basis": [f"{chain} default policy"], "trace": trace.copy(),
+                "match_basis": [
+                    f"{chain} default policy",
+                    *(["Earlier unresolved branches could only reach the same verdict or continue"] if possible_prior_verdicts else []),
+                ],
+                "trace": trace.copy(), "converged_rules": possible_prior_rules,
             }
-        return {"status": "return", "trace": trace.copy()}
+        return {
+            "status": "return", "trace": trace.copy(),
+            "possible_verdicts": sorted(possible_prior_verdicts),
+            "possible_rules": possible_prior_rules,
+        }
 
     if not policy.get("complete", False):
         return {

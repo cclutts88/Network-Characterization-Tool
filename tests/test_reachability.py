@@ -226,6 +226,35 @@ COMMIT
     assert result["query"]["effective_destination"] == "10.90.0.10"
 
 
+def test_external_source_skips_metadata_default_route_without_interface():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i outside -o inside -p tcp --dport 22 -j DROP
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "outside", "address": "198.51.100.2/24", "network": "198.51.100.0/24", "role": "unclassified"},
+            {"name": "inside", "address": "10.80.0.1/24", "network": "10.80.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "via": "127.0.0.1", "interface": None},
+            {"network": "0.0.0.0/0", "via": "198.51.100.1", "interface": "outside"},
+            {"network": "10.80.0.0/24", "interface": "inside", "direct": True},
+        ]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="10.80.0.0/24", port=22,
+        device_analyses=[device], hunting={"hosts": [], "findings": []},
+    )
+
+    assert result["outcome"] == "Expected Blocked"
+    assert result["counts"]["policy_decisions"] == 1
+
+
 def test_source_masquerade_uses_outgoing_interface_address_in_reach():
     policy = parse_iptables_policy("""*nat
 :POSTROUTING ACCEPT [0:0]

@@ -21,6 +21,10 @@
   instead of being guessed. Corrected gateway identity collection to request the
   supported `ubnt-device-info summary` form and preserved exact Linux bridge
   interface names for policy path matching.
+- Corrected Reach handling for explicit UniFi denies applied to a Saved Network.
+  CIDR inputs now match retained network objects as ranges, metadata-only default
+  routes no longer hide the usable WAN interface, and drop-or-continue threat
+  prechecks can converge on a later explicit deny without guessing their match.
 - Added ordered UniFi destination-NAT and local-redirect evaluation. Reach now
   shows the original and translated address/port, then evaluates retained
   routes, observed services, and firewall policy against the effective target.
