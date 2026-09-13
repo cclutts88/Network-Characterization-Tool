@@ -425,29 +425,13 @@ within Reachability.
 - [x] Write a concise deployment log containing the preflight decisions,
   versions, selected ports, upgrade/rollback outcome, and final URL without
   recording credentials or sensitive application evidence.
-- [x] Show a terminal-safe NCT success banner only after the deployed health
-  check passes, including a skull with a sombrero and mustache, followed by the
-  verified access URL. The intended spirit is:
+- [x] Show a concise, terminal-safe NCT success summary only after the deployed
+  health check passes, followed by the verified access URL and build details.
 
 ```text
-                 __..---..__
-            _.-'             '-._
-       _.-'___     /\ /\     ___'-._
-     .'_______\___/  V  \___/_______'.
-    /_________________________________\
-             .-============-.
-            /    _      _    \
-           |    (x)    (x)    |
-           |         /\        |
-           |    __.-'  '-.__   |
-           | .-'   \____/   '-.|
-            \      ||||||     /
-             '._   ||||||  _.'
-                '--|_||_|--'
-
-                    N C T
-        Network Characterization Tool
-       Available at https://x.x.x.x:443
+NCT - Network Characterization Tool
+Deployment verified.
+Available at https://x.x.x.x:443
 ```
 
 ### Future extension — Analyst Identity Overrides

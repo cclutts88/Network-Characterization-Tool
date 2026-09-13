@@ -657,24 +657,9 @@ swap_started="no"
 
 cat <<EOF
 
-                 __..---..__
-            _.-'             '-._
-       _.-'___     /\ /\     ___'-._
-     .'_______\___/  V  \___/_______'.
-    /_________________________________\\
-             .-============-.
-            /    _      _    \\
-           |    (x)    (x)    |
-           |         /\        |
-           |    __.-'  '-.__   |
-           | .-'   \____/   '-.|
-            \      ||||||     /
-             '._   ||||||  _.'
-                '--|_||_|--'
-
-                    N C T
-        Network Characterization Tool
-       Available at $access_url
+NCT - Network Characterization Tool
+Deployment verified.
+Available at $access_url
 
 EOF
 say "Verified build $reported_build. Previous container: ${rollback_name:-none}. Backup: $backup_file"
