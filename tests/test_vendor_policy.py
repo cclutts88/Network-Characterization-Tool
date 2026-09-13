@@ -218,6 +218,66 @@ pass in quick on em1 inet proto tcp from &lt;USERS&gt; to &lt;SERVERS&gt; port =
     assert result["verdict"] == "allow"
 
 
+def test_pfsense_dns_alias_uses_retained_runtime_table_snapshot():
+    text = """<aliases>
+<alias><name>WEB_FQDN</name><type>host</type><address>app.example.test</address></alias>
+</aliases>
+__NCT_PF_TABLE__ WEB_FQDN
+10.90.0.10
+pass in quick on em1 inet proto tcp from any to &lt;WEB_FQDN&gt; port = 443
+"""
+    policy = parse_vendor_policy(text)
+    result = evaluate_vendor_policy(
+        policy,
+        source="10.80.0.25", destination="10.90.0.10",
+        protocol="tcp", port=443,
+        input_interface="em1", output_interface="em2",
+    )
+
+    assert result["status"] == "decided"
+    assert result["verdict"] == "allow"
+    assert any("Resolved dynamic object WEB_FQDN" in item for item in result["match_basis"])
+    inventory = {item["name"]: item for item in policy["object_inventory"]}
+    assert inventory["WEB_FQDN"]["dynamic"] is True
+    assert inventory["WEB_FQDN"]["complete"] is True
+    assert inventory["WEB_FQDN"]["resolution_source"] == "Retained pfctl runtime table snapshot"
+
+
+def test_dns_alias_without_retained_runtime_membership_remains_unknown():
+    text = """<aliases>
+<alias><name>WEB_FQDN</name><type>host</type><address>app.example.test</address></alias>
+</aliases>
+pass in quick on em1 inet proto tcp from any to &lt;WEB_FQDN&gt; port = 443
+"""
+    result = evaluate_vendor_policy(
+        parse_vendor_policy(text),
+        source="10.80.0.25", destination="10.90.0.10",
+        protocol="tcp", port=443,
+        input_interface="em1", output_interface="em2",
+    )
+
+    assert result["status"] == "unknown"
+
+
+def test_cisco_fqdn_object_is_retained_but_not_guessed_without_runtime_membership():
+    text = """object network WEB_FQDN
+ fqdn v4 app.example.test
+access-list OUTSIDE_IN extended permit tcp any object WEB_FQDN eq 443
+access-group OUTSIDE_IN in interface outside
+"""
+    policy = parse_vendor_policy(text)
+    result = evaluate_vendor_policy(
+        policy,
+        source=None, destination="10.90.0.10", protocol="tcp", port=443,
+        source_external=True, input_interface="outside", output_interface="inside",
+    )
+
+    assert result["status"] == "unknown"
+    inventory = {item["name"]: item for item in policy["object_inventory"]}
+    assert inventory["WEB_FQDN"]["dynamic"] is True
+    assert inventory["WEB_FQDN"]["complete"] is False
+
+
 def test_juniper_zone_address_sets_and_custom_application_sets_are_resolved():
     text = """set security zones security-zone trust interfaces ge-0/0/1.0
 set security zones security-zone servers interfaces ge-0/0/2.0

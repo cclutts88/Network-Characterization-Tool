@@ -155,12 +155,21 @@ def _parse_cisco_objects(text: str) -> tuple[dict[str, dict], dict[str, dict]]:
         if current_kind == "address":
             item = addresses[current_name]
             host_match = re.match(r"^(?:network-object\s+)?host\s+(\S+)$", line, re.I)
+            fqdn_match = re.match(r"^fqdn(?:\s+v4)?\s+(\S+)$", line, re.I)
             subnet_match = re.match(r"^(?:network-object\s+|subnet\s+)?(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})$", line, re.I)
             cidr_match = re.match(r"^(?:network-object\s+)?(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})$", line, re.I)
             reference = re.match(r"^(?:group-object|network-object object)\s+(\S+)$", line, re.I)
             range_match = re.match(r"^(?:network-object\s+)?range\s+(\S+)\s+(\S+)$", line, re.I)
-            if host_match:
-                item["members"].append({"value": f"{host_match.group(1)}/32"})
+            if fqdn_match:
+                item["members"].append({"dns_name": fqdn_match.group(1)})
+                item["dynamic"] = True
+                item["resolution_source"] = "No retained runtime resolution"
+                item["complete"] = False
+            elif host_match:
+                try:
+                    item["members"].append({"value": f"{ipaddress.IPv4Address(host_match.group(1))}/32"})
+                except ipaddress.AddressValueError:
+                    item["complete"] = False
             elif subnet_match and (network := _network_from_mask(*subnet_match.groups())):
                 item["members"].append({"value": network})
             elif cidr_match:
@@ -253,7 +262,7 @@ def _parse_vyos_groups(text: str) -> tuple[dict[str, dict], dict[str, dict], dic
     services: dict[str, dict] = {}
     interfaces: dict[str, dict] = {}
     pattern = re.compile(
-        r"^set firewall group (address-group|network-group|port-group|interface-group) "
+        r"^set firewall group (address-group|network-group|domain-group|port-group|interface-group) "
         r"(\S+) (address|network|port|interface) (.+)$",
         re.I,
     )
@@ -265,9 +274,14 @@ def _parse_vyos_groups(text: str) -> tuple[dict[str, dict], dict[str, dict], dic
         group_type, name, _, raw_value = match.groups()
         value = raw_value.replace("'", "").replace('"', "").strip()
         group_type = group_type.lower()
-        if group_type in {"address-group", "network-group"}:
+        if group_type in {"address-group", "network-group", "domain-group"}:
             item = addresses.setdefault(name, _empty_object("address", line))
-            if group_type == "address-group" and "-" in value:
+            if group_type == "domain-group":
+                item["members"].append({"dns_name": value})
+                item["dynamic"] = True
+                item["resolution_source"] = "No retained runtime resolution"
+                item["complete"] = False
+            elif group_type == "address-group" and "-" in value:
                 start, end = value.split("-", 1)
                 try:
                     ipaddress.IPv4Address(start)
@@ -340,11 +354,11 @@ def _parse_vyos(text: str) -> dict:
                 item["protocol"] = value.lower()
             elif field == "source" and value.lower().startswith("address "):
                 item["source"] = value.split(maxsplit=1)[1]
-            elif field == "source" and re.match(r"^group (?:address-group|network-group) \S+$", value, re.I):
+            elif field == "source" and re.match(r"^group (?:address-group|network-group|domain-group) \S+$", value, re.I):
                 item["source"] = "@" + value.split()[-1]
             elif field == "destination" and value.lower().startswith("address "):
                 item["destination"] = value.split(maxsplit=1)[1]
-            elif field == "destination" and re.match(r"^group (?:address-group|network-group) \S+$", value, re.I):
+            elif field == "destination" and re.match(r"^group (?:address-group|network-group|domain-group) \S+$", value, re.I):
                 item["destination"] = "@" + value.split()[-1]
             elif field == "destination" and value.lower().startswith("port "):
                 item["destination_port"] = _port(value.split(maxsplit=1)[1])
@@ -391,7 +405,31 @@ def _xml_tag(block: str, name: str) -> str:
     return html.unescape(match.group(1).strip()) if match else ""
 
 
+def _pfsense_runtime_tables(text: str) -> dict[str, list[str]]:
+    tables: dict[str, list[str]] = defaultdict(list)
+    current = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        marker = re.match(r"^__NCT_PF_TABLE__\s+<?([^>\s]+)>?$", line)
+        if marker:
+            current = marker.group(1)
+            continue
+        if line.startswith("====="):
+            current = None
+            continue
+        if not current or not line:
+            continue
+        try:
+            network = ipaddress.ip_network(line, strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            tables[current].append(str(network))
+    return dict(tables)
+
+
 def _parse_pfsense_aliases(text: str) -> tuple[dict[str, dict], dict[str, dict]]:
+    runtime_tables = _pfsense_runtime_tables(text)
     raw_aliases = []
     for match in re.finditer(r"<alias>(.*?)</alias>", text, re.I | re.S):
         block = match.group(1)
@@ -431,7 +469,20 @@ def _parse_pfsense_aliases(text: str) -> tuple[dict[str, dict], dict[str, dict]]
                 else:
                     item["complete"] = False
             except ValueError:
+                item["members"].append({"dns_name": value})
+                item["dynamic"] = True
+                item["resolution_source"] = "No retained runtime resolution"
                 item["complete"] = False
+        if item.get("dynamic"):
+            resolved = runtime_tables.get(name) or []
+            if resolved:
+                known = {member.get("value") for member in item["members"] if member.get("value")}
+                item["members"].extend(
+                    {"value": value, "resolved_from": "pfctl runtime table"}
+                    for value in resolved if value not in known
+                )
+                item["resolution_source"] = "Retained pfctl runtime table snapshot"
+                item["complete"] = True
     return addresses, services
 
 
@@ -497,6 +548,10 @@ def _parse_juniper_objects(text: str) -> tuple[dict[str, dict[str, dict]], dict[
                 else:
                     item["complete"] = False
             elif value.lower() in {"dns-name", "wildcard-address"}:
+                if value.lower() == "dns-name" and remainder:
+                    item["members"].append({"dns_name": remainder.split()[0]})
+                    item["dynamic"] = True
+                    item["resolution_source"] = "No retained runtime resolution"
                 item["complete"] = False
             else:
                 try:
@@ -617,6 +672,8 @@ def _object_inventory(policy: dict) -> list[dict]:
                 members.append("–".join(str(value) for value in member["range"][:2]))
             elif member.get("value"):
                 members.append(str(member["value"]))
+            elif member.get("dns_name"):
+                members.append(f"DNS {member['dns_name']}")
             elif member.get("start") is not None:
                 start, end = member.get("start"), member.get("end")
                 port = str(start) if start == end else f"{start}–{end}"
@@ -628,6 +685,8 @@ def _object_inventory(policy: dict) -> list[dict]:
             "member_count": len(item.get("members") or []),
             "member_preview": ", ".join(members[:8]),
             "complete": bool(item.get("complete", False)),
+            "dynamic": bool(item.get("dynamic", False)),
+            "resolution_source": item.get("resolution_source"),
         })
 
     for object_type, field in (
@@ -845,7 +904,9 @@ def _basic_rule_match(
     return True
 
 
-def _resolved_basis(rule: dict, flow_state: str = "new") -> list[str]:
+def _resolved_basis(
+    rule: dict, flow_state: str = "new", policy: dict | None = None,
+) -> list[str]:
     names = []
     for value in (rule.get("source"), rule.get("destination")):
         if str(value or "").startswith("@"):
@@ -853,7 +914,16 @@ def _resolved_basis(rule: dict, flow_state: str = "new") -> list[str]:
     for field in ("service_ref", "input_interface_ref", "output_interface_ref"):
         if rule.get(field):
             names.append(str(rule[field]))
-    basis = [f"Resolved object {name}" for name in dict.fromkeys(names)]
+    basis = []
+    objects = (policy or {}).get("address_objects") or {}
+    for name in dict.fromkeys(names):
+        item = objects.get(name) or {}
+        if item.get("dynamic") and item.get("complete"):
+            basis.append(
+                f"Resolved dynamic object {name} from retained runtime table snapshot"
+            )
+        else:
+            basis.append(f"Resolved object {name}")
     states = set(rule.get("states") or [])
     requested = {"new" if flow_state == "new" else "established"}
     if flow_state == "established":
@@ -943,7 +1013,7 @@ def _evaluate_vyos(
                 return {"status": "unknown", "reason": f"Applied VyOS policy {chain} contains unresolved match criteria.", "rule": rule}
             action = rule.get("action")
             if action in {"permit", "deny"}:
-                return {"status": "decided", "verdict": "allow" if action == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {chain}", *_resolved_basis(rule, flow_state)]}
+                return {"status": "decided", "verdict": "allow" if action == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {chain}", *_resolved_basis(rule, flow_state, policy)]}
             if action == "jump":
                 if not rule.get("jump_target"):
                     return {"status": "unknown", "reason": f"VyOS jump rule {chain} #{rule.get('order')} has no retained target.", "rule": rule}
@@ -1058,5 +1128,5 @@ def evaluate_vendor_policy(
         if matched is None:
             return {"status": "unknown", "reason": f"Applied {vendor} policy {rule.get('policy')} contains unresolved match criteria.", "rule": rule}
         if matched:
-            return {"status": "decided", "verdict": "allow" if rule.get("action") == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {rule.get('policy')}", *_resolved_basis(rule, flow_state)]}
+            return {"status": "decided", "verdict": "allow" if rule.get("action") == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {rule.get('policy')}", *_resolved_basis(rule, flow_state, policy)]}
     return {"status": "unknown", "reason": f"Applied {vendor} policy had no supported matching terminal rule."}

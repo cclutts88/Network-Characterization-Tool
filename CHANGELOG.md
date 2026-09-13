@@ -6,6 +6,11 @@
   Retained iptables and VyOS connection-state rules now match the selected
   state, the supporting state is shown in policy evidence, and NCT clearly
   distinguishes configuration projection from proof of a live session.
+- Added retained runtime resolution for pfSense DNS-backed aliases. Device
+  collection now captures active pf tables, Reach uses only that timestamped
+  membership, Device Analysis distinguishes static, resolved-dynamic, and
+  unresolved objects, and other dynamic vendor objects remain Unknown when
+  runtime membership was not retained.
 - Connected Reach results to Map with a temporary investigation overlay. An
   analyst can open either an individual evaluation or any exposure-report path,
   focus the mapped source, destination, and retained route/policy/NAT devices,

@@ -767,6 +767,13 @@ def evaluate_reachability(
             "detail": decision["evidence"] + (f" · {basis}" if basis else ""),
             "run_id": decision.get("run_id"),
         })
+    if any(
+        "resolved dynamic object" in str(basis).lower()
+        for decision in policy for basis in (decision.get("match_basis") or [])
+    ):
+        caveats.append(
+            "Dynamic/DNS object matches use a retained runtime table snapshot from the device collection; refresh the collection after DNS or alias membership changes."
+        )
 
     caveats.extend(nat_unresolved)
     caveats.extend(policy_unresolved)

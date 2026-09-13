@@ -572,6 +572,11 @@ Available at https://x.x.x.x:443
         against the selected state, include that basis in the evidence, and
         warn that configuration evidence does not prove a live state-table
         entry exists.
+      - [x] Capture pfSense runtime alias tables and use their retained IPv4
+        membership to resolve DNS-backed aliases at the collection timestamp.
+        Identify dynamic Cisco, VyOS, pfSense, and Juniper objects in the
+        object inventory, and keep them unresolved when no retained runtime
+        membership is available.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not

@@ -179,6 +179,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ndp -an",
             "pfctl -sr",
             "pfctl -sn",
+            "for table in $(pfctl -s Tables | tr -d '<>'); do printf '__NCT_PF_TABLE__ %s\\n' \"$table\"; pfctl -t \"$table\" -T show; done",
             "cat /cf/conf/config.xml",
         ),
         "firewall": (
@@ -189,6 +190,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ndp -an",
             "pfctl -sr",
             "pfctl -sn",
+            "for table in $(pfctl -s Tables | tr -d '<>'); do printf '__NCT_PF_TABLE__ %s\\n' \"$table\"; pfctl -t \"$table\" -T show; done",
             "cat /cf/conf/config.xml",
         ),
     },
