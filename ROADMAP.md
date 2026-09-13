@@ -553,7 +553,7 @@ Available at https://x.x.x.x:443
     zone policies with directly resolvable addresses and built-in applications.
     A rule that is merely present but not demonstrably applied is not treated as
     an allow or deny decision.
-  - [ ] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
+  - [x] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
     evaluation before treating complex configurations as allow or deny evidence.
     - [x] Resolve static Cisco address and service objects/groups, VyOS address,
       network, port, and interface groups, pfSense static and nested aliases,
@@ -564,7 +564,7 @@ Available at https://x.x.x.x:443
       exact source NAT and masquerade. Show the original and effective source,
       outgoing interface, retained rule, and chain path in Reach; keep address
       ranges and conflicting multi-device translations at Unknown.
-    - [ ] Resolve dynamic and DNS-backed objects, vendor policy-based NAT,
+    - [x] Resolve dynamic and DNS-backed objects, vendor policy-based NAT,
       established-flow state, and multi-device translation paths; keep
       unsupported criteria at Unknown.
       - [x] Let analysts evaluate either a new connection or an
@@ -577,6 +577,12 @@ Available at https://x.x.x.x:443
         Identify dynamic Cisco, VyOS, pfSense, and Juniper objects in the
         object inventory, and keep them unresolved when no retained runtime
         membership is available.
+      - [x] Normalize and evaluate exact Cisco static and object NAT, VyOS
+        source/destination NAT, and retained active pfSense `rdr`/NAT rules.
+        Keep policy/route-map NAT and unresolved translations at Unknown.
+      - [x] Carry unique source and destination translations sequentially
+        across multiple retained devices, preserve every device and evidence
+        step in the Reach path, and stop at ambiguous or looping paths.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not

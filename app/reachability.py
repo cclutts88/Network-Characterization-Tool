@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from app.iptables_policy import evaluate_iptables_flow, evaluate_iptables_nat
 from app.ip_sort import ip_sort_key
-from app.vendor_policy import evaluate_vendor_policy
+from app.vendor_policy import evaluate_vendor_nat, evaluate_vendor_policy
 
 
 EXTERNAL_TOKENS = {"internet", "wan", "external", "external wan"}
@@ -286,53 +286,90 @@ def _destination_nat_translations(
     protocol: str,
     port: int,
     device_analyses: list[dict],
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[str], bool]:
     translations = []
     unresolved = []
-    for analysis in device_analyses:
-        policy = (analysis.get("policy") or {}).get("iptables") or {}
-        if not policy.get("nat_rules") or not _source_attached(source, analysis):
-            continue
+    conflict = False
+    current_destination = destination
+    current_port = port
+    remaining = list(enumerate(device_analyses))
+    while remaining:
+        candidates = []
+        step_unresolved = []
+        for index, analysis in remaining:
+            if not (
+                _source_attached(source, analysis)
+                or _source_attached(current_destination, analysis)
+            ):
+                continue
+            policies = analysis.get("policy") or {}
+            iptables = policies.get("iptables") or {}
+            applied = policies.get("applied") or {}
+            device = analysis.get("device") or {}
+            device_name = device.get("name") or device.get("address") or "Network device"
+            input_interface = _endpoint_interface(source, analysis)
+            arguments = {
+                "source": str(source.value) if source.value is not None else None,
+                "destination": str(current_destination.value) if current_destination.value is not None else None,
+                "protocol": protocol, "port": current_port,
+                "source_external": source.kind == "external",
+                "destination_external": current_destination.kind == "external",
+                "input_interface": input_interface,
+                "output_interface": _egress_interface(current_destination, analysis),
+            }
+            evaluations = []
+            if iptables.get("nat_rules"):
+                evaluations.append(("ordered", evaluate_iptables_nat(iptables, **arguments)))
+            if applied.get("nat_rules"):
+                evaluations.append((
+                    f"applied {applied.get('vendor') or 'vendor'}",
+                    evaluate_vendor_nat(applied, **arguments),
+                ))
+            for engine, result in evaluations:
+                if result.get("status") == "unknown":
+                    step_unresolved.append(
+                        f"{engine.capitalize()} NAT on {device_name}: "
+                        f"{result.get('reason') or 'the translation path could not be resolved.'}"
+                    )
+                elif result.get("status") in {"translated", "redirected"}:
+                    candidates.append((index, analysis, engine, result, input_interface))
+        if step_unresolved:
+            unresolved.extend(step_unresolved)
+            break
+        if not candidates:
+            break
+        if len(candidates) > 1:
+            conflict = True
+            break
+        index, analysis, engine, result, input_interface = candidates[0]
         device = analysis.get("device") or {}
-        device_name = device.get("name") or device.get("address") or "Network device"
-        input_interface = _endpoint_interface(source, analysis)
-        result = evaluate_iptables_nat(
-            policy,
-            source=str(source.value) if source.value is not None else None,
-            destination=str(destination.value) if destination.value is not None else None,
-            protocol=protocol,
-            port=port,
-            source_external=source.kind == "external",
-            destination_external=destination.kind == "external",
-            input_interface=input_interface,
-            output_interface=_egress_interface(destination, analysis),
-        )
-        if result.get("status") == "unknown":
-            unresolved.append(
-                f"Ordered NAT on {device_name}: "
-                f"{result.get('reason') or 'the translation path could not be resolved.'}"
-            )
-            continue
-        if result.get("status") not in {"translated", "redirected"}:
-            continue
         rule = result.get("rule") or {}
-        trace = result.get("trace") or []
-        translations.append({
-            "kind": result.get("translation"),
-            "status": result.get("status"),
-            "device": device_name,
+        translation = {
+            "kind": result.get("translation"), "status": result.get("status"),
+            "device": device.get("name") or device.get("address") or "Network device",
             "device_address": device.get("address"),
-            "original_destination": destination.entered,
-            "original_port": port,
-            "destination": result.get("destination"),
-            "port": result.get("port"),
-            "input_interface": input_interface,
-            "evidence": rule.get("evidence"),
-            "run_id": analysis.get("run_id"),
-            "trace": trace,
-            "match_basis": result.get("match_basis") or [],
-        })
-    return translations, unresolved
+            "original_destination": current_destination.entered,
+            "original_port": current_port,
+            "destination": result.get("destination"), "port": result.get("port"),
+            "input_interface": input_interface, "evidence": rule.get("evidence"),
+            "run_id": analysis.get("run_id"), "trace": result.get("trace") or [],
+            "match_basis": result.get("match_basis") or [], "engine": engine,
+            "sequence": len(translations) + 1,
+        }
+        translations.append(translation)
+        remaining = [item for item in remaining if item[0] != index]
+        if result.get("status") == "redirected" or not result.get("destination"):
+            break
+        next_destination = str(result["destination"])
+        next_port = int(result.get("port") or current_port)
+        if next_destination == current_destination.entered and next_port == current_port:
+            unresolved.append("The retained destination NAT path contains a translation loop.")
+            break
+        current_destination = Endpoint(
+            entered=next_destination, kind="host", value=ipaddress.ip_address(next_destination),
+        )
+        current_port = next_port
+    return translations, unresolved, conflict
 
 
 def _interface_address(analysis: dict, interface: str | None) -> str | None:
@@ -366,56 +403,87 @@ def _source_nat_translations(
     protocol: str,
     port: int,
     device_analyses: list[dict],
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[str], bool]:
     translations = []
     unresolved = []
-    for analysis in device_analyses:
-        policy = (analysis.get("policy") or {}).get("iptables") or {}
-        if not policy.get("nat_rules") or not _source_attached(source, analysis):
-            continue
+    conflict = False
+    current_source = source
+    remaining = list(enumerate(device_analyses))
+    while remaining:
+        candidates = []
+        step_unresolved = []
+        for index, analysis in remaining:
+            if not _source_attached(current_source, analysis):
+                continue
+            policies = analysis.get("policy") or {}
+            iptables = policies.get("iptables") or {}
+            applied = policies.get("applied") or {}
+            device = analysis.get("device") or {}
+            device_name = device.get("name") or device.get("address") or "Network device"
+            input_interface = _endpoint_interface(current_source, analysis)
+            output_interface = _egress_interface(destination, analysis)
+            arguments = {
+                "source": str(current_source.value) if current_source.value is not None else None,
+                "destination": str(destination.value) if destination.value is not None else None,
+                "protocol": protocol, "port": port,
+                "source_external": current_source.kind == "external",
+                "destination_external": destination.kind == "external",
+                "input_interface": input_interface, "output_interface": output_interface,
+                "stage": "source",
+                "masquerade_source": _interface_address(analysis, output_interface),
+            }
+            evaluations = []
+            if iptables.get("nat_rules"):
+                evaluations.append(("ordered", evaluate_iptables_nat(iptables, **arguments)))
+            if applied.get("nat_rules"):
+                evaluations.append((
+                    f"applied {applied.get('vendor') or 'vendor'}",
+                    evaluate_vendor_nat(applied, **arguments),
+                ))
+            for engine, result in evaluations:
+                if result.get("status") == "unknown":
+                    step_unresolved.append(
+                        f"{engine.capitalize()} source NAT on {device_name}: "
+                        f"{result.get('reason') or 'the translation path could not be resolved.'}"
+                    )
+                elif result.get("status") == "translated":
+                    candidates.append((index, analysis, engine, result, input_interface, output_interface))
+        if step_unresolved:
+            unresolved.extend(step_unresolved)
+            break
+        if not candidates:
+            break
+        if len(candidates) > 1:
+            conflict = True
+            break
+        index, analysis, engine, result, input_interface, output_interface = candidates[0]
         device = analysis.get("device") or {}
-        device_name = device.get("name") or device.get("address") or "Network device"
-        input_interface = _endpoint_interface(source, analysis)
-        output_interface = _egress_interface(destination, analysis)
-        result = evaluate_iptables_nat(
-            policy,
-            source=str(source.value) if source.value is not None else None,
-            destination=str(destination.value) if destination.value is not None else None,
-            protocol=protocol,
-            port=port,
-            source_external=source.kind == "external",
-            destination_external=destination.kind == "external",
-            input_interface=input_interface,
-            output_interface=output_interface,
-            stage="source",
-            masquerade_source=_interface_address(analysis, output_interface),
-        )
-        if result.get("status") == "unknown":
-            unresolved.append(
-                f"Ordered source NAT on {device_name}: "
-                f"{result.get('reason') or 'the translation path could not be resolved.'}"
-            )
-            continue
-        if result.get("status") != "translated":
-            continue
         rule = result.get("rule") or {}
-        translations.append({
-            "kind": result.get("translation"),
-            "status": "translated",
-            "device": device_name,
+        translation = {
+            "kind": result.get("translation"), "status": "translated",
+            "device": device.get("name") or device.get("address") or "Network device",
             "device_address": device.get("address"),
-            "original_source": source.entered,
-            "source": result.get("source"),
-            "source_port": result.get("source_port"),
-            "dynamic": bool(result.get("dynamic")),
-            "input_interface": input_interface,
-            "output_interface": output_interface,
-            "evidence": rule.get("evidence"),
-            "run_id": analysis.get("run_id"),
-            "trace": result.get("trace") or [],
-            "match_basis": result.get("match_basis") or [],
-        })
-    return translations, unresolved
+            "original_source": current_source.entered,
+            "source": result.get("source"), "source_port": result.get("source_port"),
+            "dynamic": bool(result.get("dynamic")), "input_interface": input_interface,
+            "output_interface": output_interface, "evidence": rule.get("evidence"),
+            "run_id": analysis.get("run_id"), "trace": result.get("trace") or [],
+            "match_basis": result.get("match_basis") or [], "engine": engine,
+            "sequence": len(translations) + 1,
+        }
+        translations.append(translation)
+        remaining = [item for item in remaining if item[0] != index]
+        if not result.get("source"):
+            unresolved.append("The retained source NAT path does not identify one effective IPv4 source.")
+            break
+        next_source = str(result["source"])
+        if next_source == current_source.entered:
+            unresolved.append("The retained source NAT path contains a translation loop.")
+            break
+        current_source = Endpoint(
+            entered=next_source, kind="host", value=ipaddress.ip_address(next_source),
+        )
+    return translations, unresolved, conflict
 
 
 def _egress_interface(destination: Endpoint, analysis: dict) -> str | None:
@@ -606,40 +674,37 @@ def evaluate_reachability(
         raise ValueError("Flow state must be new or established")
 
     transit_analyses = [item for item in device_analyses if _is_transit_device(item)]
-    destination_translations, destination_nat_unresolved = _destination_nat_translations(
+    (
+        destination_translations,
+        destination_nat_unresolved,
+        translation_conflict,
+    ) = _destination_nat_translations(
         source, destination, protocol, port, transit_analyses
     )
-    translated_targets = {
-        (str(item.get("destination")), int(item.get("port") or port))
-        for item in destination_translations
-        if item.get("status") == "translated" and item.get("destination")
-    }
     effective_destination = destination
     effective_port = port
-    translation_conflict = len(translated_targets) > 1
-    if len(translated_targets) == 1:
-        translated_address, effective_port = next(iter(translated_targets))
-        effective_destination = Endpoint(
-            entered=translated_address,
-            kind="host",
-            value=ipaddress.ip_address(translated_address),
-        )
-    source_translations, source_nat_unresolved = _source_nat_translations(
+    if destination_translations and not translation_conflict:
+        final_translation = destination_translations[-1]
+        translated_address = final_translation.get("destination")
+        if translated_address:
+            effective_port = int(final_translation.get("port") or effective_port)
+            effective_destination = Endpoint(
+                entered=str(translated_address),
+                kind="host",
+                value=ipaddress.ip_address(str(translated_address)),
+            )
+    (
+        source_translations,
+        source_nat_unresolved,
+        source_translation_conflict,
+    ) = _source_nat_translations(
         source, effective_destination, protocol, effective_port, transit_analyses
     )
     translations = [*destination_translations, *source_translations]
     nat_unresolved = [*destination_nat_unresolved, *source_nat_unresolved]
-    source_translation_signatures = {
-        (
-            str(item.get("device_address") or item.get("device")),
-            str(item.get("source") or f"interface:{item.get('output_interface') or '?'}"),
-        )
-        for item in source_translations
-    }
-    source_translation_conflict = len(source_translation_signatures) > 1
     effective_source = source.entered
-    if len(source_translation_signatures) == 1 and source_translations:
-        translation = source_translations[0]
+    if source_translations and not source_translation_conflict:
+        translation = source_translations[-1]
         effective_source = translation.get("source") or (
             f"{translation.get('output_interface') or 'outgoing'} interface address"
         )
@@ -832,12 +897,16 @@ def evaluate_reachability(
         path.append({"kind": "source", "label": source_network.get("name") or source.entered, "detail": source_network.get("cidr")})
     else:
         path.append({"kind": "source", "label": source.entered, "detail": "Selected source"})
-    if len(translated_targets) == 1:
-        translation = next(item for item in destination_translations if item.get("kind") == "dnat")
+    for translation in destination_translations:
+        if translation.get("kind") != "dnat":
+            continue
         path.append({
             "kind": "nat",
             "label": f"DNAT on {translation['device']}",
-            "detail": f"{destination.entered}:{port} → {effective_destination.entered}:{effective_port}",
+            "detail": (
+                f"{translation['original_destination']}:{translation['original_port']} → "
+                f"{translation['destination']}:{translation['port']}"
+            ),
         })
     if outcome == "Local":
         path.append({"kind": "segment", "label": "Same local segment", "detail": destination_network.get("cidr") if destination_network else ""})
@@ -845,8 +914,7 @@ def evaluate_reachability(
         route = routes[0]
         path.append({"kind": "device", "label": route["device"], "detail": route.get("device_address") or "Routing device"})
         path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "")})
-    if len(source_translation_signatures) == 1 and source_translations:
-        translation = source_translations[0]
+    for translation in source_translations:
         translated_display = translation.get("source") or (
             f"{translation.get('output_interface') or 'outgoing interface'} address"
         )
@@ -857,7 +925,7 @@ def evaluate_reachability(
                 if translation.get("kind") == "masquerade"
                 else f"Source NAT on {translation['device']}"
             ),
-            "detail": f"{source.entered} → {translated_display}",
+            "detail": f"{translation['original_source']} → {translated_display}",
         })
     path.append({
         "kind": "destination",

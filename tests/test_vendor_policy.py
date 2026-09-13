@@ -1,4 +1,4 @@
-from app.vendor_policy import evaluate_vendor_policy, parse_vendor_policy
+from app.vendor_policy import evaluate_vendor_nat, evaluate_vendor_policy, parse_vendor_policy
 
 
 def evaluate(text: str, *, input_interface: str, output_interface: str):
@@ -276,6 +276,80 @@ access-group OUTSIDE_IN in interface outside
     inventory = {item["name"]: item for item in policy["object_inventory"]}
     assert inventory["WEB_FQDN"]["dynamic"] is True
     assert inventory["WEB_FQDN"]["complete"] is False
+
+
+def test_cisco_static_port_forward_is_normalized_and_evaluated():
+    policy = parse_vendor_policy(
+        "ip nat inside source static tcp 10.90.0.10 443 198.51.100.10 8443"
+    )
+    result = evaluate_vendor_nat(
+        policy,
+        source=None, destination="198.51.100.10", protocol="tcp", port=8443,
+        source_external=True, input_interface="outside", output_interface="inside",
+    )
+
+    assert policy["counts"]["nat_rules"] == 1
+    assert result["status"] == "translated"
+    assert result["destination"] == "10.90.0.10"
+    assert result["port"] == 443
+
+
+def test_vyos_destination_nat_is_normalized_and_evaluated():
+    text = """set nat destination rule 10 inbound-interface name 'eth0'
+set nat destination rule 10 protocol 'tcp'
+set nat destination rule 10 destination address '198.51.100.10'
+set nat destination rule 10 destination port '8443'
+set nat destination rule 10 translation address '10.90.0.10'
+set nat destination rule 10 translation port '443'
+"""
+    policy = parse_vendor_policy(text)
+    result = evaluate_vendor_nat(
+        policy,
+        source=None, destination="198.51.100.10", protocol="tcp", port=8443,
+        source_external=True, input_interface="eth0", output_interface="eth1",
+    )
+
+    assert result["status"] == "translated"
+    assert result["destination"] == "10.90.0.10"
+    assert result["port"] == 443
+
+
+def test_pfsense_active_rdr_and_interface_nat_are_evaluated():
+    text = """rdr on em0 inet proto tcp from any to 198.51.100.10 port = 8443 -> 10.90.0.10 port 443
+nat on em0 inet from 10.90.0.0/24 to any -> (em0)
+"""
+    policy = parse_vendor_policy(text)
+    destination = evaluate_vendor_nat(
+        policy,
+        source=None, destination="198.51.100.10", protocol="tcp", port=8443,
+        source_external=True, input_interface="em0", output_interface="em1",
+    )
+    source = evaluate_vendor_nat(
+        policy,
+        source="10.90.0.10", destination=None, protocol="tcp", port=443,
+        destination_external=True, input_interface="em1", output_interface="em0",
+        stage="source", masquerade_source="198.51.100.2",
+    )
+
+    assert destination["destination"] == "10.90.0.10"
+    assert destination["port"] == 443
+    assert source["translation"] == "masquerade"
+    assert source["source"] == "198.51.100.2"
+
+
+def test_cisco_policy_nat_is_retained_as_unknown_instead_of_guessed():
+    policy = parse_vendor_policy(
+        "ip nat inside source route-map POLICY-NAT interface GigabitEthernet0/0 overload"
+    )
+    result = evaluate_vendor_nat(
+        policy,
+        source="10.80.0.25", destination="203.0.113.10",
+        protocol="tcp", port=443, output_interface="GigabitEthernet0/0",
+        stage="source", masquerade_source="198.51.100.2",
+    )
+
+    assert result["status"] == "unknown"
+    assert "unresolved" in result["reason"]
 
 
 def test_juniper_zone_address_sets_and_custom_application_sets_are_resolved():

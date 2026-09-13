@@ -205,8 +205,108 @@ def _parse_cisco_objects(text: str) -> tuple[dict[str, dict], dict[str, dict]]:
     return addresses, services
 
 
+def _single_address_object(objects: dict[str, dict], name: str) -> str | None:
+    item = objects.get(name) or {}
+    values = [member.get("value") for member in item.get("members") or [] if member.get("value")]
+    if not item.get("complete") or len(values) != 1:
+        return None
+    try:
+        network = ipaddress.ip_network(str(values[0]), strict=False)
+    except ValueError:
+        return None
+    return str(network.network_address) if network.prefixlen == 32 else None
+
+
+def _parse_cisco_nat(text: str, address_objects: dict[str, dict]) -> list[dict]:
+    rules = []
+    current_object = None
+    order = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        object_header = re.match(r"^object network (\S+)$", line, re.I)
+        if object_header:
+            current_object = object_header.group(1)
+            continue
+        if line == "!" or re.match(r"^(?:interface|ip access-list|access-list|access-group)\b", line, re.I):
+            current_object = None
+        object_nat = re.match(
+            r"^nat\s+\(([^,]+),([^)]+)\)\s+static\s+(\S+)"
+            r"(?:\s+service\s+(tcp|udp)\s+(\S+)\s+(\S+))?",
+            line, re.I,
+        )
+        if object_nat and current_object:
+            inside, outside, public_address, protocol, local_port, public_port = object_nat.groups()
+            local_address = _single_address_object(address_objects, current_object)
+            order += 1
+            rules.append({
+                "policy": "cisco-object-nat", "order": order, "stage": "destination",
+                "protocol": (protocol or "ip").lower(), "source": "any",
+                "destination": public_address if public_address != "interface" else "any",
+                "destination_port": _port(public_port) if public_port else None,
+                "input_interface": outside, "output_interface": None,
+                "translated_address": local_address,
+                "translated_port": _port(local_port) if local_port else None,
+                "unresolved": local_address is None or public_address == "interface"
+                or bool(public_port and _port(public_port) is None)
+                or bool(local_port and _port(local_port) is None),
+                "evidence": line[:2000],
+            })
+            continue
+        static = re.match(
+            r"^ip nat inside source static (?:(tcp|udp)\s+)?(\S+)"
+            r"(?:\s+(\S+))?\s+(\S+)(?:\s+(\S+))?(?:\s+.*)?$",
+            line, re.I,
+        )
+        if static:
+            protocol, first, second, third, fourth = static.groups()
+            if protocol:
+                local_address, local_port = first, second
+                public_address, public_port = third, fourth
+            else:
+                local_address, public_address = first, second
+                local_port = public_port = None
+            try:
+                local_address = str(ipaddress.IPv4Address(local_address))
+                public_address = str(ipaddress.IPv4Address(public_address))
+            except (ipaddress.AddressValueError, TypeError):
+                local_address = public_address = None
+            order += 1
+            rules.append({
+                "policy": "cisco-static-nat", "order": order, "stage": "destination",
+                "protocol": (protocol or "ip").lower(), "source": "any",
+                "destination": public_address or "any",
+                "destination_port": _port(public_port) if public_port else None,
+                "translated_address": local_address,
+                "translated_port": _port(local_port) if local_port else None,
+                "unresolved": local_address is None or public_address is None
+                or bool(public_port and _port(public_port) is None)
+                or bool(local_port and _port(local_port) is None),
+                "evidence": line[:2000],
+            })
+            if protocol is None:
+                rules.append({
+                    "policy": "cisco-static-nat", "order": order, "stage": "source",
+                    "protocol": "ip", "source": local_address or "any",
+                    "destination": "any", "translated_address": public_address,
+                    "unresolved": local_address is None or public_address is None,
+                    "evidence": line[:2000],
+                })
+            continue
+        policy_nat = re.match(r"^ip nat inside source (?:list|route-map)\b", line, re.I)
+        if policy_nat:
+            order += 1
+            rules.append({
+                "policy": "cisco-policy-nat", "order": order, "stage": "source",
+                "protocol": "ip", "source": "any", "destination": "any",
+                "translated_address": None, "unresolved": True,
+                "evidence": line[:2000],
+            })
+    return rules
+
+
 def _parse_cisco(text: str) -> dict:
     address_objects, service_objects = _parse_cisco_objects(text)
+    nat_rules = _parse_cisco_nat(text, address_objects)
     rules = []
     attachments = []
     order_by_acl: dict[str, int] = defaultdict(int)
@@ -254,6 +354,7 @@ def _parse_cisco(text: str) -> dict:
     return {
         "vendor": "cisco", "rules": rules, "attachments": attachments,
         "address_objects": address_objects, "service_objects": service_objects,
+        "nat_rules": nat_rules,
     }
 
 
@@ -309,6 +410,62 @@ def _parse_vyos_groups(text: str) -> tuple[dict[str, dict], dict[str, dict], dic
             item = interfaces.setdefault(name, _empty_object("interface", line))
             item["members"].append({"value": value})
     return addresses, services, interfaces
+
+
+def _parse_vyos_nat(text: str) -> list[dict]:
+    records: dict[tuple[str, int], dict] = {}
+    pattern = re.compile(r"^set nat (destination|source) rule (\d+) (\S+)(?: (.+))?$", re.I)
+    for raw in text.splitlines():
+        line = raw.strip()
+        match = pattern.match(line)
+        if not match:
+            continue
+        stage, number, field, raw_value = match.groups()
+        stage = stage.lower()
+        item = records.setdefault((stage, int(number)), {
+            "policy": f"vyos-{stage}-nat", "order": int(number), "stage": stage,
+            "protocol": "ip", "source": "any", "destination": "any",
+            "destination_port": None, "input_interface": None,
+            "output_interface": None, "translated_address": None,
+            "translated_port": None, "masquerade": False,
+            "unresolved": False, "evidence_lines": [],
+        })
+        value = (raw_value or "").replace("'", "").replace('"', "").strip()
+        item["evidence_lines"].append(line)
+        field = field.lower()
+        if field == "protocol":
+            item["protocol"] = value.lower()
+        elif field == "source" and value.lower().startswith("address "):
+            item["source"] = value.split(maxsplit=1)[1]
+        elif field == "destination" and value.lower().startswith("address "):
+            item["destination"] = value.split(maxsplit=1)[1]
+        elif field == "destination" and value.lower().startswith("port "):
+            item["destination_port"] = _port(value.split(maxsplit=1)[1])
+            item["unresolved"] |= item["destination_port"] is None
+        elif field == "inbound-interface" and value.lower().startswith("name "):
+            item["input_interface"] = value.split(maxsplit=1)[1]
+        elif field == "outbound-interface" and value.lower().startswith("name "):
+            item["output_interface"] = value.split(maxsplit=1)[1]
+        elif field == "translation" and value.lower().startswith("address "):
+            translated = value.split(maxsplit=1)[1]
+            item["masquerade"] = translated.lower() in {"masquerade", "interface"}
+            item["translated_address"] = None if item["masquerade"] else translated
+        elif field == "translation" and value.lower().startswith("port "):
+            item["translated_port"] = _port(value.split(maxsplit=1)[1])
+            item["unresolved"] |= item["translated_port"] is None
+        elif field in {"description", "log", "disable"}:
+            continue
+        elif field == "exclude":
+            item["exclude"] = True
+        else:
+            item["unresolved"] = True
+    rules = []
+    for item in sorted(records.values(), key=lambda value: (value["stage"], value["order"])):
+        item["evidence"] = " | ".join(item.pop("evidence_lines"))[:2000]
+        if not item.get("translated_address") and not item.get("masquerade") and not item.get("exclude"):
+            item["unresolved"] = True
+        rules.append(item)
+    return rules
 
 
 def _parse_vyos(text: str) -> dict:
@@ -397,6 +554,7 @@ def _parse_vyos(text: str) -> dict:
         "vendor": "vyos", "rules": rules, "attachments": attachments,
         "defaults": defaults, "address_objects": address_objects,
         "service_objects": service_objects, "interface_objects": interface_objects,
+        "nat_rules": _parse_vyos_nat(text),
     }
 
 
@@ -486,6 +644,61 @@ def _parse_pfsense_aliases(text: str) -> tuple[dict[str, dict], dict[str, dict]]
     return addresses, services
 
 
+def _pf_address_token(value: str) -> str:
+    reference = re.fullmatch(r"<([^>]+)>", value)
+    return f"@{reference.group(1)}" if reference else value
+
+
+def _parse_pfsense_nat(text: str) -> list[dict]:
+    rules = []
+    for order, raw in enumerate(text.splitlines(), start=1):
+        line = html.unescape(raw.strip())
+        rdr = re.match(r"^rdr\s+on\s+(\S+)\s+inet\b(.*)$", line, re.I)
+        if rdr:
+            interface, body = rdr.groups()
+            protocol_match = re.search(r"\bproto\s+(tcp|udp)\b", body, re.I)
+            addresses = re.search(r"\bfrom\s+(\S+)\s+to\s+(\S+)", body, re.I)
+            port_match = re.search(r"\bport\s*(?:=)?\s*(\S+)", body, re.I)
+            target = re.search(r"->\s+(\S+)(?:\s+port\s+(\S+))?", body, re.I)
+            rules.append({
+                "policy": "pfctl-rdr", "order": order, "stage": "destination",
+                "protocol": protocol_match.group(1).lower() if protocol_match else "ip",
+                "source": _pf_address_token(addresses.group(1)) if addresses else "any",
+                "destination": _pf_address_token(addresses.group(2)) if addresses else "any",
+                "destination_port": _port(port_match.group(1)) if port_match else None,
+                "input_interface": interface, "output_interface": None,
+                "translated_address": target.group(1) if target else None,
+                "translated_port": _port(target.group(2)) if target and target.group(2) else None,
+                "unresolved": addresses is None or target is None
+                or bool(port_match and _port(port_match.group(1)) is None)
+                or bool(target and target.group(2) and _port(target.group(2)) is None),
+                "evidence": line[:2000],
+            })
+            continue
+        source_nat = re.match(r"^nat\s+on\s+(\S+)\s+inet\b(.*)$", line, re.I)
+        if not source_nat:
+            continue
+        interface, body = source_nat.groups()
+        protocol_match = re.search(r"\bproto\s+(tcp|udp)\b", body, re.I)
+        addresses = re.search(r"\bfrom\s+(\S+)\s+to\s+(\S+)", body, re.I)
+        target = re.search(r"->\s+(\S+)", body, re.I)
+        translated = target.group(1) if target else None
+        masquerade = bool(translated and translated.strip("()") == interface)
+        rules.append({
+            "policy": "pfctl-nat", "order": order, "stage": "source",
+            "protocol": protocol_match.group(1).lower() if protocol_match else "ip",
+            "source": _pf_address_token(addresses.group(1)) if addresses else "any",
+            "destination": _pf_address_token(addresses.group(2)) if addresses else "any",
+            "destination_port": None, "input_interface": None,
+            "output_interface": interface,
+            "translated_address": None if masquerade else translated,
+            "translated_port": None, "masquerade": masquerade,
+            "unresolved": addresses is None or target is None,
+            "evidence": line[:2000],
+        })
+    return rules
+
+
 def _parse_pfsense(text: str) -> dict:
     address_objects, service_objects = _parse_pfsense_aliases(text)
     rules = []
@@ -522,6 +735,7 @@ def _parse_pfsense(text: str) -> dict:
     return {
         "vendor": "pfsense", "rules": rules, "attachments": [],
         "address_objects": address_objects, "service_objects": service_objects,
+        "nat_rules": _parse_pfsense_nat(text),
     }
 
 
@@ -707,18 +921,21 @@ def parse_vendor_policy(text: str) -> dict:
     candidates = [_parse_cisco(text), _parse_vyos(text), _parse_pfsense(text), _parse_juniper(text)]
     populated = [
         item for item in candidates
-        if item.get("rules") or item.get("address_objects") or item.get("address_books")
+        if item.get("rules") or item.get("nat_rules")
+        or item.get("address_objects") or item.get("address_books")
         or item.get("service_objects") or item.get("interface_objects")
     ]
     if not populated:
         return {
             "vendor": None, "rules": [], "attachments": [], "object_inventory": [],
-            "counts": {"rules": 0, "attachments": 0, "address_objects": 0,
+            "nat_rules": [],
+            "counts": {"rules": 0, "nat_rules": 0, "attachments": 0, "address_objects": 0,
                        "service_objects": 0, "interface_objects": 0, "objects": 0},
             "complete": False,
         }
     result = max(populated, key=lambda item: (
         len(item.get("rules") or []) * 100
+        + len(item.get("nat_rules") or {}) * 100
         + len(item.get("address_objects") or {})
         + sum(len(items) for items in (item.get("address_books") or {}).values())
         + len(item.get("service_objects") or {})
@@ -731,6 +948,7 @@ def parse_vendor_policy(text: str) -> dict:
     result["object_inventory"] = _object_inventory(result)
     result["counts"] = {
         "rules": len(result.get("rules") or []),
+        "nat_rules": len(result.get("nat_rules") or []),
         "attachments": len(result.get("attachments") or []),
         "address_objects": address_object_count,
         "service_objects": len(result.get("service_objects") or {}),
@@ -1130,3 +1348,84 @@ def evaluate_vendor_policy(
         if matched:
             return {"status": "decided", "verdict": "allow" if rule.get("action") == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {rule.get('policy')}", *_resolved_basis(rule, flow_state, policy)]}
     return {"status": "unknown", "reason": f"Applied {vendor} policy had no supported matching terminal rule."}
+
+
+def _normalized_translation_address(value: object) -> str | None:
+    if not value or str(value).startswith("@"):
+        return None
+    try:
+        return str(ipaddress.IPv4Address(str(value)))
+    except ipaddress.AddressValueError:
+        return None
+
+
+def evaluate_vendor_nat(
+    policy: dict, *, source: object, destination: object, protocol: str, port: int,
+    source_external: bool = False, destination_external: bool = False,
+    input_interface: str | None = None, output_interface: str | None = None,
+    stage: str = "destination", masquerade_source: str | None = None,
+) -> dict:
+    """Evaluate exact retained Cisco, VyOS, or pfSense NAT evidence."""
+    if stage not in {"destination", "source"}:
+        raise ValueError("NAT stage must be destination or source")
+    rules = sorted(
+        (item for item in policy.get("nat_rules") or [] if item.get("stage") == stage),
+        key=lambda item: int(item.get("order") or 0),
+    )
+    for rule in rules:
+        matched = _basic_rule_match(
+            rule, source=source, destination=destination, protocol=protocol, port=port,
+            source_external=source_external, destination_external=destination_external,
+            input_interface=input_interface, output_interface=output_interface,
+            policy=policy, flow_state="new",
+        )
+        if matched is False:
+            continue
+        basis = [
+            f"Applied {policy.get('vendor') or 'vendor'} NAT rule",
+            *_resolved_basis(rule, "new", policy),
+        ]
+        if matched is None:
+            return {
+                "status": "unknown",
+                "reason": f"Applied {policy.get('vendor') or 'vendor'} NAT rule #{rule.get('order')} may affect the flow but contains unresolved match or translation criteria.",
+                "rule": rule, "match_basis": basis,
+            }
+        if rule.get("exclude"):
+            return {
+                "status": "no_translation", "rule": rule,
+                "match_basis": [*basis, "Explicit NAT exclusion"],
+            }
+        if rule.get("masquerade"):
+            translated = _normalized_translation_address(masquerade_source)
+            if not translated:
+                return {
+                    "status": "unknown",
+                    "reason": "The retained source NAT uses the egress interface address, but that IPv4 address was not retained.",
+                    "rule": rule, "match_basis": basis,
+                }
+            return {
+                "status": "translated", "translation": "masquerade",
+                "source": translated, "source_port": rule.get("translated_port"),
+                "dynamic": True, "rule": rule, "match_basis": basis,
+            }
+        translated = _normalized_translation_address(rule.get("translated_address"))
+        if not translated:
+            return {
+                "status": "unknown",
+                "reason": "The retained vendor NAT translation does not resolve to one exact IPv4 address.",
+                "rule": rule, "match_basis": basis,
+            }
+        if stage == "destination":
+            return {
+                "status": "translated", "translation": "dnat",
+                "destination": translated,
+                "port": rule.get("translated_port") or port,
+                "rule": rule, "match_basis": basis,
+            }
+        return {
+            "status": "translated", "translation": "snat",
+            "source": translated, "source_port": rule.get("translated_port"),
+            "dynamic": False, "rule": rule, "match_basis": basis,
+        }
+    return {"status": "no_translation", "reason": "No retained vendor NAT rule matched the selected flow."}

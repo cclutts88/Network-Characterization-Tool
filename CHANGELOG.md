@@ -2,6 +2,12 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added retained vendor-NAT evaluation for exact Cisco static/object NAT, VyOS
+  source and destination NAT, and active pfSense `rdr`/NAT rules. Unsupported
+  policy NAT and unresolved translation criteria remain Unknown.
+- Added sequential multi-device NAT paths. Reach now carries the effective
+  address and port through each retained translation, shows every translation
+  in order, and stops conservatively on ambiguous or looping paths.
 - Added explicit new versus established/related flow evaluation to Reach.
   Retained iptables and VyOS connection-state rules now match the selected
   state, the supporting state is shown in policy evidence, and NCT clearly

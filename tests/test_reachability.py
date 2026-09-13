@@ -442,6 +442,141 @@ COMMIT
     assert any("single IPv4 address" in item for item in result["caveats"])
 
 
+def test_applied_vyos_destination_nat_drives_effective_target():
+    applied = parse_vendor_policy("""set nat destination rule 10 inbound-interface name 'outside'
+set nat destination rule 10 protocol 'tcp'
+set nat destination rule 10 destination address '198.51.100.10'
+set nat destination rule 10 destination port '8443'
+set nat destination rule 10 translation address '10.90.0.10'
+set nat destination rule 10 translation port '443'
+set firewall ipv4 forward filter rule 10 action 'accept'
+set firewall ipv4 forward filter rule 10 inbound-interface name 'outside'
+set firewall ipv4 forward filter rule 10 outbound-interface name 'servers'
+set firewall ipv4 forward filter rule 10 protocol 'tcp'
+set firewall ipv4 forward filter rule 10 destination address '10.90.0.10/32'
+set firewall ipv4 forward filter rule 10 destination port '443'
+set firewall ipv4 forward filter default-action 'drop'
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "interface": "outside"},
+            {"network": "10.90.0.0/24", "interface": "servers", "direct": True},
+        ]},
+        "policy": {"firewall_acl": [], "applied": applied},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="198.51.100.10", port=8443,
+        device_analyses=[device],
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["query"]["effective_destination"] == "10.90.0.10"
+    assert result["query"]["effective_port"] == 443
+    assert result["counts"]["destination_nat_translations"] == 1
+    assert result["retained_objects"]["nat"][0]["engine"] == "applied vyos"
+
+
+def test_sequential_destination_nat_is_carried_across_two_devices():
+    edge = {
+        "run_id": "e" * 32,
+        "device": {"name": "Edge NAT", "address": "172.16.0.1", "type": "firewall"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "transit", "network": "172.16.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "transit"}]},
+        "policy": {"firewall_acl": [], "applied": parse_vendor_policy("""set nat destination rule 10 inbound-interface name 'outside'
+set nat destination rule 10 protocol 'tcp'
+set nat destination rule 10 destination address '198.51.100.10'
+set nat destination rule 10 destination port '8443'
+set nat destination rule 10 translation address '172.16.0.10'
+set nat destination rule 10 translation port '8443'
+""")},
+    }
+    inner = {
+        "run_id": "i" * 32,
+        "device": {"name": "Inner NAT", "address": "172.16.0.2", "type": "firewall"},
+        "interfaces": [
+            {"name": "transit", "network": "172.16.0.0/24", "role": "external"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "servers", "direct": True}]},
+        "policy": {"firewall_acl": [], "applied": parse_vendor_policy("""set nat destination rule 20 inbound-interface name 'transit'
+set nat destination rule 20 protocol 'tcp'
+set nat destination rule 20 destination address '172.16.0.10'
+set nat destination rule 20 destination port '8443'
+set nat destination rule 20 translation address '10.90.0.10'
+set nat destination rule 20 translation port '443'
+""")},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="198.51.100.10", port=8443,
+        device_analyses=[edge, inner],
+    )
+
+    assert result["query"]["effective_destination"] == "10.90.0.10"
+    assert result["query"]["effective_port"] == 443
+    assert result["counts"]["destination_nat_translations"] == 2
+    assert [item["device"] for item in result["retained_objects"]["nat"]] == [
+        "Edge NAT", "Inner NAT",
+    ]
+    nat_path = [item for item in result["path"] if item["kind"] == "nat"]
+    assert [item["label"] for item in nat_path] == [
+        "DNAT on Edge NAT", "DNAT on Inner NAT",
+    ]
+
+
+def test_sequential_source_nat_is_carried_across_two_devices():
+    inner = {
+        "run_id": "i" * 32,
+        "device": {"name": "Inner NAT", "address": "10.80.0.1", "type": "router"},
+        "interfaces": [
+            {"name": "users", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "transit", "network": "172.16.0.0/24", "role": "external"},
+        ],
+        "route_analysis": {"routes": [{"network": "0.0.0.0/0", "interface": "transit"}]},
+        "policy": {"firewall_acl": [], "applied": parse_vendor_policy("""set nat source rule 10 outbound-interface name 'transit'
+set nat source rule 10 source address '10.80.0.0/24'
+set nat source rule 10 translation address '172.16.0.2'
+""")},
+    }
+    edge = {
+        "run_id": "e" * 32,
+        "device": {"name": "Edge NAT", "address": "172.16.0.1", "type": "firewall"},
+        "interfaces": [
+            {"name": "transit", "network": "172.16.0.0/24", "role": "internal"},
+            {"name": "outside", "address": "198.51.100.2/24", "network": "198.51.100.0/24", "role": "external"},
+        ],
+        "route_analysis": {"routes": [{"network": "0.0.0.0/0", "interface": "outside"}]},
+        "policy": {"firewall_acl": [], "applied": parse_vendor_policy("""set nat source rule 20 outbound-interface name 'outside'
+set nat source rule 20 source address '172.16.0.2/32'
+set nat source rule 20 translation address '198.51.100.2'
+""")},
+    }
+
+    result = assess(
+        destination_text="Internet", device_analyses=[inner, edge],
+        hunting={"hosts": [], "findings": []},
+    )
+
+    assert result["query"]["effective_source"] == "198.51.100.2"
+    assert result["counts"]["source_nat_translations"] == 2
+    assert [item["device"] for item in result["retained_objects"]["nat"]] == [
+        "Inner NAT", "Edge NAT",
+    ]
+    assert [item["detail"] for item in result["path"] if item["kind"] == "nat"] == [
+        "10.80.0.25 → 172.16.0.2",
+        "172.16.0.2 → 198.51.100.2",
+    ]
+
+
 def test_applied_cisco_acl_drives_reachability_but_unbound_acl_does_not():
     text = """ip access-list extended USERS_TO_SERVERS
  permit tcp any host 10.90.0.10 eq 443

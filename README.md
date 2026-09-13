@@ -42,8 +42,9 @@ SearchSploit database, and visualizes retained topology evidence.
   host/network/evidence filters, CVE categorization, collapsible result panels,
   and scan-to-scan change analysis.
 - Read-only Reach analysis that correlates retained routes, applied policy,
-  NAT, and Nmap services. A Not Exposed result requires exact per-host Nmap
-  protocol/port coverage rather than merely assuming an unlisted port is closed.
+  sequential vendor NAT, and Nmap services. A Not Exposed result requires exact
+  per-host Nmap protocol/port coverage rather than merely assuming an unlisted
+  port is closed.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual
