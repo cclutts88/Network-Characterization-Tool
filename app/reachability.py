@@ -5,7 +5,6 @@ import re
 from copy import deepcopy
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from urllib.parse import urlencode
 
 from app.iptables_policy import evaluate_iptables_flow, evaluate_iptables_nat
 from app.ip_sort import ip_sort_key
@@ -189,19 +188,6 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
             network = str(route.get("network") or "")
             if not _destination_matches(network, destination):
                 continue
-            via = str(route.get("via") or "").strip()
-            if via and not route.get("interface"):
-                try:
-                    if ipaddress.ip_address(via).is_loopback:
-                        excluded.append({
-                            "device": device.get("name") or device.get("address") or "Network device",
-                            "device_type": device.get("type"),
-                            "network": network,
-                            "reason": "Loopback metadata without a forwarding interface is not usable route evidence.",
-                        })
-                        continue
-                except ValueError:
-                    pass
             if not _is_transit_device(analysis):
                 excluded.append({
                     "device": device.get("name") or device.get("address") or "Network device",
@@ -313,28 +299,6 @@ def _scan_type_supports_exposure(scan_type: dict, protocol: str) -> bool:
     if protocol == "tcp":
         return kind in {"syn", "connect"}
     return kind == "udp"
-
-
-def _scan_analysis_url(
-    source_refs: list[dict] | None,
-    *,
-    host: str | None = None,
-    protocol: str | None = None,
-    port: int | None = None,
-) -> str | None:
-    """Return the retained Analyze destination represented by scan evidence."""
-    for reference in source_refs or []:
-        match = re.search(r"/api/scan-runs/([^/]+)/", str(reference.get("url") or ""))
-        if match:
-            query = {"run": match.group(1), "focus": "host"}
-            if host:
-                query["host"] = host
-            if protocol:
-                query["protocol"] = protocol
-            if port is not None:
-                query["port"] = str(port)
-            return f"/analysis?{urlencode(query)}"
-    return None
 
 
 def _scan_coverage_proof(host: dict, protocol: str, port: int) -> dict | None:
@@ -823,10 +787,6 @@ def evaluate_reachability(
     source_network = _network_for(source, saved_networks)
     destination_network = _network_for(effective_destination, saved_networks)
     service = _service_observation(effective_destination, protocol, effective_port, hunting)
-    selected_flow = (
-        f"{source.entered} → {effective_destination.entered} "
-        f"{protocol.upper()}/{effective_port}"
-    )
     routes, excluded_routes = _matching_routes(source, effective_destination, device_analyses)
     same_saved_network = bool(
         source_network and destination_network
@@ -892,17 +852,9 @@ def evaluate_reachability(
         evidence.append({
             "kind": "nat",
             "title": title,
-            "effect": (
-                f"This retained NAT rule changes the selected flow before routing and "
-                f"firewall policy are evaluated: {detail}."
-            ),
             "detail": detail,
             "raw": translation.get("evidence"),
             "run_id": translation.get("run_id"),
-            "source_url": (
-                f"/device-analysis?run={translation['run_id']}&focus=nat"
-                if translation.get("run_id") else None
-            ),
         })
     if service["finding"]:
         finding = service["finding"]
@@ -910,16 +862,7 @@ def evaluate_reachability(
         evidence.append({
             "kind": "service",
             "title": f"{protocol.upper()}/{effective_port} observed open",
-            "effect": (
-                f"The retained Nmap result observed {protocol.upper()}/{effective_port} "
-                f"open on {effective_destination.entered} from the NCT host. This proves "
-                "service exposure from that scan location, not from every possible source."
-            ),
             "detail": " · ".join(str(value) for value in (service_name, finding.get("product"), finding.get("version")) if value),
-            "source_url": _scan_analysis_url(
-                finding.get("source_refs"), host=effective_destination.entered,
-                protocol=protocol, port=effective_port,
-            ),
         })
     elif service["state"] == "not_exposed":
         coverage = service["coverage"] or {}
@@ -935,19 +878,8 @@ def evaluate_reachability(
         evidence.append({
             "kind": "coverage",
             "title": f"{protocol.upper()}/{effective_port} assessed — not exposed",
-            "effect": (
-                f"The retained Nmap scan explicitly assessed {protocol.upper()}/{effective_port} "
-                f"on {effective_destination.entered} and did not observe an exposed service "
-                "from the NCT host. The missing listener is expected to prevent an application "
-                "connection from that scan vantage, but it is not proof that a firewall rule "
-                "caused the result."
-            ),
             "detail": detail,
             "raw": coverage.get("command"),
-            "source_url": _scan_analysis_url(
-                coverage.get("source_refs"), host=effective_destination.entered,
-                protocol=protocol, port=effective_port,
-            ),
         })
         caveats.append(
             "Not Exposed reflects the retained Nmap observation from the NCT host at scan time; later service or filtering changes require a new scan."
@@ -961,50 +893,18 @@ def evaluate_reachability(
     elif service["state"] == "host_not_observed":
         caveats.append("The destination host is not present in the current retained network-wide scan evidence.")
 
-    selected_prefix = routes[0].get("prefix") if routes else None
-    for route_index, route in enumerate(routes[:5]):
+    for route in routes[:5]:
         priority = ""
         if route.get("preference") is not None:
             priority += f" · preference {route['preference']}"
         if route.get("metric") is not None:
             priority += f" · metric {route['metric']}"
-        route_role = (
-            "selected" if route_index == 0
-            else "alternate" if route.get("prefix") == selected_prefix
-            else "fallback"
-        )
-        title_prefix = {
-            "selected": "Selected route",
-            "alternate": "Equal-prefix alternate route",
-            "fallback": "Fallback route — not selected",
-        }[route_role]
-        effect = (
-            f"This retained route is the most-specific forwarding path toward "
-            f"{effective_destination.entered}. It does not by itself allow or block "
-            f"{protocol.upper()}/{effective_port}."
-            if route_role == "selected"
-            else (
-                f"This equally specific retained route may provide another path toward "
-                f"{effective_destination.entered}; live forwarding and tie-break behavior were not verified."
-                if route_role == "alternate"
-                else (
-                    f"This broader retained route is not used while the selected more-specific route "
-                    f"exists. It would only become relevant if that route were removed or unavailable."
-                )
-            )
-        )
         evidence.append({
             "kind": "route",
-            "route_role": route_role,
-            "title": f"{title_prefix} on {route['device']}",
-            "effect": effect,
+            "title": f"Route on {route['device']}",
             "detail": f"{route['network']} via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "") + priority,
             "raw": route.get("evidence"),
             "run_id": route.get("run_id"),
-            "source_url": (
-                f"/device-analysis?run={route['run_id']}&focus=routing"
-                if route.get("run_id") else None
-            ),
         })
     top_prefix_routes = [
         item for item in routes
@@ -1026,18 +926,8 @@ def evaluate_reachability(
         evidence.append({
             "kind": "policy",
             "title": f"{policy_kind} {decision['action']} on {decision['device']}",
-            "action": decision["action"],
-            "effect": (
-                f"This retained {'ACL entry' if engine == 'explicit_acl' else 'firewall rule'} "
-                f"is expected to {'allow' if decision['action'] == 'permit' else 'block'} "
-                f"{selected_flow}."
-            ),
             "detail": decision["evidence"] + (f" · {basis}" if basis else ""),
             "run_id": decision.get("run_id"),
-            "source_url": (
-                f"/device-analysis?run={decision['run_id']}&focus=policy"
-                if decision.get("run_id") else None
-            ),
         })
     if any(
         "resolved dynamic object" in str(basis).lower()

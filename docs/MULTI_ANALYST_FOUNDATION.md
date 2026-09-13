@@ -42,9 +42,8 @@ accounts or publish and unpublish a Map layout.
 
 When authentication is enabled, audit ownership for scans, generated packages,
 profiles, schedules, safety exclusions, Saved Networks, OS reviews, and device
-collection plans is taken from the signed-in server session. Manual actor fields
-are not shown. Authentication-disabled Test mode records a neutral local identity
-instead of asking for a name that could be mistaken for authenticated attribution.
+collection plans is taken from the signed-in server session. A client-supplied
+operator label cannot impersonate a different analyst.
 
 Named Map layouts become server-persistent and owner-scoped in authenticated
 mode. Updates include a version so a stale browser cannot silently overwrite a

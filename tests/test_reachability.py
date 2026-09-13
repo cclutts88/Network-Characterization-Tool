@@ -374,14 +374,6 @@ def test_explicit_acl_and_service_evidence_support_expected_allowed():
     assert result["service_observation"] == "observed_exposed"
     assert result["counts"]["routes"] == 1
     assert {item["kind"] for item in result["evidence"]} >= {"route", "policy", "service"}
-    route = next(item for item in result["evidence"] if item["kind"] == "route")
-    policy = next(item for item in result["evidence"] if item["kind"] == "policy")
-    assert "does not by itself allow or block TCP/443" in route["effect"]
-    assert policy["effect"] == (
-        "This retained ACL entry is expected to allow "
-        "10.80.0.25 → 10.90.0.10 TCP/443."
-    )
-    assert policy["source_url"] == f"/device-analysis?run={'a' * 32}&focus=policy"
 
 
 def test_same_saved_network_is_local_without_claiming_policy_decision():
@@ -427,11 +419,7 @@ def test_missing_open_port_does_not_claim_blocked_or_not_exposed():
 
 
 def test_exact_host_port_coverage_supports_not_exposed():
-    hunting = covered_hunting()
-    hunting["hosts"][0]["scan_coverages"][0]["source_refs"] = [{
-        "url": f"/api/scan-runs/{'b' * 32}/artifacts/xml",
-    }]
-    result = assess(port=22, device_analyses=[], hunting=hunting)
+    result = assess(port=22, device_analyses=[], hunting=covered_hunting())
 
     assert result["outcome"] == "Not Exposed"
     assert result["confidence"] == "high"
@@ -439,10 +427,6 @@ def test_exact_host_port_coverage_supports_not_exposed():
     assert result["counts"]["coverage_proofs"] == 1
     coverage = next(item for item in result["evidence"] if item["kind"] == "coverage")
     assert coverage["title"] == "TCP/22 assessed — not exposed"
-    assert "did not observe an exposed service from the NCT host" in coverage["effect"]
-    assert coverage["source_url"] == (
-        f"/analysis?run={'b' * 32}&focus=host&host=10.90.0.10&protocol=tcp&port=22"
-    )
     assert "NCT host at scan time" in " ".join(result["caveats"])
 
 
@@ -499,12 +483,6 @@ def test_explicit_deny_remains_expected_blocked_when_service_is_not_exposed():
     assert result["outcome"] == "Expected Blocked"
     assert result["service_observation"] == "not_exposed"
     assert {item["kind"] for item in result["evidence"]} >= {"policy", "coverage"}
-    policy = next(item for item in result["evidence"] if item["kind"] == "policy")
-    assert policy["action"] == "deny"
-    assert policy["effect"] == (
-        "This retained ACL entry is expected to block "
-        "10.80.0.25 → 10.90.0.10 TCP/22."
-    )
 
 
 def test_external_destination_uses_default_route():
@@ -690,11 +668,6 @@ COMMIT
 
     assert result["outcome"] == "Expected Blocked"
     assert result["counts"]["policy_decisions"] == 1
-    route_evidence = [item for item in result["evidence"] if item["kind"] == "route"]
-    assert not any("127.0.0.1" in str(item.get("detail")) for item in route_evidence)
-    assert any(item["title"].startswith("Fallback route — not selected") for item in route_evidence)
-    assert any(item.get("route_role") == "selected" for item in route_evidence)
-    assert any(item.get("route_role") == "fallback" for item in route_evidence)
 
 
 def test_source_masquerade_uses_outgoing_interface_address_in_reach():

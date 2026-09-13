@@ -119,8 +119,6 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "Sign out" in account_script.text
         assert "Accounts" in account_script.text
         assert "Personal notes" in account_script.text
-        assert "'/reachability': 'reach'" in account_script.text
-        assert "reach:'Reach'" in account_script.text
         assert "shared notes" in account_script.text
         assert ".nct-note-panel.personal" in account_script.text
         assert ".nct-note-panel.shared" in account_script.text

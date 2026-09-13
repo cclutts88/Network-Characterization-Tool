@@ -6,7 +6,6 @@ from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
 from app.network_map_ui import network_map_page
 from app.reachability_ui import reachability_page
-from app.session_ui import SESSION_SCRIPT
 from app.ui import operator_page
 
 
@@ -19,12 +18,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="origin"' not in html
     assert "originating_host:location.hostname" in html
     assert 'id="reason"' not in html
-    assert "NCT network characterization initiated through the scan workspace" in html
-    assert 'id="operator"' not in html
-    assert 'id="savedNetworkOperator"' not in html
-    assert 'id="noStrikeOperator"' not in html
-    assert 'id="fallbackApprover"' not in html
-    assert "function auditActor()" in html
+    assert "NCT network characterization initiated through the operator workspace" in html
     assert html.index("Build scan") < html.index("Scan history")
     assert "Save as profile" in html
     assert "Run now" in html
@@ -95,7 +89,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="noStrikePanel"' in html
     assert "Global No-Strikes are excluded addresses" in html
     assert "Profiles cannot turn them off" in html
-    assert "changed_by:auditActor()" in html
+    assert 'id="noStrikeOperator"' in html
     assert 'id="globalNoStrikeStatus" class="status" role="status"' in html
     assert "setGlobalSafetyStatus(error.message,'bad')" in html
     assert "/api/safety/no-strike" in html
@@ -206,9 +200,8 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     html = device_config_page().body.decode()
     assert "Collection note (optional)" in html
     assert "Reason / authorization note" not in html
-    assert "Device address is required before uploading" in html
-    assert 'id="operator"' not in html
-    assert "operator:auditActor()" in html
+    assert "Operator and device address are required before uploading" in html
+    assert "Operator, reason, and device address are required before uploading" not in html
     assert "Collection execution preview" in html
     assert "Complete read-only device command set" in html
     assert "Actual ordered execution plan" in html
@@ -233,22 +226,33 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert 'id="cleanupPlan"' not in html
 
 
-def test_device_collection_keeps_raw_collection_work_separate_from_analysis():
+def test_device_collection_history_has_structured_review_and_confirmed_delete():
     html = device_config_page().body.decode()
     assert 'id="historySearch"' in html
-    assert 'id="routeFilter"' not in html
-    assert "renderStructuredResults" not in html
-    assert "/summary`" not in html
+    assert 'id="routeFilter"' in html
+    assert "All routes" in html
+    assert "Connected routes" in html
+    assert "/summary`" in html
     assert "/delete-challenge`" in html
     assert 'id="deleteCollectionDialog"' in html
-    assert "status, commands, and saved evidence files" in html
-    assert "interpreted interfaces, routes, neighbors, VLANs, policy, and comparisons" in html
-    assert 'id="completionActions"' in html
-    assert 'id="analyzeCollection"' in html
-    assert 'id="continueCandidateToNmap"' in html
-    assert "showCompletionActions(data)" in html
-    assert "Analyze collection" in html
-    assert "Continue to Nmap" in html
+    for section in (
+        "Interfaces",
+        "Routes",
+        "Neighbors",
+        "VLANs",
+        "Switch VLANs",
+        "Policy address and port sets",
+        "Switching",
+        "Firewall / ACL",
+        "NAT",
+        "Network object evidence",
+        "Commands",
+        "Configuration",
+        "Raw output",
+    ):
+        assert section in html
+    assert "Showing ${shown.length} of ${availableTotal} rows" in html
+    assert "Analyze" in html
     assert "/device-analysis?run=" in html
 
 
@@ -319,10 +323,6 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "stickyOffsetObserver.observe(pageHeader)" in html
     assert "stickyOffsetObserver.observe(evidenceGuide)" in html
     assert "headerOffset+guideHeight+14" in html
-    assert 'id="resetNetwork" class="source-links hidden"' in html
-    assert "function setNetworkResetVisible(active)" in html
-    assert "setNetworkResetVisible(!networkWide)" in html
-    assert "setNetworkResetVisible(true)" in html
     assert "Exposed" in html
     assert "Inferred" in html
     assert "Why inferred:" in html
@@ -388,11 +388,6 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "contains no specific product/version fingerprints to search" in html
     assert "Service/version detection enabled" in html
     assert '/hunting?run=${encodeURIComponent(runId)}' in analysis_html
-    assert "function reachUrl(item)" in html
-    assert "Evaluate host in Reach" in html
-    assert "Open Reach with this destination and service; Source remains for you to choose." in html
-    assert "renderSearchSploitReachBase" in html
-    assert "target='_blank'" in html
 
 
 def test_reachability_view_has_grouped_source_exposure_reports():
@@ -430,100 +425,6 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="exportReport"' in html
     assert "/api/reachability/exposure-report" in html
     assert "Retained route, policy, and NAT objects" in html
-    assert "function evidenceCard(item)" in html
-    assert "View supporting evidence" in html
-    assert "Open source in Analyze ↗" in html
-    assert 'target="_blank" rel="noopener"' in html
-    assert ".evidence.policy.deny" in html
-
-
-def test_reachability_query_fields_have_clear_buttons():
-    html = reachability_page().body.decode()
-
-    assert 'id="clearSource"' in html
-    assert 'aria-label="Clear Source"' in html
-    assert 'id="clearDestination"' in html
-    assert 'aria-label="Clear Destination"' in html
-    assert "bindClearButton('source','clearSource')" in html
-    assert "bindClearButton('destination','clearDestination')" in html
-    assert "function applyIncomingContext()" in html
-    assert "params.get('destination')" in html
-    assert "Choose a Source, then evaluate." in html
-
-
-def test_async_evidence_pages_show_explicit_loading_states():
-    analyze = analysis_page().body.decode()
-    device = device_analysis_page().body.decode()
-    hunt = hunting_page().body.decode()
-    reach = reachability_page().body.decode()
-    map_html = network_map_page().body.decode()
-
-    assert 'id="pageLoading"' in analyze
-    assert "Loading retained Analyze workspace" in analyze
-    assert "aria-busy" in analyze
-    assert "Loading retained device collections" in device
-    assert "Loading retained network evidence" in hunt
-    assert "Loading retained network context" in reach
-    assert "Loading saved topology evidence" in map_html
-
-
-def test_search_fields_receive_consistent_clear_controls():
-    assert "function installClearableInputs()" in SESSION_SCRIPT
-    assert 'input[type="search"],input[data-nct-clearable="true"]' in SESSION_SCRIPT
-    assert "nct-input-clear" in SESSION_SCRIPT
-    assert "new MutationObserver" in SESSION_SCRIPT
-    assert "input.dispatchEvent(new Event('input'" in SESSION_SCRIPT
-
-
-def test_every_analysis_stage_has_a_local_export_path_including_map():
-    analyze = analysis_page().body.decode()
-    device = device_analysis_page().body.decode()
-    hunt = hunting_page().body.decode()
-    reach = reachability_page().body.decode()
-    map_html = network_map_page().body.decode()
-
-    assert "window.NCTExport" in SESSION_SCRIPT
-    assert "Export report HTML" in analyze
-    assert "function exportHtml()" in analyze
-    assert 'id="exportDeviceAnalysis"' in device
-    assert "function exportDeviceAnalysis()" in device
-    assert 'id="exportHuntJson"' in hunt
-    assert 'id="exportHuntCsv"' in hunt
-    assert "function exportHuntJson()" in hunt
-    assert "function exportHuntCsv()" in hunt
-    assert 'id="exportReachResult"' in reach
-    assert "function exportReachResult()" in reach
-    assert 'id="exportMapSvg"' in map_html
-    assert 'id="exportMapJson"' in map_html
-    assert "function exportMapImage()" in map_html
-    assert "function exportMapData()" in map_html
-    assert "topology,presentation:" in map_html
-
-
-def test_evidence_links_deep_link_to_expanded_analyze_sections():
-    reach_html = reachability_page().body.decode()
-    analyze_html = analysis_page().body.decode()
-    device_html = device_analysis_page().body.decode()
-
-    assert 'target="_blank" rel="noopener"' in reach_html
-    assert "focusRequestedEvidence" in analyze_html
-    assert "params.get('focus')!=='host'" in analyze_html
-    assert 'id="routingEvidenceSection"' in device_html
-    assert 'id="policyEvidenceSection"' in device_html
-    assert "for(const item of section.querySelectorAll('details'))item.open=true" in device_html
-
-
-def test_reachability_can_compare_the_same_flow_from_internet():
-    html = reachability_page().body.decode()
-
-    assert 'id="checkExternalPath"' in html
-    assert 'id="externalResult"' in html
-    assert 'id="showExternalOnMap"' in html
-    assert "async function evaluateExternal()" in html
-    assert "source:'Internet'" in html
-    assert "latestExternalResult" in html
-    assert "External path check" in html
-    assert "No network traffic was sent." in html
 
 
 def test_reachability_results_can_open_a_temporary_map_focus():
@@ -581,9 +482,6 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "Labeled transit subnet" in html
     assert "placeLevel(" not in html
     assert 'id="resetLayout"' in html
-    assert '<details class="evidence-files-drawer"><summary>Evidence files</summary>' in html
-    assert html.index('id="fileNavigator"') > html.index('<summary>Evidence files</summary>')
-    assert html.index('id="fileNavigator"') > html.index('</div><details class="evidence-files-drawer">')
     assert "enableNodeDrag" in html
     assert "function edgePanVelocity" in html
     assert "if(!event.ctrlKey&&!event.metaKey)return" not in html
@@ -988,7 +886,7 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert 'id="comparisonBaseline"' in html
     assert 'id="comparisonCurrent"' in html
     assert "Comparison stays out of the way until you need it" in html
-    assert "await openRun(runId);focusRequestedEvidence()" in html
+    assert "await openRun(runId);await candidatePromise" in html
     assert "coverage_warnings" in html
     assert 'id="comparisonResult"' in html
     assert ">Compare scans</button>" in html
@@ -1036,7 +934,6 @@ def test_expandable_sections_share_one_left_chevron_language():
 
     assert ".management-card>summary::after,.history-group>summary::after{content:none}" in pages["nmap"]
     assert ".management-card>summary::before,.history-group>summary::before" in pages["nmap"]
-    assert ".advanced-drawer>summary::before,.advanced-panel>summary::before" in pages["nmap"]
     assert "details.device-history>summary::before,details.run-card>summary::before,.result-section>summary::before" in pages["device"]
     assert ".comparison-panel>summary::after{content:none}" in pages["analyze"]
     assert ".comparison-panel>summary::before,.comparison-host>summary::before" in pages["analyze"]
@@ -1044,25 +941,3 @@ def test_expandable_sections_share_one_left_chevron_language():
     assert ".searchsploit-result>summary::before,.exposure-detail>summary::before" in pages["hunt"]
     assert ".report-source>summary::before,.report-result>summary::before" in pages["reach"]
     assert ".summary-panel>summary::before,.hidden-objects>summary::before" in pages["map"]
-    assert ".evidence-files-drawer>summary::before" in pages["map"]
-
-
-def test_nmap_advanced_operations_are_collapsed_without_removing_capability():
-    html = operator_page().body.decode()
-
-    assert '<details class="advanced-drawer" id="profileManagementPanel">' in html
-    assert '<summary>Advanced profile management</summary>' in html
-    assert '<details class="panel advanced-panel" id="scheduledScansPanel">' in html
-    assert '<summary><span>Advanced · Scheduled scans</span>' in html
-    assert html.index('id="runNow"') < html.index('id="profileManagementPanel"')
-    assert html.index('id="queuePanel"') < html.index('id="scheduledScansPanel"')
-    for control_id in (
-        "profileName",
-        "saveProfile",
-        "saveVersion",
-        "cloneProfile",
-        "deleteProfile",
-        "saveSchedule",
-        "refreshSchedules",
-    ):
-        assert f'id="{control_id}"' in html

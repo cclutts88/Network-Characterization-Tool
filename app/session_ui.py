@@ -3,66 +3,6 @@ from fastapi.responses import HTMLResponse, Response
 
 SESSION_SCRIPT = r"""
 (() => {
-  const exportStamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const exportName = value => String(value || 'Export').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '').slice(0, 54) || 'Export';
-  window.NCTExport = {
-    stamp: exportStamp,
-    download(prefix, extension, content, type = 'application/octet-stream') {
-      const blob = content instanceof Blob ? content : new Blob([content], {type});
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `${exportName(prefix)}_${exportStamp()}.${extension}`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 0);
-    },
-    json(prefix, data) { this.download(prefix, 'json', JSON.stringify(data, null, 2), 'application/json'); },
-    csv(prefix, rows) {
-      const cell = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
-      this.download(prefix, 'csv', rows.map(row => row.map(cell).join(',')).join('\r\n') + '\r\n', 'text/csv;charset=utf-8');
-    }
-  };
-
-  function installClearableInputs() {
-    if (!document.getElementById('nct-clearable-style')) {
-      const style = document.createElement('style');
-      style.id = 'nct-clearable-style';
-      style.textContent = '.nct-clearable-wrap{position:relative;display:block;min-width:0}.nct-clearable-wrap>input{width:100%!important;padding-right:36px!important}.nct-input-clear{position:absolute!important;top:50%!important;right:6px!important;width:25px!important;height:25px!important;min-width:25px!important;margin:0!important;padding:0!important;border:0!important;border-radius:50%!important;background:transparent!important;color:#9eb0b8!important;font:700 18px/25px system-ui!important;transform:translateY(-50%)!important;cursor:pointer!important}.nct-input-clear:hover,.nct-input-clear:focus-visible{background:#1d3946!important;color:#edf6fb!important;outline:1px solid #57d6bf!important}.nct-input-clear[hidden]{display:none!important}.map-toolbar>.nct-clearable-wrap{flex:1 1 240px}.map-toolbar>.nct-clearable-wrap input{flex:none!important}';
-      document.head.append(style);
-    }
-    const enhance = input => {
-      if (!(input instanceof HTMLInputElement) || input.closest('.clearable,.nct-clearable-wrap') || input.classList.contains('nct-note-search')) return;
-      const parent = input.parentNode;
-      if (!parent) return;
-      const wrapper = document.createElement('span');
-      wrapper.className = 'nct-clearable-wrap';
-      parent.insertBefore(wrapper, input);
-      wrapper.append(input);
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nct-input-clear';
-      button.textContent = '×';
-      const label = input.getAttribute('aria-label') || input.labels?.[0]?.textContent?.trim() || 'field';
-      button.setAttribute('aria-label', `Clear ${label}`);
-      button.title = `Clear ${label}`;
-      const sync = () => { button.hidden = !input.value; };
-      input.addEventListener('input', sync);
-      button.addEventListener('click', () => {
-        input.value = '';
-        input.dispatchEvent(new Event('input', {bubbles: true}));
-        input.dispatchEvent(new Event('change', {bubbles: true}));
-        input.focus();
-      });
-      wrapper.append(button);
-      sync();
-    };
-    const scan = root => {
-      if (root instanceof Element && root.matches('input[type="search"],input[data-nct-clearable="true"]')) enhance(root);
-      root.querySelectorAll?.('input[type="search"],input[data-nct-clearable="true"]').forEach(enhance);
-    };
-    scan(document);
-    new MutationObserver(changes => changes.forEach(change => change.addedNodes.forEach(scan))).observe(document.body, {childList: true, subtree: true});
-  }
-
   async function installAccountControls() {
     const header = document.querySelector('body > header');
     if (!header || header.querySelector('.nct-account')) return;
@@ -79,6 +19,13 @@ SESSION_SCRIPT = r"""
       identity.textContent = `${analyst.display_name || analyst.username} · ${analyst.role}`;
       identity.title = `Signed in as ${analyst.username}`;
       controls.append(identity);
+      for (const id of ['operator', 'noStrikeOperator', 'fallbackApprover']) {
+        const field = document.getElementById(id);
+        if (!field) continue;
+        field.value = analyst.username;
+        field.readOnly = true;
+        field.title = 'Bound to the signed-in analyst';
+      }
       if (analyst.role === 'admin') {
         const admin = document.createElement('a');
         admin.href = '/admin/users';
@@ -109,12 +56,11 @@ SESSION_SCRIPT = r"""
     const pageRoutes = {
       '/': 'device', '/operator': 'nmap', '/scans': 'nmap',
       '/device-config': 'device', '/device-analysis': 'device',
-      '/analysis': 'analyze', '/hunting': 'hunt', '/reachability': 'reach',
-      '/network-map': 'map'
+      '/analysis': 'analyze', '/hunting': 'hunt', '/network-map': 'map'
     };
     const page = pageRoutes[location.pathname];
     if (!page) return;
-    const pageLabel = {device:'Device', nmap:'Nmap', analyze:'Analyze', hunt:'Hunt', reach:'Reach', map:'Map'}[page];
+    const pageLabel = {device:'Device', nmap:'Nmap', analyze:'Analyze', hunt:'Hunt', map:'Map'}[page];
     const canWrite = analyst.role !== 'viewer';
     let notes = [], personalSelected = null, sharedSelected = null;
     const expandedFolders = new Set();
@@ -212,9 +158,8 @@ SESSION_SCRIPT = r"""
     if(localStorage.getItem('nct-personal-notes-open')==='1')togglePanel('personal',true);if(localStorage.getItem('nct-shared-notes-open')==='1')togglePanel('shared',true);loadNotes();
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { installClearableInputs(); installAccountControls(); }, {once: true});
+    document.addEventListener('DOMContentLoaded', installAccountControls, {once: true});
   } else {
-    installClearableInputs();
     installAccountControls();
   }
 })();
