@@ -19,6 +19,10 @@
   integrity, occupied ports, existing NCT data, active-work blocking, and exact
   promotion identity. Reports explicitly retain the remaining overlap and
   representative-old-host gaps.
+- Added pre-deployment Docker subnet overlap analysis against non-Docker host
+  LAN/VPN routes and active Saved Networks. Test records a visible warning;
+  Range and Mission stop until the Docker address pool is corrected, and the
+  result is retained in deployment logs, receipts, and the matrix report.
 - Connected proposed policy and route comparisons to Map. Analysts can open a
   temporary projected-path focus with current-to-projected outcome, proposal,
   path-change, collateral-scope, evidence, and caveats while saved layouts stay

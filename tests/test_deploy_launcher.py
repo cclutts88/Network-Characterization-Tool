@@ -17,6 +17,9 @@ def run_launcher_preflight(
     os_type: str = "linux",
     occupied_port: bool = False,
     existing: str = "none",
+    docker_subnet: str = "172.17.0.0/16",
+    host_route: str = "10.0.0.0/24",
+    overlap: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -68,7 +71,22 @@ case "$1" in
   port)
     [ "${FAKE_EXISTING:-none}" = "none" ] || printf '127.0.0.1:8766\\n'
     ;;
-  run) printf '0\\n' ;;
+  network)
+    if [ "${2:-}" = "ls" ]; then printf 'fixture-network\\n'; else printf '%s\\n' "${FAKE_DOCKER_SUBNET:-172.17.0.0/16}"; fi
+    ;;
+  run)
+    case "$*" in
+      *NCT_DOCKER_NETWORKS*)
+        if [ "${FAKE_OVERLAP:-no}" = "yes" ]; then
+          printf '%s overlaps %s (host LAN/VPN route)\\n' "${FAKE_DOCKER_SUBNET}" "${FAKE_HOST_ROUTE}"
+        else
+          printf 'none\\n'
+        fi
+        ;;
+      *saved_networks*) ;;
+      *) printf '0\\n' ;;
+    esac
+    ;;
 esac
 """,
         encoding="utf-8",
@@ -86,6 +104,12 @@ esac
         encoding="utf-8",
     )
     fake_ss.chmod(0o755)
+    fake_ip = fake_bin / "ip"
+    fake_ip.write_text(
+        "#!/bin/sh\nprintf '%s dev eth0 proto kernel scope link\\n' \"${FAKE_HOST_ROUTE:-10.0.0.0/24}\"\n",
+        encoding="utf-8",
+    )
+    fake_ip.chmod(0o755)
     if compose_mode == "legacy":
         fake_legacy_compose = fake_bin / "docker-compose"
         fake_legacy_compose.write_text("#!/bin/sh\nprintf '1.29.2\\n'\n", encoding="utf-8")
@@ -98,6 +122,9 @@ esac
     environment["FAKE_OS_TYPE"] = os_type
     environment["FAKE_OCCUPIED_PORT"] = "yes" if occupied_port else "no"
     environment["FAKE_EXISTING"] = existing
+    environment["FAKE_DOCKER_SUBNET"] = docker_subnet
+    environment["FAKE_HOST_ROUTE"] = host_route
+    environment["FAKE_OVERLAP"] = "yes" if overlap else "no"
     if compose_mode == "plugin":
         environment["FAKE_COMPOSE_PLUGIN"] = "yes"
     return subprocess.run(
@@ -405,6 +432,57 @@ def test_preflight_preserves_idle_existing_nct_and_blocks_active_work(tmp_path):
     )
     assert active.returncode == 1
     assert "has an active scan, collection, update, or migration" in active.stderr
+
+
+def test_preflight_warns_for_test_overlap_and_blocks_range_overlap(tmp_path):
+    test_result = run_launcher_preflight(
+        tmp_path / "test-overlap",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        docker_subnet="10.0.0.0/16",
+        host_route="10.0.0.0/24",
+        overlap=True,
+    )
+    assert test_result.returncode == 0, test_result.stderr
+    assert "Docker network overlap detected" in test_result.stderr
+    assert "Docker network overlap: conflict" in test_result.stdout
+
+    receipt = tmp_path / "range-source.receipt"
+    receipt.write_text(
+        "profile=test\npromotion_ready=yes\nimage_id=sha256:fake\n"
+        "version=0.14.0-test\nbuild=test-build\napplication_health=pass\n"
+        "runtime_tools=ready\nnet_raw=ready\n",
+        encoding="utf-8",
+    )
+    range_result = run_launcher_preflight(
+        tmp_path / "range-overlap",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--promote-from-receipt",
+        str(receipt),
+        docker_subnet="10.0.0.0/16",
+        host_route="10.0.0.0/24",
+        overlap=True,
+    )
+    assert range_result.returncode == 1
+    assert "Choose a non-overlapping Docker address pool" in range_result.stderr
+
+
+def test_launcher_inventory_contract_includes_routes_saved_networks_and_docker_cidrs():
+    for required in (
+        'ip -4 route show',
+        'docker network ls -q',
+        'docker network inspect',
+        'SELECT cidr FROM saved_networks WHERE active = 1',
+        'ipaddress.ip_network',
+        'network_overlap_detail',
+        'Choose a non-overlapping Docker address pool',
+    ):
+        assert required in SCRIPT
 
 
 def test_launcher_is_idempotent_for_an_already_current_direct_deployment():

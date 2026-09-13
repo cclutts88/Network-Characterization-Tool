@@ -346,8 +346,10 @@ within Reachability.
     archives, occupied ports, existing/active NCT instances, data-volume
     retention, and promotion receipt identity. Emit a timestamped report and
     optionally include the real host/image `--check-only` result.
-  - [ ] Add bridge/VPN overlap cases and capture reports on representative older
-    Range hosts before closing the matrix.
+  - [x] Add Docker bridge overlap cases for host LAN/VPN routes and retained
+    Saved Networks, with a Test warning and a Range/Mission hard stop.
+  - [ ] Capture reports on representative older Range hosts before closing the
+    matrix.
 - [ ] Make the launcher idempotent: identify an existing NCT container, image,
   persistent data volume, configured ports, and running version before making
   changes. Distinguish an upgrade from a new installation, preserve evidence
@@ -390,6 +392,9 @@ within Reachability.
   Networks before creating the deployment network. Choose a non-conflicting
   private bridge range and verify container DNS, gateway reachability, and the
   operator-selected host interface without modifying the host's routes or VPN.
+  - [x] Inventory existing Docker CIDRs, non-Docker host IPv4 routes, and active
+    Saved Networks before deployment; warn in Test and stop Range/Mission when
+    any retained scope overlaps.
 - [ ] Verify NCT's required container capabilities and runtime behavior,
   including `NET_RAW`, Nmap, FPING, tcpdump, SSH, the accountability capture
   interface, outbound target reachability, and the host IP that devices will

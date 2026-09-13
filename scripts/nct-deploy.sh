@@ -363,6 +363,75 @@ else:
 fi
 case "$account_count" in ''|*[!0-9]*) [ "$auth_mode" != "local" ] || die "Existing analyst accounts could not be inspected safely." ;; esac
 
+route_inventory="unknown"
+if command -v ip >/dev/null 2>&1; then
+    route_inventory=$(ip -4 route show 2>/dev/null | awk '$1 ~ /^[0-9]+\./ && $0 !~ / dev (docker|br-)/ {print $1}')
+elif [ "$profile" = "test" ]; then
+    warn "The ip command is unavailable; Test cannot compare Docker networks with host LAN/VPN routes."
+else
+    die "$profile requires the ip command to check Docker bridge overlap with LAN and VPN routes."
+fi
+
+docker_network_ids=$(docker network ls -q 2>/dev/null || printf '')
+docker_networks=""
+if [ -n "$docker_network_ids" ]; then
+    docker_networks=$(docker network inspect $docker_network_ids --format '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' 2>/dev/null || printf unknown)
+fi
+
+saved_networks=""
+if [ "$volume_exists" = "yes" ] && docker image inspect "$image" >/dev/null 2>&1; then
+    saved_networks=$(docker run --rm -v "$data_volume:/data:ro" "$image" python -c 'import pathlib,sqlite3
+p=pathlib.Path("/data/analyzer.db")
+if p.exists():
+ db=sqlite3.connect(f"file:{p}?mode=ro",uri=True)
+ try:
+  for row in db.execute("SELECT cidr FROM saved_networks WHERE active = 1"): print(row[0])
+ except sqlite3.OperationalError: pass' 2>/dev/null || printf unknown)
+fi
+
+network_overlap="not-evaluated"
+network_overlap_detail=""
+if [ -n "$docker_networks" ] && [ "$docker_networks" != "unknown" ] && [ "$route_inventory" != "unknown" ] && [ "$saved_networks" != "unknown" ] && docker image inspect "$image" >/dev/null 2>&1; then
+    network_overlap_detail=$(docker run --rm \
+        -e "NCT_DOCKER_NETWORKS=$docker_networks" \
+        -e "NCT_HOST_NETWORKS=$route_inventory" \
+        -e "NCT_SAVED_NETWORKS=$saved_networks" \
+        "$image" python -c 'import ipaddress,os
+def nets(name):
+ out=[]
+ for value in os.environ.get(name,"").split():
+  try: out.append(ipaddress.ip_network(value,strict=False))
+  except ValueError: pass
+ return out
+docker=nets("NCT_DOCKER_NETWORKS")
+scopes=[("host LAN/VPN route",n) for n in nets("NCT_HOST_NETWORKS")]+[("Saved Network",n) for n in nets("NCT_SAVED_NETWORKS")]
+matches=[f"{left} overlaps {right} ({kind})" for left in docker for kind,right in scopes if left.overlaps(right)]
+print("; ".join(matches) if matches else "none")' 2>/dev/null || printf unknown)
+    case "$network_overlap_detail" in
+        none) network_overlap="clear" ;;
+        unknown|'')
+            network_overlap="not-evaluated"
+            [ "$profile" = "test" ] || die "$profile could not complete Docker bridge overlap analysis."
+            warn "Docker bridge overlap analysis could not be completed in Test."
+            ;;
+        *)
+            network_overlap="conflict"
+            if [ "$profile" = "test" ]; then
+                warn "Docker network overlap detected: $network_overlap_detail"
+            else
+                die "Docker network overlap detected: $network_overlap_detail. Choose a non-overlapping Docker address pool before $profile deployment."
+            fi
+            ;;
+    esac
+elif [ -z "$docker_networks" ]; then
+    network_overlap="clear-no-bridges"
+elif [ "$profile" = "test" ]; then
+    warn "Docker bridge overlap was not fully evaluated in Test."
+else
+    die "$profile could not inventory Docker networks, host routes, Saved Networks, and the selected image for overlap analysis."
+fi
+printf 'network_overlap=%s\nnetwork_overlap_detail=%s\n' "$network_overlap" "$network_overlap_detail" >> "$log_file"
+
 prompt_for_bootstrap_password() {
     [ -t 0 ] || die "First authenticated setup needs --admin-password-file or --generate-admin-password in a non-interactive shell."
     terminal_state=$(stty -g)
@@ -481,6 +550,7 @@ say "Range compatibility: $compatibility_status · $compatibility_tier"
 say "$compatibility_guidance"
 say "Image: $image · ID: $target_image_id · Build: $target_build · Existing: $existing_image · Data: $data_volume"
 say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled · Authentication: $auth_mode"
+say "Docker network overlap: $network_overlap${network_overlap_detail:+ · $network_overlap_detail}"
 say "Deployment log: $log_file"
 [ "$check_only" = "no" ] || { say "Preflight complete; no container, firewall, or image state was changed."; exit 0; }
 
@@ -620,7 +690,7 @@ write_promotion_receipt() {
         printf 'schema=1\nprofile=%s\npromotion_ready=yes\ncompleted=%s\n' "$profile" "$(date -u +%FT%TZ)"
         printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build"
         printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
-        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$architecture"
+        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\nnetwork_overlap=%s\nnetwork_overlap_detail=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$network_overlap" "$network_overlap_detail" "$architecture"
         printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url"
         printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
     } > "$receipt_tmp" || return 1

@@ -86,7 +86,7 @@ overall="pass"
     printf '%-34s %-12s %s\n' "Existing NCT and active work" "$test_result" "preserve idle; reject active"
     printf '%-34s %-12s %s\n' "Promotion receipt identity" "$test_result" "exact match and mismatch"
     printf '%-34s %-12s %s\n' "Real host/image preflight" "$preflight_result" "optional --image check-only"
-    printf '%-34s %-12s %s\n' "Bridge/VPN subnet overlap" "planned" "launcher control not yet implemented"
+    printf '%-34s %-12s %s\n' "Bridge/VPN subnet overlap" "$test_result" "Test warns; Range/Mission stop"
     printf '%-34s %-12s %s\n' "Post-deploy packet/scan runtime" "deploy-gate" "NET_RAW, tcpdump -D, raw socket, health"
     printf '\nAutomated test output:\n'
     cat "$tmp_test"

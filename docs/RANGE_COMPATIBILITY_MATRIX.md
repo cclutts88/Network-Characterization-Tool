@@ -32,9 +32,10 @@ path.
 | Existing older NCT | Idle and active fixtures | Data retained; active work blocks upgrade |
 | Promotion receipt | Match and mismatch fixtures | Exact image/build required |
 | `NET_RAW`, packet capture, raw socket, health | Deployment acceptance contract | Failure rolls back deployment |
-| Docker bridge/VPN overlap | Not yet automated | Open roadmap control |
+| Docker bridge/VPN overlap | Docker, host-route, and Saved Network fixtures | Test warns; Range/Mission stop |
 | Representative old range hosts | Requires range lab | Record with the generated report |
 
-The matrix item remains open until bridge/VPN overlap detection is implemented
-and the same report is captured on representative older range hosts. A passing
-developer-host matrix is development evidence, not mission readiness.
+The matrix item remains open until the same report is captured on representative
+older range hosts. A passing developer-host matrix is development evidence, not
+mission readiness. Automatic selection and verification of a replacement bridge
+range remains a separate deployment control.
