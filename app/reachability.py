@@ -162,11 +162,87 @@ def _service_observation(destination: Endpoint, protocol: str, port: int, huntin
         and str(item.get("protocol") or "tcp").lower() == protocol
         and int(item.get("port") or 0) == port
     ), None)
+    if finding and str(finding.get("state") or "").casefold() == "open|filtered":
+        return {
+            "state": "observed_inconclusive",
+            "host": host,
+            "finding": None,
+            "coverage": None,
+            "port_observation": finding,
+        }
     if finding:
-        return {"state": "observed_exposed", "host": host, "finding": finding}
+        return {"state": "observed_exposed", "host": host, "finding": finding, "coverage": None}
     if host:
-        return {"state": "not_observed", "host": host, "finding": None}
-    return {"state": "host_not_observed", "host": None, "finding": None}
+        observed = next((
+            item for item in host.get("observed_ports") or []
+            if str(item.get("protocol") or "").lower() == protocol
+            and int(item.get("port") or 0) == port
+        ), None)
+        if observed and str(observed.get("state") or "").lower() in {
+            "open", "open|filtered"
+        }:
+            return {
+                "state": "observed_inconclusive",
+                "host": host,
+                "finding": None,
+                "coverage": None,
+                "port_observation": observed,
+            }
+        proof = _scan_coverage_proof(host, protocol, port)
+        if proof:
+            return {
+                "state": "not_exposed",
+                "host": host,
+                "finding": None,
+                "coverage": proof,
+            }
+        return {"state": "not_observed", "host": host, "finding": None, "coverage": None}
+    return {"state": "host_not_observed", "host": None, "finding": None, "coverage": None}
+
+
+def _service_range_contains(services: str, port: int) -> bool:
+    """Return whether an exact Nmap scaninfo service list includes a port."""
+    for token in str(services or "").split(","):
+        token = token.strip()
+        if ":" in token:
+            token = token.rsplit(":", 1)[-1].strip()
+        if not token:
+            continue
+        if re.fullmatch(r"\d+", token):
+            if int(token) == port:
+                return True
+            continue
+        match = re.fullmatch(r"(\d+)\s*-\s*(\d+)", token)
+        if match and int(match.group(1)) <= port <= int(match.group(2)):
+            return True
+    return False
+
+
+def _scan_type_supports_exposure(scan_type: dict, protocol: str) -> bool:
+    kind = str(scan_type.get("type") or "").casefold()
+    if protocol == "tcp":
+        return kind in {"syn", "connect"}
+    return kind == "udp"
+
+
+def _scan_coverage_proof(host: dict, protocol: str, port: int) -> dict | None:
+    if str(host.get("state") or "up").casefold() not in {"", "up"}:
+        return None
+    for coverage in host.get("scan_coverages") or []:
+        for scan_type in coverage.get("scan_types") or []:
+            if str(scan_type.get("protocol") or "").casefold() != protocol:
+                continue
+            if not _scan_type_supports_exposure(scan_type, protocol):
+                continue
+            services = str(scan_type.get("services") or "").strip()
+            if services and _service_range_contains(services, port):
+                return {
+                    "scan_type": scan_type,
+                    "observed_at": coverage.get("observed_at"),
+                    "source_refs": list(coverage.get("source_refs") or []),
+                    "command": coverage.get("command"),
+                }
+    return None
 
 
 def _endpoint_interface(endpoint: Endpoint, analysis: dict, *, role: str | None = None) -> str | None:
@@ -630,6 +706,30 @@ def evaluate_reachability(
             "title": f"{protocol.upper()}/{effective_port} observed open",
             "detail": " · ".join(str(value) for value in (service_name, finding.get("product"), finding.get("version")) if value),
         })
+    elif service["state"] == "not_exposed":
+        coverage = service["coverage"] or {}
+        scan_type = coverage.get("scan_type") or {}
+        scan_label = str(scan_type.get("type") or "Nmap").upper()
+        observed_at = coverage.get("observed_at")
+        detail = (
+            f"The observed host was included in retained {scan_label} coverage "
+            f"that explicitly assessed {protocol.upper()}/{effective_port}; no open service was observed."
+        )
+        if observed_at:
+            detail += f" Evidence time: {observed_at}."
+        evidence.append({
+            "kind": "coverage",
+            "title": f"{protocol.upper()}/{effective_port} assessed — not exposed",
+            "detail": detail,
+            "raw": coverage.get("command"),
+        })
+        caveats.append(
+            "Not Exposed reflects the retained Nmap observation from the NCT host at scan time; later service or filtering changes require a new scan."
+        )
+    elif service["state"] == "observed_inconclusive":
+        caveats.append(
+            f"The retained result for {protocol.upper()}/{effective_port} was open|filtered, so NCT cannot establish whether the service was exposed."
+        )
     elif service["state"] == "not_observed":
         caveats.append(f"The destination host was observed, but {protocol.upper()}/{effective_port} was not present in retained open-port evidence. This is not proof that policy blocks it.")
     elif service["state"] == "host_not_observed":
@@ -677,6 +777,12 @@ def evaluate_reachability(
     elif actions == {"deny"}:
         outcome, confidence = "Expected Blocked", "high"
         explanation = "The retained ordered policy denies this new flow for the selected endpoints and service."
+    elif service["state"] == "not_exposed":
+        outcome, confidence = "Not Exposed", "high"
+        explanation = (
+            f"Retained Nmap evidence explicitly assessed {protocol.upper()}/{effective_port} "
+            "on the observed destination and did not find the service exposed from the NCT host."
+        )
     elif actions == {"permit"}:
         outcome, confidence = "Expected Allowed", "high"
         explanation = "The retained ordered policy permits this new flow for the selected endpoints and service."
@@ -759,6 +865,7 @@ def evaluate_reachability(
             "destination_nat_translations": len(destination_translations),
             "source_nat_translations": len(source_translations),
             "nat_unresolved": len(nat_unresolved),
+            "coverage_proofs": 1 if service["state"] == "not_exposed" else 0,
             "evidence": len(evidence),
         },
     }

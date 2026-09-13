@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import ipaddress
+import json
 
 from app.comparison import canonical_host_key
 from app.ip_sort import ip_sort_key
@@ -473,6 +474,18 @@ def build_hunting_analysis(
         os_identity["device_type"] = device_type
         _apply_host_os_identity(os_identity)
         source_refs = list((evidence or {}).get("evidence", {}).get("sources") or [])
+        observed_at = (evidence or {}).get("completed_at") or (evidence or {}).get("created_at")
+        raw_coverages = list(host.get("scan_coverages") or [])
+        if not raw_coverages and analysis.get("coverage"):
+            raw_coverages = [analysis["coverage"]]
+        scan_coverages = [
+            {
+                **coverage,
+                "source_refs": source_refs,
+                "observed_at": observed_at,
+            }
+            for coverage in raw_coverages
+        ]
         for finding in host_findings:
             finding.update({
                 "subnet": subnet,
@@ -481,8 +494,7 @@ def build_hunting_analysis(
                 "os_filter": os_identity["os_filter"],
                 "os_inference": os_identity["os_inference"],
                 "source_refs": source_refs,
-                "last_observed": (evidence or {}).get("completed_at")
-                or (evidence or {}).get("created_at"),
+                "last_observed": observed_at,
             })
         hosts.append({
             "host_key": canonical_host_key(host),
@@ -523,11 +535,13 @@ def build_hunting_analysis(
                 if any(state in item["evidence_states"] for item in host_findings)
             ],
             "finding_count": len(host_findings),
+            "state": host.get("state"),
+            "observed_ports": list(host.get("observed_ports") or []),
+            "scan_coverages": scan_coverages,
             "evidence_origin": "nmap",
             "has_configuration_evidence": False,
             "source_refs": source_refs,
-            "last_observed": (evidence or {}).get("completed_at")
-            or (evidence or {}).get("created_at"),
+            "last_observed": observed_at,
         })
     return _summarize_hunting(
         hosts,
@@ -559,6 +573,15 @@ def merge_hunting_analyses(
                 hosts[key].setdefault("source_refs", []).extend(
                     item for item in host.get("source_refs") or []
                     if item.get("url") not in known_sources
+                )
+                known_coverages = {
+                    json.dumps(item, sort_keys=True, default=str)
+                    for item in hosts[key].get("scan_coverages") or []
+                }
+                hosts[key].setdefault("scan_coverages", []).extend(
+                    item for item in host.get("scan_coverages") or []
+                    if json.dumps(item, sort_keys=True, default=str)
+                    not in known_coverages
                 )
         for finding in analysis.get("findings") or []:
             key = _finding_key(finding)

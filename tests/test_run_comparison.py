@@ -169,6 +169,36 @@ def test_coverage_changes_are_explicit_warnings():
     assert any("Profile version differs" in warning for warning in warnings)
 
 
+def test_merged_host_retains_only_coverage_from_xmls_where_it_appeared():
+    tcp_coverage = {
+        "protocols": ["TCP"],
+        "scan_types": [{"type": "syn", "protocol": "TCP", "services": "22"}],
+    }
+    udp_coverage = {
+        "protocols": ["UDP"],
+        "scan_types": [{"type": "udp", "protocol": "UDP", "services": "53"}],
+    }
+    shared = {
+        "ip": "10.0.0.10", "state": "up", "os_group": "Unclassified",
+        "ports": [], "observed_ports": [], "scan_coverages": [tcp_coverage],
+    }
+    first = {"hosts": [shared], "coverage": tcp_coverage, "warnings": []}
+    second = {
+        "hosts": [
+            {**shared, "scan_coverages": [udp_coverage]},
+            {**shared, "ip": "10.0.0.20", "scan_coverages": [udp_coverage]},
+        ],
+        "coverage": udp_coverage,
+        "warnings": [],
+    }
+
+    merged = merge_analyses([first, second])
+
+    by_ip = {item["ip"]: item for item in merged["hosts"]}
+    assert by_ip["10.0.0.10"]["scan_coverages"] == [tcp_coverage, udp_coverage]
+    assert by_ip["10.0.0.20"]["scan_coverages"] == [udp_coverage]
+
+
 def test_xml_coverage_warnings_include_targets_and_exact_port_sets():
     warnings = coverage_warnings(
         {

@@ -58,6 +58,7 @@ def test_parser_surfaces_mac_hostname_protocol_and_coverage():
     assert host["trace"]["hops"][0]["ip"] == "10.20.30.1"
     assert host["trace"]["hops"][0]["ttl"] == 1
     assert len(host["observed_ports"]) == 2
+    assert host["scan_coverages"] == [analysis["coverage"]]
 
 
 def test_parser_warns_when_reset_responses_make_an_entire_subnet_look_online():

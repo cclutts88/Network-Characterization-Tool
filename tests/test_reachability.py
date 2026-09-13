@@ -21,6 +21,29 @@ HUNTING = {
     }],
 }
 
+
+def covered_hunting(*, services: str = "1-1024", scan_type: str = "syn", observed_ports=None):
+    return {
+        "hosts": [{
+            "ip": "10.90.0.10",
+            "hostname": "app01",
+            "state": "up",
+            "observed_ports": observed_ports or [],
+            "scan_coverages": [{
+                "source": "nmap_xml",
+                "scan_types": [{
+                    "type": scan_type,
+                    "protocol": "TCP",
+                    "services": services,
+                    "service_count": 1024,
+                }],
+                "command": "nmap -sS -p 1-1024 10.90.0.10",
+                "observed_at": "2026-09-12T12:00:00+00:00",
+            }],
+        }],
+        "findings": [],
+    }
+
 DEVICE = {
     "run_id": "a" * 32,
     "device": {"name": "Edge Firewall", "address": "10.80.0.1", "type": "firewall"},
@@ -99,6 +122,73 @@ def test_missing_open_port_does_not_claim_blocked_or_not_exposed():
     assert result["outcome"] == "Unknown"
     assert result["service_observation"] == "not_observed"
     assert any("not proof" in item for item in result["caveats"])
+
+
+def test_exact_host_port_coverage_supports_not_exposed():
+    result = assess(port=22, device_analyses=[], hunting=covered_hunting())
+
+    assert result["outcome"] == "Not Exposed"
+    assert result["confidence"] == "high"
+    assert result["service_observation"] == "not_exposed"
+    assert result["counts"]["coverage_proofs"] == 1
+    coverage = next(item for item in result["evidence"] if item["kind"] == "coverage")
+    assert coverage["title"] == "TCP/22 assessed — not exposed"
+    assert "NCT host at scan time" in " ".join(result["caveats"])
+
+
+def test_uncovered_port_and_non_service_scan_do_not_support_not_exposed():
+    uncovered = assess(port=2049, device_analyses=[], hunting=covered_hunting())
+    ack_only = assess(
+        port=22,
+        device_analyses=[],
+        hunting=covered_hunting(scan_type="ack"),
+    )
+
+    assert uncovered["outcome"] == "Unknown"
+    assert uncovered["service_observation"] == "not_observed"
+    assert ack_only["outcome"] == "Unknown"
+    assert ack_only["service_observation"] == "not_observed"
+
+
+def test_open_filtered_observation_does_not_support_not_exposed():
+    hunting = covered_hunting(observed_ports=[{
+        "protocol": "tcp", "port": 22, "state": "open|filtered",
+    }])
+
+    result = assess(port=22, device_analyses=[], hunting=hunting)
+
+    assert result["outcome"] == "Unknown"
+    assert result["service_observation"] == "observed_inconclusive"
+    assert any("open|filtered" in item for item in result["caveats"])
+
+    result = assess(
+        port=22,
+        device_analyses=[],
+        hunting={
+            **covered_hunting(),
+            "findings": [{
+                "ip": "10.90.0.10", "protocol": "tcp", "port": 22,
+                "state": "open|filtered", "service": "unknown",
+            }],
+        },
+    )
+    assert result["outcome"] == "Unknown"
+    assert result["service_observation"] == "observed_inconclusive"
+
+
+def test_explicit_deny_remains_expected_blocked_when_service_is_not_exposed():
+    device = {
+        **DEVICE,
+        "policy": {"firewall_acl": [{
+            "evidence": "access-list 101 deny tcp any host 10.90.0.10 eq 22"
+        }]},
+    }
+
+    result = assess(port=22, device_analyses=[device], hunting=covered_hunting())
+
+    assert result["outcome"] == "Expected Blocked"
+    assert result["service_observation"] == "not_exposed"
+    assert {item["kind"] for item in result["evidence"]} >= {"policy", "coverage"}
 
 
 def test_external_destination_uses_default_route():

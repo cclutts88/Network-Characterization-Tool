@@ -216,6 +216,34 @@ def test_network_hunt_merges_newest_first_without_duplicate_hosts_or_findings():
     assert {item["version"] for item in result["findings"]} == {"9.2"}
 
 
+def test_hunting_retains_per_host_scan_coverage_across_network_merge():
+    tcp = {
+        "source": "nmap_xml",
+        "scan_types": [{"type": "syn", "protocol": "TCP", "services": "22,80"}],
+    }
+    udp = {
+        "source": "nmap_xml",
+        "scan_types": [{"type": "udp", "protocol": "UDP", "services": "53"}],
+    }
+    newer = build_hunting_analysis(
+        {"hosts": [{**host("10.0.0.10", []), "scan_coverages": [tcp]}]},
+        evidence={"completed_at": "2026-09-12T12:00:00+00:00"},
+    )
+    older = build_hunting_analysis(
+        {"hosts": [{**host("10.0.0.10", []), "scan_coverages": [udp]}]},
+        evidence={"completed_at": "2026-09-11T12:00:00+00:00"},
+    )
+
+    result = merge_hunting_analyses([newer, older])
+
+    coverages = result["hosts"][0]["scan_coverages"]
+    assert len(coverages) == 2
+    assert {item["scan_types"][0]["protocol"] for item in coverages} == {"TCP", "UDP"}
+    assert {item["observed_at"] for item in coverages} == {
+        "2026-09-12T12:00:00+00:00", "2026-09-11T12:00:00+00:00",
+    }
+
+
 def test_network_hunt_adds_configuration_devices_without_claiming_nmap_observation():
     result = build_hunting_analysis({
         "hosts": [host("10.0.0.10", [port(22, "ssh", "OpenSSH")])]

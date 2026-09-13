@@ -41,6 +41,9 @@ SearchSploit database, and visualizes retained topology evidence.
 - A dedicated network-wide Hunt view with service-aware datasets, combined
   host/network/evidence filters, CVE categorization, collapsible result panels,
   and scan-to-scan change analysis.
+- Read-only Reach analysis that correlates retained routes, applied policy,
+  NAT, and Nmap services. A Not Exposed result requires exact per-host Nmap
+  protocol/port coverage rather than merely assuming an unlisted port is closed.
 - Audited analyst OS corrections from the Nmap host inventory. Scanner evidence
   remains visible and unchanged; the confirmed value is used for Hunt and Map
   presentation, and later scanner disagreement is flagged.

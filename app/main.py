@@ -705,6 +705,7 @@ def parse_xml(content: bytes) -> dict:
     if finished is None:
         warnings.append("The XML does not contain completed run statistics")
 
+    coverage = nmap_xml_coverage(root)
     hosts: list[dict] = []
     port_frequency: Counter[tuple[str, int]] = Counter()
     peer_groups: defaultdict[str, list[str]] = defaultdict(list)
@@ -810,6 +811,9 @@ def parse_xml(content: bytes) -> dict:
             "classification_basis": classification_basis,
             "ports": ports,
             "observed_ports": observed_ports,
+            # Retain coverage beside the host that was actually present in this
+            # XML so grouped scans cannot borrow proof from another file.
+            "scan_coverages": [coverage],
             "trace": trace,
         }
         host_record["os_inference"] = infer_os_identity(host_record)
@@ -908,7 +912,7 @@ def parse_xml(content: bytes) -> dict:
         "up_count": len(up_hosts),
         "mac_count": mac_count,
         "discovery_reason_counts": dict(sorted(discovery_reason_counts.items())),
-        "coverage": nmap_xml_coverage(root),
+        "coverage": coverage,
         "warnings": warnings,
         "hosts": hosts,
         "peer_groups": [

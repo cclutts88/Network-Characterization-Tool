@@ -275,8 +275,19 @@ def merge_analyses(analyses: Iterable[dict]) -> dict:
                     values = {_port_key(item): item for item in merged.get(field, []) or []}
                     values.update({_port_key(item): item for item in host.get(field, []) or []})
                     merged[field] = [values[item] for item in sorted(values)]
+                coverage_values = list(merged.get("scan_coverages") or [])
+                coverage_keys = {
+                    json.dumps(item, sort_keys=True, default=str)
+                    for item in coverage_values
+                }
+                for coverage in host.get("scan_coverages") or []:
+                    coverage_key = json.dumps(coverage, sort_keys=True, default=str)
+                    if coverage_key not in coverage_keys:
+                        coverage_values.append(coverage)
+                        coverage_keys.add(coverage_key)
+                merged["scan_coverages"] = coverage_values
                 for field, value in host.items():
-                    if field not in {"ports", "observed_ports"} and value not in (None, "", [], {}):
+                    if field not in {"ports", "observed_ports", "scan_coverages"} and value not in (None, "", [], {}):
                         merged[field] = value
     values = sorted(hosts.values(), key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     summary = _summarize_hosts(values)

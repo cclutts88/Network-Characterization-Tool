@@ -2,6 +2,11 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added proof-based Not Exposed results to Reach. NCT now requires the exact
+  requested protocol/port in retained per-host Nmap coverage, treats
+  `open|filtered` observations as inconclusive, and shows the scan-time/NCT-host
+  limitation. Explicit policy denies remain Expected Blocked even when the
+  service was also not exposed.
 - Added combined Router + Firewall device collection. The Device page merges
   both read-only templates without duplicate commands, and Device Analysis and
   Map retain and display both observed roles.

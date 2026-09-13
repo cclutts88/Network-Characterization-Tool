@@ -589,7 +589,7 @@ within Reachability.
   Exposed without claiming unsupported certainty.
   - [x] Report Local, Routed, exact-policy Expected Allowed/Blocked, and Unknown
     with confidence, evidence, and prominent caveats.
-  - [ ] Report Not Exposed only when retained scan coverage proves that the
+  - [x] Report Not Exposed only when retained scan coverage proves that the
     requested service was actually assessed and not exposed.
 - [ ] Group source-exposure reports by Saved Network and preserve policy objects
   and evidence.
