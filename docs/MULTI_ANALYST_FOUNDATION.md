@@ -16,7 +16,9 @@ NCT_COOKIE_SECURE=1
 
 After sign-in, every primary page shows the active analyst and role. An
 Administrator can open **Accounts** from that control to create named Admin,
-Analyst, or Viewer accounts; passwords are never displayed after creation.
+Analyst, or Viewer accounts; enable or disable accounts; reset passwords; and
+review account audit history. Passwords are never displayed after creation or
+reset. Disabling an account or resetting its password revokes all its sessions.
 
 The password file should be mounted read-only, contain only the initial
 password, and be removed from the deployment after the first Administrator has

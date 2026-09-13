@@ -481,6 +481,9 @@ within Reachability.
   - [x] Bind authenticated scan, profile, schedule, safety, Saved Network, and
     device-collection actor fields to the server session while preserving the
     existing typed-operator workflow when authentication is disabled.
+  - [x] Add Administrator account enable/disable and password reset with session
+    revocation, last-active-Administrator protection, and visible account audit
+    history.
 - [ ] Give each analyst a persistent personal workspace for saved map layouts,
   filters, investigation notes, scan drafts, and interface preferences.
   - [x] Move named Map layouts to owner-scoped server storage when authentication

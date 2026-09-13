@@ -219,3 +219,81 @@ def list_users(db_path: Path) -> list[dict]:
         return [dict(row) for row in db.execute(
             "SELECT username, display_name, role, disabled, created_at, created_by FROM analyst_users ORDER BY username"
         ).fetchall()]
+
+
+def set_user_disabled(
+    db_path: Path, *, username: object, disabled: bool, actor: object
+) -> dict:
+    username = normalize_username(username)
+    actor_name = str(actor or "").strip()[:100] or "system"
+    changed_at = utc_now().isoformat()
+    with sqlite3.connect(db_path) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            "SELECT username, display_name, role, disabled FROM analyst_users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if row is None:
+            raise KeyError("Analyst account not found")
+        if disabled and row["role"] == "admin" and not row["disabled"]:
+            active_admins = int(
+                db.execute(
+                    "SELECT COUNT(*) FROM analyst_users WHERE role = 'admin' AND disabled = 0"
+                ).fetchone()[0]
+            )
+            if active_admins <= 1:
+                raise ValueError("The last active Administrator cannot be disabled")
+        db.execute(
+            "UPDATE analyst_users SET disabled = ? WHERE username = ?",
+            (1 if disabled else 0, username),
+        )
+        if disabled:
+            db.execute("DELETE FROM analyst_sessions WHERE username = ?", (username,))
+        db.execute(
+            "INSERT INTO analyst_auth_audit (username, action, actor, changed_at) VALUES (?, ?, ?, ?)",
+            (username, "disable" if disabled else "enable", actor_name, changed_at),
+        )
+    return {
+        "username": row["username"],
+        "display_name": row["display_name"],
+        "role": row["role"],
+        "disabled": bool(disabled),
+    }
+
+
+def reset_user_password(
+    db_path: Path, *, username: object, password: str, actor: object
+) -> dict:
+    username = normalize_username(username)
+    actor_name = str(actor or "").strip()[:100] or "system"
+    salt, digest = _password_hash(password)
+    changed_at = utc_now().isoformat()
+    with sqlite3.connect(db_path) as db:
+        exists = db.execute(
+            "SELECT 1 FROM analyst_users WHERE username = ?", (username,)
+        ).fetchone()
+        if exists is None:
+            raise KeyError("Analyst account not found")
+        db.execute(
+            "UPDATE analyst_users SET password_salt = ?, password_hash = ? WHERE username = ?",
+            (salt, digest, username),
+        )
+        db.execute("DELETE FROM analyst_sessions WHERE username = ?", (username,))
+        db.execute(
+            "INSERT INTO analyst_auth_audit (username, action, actor, changed_at) VALUES (?, 'password_reset', ?, ?)",
+            (username, actor_name, changed_at),
+        )
+    return {"username": username, "password_reset": True, "sessions_revoked": True}
+
+
+def auth_audit_history(db_path: Path, limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit), 1000))
+    with sqlite3.connect(db_path) as db:
+        db.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in db.execute(
+                "SELECT audit_id, username, action, actor, changed_at FROM analyst_auth_audit ORDER BY audit_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        ]

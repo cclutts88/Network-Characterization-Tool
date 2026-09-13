@@ -67,14 +67,17 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.auth import (
     SESSION_COOKIE,
     auth_enabled,
+    auth_audit_history,
     cookie_secure,
     create_session,
     create_user,
     end_session,
     init_auth_storage,
     list_users,
+    reset_user_password,
     session_hours,
     session_identity,
+    set_user_disabled,
     verify_credentials,
 )
 from app.workspaces import (
@@ -178,6 +181,14 @@ class AnalystUserRequest(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     display_name: str = Field(min_length=1, max_length=100)
     role: Literal["admin", "analyst", "viewer"]
+    password: str = Field(min_length=12, max_length=256)
+
+
+class AnalystUserStateRequest(BaseModel):
+    disabled: bool
+
+
+class AnalystPasswordResetRequest(BaseModel):
     password: str = Field(min_length=12, max_length=256)
 
 
@@ -980,6 +991,50 @@ def add_analyst_user(request: Request, user: AnalystUserRequest) -> dict:
         return create_user(DB_PATH, **user.model_dump(), created_by=actor["username"])
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/users/{username}/state")
+def change_analyst_user_state(
+    request: Request, username: str, state: AnalystUserStateRequest
+) -> dict:
+    actor = require_admin(request)
+    if state.disabled and username.strip().lower() == actor["username"]:
+        raise HTTPException(status_code=409, detail="You cannot disable your active account")
+    try:
+        return set_user_disabled(
+            DB_PATH,
+            username=username,
+            disabled=state.disabled,
+            actor=actor["username"],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/users/{username}/password")
+def change_analyst_password(
+    request: Request, username: str, reset: AnalystPasswordResetRequest
+) -> dict:
+    actor = require_admin(request)
+    try:
+        return reset_user_password(
+            DB_PATH,
+            username=username,
+            password=reset.password,
+            actor=actor["username"],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/auth/audit")
+def analyst_account_audit(request: Request, limit: int = 200) -> list[dict]:
+    require_admin(request)
+    return auth_audit_history(DB_PATH, limit)
 
 
 @app.get("/api/workspaces/layouts")

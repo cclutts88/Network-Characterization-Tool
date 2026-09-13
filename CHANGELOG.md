@@ -32,6 +32,9 @@
   changes, No-Strike changes, fallback decisions, and device collection plans
   to the signed-in server identity while preserving typed operator labels in
   authentication-disabled Test mode.
+- Added Administrator account enable/disable, password reset, forced session
+  revocation, and account-audit history. NCT prevents an Administrator from
+  disabling the account currently in use or the last active Administrator.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility

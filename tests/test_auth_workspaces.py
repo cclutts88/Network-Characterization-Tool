@@ -103,6 +103,30 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
                 "password": "observer password 123",
             },
         ).status_code == 200
+        assert admin.post(
+            "/api/auth/users/nctadmin/state", json={"disabled": True}
+        ).status_code == 409
+        reset = admin.post(
+            "/api/auth/users/observer/password",
+            json={"password": "replacement password 456"},
+        )
+        assert reset.status_code == 200
+        assert reset.json()["sessions_revoked"] is True
+        disabled = admin.post(
+            "/api/auth/users/observer/state", json={"disabled": True}
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["disabled"] is True
+        assert admin.post(
+            "/api/auth/users/observer/state", json={"disabled": False}
+        ).status_code == 200
+        audit = admin.get("/api/auth/audit").json()
+        assert {item["action"] for item in audit} >= {
+            "create",
+            "password_reset",
+            "disable",
+            "enable",
+        }
         corrected_os = admin.post(
             "/api/os-overrides",
             json={
@@ -200,7 +224,7 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
     with TestClient(app) as viewer:
         assert viewer.post(
             "/api/auth/login",
-            json={"username": "observer", "password": "observer password 123"},
+            json={"username": "observer", "password": "replacement password 456"},
         ).status_code == 200
         listing = viewer.get("/api/workspaces/layouts").json()
         assert listing["server_persistence"] is True
