@@ -50,7 +50,9 @@ SearchSploit database, and visualizes retained topology evidence.
   retained outcome and exports the evidence without changing a device. A
   companion proposed-route check adds a route on a retained interface or
   removes an exact retained route in memory, exposes broader fallback routes,
-  and exports the comparison without contacting a device.
+  changes an explicit metric/preference, and exports the comparison without
+  contacting a device. Equal-prefix path selection is projected only where all
+  competing retained routes have comparable numeric priority evidence.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual

@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added vendor-neutral metric/preference comparisons for equally specific
+  retained routes. Reach shows the selected path before and after, changes it
+  only when every competing route has comparable priority evidence, and calls
+  incomplete or vendor-specific tie-breaks unresolved.
 - Added a read-only proposed-route check to Reach. Analysts can add a route on
   a retained interface or remove an exact retained route, compare current and
   projected paths, preserve broader fallback routes and limitations, and export

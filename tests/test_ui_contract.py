@@ -393,6 +393,10 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="routeSimulationDevice"' in html
     assert 'id="routeSimulationNetwork"' in html
     assert 'id="routeSimulationInterface"' in html
+    assert 'id="routeSimulationPriorityKind"' in html
+    assert 'id="routeSimulationPriorityValue"' in html
+    assert 'id="routeSimulationPath"' in html
+    assert 'value="set_priority"' in html
     assert 'id="exportRouteSimulation"' in html
     assert "/api/reachability/simulate-route" in html
     assert "NCT_RouteWhatIf_" in html

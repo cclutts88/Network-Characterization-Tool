@@ -637,17 +637,18 @@ Available at https://x.x.x.x:443
 
 ### Future extension — Hardening Validation
 
-- [ ] Simulate proposed firewall, ACL, or routing controls without changing
+- [x] Simulate proposed firewall, ACL, or routing controls without changing
   production devices.
   - [x] Add a read-only exact-flow policy projection for retained routers and
     firewalls. Compare the current outcome with a proposed permit or deny on a
     selected device, show source attachment and address-pair scope, preserve
     evidence and caveats, and export the complete comparison as JSON.
-  - [ ] Add proposed route insertion, removal, and metric/preference changes.
+  - [x] Add proposed route insertion, removal, and metric/preference changes.
     - [x] Add read-only retained-device route insertion/removal comparison with
       exact destination coverage, retained-interface validation, broader-route
       fallback visibility, evidence/caveats, and JSON export.
-    - [ ] Add metric/preference changes and vendor-neutral path-choice modeling.
+    - [x] Add metric/preference changes and vendor-neutral path-choice modeling
+      for equally specific routes with complete comparable retained values.
 - [ ] Compare current and proposed paths, alternate paths, and collateral impact.
 - [ ] Export evidence-backed hardening reports and map comparisons.
 

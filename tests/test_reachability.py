@@ -257,6 +257,8 @@ def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
         "interface": "inside",
         "next_hop": "10.80.0.2",
         "changed_route_count": 1,
+        "priority_kind": None,
+        "priority_value": None,
     }
     assert result["comparison"]["baseline_route_count"] == 0
     assert result["comparison"]["projected_route_count"] == 1
@@ -307,6 +309,55 @@ def test_proposed_route_requires_destination_coverage_and_exact_remove_match():
         simulate_proposed_route_control(
             **values, action="remove", route_network="10.90.0.10/32",
         )
+
+
+@pytest.mark.parametrize("priority_kind", ["metric", "preference"])
+def test_proposed_route_priority_change_can_change_selected_equal_prefix_path(priority_kind):
+    first = {
+        "network": "10.90.0.0/24", "via": "10.80.0.2",
+        "interface": "inside", "line": "route path-a metric 100",
+        priority_kind: 100,
+    }
+    second = {
+        "network": "10.90.0.0/24", "via": "10.80.0.3",
+        "interface": "inside", "line": "route path-b metric 200",
+        priority_kind: 200,
+    }
+    device = {**DEVICE, "route_analysis": {"routes": [first, second]}}
+
+    result = simulate_proposed_route_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[device],
+        action="set_priority", device_key="10.80.0.1",
+        route_network="10.90.0.0/24", route_interface="inside",
+        next_hop="10.80.0.2", priority_kind=priority_kind,
+        priority_value=300,
+    )
+
+    comparison = result["comparison"]
+    assert comparison["path_changed"] is True
+    assert comparison["selected_route_before"]["via"] == "10.80.0.2"
+    assert comparison["selected_route_after"]["via"] == "10.80.0.3"
+    assert comparison["selected_route_before"][priority_kind] == 100
+    assert comparison["selected_route_after"][priority_kind] == 200
+    assert result["proposal"]["priority_kind"] == priority_kind
+    assert result["proposal"]["priority_value"] == 300
+
+
+def test_equal_prefix_routes_without_comparable_priority_remain_explicitly_unresolved():
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "via": "10.80.0.2", "interface": "inside"},
+            {"network": "10.90.0.0/24", "via": "10.80.0.3", "interface": "inside", "metric": 20},
+        ]},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert result["retained_objects"]["routes"][0]["priority_comparable"] is False
+    assert any("cannot establish the active path" in item for item in result["caveats"])
 
 
 def test_explicit_acl_and_service_evidence_support_expected_allowed():

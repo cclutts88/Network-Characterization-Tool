@@ -178,11 +178,13 @@ class ReachabilitySimulationQuery(ReachabilityQuery):
 
 
 class ReachabilityRouteSimulationQuery(ReachabilityQuery):
-    action: Literal["add", "remove"]
+    action: Literal["add", "remove", "set_priority"]
     device_key: str = Field(min_length=1, max_length=160)
     route_network: str = Field(min_length=1, max_length=64)
     route_interface: str | None = Field(default=None, max_length=160)
     next_hop: str | None = Field(default=None, max_length=64)
+    priority_kind: Literal["metric", "preference"] | None = None
+    priority_value: int | None = Field(default=None, ge=0, le=4_294_967_295)
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -1940,6 +1942,8 @@ def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> 
             route_network=query.route_network,
             route_interface=query.route_interface,
             next_hop=query.next_hop,
+            priority_kind=query.priority_kind,
+            priority_value=query.priority_value,
             hunting=analyze_hunting_network(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),

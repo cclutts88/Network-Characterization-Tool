@@ -112,6 +112,72 @@ def _source_attached(source: Endpoint, analysis: dict) -> bool:
     return False
 
 
+def _route_priority_value(route: dict, field: str) -> int | None:
+    value = route.get(field)
+    if value not in (None, ""):
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+    match = re.search(
+        rf"\b{re.escape(field)}\s+(\d+)\b",
+        str(route.get("line") or ""),
+        re.I,
+    )
+    return int(match.group(1)) if match else None
+
+
+def _rank_route_candidates(candidates: list[dict]) -> list[dict]:
+    """Rank equally specific routes only when their retained priority is comparable."""
+    groups: dict[int, list[dict]] = {}
+    for item in candidates:
+        groups.setdefault(int(item["prefix"]), []).append(item)
+    ranked = []
+    for prefix in sorted(groups, reverse=True):
+        group = groups[prefix]
+        preferences = [item.get("preference") for item in group]
+        metrics = [item.get("metric") for item in group]
+        if len(group) == 1:
+            basis = "longest prefix"
+            comparable = True
+        elif all(value is not None for value in preferences):
+            if all(value is not None for value in metrics):
+                group = sorted(
+                    group,
+                    key=lambda item: (int(item["preference"]), int(item["metric"])),
+                )
+                best = (int(group[0]["preference"]), int(group[0]["metric"]))
+                comparable = sum(
+                    (int(item["preference"]), int(item["metric"])) == best
+                    for item in group
+                ) == 1
+                basis = "explicit preference then metric"
+            else:
+                group = sorted(group, key=lambda item: int(item["preference"]))
+                best = int(group[0]["preference"])
+                comparable = sum(int(item["preference"]) == best for item in group) == 1
+                basis = "explicit preference"
+        elif all(value is not None for value in metrics):
+            group = sorted(group, key=lambda item: int(item["metric"]))
+            best = int(group[0]["metric"])
+            comparable = sum(int(item["metric"]) == best for item in group) == 1
+            basis = "explicit metric"
+        else:
+            basis = "unresolved equal-prefix priority"
+            comparable = False
+        if not comparable and "unresolved" not in basis:
+            basis += " with unresolved tie"
+        for index, item in enumerate(group, 1):
+            ranked.append({
+                **item,
+                "selection_basis": basis,
+                "selection_order": index,
+                "priority_comparable": comparable,
+            })
+    return ranked
+
+
 def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: list[dict]) -> tuple[list[dict], list[dict]]:
     candidates = []
     excluded = []
@@ -152,11 +218,13 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                 "via": route.get("via"),
                 "interface": route.get("interface"),
                 "protocol": route.get("protocol"),
+                "preference": _route_priority_value(route, "preference"),
+                "metric": _route_priority_value(route, "metric"),
                 "evidence": route.get("line"),
                 "run_id": analysis.get("run_id"),
                 "prefix": prefix,
             })
-    return sorted(candidates, key=lambda item: item["prefix"], reverse=True), excluded
+    return _rank_route_candidates(candidates), excluded
 
 
 def _service_observation(destination: Endpoint, protocol: str, port: int, hunting: dict) -> dict:
@@ -826,13 +894,31 @@ def evaluate_reachability(
         caveats.append("The destination host is not present in the current retained network-wide scan evidence.")
 
     for route in routes[:5]:
+        priority = ""
+        if route.get("preference") is not None:
+            priority += f" · preference {route['preference']}"
+        if route.get("metric") is not None:
+            priority += f" · metric {route['metric']}"
         evidence.append({
             "kind": "route",
             "title": f"Route on {route['device']}",
-            "detail": f"{route['network']} via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else ""),
+            "detail": f"{route['network']} via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "") + priority,
             "raw": route.get("evidence"),
             "run_id": route.get("run_id"),
         })
+    top_prefix_routes = [
+        item for item in routes
+        if routes and item.get("prefix") == routes[0].get("prefix")
+    ]
+    if len(top_prefix_routes) > 1:
+        if all(item.get("priority_comparable") for item in top_prefix_routes):
+            caveats.append(
+                f"Equally specific retained routes were ordered by {routes[0].get('selection_basis')}; live forwarding, health checks, and vendor-specific tie-breakers were not verified."
+            )
+        else:
+            caveats.append(
+                "More than one equally specific route covers the destination, but explicit comparable preference or metric evidence is incomplete; NCT cannot establish the active path."
+            )
     for decision in policy:
         basis = ", ".join(decision.get("match_basis") or [])
         engine = str(decision.get("engine") or "")
@@ -927,7 +1013,12 @@ def evaluate_reachability(
     elif routes:
         route = routes[0]
         path.append({"kind": "device", "label": route["device"], "detail": route.get("device_address") or "Routing device"})
-        path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "")})
+        priority = ""
+        if route.get("preference") is not None:
+            priority += f" · preference {route['preference']}"
+        if route.get("metric") is not None:
+            priority += f" · metric {route['metric']}"
+        path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "") + priority})
     for translation in source_translations:
         translated_display = translation.get("source") or (
             f"{translation.get('output_interface') or 'outgoing interface'} address"
@@ -1157,18 +1248,27 @@ def simulate_proposed_route_control(
     hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
     action: str, device_key: str, route_network: str,
     route_interface: str | None = None, next_hop: str | None = None,
+    priority_kind: str | None = None, priority_value: int | None = None,
     flow_state: str = "new", source_external: bool = False,
 ) -> dict:
-    """Project one retained-device route addition or removal in memory only."""
+    """Project one retained-device route change in memory only."""
     action = str(action or "").strip().lower()
-    if action not in {"add", "remove"}:
-        raise ValueError("Proposed route action must be add or remove")
+    if action not in {"add", "remove", "set_priority"}:
+        raise ValueError("Proposed route action must be add, remove, or set_priority")
+    priority_kind = str(priority_kind or "").strip().lower() or None
+    if action == "set_priority":
+        if priority_kind not in {"metric", "preference"}:
+            raise ValueError("Choose metric or preference for the proposed priority")
+        if priority_value is None or not 0 <= int(priority_value) <= 4_294_967_295:
+            raise ValueError("Route priority must be from 0 through 4294967295")
+        priority_value = int(priority_value)
     try:
         network = ipaddress.ip_network(str(route_network or "").strip(), strict=False)
     except ValueError as exc:
         raise ValueError("Enter a valid IPv4 route network") from exc
     if network.version != 4:
         raise ValueError("Enter a valid IPv4 route network")
+    route_interface = str(route_interface or "").strip() or None
     next_hop = str(next_hop or "").strip() or None
     if next_hop:
         try:
@@ -1211,7 +1311,6 @@ def simulate_proposed_route_control(
     }
     changed_routes = []
     if action == "add":
-        route_interface = str(route_interface or "").strip()
         if not route_interface or route_interface not in retained_interfaces:
             raise ValueError("Choose one retained interface on the selected device")
         proposed_route = {
@@ -1226,20 +1325,41 @@ def simulate_proposed_route_control(
         routes.append(proposed_route)
         changed_routes.append(proposed_route)
     else:
-        kept_routes = []
-        for item in routes:
+        exact_matches = []
+        for index, item in enumerate(routes):
             try:
                 existing = ipaddress.ip_network(str(item.get("network") or ""), strict=False)
             except ValueError:
-                kept_routes.append(item)
                 continue
-            if existing == network:
-                changed_routes.append(item)
-            else:
-                kept_routes.append(item)
-        if not changed_routes:
+            if existing != network:
+                continue
+            if route_interface and str(item.get("interface") or "") != route_interface:
+                continue
+            if next_hop and str(item.get("via") or "") != next_hop:
+                continue
+            exact_matches.append((index, item))
+        if not exact_matches:
             raise ValueError("The selected device has no retained route with that exact network")
-        routes = kept_routes
+        if len(exact_matches) > 1:
+            raise ValueError(
+                "More than one exact retained route matched; choose its interface and/or next hop"
+            )
+        route_index, matched_route = exact_matches[0]
+        changed_routes.append(matched_route)
+        if action == "remove":
+            routes.pop(route_index)
+        else:
+            updated = {
+                **matched_route,
+                priority_kind: priority_value,
+                "simulated": True,
+                "line": (
+                    f"PROPOSED {priority_kind.upper()} {priority_value} for "
+                    f"{network} via {matched_route.get('via') or 'direct'} "
+                    f"interface {matched_route.get('interface') or 'unspecified'}"
+                ),
+            }
+            routes[route_index] = updated
     route_analysis["routes"] = routes
     projected = evaluate_reachability(
         source_text=source_text, destination_text=destination_text,
@@ -1247,7 +1367,11 @@ def simulate_proposed_route_control(
         saved_networks=saved_networks, device_analyses=projected_analyses,
         flow_state=flow_state, source_external=source_external,
     )
-    proposal_label = "Proposed route" if action == "add" else "Proposed route removal"
+    proposal_label = {
+        "add": "Proposed route",
+        "remove": "Proposed route removal",
+        "set_priority": "Proposed route priority",
+    }[action]
     proposed_evidence = {
         "kind": "proposal",
         "title": f"{proposal_label} on {device_name}",
@@ -1255,7 +1379,12 @@ def simulate_proposed_route_control(
             f"{network} · "
             + (
                 f"via {next_hop or 'direct'} · {route_interface}"
-                if action == "add" else f"{len(changed_routes)} exact retained route{'s' if len(changed_routes) != 1 else ''} removed from projection"
+                if action == "add"
+                else (
+                    f"{priority_kind} {priority_value} · retained route selected by exact network"
+                    if action == "set_priority"
+                    else "1 exact retained route removed from projection"
+                )
             )
         ),
     }
@@ -1268,11 +1397,18 @@ def simulate_proposed_route_control(
     projected["simulated"] = True
     projected["caveats"] = list(dict.fromkeys([
         "Simulation only: NCT did not connect to or change any network device.",
-        "The projection changes only the selected retained route record; route redistribution, dynamic convergence, policy-based routing, and device-specific administrative distance are not modeled.",
+        "The projection changes only the selected retained route record; route redistribution, dynamic convergence, policy-based routing, health checks, and vendor-specific tie-breakers are not modeled.",
+        "Preference and metric order is used only among equally specific routes when every competing retained route has an explicit comparable value.",
         *(projected.get("caveats") or []),
     ]))
     baseline_routes = list((baseline.get("retained_objects") or {}).get("routes") or [])
     projected_routes = list((projected.get("retained_objects") or {}).get("routes") or [])
+    baseline_selected = baseline_routes[0] if baseline_routes else None
+    projected_selected = projected_routes[0] if projected_routes else None
+    selected_fields = ("device", "device_address", "network", "via", "interface", "preference", "metric")
+    compact_selected = lambda item: (
+        {field: item.get(field) for field in selected_fields} if item else None
+    )
     return {
         "status": "reachability_route_simulation_complete",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1280,6 +1416,7 @@ def simulate_proposed_route_control(
             "action": action, "device": device_name, "device_address": device_address,
             "network": str(network), "interface": route_interface,
             "next_hop": next_hop, "changed_route_count": len(changed_routes),
+            "priority_kind": priority_kind, "priority_value": priority_value,
         },
         "baseline": baseline,
         "projected": projected,
@@ -1290,6 +1427,9 @@ def simulate_proposed_route_control(
             "projected_route_count": len(projected_routes),
             "changed_route_count": len(changed_routes),
             "network_addresses": int(network.num_addresses),
+            "selected_route_before": compact_selected(baseline_selected),
+            "selected_route_after": compact_selected(projected_selected),
+            "path_changed": compact_selected(baseline_selected) != compact_selected(projected_selected),
         },
         "disclaimer": (
             "Read-only route projection from retained evidence. It sends no network traffic and changes no device configuration."
