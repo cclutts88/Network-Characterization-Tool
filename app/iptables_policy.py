@@ -53,6 +53,9 @@ def _parse_rule(line: str, table: str, order: int) -> dict:
         tokens, "--sport", "--source-port", "--sports", "--source-ports"
     )
     states, _ = _option(tokens, "--state", "--ctstate")
+    to_destination, _ = _option(tokens, "--to-destination")
+    to_source, _ = _option(tokens, "--to-source")
+    to_ports, _ = _option(tokens, "--to-ports")
     set_matches = []
     for index, token in enumerate(tokens):
         if token != "--match-set" or index + 2 >= len(tokens):
@@ -88,6 +91,9 @@ def _parse_rule(line: str, table: str, order: int) -> dict:
         "source_ports": source_ports,
         "source_ports_negated": source_ports_negated,
         "states": [item.upper() for item in states.split(",")] if states else [],
+        "to_destination": to_destination,
+        "to_source": to_source,
+        "to_ports": to_ports,
         "set_matches": set_matches,
         "unsupported_modules": unsupported_modules,
         "evidence": line[:2000],
@@ -98,7 +104,9 @@ def _parse_rule(line: str, table: str, order: int) -> dict:
 def parse_iptables_policy(text: str, *, source_truncated: bool = False) -> dict:
     """Parse ordered iptables-save chains and compact ipset definitions."""
     rules = []
+    nat_rules = []
     chain_policies: dict[str, str] = {}
+    nat_chain_policies: dict[str, str] = {}
     ipsets: dict[str, dict] = {}
     table: str | None = None
     chain_orders: dict[tuple[str, str], int] = defaultdict(int)
@@ -117,17 +125,19 @@ def parse_iptables_policy(text: str, *, source_truncated: bool = False) -> dict:
             table = None
             continue
         declaration = re.match(r"^:(?P<chain>\S+)\s+(?P<policy>\S+)", line)
-        if table == "filter" and declaration:
-            chain_policies[declaration.group("chain")] = declaration.group("policy").upper()
+        if table in {"filter", "nat"} and declaration:
+            target = chain_policies if table == "filter" else nat_chain_policies
+            target[declaration.group("chain")] = declaration.group("policy").upper()
             continue
-        if table == "filter" and line.startswith("-A "):
+        if table in {"filter", "nat"} and line.startswith("-A "):
             chain = line.split(maxsplit=2)[1]
             key = (table, chain)
             chain_orders[key] += 1
-            if len(rules) < MAX_POLICY_RULES:
+            target_rules = rules if table == "filter" else nat_rules
+            if len(rules) + len(nat_rules) < MAX_POLICY_RULES:
                 rule = _parse_rule(line, table, chain_orders[key])
                 rule["line_number"] = line_number
-                rules.append(rule)
+                target_rules.append(rule)
             else:
                 rule_truncated = True
             continue
@@ -179,11 +189,15 @@ def parse_iptables_policy(text: str, *, source_truncated: bool = False) -> dict:
 
     return {
         "rules": rules,
+        "nat_rules": nat_rules,
         "chain_policies": chain_policies,
+        "nat_chain_policies": nat_chain_policies,
         "ipsets": list(ipsets.values()),
         "counts": {
             "rules": len(rules),
+            "nat_rules": len(nat_rules),
             "chains": len(chain_policies),
+            "nat_chains": len(nat_chain_policies),
             "ipsets": len(ipsets),
             "ipset_members": member_total,
         },
@@ -464,4 +478,112 @@ def evaluate_iptables_flow(
             "status": "unknown", "reason": "The retained FORWARD chain returned without a supported final verdict.",
             "trace": result.get("trace") or [],
         }
+    return result
+
+
+def _translation_target(value: str | None) -> tuple[str | None, int | None]:
+    if not value:
+        return None, None
+    host = value
+    translated_port = None
+    if value.count(":") == 1:
+        possible_host, possible_port = value.rsplit(":", 1)
+        if possible_port.isdigit():
+            host, translated_port = possible_host, int(possible_port)
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        return None, translated_port
+    return (str(parsed) if parsed.version == 4 else None), translated_port
+
+
+def evaluate_iptables_nat(
+    policy: dict,
+    *,
+    source: object,
+    destination: object,
+    protocol: str,
+    port: int,
+    source_external: bool = False,
+    destination_external: bool = False,
+    input_interface: str | None = None,
+    output_interface: str | None = None,
+) -> dict:
+    """Walk ordered NAT PREROUTING and report a supported destination translation."""
+    rules_by_chain: dict[str, list[dict]] = defaultdict(list)
+    for rule in policy.get("nat_rules") or []:
+        if rule.get("chain"):
+            rules_by_chain[str(rule["chain"])].append(rule)
+    for rules in rules_by_chain.values():
+        rules.sort(key=lambda item: int(item.get("rule_order") or 0))
+    if not rules_by_chain:
+        return {"status": "not_present", "trace": []}
+    if not policy.get("complete", False):
+        return {
+            "status": "unknown", "reason": "The retained NAT policy or address-set membership is incomplete.",
+            "trace": [],
+        }
+    ipsets = {item["name"]: item for item in policy.get("ipsets") or [] if item.get("name")}
+    context = {
+        "source": source, "destination": destination,
+        "source_external": source_external, "destination_external": destination_external,
+        "protocol": protocol.lower(), "port": port,
+        "input_interface": input_interface, "output_interface": output_interface,
+    }
+    trace = []
+
+    def walk(chain: str, stack: tuple[str, ...]) -> dict:
+        if chain in stack or len(stack) >= 24:
+            return {"status": "unknown", "reason": f"NAT chain recursion could not be resolved at {chain}."}
+        if chain not in rules_by_chain:
+            return {"status": "return", "trace": trace.copy()}
+        for rule in rules_by_chain[chain]:
+            matched, basis = _rule_matches(rule, context, ipsets)
+            action = str(rule.get("action") or "").upper()
+            if matched is False:
+                continue
+            if matched is None:
+                if action in {"LOG", "NFLOG", "MARK", "CONNMARK"}:
+                    continue
+                return {
+                    "status": "unknown",
+                    "reason": f"NAT rule {chain} #{rule.get('rule_order')} may affect the flow but contains unresolved match criteria.",
+                    "rule": rule, "match_basis": basis, "trace": trace.copy(),
+                }
+            trace.append({
+                "chain": chain, "rule_order": rule.get("rule_order"), "action": action,
+                "evidence": rule.get("evidence"), "match_basis": basis,
+            })
+            if action == "DNAT":
+                address, translated_port = _translation_target(rule.get("to_destination"))
+                if address is None:
+                    return {"status": "unknown", "reason": "The matched DNAT target is not a supported IPv4 address.", "rule": rule, "trace": trace.copy()}
+                return {
+                    "status": "translated", "translation": "dnat",
+                    "destination": address, "port": translated_port or port,
+                    "rule": rule, "match_basis": basis, "trace": trace.copy(),
+                }
+            if action == "REDIRECT":
+                redirect_port = rule.get("to_ports")
+                return {
+                    "status": "redirected", "translation": "redirect",
+                    "destination": "local_device",
+                    "port": int(redirect_port) if str(redirect_port or "").isdigit() else port,
+                    "rule": rule, "match_basis": basis, "trace": trace.copy(),
+                }
+            if action == "RETURN":
+                return {"status": "return", "trace": trace.copy()}
+            if action in {"ACCEPT", "SNAT", "MASQUERADE"}:
+                return {"status": "no_translation", "trace": trace.copy()}
+            if action in NON_TERMINAL_TARGETS or not action:
+                continue
+            nested = walk(action, stack + (chain,))
+            if nested["status"] == "return":
+                continue
+            return nested
+        return {"status": "return", "trace": trace.copy()}
+
+    result = walk("PREROUTING", ())
+    if result["status"] == "return":
+        return {"status": "no_translation", "trace": result.get("trace") or []}
     return result

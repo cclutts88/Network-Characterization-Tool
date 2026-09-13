@@ -399,6 +399,7 @@ def analyze_device_collection(
             "nat": summary.get("nat", []),
             "network_objects": summary.get("network_objects", []),
             "iptables": iptables_policy,
+            "applied": summary.get("vendor_policy") or {},
         },
         "neighbors": summary.get("neighbors", []),
         "topology_neighbors": summary.get("topology_neighbors", []),

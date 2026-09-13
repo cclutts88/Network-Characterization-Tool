@@ -4,7 +4,8 @@ import ipaddress
 import re
 from dataclasses import dataclass
 
-from app.iptables_policy import evaluate_iptables_flow
+from app.iptables_policy import evaluate_iptables_flow, evaluate_iptables_nat
+from app.vendor_policy import evaluate_vendor_policy
 
 
 EXTERNAL_TOKENS = {"internet", "wan", "external", "external wan"}
@@ -74,10 +75,19 @@ def _is_transit_device(analysis: dict) -> bool:
     }
 
 
+def _default_route_interface(analysis: dict) -> str | None:
+    for route in (analysis.get("route_analysis") or {}).get("routes") or []:
+        if str(route.get("network") or "") in {"0.0.0.0/0", "default"}:
+            return str(route.get("interface") or "") or None
+    return None
+
+
 def _source_attached(source: Endpoint, analysis: dict) -> bool:
     interfaces = analysis.get("interfaces") or []
     if source.kind == "external":
-        return any(item.get("role") == "external" for item in interfaces)
+        return any(item.get("role") == "external" for item in interfaces) or bool(
+            _default_route_interface(analysis)
+        )
     if source.value is None:
         return False
     for item in interfaces:
@@ -172,6 +182,10 @@ def _endpoint_interface(endpoint: Endpoint, analysis: dict, *, role: str | None 
             continue
         if endpoint.value in network:
             candidates.append((network.prefixlen, str(item.get("name") or "")))
+    if endpoint.kind == "external" and not candidates:
+        default_interface = _default_route_interface(analysis)
+        if default_interface:
+            candidates.append((0, default_interface))
     if role:
         role_candidates = [item for item in candidates if item[1] and any(
             value.get("name") == item[1] and value.get("role") == role
@@ -180,6 +194,61 @@ def _endpoint_interface(endpoint: Endpoint, analysis: dict, *, role: str | None 
         if role_candidates:
             candidates = role_candidates
     return max(candidates, default=(0, ""))[1] or None
+
+
+def _nat_translations(
+    source: Endpoint,
+    destination: Endpoint,
+    protocol: str,
+    port: int,
+    device_analyses: list[dict],
+) -> tuple[list[dict], list[str]]:
+    translations = []
+    unresolved = []
+    for analysis in device_analyses:
+        policy = (analysis.get("policy") or {}).get("iptables") or {}
+        if not policy.get("nat_rules") or not _source_attached(source, analysis):
+            continue
+        device = analysis.get("device") or {}
+        device_name = device.get("name") or device.get("address") or "Network device"
+        input_interface = _endpoint_interface(source, analysis)
+        result = evaluate_iptables_nat(
+            policy,
+            source=str(source.value) if source.value is not None else None,
+            destination=str(destination.value) if destination.value is not None else None,
+            protocol=protocol,
+            port=port,
+            source_external=source.kind == "external",
+            destination_external=destination.kind == "external",
+            input_interface=input_interface,
+            output_interface=_egress_interface(destination, analysis),
+        )
+        if result.get("status") == "unknown":
+            unresolved.append(
+                f"Ordered NAT on {device_name}: "
+                f"{result.get('reason') or 'the translation path could not be resolved.'}"
+            )
+            continue
+        if result.get("status") not in {"translated", "redirected"}:
+            continue
+        rule = result.get("rule") or {}
+        trace = result.get("trace") or []
+        translations.append({
+            "kind": result.get("translation"),
+            "status": result.get("status"),
+            "device": device_name,
+            "device_address": device.get("address"),
+            "original_destination": destination.entered,
+            "original_port": port,
+            "destination": result.get("destination"),
+            "port": result.get("port"),
+            "input_interface": input_interface,
+            "evidence": rule.get("evidence"),
+            "run_id": analysis.get("run_id"),
+            "trace": trace,
+            "match_basis": result.get("match_basis") or [],
+        })
+    return translations, unresolved
 
 
 def _egress_interface(destination: Endpoint, analysis: dict) -> str | None:
@@ -267,6 +336,43 @@ def _policy_decisions(
             "trace": trace,
         })
 
+    for analysis in device_analyses:
+        applied = (analysis.get("policy") or {}).get("applied") or {}
+        if not applied.get("rules") or not _source_attached(source, analysis):
+            continue
+        device = analysis.get("device") or {}
+        result = evaluate_vendor_policy(
+            applied,
+            source=str(source.value) if source.value is not None else None,
+            destination=str(destination.value) if destination.value is not None else None,
+            protocol=protocol,
+            port=port,
+            source_external=source.kind == "external",
+            destination_external=destination.kind == "external",
+            input_interface=_endpoint_interface(source, analysis),
+            output_interface=_egress_interface(destination, analysis),
+        )
+        if result.get("status") == "not_applied":
+            continue
+        if result.get("status") != "decided":
+            unresolved.append(
+                f"Applied {applied.get('vendor') or 'vendor'} policy on "
+                f"{device.get('name') or device.get('address') or 'network device'}: "
+                f"{result.get('reason') or 'no supported final verdict was reached.'}"
+            )
+            continue
+        rule = result.get("rule") or {}
+        decisions.append({
+            "action": "permit" if result.get("verdict") == "allow" else "deny",
+            "device": device.get("name") or device.get("address") or "Network device",
+            "device_address": device.get("address"),
+            "evidence": rule.get("evidence") or "Applied vendor policy",
+            "run_id": analysis.get("run_id"),
+            "engine": f"applied_{applied.get('vendor') or 'vendor'}",
+            "rule_order": rule.get("order"),
+            "match_basis": result.get("match_basis") or [],
+        })
+
     if destination.kind != "host" or destination.value is None:
         return decisions, unresolved
     destination_ip = str(destination.value)
@@ -277,7 +383,11 @@ def _policy_decisions(
         re.I,
     )
     for analysis in device_analyses:
-        if ((analysis.get("policy") or {}).get("iptables") or {}).get("rules"):
+        analyzed_policy = analysis.get("policy") or {}
+        if (
+            (analyzed_policy.get("iptables") or {}).get("rules")
+            or (analyzed_policy.get("applied") or {}).get("rules")
+        ):
             continue
         device = analysis.get("device") or {}
         for item in (analysis.get("policy") or {}).get("firewall_acl") or []:
@@ -321,18 +431,41 @@ def evaluate_reachability(
     if not 1 <= port <= 65535:
         raise ValueError("Port must be between 1 and 65535")
 
-    source_network = _network_for(source, saved_networks)
-    destination_network = _network_for(destination, saved_networks)
-    service = _service_observation(destination, protocol, port, hunting)
-    routes, excluded_routes = _matching_routes(source, destination, device_analyses)
     transit_analyses = [item for item in device_analyses if _is_transit_device(item)]
+    translations, nat_unresolved = _nat_translations(
+        source, destination, protocol, port, transit_analyses
+    )
+    translated_targets = {
+        (str(item.get("destination")), int(item.get("port") or port))
+        for item in translations
+        if item.get("status") == "translated" and item.get("destination")
+    }
+    effective_destination = destination
+    effective_port = port
+    translation_conflict = len(translated_targets) > 1
+    if len(translated_targets) == 1:
+        translated_address, effective_port = next(iter(translated_targets))
+        effective_destination = Endpoint(
+            entered=translated_address,
+            kind="host",
+            value=ipaddress.ip_address(translated_address),
+        )
+
+    source_network = _network_for(source, saved_networks)
+    destination_network = _network_for(effective_destination, saved_networks)
+    service = _service_observation(effective_destination, protocol, effective_port, hunting)
+    routes, excluded_routes = _matching_routes(source, effective_destination, device_analyses)
     same_saved_network = bool(
         source_network and destination_network
         and source_network.get("saved_network_id") == destination_network.get("saved_network_id")
     )
-    policy, policy_unresolved = ([], []) if same_saved_network else _policy_decisions(
-        source, destination, protocol, port, transit_analyses
-    )
+    redirect_present = any(item.get("status") == "redirected" for item in translations)
+    if same_saved_network or nat_unresolved or translation_conflict or redirect_present:
+        policy, policy_unresolved = [], []
+    else:
+        policy, policy_unresolved = _policy_decisions(
+            source, effective_destination, protocol, effective_port, transit_analyses
+        )
     evidence = []
     caveats = []
 
@@ -340,16 +473,38 @@ def evaluate_reachability(
         evidence.append({"kind": "source_network", "title": source_network.get("name"), "detail": source_network.get("cidr")})
     if destination_network:
         evidence.append({"kind": "destination_network", "title": destination_network.get("name"), "detail": destination_network.get("cidr")})
+    for translation in translations:
+        chain_path = list(dict.fromkeys(
+            str(item.get("chain")) for item in translation.get("trace") or [] if item.get("chain")
+        ))
+        if translation.get("status") == "translated":
+            title = f"DNAT on {translation['device']}"
+            detail = (
+                f"{translation['original_destination']}:{translation['original_port']} → "
+                f"{translation['destination']}:{translation['port']}"
+            )
+        else:
+            title = f"Local redirect on {translation['device']}"
+            detail = f"{translation['original_destination']}:{translation['original_port']} → local device:{translation['port']}"
+        if chain_path:
+            detail += " · " + " → ".join(chain_path)
+        evidence.append({
+            "kind": "nat",
+            "title": title,
+            "detail": detail,
+            "raw": translation.get("evidence"),
+            "run_id": translation.get("run_id"),
+        })
     if service["finding"]:
         finding = service["finding"]
         service_name = finding.get("service") or "unknown service"
         evidence.append({
             "kind": "service",
-            "title": f"{protocol.upper()}/{port} observed open",
+            "title": f"{protocol.upper()}/{effective_port} observed open",
             "detail": " · ".join(str(value) for value in (service_name, finding.get("product"), finding.get("version")) if value),
         })
     elif service["state"] == "not_observed":
-        caveats.append(f"The destination host was observed, but {protocol.upper()}/{port} was not present in retained open-port evidence. This is not proof that policy blocks it.")
+        caveats.append(f"The destination host was observed, but {protocol.upper()}/{effective_port} was not present in retained open-port evidence. This is not proof that policy blocks it.")
     elif service["state"] == "host_not_observed":
         caveats.append("The destination host is not present in the current retained network-wide scan evidence.")
 
@@ -363,20 +518,30 @@ def evaluate_reachability(
         })
     for decision in policy:
         basis = ", ".join(decision.get("match_basis") or [])
+        engine = str(decision.get("engine") or "")
+        policy_kind = "Ordered" if engine == "ordered_iptables" else "Applied" if engine.startswith("applied_") else "Explicit"
         evidence.append({
             "kind": "policy",
-            "title": f"{'Ordered' if decision.get('engine') == 'ordered_iptables' else 'Explicit'} {decision['action']} on {decision['device']}",
+            "title": f"{policy_kind} {decision['action']} on {decision['device']}",
             "detail": decision["evidence"] + (f" · {basis}" if basis else ""),
             "run_id": decision.get("run_id"),
         })
 
+    caveats.extend(nat_unresolved)
     caveats.extend(policy_unresolved)
+    if translation_conflict:
+        caveats.append("Retained devices produced conflicting destination translations, so NCT did not choose an effective target.")
+    if redirect_present:
+        caveats.append("The retained NAT policy redirects this flow to the network device itself; a normal forwarded-path verdict is not applicable.")
 
     outcome = "Unknown"
     confidence = "low"
     explanation = "Retained evidence does not establish an end-to-end decision."
     actions = {item["action"] for item in policy}
-    if len(actions) > 1:
+    if nat_unresolved or translation_conflict or redirect_present:
+        outcome, confidence = "Unknown", "low"
+        explanation = "NAT changes or may change the selected flow before forwarded policy is evaluated."
+    elif len(actions) > 1:
         outcome, confidence = "Unknown", "low"
         explanation = "Retained policy sources produced conflicting ordered decisions."
         caveats.append("Conflicting allow and deny results require path and device review before drawing a conclusion.")
@@ -393,7 +558,7 @@ def evaluate_reachability(
         outcome, confidence = "Routed", "medium"
         explanation = "A retained route covers the destination, but no exact allow or deny policy was established."
 
-    if not policy:
+    if not policy and not same_saved_network:
         caveats.append("No complete supported ordered-policy path established an allow or deny decision. NAT translation or unsupported application-aware criteria may still change the real path.")
     if service["state"] == "observed_exposed" and outcome == "Unknown":
         caveats.append("The service was observed open from the NCT host, but that does not prove it is reachable from the selected source.")
@@ -403,13 +568,24 @@ def evaluate_reachability(
         path.append({"kind": "source", "label": source_network.get("name") or source.entered, "detail": source_network.get("cidr")})
     else:
         path.append({"kind": "source", "label": source.entered, "detail": "Selected source"})
+    if len(translated_targets) == 1:
+        translation = next(item for item in translations if item.get("status") == "translated")
+        path.append({
+            "kind": "nat",
+            "label": f"DNAT on {translation['device']}",
+            "detail": f"{destination.entered}:{port} → {effective_destination.entered}:{effective_port}",
+        })
     if outcome == "Local":
         path.append({"kind": "segment", "label": "Same local segment", "detail": destination_network.get("cidr") if destination_network else ""})
     elif routes:
         route = routes[0]
         path.append({"kind": "device", "label": route["device"], "detail": route.get("device_address") or "Routing device"})
         path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "")})
-    path.append({"kind": "destination", "label": destination.entered, "detail": f"{protocol.upper()}/{port}"})
+    path.append({
+        "kind": "destination",
+        "label": effective_destination.entered,
+        "detail": f"{protocol.upper()}/{effective_port}",
+    })
 
     return {
         "status": "reachability_analysis_complete",
@@ -421,6 +597,8 @@ def evaluate_reachability(
             "destination": destination.entered,
             "protocol": protocol,
             "port": port,
+            "effective_destination": effective_destination.entered,
+            "effective_port": effective_port,
         },
         "source_network": source_network,
         "destination_network": destination_network,
@@ -433,6 +611,8 @@ def evaluate_reachability(
             "excluded_non_transit_routes": len(excluded_routes),
             "policy_decisions": len(policy),
             "policy_unresolved": len(policy_unresolved),
+            "nat_translations": len(translations),
+            "nat_unresolved": len(nat_unresolved),
             "evidence": len(evidence),
         },
     }

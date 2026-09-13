@@ -5,6 +5,7 @@ import pytest
 from app import main
 from app.iptables_policy import parse_iptables_policy
 from app.reachability import evaluate_reachability, parse_endpoint
+from app.vendor_policy import parse_vendor_policy
 
 
 SAVED = [
@@ -155,6 +156,103 @@ COMMIT
     assert result["counts"]["policy_decisions"] == 0
     assert result["counts"]["policy_unresolved"] == 1
     assert any("unresolved match criteria" in item for item in result["caveats"])
+
+
+def test_dnat_translation_uses_internal_target_for_service_route_and_policy():
+    policy = parse_iptables_policy("""*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -i outside -p tcp --dport 8443 -j DNAT --to-destination 10.90.0.10:443
+COMMIT
+*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i outside -o servers -p tcp -d 10.90.0.10/32 --dport 443 -j ACCEPT
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "via": "198.51.100.1", "interface": "outside"},
+            {"network": "10.90.0.0/24", "interface": "servers", "direct": True},
+        ]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="198.51.100.10", port=8443,
+        device_analyses=[device],
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["query"]["effective_destination"] == "10.90.0.10"
+    assert result["query"]["effective_port"] == 443
+    assert result["service_observation"] == "observed_exposed"
+    assert result["counts"]["nat_translations"] == 1
+    assert any(item["kind"] == "nat" for item in result["evidence"])
+
+
+def test_external_source_uses_default_route_interface_when_role_is_unclassified():
+    policy = parse_iptables_policy("""*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -i eth9 -p tcp --dport 8443 -j DNAT --to-destination 10.90.0.10:443
+COMMIT
+*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i eth9 -o servers -p tcp --dport 443 -j ACCEPT
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "eth9", "network": "198.51.100.0/24", "role": "unclassified"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "via": "198.51.100.1", "interface": "eth9"},
+            {"network": "10.90.0.0/24", "interface": "servers", "direct": True},
+        ]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="198.51.100.10", port=8443,
+        device_analyses=[device],
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["query"]["effective_destination"] == "10.90.0.10"
+
+
+def test_applied_cisco_acl_drives_reachability_but_unbound_acl_does_not():
+    text = """ip access-list extended USERS_TO_SERVERS
+ permit tcp any host 10.90.0.10 eq 443
+ deny ip any any
+!
+interface inside
+ ip access-group USERS_TO_SERVERS in
+"""
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "policy": {
+            "firewall_acl": [{"evidence": "access-list unrelated permit tcp any host 10.90.0.10 eq 443"}],
+            "applied": parse_vendor_policy(text),
+        },
+    }
+
+    result = assess(device_analyses=[device])
+    assert result["outcome"] == "Expected Allowed"
+    assert next(item for item in result["evidence"] if item["kind"] == "policy")["title"].startswith("Applied permit")
+
+    unbound = {**device, "policy": {**device["policy"], "applied": parse_vendor_policy(text.replace(" ip access-group USERS_TO_SERVERS in", ""))}}
+    result = assess(device_analyses=[unbound])
+    assert result["outcome"] == "Routed"
 
 
 def test_invalid_endpoint_is_rejected():

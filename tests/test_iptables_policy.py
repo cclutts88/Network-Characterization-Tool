@@ -1,4 +1,8 @@
-from app.iptables_policy import evaluate_iptables_flow, parse_iptables_policy
+from app.iptables_policy import (
+    evaluate_iptables_flow,
+    evaluate_iptables_nat,
+    parse_iptables_policy,
+)
 
 
 POLICY = """*filter
@@ -20,7 +24,8 @@ def test_ipset_definitions_members_and_ordered_chains_are_parsed():
 
     assert policy["complete"] is True
     assert policy["counts"] == {
-        "rules": 3, "chains": 2, "ipsets": 2, "ipset_members": 2,
+        "rules": 3, "nat_rules": 0, "chains": 2, "nat_chains": 0,
+        "ipsets": 2, "ipset_members": 2,
     }
     assert policy["chain_policies"]["FORWARD"] == "DROP"
     assert policy["ipsets"][0]["members"][0]["value"] == "10.0.0.0/24"
@@ -78,3 +83,57 @@ def test_incomplete_retained_membership_never_returns_a_verdict():
 
     assert result["status"] == "unknown"
     assert "incomplete" in result["reason"]
+
+
+def test_ordered_nat_chain_resolves_dnat_address_and_port():
+    policy = parse_iptables_policy("""*nat
+:PREROUTING ACCEPT [0:0]
+:PORT_FORWARD - [0:0]
+-A PREROUTING -i eth9 -j PORT_FORWARD
+-A PORT_FORWARD -p tcp --dport 8443 -j DNAT --to-destination 10.90.0.10:443
+COMMIT
+""")
+
+    result = evaluate_iptables_nat(
+        policy,
+        source=None, destination=None, protocol="tcp", port=8443,
+        source_external=True, input_interface="eth9",
+    )
+
+    assert result["status"] == "translated"
+    assert result["destination"] == "10.90.0.10"
+    assert result["port"] == 443
+    assert [item["chain"] for item in result["trace"]] == ["PREROUTING", "PORT_FORWARD"]
+
+
+def test_ordered_nat_mismatch_reports_no_translation():
+    policy = parse_iptables_policy("""*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -i eth9 -p tcp --dport 8443 -j DNAT --to-destination 10.90.0.10:443
+COMMIT
+""")
+
+    result = evaluate_iptables_nat(
+        policy,
+        source=None, destination=None, protocol="tcp", port=22,
+        source_external=True, input_interface="eth9",
+    )
+
+    assert result["status"] == "no_translation"
+
+
+def test_ordered_nat_unsupported_match_never_guesses():
+    policy = parse_iptables_policy("""*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -m addrtype --dst-type LOCAL -p tcp --dport 8443 -j DNAT --to-destination 10.90.0.10:443
+COMMIT
+""")
+
+    result = evaluate_iptables_nat(
+        policy,
+        source=None, destination=None, protocol="tcp", port=8443,
+        source_external=True, input_interface="eth9",
+    )
+
+    assert result["status"] == "unknown"
+    assert "unresolved match criteria" in result["reason"]

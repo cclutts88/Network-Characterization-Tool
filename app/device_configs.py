@@ -1284,6 +1284,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     from app.network_map import parse_config_text
     from app.switching import merge_switch_interfaces, parse_switch_evidence
     from app.topology_neighbors import parse_topology_neighbors
+    from app.vendor_policy import parse_vendor_policy
 
     interfaces, routes = parse_config_text(configuration_text)
     switch_detail = parse_switch_evidence(configuration_text, manifest.get("commands", []))
@@ -1295,6 +1296,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     iptables_policy = parse_iptables_policy(
         configuration_text, source_truncated=configuration_truncated
     )
+    vendor_policy = parse_vendor_policy(configuration_text)
     firewall_acl = _merge_evidence(
         _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS),
         linux_policy["firewall_acl"],
@@ -1346,6 +1348,8 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "policy_rules": iptables_policy["counts"]["rules"],
             "policy_sets": iptables_policy["counts"]["ipsets"],
             "policy_set_members": iptables_policy["counts"]["ipset_members"],
+            "applied_policy_rules": (vendor_policy.get("counts") or {}).get("rules", 0),
+            "policy_attachments": (vendor_policy.get("counts") or {}).get("attachments", 0),
             "switching": len(switching),
             "learned_macs": len(switch_detail["mac_table"]),
             "switch_ports": len(switch_detail["ports"]),
@@ -1364,6 +1368,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         "nat": nat,
         "network_objects": network_objects,
         "iptables_policy": iptables_policy,
+        "vendor_policy": vendor_policy,
         "switching": switching,
         "switch_detail": switch_detail,
         "command_results": switch_detail["command_results"],

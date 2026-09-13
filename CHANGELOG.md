@@ -21,6 +21,14 @@
   instead of being guessed. Corrected gateway identity collection to request the
   supported `ubnt-device-info summary` form and preserved exact Linux bridge
   interface names for policy path matching.
+- Added ordered UniFi destination-NAT and local-redirect evaluation. Reach now
+  shows the original and translated address/port, then evaluates retained
+  routes, observed services, and firewall policy against the effective target.
+- Added conservative applied-policy handling for Cisco IOS/IOS-XE/ASA, VyOS,
+  pfSense, and Juniper. NCT requires retained interface or zone attachment
+  evidence before using a vendor rule for an allow/deny result, exposes the
+  normalized rules and attachments in Device views, and leaves unresolved
+  objects or applications at Unknown.
 - Improved Reach path selection to use source-attached router/firewall evidence,
   ignore switch management routes, preserve the newest usable collection when a
   later pull fails, and render the likely path in the interface.

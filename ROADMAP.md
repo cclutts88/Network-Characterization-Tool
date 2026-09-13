@@ -555,8 +555,21 @@ within Reachability.
     preview, and resolve IP/network/port sets while walking ordered `FORWARD` and
     user chains. Stop at Unknown for unsupported DPI, GeoIP, missing membership,
     or truncated policy evidence rather than inferring a verdict.
+  - [x] Walk retained UniFi NAT `PREROUTING` and nested chains before firewall
+    evaluation. Resolve supported DNAT address/port changes and local redirects,
+    show the original and effective destination in Reach, and use the translated
+    target for route, service, and ordered `FORWARD` evidence.
+  - [x] Add attachment-aware ordered policy evaluation for Cisco IOS/IOS-XE/ASA
+    ACLs, VyOS interface policies, active pfSense `pfctl` rules, and Juniper
+    zone policies with directly resolvable addresses and built-in applications.
+    A rule that is merely present but not demonstrably applied is not treated as
+    an allow or deny decision.
   - [ ] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
     evaluation before treating complex configurations as allow or deny evidence.
+    - [ ] Resolve vendor address/service object groups, Juniper custom
+      applications, zone defaults, source NAT, policy-based NAT, established-flow
+      state, and multi-device translation paths; keep unsupported criteria at
+      Unknown.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not
