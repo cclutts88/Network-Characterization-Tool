@@ -42,8 +42,10 @@
   administrator-only host recovery with complete session revocation.
 - Stabilized every visible Map object when Edit mode begins and retained every
   rendered object coordinate in saved layouts, preventing a single untouched
-  auto-layout node from moving during redraws. Added a per-analyst `☆` / `★`
-  default selector for one personal or shared layout that opens automatically.
+  auto-layout node from moving during redraws. The map boundary now grows to
+  contain saved edge positions rather than clamping the outlying object inward.
+  Added a per-analyst `☆` / `★` default selector for one personal or shared
+  layout that opens automatically.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility

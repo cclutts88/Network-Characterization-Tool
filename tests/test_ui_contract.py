@@ -538,6 +538,8 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function setSelectedLayoutDefault" in html
     assert "defaultLayoutStorageKey='nct-map-default-layout-v1'" in html
     assert "if(editMode)for(const [id,box] of currentPositions)" in html
+    assert "manual.x+size.w+30" in html
+    assert "manual.y+size.h+30" in html
     assert "'/api/workspaces/layouts'" in html
     assert "serverWorkspaceAnalyst" in html
     assert "expected_version" in html

@@ -242,7 +242,9 @@ within Reachability.
   restore the complete presentation, and can be replaced or deleted.
 - [x] Save every visible object's coordinates in a named layout and stabilize
   all visible objects on entering Edit mode so an untouched auto-layout node
-  cannot reflow independently while the analyst is building the map.
+  cannot reflow independently while the analyst is building the map. Expand
+  the logical map boundary to contain saved edge positions instead of clamping
+  an outlying object into a new location during redraw.
 - [x] Let each analyst mark exactly one personal or shared layout as the default
   with a hollow/filled star; automatically open that layout on future Map visits.
 - [x] Add Direct and Right-angle trunks connection styles so analysts can switch
