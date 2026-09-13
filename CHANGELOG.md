@@ -14,6 +14,13 @@
   switch output format. Expanded streamed collection retention from 200 KB to a
   reported 5 MB limit and prioritized firewall-table capture before large
   address sets.
+- Added full UniFi IP-set definition and membership parsing, accurate object
+  totals beside a bounded review preview, and conservative ordered `FORWARD`
+  chain evaluation for IP, network, port, interface, connection-state, and
+  nested user-chain matches. Unsupported DPI/GeoIP criteria now stop at Unknown
+  instead of being guessed. Corrected gateway identity collection to request the
+  supported `ubnt-device-info summary` form and preserved exact Linux bridge
+  interface names for policy path matching.
 - Improved Reach path selection to use source-attached router/firewall evidence,
   ignore switch management routes, preserve the newest usable collection when a
   later pull fails, and render the likely path in the interface.

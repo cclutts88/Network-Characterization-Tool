@@ -121,6 +121,10 @@ add USERS 10.80.0.0/24
     assert {item["evidence"] for item in result["network_objects"]} >= {
         "create USERS hash:net family inet", "add USERS 10.80.0.0/24"
     }
+    assert result["counts"]["policy_sets"] == 1
+    assert result["counts"]["policy_set_members"] == 1
+    assert result["counts"]["network_objects_total"] == 2
+    assert result["iptables_policy"]["ipsets"][0]["members"][0]["value"] == "10.80.0.0/24"
 
 
 def test_large_streamed_collection_is_bounded_and_reports_truncation(monkeypatch):

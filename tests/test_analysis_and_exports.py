@@ -295,6 +295,7 @@ def test_configuration_parser_reads_unifi_linux_interfaces_connected_and_default
         """
 2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
     link/ether 00:11:22:33:44:99 brd ff:ff:ff:ff:ff:ff
+    bridge forward_delay 1500 hello_time 200 stp_state 0
     inet 10.80.0.1/24 brd 10.80.0.255 scope global br0
 10.80.0.0/24 dev br0 proto kernel scope link src 10.80.0.1
 default via 192.0.2.254 dev eth8 proto static
@@ -303,6 +304,7 @@ default via 192.0.2.254 dev eth8 proto static
 
     by_name = {item["name"]: item for item in interfaces}
     assert by_name["br0"]["address"] == "10.80.0.1/24"
+    assert "bridge" not in by_name
     assert by_name["br0"]["mac"] == "00:11:22:33:44:99"
     by_network = {item["network"]: item for item in routes}
     assert by_network["10.80.0.0/24"]["interface"] == "br0"

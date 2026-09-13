@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app import main
+from app.iptables_policy import parse_iptables_policy
 from app.reachability import evaluate_reachability, parse_endpoint
 
 
@@ -107,6 +108,53 @@ def test_external_destination_uses_default_route():
     }
     result = assess(destination_text="Internet", device_analyses=[device])
     assert result["outcome"] == "Routed"
+
+
+def test_ordered_iptables_sets_drive_expected_allowed_decision():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+:LAN_TO_SERVERS - [0:0]
+-A FORWARD -i inside -o servers -j LAN_TO_SERVERS
+-A LAN_TO_SERVERS -p tcp -m set --match-set USERS src -m set --match-set HTTPS dst -j ACCEPT
+-A LAN_TO_SERVERS -j DROP
+COMMIT
+create USERS hash:net family inet
+add USERS 10.80.0.0/24
+create HTTPS bitmap:port range 0-65535
+add HTTPS 443
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["confidence"] == "high"
+    assert result["counts"]["policy_decisions"] == 1
+    policy_evidence = next(item for item in result["evidence"] if item["kind"] == "policy")
+    assert policy_evidence["title"].startswith("Ordered permit")
+
+
+def test_ordered_iptables_unsupported_match_remains_routed_with_caveat():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -m dpi32 --cat-app 4,112 -j DROP
+COMMIT
+""")
+    device = {**DEVICE, "policy": {"firewall_acl": [], "iptables": policy}}
+
+    result = assess(device_analyses=[device])
+
+    assert result["outcome"] == "Routed"
+    assert result["counts"]["policy_decisions"] == 0
+    assert result["counts"]["policy_unresolved"] == 1
+    assert any("unresolved match criteria" in item for item in result["caveats"])
 
 
 def test_invalid_endpoint_is_rejected():

@@ -196,7 +196,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
         "router": (
             "uname -a",
             "cat /etc/os-release",
-            "ubnt-device-info",
+            "ubnt-device-info summary",
             "ip -details address show",
             "ip -4 route show table all",
             "ip -6 route show table all",
@@ -212,7 +212,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
         "firewall": (
             "uname -a",
             "cat /etc/os-release",
-            "ubnt-device-info",
+            "ubnt-device-info summary",
             "ip -details address show",
             "ip -4 route show table all",
             "ip -6 route show table all",
@@ -1280,6 +1280,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     )
 
     from app.mac_enrichment import parse_neighbor_text
+    from app.iptables_policy import parse_iptables_policy
     from app.network_map import parse_config_text
     from app.switching import merge_switch_interfaces, parse_switch_evidence
     from app.topology_neighbors import parse_topology_neighbors
@@ -1291,6 +1292,9 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     topology_neighbors = parse_topology_neighbors(configuration_text)
     vlans = _evidence_lines(configuration_text, VLAN_PATTERNS)
     linux_policy = _linux_policy_evidence(configuration_text)
+    iptables_policy = parse_iptables_policy(
+        configuration_text, source_truncated=configuration_truncated
+    )
     firewall_acl = _merge_evidence(
         _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS),
         linux_policy["firewall_acl"],
@@ -1302,6 +1306,11 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     network_objects = _merge_evidence(
         _evidence_lines(configuration_text, NETWORK_OBJECT_PATTERNS),
         linux_policy["network_objects"],
+    )
+    network_objects_total = max(
+        len(network_objects),
+        int(iptables_policy["counts"]["ipsets"])
+        + int(iptables_policy["counts"]["ipset_members"]),
     )
     switching = _evidence_lines(configuration_text, SWITCHING_PATTERNS)
     commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
@@ -1332,6 +1341,11 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "firewall_acl": len(firewall_acl),
             "nat": len(nat),
             "network_objects": len(network_objects),
+            "network_objects_total": network_objects_total,
+            "policy_chains": iptables_policy["counts"]["chains"],
+            "policy_rules": iptables_policy["counts"]["rules"],
+            "policy_sets": iptables_policy["counts"]["ipsets"],
+            "policy_set_members": iptables_policy["counts"]["ipset_members"],
             "switching": len(switching),
             "learned_macs": len(switch_detail["mac_table"]),
             "switch_ports": len(switch_detail["ports"]),
@@ -1349,6 +1363,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         "firewall_acl": firewall_acl,
         "nat": nat,
         "network_objects": network_objects,
+        "iptables_policy": iptables_policy,
         "switching": switching,
         "switch_detail": switch_detail,
         "command_results": switch_detail["command_results"],

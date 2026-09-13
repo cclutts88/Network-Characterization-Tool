@@ -130,6 +130,7 @@ function renderStructuredResults(runId,target) {
   const data=deviceAnalysisCache.get(runId); target.replaceChildren(); if(!data) { target.append(element('div','meta','Open this result to load its structured evidence.')); return; }
   const term=searchTerm(),routeType=$('routeFilter').value;
   const switchDetail=data.switch_detail||{};
+  const iptablesPolicy=data.iptables_policy||{},policySets=iptablesPolicy.ipsets||[];
   const filtered=value=>(value||[]).filter(item=>matchesSearch(item,term));
   const routes=(data.routes||[]).filter(route=>(routeType==='all'||route.route_type===routeType)&&matchesSearch(route,term));
   const neighbors=filtered([...(data.neighbors||[]),...(data.topology_neighbors||[])]);
@@ -146,7 +147,8 @@ function renderStructuredResults(runId,target) {
     resultSection('Spanning tree',filtered(switchDetail.spanning_tree),[{label:'Port',value:'interface'},{label:'VLAN',value:'vlan_id'},{label:'Role',value:'role'},{label:'State',value:'state'},{label:'Evidence',value:'evidence'}],{total:data.counts?.spanning_tree??null}),
     resultSection('Firewall / ACL',filtered(data.firewall_acl),[{label:'Table',value:'table'},{label:'Chain',value:'chain'},{label:'Order',value:'rule_order'},{label:'Action',value:'action'},{label:'Protocol',value:'protocol'},{label:'Destination port',value:'destination_ports'},{label:'Evidence',value:'evidence'}],{total:data.counts?.firewall_acl??null}),
     resultSection('NAT',filtered(data.nat),[{label:'Table',value:'table'},{label:'Chain',value:'chain'},{label:'Order',value:'rule_order'},{label:'Action',value:'action'},{label:'Protocol',value:'protocol'},{label:'Destination port',value:'destination_ports'},{label:'Evidence',value:'evidence'}],{total:data.counts?.nat??null}),
-    resultSection('Network objects',filtered(data.network_objects),[{label:'Line',value:'line_number'},{label:'Evidence',value:'evidence'}],{total:data.counts?.network_objects??null}),
+    resultSection('Policy address and port sets',filtered(policySets),[{label:'Set',value:'name'},{label:'Type',value:'set_type'},{label:'Family',value:'family'},{label:'Members',value:'member_count'},{label:'Member preview',value:item=>(item.members||[]).slice(0,8).map(value=>value.value).join(', ')}],{total:data.counts?.policy_sets??null}),
+    resultSection('Network object evidence',filtered(data.network_objects),[{label:'Line',value:'line_number'},{label:'Evidence',value:'evidence'}],{total:data.counts?.network_objects_total??data.counts?.network_objects??null}),
     resultSection('Commands',filtered((data.commands||[]).map((command,index)=>({number:index+1,command}))),[{label:'#',value:'number'},{label:'Command',value:'command'}],{total:data.counts?.commands??null}),
     resultSection('Per-command collection status',filtered(data.command_results),[{label:'Command',value:'command'},{label:'Status',value:'status'},{label:'Meaning',value:'detail'}],{total:data.counts?.command_results??null}),
     textResultSection('Configuration',data.configuration_text||'',{filename:data.source_filename,truncated:data.configuration_truncated}),

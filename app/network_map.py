@@ -715,10 +715,10 @@ def interface_name(line: str) -> str | None:
     if not stripped:
         return None
     first = stripped.split()[0].rstrip(":,")
-    # FreeBSD ifconfig emits a link-layer line such as ``ether <mac>``.
-    # ``ether`` begins with ``eth`` but is not an interface name; do not let
-    # it replace the preceding vtnet/igb/etc. header while parsing addresses.
-    if first.lower() == "ether":
+    # FreeBSD ifconfig and Linux `ip -details` emit type/detail lines beginning
+    # with ``ether`` or ``bridge``. They are not interface headers; do not let
+    # them replace the preceding vtnet/igb/br/etc. name while parsing addresses.
+    if first.lower() in {"ether", "bridge"}:
         return None
     if re.fullmatch(
         r"(?:eth|ens|enp|lo|bond|br|bridge|vlan|ge-|xe-|em|fxp|vtnet|vmx|ix|igb|lagg|tap|tun|wg|enc|pflog|pfsync|pppoe|gif|gre)[A-Za-z0-9_.:/-]*",

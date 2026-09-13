@@ -423,7 +423,7 @@ def test_unifi_gateway_preview_uses_guarded_read_only_linux_collection_without_s
     assert data["remote_output_path"] is None
     assert data["scp_command"] is None
     assert "Retain streamed output" in phases
-    assert "ubnt-device-info" in data["commands"]
+    assert "ubnt-device-info summary" in data["commands"]
     assert "ip -details address show" in data["commands"]
     assert "ip -4 neigh show" in data["commands"]
     assert "ip -6 neigh show" in data["commands"]

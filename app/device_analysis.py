@@ -304,6 +304,13 @@ def analyze_device_collection(
             "title": "Collection output reached the retention limit",
             "detail": "Later command sections may be absent. Reduce optional output or increase the reviewed deployment limit before relying on missing evidence.",
         })
+    iptables_policy = summary.get("iptables_policy") or {}
+    if iptables_policy and not iptables_policy.get("complete", False):
+        review_items.append({
+            "severity": "warning", "category": "policy",
+            "title": "Ordered policy evidence is incomplete",
+            "detail": "One or more retained rules, address sets, or set members exceeded the reviewed evidence boundary. Reachability will not claim an allow or deny decision from this policy.",
+        })
     if manifest.get("device_type") == "firewall" and not policy_count:
         review_items.append({
             "severity": "warning", "category": "policy",
@@ -391,6 +398,7 @@ def analyze_device_collection(
             "firewall_acl": summary.get("firewall_acl", []),
             "nat": summary.get("nat", []),
             "network_objects": summary.get("network_objects", []),
+            "iptables": iptables_policy,
         },
         "neighbors": summary.get("neighbors", []),
         "topology_neighbors": summary.get("topology_neighbors", []),

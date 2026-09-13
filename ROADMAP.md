@@ -550,6 +550,11 @@ within Reachability.
   - [x] Collect and retain UniFi `ipset` definitions for future address-group
     resolution. Existing collections remain useful but require a new pull to add
     object membership that was not captured previously.
+  - [x] Parse complete retained UniFi IP-set definitions and memberships into
+    compact policy objects, report the full evidence count beside a bounded UI
+    preview, and resolve IP/network/port sets while walking ordered `FORWARD` and
+    user chains. Stop at Unknown for unsupported DPI, GeoIP, missing membership,
+    or truncated policy evidence rather than inferring a verdict.
   - [ ] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
     evaluation before treating complex configurations as allow or deny evidence.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
