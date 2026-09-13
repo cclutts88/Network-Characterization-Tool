@@ -426,6 +426,7 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
         analysis = client.get(f"/api/hunting/{after_id}")
         network = client.get("/api/hunting/network")
         current_evidence = client.get("/api/analysis/network")
+        network_changes = client.get("/api/analysis/network-changes")
         comparison = client.get(
             f"/api/hunting/compare?before={before_id}&after={after_id}"
         )
@@ -455,3 +456,36 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     source = current_evidence.json()["hosts"][0]["source_refs"][0]
     assert source["analysis_url"] == f"/analysis?run={after_id}"
     assert source["run_id"] == after_id
+    assert network_changes.status_code == 200
+    assert network_changes.json()["status"] == "network_changes_complete"
+    assert network_changes.json()["scope_count"] == 1
+    assert network_changes.json()["compared_scope_count"] == 1
+    assert network_changes.json()["summary"]["hosts_changed"] == 1
+    assert network_changes.json()["summary"]["ports_added"] == 1
+    assert network_changes.json()["summary"]["ports_removed"] == 1
+
+
+def test_analyze_network_controls_keep_routes_separate_from_policy(monkeypatch):
+    monkeypatch.setattr(
+        "app.main._latest_device_reachability_evidence",
+        lambda: [{
+            "device": {"name": "Edge", "roles": ["router", "firewall"]},
+            "route_analysis": {"routes": [{"network": "10.0.0.0/24"}]},
+            "policy": {
+                "firewall_acl": [{"raw": "deny tcp any any eq 22"}],
+                "nat": [{"raw": "masquerade"}],
+            },
+        }],
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/analysis/network-controls")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "network_controls_complete"
+    assert payload["device_count"] == 1
+    assert payload["route_count"] == 1
+    assert payload["policy_count"] == 1
+    assert payload["nat_count"] == 1
+    assert "possible forwarding path" in payload["disclaimer"]

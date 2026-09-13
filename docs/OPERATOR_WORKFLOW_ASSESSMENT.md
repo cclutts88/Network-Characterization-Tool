@@ -153,9 +153,14 @@ complete. Analyze now opens on the newest retained evidence from every network
 scope plus current device configuration evidence, consolidates correlated
 identity, services, capability datasets, provenance, and collection time into
 one paginated inventory, and includes a compact specific-result picker without
-recreating Nmap Scan History. The remaining larger Analyze work is the bulk
-last-two-per-scope change view, in-place evidence/history expansion, and the
-separate route/policy workflow.
+recreating Nmap Scan History. The inventory now expands in place for capability
+basis, source provenance, coverage, and observation history; a bulk view
+compares the newest two complete Nmap observations per exact scope; and a
+separate retained routes/policy drawer keeps possible forwarding distinct from
+explicit authorization evidence. Analyze also recalculates uncommon ports by
+OS peer group across the current network or the operator-selected subnet.
+Remaining Analyze work is device-collection
+bulk change comparison and safely attaching retained SearchSploit enrichment.
 
 A separate Export Studio candidate is now recorded in the roadmap. It keeps
 one-click downloads for routine use, while a preview-first customized path can

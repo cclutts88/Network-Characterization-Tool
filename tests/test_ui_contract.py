@@ -1021,11 +1021,29 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="networkHostRows"' in html
     assert 'id="networkPageSize"' in html
     assert "renderNetworkInventory" in html
+    assert "networkEvidenceDetails" in html
+    assert "Evidence and history" in html
     assert "else{await loadNetworkOverview()}" in html
     assert "scanRef(item).primary" in html
     assert "Open one specific retained scan" in html
     assert 'id="retainedScanSelect"' in html
     assert "currentNetwork.hosts" in html
+    assert 'id="networkOutliersPanel"' in html
+    assert "Uncommon ports by OS" in html
+    assert "The Subnet filter above recalculates this view" in html
+    assert "renderNetworkOutliers" in html
+    assert 'id="networkChangesPanel"' in html
+    assert 'id="loadNetworkChanges"' in html
+    assert "/api/analysis/network-changes" in html
+    assert "renderNetworkChanges" in html
+    assert 'id="networkControlsPanel"' in html
+    assert "Routes show where traffic could be forwarded" in html
+    assert "a route alone does not authorize a protocol or port" in html
+    assert 'id="networkControlsSearch"' in html
+    assert 'id="loadNetworkControls"' in html
+    assert "/api/analysis/network-controls" in html
+    assert "renderNetworkControls" in html
+    assert "large policy tables are capped until narrowed" in html
 
 
 def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():

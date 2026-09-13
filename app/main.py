@@ -1861,6 +1861,123 @@ def analyze_current_network() -> dict:
     return result
 
 
+@app.get("/api/analysis/network-changes")
+def analyze_current_network_changes() -> dict:
+    """Compare the newest two complete observations for each exact scan scope."""
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    groups = [
+        group for group in group_run_manifests(manifests)
+        if group_is_comparable(group)
+    ]
+    groups.sort(
+        key=lambda group: describe_run_group(group).get("completed_at")
+        or describe_run_group(group).get("created_at") or "",
+        reverse=True,
+    )
+    by_scope: dict[tuple[str, ...], list[list[dict]]] = {}
+    for group in groups:
+        by_scope.setdefault(_hunting_scope_tokens(group), []).append(group)
+
+    summary_keys = (
+        "hosts_added", "hosts_removed", "hosts_changed", "ports_added",
+        "ports_removed", "port_state_changes", "identity_changes", "route_changes",
+    )
+    aggregate = {key: 0 for key in summary_keys}
+    scopes = []
+    for scope_groups in by_scope.values():
+        after_group = scope_groups[0]
+        after_description = describe_run_group(after_group)
+        scope_item = {
+            "scope": after_description.get("scope") or {},
+            "saved_networks": after_description.get("saved_networks") or [],
+            "current": {
+                **after_description,
+                "comparison_name": _comparison_name(after_group, after_description),
+            },
+        }
+        if len(scope_groups) < 2:
+            scopes.append({
+                **scope_item,
+                "status": "no_baseline",
+                "message": "Only one complete observation is retained for this scope.",
+                "baseline": None,
+            })
+            continue
+        before_group = scope_groups[1]
+        before_description = describe_run_group(before_group)
+        before_evidence = _comparison_evidence(before_group, before_description)
+        after_evidence = _comparison_evidence(after_group, after_description)
+        comparison = compare_analyses(
+            _run_group_analysis(before_group),
+            _run_group_analysis(after_group),
+            before_evidence=before_evidence,
+            after_evidence=after_evidence,
+        )
+        warnings = coverage_warnings(
+            representative_coverage(before_group),
+            representative_coverage(after_group),
+        )
+        for key in summary_keys:
+            aggregate[key] += int((comparison.get("summary") or {}).get(key) or 0)
+        scopes.append({
+            **scope_item,
+            "status": "comparison_complete",
+            "message": "Compared the newest two complete observations for this scope.",
+            "baseline": {
+                **before_description,
+                "comparison_name": _comparison_name(before_group, before_description),
+            },
+            "before": before_description,
+            "after": after_description,
+            "coverage_compatible": not warnings,
+            "coverage_warnings": warnings,
+            **comparison,
+        })
+    return {
+        "status": "network_changes_complete",
+        "scope_count": len(scopes),
+        "compared_scope_count": sum(
+            item["status"] == "comparison_complete" for item in scopes
+        ),
+        "no_baseline_scope_count": sum(
+            item["status"] == "no_baseline" for item in scopes
+        ),
+        "summary": aggregate,
+        "scopes": scopes,
+    }
+
+
+@app.get("/api/analysis/network-controls")
+def analyze_current_network_controls() -> dict:
+    """Expose newest retained routing and policy evidence without inferring permission."""
+    devices = _latest_device_reachability_evidence()
+    return {
+        "status": "network_controls_complete",
+        "device_count": len(devices),
+        "route_count": sum(
+            len((item.get("route_analysis") or {}).get("routes") or [])
+            for item in devices
+        ),
+        "policy_count": sum(
+            len((item.get("policy") or {}).get("firewall_acl") or [])
+            for item in devices
+        ),
+        "nat_count": sum(
+            len((item.get("policy") or {}).get("nat") or [])
+            for item in devices
+        ),
+        "devices": devices,
+        "disclaimer": (
+            "A retained route describes a possible forwarding path. Only explicit "
+            "firewall or ACL evidence can support an allow or deny conclusion."
+        ),
+    }
+
+
 def _latest_device_reachability_evidence() -> list[dict]:
     analyses = []
     seen_devices = set()

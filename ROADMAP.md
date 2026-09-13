@@ -544,21 +544,29 @@ Available at https://x.x.x.x:443
   keeping IP, hostname, MAC, OS, device role, latest observation,
   ports/services, concise capability badges, evidence origin, and source links
   visible without duplicating the identity across separate flat tables.
-- [ ] Expand a current-evidence identity in place for capability evidence,
-  SearchSploit candidates, configuration provenance, and observation history.
+- [x] Expand a current-evidence identity in place for capability match basis,
+  configuration provenance, retained sources, scan coverage, and observation
+  history.
+- [ ] Attach SearchSploit candidates to the identity expansion after the
+  retained-enrichment cache has a stable invalidation contract.
 - [x] Let the operator reorganize the same current evidence by IP address, port,
   service, MAC address, hostname, OS, or last-observed time. Keep all services
   consolidated under one identity and provide search, subnet filtering, and
   bounded client-side paging for large inventories.
-- [ ] Add a route and policy view that keeps network routing distinct from
+- [x] Recalculate uncommon-port findings across the current network by OS peer
+  group, with the view automatically narrowing when the operator selects one
+  subnet and with a minimum two-host evidence threshold.
+- [x] Add a route and policy view that keeps network routing distinct from
   authorization: routes describe source/destination reachability, while
-  firewall, ACL, and NAT evidence describes protocol/port decisions.
+  firewall, ACL, and NAT evidence describes protocol/port decisions. Keep exact
+  flow conclusions in Reach and link to it from the retained evidence view.
 - [x] Preserve focused analysis of one retained scan and comparison of two
   selected scans as explicit modes, including a compact retained-scan picker.
-- [ ] Add a network-change mode that compares
-  the newest two comparable observations for every retained network scope and
-  groups changes by subnet, host/device, port/service, identity, and route or
-  policy evidence.
+- [x] Add a network-change mode that compares the newest two complete Nmap
+  observations for every exact retained network scope and groups changes by
+  subnet, host, port/service, identity, and collected scan path.
+- [ ] Extend the bulk change view with the newest two comparable device
+  collections per device for route, firewall/ACL, NAT, and switching changes.
 - [ ] Before implementation, define identity correlation, newest-usable
   evidence selection, stale/conflicting evidence display, scale limits, and
   partial-coverage warnings so the landing view cannot imply certainty that
