@@ -78,6 +78,76 @@ def assess(**overrides):
     return evaluate_reachability(**values)
 
 
+@pytest.mark.parametrize(
+    "vendor,policy",
+    [
+        (
+            "cisco",
+            {"firewall_acl": [], "applied": parse_vendor_policy("""access-list OUTSIDE_IN extended permit tcp host 203.0.113.5 host 10.90.0.10 eq 443
+access-group OUTSIDE_IN in interface outside
+""")},
+        ),
+        (
+            "vyos",
+            {"firewall_acl": [], "applied": parse_vendor_policy("""set firewall ipv4 forward filter rule 10 action 'accept'
+set firewall ipv4 forward filter rule 10 inbound-interface name 'outside'
+set firewall ipv4 forward filter rule 10 outbound-interface name 'servers'
+set firewall ipv4 forward filter rule 10 protocol 'tcp'
+set firewall ipv4 forward filter rule 10 source address '203.0.113.5/32'
+set firewall ipv4 forward filter rule 10 destination address '10.90.0.10/32'
+set firewall ipv4 forward filter rule 10 destination port '443'
+set firewall ipv4 forward filter default-action 'drop'
+""")},
+        ),
+        (
+            "pfsense",
+            {"firewall_acl": [], "applied": parse_vendor_policy(
+                "pass in quick on outside inet proto tcp from 203.0.113.5 to 10.90.0.10 port = 443"
+            )},
+        ),
+        (
+            "unifi",
+            {"firewall_acl": [], "iptables": parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i outside -o servers -p tcp -s 203.0.113.5/32 -d 10.90.0.10/32 --dport 443 -j ACCEPT
+COMMIT
+""")},
+        ),
+    ],
+)
+def test_exact_external_source_matches_wan_policy_for_current_vendors(vendor, policy):
+    device = {
+        **DEVICE,
+        "device": {"name": f"{vendor} edge", "address": "10.80.0.1", "type": "firewall"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "interface": "servers", "direct": True},
+        ]},
+        "policy": policy,
+    }
+
+    result = assess(
+        source_text="203.0.113.5", source_external=True,
+        device_analyses=[device],
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["query"]["source_external"] is True
+    assert result["path"][0]["detail"] == "External address / range"
+    assert any("analyst-supplied" in item for item in result["caveats"])
+
+
+def test_external_cidr_preserves_range_for_exact_policy_matching():
+    endpoint = parse_endpoint("203.0.113.0/24", external=True)
+
+    assert endpoint.kind == "network"
+    assert endpoint.external is True
+    assert str(endpoint.value) == "203.0.113.0/24"
+
+
 def test_explicit_acl_and_service_evidence_support_expected_allowed():
     result = assess()
     assert result["outcome"] == "Expected Allowed"

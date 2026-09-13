@@ -18,30 +18,35 @@ class Endpoint:
     entered: str
     kind: str
     value: ipaddress.IPv4Address | ipaddress.IPv4Network | None
+    external: bool = False
 
 
-def parse_endpoint(value: str) -> Endpoint:
+def parse_endpoint(value: str, *, external: bool = False) -> Endpoint:
     entered = value.strip()
     if not entered:
         raise ValueError("Enter both a source and destination")
     if entered.casefold() in EXTERNAL_TOKENS:
-        return Endpoint(entered=entered, kind="external", value=None)
+        return Endpoint(entered=entered, kind="external", value=None, external=True)
     try:
         if "/" in entered:
             parsed = ipaddress.ip_network(entered, strict=False)
             if parsed.version != 4:
                 raise ValueError
-            return Endpoint(entered=entered, kind="network", value=parsed)
+            return Endpoint(entered=entered, kind="network", value=parsed, external=external)
         parsed_address = ipaddress.ip_address(entered)
         if parsed_address.version != 4:
             raise ValueError
-        return Endpoint(entered=entered, kind="host", value=parsed_address)
+        return Endpoint(entered=entered, kind="host", value=parsed_address, external=external)
     except ValueError as exc:
         raise ValueError(f"Invalid IPv4 host, CIDR, or Internet endpoint: {entered}") from exc
 
 
+def _is_external_endpoint(endpoint: Endpoint) -> bool:
+    return endpoint.kind == "external" or endpoint.external
+
+
 def _network_for(endpoint: Endpoint, saved_networks: list[dict]) -> dict | None:
-    if endpoint.kind == "external" or endpoint.value is None:
+    if _is_external_endpoint(endpoint) or endpoint.value is None:
         return None
     for item in saved_networks:
         try:
@@ -88,7 +93,7 @@ def _default_route_interface(analysis: dict) -> str | None:
 
 def _source_attached(source: Endpoint, analysis: dict) -> bool:
     interfaces = analysis.get("interfaces") or []
-    if source.kind == "external":
+    if _is_external_endpoint(source):
         return any(item.get("role") == "external" for item in interfaces) or bool(
             _default_route_interface(analysis)
         )
@@ -250,7 +255,7 @@ def _scan_coverage_proof(host: dict, protocol: str, port: int) -> dict | None:
 def _endpoint_interface(endpoint: Endpoint, analysis: dict, *, role: str | None = None) -> str | None:
     candidates = []
     for item in analysis.get("interfaces") or []:
-        if endpoint.kind == "external":
+        if _is_external_endpoint(endpoint):
             if item.get("role") == "external":
                 candidates.append((0, str(item.get("name") or "")))
             continue
@@ -266,7 +271,7 @@ def _endpoint_interface(endpoint: Endpoint, analysis: dict, *, role: str | None 
             endpoint.kind == "network" and endpoint.value.subnet_of(network)
         ):
             candidates.append((network.prefixlen, str(item.get("name") or "")))
-    if endpoint.kind == "external" and not candidates:
+    if _is_external_endpoint(endpoint) and not candidates:
         default_interface = _default_route_interface(analysis)
         if default_interface:
             candidates.append((0, default_interface))
@@ -661,8 +666,9 @@ def evaluate_reachability(
     saved_networks: list[dict],
     device_analyses: list[dict],
     flow_state: str = "new",
+    source_external: bool = False,
 ) -> dict:
-    source = parse_endpoint(source_text)
+    source = parse_endpoint(source_text, external=source_external)
     destination = parse_endpoint(destination_text)
     protocol = protocol.strip().lower()
     if protocol not in {"tcp", "udp"}:
@@ -730,6 +736,10 @@ def evaluate_reachability(
         )
     evidence = []
     caveats = []
+    if source.external and source.value is not None:
+        caveats.append(
+            "The outside source designation is analyst-supplied. NCT uses the exact address or range for retained policy matching but does not verify ownership or live path availability."
+        )
     if flow_state == "established":
         caveats.append(
             "Established / related evaluates retained policy for packets already marked as part of an existing or related flow; it does not prove that a live device state-table entry exists."
@@ -896,7 +906,10 @@ def evaluate_reachability(
     if source_network:
         path.append({"kind": "source", "label": source_network.get("name") or source.entered, "detail": source_network.get("cidr")})
     else:
-        path.append({"kind": "source", "label": source.entered, "detail": "Selected source"})
+        path.append({
+            "kind": "source", "label": source.entered,
+            "detail": "External address / range" if _is_external_endpoint(source) else "Selected source",
+        })
     for translation in destination_translations:
         if translation.get("kind") != "dnat":
             continue
@@ -947,6 +960,7 @@ def evaluate_reachability(
             "effective_destination": effective_destination.entered,
             "effective_port": effective_port,
             "flow_state": flow_state,
+            "source_external": _is_external_endpoint(source),
         },
         "source_network": source_network,
         "destination_network": destination_network,

@@ -380,6 +380,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
 
 def test_reachability_view_has_grouped_source_exposure_reports():
     html = reachability_page().body.decode()
+    assert 'id="sourceExternal"' in html
+    assert "External address / range" in html
+    assert "source_external:$('sourceExternal').checked" in html
     assert 'id="exposureReportPanel"' in html
     assert 'id="generateReport"' in html
     assert 'id="exportReport"' in html

@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added explicit external source IP/CIDR evaluation to Reach. Analysts can mark
+  an exact address or range as outside the network, retain it for precise rule
+  matching, and evaluate it through WAN-facing Cisco, VyOS, pfSense, and UniFi
+  policy without treating every unsaved address as external.
 - Added retained vendor-NAT evaluation for exact Cisco static/object NAT, VyOS
   source and destination NAT, and active pfSense `rdr`/NAT rules. Unsupported
   policy NAT and unresolved translation criteria remain Unknown.

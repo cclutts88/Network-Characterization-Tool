@@ -583,8 +583,12 @@ Available at https://x.x.x.x:443
       - [x] Carry unique source and destination translations sequentially
         across multiple retained devices, preserve every device and evidence
         step in the Reach path, and stop at ambiguous or looping paths.
-- [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
+- [x] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
+  - [x] Let an analyst explicitly designate an exact source IPv4 host or CIDR as
+    external. Preserve the address for rule matching while binding the path to
+    the retained WAN-facing interface; never guess external status from an
+    unsaved address alone.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not
   Exposed without claiming unsupported certainty.
   - [x] Report Local, Routed, exact-policy Expected Allowed/Blocked, and Unknown

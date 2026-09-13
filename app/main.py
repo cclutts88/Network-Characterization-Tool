@@ -167,6 +167,7 @@ class ReachabilityQuery(BaseModel):
     protocol: Literal["tcp", "udp"] = "tcp"
     port: int = Field(ge=1, le=65535)
     flow_state: Literal["new", "established"] = "new"
+    source_external: bool = False
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -1856,6 +1857,7 @@ def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
             protocol=query.protocol,
             port=query.port,
             flow_state=query.flow_state,
+            source_external=query.source_external,
             hunting=analyze_hunting_network(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),

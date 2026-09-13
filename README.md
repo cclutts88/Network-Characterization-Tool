@@ -44,7 +44,8 @@ SearchSploit database, and visualizes retained topology evidence.
 - Read-only Reach analysis that correlates retained routes, applied policy,
   sequential vendor NAT, and Nmap services. A Not Exposed result requires exact
   per-host Nmap protocol/port coverage rather than merely assuming an unlisted
-  port is closed.
+  port is closed. An analyst can explicitly mark a source IP or CIDR as external
+  while preserving that exact address for retained WAN-policy matching.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual
