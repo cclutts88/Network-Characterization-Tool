@@ -10,6 +10,10 @@
   and kept unavailable commands from discarding the rest of a guarded pull.
 - Added guarded UniFi switch fallback commands and explicit partial-evidence
   warnings when a failed pull contains no structured forwarding records.
+- Added UniFi `swctrl` port and learned MAC/VLAN parsing using the actual retained
+  switch output format. Expanded streamed collection retention from 200 KB to a
+  reported 5 MB limit and prioritized firewall-table capture before large
+  address sets.
 - Improved Reach path selection to use source-attached router/firewall evidence,
   ignore switch management routes, preserve the newest usable collection when a
   later pull fails, and render the likely path in the interface.

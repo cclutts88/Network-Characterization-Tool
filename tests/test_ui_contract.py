@@ -228,6 +228,7 @@ def test_device_collection_history_has_structured_review_and_confirmed_delete():
         "Routes",
         "Neighbors",
         "VLANs",
+        "Switch VLANs",
         "Switching",
         "Firewall / ACL",
         "NAT",

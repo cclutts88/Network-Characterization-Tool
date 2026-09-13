@@ -79,3 +79,34 @@ def test_unlabeled_cli_output_does_not_claim_per_command_success():
     result = parse_switch_evidence("combined CLI output", ["show vlan brief"])
 
     assert result["command_results"][0]["status"] == "not_individually_reported"
+
+
+def test_unifi_swctrl_port_and_mac_tables_are_structured():
+    result = parse_switch_evidence(
+        """
+===== swctrl port show =====
+@U 2  U/U  10000F   20968403 11765150 18771366798 5679214362 forwarding force auth authorized 0x0
+   4  U/D      0H         70  1909271        5396  211310775 N disabled force auth 0x0
+===== swctrl mac show =====
+port vlan mac-address       ip-address      hostname          uptime age wireless-type
+---- ---- ----------------- --------------- ---------------- ------ --- -------------
+   2    1 28:70:4e:c4:03:ad 10.0.0.4                          403 403
+   5    1 04:7c:16:b3:21:8d 10.0.0.100     Chris_Desktop     45554 700
+===== swctrl vlan show =====
+[error] Command line is not complete. Try option "help"
+[NCT] Command unavailable or returned a non-zero status.
+""",
+        ["swctrl port show", "swctrl mac show", "swctrl vlan show"],
+    )
+
+    assert len(result["mac_table"]) == 2
+    assert [item["vlan_id"] for item in result["vlans"]] == [1]
+    assert result["mac_table"][0]["interface"] == "Port 2"
+    assert result["mac_table"][0]["vlan_id"] == 1
+    ports = {item["interface"]: item for item in result["ports"]}
+    assert ports["Port 2"]["status"] == "up"
+    assert ports["Port 2"]["uplink"] is True
+    assert ports["Port 4"]["status"] == "down"
+    assert result["spanning_tree"][0]["state"] == "forwarding"
+    statuses = {item["command"]: item["status"] for item in result["command_results"]}
+    assert statuses["swctrl vlan show"] == "unavailable"

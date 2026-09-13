@@ -298,6 +298,12 @@ def analyze_device_collection(
             "title": f"Collection status is {collection_status}",
             "detail": "Treat parsed content as partial evidence. Review the retained command status and rerun with the current guarded profile before relying on missing sections.",
         })
+    if manifest.get("output_truncated"):
+        review_items.append({
+            "severity": "warning", "category": "collection",
+            "title": "Collection output reached the retention limit",
+            "detail": "Later command sections may be absent. Reduce optional output or increase the reviewed deployment limit before relying on missing evidence.",
+        })
     if manifest.get("device_type") == "firewall" and not policy_count:
         review_items.append({
             "severity": "warning", "category": "policy",

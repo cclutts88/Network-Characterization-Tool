@@ -16,6 +16,7 @@ UNAVAILABLE_MARKERS = (
     "syntax error",
     "invalid command",
     "not supported",
+    "command line is not complete",
 )
 
 
@@ -171,6 +172,49 @@ def parse_switch_evidence(text: str, commands: list[str] | None = None) -> dict:
         if header or name_header:
             current_interface = (header or name_header).group(1)
             port(current_interface)
+
+        # UniFi switch firmware exposes learned clients as:
+        # port vlan mac-address ip-address hostname uptime age ...
+        swctrl_mac = re.match(
+            rf"^(?P<port>\d+)\s+(?P<vlan>\d{{1,4}})\s+(?P<mac>{MAC_TOKEN})(?:\s|$)",
+            line, re.I,
+        )
+        if swctrl_mac:
+            interface = f"Port {swctrl_mac.group('port')}"
+            vlan = _vlan_id(swctrl_mac.group("vlan"))
+            add_mac(
+                swctrl_mac.group("mac"), vlan, interface, "learned",
+                line_number, line,
+            )
+            add_vlan(vlan, f"VLAN {vlan}", line, [interface])
+            continue
+
+        # `swctrl port show` prefixes may mark uplink/management ports before
+        # the physical port number. Link state and STP state are still stable.
+        swctrl_port = re.match(
+            r"^(?P<prefix>(?:[@A-Z]\s*)*)(?P<port>\d+)\s+"
+            r"(?P<link>[UD]/[UD])\s+(?P<rate>\S+)\s+",
+            line, re.I,
+        )
+        if swctrl_port:
+            interface = f"Port {swctrl_port.group('port')}"
+            item = port(interface)
+            item["status"] = "up" if swctrl_port.group("link").upper().endswith("/U") else "down"
+            item["description"] = f"Link rate {swctrl_port.group('rate')}"
+            item["uplink"] = "@U" in re.sub(r"\s+", "", swctrl_port.group("prefix")).upper()
+            add_port_evidence(item, line)
+            if re.search(r"\bforwarding\b", line, re.I):
+                key = (interface, None, "forwarding")
+                if key not in seen_stp:
+                    seen_stp.add(key)
+                    spanning_tree.append({
+                        "interface": interface,
+                        "vlan_id": None,
+                        "role": "active",
+                        "state": "forwarding",
+                        "evidence": line[:500],
+                    })
+            continue
 
         cisco_mac = re.match(
             rf"^(?P<vlan>\d{{1,4}}|All|---)\s+(?P<mac>{MAC_TOKEN})\s+"

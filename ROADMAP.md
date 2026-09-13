@@ -575,6 +575,12 @@ within Reachability.
 - [x] Add guarded UniFi switch fallbacks for platform, switch-control, forwarding,
   VLAN, and spanning-tree evidence on firmware where standard Linux utilities are
   absent.
+- [x] Parse retained UniFi `swctrl` physical-port state and learned MAC/VLAN
+  tables into structured switch ports, forwarding state, VLAN observations, and
+  endpoint-to-port evidence.
+- [x] Raise the bounded streamed configuration retention limit to 5 MB, report
+  truncation explicitly, and collect firewall tables before large address sets
+  so missing late evidence cannot masquerade as an empty policy.
 - [x] Mark failed device pulls as partial evidence in Device Analysis and warn
   separately when a switch pull contains no structured port, learned-MAC,
   aggregation, or spanning-tree records.

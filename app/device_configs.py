@@ -39,6 +39,8 @@ COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_SUMMARY_TEXT_BYTES = 2 * 1024 * 1024
 MAX_SUMMARY_ITEMS = 500
+MAX_COLLECTION_OUTPUT_CHARS = 5 * 1024 * 1024
+MAX_RESPONSE_OUTPUT_CHARS = 200_000
 PASSWORD_SESSION_TTL_SECONDS = 90
 MAX_ADDITIONAL_COMMANDS = 20
 READ_ONLY_COMMAND_PREFIXES = {
@@ -202,9 +204,9 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ip -6 neigh show",
             "bridge vlan show",
             "ss -lntup",
-            "ipset save",
             "iptables-save",
             "nft list ruleset",
+            "ipset save",
             "lldpcli show neighbors details",
         ),
         "firewall": (
@@ -218,9 +220,9 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ip -6 neigh show",
             "bridge vlan show",
             "ss -lntup",
-            "ipset save",
             "iptables-save",
             "nft list ruleset",
+            "ipset save",
             "lldpcli show neighbors details",
         ),
         "switch": (
@@ -957,6 +959,11 @@ def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
     return _control_ssh_args_for_plan(session.plan, session.control_path)
 
 
+def bounded_collection_output(value: str) -> tuple[str, bool]:
+    """Bound retained streamed output while making any evidence loss explicit."""
+    return value[:MAX_COLLECTION_OUTPUT_CHARS], len(value) > MAX_COLLECTION_OUTPUT_CHARS
+
+
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     plan = session.plan
     preview = session.preview
@@ -968,6 +975,7 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     transfer_method = "ssh_stdout"
     cleanup_status = "not_required"
     remote_created = False
+    output_truncated = False
     try:
         if plan.vendor in {"vyos", "pfsense"}:
             transfer_method = "scp_control_session"
@@ -1015,12 +1023,15 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 check=False,
             )
             exit_code = collected.returncode
-            local_output.write_text(collected.stdout[:200_000])
+            retained_output, output_truncated = bounded_collection_output(collected.stdout)
+            local_output.write_text(retained_output)
             if collected.stderr:
                 stderr_parts.append(collected.stderr[:20_000])
             if collected.returncode != 0:
                 raise RuntimeError("The remote collection command returned a non-zero result.")
-        (session.run_dir / "stdout.txt").write_text(local_output.read_text(errors="replace")[:200_000])
+        (session.run_dir / "stdout.txt").write_text(
+            local_output.read_text(errors="replace")[:MAX_RESPONSE_OUTPUT_CHARS]
+        )
         status = "completed"
         failure_class = None
     except subprocess.TimeoutExpired:
@@ -1058,6 +1069,8 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             "remote_temp_created": remote_created,
             "remote_cleanup_status": cleanup_status,
             "local_output_name": preview["local_output_name"],
+            "output_truncated": output_truncated,
+            "output_limit_bytes": MAX_COLLECTION_OUTPUT_CHARS,
         },
     )
 
@@ -1315,6 +1328,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "neighbors": len(neighbors),
             "topology_neighbors": len(topology_neighbors),
             "vlans": len(vlans),
+            "switch_vlans": len(switch_detail.get("vlans") or []),
             "firewall_acl": len(firewall_acl),
             "nat": len(nat),
             "network_objects": len(network_objects),
@@ -1652,6 +1666,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     exit_code = None
     status = "failed"
     failure_class = None
+    output_truncated = False
     process = None
     capture_stderr = None
     if key["status"] in {"missing", "unreadable", "invalid"}:
@@ -1673,7 +1688,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
                 timeout=120,
                 check=False,
             )
-            stdout = completed.stdout[:200_000]
+            stdout, output_truncated = bounded_collection_output(completed.stdout)
             stderr = completed.stderr[:50_000]
             exit_code = completed.returncode
             status = "completed" if completed.returncode == 0 else "failed"
@@ -1699,11 +1714,18 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         stderr = (stderr + "\n" if stderr else "") + "Mandatory tcpdump accountability did not produce a valid PCAP."
     (run_dir / "stdout.txt").write_text(stdout)
     (run_dir / "stderr.txt").write_text(stderr)
-    manifest.update({"status": status, "completed_at": utc_now(), "exit_code": exit_code, "failure_class": failure_class})
+    manifest.update({
+        "status": status,
+        "completed_at": utc_now(),
+        "exit_code": exit_code,
+        "failure_class": failure_class,
+        "output_truncated": output_truncated,
+        "output_limit_bytes": MAX_COLLECTION_OUTPUT_CHARS,
+    })
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return {
         **manifest,
-        "stdout": stdout,
+        "stdout": stdout[:MAX_RESPONSE_OUTPUT_CHARS],
         "stderr": stderr,
         "scp_command": preview_data["scp_command"],
         "artifacts": artifact_records(preview_data["run_id"], run_dir),

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.device_configs import (
     artifact_records,
+    bounded_collection_output,
     delete_device_collection,
     device_collection_directory,
     device_collection_summary,
@@ -120,6 +121,16 @@ add USERS 10.80.0.0/24
     assert {item["evidence"] for item in result["network_objects"]} >= {
         "create USERS hash:net family inet", "add USERS 10.80.0.0/24"
     }
+
+
+def test_large_streamed_collection_is_bounded_and_reports_truncation(monkeypatch):
+    monkeypatch.setattr("app.device_configs.MAX_COLLECTION_OUTPUT_CHARS", 10)
+
+    retained, truncated = bounded_collection_output("0123456789extra")
+
+    assert retained == "0123456789"
+    assert truncated is True
+    assert bounded_collection_output("short") == ("short", False)
 
 
 def test_collection_artifacts_are_not_duplicated_when_upload_matches_config_suffix(tmp_path):
