@@ -580,9 +580,6 @@ within Reachability.
       exact source NAT and masquerade. Show the original and effective source,
       outgoing interface, retained rule, and chain path in Reach; keep address
       ranges and conflicting multi-device translations at Unknown.
-    - [ ] Comeback point: evaluate Juniper zone-default policy only after the
-      retained evidence and expected device behavior can be tested. This is
-      intentionally deferred from the current rollout.
     - [ ] Resolve dynamic and DNS-backed objects, vendor policy-based NAT,
       established-flow state, and multi-device translation paths; keep
       unsupported criteria at Unknown.
@@ -630,6 +627,13 @@ within Reachability.
   production devices.
 - [ ] Compare current and proposed paths, alternate paths, and collateral impact.
 - [ ] Export evidence-backed hardening reports and map comparisons.
+
+### End-of-roadmap fringe-vendor validation
+
+- [ ] Return to Juniper only after the primary mission vendor work and all other
+  planned capabilities are complete. Validate zone-default policy, collection,
+  parsing, and Reach behavior against representative retained Juniper evidence;
+  do not let this fringe case block UniFi, Cisco, VyOS, or pfSense delivery.
 
 ## Release discipline
 

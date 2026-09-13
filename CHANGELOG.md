@@ -31,7 +31,8 @@
 - Added ordered Linux/UniFi source-NAT and masquerade evaluation. Reach now
   shows the pre- and post-translation source, outgoing interface, retained rule,
   and chain path while leaving source ranges and competing device translations
-  unresolved. Juniper zone-default evaluation is explicitly deferred.
+  unresolved. Juniper zone-default evaluation is explicitly deferred to the
+  end-of-roadmap fringe-vendor validation stage.
 - Added conservative applied-policy handling for Cisco IOS/IOS-XE/ASA, VyOS,
   pfSense, and Juniper. NCT requires retained interface or zone attachment
   evidence before using a vendor rule for an allow/deny result, exposes the
