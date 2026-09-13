@@ -62,6 +62,7 @@ from app.comparison import (
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
 from app.session_ui import analyst_admin_page, session_script
+from app.view_preferences_ui import view_preferences_script
 from app.request_identity import bind_signed_in_actor
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.auth import (
@@ -104,6 +105,14 @@ from app.investigation_notes import (
     list_notes,
     save_note,
     share_note,
+)
+from app.view_preferences import (
+    ViewPreferenceConflict,
+    delete_filter_preset,
+    get_view_workspace,
+    init_view_preference_storage,
+    save_filter_preset,
+    save_view_preference,
 )
 import hashlib
 import io
@@ -239,6 +248,18 @@ class InvestigationNoteShareRequest(BaseModel):
     shared: bool
     expected_version: int = Field(ge=1)
     page: Literal["device", "nmap", "analyze", "hunt", "map"] | None = None
+
+
+class AnalystViewPreferenceRequest(BaseModel):
+    snapshot: dict
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class AnalystFilterPresetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    snapshot: dict
+    preset_id: str | None = Field(default=None, max_length=64)
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 def utc_now() -> str:
@@ -898,6 +919,7 @@ async def lifespan(_: FastAPI):
     init_workspace_storage(DB_PATH)
     init_scan_collaboration_storage(DB_PATH)
     init_note_storage(DB_PATH)
+    init_view_preference_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1012,6 +1034,11 @@ def current_analyst(request: Request) -> dict:
 @app.get("/assets/nct-session.js")
 def account_controls_script() -> Response:
     return session_script()
+
+
+@app.get("/assets/nct-view-preferences.js")
+def analyst_view_preferences_script() -> Response:
+    return view_preferences_script()
 
 
 @app.get("/admin/users", response_class=HTMLResponse)
@@ -1168,6 +1195,89 @@ def clear_workspace_layout_default(request: Request) -> dict:
     return set_default_layout(
         DB_PATH, owner=request.state.analyst["username"], layout_id=None
     )
+
+
+@app.get("/api/workspaces/views/{page}")
+def analyst_view_workspace(request: Request, page: Literal["hunt", "analyze"]) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {
+            "server_persistence": False,
+            "page": page,
+            "preference": None,
+            "presets": [],
+        }
+    result = get_view_workspace(
+        DB_PATH, owner=request.state.analyst["username"], page=page
+    )
+    result["server_persistence"] = True
+    return result
+
+
+@app.put("/api/workspaces/views/{page}")
+def store_analyst_view_preference(
+    request: Request,
+    page: Literal["hunt", "analyze"],
+    preference: AnalystViewPreferenceRequest,
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal views require authenticated mode")
+    try:
+        return save_view_preference(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            page=page,
+            **preference.model_dump(),
+        )
+    except ViewPreferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/workspaces/views/{page}/presets")
+def store_analyst_filter_preset(
+    request: Request,
+    page: Literal["hunt", "analyze"],
+    preset: AnalystFilterPresetRequest,
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal presets require authenticated mode")
+    try:
+        return save_filter_preset(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            page=page,
+            **preset.model_dump(),
+        )
+    except ViewPreferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal preset not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/views/{page}/presets/{preset_id}")
+def remove_analyst_filter_preset(
+    request: Request,
+    page: Literal["hunt", "analyze"],
+    preset_id: str,
+    expected_version: int,
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal presets require authenticated mode")
+    try:
+        return delete_filter_preset(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            page=page,
+            preset_id=preset_id,
+            expected_version=expected_version,
+        )
+    except ViewPreferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal preset not found") from exc
 
 
 @app.get("/api/workspaces/scan-draft")

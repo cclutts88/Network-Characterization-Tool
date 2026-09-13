@@ -293,12 +293,12 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "annotateSearchSploitNetworkData" in html
     assert "after all active filters" in html
     assert 'id="hostRows"' in html
-    assert '<details class="panel" id="inventoryPanel">' in html
+    assert '<details class="panel" id="inventoryPanel" data-workspace-card="inventory">' in html
     assert 'id="inventorySummary"' in html
     assert 'class="panel evidence-guide"' in html
-    assert '<details class="panel evidence-guide" open>' in html
-    assert '<details class="panel" open><summary>Capability datasets</summary>' in html
-    assert '<details class="panel" open><summary>Capability findings</summary>' in html
+    assert '<details class="panel evidence-guide" data-workspace-card="evidence-guide" open>' in html
+    assert '<details class="panel" data-workspace-card="capability-datasets" open><summary>Capability datasets</summary>' in html
+    assert '<details class="panel" data-workspace-card="capability-findings" open><summary>Capability findings</summary>' in html
     assert "details.panel>summary::before" in html
     assert "details.panel[open]>summary::before" in html
     assert "position:sticky;top:var(--hunt-header-offset)" in html
@@ -818,3 +818,18 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "Port state, service, product, or version changes" in html
     assert "Traceroute path change" in html
     assert "renderComparisonDetails" in html
+
+
+def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():
+    hunt_html = hunting_page().body.decode()
+    analyze_html = analysis_page().body.decode()
+    for html in (hunt_html, analyze_html):
+        assert '/assets/nct-view-preferences.js' in html
+        assert 'data-workspace-card=' in html
+    assert 'data-workspace-card="network-filters"' in hunt_html
+    assert 'data-workspace-card="scan-comparison"' in analyze_html
+    assert 'id="analysisHostRows"' in analyze_html
+    from app.view_preferences_ui import VIEW_PREFERENCES_SCRIPT
+
+    assert "pageNode.textContent!==pageLabel" in VIEW_PREFERENCES_SCRIPT
+    assert "if(pagerOnly)return" in VIEW_PREFERENCES_SCRIPT

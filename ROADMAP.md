@@ -495,7 +495,7 @@ within Reachability.
     credentials, one-time read-only secret mounting and removal, existing-account
     preservation, and an admin-only host recovery path with backup and session
     revocation.
-- [ ] Give each analyst a persistent personal workspace for saved map layouts,
+- [x] Give each analyst a persistent personal workspace for saved map layouts,
   filters, investigation notes, scan drafts, and interface preferences.
   - [x] Move named Map layouts to owner-scoped server storage when authentication
     is enabled, while retaining browser-local layouts in disabled Test mode.
@@ -506,6 +506,11 @@ within Reachability.
   - [x] Autosave one owner-scoped Nmap builder draft per analyst, including the
     selected interface, scope, profile, timeout, and scan options. Reject stale
     browser writes instead of silently replacing a newer draft.
+  - [x] Preserve each analyst's Hunt and Analyze filters, collapsible-card state,
+    table density, natural IP/hostname sorting, and paginated row preference on
+    the server. Keep the working view isolated by account and reject stale writes.
+  - [x] Add private named Hunt and Analyze filter presets that analysts can load,
+    update, and delete without affecting another operator's view.
 - [ ] Keep shared evidence authoritative while requiring an explicit publish or
   share action to move personal layouts and investigations into a team workspace.
   - [x] Allow only an Administrator to deliberately publish or unpublish a
