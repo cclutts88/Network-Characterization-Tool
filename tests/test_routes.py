@@ -79,7 +79,7 @@ def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
     monkeypatch.setattr("app.main.list_saved_networks", lambda _path: saved)
     monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: devices)
     monkeypatch.setattr(
-        "app.main.enrich_hunting_with_searchsploit", lambda value: enrichment
+        "app.main.enrich_hunting_with_searchsploit_cached", lambda value: enrichment
     )
 
     def fake_report(**values):
@@ -99,6 +99,24 @@ def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
         "device_analyses": devices,
         "searchsploit": enrichment,
     }
+
+
+def test_searchsploit_cache_lookup_requires_an_explicit_run_when_stale(monkeypatch):
+    hunting = {"source": {"run_ids": ["scan-one"]}, "hosts": [], "findings": []}
+    required = {
+        "status": "searchsploit_cache_required",
+        "matches": [],
+        "cache": {"state": "required"},
+    }
+
+    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: hunting)
+    monkeypatch.setattr("app.main.searchsploit_cache_status", lambda value: required)
+
+    with TestClient(app) as client:
+        response = client.get("/api/searchsploit/hunting/network")
+
+    assert response.status_code == 200
+    assert response.json() == required
 
 
 def test_preview_and_package_use_the_same_udp_settings_and_required_n():

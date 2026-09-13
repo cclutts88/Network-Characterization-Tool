@@ -375,6 +375,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "renderHostCveDropdowns" in html
     assert "/api/searchsploit/status" in html
     assert "/api/searchsploit/hunting/network" in html
+    assert "loadSearchSploitCache" in html
+    assert "Run for current evidence" in html
+    assert "Results current" in html
+    assert "They will refresh only after new scan evidence or a database change." in html
     assert 'id="searchsploitOnline"' in html
     assert 'id="searchsploitUpload"' in html
     assert 'id="searchsploitRollback"' in html

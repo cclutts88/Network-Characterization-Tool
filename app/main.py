@@ -38,7 +38,8 @@ from app.ip_sort import ip_sort_key
 from app.os_inference import infer_os_identity
 from app.searchsploit import (
     MAX_ARCHIVE_BYTES,
-    enrich_hunting_with_searchsploit,
+    enrich_hunting_with_searchsploit_cached,
+    searchsploit_cache_status,
     install_searchsploit_archive,
     rollback_searchsploit_database,
     searchsploit_status,
@@ -1914,7 +1915,7 @@ def generate_source_exposure_report() -> dict:
         hunting=hunting,
         saved_networks=list_saved_networks(DB_PATH),
         device_analyses=_latest_device_reachability_evidence(),
-        searchsploit=enrich_hunting_with_searchsploit(hunting),
+        searchsploit=enrich_hunting_with_searchsploit_cached(hunting),
     )
 
 
@@ -2070,7 +2071,7 @@ def rollback_searchsploit_database_version(version_id: str) -> dict:
 def searchsploit_hunting_network() -> dict:
     hunting = analyze_hunting_network()
     return classify_searchsploit_exposure(
-        enrich_hunting_with_searchsploit(hunting),
+        enrich_hunting_with_searchsploit_cached(hunting),
         hunting=hunting,
         saved_networks=list_saved_networks(DB_PATH),
         device_analyses=_latest_device_reachability_evidence(),
@@ -2081,7 +2082,35 @@ def searchsploit_hunting_network() -> dict:
 def searchsploit_hunting_scan(run_id: str) -> dict:
     hunting = analyze_hunting_scan(run_id)
     return classify_searchsploit_exposure(
-        enrich_hunting_with_searchsploit(hunting),
+        enrich_hunting_with_searchsploit_cached(hunting),
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
+
+
+@app.get("/api/searchsploit/hunting/network")
+def cached_searchsploit_hunting_network() -> dict:
+    hunting = analyze_hunting_network()
+    cached = searchsploit_cache_status(hunting)
+    if cached.get("status") != "searchsploit_complete":
+        return cached
+    return classify_searchsploit_exposure(
+        cached,
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
+
+
+@app.get("/api/searchsploit/hunting/{run_id}")
+def cached_searchsploit_hunting_scan(run_id: str) -> dict:
+    hunting = analyze_hunting_scan(run_id)
+    cached = searchsploit_cache_status(hunting)
+    if cached.get("status") != "searchsploit_complete":
+        return cached
+    return classify_searchsploit_exposure(
+        cached,
         hunting=hunting,
         saved_networks=list_saved_networks(DB_PATH),
         device_analyses=_latest_device_reachability_evidence(),

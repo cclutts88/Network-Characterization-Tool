@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Retained SearchSploit enrichment by exact scan-evidence and active-database
+  identity. Hunt now restores current matches when an analyst returns to the
+  page and requires a new run only after newer scan evidence is selected or
+  the active Exploit-DB dataset changes.
 - Added Hunt-to-Reach shortcuts for inventory hosts, capability findings, and
   SearchSploit matches. The selected destination plus available protocol and
   port are loaded in a new Reach tab while Source remains an analyst choice.

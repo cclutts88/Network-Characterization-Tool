@@ -11,6 +11,8 @@ from app.main import app
 from app.searchsploit import (
     _search,
     enrich_hunting_with_searchsploit,
+    enrich_hunting_with_searchsploit_cached,
+    searchsploit_cache_status,
     install_searchsploit_archive,
     rollback_searchsploit_database,
 )
@@ -123,6 +125,66 @@ def test_searchsploit_reports_when_no_product_fingerprints_are_searchable(monkey
     assert result["searched_finding_count"] == 0
     assert result["skipped_no_product_count"] == 2
     assert result["matches"] == []
+
+
+def test_searchsploit_cache_reuses_results_until_evidence_or_database_changes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ANALYZER_DATA_DIR", str(tmp_path / "data"))
+    database = {"version": "db-one"}
+
+    def status():
+        return {
+            "available": True,
+            "command_path": "/opt/exploit-database/searchsploit",
+            "database_path": "/opt/exploit-database",
+            "database_files": 2,
+            "database_updated_epoch": 100.0,
+            "active_version": database["version"],
+            "archive_sha256": database["version"],
+            "message": "ready",
+        }
+
+    searches = []
+
+    def fake_search(_command_path: str, query: str):
+        searches.append(query)
+        return [{
+            "edb_id": "12345",
+            "title": "Example candidate",
+            "platform": "linux",
+            "type": "remote",
+            "codes": "CVE-2026-12345",
+            "cves": ["CVE-2026-12345"],
+        }], None
+
+    monkeypatch.setattr("app.searchsploit.searchsploit_status", status)
+    monkeypatch.setattr("app.searchsploit._search", fake_search)
+    hunting = {
+        "source": {"run_ids": ["scan-one"]},
+        "findings": [finding("Example Server", "1.0")],
+    }
+
+    first = enrich_hunting_with_searchsploit_cached(hunting)
+    second = enrich_hunting_with_searchsploit_cached(hunting)
+
+    assert first["cache"]["reused"] is False
+    assert second["cache"]["reused"] is True
+    assert first["cache"]["generated_at"] == second["cache"]["generated_at"]
+    assert searches == ["Example Server 1.0"]
+    assert searchsploit_cache_status(hunting)["cache"]["state"] == "current"
+
+    newer_scan = {**hunting, "source": {"run_ids": ["scan-two"]}}
+    assert searchsploit_cache_status(newer_scan)["cache"]["state"] == "required"
+    enrich_hunting_with_searchsploit_cached(newer_scan)
+    assert searches == ["Example Server 1.0", "Example Server 1.0"]
+
+    database["version"] = "db-two"
+    assert searchsploit_cache_status(newer_scan)["cache"]["state"] == "required"
+    enrich_hunting_with_searchsploit_cached(newer_scan)
+    assert searches == [
+        "Example Server 1.0", "Example Server 1.0", "Example Server 1.0"
+    ]
 
 
 def database_archive(path, marker: str):
