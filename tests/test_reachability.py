@@ -9,6 +9,7 @@ from app.reachability import (
     classify_searchsploit_exposure,
     evaluate_reachability,
     parse_endpoint,
+    simulate_proposed_policy_control,
 )
 from app.vendor_policy import parse_vendor_policy
 
@@ -146,6 +147,92 @@ def test_external_cidr_preserves_range_for_exact_policy_matching():
     assert endpoint.kind == "network"
     assert endpoint.external is True
     assert str(endpoint.value) == "203.0.113.0/24"
+
+
+def test_proposed_exact_deny_compares_against_current_permit_without_device_changes():
+    result = simulate_proposed_policy_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[DEVICE],
+        action="deny", device_key="10.80.0.1",
+    )
+
+    assert result["status"] == "reachability_policy_simulation_complete"
+    assert result["comparison"]["before"] == "Expected Allowed"
+    assert result["comparison"]["after"] == "Expected Blocked"
+    assert result["comparison"]["outcome_changed"] is True
+    assert result["comparison"]["scope"] == {
+        "source_addresses": 1,
+        "destination_addresses": 1,
+        "address_pairs": 1,
+        "protocol": "tcp",
+        "port": 443,
+    }
+    assert result["projected"]["simulated"] is True
+    assert result["projected"]["retained_objects"]["policy"][0]["simulated"] is True
+    assert "changes no device configuration" in result["disclaimer"]
+
+
+def test_proposed_permit_replaces_selected_device_deny_in_projection():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i inside -o servers -p tcp -s 10.80.0.0/24 -d 10.90.0.10/32 --dport 443 -j DROP
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = simulate_proposed_policy_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[device],
+        action="permit", device_key="Edge Firewall",
+    )
+
+    assert result["comparison"]["before"] == "Expected Blocked"
+    assert result["comparison"]["after"] == "Expected Allowed"
+    assert result["projected"]["confidence"] == "medium"
+    proposal = next(item for item in result["projected"]["evidence"] if item["kind"] == "proposal")
+    assert proposal["title"] == "Proposed permit on Edge Firewall"
+
+
+def test_proposed_control_stays_unknown_when_selected_device_is_not_source_attached():
+    detached = {
+        **DEVICE,
+        "device": {"name": "Detached Edge", "address": "10.70.0.1", "type": "firewall"},
+        "interfaces": [{"name": "other", "network": "10.70.0.0/24", "role": "internal"}],
+        "policy": {"firewall_acl": []},
+    }
+
+    result = simulate_proposed_policy_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[detached],
+        action="deny", device_key="10.70.0.1",
+    )
+
+    assert result["comparison"]["source_attached"] is False
+    assert result["projected"]["outcome"] == "Unknown"
+    assert "not attached" in result["projected"]["explanation"]
+
+
+def test_proposed_cidr_control_reports_address_pair_scope():
+    result = simulate_proposed_policy_control(
+        source_text="10.80.0.0/24", destination_text="10.90.0.0/24",
+        protocol="tcp", port=443, hunting={"hosts": [], "findings": []},
+        saved_networks=SAVED, device_analyses=[DEVICE],
+        action="deny", device_key="10.80.0.1",
+    )
+
+    assert result["comparison"]["scope"]["source_addresses"] == 256
+    assert result["comparison"]["scope"]["destination_addresses"] == 256
+    assert result["comparison"]["scope"]["address_pairs"] == 65536
 
 
 def test_explicit_acl_and_service_evidence_support_expected_allowed():

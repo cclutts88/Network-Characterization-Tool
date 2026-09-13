@@ -639,6 +639,11 @@ Available at https://x.x.x.x:443
 
 - [ ] Simulate proposed firewall, ACL, or routing controls without changing
   production devices.
+  - [x] Add a read-only exact-flow policy projection for retained routers and
+    firewalls. Compare the current outcome with a proposed permit or deny on a
+    selected device, show source attachment and address-pair scope, preserve
+    evidence and caveats, and export the complete comparison as JSON.
+  - [ ] Add proposed route insertion, removal, and metric/preference changes.
 - [ ] Compare current and proposed paths, alternate paths, and collateral impact.
 - [ ] Export evidence-backed hardening reports and map comparisons.
 

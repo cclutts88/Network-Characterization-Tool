@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
@@ -985,6 +986,169 @@ def evaluate_reachability(
             "coverage_proofs": 1 if service["state"] == "not_exposed" else 0,
             "evidence": len(evidence),
         },
+    }
+
+
+def _endpoint_address_count(endpoint: Endpoint) -> int | None:
+    if endpoint.value is None:
+        return None
+    if endpoint.kind == "host":
+        return 1
+    return int(endpoint.value.num_addresses)
+
+
+def simulate_proposed_policy_control(
+    *, source_text: str, destination_text: str, protocol: str, port: int,
+    hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
+    action: str, device_key: str, flow_state: str = "new",
+    source_external: bool = False,
+) -> dict:
+    """Project one exact policy control without changing retained or live data."""
+    action = str(action or "").strip().lower()
+    if action not in {"permit", "deny"}:
+        raise ValueError("Proposed policy action must be permit or deny")
+    selected = next((
+        item for item in device_analyses
+        if device_key in {
+            str((item.get("device") or {}).get("address") or ""),
+            str((item.get("device") or {}).get("name") or ""),
+        }
+    ), None)
+    if selected is None or not _is_transit_device(selected):
+        raise ValueError("Choose a retained router or firewall for the proposed control")
+
+    baseline = evaluate_reachability(
+        source_text=source_text, destination_text=destination_text,
+        protocol=protocol, port=port, hunting=hunting,
+        saved_networks=saved_networks, device_analyses=device_analyses,
+        flow_state=flow_state, source_external=source_external,
+    )
+    source = parse_endpoint(source_text, external=source_external)
+    destination = parse_endpoint(destination_text)
+    projected = deepcopy(baseline)
+    device = selected.get("device") or {}
+    device_name = str(device.get("name") or device.get("address") or "Network device")
+    device_address = str(device.get("address") or "") or None
+    attached = _source_attached(source, selected)
+    prior_decisions = list((baseline.get("retained_objects") or {}).get("policy") or [])
+    other_decisions = [
+        item for item in prior_decisions
+        if str(item.get("device_address") or "") != str(device_address or "")
+        and str(item.get("device") or "") != device_name
+    ]
+    projected_decisions = [*other_decisions, {
+        "action": action,
+        "device": device_name,
+        "device_address": device_address,
+        "engine": "proposed_exact_control",
+        "evidence": (
+            f"PROPOSED {action.upper()} {protocol.upper()}/{port} "
+            f"from {source.entered} to {destination.entered}"
+        ),
+        "match_basis": ["Exact proposed source, destination, protocol, and port"],
+        "simulated": True,
+    }]
+    projected["retained_objects"]["policy"] = projected_decisions
+    projected["counts"]["policy_decisions"] = len(projected_decisions)
+    proposed_evidence = {
+        "kind": "proposal",
+        "title": f"Proposed {action} on {device_name}",
+        "detail": (
+            f"{source.entered} → {destination.entered} · "
+            f"{protocol.upper()}/{port} · simulation only"
+        ),
+        "raw": projected_decisions[-1]["evidence"],
+    }
+    projected["evidence"] = [
+        *[
+            item for item in projected.get("evidence") or []
+            if item.get("kind") != "policy" or device_name not in str(item.get("title") or "")
+        ],
+        proposed_evidence,
+    ]
+    projected["path"] = list(projected.get("path") or [])
+    projected["path"].insert(max(1, len(projected["path"]) - 1), {
+        "kind": "proposal",
+        "label": f"Proposed {action} · {device_name}",
+        "detail": f"Exact {protocol.upper()}/{port} control",
+    })
+    projected["simulated"] = True
+    projected["confidence"] = "medium" if attached else "low"
+    projected_caveats = [
+        "Simulation only: NCT did not connect to or change any network device.",
+        "The projection assumes the exact proposed rule is installed before conflicting rules on the selected device and that the observed path still traverses that device.",
+    ]
+    if not attached:
+        projected["outcome"] = "Unknown"
+        projected["explanation"] = (
+            "The selected device is not attached to the proposed source in retained evidence, so NCT cannot place this control on the path."
+        )
+        projected_caveats.append("Choose a source-attached router or firewall, or refresh its retained interface evidence.")
+    else:
+        actions = {str(item.get("action") or "") for item in projected_decisions}
+        if len(actions) > 1:
+            projected["outcome"] = "Unknown"
+            projected["confidence"] = "low"
+            projected["explanation"] = (
+                "The proposed control and another retained path decision conflict, so the end-to-end result remains unresolved."
+            )
+            projected_caveats.append("Review the remaining retained policy decisions before treating the proposal as effective end to end.")
+        elif action == "deny":
+            projected["outcome"] = "Expected Blocked"
+            projected["explanation"] = (
+                "The exact proposed deny would block the selected flow on the chosen path device if deployed in the modeled position."
+            )
+        elif baseline.get("service_observation") == "not_exposed":
+            projected["outcome"] = "Not Exposed"
+            projected["explanation"] = (
+                "The proposed permit would allow policy on the selected device, but retained Nmap coverage did not find the service exposed."
+            )
+        else:
+            projected["outcome"] = "Expected Allowed"
+            projected["explanation"] = (
+                "The exact proposed permit would allow the selected flow on the modeled path, with no conflicting retained decision established."
+            )
+    projected["caveats"] = list(dict.fromkeys([
+        *projected_caveats, *(projected.get("caveats") or []),
+    ]))
+    source_count = _endpoint_address_count(source)
+    destination_count = _endpoint_address_count(destination)
+    address_pairs = (
+        source_count * destination_count
+        if source_count is not None and destination_count is not None else None
+    )
+    comparison = {
+        "outcome_changed": baseline.get("outcome") != projected.get("outcome"),
+        "before": baseline.get("outcome"),
+        "after": projected.get("outcome"),
+        "selected_device": device_name,
+        "selected_device_address": device_address,
+        "source_attached": attached,
+        "scope": {
+            "source_addresses": source_count,
+            "destination_addresses": destination_count,
+            "address_pairs": address_pairs,
+            "protocol": protocol.lower(),
+            "port": port,
+        },
+    }
+    return {
+        "status": "reachability_policy_simulation_complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "proposal": {
+            "action": action, "device": device_name,
+            "device_address": device_address,
+            "source": source.entered, "source_external": _is_external_endpoint(source),
+            "destination": destination.entered,
+            "protocol": protocol.lower(), "port": port,
+            "flow_state": flow_state,
+        },
+        "baseline": baseline,
+        "projected": projected,
+        "comparison": comparison,
+        "disclaimer": (
+            "Read-only planning projection from retained evidence. It sends no network traffic and changes no device configuration."
+        ),
     }
 
 

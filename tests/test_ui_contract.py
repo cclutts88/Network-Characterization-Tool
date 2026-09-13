@@ -383,6 +383,12 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="sourceExternal"' in html
     assert "External address / range" in html
     assert "source_external:$('sourceExternal').checked" in html
+    assert 'id="policySimulationPanel"' in html
+    assert 'id="simulationDevice"' in html
+    assert 'id="simulationAction"' in html
+    assert 'id="exportSimulation"' in html
+    assert "/api/reachability/simulate-policy" in html
+    assert "changes no device configuration" in html
     assert 'id="exposureReportPanel"' in html
     assert 'id="generateReport"' in html
     assert 'id="exportReport"' in html

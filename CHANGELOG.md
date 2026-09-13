@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added the first read-only hardening simulation to Reach. Analysts can compare
+  the retained outcome with an exact permit or deny on a selected current-vendor
+  router/firewall, review source attachment and affected address-pair scope, and
+  export the complete evidence comparison without contacting or changing a device.
 - Added explicit external source IP/CIDR evaluation to Reach. Analysts can mark
   an exact address or range as outside the network, retain it for precise rule
   matching, and evaluate it through WAN-facing Cisco, VyOS, pfSense, and UniFi

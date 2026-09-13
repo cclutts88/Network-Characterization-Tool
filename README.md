@@ -45,7 +45,9 @@ SearchSploit database, and visualizes retained topology evidence.
   sequential vendor NAT, and Nmap services. A Not Exposed result requires exact
   per-host Nmap protocol/port coverage rather than merely assuming an unlisted
   port is closed. An analyst can explicitly mark a source IP or CIDR as external
-  while preserving that exact address for retained WAN-policy matching.
+  while preserving that exact address for retained WAN-policy matching. A
+  read-only proposed-policy check compares an exact permit or deny with the
+  retained outcome and exports the evidence without changing a device.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual

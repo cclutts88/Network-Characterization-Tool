@@ -29,6 +29,7 @@ from app.reachability import (
     build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
+    simulate_proposed_policy_control,
 )
 from app.reachability_ui import reachability_page
 from app.saved_networks import list_saved_networks
@@ -168,6 +169,11 @@ class ReachabilityQuery(BaseModel):
     port: int = Field(ge=1, le=65535)
     flow_state: Literal["new", "established"] = "new"
     source_external: bool = False
+
+
+class ReachabilitySimulationQuery(ReachabilityQuery):
+    action: Literal["permit", "deny"]
+    device_key: str = Field(min_length=1, max_length=160)
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -1845,6 +1851,15 @@ def reachability_context() -> dict:
         "saved_networks": list_saved_networks(DB_PATH),
         "hosts": hunting.get("hosts") or [],
         "device_collections": len(devices),
+        "devices": [
+            {
+                "name": (item.get("device") or {}).get("name"),
+                "address": (item.get("device") or {}).get("address"),
+                "type": (item.get("device") or {}).get("type"),
+            }
+            for item in devices if str((item.get("device") or {}).get("type") or "").lower()
+            in {"router", "firewall"}
+        ],
     }
 
 
@@ -1875,6 +1890,26 @@ def generate_source_exposure_report() -> dict:
         device_analyses=_latest_device_reachability_evidence(),
         searchsploit=enrich_hunting_with_searchsploit(hunting),
     )
+
+
+@app.post("/api/reachability/simulate-policy")
+def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict:
+    try:
+        return simulate_proposed_policy_control(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            flow_state=query.flow_state,
+            source_external=query.source_external,
+            action=query.action,
+            device_key=query.device_key,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.get("/api/hunting/compare")
