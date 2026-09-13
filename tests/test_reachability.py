@@ -10,6 +10,7 @@ from app.reachability import (
     evaluate_reachability,
     parse_endpoint,
     simulate_proposed_policy_control,
+    simulate_proposed_route_control,
 )
 from app.vendor_policy import parse_vendor_policy
 
@@ -233,6 +234,79 @@ def test_proposed_cidr_control_reports_address_pair_scope():
     assert result["comparison"]["scope"]["source_addresses"] == 256
     assert result["comparison"]["scope"]["destination_addresses"] == 256
     assert result["comparison"]["scope"]["address_pairs"] == 65536
+
+
+def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
+    device = {**DEVICE, "route_analysis": {"routes": []}}
+
+    result = simulate_proposed_route_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[device],
+        action="add", device_key="10.80.0.1",
+        route_network="10.90.0.0/24", route_interface="inside",
+        next_hop="10.80.0.2",
+    )
+
+    assert result["status"] == "reachability_route_simulation_complete"
+    assert result["proposal"] == {
+        "action": "add",
+        "device": "Edge Firewall",
+        "device_address": "10.80.0.1",
+        "network": "10.90.0.0/24",
+        "interface": "inside",
+        "next_hop": "10.80.0.2",
+        "changed_route_count": 1,
+    }
+    assert result["comparison"]["baseline_route_count"] == 0
+    assert result["comparison"]["projected_route_count"] == 1
+    assert result["comparison"]["network_addresses"] == 256
+    assert result["projected"]["simulated"] is True
+    assert any(item["kind"] == "proposal" for item in result["projected"]["evidence"])
+    assert "changes no device configuration" in result["disclaimer"]
+
+
+def test_proposed_route_removal_preserves_a_broader_retained_fallback():
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            *DEVICE["route_analysis"]["routes"],
+            {"network": "0.0.0.0/0", "interface": "inside", "via": "10.80.0.254"},
+        ]},
+    }
+
+    result = simulate_proposed_route_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[device],
+        action="remove", device_key="Edge Firewall",
+        route_network="10.90.0.0/24",
+    )
+
+    assert result["proposal"]["changed_route_count"] == 1
+    assert result["comparison"]["baseline_route_count"] == 2
+    assert result["comparison"]["projected_route_count"] == 1
+    projected_routes = result["projected"]["retained_objects"]["routes"]
+    assert [item["network"] for item in projected_routes] == ["0.0.0.0/0"]
+    assert any("dynamic convergence" in item for item in result["projected"]["caveats"])
+
+
+def test_proposed_route_requires_destination_coverage_and_exact_remove_match():
+    values = {
+        "source_text": "10.80.0.25", "destination_text": "10.90.0.10",
+        "protocol": "tcp", "port": 443, "hunting": HUNTING,
+        "saved_networks": SAVED, "device_analyses": [DEVICE],
+        "device_key": "10.80.0.1",
+    }
+    with pytest.raises(ValueError, match="does not cover"):
+        simulate_proposed_route_control(
+            **values, action="add", route_network="192.0.2.0/24",
+            route_interface="inside",
+        )
+    with pytest.raises(ValueError, match="no retained route"):
+        simulate_proposed_route_control(
+            **values, action="remove", route_network="10.90.0.10/32",
+        )
 
 
 def test_explicit_acl_and_service_evidence_support_expected_allowed():

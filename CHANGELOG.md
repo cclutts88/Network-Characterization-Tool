@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added a read-only proposed-route check to Reach. Analysts can add a route on
+  a retained interface or remove an exact retained route, compare current and
+  projected paths, preserve broader fallback routes and limitations, and export
+  the complete JSON comparison without contacting or changing a device.
 - Added the first read-only hardening simulation to Reach. Analysts can compare
   the retained outcome with an exact permit or deny on a selected current-vendor
   router/firewall, review source attachment and affected address-pair scope, and

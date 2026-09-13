@@ -389,6 +389,13 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="exportSimulation"' in html
     assert "/api/reachability/simulate-policy" in html
     assert "changes no device configuration" in html
+    assert 'id="routeSimulationPanel"' in html
+    assert 'id="routeSimulationDevice"' in html
+    assert 'id="routeSimulationNetwork"' in html
+    assert 'id="routeSimulationInterface"' in html
+    assert 'id="exportRouteSimulation"' in html
+    assert "/api/reachability/simulate-route" in html
+    assert "NCT_RouteWhatIf_" in html
     assert 'id="exposureReportPanel"' in html
     assert 'id="generateReport"' in html
     assert 'id="exportReport"' in html

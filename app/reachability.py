@@ -1152,6 +1152,151 @@ def simulate_proposed_policy_control(
     }
 
 
+def simulate_proposed_route_control(
+    *, source_text: str, destination_text: str, protocol: str, port: int,
+    hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
+    action: str, device_key: str, route_network: str,
+    route_interface: str | None = None, next_hop: str | None = None,
+    flow_state: str = "new", source_external: bool = False,
+) -> dict:
+    """Project one retained-device route addition or removal in memory only."""
+    action = str(action or "").strip().lower()
+    if action not in {"add", "remove"}:
+        raise ValueError("Proposed route action must be add or remove")
+    try:
+        network = ipaddress.ip_network(str(route_network or "").strip(), strict=False)
+    except ValueError as exc:
+        raise ValueError("Enter a valid IPv4 route network") from exc
+    if network.version != 4:
+        raise ValueError("Enter a valid IPv4 route network")
+    next_hop = str(next_hop or "").strip() or None
+    if next_hop:
+        try:
+            if ipaddress.ip_address(next_hop).version != 4:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError("Next hop must be one IPv4 address") from exc
+    selected_index = next((
+        index for index, item in enumerate(device_analyses)
+        if device_key in {
+            str((item.get("device") or {}).get("address") or ""),
+            str((item.get("device") or {}).get("name") or ""),
+        }
+    ), None)
+    if selected_index is None or not _is_transit_device(device_analyses[selected_index]):
+        raise ValueError("Choose a retained router or firewall for the proposed route")
+    selected = device_analyses[selected_index]
+    source = parse_endpoint(source_text, external=source_external)
+    destination = parse_endpoint(destination_text)
+    if not _source_attached(source, selected):
+        raise ValueError("The selected device is not attached to the proposed source in retained evidence")
+    if not _destination_matches(str(network), destination):
+        raise ValueError("The proposed route network does not cover the selected destination")
+    device = selected.get("device") or {}
+    device_name = str(device.get("name") or device.get("address") or "Network device")
+    device_address = str(device.get("address") or "") or None
+    baseline = evaluate_reachability(
+        source_text=source_text, destination_text=destination_text,
+        protocol=protocol, port=port, hunting=hunting,
+        saved_networks=saved_networks, device_analyses=device_analyses,
+        flow_state=flow_state, source_external=source_external,
+    )
+    projected_analyses = deepcopy(device_analyses)
+    projected_device = projected_analyses[selected_index]
+    route_analysis = projected_device.setdefault("route_analysis", {})
+    routes = list(route_analysis.get("routes") or [])
+    retained_interfaces = {
+        str(item.get("name") or "") for item in selected.get("interfaces") or []
+        if item.get("name")
+    }
+    changed_routes = []
+    if action == "add":
+        route_interface = str(route_interface or "").strip()
+        if not route_interface or route_interface not in retained_interfaces:
+            raise ValueError("Choose one retained interface on the selected device")
+        proposed_route = {
+            "network": str(network), "interface": route_interface,
+            "via": next_hop, "protocol": "proposed", "direct": not next_hop,
+            "line": (
+                f"PROPOSED ROUTE {network} via {next_hop or 'direct'} "
+                f"interface {route_interface}"
+            ),
+            "simulated": True,
+        }
+        routes.append(proposed_route)
+        changed_routes.append(proposed_route)
+    else:
+        kept_routes = []
+        for item in routes:
+            try:
+                existing = ipaddress.ip_network(str(item.get("network") or ""), strict=False)
+            except ValueError:
+                kept_routes.append(item)
+                continue
+            if existing == network:
+                changed_routes.append(item)
+            else:
+                kept_routes.append(item)
+        if not changed_routes:
+            raise ValueError("The selected device has no retained route with that exact network")
+        routes = kept_routes
+    route_analysis["routes"] = routes
+    projected = evaluate_reachability(
+        source_text=source_text, destination_text=destination_text,
+        protocol=protocol, port=port, hunting=hunting,
+        saved_networks=saved_networks, device_analyses=projected_analyses,
+        flow_state=flow_state, source_external=source_external,
+    )
+    proposal_label = "Proposed route" if action == "add" else "Proposed route removal"
+    proposed_evidence = {
+        "kind": "proposal",
+        "title": f"{proposal_label} on {device_name}",
+        "detail": (
+            f"{network} · "
+            + (
+                f"via {next_hop or 'direct'} · {route_interface}"
+                if action == "add" else f"{len(changed_routes)} exact retained route{'s' if len(changed_routes) != 1 else ''} removed from projection"
+            )
+        ),
+    }
+    projected["evidence"] = [proposed_evidence, *(projected.get("evidence") or [])]
+    projected["path"] = list(projected.get("path") or [])
+    projected["path"].insert(max(1, len(projected["path"]) - 1), {
+        "kind": "proposal", "label": f"{proposal_label} · {device_name}",
+        "detail": str(network),
+    })
+    projected["simulated"] = True
+    projected["caveats"] = list(dict.fromkeys([
+        "Simulation only: NCT did not connect to or change any network device.",
+        "The projection changes only the selected retained route record; route redistribution, dynamic convergence, policy-based routing, and device-specific administrative distance are not modeled.",
+        *(projected.get("caveats") or []),
+    ]))
+    baseline_routes = list((baseline.get("retained_objects") or {}).get("routes") or [])
+    projected_routes = list((projected.get("retained_objects") or {}).get("routes") or [])
+    return {
+        "status": "reachability_route_simulation_complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "proposal": {
+            "action": action, "device": device_name, "device_address": device_address,
+            "network": str(network), "interface": route_interface,
+            "next_hop": next_hop, "changed_route_count": len(changed_routes),
+        },
+        "baseline": baseline,
+        "projected": projected,
+        "comparison": {
+            "outcome_changed": baseline.get("outcome") != projected.get("outcome"),
+            "before": baseline.get("outcome"), "after": projected.get("outcome"),
+            "baseline_route_count": len(baseline_routes),
+            "projected_route_count": len(projected_routes),
+            "changed_route_count": len(changed_routes),
+            "network_addresses": int(network.num_addresses),
+        },
+        "disclaimer": (
+            "Read-only route projection from retained evidence. It sends no network traffic and changes no device configuration."
+        ),
+    }
+
+
 def _compact_exposure_result(source: dict, result: dict) -> dict:
     return {
         "source": source,

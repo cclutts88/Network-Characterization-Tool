@@ -47,7 +47,10 @@ SearchSploit database, and visualizes retained topology evidence.
   port is closed. An analyst can explicitly mark a source IP or CIDR as external
   while preserving that exact address for retained WAN-policy matching. A
   read-only proposed-policy check compares an exact permit or deny with the
-  retained outcome and exports the evidence without changing a device.
+  retained outcome and exports the evidence without changing a device. A
+  companion proposed-route check adds a route on a retained interface or
+  removes an exact retained route in memory, exposes broader fallback routes,
+  and exports the comparison without contacting a device.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual

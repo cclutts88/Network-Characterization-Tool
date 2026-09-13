@@ -644,6 +644,10 @@ Available at https://x.x.x.x:443
     selected device, show source attachment and address-pair scope, preserve
     evidence and caveats, and export the complete comparison as JSON.
   - [ ] Add proposed route insertion, removal, and metric/preference changes.
+    - [x] Add read-only retained-device route insertion/removal comparison with
+      exact destination coverage, retained-interface validation, broader-route
+      fallback visibility, evidence/caveats, and JSON export.
+    - [ ] Add metric/preference changes and vendor-neutral path-choice modeling.
 - [ ] Compare current and proposed paths, alternate paths, and collateral impact.
 - [ ] Export evidence-backed hardening reports and map comparisons.
 

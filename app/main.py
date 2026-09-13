@@ -30,6 +30,7 @@ from app.reachability import (
     classify_searchsploit_exposure,
     evaluate_reachability,
     simulate_proposed_policy_control,
+    simulate_proposed_route_control,
 )
 from app.reachability_ui import reachability_page
 from app.saved_networks import list_saved_networks
@@ -174,6 +175,14 @@ class ReachabilityQuery(BaseModel):
 class ReachabilitySimulationQuery(ReachabilityQuery):
     action: Literal["permit", "deny"]
     device_key: str = Field(min_length=1, max_length=160)
+
+
+class ReachabilityRouteSimulationQuery(ReachabilityQuery):
+    action: Literal["add", "remove"]
+    device_key: str = Field(min_length=1, max_length=160)
+    route_network: str = Field(min_length=1, max_length=64)
+    route_interface: str | None = Field(default=None, max_length=160)
+    next_hop: str | None = Field(default=None, max_length=64)
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -1856,6 +1865,10 @@ def reachability_context() -> dict:
                 "name": (item.get("device") or {}).get("name"),
                 "address": (item.get("device") or {}).get("address"),
                 "type": (item.get("device") or {}).get("type"),
+                "interfaces": [
+                    value.get("name") for value in item.get("interfaces") or []
+                    if value.get("name")
+                ],
             }
             for item in devices if str((item.get("device") or {}).get("type") or "").lower()
             in {"router", "firewall"}
@@ -1904,6 +1917,29 @@ def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict
             source_external=query.source_external,
             action=query.action,
             device_key=query.device_key,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.post("/api/reachability/simulate-route")
+def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> dict:
+    try:
+        return simulate_proposed_route_control(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            flow_state=query.flow_state,
+            source_external=query.source_external,
+            action=query.action,
+            device_key=query.device_key,
+            route_network=query.route_network,
+            route_interface=query.route_interface,
+            next_hop=query.next_hop,
             hunting=analyze_hunting_network(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
