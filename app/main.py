@@ -87,6 +87,7 @@ from app.workspaces import (
     list_layouts,
     publish_layout,
     save_layout,
+    set_default_layout,
 )
 import hashlib
 import io
@@ -901,7 +902,16 @@ async def local_authentication_guard(request: Request, call_next):
         origin = request.headers.get("origin")
         if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
             return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
-        if analyst["role"] == "viewer" and request.url.path != "/api/auth/logout":
+        personal_default_change = (
+            request.url.path == "/api/workspaces/layouts/default/clear"
+            or request.url.path.endswith("/default")
+            and request.url.path.startswith("/api/workspaces/layouts/")
+        )
+        if (
+            analyst["role"] == "viewer"
+            and request.url.path != "/api/auth/logout"
+            and not personal_default_change
+        ):
             return JSONResponse({"detail": "Viewer accounts cannot make changes"}, status_code=403)
     return await call_next(request)
 
@@ -1098,6 +1108,27 @@ def share_workspace_layout(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Layout not found") from exc
+
+
+@app.post("/api/workspaces/layouts/{layout_id}/default")
+def make_workspace_layout_default(request: Request, layout_id: str) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    try:
+        return set_default_layout(
+            DB_PATH, owner=request.state.analyst["username"], layout_id=layout_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Visible layout not found") from exc
+
+
+@app.post("/api/workspaces/layouts/default/clear")
+def clear_workspace_layout_default(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    return set_default_layout(
+        DB_PATH, owner=request.state.analyst["username"], layout_id=None
+    )
 
 
 @app.get("/api/os-overrides")

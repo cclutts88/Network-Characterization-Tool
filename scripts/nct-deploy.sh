@@ -27,6 +27,14 @@ check_only="no"
 assume_yes="no"
 offline="no"
 skip_backup="no"
+auth_mode=""
+auth_supplied="no"
+admin_user=""
+admin_password_file=""
+generate_admin_password="no"
+bootstrap_password_file=""
+bootstrap_password_cleanup="no"
+bootstrap_password_retained="no"
 state_dir="./nct-deployment"
 minimum_api="1.41"
 lock_dir="${TMPDIR:-/tmp}/nct-deploy.lock"
@@ -55,6 +63,10 @@ Usage: sh scripts/nct-deploy.sh [options]
   --state-dir DIR                  Deployment logs, proxy config, and backups
   --offline                        Never pull images or require internet
   --skip-backup                    Skip pre-upgrade backup (not allowed for mission)
+  --auth disabled|local            Authentication mode (Range defaults to local)
+  --admin-user USER                First Administrator username on an empty install
+  --admin-password-file FILE       Read the first Administrator password from FILE
+  --generate-admin-password        Create a strong initial password file in state-dir
   --check-only                     Run preflight without changing containers
   --yes                            Approve the container swap non-interactively
 EOF
@@ -82,6 +94,10 @@ while [ "$#" -gt 0 ]; do
         --yes) assume_yes="yes"; shift ;;
         --offline) offline="yes"; shift ;;
         --skip-backup) skip_backup="yes"; shift ;;
+        --auth) auth_mode=${2:?missing authentication mode}; auth_supplied="yes"; shift 2 ;;
+        --admin-user) admin_user=${2:?missing Administrator username}; shift 2 ;;
+        --admin-password-file) admin_password_file=${2:?missing password file}; shift 2 ;;
+        --generate-admin-password) generate_admin_password="yes"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; die "Unknown option: $1" ;;
     esac
@@ -90,22 +106,31 @@ done
 case "$profile" in test|range|mission) ;; *) die "Profile must be test, range, or mission." ;; esac
 case "$access" in local|lan) ;; *) die "Access must be local or lan." ;; esac
 state_file="$state_dir/current.env"
+saved_auth_mode=""
 if [ -r "$state_file" ]; then
     saved_app_port=$(awk -F= '$1 == "app_port" {print $2; exit}' "$state_file")
     saved_https_port=$(awk -F= '$1 == "https_port" {print $2; exit}' "$state_file")
+    saved_auth_mode=$(awk -F= '$1 == "auth_mode" {print $2; exit}' "$state_file")
     [ "$port_supplied" = "yes" ] || app_port=${saved_app_port:-$app_port}
     [ "$https_port_supplied" = "yes" ] || https_port=${saved_https_port:-$https_port}
 fi
+case "$auth_mode" in ''|disabled|local) ;; *) die "Authentication must be disabled or local." ;; esac
+[ -z "$admin_password_file" ] || [ "$generate_admin_password" = "no" ] || die "Choose either --admin-password-file or --generate-admin-password, not both."
 case "$app_port:$https_port" in *[!0-9:]*|:*) die "Ports must be numeric." ;; esac
 [ "$app_port" -ge 1 ] && [ "$app_port" -le 65535 ] || die "Application port is outside 1-65535."
 [ "$https_port" -ge 1 ] && [ "$https_port" -le 65535 ] || die "HTTPS port is outside 1-65535."
 [ "$profile" != "mission" ] || [ "$skip_backup" = "no" ] || die "Mission upgrades cannot skip the backup."
-[ "$profile" != "mission" ] || die "Mission deployment is intentionally fail-closed until NCT authentication and the mission promotion gate are implemented. Use Test or Range for the current evaluation build."
+[ "$profile" != "mission" ] || die "Mission deployment is intentionally fail-closed until the mission promotion gate is complete. Use Test or Range for the current evaluation build."
 
 if ! mkdir "$lock_dir" 2>/dev/null; then
     die "Another deployment launcher appears active at $lock_dir."
 fi
-cleanup_lock() { rmdir "$lock_dir" 2>/dev/null || true; }
+cleanup_lock() {
+    if [ "$bootstrap_password_cleanup" = "yes" ] && [ -n "$bootstrap_password_file" ]; then
+        rm -f "$bootstrap_password_file"
+    fi
+    rmdir "$lock_dir" 2>/dev/null || true
+}
 trap cleanup_lock EXIT
 trap 'cleanup_lock; exit 130' HUP INT TERM
 
@@ -258,6 +283,96 @@ sys.exit(42 if active else 0)' >/dev/null 2>&1
     fi
 fi
 
+existing_auth_mode=""
+if [ -n "$existing_id" ]; then
+    existing_auth_mode=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null | awk -F= '$1 == "NCT_AUTH_MODE" {print substr($0, index($0, "=") + 1); exit}')
+fi
+existing_auth_mode=${existing_auth_mode:-disabled}
+if [ "$auth_supplied" = "no" ]; then
+    if [ -n "$saved_auth_mode" ]; then
+        auth_mode=$saved_auth_mode
+    elif [ -n "$existing_id" ]; then
+        auth_mode=$existing_auth_mode
+    elif [ "$profile" = "range" ] || [ "$profile" = "mission" ]; then
+        auth_mode="local"
+    else
+        auth_mode="disabled"
+    fi
+fi
+[ "$profile" != "range" ] || [ "$auth_mode" = "local" ] || die "Range deployment requires local authentication."
+printf 'auth_mode=%s\nexisting_auth_mode=%s\n' "$auth_mode" "$existing_auth_mode" >> "$log_file"
+
+volume_exists="no"
+if docker volume inspect "$data_volume" >/dev/null 2>&1; then
+    volume_exists="yes"
+elif [ "$check_only" = "no" ]; then
+    docker volume create "$data_volume" >/dev/null
+    volume_exists="yes"
+fi
+
+account_count="0"
+if [ "$volume_exists" = "yes" ] && docker image inspect "$image" >/dev/null 2>&1; then
+    account_count=$(docker run --rm -v "$data_volume:/data:ro" "$image" python -c 'import pathlib,sqlite3
+p=pathlib.Path("/data/analyzer.db")
+if not p.exists(): print(0)
+else:
+ db=sqlite3.connect(f"file:{p}?mode=ro",uri=True)
+ try: print(int(db.execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0]))
+ except sqlite3.OperationalError: print(0)' 2>/dev/null || printf unknown)
+fi
+case "$account_count" in ''|*[!0-9]*) [ "$auth_mode" != "local" ] || die "Existing analyst accounts could not be inspected safely." ;; esac
+
+prompt_for_bootstrap_password() {
+    [ -t 0 ] || die "First authenticated setup needs --admin-password-file or --generate-admin-password in a non-interactive shell."
+    terminal_state=$(stty -g)
+    trap 'stty "$terminal_state" 2>/dev/null || true; cleanup_lock; exit 130' HUP INT TERM
+    printf 'Initial Administrator password (12-256 characters): ' >&2
+    stty -echo
+    IFS= read -r first_password
+    stty "$terminal_state"
+    printf '\nConfirm initial Administrator password: ' >&2
+    stty -echo
+    IFS= read -r second_password
+    stty "$terminal_state"
+    printf '\n' >&2
+    trap 'cleanup_lock; exit 130' HUP INT TERM
+    [ "$first_password" = "$second_password" ] || die "Administrator passwords did not match."
+    password_length=$(printf %s "$first_password" | wc -c | tr -d ' ')
+    [ "$password_length" -ge 12 ] && [ "$password_length" -le 256 ] || die "Administrator password must be 12-256 characters."
+    bootstrap_password_file="$state_dir/.bootstrap-password.$$"
+    printf %s "$first_password" > "$bootstrap_password_file"
+    unset first_password second_password
+    bootstrap_password_cleanup="yes"
+}
+
+if [ "$auth_mode" = "local" ] && [ "$account_count" = "0" ] && [ "$check_only" = "no" ]; then
+    if [ -z "$admin_user" ]; then
+        [ -t 0 ] || die "First authenticated setup requires --admin-user in a non-interactive shell."
+        printf 'Initial Administrator username: ' >&2
+        IFS= read -r admin_user
+    fi
+    printf %s "$admin_user" | grep -Eq '^[a-z0-9][a-z0-9._-]{1,63}$' || die "Administrator username must be 2-64 lowercase letters, numbers, dots, dashes, or underscores."
+    if [ -n "$admin_password_file" ]; then
+        [ -r "$admin_password_file" ] || die "Administrator password file is not readable."
+        bootstrap_password_file=$admin_password_file
+    elif [ "$generate_admin_password" = "yes" ]; then
+        bootstrap_password_file="$state_dir/initial-admin-password-$(date -u +%Y%m%dT%H%M%SZ).txt"
+        docker run --rm "$image" python -c 'import secrets; print(secrets.token_urlsafe(24),end="")' > "$bootstrap_password_file"
+        chmod 600 "$bootstrap_password_file"
+        bootstrap_password_retained="yes"
+    else
+        prompt_for_bootstrap_password
+    fi
+    password_length=$(wc -c < "$bootstrap_password_file" | tr -d ' ')
+    [ "$password_length" -ge 12 ] && [ "$password_length" -le 258 ] || die "Administrator password file must contain one 12-256 character password."
+    bootstrap_password_file=$(cd "$(dirname "$bootstrap_password_file")" && pwd)/$(basename "$bootstrap_password_file")
+    say "An empty account store was detected; $admin_user will be created as the first Administrator."
+elif [ "$auth_mode" = "local" ] && [ "$account_count" = "0" ]; then
+    warn "Authenticated first start requires an initial Administrator after preflight."
+elif [ "$auth_mode" = "local" ]; then
+    say "Preserving $account_count existing analyst account(s); bootstrap credentials are not required."
+fi
+
 proxy_name="${container}-https"
 existing_app_binding=$(docker port "$container" 8080/tcp 2>/dev/null | head -n 1 || printf '')
 existing_proxy_binding=$(docker port "$proxy_name" 443/tcp 2>/dev/null | head -n 1 || printf '')
@@ -322,16 +437,16 @@ fi
 
 say "Profile: $profile · Docker $server_version/API $server_api · Compose $compose_mode $compose_version"
 say "Image: $image · ID: $target_image_id · Build: $target_build · Existing: $existing_image · Data: $data_volume"
-say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled"
+say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled · Authentication: $auth_mode"
 say "Deployment log: $log_file"
 [ "$check_only" = "no" ] || { say "Preflight complete; no container, firewall, or image state was changed."; exit 0; }
 
-if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "$tls_enabled" = "no" ]; then
+if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "$tls_enabled" = "no" ] && [ "$existing_auth_mode" = "$auth_mode" ]; then
     existing_binding=$(docker port "$container" 8080/tcp 2>/dev/null | head -n 1 || printf '')
     if [ "$existing_binding" = "$bind_address:$app_port" ] && docker exec "$container" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2)); assert d.get("status")=="ok"' >/dev/null 2>&1; then
         access_url="http://$bind_address:$app_port"
         state_tmp="${state_file}.tmp.$$"
-        printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimage=%s\nimage_id=%s\nbuild=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port" "$image" "$target_image_id" "$target_build" > "$state_tmp"
+        printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimage=%s\nimage_id=%s\nbuild=%s\nauth_mode=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port" "$image" "$target_image_id" "$target_build" "$auth_mode" > "$state_tmp"
         mv "$state_tmp" "$state_file"
         printf 'completed=%s\nreported_build=%s\nresult=already-current\nurl=%s\n' "$(date -u +%FT%TZ)" "$target_build" "$access_url" >> "$log_file"
         say "This exact image is already healthy at $access_url; no backup or container swap was needed."
@@ -423,21 +538,60 @@ if [ -n "$existing_proxy_id" ]; then
 fi
 swap_started="yes"
 
-if [ "$tls_enabled" = "yes" ]; then
-    docker run -d --name "$container" --restart unless-stopped --cap-add NET_RAW \
-        -v "$data_volume:/data" "$image" >/dev/null || rollback
-else
-    docker run -d --name "$container" --restart unless-stopped --cap-add NET_RAW \
-        -p "$bind_address:$app_port:8080" -v "$data_volume:/data" "$image" >/dev/null || rollback
+start_nct_container() {
+    include_bootstrap=$1
+    set -- docker run -d --name "$container" --restart unless-stopped --cap-add NET_RAW -v "$data_volume:/data"
+    if [ "$tls_enabled" = "no" ]; then
+        set -- "$@" -p "$bind_address:$app_port:8080"
+    fi
+    if [ "$auth_mode" = "local" ]; then
+        cookie_secure_value="0"
+        [ "$tls_enabled" = "no" ] || cookie_secure_value="1"
+        set -- "$@" -e NCT_AUTH_MODE=local -e NCT_SESSION_HOURS=12 -e "NCT_COOKIE_SECURE=$cookie_secure_value"
+        if [ "$include_bootstrap" = "yes" ]; then
+            set -- "$@" -e "NCT_BOOTSTRAP_ADMIN=$admin_user" -e NCT_BOOTSTRAP_PASSWORD_FILE=/run/secrets/nct_bootstrap_password -v "$bootstrap_password_file:/run/secrets/nct_bootstrap_password:ro"
+        fi
+    fi
+    "$@" "$image" >/dev/null
+}
+
+wait_for_nct_health() {
+    healthy="no"
+    attempt=0
+    while [ "$attempt" -lt 30 ]; do
+        if docker exec "$container" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2)); assert d.get("status")=="ok"' >/dev/null 2>&1; then healthy="yes"; break; fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    [ "$healthy" = "yes" ]
+}
+
+bootstrap_started="no"
+if [ -n "$bootstrap_password_file" ]; then bootstrap_started="yes"; fi
+start_nct_container "$bootstrap_started" || rollback
+wait_for_nct_health || rollback
+
+if [ "$bootstrap_started" = "yes" ]; then
+    docker exec "$container" python -c 'import pathlib,sys
+from app.auth import verify_credentials
+password=pathlib.Path("/run/secrets/nct_bootstrap_password").read_text(encoding="utf-8").rstrip("\r\n")
+identity=verify_credentials(pathlib.Path("/data/analyzer.db"),sys.argv[1],password)
+assert identity and identity.get("role")=="admin"' "$admin_user" >/dev/null 2>&1 || rollback
+    docker rm -f "$container" >/dev/null 2>&1 || rollback
+    start_nct_container "no" || rollback
+    wait_for_nct_health || rollback
+    [ "$bootstrap_password_cleanup" = "no" ] || rm -f "$bootstrap_password_file"
+    bootstrap_password_cleanup="no"
+    say "Bootstrap Administrator verified; the one-time secret is no longer mounted in NCT."
 fi
 
-healthy="no"
-attempt=0
-while [ "$attempt" -lt 30 ]; do
-    if docker exec "$container" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2)); assert d.get("status")=="ok"' >/dev/null 2>&1; then healthy="yes"; break; fi
-    attempt=$((attempt + 1)); sleep 1
-done
-[ "$healthy" = "yes" ] || rollback
+if [ "$auth_mode" = "local" ]; then
+    auth_probe=$(docker exec "$container" python -c 'import urllib.error,urllib.request
+try: urllib.request.urlopen("http://127.0.0.1:8080/api/auth/me",timeout=2)
+except urllib.error.HTTPError as exc: print(exc.code)
+else: print(200)' 2>/dev/null || printf failed)
+    [ "$auth_probe" = "401" ] || rollback
+fi
 
 runtime_tools=$(docker exec "$container" sh -c '
 set -eu
@@ -495,10 +649,10 @@ else
 fi
 
 state_tmp="${state_file}.tmp.$$"
-printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimage=%s\nimage_id=%s\nbuild=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port" "$image" "$target_image_id" "$reported_build" > "$state_tmp"
+printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimage=%s\nimage_id=%s\nbuild=%s\nauth_mode=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port" "$image" "$target_image_id" "$reported_build" "$auth_mode" > "$state_tmp"
 mv "$state_tmp" "$state_file"
 
-printf 'completed=%s\nreported_build=%s\nruntime_tools=%s\nnet_raw=%s\nbackup=%s\nurl=%s\nrollback_container=%s\n' "$(date -u +%FT%TZ)" "$reported_build" "$runtime_tools" "$raw_socket" "$backup_file" "$access_url" "${rollback_name:-none}" >> "$log_file"
+printf 'completed=%s\nreported_build=%s\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\naccount_count_before=%s\nbootstrap_admin=%s\nbackup=%s\nurl=%s\nrollback_container=%s\n' "$(date -u +%FT%TZ)" "$reported_build" "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}" "$account_count" "${admin_user:-none}" "$backup_file" "$access_url" "${rollback_name:-none}" >> "$log_file"
 swap_started="no"
 
 cat <<EOF
@@ -524,3 +678,11 @@ cat <<EOF
 
 EOF
 say "Verified build $reported_build. Previous container: ${rollback_name:-none}. Backup: $backup_file"
+if [ "$bootstrap_password_retained" = "yes" ]; then
+    say "Initial Administrator: $admin_user"
+    say "Initial password file: $bootstrap_password_file (save it securely, sign in, then delete it)."
+elif [ "$bootstrap_started" = "yes" ]; then
+    say "Initial Administrator: $admin_user · the temporary bootstrap mount has been removed."
+elif [ "$auth_mode" = "local" ]; then
+    say "Authentication is active with the existing analyst account store."
+fi

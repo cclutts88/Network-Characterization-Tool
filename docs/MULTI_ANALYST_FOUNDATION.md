@@ -1,8 +1,9 @@
 # Multi-analyst foundation
 
-NCT authentication is intentionally disabled in the current single-operator
-Test environment. When `NCT_AUTH_MODE=local` is enabled, every page and API
-except health and sign-in requires an analyst session.
+NCT authentication remains optional for a single-operator Test deployment and
+is required by the Range deployment profile. When `NCT_AUTH_MODE=local` is
+enabled, every page and API except health and sign-in requires an analyst
+session.
 
 The first authenticated start requires an Administrator and a password file:
 
@@ -26,6 +27,13 @@ been created. Supplying `NCT_BOOTSTRAP_PASSWORD` directly is retained for
 controlled automated tests but exposes the value through container metadata and
 must not be used for Range or Mission deployment.
 
+The rapid deployment launcher performs this sequence automatically when it
+finds an empty account store. It requires an operator-selected Administrator
+name and an interactive, supplied-file, or generated password; there are no
+default credentials. It verifies the new account, removes the secret mount, and
+restarts NCT without bootstrap configuration before reporting success. Upgrades
+that find existing accounts do not bootstrap again.
+
 Passwords use per-user random salts and PBKDF2-SHA256. Session tokens are random,
 stored only as hashes, sent in HttpOnly SameSite cookies, and expire. Viewer
 accounts can read shared evidence but cannot perform mutations. Analysts can
@@ -41,8 +49,15 @@ Named Map layouts become server-persistent and owner-scoped in authenticated
 mode. Updates include a version so a stale browser cannot silently overwrite a
 newer layout. Shared layouts remain owned by their creator; another analyst can
 load one without modifying or deleting the owner's copy. With authentication
-disabled, the current browser-local layout behavior remains unchanged.
+disabled, the current browser-local layout behavior remains unchanged. Each
+analyst can mark exactly one visible personal or shared layout as the default;
+that preference affects only their account and opens automatically on Map.
 
-This is a foundation, not Mission readiness. Account disable/reset, recovery,
-external identity integration, comprehensive shared-change auditing, scan
-ownership/queuing, and authenticated HTTPS deployment gates remain open.
+An authorized host operator can use `scripts/nct-admin-recover.sh` when all
+Administrators are locked out. Recovery is limited to an existing Administrator,
+requires no active work, creates a backup, resets through a password-file mount,
+and revokes the account's existing sessions. It cannot create or promote users.
+
+This is a foundation, not Mission readiness. External identity integration,
+comprehensive shared-change auditing, scan ownership/queuing, the formal
+promotion gate, and fully validated authenticated HTTPS deployment remain open.

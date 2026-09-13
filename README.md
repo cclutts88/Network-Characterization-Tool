@@ -65,7 +65,9 @@ sh scripts/nct-deploy.sh --profile test --access local \
 
 See [Rapid deployment](docs/RAPID_DEPLOYMENT.md) before using LAN, offline,
 upgrade, TLS, or Range options. The Mission profile remains intentionally
-blocked until authentication and the formal mission-readiness gate are complete.
+blocked until the formal mission-readiness gate is complete. Range deployments
+require authentication; a fresh account store is initialized with an
+operator-selected Administrator and no fixed default credentials.
 
 For a first-time private-lab HTTPS installation:
 

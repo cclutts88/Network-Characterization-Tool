@@ -526,6 +526,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert 'id="savedLayouts"' in html
     assert 'id="saveLayout"' in html
     assert 'id="loadLayout"' in html
+    assert 'id="setDefaultLayout"' in html
     assert 'id="deleteLayout"' in html
     assert 'id="shareLayout"' in html
     assert "layoutStorageKey='nct-map-layouts-v1'" in html
@@ -534,6 +535,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function loadNamedLayout" in html
     assert "private browser layout" in html
     assert "function initializeNamedLayouts" in html
+    assert "function setSelectedLayoutDefault" in html
+    assert "defaultLayoutStorageKey='nct-map-default-layout-v1'" in html
+    assert "if(editMode)for(const [id,box] of currentPositions)" in html
     assert "'/api/workspaces/layouts'" in html
     assert "serverWorkspaceAnalyst" in html
     assert "expected_version" in html

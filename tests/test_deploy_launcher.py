@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 SCRIPT = (Path(__file__).parents[1] / "scripts" / "nct-deploy.sh").read_text()
+RECOVERY = (Path(__file__).parents[1] / "scripts" / "nct-admin-recover.sh").read_text()
 
 
 def test_launcher_has_profiles_and_safe_access_modes():
@@ -95,3 +96,41 @@ def test_launcher_prints_verified_nct_banner_only_at_success_end():
     health = SCRIPT.index('reported_build=$(docker exec')
     assert banner > health
     assert 'Available at $access_url' in SCRIPT
+
+
+def test_launcher_bootstraps_first_admin_without_fixed_credentials():
+    for required in (
+        '--auth disabled|local', '--admin-user USER', '--admin-password-file FILE',
+        '--generate-admin-password', 'SELECT COUNT(*) FROM analyst_users',
+        'NCT_BOOTSTRAP_PASSWORD_FILE=/run/secrets/nct_bootstrap_password',
+        'Bootstrap Administrator verified',
+    ):
+        assert required in SCRIPT
+    assert 'Range deployment requires local authentication' in SCRIPT
+    assert 'NCT_BOOTSTRAP_PASSWORD=' not in SCRIPT
+    assert 'admin:admin' not in SCRIPT.lower()
+
+
+def test_launcher_detaches_one_time_bootstrap_secret_and_preserves_accounts():
+    verification = SCRIPT.index('from app.auth import verify_credentials')
+    detach = SCRIPT.index('docker rm -f "$container"', verification)
+    permanent_start = SCRIPT.index('start_nct_container "no"', detach)
+    assert verification < detach < permanent_start
+    assert 'Preserving $account_count existing analyst account(s)' in SCRIPT
+    assert 'auth_mode=%s' in SCRIPT
+    assert 'chmod 600 "$bootstrap_password_file"' in SCRIPT
+
+
+def test_host_recovery_is_admin_only_backed_up_and_secret_file_based():
+    for required in (
+        '--admin-user USER', '--password-file FILE', '--generate-password',
+        'v "$data_volume:/data:ro"', 'tar -czf',
+        'Recovery is restricted to Administrator accounts',
+        'reset_user_password', 'set_user_disabled',
+        '/run/secrets/nct_recovery_password:ro',
+        'NCT has active work', 'chmod 600 "$password_file"',
+        'action=password_reset_and_session_revocation',
+    ):
+        assert required in RECOVERY
+    assert 'NCT_BOOTSTRAP_PASSWORD=' not in RECOVERY
+    assert 'password=%s' not in RECOVERY

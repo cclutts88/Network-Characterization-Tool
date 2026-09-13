@@ -35,6 +35,15 @@
 - Added Administrator account enable/disable, password reset, forced session
   revocation, and account-audit history. NCT prevents an Administrator from
   disabling the account currently in use or the last active Administrator.
+- Completed first-run account setup in the rapid deployment launcher. Fresh
+  authenticated installations require an operator-selected Administrator and a
+  protected password source, verify the account, then restart without bootstrap
+  material. Existing account stores are preserved. Added backup-first,
+  administrator-only host recovery with complete session revocation.
+- Stabilized every visible Map object when Edit mode begins and retained every
+  rendered object coordinate in saved layouts, preventing a single untouched
+  auto-layout node from moving during redraws. Added a per-analyst `☆` / `★`
+  default selector for one personal or shared layout that opens automatically.
 
 - Added the first rapid-deployment checkpoint for controlled Linux Docker Test
   and Range hosts. The launcher performs Docker/Compose and compatibility
@@ -43,7 +52,7 @@
   backup, health verification, application/HTTPS proxy rollback, narrow
   opt-in firewall handling, a concise deployment log, and the requested NCT
   success banner. Mission deployment remains deliberately fail-closed pending
-  authentication and promotion-gate work.
+  promotion-gate work.
 
 - Added an explicit Map Edit mode. Line routing, node movement, alignment,
   locking, markup, and other map-building controls stay hidden and inactive in

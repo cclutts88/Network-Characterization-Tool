@@ -4,7 +4,13 @@ from fastapi.testclient import TestClient
 
 from app.auth import create_user, init_auth_storage, verify_credentials
 from app.main import app
-from app.workspaces import WorkspaceConflict, delete_layout, list_layouts, save_layout
+from app.workspaces import (
+    WorkspaceConflict,
+    delete_layout,
+    list_layouts,
+    save_layout,
+    set_default_layout,
+)
 
 
 def test_passwords_are_hashed_and_credentials_are_verified(tmp_path):
@@ -68,6 +74,24 @@ def test_personal_layouts_enforce_owner_and_version_conflicts(tmp_path):
         pass
     else:
         raise AssertionError("Another analyst deleted a personal layout")
+
+
+def test_each_analyst_has_at_most_one_visible_default_layout(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    first = save_layout(db_path, owner="alpha", name="First", snapshot={"zoomLevel": 1})
+    second = save_layout(db_path, owner="alpha", name="Second", snapshot={"zoomLevel": 2})
+    shared = save_layout(db_path, owner="bravo", name="Shared", snapshot={"zoomLevel": 3})
+    from app.workspaces import publish_layout
+
+    publish_layout(db_path, layout_id=shared["layout_id"], actor="bravo", shared=True)
+    set_default_layout(db_path, owner="alpha", layout_id=first["layout_id"])
+    assert [item["name"] for item in list_layouts(db_path, "alpha") if item["is_default"]] == ["First"]
+    set_default_layout(db_path, owner="alpha", layout_id=second["layout_id"])
+    assert [item["name"] for item in list_layouts(db_path, "alpha") if item["is_default"]] == ["Second"]
+    set_default_layout(db_path, owner="alpha", layout_id=shared["layout_id"])
+    assert [item["name"] for item in list_layouts(db_path, "alpha") if item["is_default"]] == ["Shared"]
+    set_default_layout(db_path, owner="alpha", layout_id=None)
+    assert not any(item["is_default"] for item in list_layouts(db_path, "alpha"))
 
 
 def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
@@ -220,6 +244,11 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
             json={"shared": True},
         )
         assert published.status_code == 200
+        defaulted = admin.post(
+            f"/api/workspaces/layouts/{saved['layout_id']}/default"
+        )
+        assert defaulted.status_code == 200
+        assert admin.get("/api/workspaces/layouts").json()["layouts"][0]["is_default"] is True
 
     with TestClient(app) as viewer:
         assert viewer.post(
@@ -229,6 +258,10 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         listing = viewer.get("/api/workspaces/layouts").json()
         assert listing["server_persistence"] is True
         assert listing["layouts"][0]["visibility"] == "shared"
+        assert viewer.post(
+            f"/api/workspaces/layouts/{saved['layout_id']}/default"
+        ).status_code == 200
+        assert viewer.get("/api/workspaces/layouts").json()["layouts"][0]["is_default"] is True
         assert viewer.post(
             "/api/workspaces/layouts",
             json={"name": "Viewer edit", "snapshot": {}},

@@ -240,6 +240,11 @@ within Reachability.
   device identity.
 - [x] Add named private layouts that persist in the current analyst's browser,
   restore the complete presentation, and can be replaced or deleted.
+- [x] Save every visible object's coordinates in a named layout and stabilize
+  all visible objects on entering Edit mode so an untouched auto-layout node
+  cannot reflow independently while the analyst is building the map.
+- [x] Let each analyst mark exactly one personal or shared layout as the default
+  with a hollow/filled star; automatically open that layout on future Map visits.
 - [x] Add Direct and Right-angle trunks connection styles so analysts can switch
   between compact web lines and conventional vertical-drop/horizontal-backbone
   diagram presentation without changing topology evidence.
@@ -276,8 +281,8 @@ within Reachability.
   and keep those dependent hosts off-canvas while the subnet is parked.
 - [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
   the Map while retaining each CIDR as the stable technical identifier.
-- [ ] Add authenticated deliberately shared layouts when the multi-analyst
-  workspace and permissions model is introduced.
+- [x] Add authenticated deliberately shared layouts with owner protection,
+  explicit Administrator publishing, and analyst-local default selection.
 
 ### Future release — Rapid Deployment and Upgrade Automation
 
@@ -484,12 +489,18 @@ within Reachability.
   - [x] Add Administrator account enable/disable and password reset with session
     revocation, last-active-Administrator protection, and visible account audit
     history.
+  - [x] Add deployment-aware first-run Administrator creation with no fixed
+    credentials, one-time read-only secret mounting and removal, existing-account
+    preservation, and an admin-only host recovery path with backup and session
+    revocation.
 - [ ] Give each analyst a persistent personal workspace for saved map layouts,
   filters, investigation notes, scan drafts, and interface preferences.
   - [x] Move named Map layouts to owner-scoped server storage when authentication
     is enabled, while retaining browser-local layouts in disabled Test mode.
     Reject stale replacements and prevent one analyst from deleting another's
     personal layout.
+  - [x] Store one default Map layout preference per analyst, permit either a
+    personal or currently shared layout, and expose it as a hollow/filled star.
 - [ ] Keep shared evidence authoritative while requiring an explicit publish or
   share action to move personal layouts and investigations into a team workspace.
   - [x] Allow only an Administrator to deliberately publish or unpublish a

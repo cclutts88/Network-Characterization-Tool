@@ -41,6 +41,13 @@ def init_workspace_storage(db_path: Path) -> None:
                 changed_at TEXT NOT NULL
             )"""
         )
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS analyst_workspace_preferences (
+                owner TEXT PRIMARY KEY,
+                default_layout_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
 
 
 def _layout(row: sqlite3.Row) -> dict:
@@ -59,7 +66,45 @@ def list_layouts(db_path: Path, owner: str) -> list[dict]:
                ORDER BY CASE WHEN owner = ? THEN 0 ELSE 1 END, lower(name), owner""",
             (owner, owner),
         ).fetchall()
-    return [_layout(row) for row in rows]
+        preference = db.execute(
+            "SELECT default_layout_id FROM analyst_workspace_preferences WHERE owner = ?",
+            (owner,),
+        ).fetchone()
+    default_layout_id = preference[0] if preference else None
+    layouts = [_layout(row) for row in rows]
+    for layout in layouts:
+        layout["is_default"] = layout["layout_id"] == default_layout_id
+    return layouts
+
+
+def set_default_layout(db_path: Path, *, owner: str, layout_id: str | None) -> dict:
+    init_workspace_storage(db_path)
+    changed_at = utc_now()
+    with sqlite3.connect(db_path) as db:
+        db.row_factory = sqlite3.Row
+        if layout_id is None:
+            db.execute(
+                "DELETE FROM analyst_workspace_preferences WHERE owner = ?", (owner,)
+            )
+            return {"status": "cleared", "layout_id": None}
+        row = db.execute(
+            """SELECT * FROM analyst_workspace_layouts
+               WHERE layout_id = ? AND (owner = ? OR visibility = 'shared')""",
+            (layout_id, owner),
+        ).fetchone()
+        if row is None:
+            raise KeyError(layout_id)
+        db.execute(
+            """INSERT INTO analyst_workspace_preferences
+               (owner, default_layout_id, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(owner) DO UPDATE SET
+                 default_layout_id = excluded.default_layout_id,
+                 updated_at = excluded.updated_at""",
+            (owner, layout_id, changed_at),
+        )
+    value = _layout(row)
+    value["is_default"] = True
+    return value
 
 
 def save_layout(
@@ -143,6 +188,10 @@ def delete_layout(
             raise WorkspaceConflict("Layout changed in another session; reload before deleting")
         changed_at = utc_now()
         db.execute("DELETE FROM analyst_workspace_layouts WHERE layout_id = ?", (layout_id,))
+        db.execute(
+            "DELETE FROM analyst_workspace_preferences WHERE default_layout_id = ?",
+            (layout_id,),
+        )
         db.execute(
             """INSERT INTO analyst_workspace_layout_audit
                (layout_id, owner, action, version, actor, changed_at)

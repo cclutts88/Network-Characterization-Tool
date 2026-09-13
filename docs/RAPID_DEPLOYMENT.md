@@ -22,8 +22,15 @@ silently changing its declared URL.
 
 This checkpoint supports **Test** and **Range** deployment. The **Mission**
 profile is present but intentionally stops before making changes until NCT's
-authenticated access and formal mission-promotion gate are implemented. A
+formal mission-promotion gate is implemented. A
 successful Test or Range launch must not be reported as mission readiness.
+
+Authentication is optional for a local **Test** deployment and defaults to
+enabled for **Range**. Range cannot be launched with authentication disabled.
+On the first authenticated deployment, the launcher inspects the persistent
+account store. If it is empty, it creates the operator-selected first
+Administrator; NCT has no fixed default username or password. Existing accounts
+are preserved on upgrade and bootstrap is not repeated.
 
 Run a non-mutating preflight first:
 
@@ -39,6 +46,24 @@ sh scripts/nct-deploy.sh --profile test --access local --port 8766 \
   --image network-characterization-tool:0.14.0-dev-42d8636
 ```
 
+Enable authentication for that Test build and securely generate its first
+Administrator password:
+
+```sh
+sh scripts/nct-deploy.sh --profile test --access local --port 8766 \
+  --auth local --admin-user nctadmin --generate-admin-password \
+  --image network-characterization-tool:VERSION
+```
+
+The launcher prints the generated password-file path only after it verifies the
+new Administrator. Sign in, store the password using the approved site process,
+then delete that file. For unattended deployment, use
+`--admin-password-file FILE` instead; the file is mounted read-only and its
+contents never appear in container metadata or the deployment log. Interactive
+deployment prompts twice without echoing the password. In every path, the
+bootstrap mount is removed and NCT is restarted without it before success is
+reported.
+
 For a range host, choose its exact LAN address and approved source range. The
 launcher never binds to every interface and does not alter the firewall unless
 `--configure-firewall` is explicitly supplied from an elevated shell:
@@ -46,7 +71,8 @@ launcher never binds to every interface and does not alter the firewall unless
 ```sh
 sudo sh scripts/nct-deploy.sh --profile range --access lan \
   --bind 10.20.30.40 --port 8766 --source-cidr 10.20.30.0/24 \
-  --configure-firewall --image nct:range-validated
+  --configure-firewall --auth local --admin-user nctadmin \
+  --generate-admin-password --image nct:range-validated
 ```
 
 Air-gapped packages should include an immutable image archive and SHA-256:
@@ -71,3 +97,23 @@ evidence. A success banner and access URL are printed only after the final
 health check passes. Final readiness also proves that Nmap, FPING, tcpdump, and
 SSH are installed inside the application container, packet-capture interfaces
 can be enumerated, `NET_RAW` is present, and a raw ICMP socket can be created.
+
+## Administrator recovery
+
+If every Administrator is locked out, an authorized host operator can recover
+one existing Administrator without enabling an application-level back door:
+
+```sh
+sudo sh scripts/nct-admin-recover.sh --container nct \
+  --admin-user nctadmin --generate-password
+```
+
+Recovery refuses to proceed while NCT has active work, verifies that the target
+is an Administrator, stops the existing container when necessary, creates a
+timestamped data backup, resets the password through a read-only secret-file
+mount, revokes all prior sessions for that account, and returns the original
+container to its previous running state. It cannot create a new account or
+promote an Analyst. The generated recovery password remains in the protected
+state directory only long enough for the operator to store it and confirm
+sign-in; delete it afterward. A supplied `--password-file` is never deleted by
+the script.
