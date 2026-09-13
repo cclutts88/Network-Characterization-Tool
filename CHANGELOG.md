@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Made rapid deployment artifact identity fail closed across Test, Range, and
+  Mission: the launcher now requires an explicit versioned image with embedded
+  application/build identity, rejects mutable `:latest` references, and
+  requires SHA-256 verification for every supplied offline image archive.
 - Connected proposed policy and route comparisons to Map. Analysts can open a
   temporary projected-path focus with current-to-projected outcome, proposal,
   path-change, collateral-scope, evidence, and caveats while saved layouts stay

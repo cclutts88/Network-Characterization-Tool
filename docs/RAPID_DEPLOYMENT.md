@@ -5,12 +5,15 @@ runtime, image, ports, access boundary, firewall posture, TLS material,
 persistent volume, active work, backup, health, and rollback path before it
 reports NCT as available.
 
-Range images must use an explicit version tag or digest and declare their NCT
-build identity. The launcher records the local content-addressed image ID and
-any registry digest in its deployment log, then verifies that the running
-application reports the same build. Re-running the launcher against the exact
-same healthy direct-HTTP image, bind address, port, and data volume is a safe
-no-op rather than an unnecessary replacement.
+Every Test, Range, or Mission deployment must name an explicit version tag or
+digest and the image must declare its NCT version and build identity. Mutable
+defaults such as `:latest` are rejected even for Test so the content-addressed
+image tested locally is the same artifact that can be evaluated on a range.
+The launcher records the local image ID and any registry digest in its
+deployment log, then verifies that the running application reports the same
+build. Re-running the launcher against the exact same healthy direct-HTTP
+image, bind address, port, and data volume is a safe no-op rather than an
+unnecessary replacement.
 
 The selected application and HTTPS ports are stored in
 `nct-deployment/current.env` after successful validation. Unless an operator
@@ -75,7 +78,8 @@ sudo sh scripts/nct-deploy.sh --profile range --access lan \
   --generate-admin-password --image nct:range-validated
 ```
 
-Air-gapped packages should include an immutable image archive and SHA-256:
+Air-gapped packages must include an immutable image archive and SHA-256. The
+launcher rejects an archive without a checksum in every deployment profile:
 
 ```sh
 sh scripts/nct-deploy.sh --profile range --access local --offline \

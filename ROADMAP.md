@@ -291,7 +291,7 @@ within Reachability.
 - [x] Provide an operator-friendly rapid deployment launcher that performs a
   complete preflight, deployment or upgrade, health check, and final access
   handoff without requiring the operator to assemble Docker commands manually.
-- [ ] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
+- [x] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
   profiles with different acceptance rules rather than treating every host as
   equivalent:
   - **Test** keeps the current developer workflow local, permits alternate
@@ -304,7 +304,7 @@ within Reachability.
     and ports, trusted HTTPS, authenticated access, backups, monitoring, and a
     fail-closed readiness check. Required prerequisites may be installed only
     through an explicitly approved and logged administrator workflow.
-- [ ] Use one immutable, versioned, checksummed NCT application image across all
+- [x] Use one immutable, versioned, checksummed NCT application image across all
   three profiles. Keep configuration, credentials, ports, certificates, and
   data volumes environment-specific, and never promote test or range data into
   a mission environment implicitly.

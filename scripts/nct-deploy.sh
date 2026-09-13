@@ -12,7 +12,7 @@ app_port="8766"
 port_supplied="no"
 https_port="443"
 https_port_supplied="no"
-image="network-characterization-tool:latest"
+image=""
 image_archive=""
 image_sha256=""
 container="nct"
@@ -105,6 +105,7 @@ done
 
 case "$profile" in test|range|mission) ;; *) die "Profile must be test, range, or mission." ;; esac
 case "$access" in local|lan) ;; *) die "Access must be local or lan." ;; esac
+[ -n "$image" ] || die "Choose an explicit versioned NCT image with --image; mutable defaults are not permitted."
 state_file="$state_dir/current.env"
 saved_auth_mode=""
 if [ -r "$state_file" ]; then
@@ -208,15 +209,10 @@ umask 077
 
 if [ -n "$image_archive" ]; then
     [ -r "$image_archive" ] || die "Offline image archive is not readable: $image_archive"
-    if [ -n "$image_sha256" ]; then
-        command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify the image archive."
-        actual_sha=$(sha256sum "$image_archive" | awk '{print $1}')
-        [ "$actual_sha" = "$image_sha256" ] || die "Image archive checksum does not match."
-    elif [ "$profile" = "mission" ]; then
-        die "Mission offline images require --image-sha256."
-    else
-        warn "The supplied offline image archive has no checksum."
-    fi
+    [ -n "$image_sha256" ] || die "Every offline image archive requires --image-sha256 before Test, Range, or Mission use."
+    command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to verify the image archive."
+    actual_sha=$(sha256sum "$image_archive" | awk '{print $1}')
+    [ "$actual_sha" = "$image_sha256" ] || die "Image archive checksum does not match."
     [ "$check_only" = "yes" ] || docker load -i "$image_archive" >/dev/null
 fi
 
@@ -229,13 +225,11 @@ fi
 
 case "$image" in
     *:latest|latest)
-        [ "$profile" = "test" ] || die "Range and Mission deployments require a versioned image reference, not :latest."
-        warn "Test is using the mutable :latest tag; record a versioned image before range evaluation."
+        die "Test, Range, and Mission deployments require a versioned image reference, not :latest."
         ;;
     *@sha256:*|*:*) ;;
     *)
-        [ "$profile" = "test" ] || die "Range and Mission deployments require an explicit version tag or digest."
-        warn "Test image has no explicit version tag."
+        die "Test, Range, and Mission deployments require an explicit version tag or digest."
         ;;
 esac
 
@@ -246,7 +240,8 @@ target_version=$(docker image inspect --format '{{range .Config.Env}}{{println .
 target_build=${target_build:-unknown}
 target_version=${target_version:-unknown}
 [ "$target_image_id" != "unknown" ] || [ "$check_only" = "yes" ] || die "The selected image identity could not be inspected."
-[ "$profile" != "range" ] || [ "$target_build" != "unknown" ] || die "Range images must declare NCT_BUILD_ID."
+[ "$check_only" = "yes" ] && [ "$target_image_id" = "unknown" ] || [ "$target_build" != "unknown" ] || die "All deployable NCT images must declare NCT_BUILD_ID."
+[ "$check_only" = "yes" ] && [ "$target_image_id" = "unknown" ] || [ "$target_version" != "unknown" ] || die "All deployable NCT images must declare NCT_APP_VERSION."
 printf 'image_id=%s\nimage_repo_digests=%s\ntarget_version=%s\ntarget_build=%s\n' "$target_image_id" "$target_repo_digests" "$target_version" "$target_build" >> "$log_file"
 
 existing_id=$(docker ps -aq --filter "name=^/${container}$" | head -n 1)

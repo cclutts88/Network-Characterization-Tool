@@ -82,7 +82,9 @@ SearchSploit database, and visualizes retained topology evidence.
 ## Run
 
 For a controlled Linux Docker Test or Range deployment, start with the rapid
-launcher in check-only mode. It validates the Docker runtime, existing NCT
+launcher in check-only mode. Every profile requires an explicit versioned image
+with embedded application/build identity; mutable `:latest` references are
+rejected. The launcher validates the Docker runtime, existing NCT
 instance and data volume, active operations, access address, ports, firewall
 plan, image availability, disk space, and rollback prerequisites without
 changing containers:

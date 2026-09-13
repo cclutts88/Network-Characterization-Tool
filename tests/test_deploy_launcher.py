@@ -1,8 +1,59 @@
+import os
 from pathlib import Path
+import subprocess
 
 
 SCRIPT = (Path(__file__).parents[1] / "scripts" / "nct-deploy.sh").read_text()
 RECOVERY = (Path(__file__).parents[1] / "scripts" / "nct-admin-recover.sh").read_text()
+
+
+def run_launcher_preflight(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        """#!/bin/sh
+case "$1" in
+  info)
+    case "${3:-}" in
+      *Architecture*) printf 'amd64\\n' ;;
+      *OSType*) printf 'linux\\n' ;;
+    esac
+    ;;
+  version)
+    case "${3:-}" in
+      *APIVersion*) printf '1.49\\n' ;;
+      *) printf '28.0.1\\n' ;;
+    esac
+    ;;
+  context) printf 'default\\n' ;;
+  compose) exit 1 ;;
+  image) exit 0 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["TMPDIR"] = str(tmp_path)
+    return subprocess.run(
+        [
+            "sh",
+            str(Path(__file__).parents[1] / "scripts" / "nct-deploy.sh"),
+            "--check-only",
+            "--state-dir",
+            str(tmp_path / "state"),
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
 
 
 def test_launcher_has_profiles_and_safe_access_modes():
@@ -34,11 +85,48 @@ def test_launcher_supports_offline_integrity_backup_health_and_rollback():
 def test_launcher_records_immutable_image_identity_and_exact_build():
     for required in (
         'target_image_id=$(docker image inspect', 'target_repo_digests=',
-        'target_build=', 'target_version=', 'Range images must declare NCT_BUILD_ID',
+        'target_build=', 'target_version=', 'All deployable NCT images must declare NCT_BUILD_ID',
+        'All deployable NCT images must declare NCT_APP_VERSION',
         'reported_build" = "$target_build',
     ):
         assert required in SCRIPT
-    assert 'require a versioned image reference, not :latest' in SCRIPT
+    assert 'Test, Range, and Mission deployments require a versioned image reference, not :latest' in SCRIPT
+    assert 'image=""' in SCRIPT
+    assert 'mutable defaults are not permitted' in SCRIPT
+
+
+def test_launcher_requires_checksums_for_every_offline_archive():
+    assert 'Every offline image archive requires --image-sha256 before Test, Range, or Mission use.' in SCRIPT
+    assert 'The supplied offline image archive has no checksum.' not in SCRIPT
+
+
+def test_launcher_rejects_missing_or_mutable_image_references(tmp_path):
+    missing = run_launcher_preflight(tmp_path / "missing", "--profile", "test")
+    assert missing.returncode == 1
+    assert "Choose an explicit versioned NCT image" in missing.stderr
+
+    for index, image in enumerate(("network-characterization-tool:latest", "network-characterization-tool")):
+        rejected = run_launcher_preflight(
+            tmp_path / f"mutable-{index}", "--profile", "test", "--image", image
+        )
+        assert rejected.returncode == 1
+        assert "Test, Range, and Mission deployments require" in rejected.stderr
+
+
+def test_launcher_rejects_unverified_offline_archives_in_test(tmp_path):
+    archive = tmp_path / "nct.tar"
+    archive.write_bytes(b"retained test artifact")
+    rejected = run_launcher_preflight(
+        tmp_path / "unchecked-archive",
+        "--profile",
+        "test",
+        "--image",
+        "network-characterization-tool:0.14.0-test",
+        "--image-archive",
+        str(archive),
+    )
+    assert rejected.returncode == 1
+    assert "Every offline image archive requires --image-sha256" in rejected.stderr
 
 
 def test_launcher_is_idempotent_for_an_already_current_direct_deployment():
