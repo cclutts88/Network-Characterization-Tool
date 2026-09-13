@@ -20,6 +20,7 @@ def run_launcher_preflight(
     docker_subnet: str = "172.17.0.0/16",
     host_route: str = "10.0.0.0/24",
     overlap: bool = False,
+    thread_probe: str = "pass",
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -76,6 +77,13 @@ case "$1" in
     ;;
   run)
     case "$*" in
+      *threading.Thread*)
+        if [ "${FAKE_THREAD_PROBE:-pass}" = "blocked" ]; then
+          case "$*" in *seccomp=unconfined*) exit 0 ;; *) exit 1 ;; esac
+        elif [ "${FAKE_THREAD_PROBE:-pass}" = "fail" ]; then
+          exit 1
+        fi
+        ;;
       *NCT_DOCKER_NETWORKS*)
         if [ "${FAKE_OVERLAP:-no}" = "yes" ]; then
           printf '%s overlaps %s (host LAN/VPN route)\\n' "${FAKE_DOCKER_SUBNET}" "${FAKE_HOST_ROUTE}"
@@ -125,6 +133,7 @@ esac
     environment["FAKE_DOCKER_SUBNET"] = docker_subnet
     environment["FAKE_HOST_ROUTE"] = host_route
     environment["FAKE_OVERLAP"] = "yes" if overlap else "no"
+    environment["FAKE_THREAD_PROBE"] = thread_probe
     if compose_mode == "plugin":
         environment["FAKE_COMPOSE_PLUGIN"] = "yes"
     return subprocess.run(
@@ -166,8 +175,10 @@ def test_launcher_classifies_the_range_compatibility_ladder():
         'compatibility_tier="compose-v2"',
         'compatibility_tier="legacy-compose-v1"',
         'compatibility_tier="direct-engine"',
+        'compatibility_tier="legacy-range-direct-engine"',
         'compatibility_status="supported"',
         'compatibility_status="degraded"',
+        'compatibility_status="workaround"',
         'Range compatibility: unsupported Docker API',
         'offline NCT appliance fallback',
         'Range compatibility: $compatibility_status · $compatibility_tier',
@@ -337,7 +348,7 @@ def test_preflight_rejects_old_api_unsupported_architecture_and_windows_daemon(t
         api_version="1.40",
     )
     assert old_api.returncode == 1
-    assert "unsupported Docker API 1.40" in old_api.stderr
+    assert "Docker API 1.40 needs the verified recurring-VM workaround" in old_api.stderr
 
     unsupported_arch = run_launcher_preflight(
         tmp_path / "architecture",
@@ -360,6 +371,78 @@ def test_preflight_rejects_old_api_unsupported_architecture_and_windows_daemon(t
     )
     assert windows.returncode == 1
     assert "requires Docker Linux containers" in windows.stderr
+
+
+def test_range_can_opt_into_the_verified_legacy_vm_runtime(tmp_path):
+    assert '--security-opt seccomp=unconfined' in SCRIPT
+    assert 'uvicorn app.main:app --host 0.0.0.0 --port 8080 --loop asyncio --http h11' in SCRIPT
+    assert SCRIPT.index('Promotion receipt does not contain complete') < SCRIPT.index(
+        'docker run --rm --entrypoint python'
+    )
+    assert 'Mission promotion requires a supported Range runtime receipt' in SCRIPT
+    receipt = tmp_path / "test.receipt"
+    receipt.write_text(
+        "profile=test\npromotion_ready=yes\nimage_id=sha256:fake\n"
+        "version=0.14.0-test\nbuild=test-build\napplication_health=pass\n"
+        "runtime_tools=ready\nnet_raw=ready\ncompatibility_status=supported\n",
+        encoding="utf-8",
+    )
+    completed = run_launcher_preflight(
+        tmp_path / "legacy-range",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--promote-from-receipt",
+        str(receipt),
+        "--allow-legacy-range-runtime",
+        api_version="1.39",
+        thread_probe="blocked",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Range compatibility: workaround · legacy-range-direct-engine" in completed.stdout
+    assert "Legacy runtime probe: seccomp-workaround-pass" in completed.stdout
+    log_text = next((tmp_path / "legacy-range" / "state" / "logs").glob("deploy-*.log")).read_text()
+    assert "runtime_seccomp=unconfined" in log_text
+    assert "runtime_uvicorn=asyncio-h11" in log_text
+
+
+def test_legacy_range_runtime_fails_closed_when_thread_probe_still_fails(tmp_path):
+    receipt = tmp_path / "test.receipt"
+    receipt.write_text(
+        "profile=test\npromotion_ready=yes\nimage_id=sha256:fake\n"
+        "version=0.14.0-test\nbuild=test-build\napplication_health=pass\n"
+        "runtime_tools=ready\nnet_raw=ready\ncompatibility_status=supported\n",
+        encoding="utf-8",
+    )
+    completed = run_launcher_preflight(
+        tmp_path / "legacy-fail",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--promote-from-receipt",
+        str(receipt),
+        "--allow-legacy-range-runtime",
+        api_version="1.39",
+        thread_probe="fail",
+    )
+    assert completed.returncode == 1
+    assert "runtime probe failed even with" in completed.stderr
+
+
+def test_legacy_range_runtime_is_not_available_to_test_or_mission(tmp_path):
+    for profile in ("test", "mission"):
+        completed = run_launcher_preflight(
+            tmp_path / profile,
+            "--profile",
+            profile,
+            "--image",
+            "nct:0.14.0-test",
+            "--allow-legacy-range-runtime",
+        )
+        assert completed.returncode == 1
+        assert "restricted to the Range profile" in completed.stderr
 
 
 def test_preflight_verifies_offline_archive_checksum(tmp_path):

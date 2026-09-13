@@ -24,6 +24,7 @@ tls_cert=""
 tls_key=""
 tls_ca=""
 configure_firewall="no"
+allow_legacy_range_runtime="no"
 check_only="no"
 assume_yes="no"
 offline="no"
@@ -38,6 +39,11 @@ bootstrap_password_cleanup="no"
 bootstrap_password_retained="no"
 state_dir="./nct-deployment"
 minimum_api="1.41"
+legacy_minimum_api="1.39"
+legacy_range_runtime="no"
+runtime_seccomp="default"
+runtime_uvicorn="image-default"
+runtime_thread_probe="not-required"
 lock_dir="${TMPDIR:-/tmp}/nct-deploy.lock"
 
 say() { printf '%s\n' "[NCT] $*"; }
@@ -62,6 +68,7 @@ Usage: sh scripts/nct-deploy.sh [options]
   --tls-ca FILE                    CA file used for the final trusted HTTPS check
   --source-cidr CIDR               Restrict a firewall rule to approved sources
   --configure-firewall             Create a narrow UFW/firewalld rule
+  --allow-legacy-range-runtime     Opt in to the verified API 1.39/1.40 Range workaround
   --state-dir DIR                  Deployment logs, proxy config, and backups
   --offline                        Never pull images or require internet
   --skip-backup                    Skip pre-upgrade backup (not allowed for mission)
@@ -93,6 +100,7 @@ while [ "$#" -gt 0 ]; do
         --source-cidr) source_cidr=${2:?missing CIDR}; shift 2 ;;
         --state-dir) state_dir=${2:?missing directory}; shift 2 ;;
         --configure-firewall) configure_firewall="yes"; shift ;;
+        --allow-legacy-range-runtime) allow_legacy_range_runtime="yes"; shift ;;
         --check-only) check_only="yes"; shift ;;
         --yes) assume_yes="yes"; shift ;;
         --offline) offline="yes"; shift ;;
@@ -108,6 +116,7 @@ done
 
 case "$profile" in test|range|mission) ;; *) die "Profile must be test, range, or mission." ;; esac
 case "$access" in local|lan) ;; *) die "Access must be local or lan." ;; esac
+[ "$allow_legacy_range_runtime" = "no" ] || [ "$profile" = "range" ] || die "--allow-legacy-range-runtime is restricted to the Range profile."
 [ -n "$image" ] || die "Choose an explicit versioned NCT image with --image; mutable defaults are not permitted."
 state_file="$state_dir/current.env"
 saved_auth_mode=""
@@ -145,15 +154,27 @@ command -v curl >/dev/null 2>&1 || die "curl is required for the final access-pa
 server_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || printf unknown)
 server_api=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null || printf unknown)
 docker_context=$(docker context show 2>/dev/null || printf unknown)
+
+api_at_least() {
+    awk -v have="$1" -v need="$2" 'BEGIN {
+        split(have, h, "."); split(need, n, ".")
+        ok = (h[1] + 0 > n[1] + 0) || (h[1] + 0 == n[1] + 0 && h[2] + 0 >= n[2] + 0)
+        exit(ok ? 0 : 1)
+    }'
+}
+
 case "$server_api" in
     unknown|'') [ "$profile" = "range" ] || die "Docker server API version could not be read." ;;
     *)
-        api_supported=$(awk -v have="$server_api" -v need="$minimum_api" 'BEGIN {
-            split(have, h, "."); split(need, n, ".")
-            ok = (h[1] + 0 > n[1] + 0) || (h[1] + 0 == n[1] + 0 && h[2] + 0 >= n[2] + 0)
-            print ok ? "yes" : "no"
-        }')
-        [ "$api_supported" = "yes" ] || die "Range compatibility: unsupported Docker API $server_api (minimum $minimum_api); use the separately versioned offline NCT appliance fallback on this host." ;;
+        if api_at_least "$server_api" "$minimum_api"; then
+            :
+        elif [ "$allow_legacy_range_runtime" = "yes" ] && api_at_least "$server_api" "$legacy_minimum_api"; then
+            legacy_range_runtime="yes"
+        elif api_at_least "$server_api" "$legacy_minimum_api"; then
+            die "Range compatibility: Docker API $server_api needs the verified recurring-VM workaround. Re-run the Range preflight with --allow-legacy-range-runtime to probe it explicitly."
+        else
+            die "Range compatibility: unsupported Docker API $server_api (minimum $minimum_api; legacy Range floor $legacy_minimum_api); use the separately versioned offline NCT appliance fallback on this host."
+        fi ;;
 esac
 
 compose_mode="absent"
@@ -181,6 +202,12 @@ case "$compose_mode" in
         compatibility_guidance="Legacy docker-compose was detected; NCT will use the supported direct-Docker swap path instead of relying on legacy orchestration."
         ;;
 esac
+
+if [ "$legacy_range_runtime" = "yes" ]; then
+    compatibility_tier="legacy-range-direct-engine"
+    compatibility_status="workaround"
+    compatibility_guidance="Known recurring Range VM path: bypass Compose, probe Python threading, and use the pure-Python Uvicorn transport. This result is not Mission-promotable."
+fi
 
 architecture=$(docker info --format '{{.Architecture}}' 2>/dev/null || uname -m)
 case "$architecture" in amd64|x86_64|arm64|aarch64) ;; *) die "Unsupported Docker architecture: $architecture" ;; esac
@@ -281,13 +308,38 @@ if [ "$profile" = "range" ] || [ "$profile" = "mission" ]; then
     receipt_health=$(receipt_value application_health)
     receipt_runtime=$(receipt_value runtime_tools)
     receipt_raw=$(receipt_value net_raw)
+    receipt_compatibility=$(receipt_value compatibility_status)
     [ "$receipt_profile" = "$required_receipt_profile" ] || die "$profile requires a $required_receipt_profile promotion receipt, not $receipt_profile."
     [ "$receipt_ready" = "yes" ] || die "The supplied receipt is not marked promotion-ready."
     [ "$receipt_image_id" = "$target_image_id" ] || die "Promotion receipt image ID does not match the selected local image."
     [ "$receipt_build" = "$target_build" ] || die "Promotion receipt build does not match the selected image."
     [ "$receipt_version" = "$target_version" ] || die "Promotion receipt version does not match the selected image."
     [ "$receipt_health" = "pass" ] && [ "$receipt_runtime" = "ready" ] && [ "$receipt_raw" = "ready" ] || die "Promotion receipt does not contain complete application, runtime-tool, and NET_RAW acceptance results."
+    if [ "$profile" = "mission" ] && [ "$receipt_compatibility" != "supported" ]; then
+        die "Mission promotion requires a supported Range runtime receipt; $receipt_compatibility compatibility cannot be promoted."
+    fi
     printf 'promotion_source=%s\npromotion_source_profile=%s\npromotion_source_image_id=%s\npromotion_source_build=%s\n' "$promotion_receipt" "$receipt_profile" "$receipt_image_id" "$receipt_build" >> "$log_file"
+fi
+
+if [ "$legacy_range_runtime" = "yes" ]; then
+    runtime_uvicorn="asyncio-h11"
+    set +e
+    docker run --rm --entrypoint python "$image" -c 'import threading; t=threading.Thread(target=lambda: None); t.start(); t.join()' >/dev/null 2>&1
+    thread_rc=$?
+    set -e
+    if [ "$thread_rc" -eq 0 ]; then
+        runtime_thread_probe="default-pass"
+    else
+        set +e
+        docker run --rm --security-opt seccomp=unconfined --entrypoint python "$image" -c 'import threading; t=threading.Thread(target=lambda: None); t.start(); t.join()' >/dev/null 2>&1
+        unconfined_thread_rc=$?
+        set -e
+        [ "$unconfined_thread_rc" -eq 0 ] || die "Legacy Range runtime probe failed even with the container-scoped seccomp workaround; use the offline NCT appliance fallback."
+        runtime_seccomp="unconfined"
+        runtime_thread_probe="seccomp-workaround-pass"
+        warn "Python threading is blocked by this host's default container profile. The Range deployment will disable seccomp only for the NCT analyzer container."
+    fi
+    printf 'legacy_range_runtime=yes\nruntime_thread_probe=%s\nruntime_seccomp=%s\nruntime_uvicorn=%s\n' "$runtime_thread_probe" "$runtime_seccomp" "$runtime_uvicorn" >> "$log_file"
 fi
 
 existing_id=$(docker ps -aq --filter "name=^/${container}$" | head -n 1)
@@ -548,6 +600,7 @@ fi
 say "Profile: $profile · Docker $server_version/API $server_api · Compose $compose_mode $compose_version"
 say "Range compatibility: $compatibility_status · $compatibility_tier"
 say "$compatibility_guidance"
+[ "$legacy_range_runtime" = "no" ] || say "Legacy runtime probe: $runtime_thread_probe · seccomp $runtime_seccomp · Uvicorn $runtime_uvicorn"
 say "Image: $image · ID: $target_image_id · Build: $target_build · Existing: $existing_image · Data: $data_volume"
 say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled · Authentication: $auth_mode"
 say "Docker network overlap: $network_overlap${network_overlap_detail:+ · $network_overlap_detail}"
@@ -654,6 +707,9 @@ swap_started="yes"
 start_nct_container() {
     include_bootstrap=$1
     set -- docker run -d --name "$container" --restart unless-stopped --cap-add NET_RAW -v "$data_volume:/data"
+    if [ "$runtime_seccomp" = "unconfined" ]; then
+        set -- "$@" --security-opt seccomp=unconfined
+    fi
     if [ "$tls_enabled" = "no" ]; then
         set -- "$@" -p "$bind_address:$app_port:8080"
     fi
@@ -665,7 +721,11 @@ start_nct_container() {
             set -- "$@" -e "NCT_BOOTSTRAP_ADMIN=$admin_user" -e NCT_BOOTSTRAP_PASSWORD_FILE=/run/secrets/nct_bootstrap_password -v "$bootstrap_password_file:/run/secrets/nct_bootstrap_password:ro"
         fi
     fi
-    "$@" "$image" >/dev/null
+    set -- "$@" "$image"
+    if [ "$runtime_uvicorn" = "asyncio-h11" ]; then
+        set -- "$@" uvicorn app.main:app --host 0.0.0.0 --port 8080 --loop asyncio --http h11
+    fi
+    "$@" >/dev/null
 }
 
 wait_for_nct_health() {
@@ -690,7 +750,7 @@ write_promotion_receipt() {
         printf 'schema=1\nprofile=%s\npromotion_ready=yes\ncompleted=%s\n' "$profile" "$(date -u +%FT%TZ)"
         printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build"
         printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
-        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\nnetwork_overlap=%s\nnetwork_overlap_detail=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$network_overlap" "$network_overlap_detail" "$architecture"
+        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\nlegacy_range_runtime=%s\nruntime_thread_probe=%s\nruntime_seccomp=%s\nruntime_uvicorn=%s\nnetwork_overlap=%s\nnetwork_overlap_detail=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$legacy_range_runtime" "$runtime_thread_probe" "$runtime_seccomp" "$runtime_uvicorn" "$network_overlap" "$network_overlap_detail" "$architecture"
         printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url"
         printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
     } > "$receipt_tmp" || return 1

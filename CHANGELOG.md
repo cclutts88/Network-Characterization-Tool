@@ -2,6 +2,12 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Recovered the verified deployment history for the regularly reset Range VM
+  family and encoded it as a sanitized API 1.39 compatibility fixture. An
+  explicit Range-only launcher mode now bypasses incompatible Compose, probes
+  Python threading, conditionally scopes the seccomp workaround to the NCT
+  analyzer, forces Uvicorn asyncio/h11, records the result, and cannot be
+  promoted as Mission-ready.
 - Made rapid deployment artifact identity fail closed across Test, Range, and
   Mission: the launcher now requires an explicit versioned image with embedded
   application/build identity, rejects mutable `:latest` references, and

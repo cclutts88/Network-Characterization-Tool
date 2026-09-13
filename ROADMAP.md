@@ -348,6 +348,11 @@ within Reachability.
     optionally include the real host/image `--check-only` result.
   - [x] Add Docker bridge overlap cases for host LAN/VPN routes and retained
     Saved Networks, with a Test warning and a Range/Mission hard stop.
+  - [x] Convert the previously successful recurring Range VM recovery into a
+    sanitized API 1.39 fixture and an explicit Range-only compatibility path.
+    Bypass incompatible Compose, probe Python 3.12 threading, scope the seccomp
+    workaround to the analyzer only when proven necessary, force the stable
+    asyncio/h11 transport, and prevent Mission promotion of the workaround.
   - [ ] Capture reports on representative older Range hosts before closing the
     matrix.
 - [ ] Make the launcher idempotent: identify an existing NCT container, image,

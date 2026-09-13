@@ -23,22 +23,32 @@ other Docker containers and host listeners through `ss` or `netstat`; Test and
 Range may advance to an available port, while Mission must stop rather than
 silently changing its declared URL.
 
-The preflight reports a four-step Range compatibility ladder:
+The preflight reports a five-step Range compatibility ladder:
 
 1. `compose-v2` — supported modern Compose is available.
 2. `legacy-compose-v1` — degraded but accepted; the launcher avoids relying on
    the older orchestration behavior.
 3. `direct-engine` — degraded but accepted when the Docker API, Linux runtime,
    architecture, and required container capabilities remain supported.
-4. `offline appliance required` — unsupported Docker API, kernel, image format,
+4. `legacy-range-direct-engine` — an explicit Range-only workaround for the
+   recurring API 1.39/1.40 VM pattern. The launcher bypasses Compose, probes
+   Python thread creation, selects container-only seccomp compatibility only
+   when proven necessary, and forces Uvicorn `asyncio` + `h11`. This tier cannot
+   be promoted to Mission.
+5. `offline appliance required` — unsupported Docker API, kernel, image format,
    networking, or security behavior must stop instead of being hidden behind a
    fragile flag workaround. The appliance is a separately tracked artifact and
    is not bundled by this checkpoint.
 
 For consistent backup and rollback semantics, the launcher performs the final
 transactional swap through the Docker Engine path in all supported tiers. The
-detected tier and supported/degraded result are recorded in the deployment log
+detected tier and supported/degraded/workaround result are recorded in the deployment log
 and promotion receipt.
+
+See the [Recurring Range VM compatibility baseline](RECURRING_RANGE_VM_BASELINE.md)
+for the sanitized record of the previously successful old-runtime, occupied-port,
+and firewall recovery. The compatibility flag is deliberately not automatic
+because it may relax seccomp for the analyzer container.
 
 This checkpoint supports **Test** and **Range** deployment. The **Mission**
 profile can run a non-mutating readiness preflight but intentionally stops
@@ -103,6 +113,12 @@ sudo sh scripts/nct-deploy.sh --profile range --access lan \
   --generate-admin-password --image nct:range-validated \
   --promote-from-receipt nct-deployment/receipts/test-BUILD-TIMESTAMP.receipt
 ```
+
+On the repeatedly reset legacy Range VM family, add
+`--allow-legacy-range-runtime` only after reviewing the preflight. The known
+successful alternate HTTPS port was `8444`; the current launcher will also
+detect an occupied requested port and record a safe Range alternate without
+stopping the existing service.
 
 Air-gapped packages must include an immutable image archive and SHA-256. The
 launcher rejects an archive without a checksum in every deployment profile:

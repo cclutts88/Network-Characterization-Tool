@@ -26,6 +26,7 @@ path.
 | Legacy Compose v1 | Simulated preflight | Degraded; direct Engine swap |
 | Engine without Compose | Simulated preflight | Degraded; supported |
 | Minimum/old Docker API | Boundary fixtures | Supported or appliance-required |
+| Recurring Range VM API 1.39 pattern | Historical acceptance plus executable fixture | Explicit Range-only workaround; never Mission-promotable |
 | Linux daemon and CPU architecture | Linux/Windows and CPU fixtures | Unsupported hosts fail closed |
 | Offline image | Missing, valid, and invalid SHA-256 | Unverified archives fail closed |
 | Occupied port | Host-listener fixture | Test/Range select and record an alternate |
@@ -39,3 +40,9 @@ The matrix item remains open until the same report is captured on representative
 older range hosts. A passing developer-host matrix is development evidence, not
 mission readiness. Automatic selection and verification of a replacement bridge
 range remains a separate deployment control.
+
+The recovered failure and resolution sequence for the regularly reset VM family
+is documented in [Recurring Range VM compatibility baseline](RECURRING_RANGE_VM_BASELINE.md).
+It covers the old Docker/Compose API mismatch, occupied host ports, firewalld,
+and the Python 3.12 thread/seccomp behavior without retaining any range address,
+scan, or device configuration.
