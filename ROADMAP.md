@@ -542,6 +542,8 @@ within Reachability.
   - [x] Build the likely path only from source-attached router/firewall evidence,
     show that path visually, and exclude ordinary switch management default
     routes unless Layer-3 forwarding is explicitly established.
+  - [x] Select the newest completed or uploaded collection per device for Reach;
+    failed newer attempts no longer displace the last usable retained evidence.
   - [x] Parse retained UniFi `iptables-save` filter and NAT tables by table,
     chain, rule order, action, protocol, and basic address/port selectors instead
     of discarding bare saved-rule lines.
@@ -573,6 +575,11 @@ within Reachability.
 - [x] Add guarded UniFi switch fallbacks for platform, switch-control, forwarding,
   VLAN, and spanning-tree evidence on firmware where standard Linux utilities are
   absent.
+- [x] Mark failed device pulls as partial evidence in Device Analysis and warn
+  separately when a switch pull contains no structured port, learned-MAC,
+  aggregation, or spanning-tree records.
+- [x] Deduplicate repeated config-derived Saved Network suggestions by current
+  device/interface path while retaining the newest supporting source.
 - [ ] Rerun the revised profile against representative UniFi switch models and add
   parser fixtures for their actual retained `mca-cli-op`, `swctrl`, and `stp`
   formats. Do not infer missing Layer-2 relationships from the older partial pulls.

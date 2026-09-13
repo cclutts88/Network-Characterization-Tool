@@ -1815,6 +1815,8 @@ def _latest_device_reachability_evidence() -> list[dict]:
         device_key = str(record.get("device_address") or record.get("device_name") or "").casefold()
         if not device_key or device_key in seen_devices:
             continue
+        if str(record.get("status") or "").casefold() not in {"completed", "uploaded"}:
+            continue
         try:
             analysis = analyze_device_collection(record["run_id"])
         except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):

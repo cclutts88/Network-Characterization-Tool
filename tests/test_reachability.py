@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app import main
 from app.reachability import evaluate_reachability, parse_endpoint
 
 
@@ -111,3 +112,21 @@ def test_external_destination_uses_default_route():
 def test_invalid_endpoint_is_rejected():
     with pytest.raises(ValueError, match="Invalid IPv4"):
         parse_endpoint("not a network")
+
+
+def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(monkeypatch):
+    records = [
+        {"run_id": "failed", "device_address": "10.80.0.1", "status": "failed"},
+        {"run_id": "usable", "device_address": "10.80.0.1", "status": "completed"},
+        {"run_id": "upload", "device_address": "10.80.0.2", "status": "uploaded"},
+    ]
+    monkeypatch.setattr(main, "device_collection_history", lambda limit: records)
+    monkeypatch.setattr(
+        main,
+        "analyze_device_collection",
+        lambda run_id: {"run_id": run_id},
+    )
+
+    result = main._latest_device_reachability_evidence()
+
+    assert result == [{"run_id": "usable"}, {"run_id": "upload"}]

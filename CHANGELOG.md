@@ -2,6 +2,19 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added combined Router + Firewall device collection. The Device page merges
+  both read-only templates without duplicate commands, and Device Analysis and
+  Map retain and display both observed roles.
+- Corrected UniFi gateway parsing for retained `iptables-save` filter and NAT
+  tables, added `ipset` collection, exposed table/chain/order/action fields,
+  and kept unavailable commands from discarding the rest of a guarded pull.
+- Added guarded UniFi switch fallback commands and explicit partial-evidence
+  warnings when a failed pull contains no structured forwarding records.
+- Improved Reach path selection to use source-attached router/firewall evidence,
+  ignore switch management routes, preserve the newest usable collection when a
+  later pull fails, and render the likely path in the interface.
+- Deduplicated config-derived Saved Network suggestions that referred to the
+  same current device/interface path across repeated pulls.
 - Added private account-owned Hunt and Analyze working views. Filters,
   collapsible cards, row count, and natural IP/hostname sorting
   now follow the signed-in analyst between sessions. Analysts can also create,

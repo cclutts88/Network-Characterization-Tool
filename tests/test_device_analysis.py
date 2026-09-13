@@ -151,6 +151,27 @@ def test_device_collection_comparison_covers_interface_route_and_policy_changes(
     assert result["policy_changes"]["network_objects_removed"]
 
 
+def test_failed_switch_collection_is_explicitly_partial_and_requests_rerun(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "nct.db"
+    run_id = "d" * 32
+    make_collection(config_dir, run_id, "default via 10.80.0.1 dev eth0\nbridge link show\n")
+    manifest_path = config_dir / run_id / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update({"status": "failed", "device_type": "switch", "device_name": "Access Switch"})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = analyze_device_collection(
+        run_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    )
+
+    titles = {item["title"] for item in result["review_items"]}
+    assert "Collection status is failed" in titles
+    assert "No structured switch forwarding evidence was parsed" in titles
+    assert result["device"]["role_label"] == "Switch"
+
+
 def test_device_analysis_routes_use_runtime_storage_paths(tmp_path, monkeypatch):
     config_dir = tmp_path / "device-configs"
     data_dir = tmp_path / "data"

@@ -1044,16 +1044,20 @@ def configuration_network_candidates(
                 "sources": [],
             },
         )
+        # Manifests are newest-first. Keep one useful provenance row for the
+        # same device/interface path instead of repeating it for every pull or
+        # for both an interface address and its equivalent connected route.
         signature = (
-            source.get("run_id"),
+            source.get("device_address") or source.get("device_name"),
             source.get("interface"),
-            source.get("kind"),
-            source.get("evidence"),
+            source.get("zone"),
+            None if source.get("interface") or source.get("zone") else source.get("kind"),
         )
         if signature not in {
             (
-                item.get("run_id"), item.get("interface"), item.get("kind"),
-                item.get("evidence"),
+                item.get("device_address") or item.get("device_name"),
+                item.get("interface"), item.get("zone"),
+                None if item.get("interface") or item.get("zone") else item.get("kind"),
             )
             for item in record["sources"]
         }:

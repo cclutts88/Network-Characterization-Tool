@@ -291,6 +291,13 @@ def analyze_device_collection(
         observed_roles.add("firewall")
     role_order = ("router", "firewall", "switch")
     roles = [role for role in role_order if role in observed_roles]
+    collection_status = str(manifest.get("status") or "unknown").lower()
+    if collection_status not in {"completed", "uploaded"}:
+        review_items.append({
+            "severity": "warning", "category": "collection",
+            "title": f"Collection status is {collection_status}",
+            "detail": "Treat parsed content as partial evidence. Review the retained command status and rerun with the current guarded profile before relying on missing sections.",
+        })
     if manifest.get("device_type") == "firewall" and not policy_count:
         review_items.append({
             "severity": "warning", "category": "policy",
@@ -298,11 +305,16 @@ def analyze_device_collection(
             "detail": "Confirm that the selected collection profile returned the active policy configuration.",
         })
     switching_count = len(summary.get("switching", []))
-    if manifest.get("device_type") == "switch" and not switching_count:
+    switch_detail = summary.get("switch_detail") or {}
+    structured_switching_count = sum(
+        len(switch_detail.get(section) or [])
+        for section in ("ports", "mac_table", "port_channels", "spanning_tree")
+    )
+    if manifest.get("device_type") == "switch" and not structured_switching_count:
         review_items.append({
             "severity": "warning", "category": "switching",
-            "title": "No switching evidence was parsed",
-            "detail": "Confirm the vendor profile matches the switch platform and review per-command status in the retained raw output.",
+            "title": "No structured switch forwarding evidence was parsed",
+            "detail": "No usable port, learned-MAC, aggregation, or spanning-tree records were found. Confirm the vendor profile and rerun with the current guarded switch commands.",
         })
     policy_items = [
         *summary.get("firewall_acl", []),
@@ -377,7 +389,7 @@ def analyze_device_collection(
         "neighbors": summary.get("neighbors", []),
         "topology_neighbors": summary.get("topology_neighbors", []),
         "switching": summary.get("switching", []),
-        "switch_detail": summary.get("switch_detail", {}),
+        "switch_detail": switch_detail,
         "command_results": summary.get("command_results", []),
         "saved_network_correlations": saved_matches,
         "nmap_host_correlations": nmap_matches,

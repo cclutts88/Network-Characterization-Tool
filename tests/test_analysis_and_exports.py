@@ -550,6 +550,7 @@ ip route 0.0.0.0/0 192.0.2.254
     interface_candidate = candidates[0]
     assert interface_candidate["suggested_name"] == "OPERATIONS-LAN · 10.40.0.0/24"
     assert interface_candidate["sources"][0]["device_name"] == "Core Firewall"
+    assert len(interface_candidate["sources"]) == 1
 
     create_saved_network(
         SavedNetworkCreate(
