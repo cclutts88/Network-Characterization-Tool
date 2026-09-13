@@ -55,7 +55,9 @@ SearchSploit database, and visualizes retained topology evidence.
   competing retained routes have comparable numeric priority evidence. Both
   policy and route checks show current/projected paths, retained alternatives,
   and bounded collateral scope without extrapolating beyond the one evaluated
-  representative flow.
+  representative flow. Complete report JSON uses short filenames, and either
+  proposal can open as a temporary current-to-projected Map focus without
+  changing a saved layout.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual

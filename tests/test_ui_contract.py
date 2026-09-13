@@ -389,6 +389,7 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="simulationPath"' in html
     assert 'id="simulationImpact"' in html
     assert 'id="exportSimulation"' in html
+    assert 'id="showPolicySimulationOnMap"' in html
     assert "/api/reachability/simulate-policy" in html
     assert "changes no device configuration" in html
     assert 'id="routeSimulationPanel"' in html
@@ -402,8 +403,11 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="routeSimulationImpact"' in html
     assert 'value="set_priority"' in html
     assert 'id="exportRouteSimulation"' in html
+    assert 'id="showRouteSimulationOnMap"' in html
     assert "/api/reachability/simulate-route" in html
     assert "NCT_RouteWhatIf_" in html
+    assert "showSimulationOnMap" in html
+    assert "version:2" in html
     assert 'id="exposureReportPanel"' in html
     assert 'id="generateReport"' in html
     assert 'id="exportReport"' in html
@@ -425,7 +429,10 @@ def test_reachability_results_can_open_a_temporary_map_focus():
     assert "function applyReachFocus" in map_html
     assert "reach-focus-match" in map_html
     assert "reach-focus-dim" in map_html
-    assert "Temporary investigation overlay; saved map positions and layouts are unchanged." in map_html
+    assert "Temporary investigation overlay" in map_html
+    assert "saved map positions and layouts are unchanged" in map_html
+    assert "Temporary proposed-path comparison" in map_html
+    assert "Bounded collateral scope" in map_html
 
 
 def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():

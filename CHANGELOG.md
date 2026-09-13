@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Connected proposed policy and route comparisons to Map. Analysts can open a
+  temporary projected-path focus with current-to-projected outcome, proposal,
+  path-change, collateral-scope, evidence, and caveats while saved layouts stay
+  unchanged; complete comparison exports remain available as short-name JSON.
 - Added explicit hardening-impact summaries for proposed policy and route
   checks: current/projected paths, retained route alternatives, bounded address
   scope, and a clear statement that only the selected representative flow was

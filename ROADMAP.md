@@ -652,7 +652,9 @@ Available at https://x.x.x.x:443
 - [x] Compare current and proposed paths, retained alternate routes, and bounded
   collateral scope. State when only one representative flow was evaluated and
   never extrapolate a route prefix into untested service/policy conclusions.
-- [ ] Export evidence-backed hardening reports and map comparisons.
+- [x] Export evidence-backed hardening reports and open current-to-projected
+  results as temporary Map focus comparisons. Keep the overlay browser-local
+  and leave saved map layouts unchanged.
 
 ### End-of-roadmap fringe-vendor validation
 
