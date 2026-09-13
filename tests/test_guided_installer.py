@@ -10,7 +10,14 @@ INSTALLER_TEXT = INSTALLER.read_text()
 TLS_TEXT = TLS_SETUP.read_text()
 
 
-def run_plan(tmp_path: Path, preset: str, *, api: str = "1.49", answers: int = 12):
+def run_plan(
+    tmp_path: Path,
+    preset: str,
+    *,
+    api: str = "1.49",
+    answers: int = 12,
+    reuse_preset: bool = False,
+):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
@@ -29,8 +36,12 @@ def run_plan(tmp_path: Path, preset: str, *, api: str = "1.49", answers: int = 1
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
     environment["FAKE_DOCKER_API"] = api
+    command = ["sh", str(INSTALLER), "--preset", str(preset_file)]
+    if reuse_preset:
+        command.append("--reuse-preset")
+    command.append("--plan-only")
     return subprocess.run(
-        ["sh", str(INSTALLER), "--preset", str(preset_file), "--plan-only"],
+        command,
         input="\n" * answers,
         capture_output=True,
         text=True,
@@ -74,6 +85,40 @@ def test_guided_range_plan_covers_legacy_tls_firewall_and_admin_prompts(tmp_path
     assert "Authentication:   local" in completed.stdout
 
 
+def test_explicit_preset_reuse_skips_setup_questions_but_keeps_review(tmp_path):
+    completed = run_plan(
+        tmp_path,
+        "profile=test\naccess=local\ntls_enabled=no\napp_port=8766\n"
+        "image=nct:0.14.0-test\noffline=no\nauth_mode=disabled\n",
+        answers=0,
+        reuse_preset=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Preset reuse enabled" in completed.stdout
+    assert "Saved defaults:   yes" in completed.stdout
+    assert "Profile:          test" in completed.stdout
+    assert "Plan complete" in completed.stdout
+    assert "Deployment profile (range/test)" not in completed.stderr
+
+
+def test_explicit_preset_reuse_requires_readable_preset(tmp_path):
+    completed = subprocess.run(
+        [
+            "sh",
+            str(INSTALLER),
+            "--preset",
+            str(tmp_path / "missing.env"),
+            "--reuse-preset",
+            "--plan-only",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert "requires a readable preset" in completed.stderr
+
+
 def test_installer_preflights_before_deploying_and_saves_only_after_success():
     preflight = INSTALLER_TEXT.index('sh "$@" --check-only')
     deploy = INSTALLER_TEXT.index('sh "$@" --yes')
@@ -90,6 +135,10 @@ def test_installer_preflights_before_deploying_and_saves_only_after_success():
         "--allow-legacy-range-runtime",
         "--configure-firewall",
         "--generate-admin-password",
+        "--reuse-preset",
+        "Review, preflight, and final deployment approval are still required",
+        "Step 1 of 4",
+        "Step 4 of 4",
     ):
         assert expected in INSTALLER_TEXT
     assert "password=" not in INSTALLER_TEXT.lower()

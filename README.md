@@ -94,6 +94,9 @@ Use `--plan-only` to review the questions and resulting plan without generating
 certificates, loading images, changing the firewall, or starting containers.
 After a successful installation, non-sensitive answers are retained under
 `nct-deployment` for the next reset; passwords are never stored in that preset.
+On later resets, accept the reuse prompt or add `--reuse-preset` to skip the
+individual setup questions. The review, safe preflight, and final installation
+approval always remain in place.
 
 For advanced or unattended operation, use the rapid launcher directly in
 check-only mode. Every profile requires an explicit versioned image

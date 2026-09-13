@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added a repeat-reset mode to the guided installer. A saved non-sensitive
+  preset can now skip repeated setup questions, but it never skips the review,
+  non-destructive preflight, or final approval; four progress stages make the
+  active deployment step visible.
 - Added a guided Test/Range installer that prompts for access, address, TLS,
   ports, firewall scope, legacy-runtime consent, immutable image/offline
   archive, acceptance receipt, authentication, and initial Administrator. It

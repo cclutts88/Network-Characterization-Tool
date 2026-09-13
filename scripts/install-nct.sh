@@ -12,15 +12,18 @@ tls_script="$script_dir/setup-lab-https.sh"
 state_dir="$repo_dir/nct-deployment"
 preset_file=""
 plan_only="no"
+reuse_preset="no"
+reuse_preset_requested="no"
 
 usage() {
-    printf '%s\n' "Usage: sh scripts/install-nct.sh [--state-dir DIR] [--preset FILE] [--plan-only]"
+    printf '%s\n' "Usage: sh scripts/install-nct.sh [--state-dir DIR] [--preset FILE] [--reuse-preset] [--plan-only]"
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --state-dir) state_dir=${2:?missing state directory}; shift 2 ;;
         --preset) preset_file=${2:?missing preset file}; shift 2 ;;
+        --reuse-preset) reuse_preset_requested="yes"; shift ;;
         --plan-only) plan_only="yes"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; printf '%s\n' "[NCT] ERROR: Unknown option: $1" >&2; exit 1 ;;
@@ -45,6 +48,10 @@ default_value() {
 prompt_value() {
     label=$1
     default=$2
+    if [ "$reuse_preset" = "yes" ]; then
+        printf '%s\n' "$default"
+        return
+    fi
     if [ -n "$default" ]; then
         printf '%s [%s]: ' "$label" "$default" >&2
     else
@@ -55,6 +62,18 @@ prompt_value() {
 }
 
 prompt_yes_no() {
+    label=$1
+    default=$2
+    if [ "$reuse_preset" = "yes" ]; then
+        case "$default" in
+            yes|no) printf '%s\n' "$default"; return ;;
+            *) die "Saved answer for $label is not yes or no." ;;
+        esac
+    fi
+    confirm_yes_no "$label" "$default"
+}
+
+confirm_yes_no() {
     label=$1
     default=$2
     if [ "$default" = "yes" ]; then hint="Y/n"; else hint="y/N"; fi
@@ -101,7 +120,20 @@ detect_test_receipt() {
 
 printf '\n%s\n' "NCT - Network Characterization Tool"
 printf '%s\n\n' "Guided Test / Range installer"
-if [ -r "$preset_file" ]; then say "Using saved non-sensitive defaults from $preset_file"; fi
+if [ "$reuse_preset_requested" = "yes" ] && [ ! -r "$preset_file" ]; then
+    die "--reuse-preset requires a readable preset: $preset_file"
+fi
+if [ -r "$preset_file" ]; then
+    say "Found saved non-sensitive defaults at $preset_file"
+    if [ "$reuse_preset_requested" = "yes" ]; then
+        reuse_preset="yes"
+    else
+        reuse_preset=$(confirm_yes_no "Reuse these defaults and skip the individual setup questions" yes)
+    fi
+    if [ "$reuse_preset" = "yes" ]; then
+        say "Preset reuse enabled. Review, preflight, and final deployment approval are still required."
+    fi
+fi
 
 profile=$(prompt_value "Deployment profile (range/test)" "$(default_value profile range)")
 case "$profile" in r|R|range|Range) profile="range" ;; t|T|test|Test) profile="test" ;; *) die "Choose range or test." ;; esac
@@ -242,6 +274,7 @@ printf '  Legacy workaround:%s\n' " $allow_legacy"
 printf '  Image:            %s\n' "$image"
 printf '  Offline:          %s\n' "$offline"
 printf '  Authentication:   %s\n' "$auth_mode"
+printf '  Saved defaults:   %s\n' "$reuse_preset"
 printf '  State directory:  %s\n\n' "$state_dir"
 
 if [ "$plan_only" = "yes" ]; then
@@ -249,14 +282,15 @@ if [ "$plan_only" = "yes" ]; then
     exit 0
 fi
 
-approved=$(prompt_yes_no "Run the safe preflight with these settings" yes)
+approved=$(confirm_yes_no "Run the safe preflight with these settings" yes)
 [ "$approved" = "yes" ] || die "Installation cancelled before preflight."
 
+say "Step 1 of 4: validating Docker and staging the selected image if needed."
 command -v docker >/dev/null 2>&1 || die "Docker Engine is not installed or is not on PATH."
 docker info >/dev/null 2>&1 || die "Docker is installed but its daemon is not reachable."
 if ! docker image inspect "$image" >/dev/null 2>&1; then
     if [ -n "$image_archive" ]; then
-        stage_image=$(prompt_yes_no "The selected image is not loaded. Verify and stage the offline archive now" yes)
+        stage_image=$(confirm_yes_no "The selected image is not loaded. Verify and stage the offline archive now" yes)
         [ "$stage_image" = "yes" ] || die "Installation stopped before the image was staged."
         command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required to stage the offline image."
         actual_sha=$(sha256sum "$image_archive" | awk '{print $1}')
@@ -265,7 +299,7 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
     elif [ "$offline" = "yes" ]; then
         die "The selected image is not loaded and no offline image archive was provided."
     else
-        pull_image=$(prompt_yes_no "The selected image is not local. Pull it before preflight" yes)
+        pull_image=$(confirm_yes_no "The selected image is not local. Pull it before preflight" yes)
         [ "$pull_image" = "yes" ] || die "Installation stopped before the image was pulled."
         docker pull "$image"
     fi
@@ -273,8 +307,11 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
 fi
 
 if [ "$tls_mode" = "generate" ]; then
+    say "Step 2 of 4: generating the approved private-lab TLS material."
     [ ! -e "$tls_key" ] || die "Generated TLS keys already exist. Choose existing TLS material instead."
     sh "$tls_script" "$bind_address" "$tls_root"
+else
+    say "Step 2 of 4: using the reviewed TLS setting without generating new material."
 fi
 
 set -- "$deploy_script" --profile "$profile" --access "$access" --bind "$bind_address" --image "$image" --state-dir "$state_dir" --auth "$auth_mode"
@@ -290,11 +327,12 @@ if [ "$configure_firewall" = "yes" ]; then set -- "$@" --source-cidr "$source_ci
 if [ "$allow_legacy" = "yes" ]; then set -- "$@" --allow-legacy-range-runtime; fi
 if [ "$auth_mode" = "local" ]; then set -- "$@" --admin-user "$admin_user" --generate-admin-password; fi
 
-say "Running non-destructive deployment preflight..."
+say "Step 3 of 4: running the non-destructive deployment preflight."
 sh "$@" --check-only
 
-deploy_now=$(prompt_yes_no "Preflight passed. Install NCT now" yes)
+deploy_now=$(confirm_yes_no "Preflight passed. Install NCT now" yes)
 [ "$deploy_now" = "yes" ] || die "Installation stopped after the successful preflight; no container or firewall change was made."
+say "Step 4 of 4: installing the verified NCT image and checking application health."
 sh "$@" --yes
 
 mkdir -p "$state_dir"

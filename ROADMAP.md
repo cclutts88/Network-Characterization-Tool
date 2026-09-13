@@ -295,6 +295,9 @@ within Reachability.
     a non-mutating plan mode, automatic preflight before deployment, private-lab
     TLS generation, initial Administrator setup, and a reusable non-sensitive
     Range preset for frequently reset VMs.
+  - [x] Add a repeat-reset preset path that skips repeated non-sensitive setup
+    questions while retaining the full review, safe preflight, final approval,
+    and visible deployment-stage progress.
 - [x] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
   profiles with different acceptance rules rather than treating every host as
   equivalent:

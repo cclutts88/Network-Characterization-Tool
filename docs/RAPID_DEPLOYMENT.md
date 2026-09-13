@@ -14,6 +14,14 @@ and the initial Administrator. It shows a concise review, runs the launcher's
 non-mutating preflight, and asks once more before deployment. `--plan-only`
 completes the guided review without changing any state.
 
+When a successful prior installation has saved a preset, the installer offers
+to reuse those non-sensitive answers and skip the individual setup questions.
+Use `--reuse-preset` for the same repeat-reset path without the initial reuse
+question. Preset reuse never skips the complete review, immutable-image and
+host preflight, or final deployment approval. It also prints four concise
+progress stages so an operator can tell whether it is staging the image,
+handling TLS, preflighting, or installing and checking health.
+
 On a fresh air-gapped host, the installer explicitly asks before verifying and
 loading the offline image into Docker's local cache. This staging step changes
 no container, port, firewall rule, or NCT data; it makes the exact image
