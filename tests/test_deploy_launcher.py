@@ -21,6 +21,7 @@ def run_launcher_preflight(
     host_route: str = "10.0.0.0/24",
     overlap: bool = False,
     thread_probe: str = "pass",
+    firewall: str = "none",
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -112,6 +113,19 @@ esac
         encoding="utf-8",
     )
     fake_ss.chmod(0o755)
+    if firewall.startswith("firewalld"):
+        fake_firewalld = fake_bin / "firewall-cmd"
+        fake_firewalld.write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  --state) [ \"${FAKE_FIREWALL_STATE:-active}\" = \"active\" ] && printf 'running\\n' || { printf 'not running\\n'; exit 1; } ;;\n"
+            "  --query-rich-rule=*|--query-port=*) [ \"${FAKE_FIREWALL_RULE:-missing}\" = \"present\" ] ;;\n"
+            "  --permanent) exit 0 ;;\n"
+            "  --reload) exit 0 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        fake_firewalld.chmod(0o755)
     fake_ip = fake_bin / "ip"
     fake_ip.write_text(
         "#!/bin/sh\nprintf '%s dev eth0 proto kernel scope link\\n' \"${FAKE_HOST_ROUTE:-10.0.0.0/24}\"\n",
@@ -134,6 +148,8 @@ esac
     environment["FAKE_HOST_ROUTE"] = host_route
     environment["FAKE_OVERLAP"] = "yes" if overlap else "no"
     environment["FAKE_THREAD_PROBE"] = thread_probe
+    environment["FAKE_FIREWALL_STATE"] = "inactive" if firewall.endswith("inactive") else "active"
+    environment["FAKE_FIREWALL_RULE"] = "present" if firewall.endswith("present") else "missing"
     if compose_mode == "plugin":
         environment["FAKE_COMPOSE_PLUGIN"] = "yes"
     return subprocess.run(
@@ -493,6 +509,91 @@ def test_preflight_selects_an_alternate_test_port_without_touching_listener(tmp_
     assert "Access: local on 127.0.0.1:8767" in completed.stdout
 
 
+def test_firewall_preflight_detects_an_existing_range_rule_without_duplication(tmp_path):
+    completed = run_launcher_preflight(
+        tmp_path / "firewall-present",
+        "--profile",
+        "test",
+        "--access",
+        "lan",
+        "--bind",
+        "10.20.30.40",
+        "--source-cidr",
+        "10.20.30.0/24",
+        "--configure-firewall",
+        "--image",
+        "nct:0.14.0-test",
+        firewall="firewalld-present",
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "already permits 10.20.30.0/24->10.20.30.40:8766/tcp" in completed.stdout
+    assert "Firewall: active · firewalld · rule present" in completed.stdout
+    log_text = next((tmp_path / "firewall-present" / "state" / "logs").glob("deploy-*.log")).read_text()
+    assert "firewall_rule_status=present" in log_text
+    assert "firewall_changed=no" in log_text
+
+
+def test_firewall_preflight_reports_missing_and_inactive_managers(tmp_path):
+    missing = run_launcher_preflight(
+        tmp_path / "firewall-missing",
+        "--access",
+        "lan",
+        "--bind",
+        "10.20.30.40",
+        "--source-cidr",
+        "10.20.30.0/24",
+        "--image",
+        "nct:0.14.0-test",
+        firewall="firewalld-missing",
+    )
+    assert missing.returncode == 0, missing.stderr
+    assert "does not show an inbound rule" in missing.stderr
+    assert "Firewall: active · firewalld · rule missing" in missing.stdout
+
+    inactive = run_launcher_preflight(
+        tmp_path / "firewall-inactive",
+        "--access",
+        "lan",
+        "--bind",
+        "10.20.30.40",
+        "--source-cidr",
+        "10.20.30.0/24",
+        "--configure-firewall",
+        "--image",
+        "nct:0.14.0-test",
+        firewall="firewalld-inactive",
+    )
+    assert inactive.returncode == 1
+    assert "No supported active firewall manager" in inactive.stderr
+
+
+def test_range_firewall_change_requires_an_approved_source_cidr(tmp_path):
+    receipt = tmp_path / "test.receipt"
+    receipt.write_text(
+        "profile=test\npromotion_ready=yes\nimage_id=sha256:fake\n"
+        "version=0.14.0-test\nbuild=test-build\napplication_health=pass\n"
+        "runtime_tools=ready\nnet_raw=ready\ncompatibility_status=supported\n",
+        encoding="utf-8",
+    )
+    completed = run_launcher_preflight(
+        tmp_path / "range-firewall-any",
+        "--profile",
+        "range",
+        "--access",
+        "lan",
+        "--bind",
+        "10.20.30.40",
+        "--configure-firewall",
+        "--image",
+        "nct:0.14.0-test",
+        "--promote-from-receipt",
+        str(receipt),
+        firewall="firewalld-missing",
+    )
+    assert completed.returncode == 1
+    assert "require --source-cidr" in completed.stderr
+
+
 def test_preflight_preserves_idle_existing_nct_and_blocks_active_work(tmp_path):
     idle = run_launcher_preflight(
         tmp_path / "idle-existing",
@@ -575,6 +676,7 @@ def test_launcher_is_idempotent_for_an_already_current_direct_deployment():
     assert 'no backup or container swap was needed' in SCRIPT
     assert 'state_file="$state_dir/current.env"' in SCRIPT
     assert 'mv "$state_tmp" "$state_file"' in SCRIPT
+    assert '[ "$firewall_changed" != "staged" ]' in SCRIPT
 
 
 def test_launcher_detects_docker_and_host_port_listeners():
@@ -601,6 +703,11 @@ def test_launcher_requires_mission_tls_and_narrow_firewall_authority():
     assert '--configure-firewall' in SCRIPT
     assert 'source address=$source_cidr' in SCRIPT
     assert 'No firewall change was made' in SCRIPT
+    assert 'firewall_rule_present()' in SCRIPT
+    assert 'firewall-cmd --state' in SCRIPT
+    assert 'Status: active' in SCRIPT
+    assert 'NCT managed access' in SCRIPT
+    assert 'Range and Mission firewall changes require --source-cidr' in SCRIPT
     assert SCRIPT.index('Proceed with the NCT container swap?') < SCRIPT.index('apply_firewall_rule || rollback')
 
 

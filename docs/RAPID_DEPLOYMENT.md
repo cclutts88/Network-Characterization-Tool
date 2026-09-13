@@ -114,6 +114,14 @@ sudo sh scripts/nct-deploy.sh --profile range --access lan \
   --promote-from-receipt nct-deployment/receipts/test-BUILD-TIMESTAMP.receipt
 ```
 
+LAN preflight distinguishes active firewalld, active UFW, an installed but
+inactive manager, and an unmanaged host. It queries the selected port and
+source before deployment, reuses an existing matching rule without duplication,
+and records the rule decision. Range and Mission firewall changes require an
+approved `--source-cidr`; the launcher will not create an unrestricted
+Internet-facing rule for those profiles. A rule created by NCT is verified after
+reload and removed if the deployment rolls back.
+
 On the repeatedly reset legacy Range VM family, add
 `--allow-legacy-range-runtime` only after reviewing the preflight. The known
 successful alternate HTTPS port was `8444`; the current launcher will also

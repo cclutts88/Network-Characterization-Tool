@@ -582,19 +582,78 @@ fi
 printf 'selected_app_port=%s\nselected_https_port=%s\nlistener_tool=%s\n' "$app_port" "$https_port" "$listener_tool" >> "$log_file"
 
 firewall_tool="none"
+firewall_state="not-applicable"
+firewall_rule_status="not-applicable"
+firewall_rule_spec="none"
 firewall_changed="no"
+
+firewall_rule_present() {
+    case "$firewall_tool" in
+        firewalld)
+            if [ -n "$source_cidr" ]; then
+                firewall-cmd --query-rich-rule="rule family=ipv4 source address=$source_cidr destination address=$bind_address port port=$published_port protocol=tcp accept" >/dev/null 2>&1
+            else
+                firewall-cmd --query-port="$published_port/tcp" >/dev/null 2>&1
+            fi
+            ;;
+        ufw)
+            ufw status 2>/dev/null | awk -v port="$published_port/tcp" -v source="$source_cidr" '
+                ($1 == port || index($1, ":" port)) && $2 == "ALLOW" {
+                    if (source == "" || index($0, source)) found=1
+                }
+                END {exit(found ? 0 : 1)}'
+            ;;
+        *) return 1 ;;
+    esac
+}
+
 if [ "$access" = "lan" ]; then
-    command -v ufw >/dev/null 2>&1 && firewall_tool="ufw"
-    command -v firewall-cmd >/dev/null 2>&1 && firewall_tool="firewalld"
+    firewall_state="unmanaged"
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        firewall_state="firewalld-inactive"
+        if [ "$(firewall-cmd --state 2>/dev/null || printf stopped)" = "running" ]; then
+            firewall_tool="firewalld"
+            firewall_state="active"
+        fi
+    fi
+    if [ "$firewall_tool" = "none" ] && command -v ufw >/dev/null 2>&1; then
+        firewall_state="ufw-inactive"
+        if ufw status 2>/dev/null | grep -F 'Status: active' >/dev/null 2>&1; then
+            firewall_tool="ufw"
+            firewall_state="active"
+        fi
+    fi
+    if [ "$firewall_tool" != "none" ]; then
+        firewall_rule_spec="$bind_address:$published_port/tcp"
+        [ -z "$source_cidr" ] || firewall_rule_spec="$source_cidr->$firewall_rule_spec"
+        if firewall_rule_present; then
+            firewall_rule_status="present"
+        else
+            firewall_rule_status="missing"
+        fi
+    else
+        firewall_rule_status="unverified"
+    fi
     if [ "$configure_firewall" = "yes" ]; then
         [ "$(id -u)" -eq 0 ] || die "--configure-firewall requires an elevated/root shell."
+        [ "$profile" = "test" ] || [ -n "$source_cidr" ] || die "Range and Mission firewall changes require --source-cidr for the approved analyst network."
         [ "$firewall_tool" != "none" ] || die "No supported active firewall manager was found; configure the narrow inbound rule manually."
-        say "A narrow $firewall_tool rule is staged for $bind_address:$published_port and will be applied only after confirmation."
-        printf 'firewall_tool=%s\nfirewall_changed=staged\n' "$firewall_tool" >> "$log_file"
+        if [ "$firewall_rule_status" = "present" ]; then
+            say "The required $firewall_tool rule already permits $firewall_rule_spec; no duplicate rule will be created."
+        else
+            say "A narrow $firewall_tool rule is staged for $firewall_rule_spec and will be applied only after confirmation."
+            firewall_changed="staged"
+        fi
     else
-        warn "LAN mode needs an inbound TCP rule for $bind_address:$published_port. No firewall change was made."
-        printf 'firewall_tool=%s\nfirewall_changed=no\n' "$firewall_tool" >> "$log_file"
+        if [ "$firewall_rule_status" = "present" ]; then
+            say "Firewall preflight found an existing $firewall_tool rule for $firewall_rule_spec."
+        elif [ "$firewall_tool" = "none" ]; then
+            warn "No active UFW or firewalld manager could verify LAN access to $bind_address:$published_port. No firewall change was made."
+        else
+            warn "Active $firewall_tool does not show an inbound rule for $firewall_rule_spec. No firewall change was made."
+        fi
     fi
+    printf 'firewall_tool=%s\nfirewall_state=%s\nfirewall_rule_status=%s\nfirewall_rule_spec=%s\nfirewall_changed=%s\n' "$firewall_tool" "$firewall_state" "$firewall_rule_status" "$firewall_rule_spec" "$firewall_changed" >> "$log_file"
 fi
 
 say "Profile: $profile · Docker $server_version/API $server_api · Compose $compose_mode $compose_version"
@@ -603,11 +662,12 @@ say "$compatibility_guidance"
 [ "$legacy_range_runtime" = "no" ] || say "Legacy runtime probe: $runtime_thread_probe · seccomp $runtime_seccomp · Uvicorn $runtime_uvicorn"
 say "Image: $image · ID: $target_image_id · Build: $target_build · Existing: $existing_image · Data: $data_volume"
 say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled · Authentication: $auth_mode"
+[ "$access" != "lan" ] || say "Firewall: $firewall_state · $firewall_tool · rule $firewall_rule_status"
 say "Docker network overlap: $network_overlap${network_overlap_detail:+ · $network_overlap_detail}"
 say "Deployment log: $log_file"
 [ "$check_only" = "no" ] || { say "Preflight complete; no container, firewall, or image state was changed."; exit 0; }
 
-if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "$tls_enabled" = "no" ] && [ "$existing_auth_mode" = "$auth_mode" ]; then
+if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "$tls_enabled" = "no" ] && [ "$existing_auth_mode" = "$auth_mode" ] && [ "$firewall_changed" != "staged" ]; then
     existing_binding=$(docker port "$container" 8080/tcp 2>/dev/null | head -n 1 || printf '')
     if [ "$existing_binding" = "$bind_address:$app_port" ] && docker exec "$container" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2)); assert d.get("status")=="ok"' >/dev/null 2>&1; then
         access_url="http://$bind_address:$app_port"
@@ -659,10 +719,14 @@ remove_firewall_rule() {
 apply_firewall_rule() {
     case "$firewall_tool" in
         ufw)
-            if [ -n "$source_cidr" ]; then ufw allow from "$source_cidr" to "$bind_address" port "$published_port" proto tcp; else ufw allow to "$bind_address" port "$published_port" proto tcp; fi ;;
+            if [ -n "$source_cidr" ]; then ufw allow from "$source_cidr" to "$bind_address" port "$published_port" proto tcp comment "NCT managed access" || return 1; else ufw allow to "$bind_address" port "$published_port" proto tcp comment "NCT managed access" || return 1; fi
+            firewall_changed="yes"
+            ;;
         firewalld)
-            if [ -n "$source_cidr" ]; then firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$source_cidr destination address=$bind_address port port=$published_port protocol=tcp accept"; else firewall-cmd --permanent --add-port="$published_port/tcp"; fi
-            firewall-cmd --reload ;;
+            if [ -n "$source_cidr" ]; then firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=$source_cidr destination address=$bind_address port port=$published_port protocol=tcp accept" || return 1; else firewall-cmd --permanent --add-port="$published_port/tcp" || return 1; fi
+            firewall_changed="yes"
+            firewall-cmd --reload || return 1
+            ;;
         *) return 1 ;;
     esac
 }
@@ -751,7 +815,7 @@ write_promotion_receipt() {
         printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build"
         printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
         printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\nlegacy_range_runtime=%s\nruntime_thread_probe=%s\nruntime_seccomp=%s\nruntime_uvicorn=%s\nnetwork_overlap=%s\nnetwork_overlap_detail=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$legacy_range_runtime" "$runtime_thread_probe" "$runtime_seccomp" "$runtime_uvicorn" "$network_overlap" "$network_overlap_detail" "$architecture"
-        printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url"
+        printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\nfirewall_tool=%s\nfirewall_state=%s\nfirewall_rule_status=%s\nfirewall_rule_spec=%s\nfirewall_changed=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url" "$firewall_tool" "$firewall_state" "$firewall_rule_status" "$firewall_rule_spec" "$firewall_changed"
         printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
     } > "$receipt_tmp" || return 1
     mv "$receipt_tmp" "$receipt_file" || return 1
@@ -821,9 +885,11 @@ if [ "$tls_enabled" = "yes" ]; then
         caddy:2-alpine >/dev/null || rollback
 fi
 
-if [ "$configure_firewall" = "yes" ]; then
+if [ "$configure_firewall" = "yes" ] && [ "$firewall_rule_status" = "missing" ]; then
     apply_firewall_rule || rollback
-    firewall_changed="yes"
+    firewall_rule_present || rollback
+    firewall_rule_status="created"
+    printf 'firewall_rule_status_after=%s\nfirewall_changed_after=%s\n' "$firewall_rule_status" "$firewall_changed" >> "$log_file"
 fi
 
 reported_build=$(docker exec "$container" python -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8080/health"))["build_id"])' 2>/dev/null || printf unknown)

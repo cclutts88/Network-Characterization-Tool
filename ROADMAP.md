@@ -384,6 +384,11 @@ within Reachability.
   inbound rule only with explicit operator approval and required elevation,
   defaulting to Domain/Private and approved source subnets rather than Public or
   Any. Record rules created by NCT and remove or restore them during rollback.
+  - [x] On Linux Range hosts, distinguish active firewalld/UFW from installed
+    but inactive or unmanaged state, detect and reuse a matching rule, require
+    an approved source CIDR for changes, verify a newly created rule, and remove
+    only the NCT-created rule during rollback. Windows profile-aware handling
+    remains open.
 - [ ] Validate the complete HTTPS path, not just the container port: reverse
   proxy health, certificate/key availability, certificate expiration and host/IP
   names, system time, and client trust requirements. Connected and air-gapped

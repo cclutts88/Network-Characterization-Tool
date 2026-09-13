@@ -30,6 +30,7 @@ path.
 | Linux daemon and CPU architecture | Linux/Windows and CPU fixtures | Unsupported hosts fail closed |
 | Offline image | Missing, valid, and invalid SHA-256 | Unverified archives fail closed |
 | Occupied port | Host-listener fixture | Test/Range select and record an alternate |
+| firewalld state and rule | Active present/missing and inactive fixtures | Reuse exact rule, explain missing rule, or fail closed |
 | Existing older NCT | Idle and active fixtures | Data retained; active work blocks upgrade |
 | Promotion receipt | Match and mismatch fixtures | Exact image/build required |
 | `NET_RAW`, packet capture, raw socket, health | Deployment acceptance contract | Failure rolls back deployment |

@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Expanded Linux Range firewall preflight to identify active versus inactive
+  firewalld/UFW, detect and reuse an existing exact rule, require an approved
+  source CIDR before Range/Mission changes, verify created rules after reload,
+  record the decision, and roll back only rules created by NCT.
 - Recovered the verified deployment history for the regularly reset Range VM
   family and encoded it as a sanitized API 1.39 compatibility fixture. An
   explicit Range-only launcher mode now bypasses incompatible Compose, probes
