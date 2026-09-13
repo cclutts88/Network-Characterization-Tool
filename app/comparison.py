@@ -123,12 +123,42 @@ def describe_run_group(manifests: list[dict]) -> dict:
     first = manifests[0]
     display_name = str(first.get("display_name") or first.get("name") or "Scan")
     display_name = _CHUNK_NAME_RE.sub("", display_name)
+    saved_networks: list[dict] = []
+    seen_networks: set[str] = set()
+    manual_targets: list[str] = []
+    for manifest in manifests:
+        values = manifest.get("saved_networks") or (
+            manifest.get("target_selection") or {}
+        ).get("saved_networks") or []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            key = str(
+                value.get("saved_network_id")
+                or value.get("name")
+                or value.get("cidr")
+                or ""
+            ).casefold()
+            if not key or key in seen_networks:
+                continue
+            seen_networks.add(key)
+            saved_networks.append(value)
+        for value in manifest.get("manual_targets") or (
+            manifest.get("target_selection") or {}
+        ).get("manual_targets") or []:
+            value = str(value).strip()
+            if value and value not in manual_targets:
+                manual_targets.append(value)
     return {
         "group_id": run_group_key(first),
         "run_ids": [item["run_id"] for item in manifests],
+        "name": first.get("name") or first.get("campaign"),
         "display_name": display_name,
+        "scheduled": bool(first.get("scheduled") or first.get("schedule_id")),
         "schedule_id": first.get("schedule_id"),
         "schedule_batch_id": first.get("schedule_batch_id"),
+        "saved_networks": saved_networks,
+        "manual_targets": manual_targets,
         "created_at": min((item.get("created_at") or "" for item in manifests), default=""),
         "completed_at": max((item.get("completed_at") or "" for item in manifests), default=""),
         "chunk_count": len(manifests),

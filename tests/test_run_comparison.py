@@ -121,6 +121,28 @@ def test_legacy_chunk_names_are_collapsed_to_one_readable_group_name():
     assert description["display_name"] == "DMZ_Baseline_(S)_2026-09-09_1000"
 
 
+def test_group_description_exposes_human_reference_context():
+    manifests = [{
+        **run("1" * 32, "2026-09-09T10:00:00+00:00", ["10.0.0.0/24"]),
+        "name": "DMZ Baseline",
+        "display_name": "DMZ_Baseline_(S)_2026-09-09_1000",
+        "scheduled": True,
+        "manual_targets": ["192.0.2.10"],
+        "saved_networks": [{
+            "saved_network_id": "dmz",
+            "name": "Operations DMZ",
+            "cidr": "10.0.0.0/24",
+        }],
+    }]
+
+    description = describe_run_group(manifests)
+
+    assert description["name"] == "DMZ Baseline"
+    assert description["scheduled"] is True
+    assert description["saved_networks"][0]["name"] == "Operations DMZ"
+    assert description["manual_targets"] == ["192.0.2.10"]
+
+
 def test_chunked_analysis_retains_full_summary_and_merged_coverage():
     first = {
         "scanner": "nmap", "started": "start-1", "finished": "finish-1",

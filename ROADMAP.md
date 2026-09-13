@@ -132,6 +132,11 @@ within Reachability.
   top comparison selector that stays collapsed until requested.
 - [x] Present original operator scan scopes and exclusion counts in Analyze
   instead of exposing fragmented post-exclusion CIDRs as the main title.
+- [x] Standardize human-readable retained scan references across Nmap, Analyze,
+  and Hunt. Show the logical scan name, Saved Network or concise scope, friendly
+  local time, Manual/Scheduled context, and a Latest marker in selectors while
+  preserving exact artifact names, UTC timestamps, full targets, and stable IDs
+  in detail text without migrating historical evidence.
 - [x] Replace Device's disconnected command blocks with one ordered,
   vendor-specific execution plan that distinguishes NCT host commands, device
   commands, and local evidence writes; show SCP, remote-file creation, and

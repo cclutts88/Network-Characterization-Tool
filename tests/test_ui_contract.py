@@ -151,6 +151,13 @@ def test_navigation_is_sticky_on_every_primary_page():
         assert '<script src="/assets/nct-session.js" defer></script>' in html
 
 
+def test_scan_workflow_pages_share_human_readable_scan_references():
+    for page in (operator_page(), analysis_page(), hunting_page()):
+        html = page.body.decode()
+        assert '<script src="/assets/nct-scan-references.js"></script>' in html
+        assert "NCTScanReference" in html
+
+
 def test_table_headers_stay_visible_without_overlapping_sticky_page_content():
     page_tables = [operator_page(), analysis_page(), device_analysis_page(), hunting_page()]
     for page in page_tables:
@@ -341,8 +348,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "direct Nmap" in html
     assert "/api/hunting/compare" in html
     assert "/api/hunting/${encodeURIComponent(id)}" in html
-    assert "item.profile_version?`v${item.profile_version}`" in html
-    assert "item.comparison_name||label(item)" in html
+    assert "function label(item){return scanRef(item).selection}" in html
+    assert "title=\"${esc(reference.detail)}\"" in html
+    assert "${index===0?' · Latest':''}" in html
     assert "Findings added" in html
     assert "Capability datasets" in html
     assert '<label for="category">Dataset</label>' in html
@@ -865,10 +873,12 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "compactExportLabel" in html
     assert "function readableScope" in html
     assert "function analysisScopeLabel" in html
-    assert "item.display_name||'Automated scan analysis'" in html
+    assert "const reference=scanRef" in html
+    assert "display_name:reference.primary" in html
+    assert "title=\"${esc(reference.detail)}\"" in html
     assert "metadata.saved_networks" in html
     assert "metadata.group?.scope?.excluded_address_count" in html
-    assert "item.coverage?.targets||item.scope?.targets" in html
+    assert "function comparisonLabel(item){return scanRef(item).selection}" in html
     assert "`${currentLabel}-hosts.csv`" in html
     assert "`${currentLabel}-ports.csv`" in html
     assert "MAC / vendor" in html

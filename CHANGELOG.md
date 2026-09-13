@@ -2,6 +2,11 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Separated human-facing scan references from retained artifact identifiers.
+  Nmap, Analyze, and Hunt now show the operator's scan name, Saved Network or
+  concise scope, friendly local time, and clear Manual/Scheduled context while
+  keeping full targets, UTC timestamps, artifact names, and short IDs in detail
+  text. Existing scan history is humanized without renaming stored evidence.
 - Removed the mandatory pre-run reason/authorization note. Nmap retains a
   neutral system context automatically, while Device exposes only an optional
   collection note; explicit fallback approval notes remain required at the

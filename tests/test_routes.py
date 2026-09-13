@@ -27,12 +27,15 @@ def test_primary_pages_and_profiles_are_available():
         analysis_page = client.get("/analysis")
         reachability_page = client.get("/reachability")
         profiles = client.get("/api/scan-profiles")
+        scan_references = client.get("/assets/nct-scan-references.js")
 
     assert device_page.status_code == 200
     assert "Build a collection plan" in device_page.text
     assert scan_page.status_code == 200
     assert "Build scan" in scan_page.text
     assert analysis_page.status_code == 200
+    assert scan_references.status_code == 200
+    assert "window.NCTScanReference" in scan_references.text
     assert "Compare scans" in analysis_page.text
     assert "Previous scans" not in analysis_page.text
     assert reachability_page.status_code == 200

@@ -71,6 +71,7 @@ from app.comparison import (
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
 from app.session_ui import analyst_admin_page, session_script
+from app.scan_references_ui import scan_references_script
 from app.view_preferences_ui import view_preferences_script
 from app.request_identity import bind_signed_in_actor
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
@@ -1072,6 +1073,11 @@ def account_controls_script() -> Response:
     return session_script()
 
 
+@app.get("/assets/nct-scan-references.js")
+def scan_reference_controls_script() -> Response:
+    return scan_references_script()
+
+
 @app.get("/assets/nct-view-preferences.js")
 def analyst_view_preferences_script() -> Response:
     return view_preferences_script()
@@ -1812,9 +1818,14 @@ def analyze_hunting_network() -> dict:
         ))
         sources.extend(evidence.get("sources") or [])
         scope_summaries.append({
+            "name": description.get("name"),
             "display_name": description.get("display_name"),
             "completed_at": description.get("completed_at")
             or description.get("created_at"),
+            "scheduled": description.get("scheduled"),
+            "saved_networks": description.get("saved_networks") or [],
+            "manual_targets": description.get("manual_targets") or [],
+            "scope": description.get("scope") or {},
             "subnets": _hunting_subnets(group),
             "run_ids": description.get("run_ids") or [],
         })
