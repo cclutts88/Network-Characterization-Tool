@@ -221,7 +221,10 @@ class ScanRunPlan(BaseModel):
 
     operator: str = Field(min_length=1, max_length=100)
     name: str = Field(default="Scan", min_length=1, max_length=100)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(
+        default="NCT network characterization initiated through the operator workspace",
+        max_length=500,
+    )
     originating_host: str = Field(min_length=1, max_length=255)
     interface: str = Field(min_length=1, max_length=64)
     profile: str = Field(default="standard", min_length=1, max_length=100)
@@ -245,13 +248,19 @@ class ScanRunPlan(BaseModel):
     saved_network_ids: list[str] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
 
-    @field_validator("operator", "name", "reason", "originating_host", "interface", "profile")
+    @field_validator("operator", "name", "originating_host", "interface", "profile")
     @classmethod
     def clean_required_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("This field cannot be blank")
         return value
+
+    @field_validator("reason")
+    @classmethod
+    def clean_optional_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        return cleaned or "NCT network characterization initiated through the operator workspace"
 
     @field_validator("profile_id", "created_by", "scheduled_by", "executed_by")
     @classmethod

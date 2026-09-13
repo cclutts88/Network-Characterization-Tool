@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Removed the mandatory pre-run reason/authorization note. Nmap retains a
+  neutral system context automatically, while Device exposes only an optional
+  collection note; explicit fallback approval notes remain required at the
+  actual authorization decision.
 - Standardized expandable sections across Device, Nmap, Analyze, Hunt, Network
   Device Analysis, Reach, and Map on one left-side accent chevron while keeping
   their existing open/closed defaults and keyboard behavior.

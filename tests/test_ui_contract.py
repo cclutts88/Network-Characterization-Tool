@@ -191,6 +191,10 @@ def test_device_configs_offer_reviewed_network_candidates():
 
 def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     html = device_config_page().body.decode()
+    assert "Collection note (optional)" in html
+    assert "Reason / authorization note" not in html
+    assert "Operator and device address are required before uploading" in html
+    assert "Operator, reason, and device address are required before uploading" not in html
     assert "Collection execution preview" in html
     assert "Complete read-only device command set" in html
     assert "Actual ordered execution plan" in html

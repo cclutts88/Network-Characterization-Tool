@@ -35,6 +35,27 @@ object network WEB_SERVER
 """
 
 
+def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatch):
+    from app import device_configs
+
+    monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/device-configs/upload",
+            data={
+                "operator": "analyst",
+                "originating_host": "nct-test",
+                "vendor": "cisco",
+                "device_type": "router",
+                "device_address": "192.0.2.10",
+            },
+            files={"result_file": ("router.txt", SAMPLE_CONFIG, "text/plain")},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["reason"] == ""
+
+
 def make_collection(config_dir, run_id="d" * 32):
     run_dir = config_dir / run_id
     run_dir.mkdir(parents=True)

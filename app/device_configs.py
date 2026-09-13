@@ -273,7 +273,7 @@ class DeviceConfigPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=100)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=500)
     originating_host: str = Field(min_length=1, max_length=255)
     vendor: Literal["vyos", "cisco", "juniper", "pfsense", "unifi"]
     device_type: Literal["router", "firewall", "switch"]
@@ -307,13 +307,18 @@ class DeviceConfigPlan(BaseModel):
         )
         return self
 
-    @field_validator("operator", "reason", "originating_host", "device_address", "username")
+    @field_validator("operator", "originating_host", "device_address", "username")
     @classmethod
     def clean_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("This field cannot be blank")
         return value
+
+    @field_validator("reason")
+    @classmethod
+    def clean_optional_reason(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("device_address")
     @classmethod
@@ -1759,7 +1764,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
 async def upload_result(
     request: Request,
     operator: str = Form(...),
-    reason: str = Form(...),
+    reason: str = Form(""),
     originating_host: str = Form(...),
     vendor: str = Form(...),
     device_type: str = Form(...),
@@ -1774,8 +1779,13 @@ async def upload_result(
         "originating_host": originating_host.strip(),
         "device_address": device_address.strip(),
     }
-    if any(not value for value in values.values()):
-        raise HTTPException(status_code=422, detail="Operator, reason, originating host, and device address are required")
+    required_values = (
+        values["operator"],
+        values["originating_host"],
+        values["device_address"],
+    )
+    if any(not value for value in required_values):
+        raise HTTPException(status_code=422, detail="Operator, originating host, and device address are required")
     if len(values["operator"]) > 100 or len(values["reason"]) > 500 or len(values["originating_host"]) > 255:
         raise HTTPException(status_code=422, detail="One or more upload fields exceed the allowed length")
     clean_device_name = device_name.strip()

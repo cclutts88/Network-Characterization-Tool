@@ -355,6 +355,15 @@ def device_password_plan() -> dict:
     }
 
 
+def test_device_collection_note_is_optional_and_trimmed():
+    without_note = device_password_plan()
+    without_note.pop("reason")
+    blank_note = {**device_password_plan(), "reason": "   "}
+
+    assert DeviceConfigPlan.model_validate(without_note).reason == ""
+    assert DeviceConfigPlan.model_validate(blank_note).reason == ""
+
+
 def test_interactive_device_preview_starts_with_plain_ssh_and_never_contains_a_password():
     with TestClient(app) as client:
         response = client.post("/api/device-configs/preview", json=device_password_plan())

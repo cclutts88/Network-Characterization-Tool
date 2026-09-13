@@ -105,6 +105,13 @@ defaults, navigation, or operator decisions:
 - Add a UI contract test so new top-level disclosures cannot silently return to
   plus/minus, an unmarked header, or a conflicting right-side indicator.
 
+## Decisions applied after review
+
+- Mandatory reason/authorization text was removed from the pre-run workflow.
+  Nmap records a neutral system context without asking the operator, Device
+  accepts an optional collection note, and a note remains required only at an
+  explicit fallback authorization decision.
+
 ## Recommended order for a future workflow release
 
 1. Add Hunt → Reach context transfer.
@@ -116,4 +123,3 @@ defaults, navigation, or operator decisions:
 6. Reorganize Nmap advanced operations and Map evidence browsing without
    removing capability.
 7. Decide note scope and a shared loading-state convention across every page.
-

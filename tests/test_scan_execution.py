@@ -48,6 +48,20 @@ def test_scan_run_default_timeout_is_45_minutes():
     assert request.timeout_seconds == 45 * 60
 
 
+def test_scan_run_does_not_require_an_operator_reason_note():
+    request = ScanRunRequest(
+        operator="Tester",
+        originating_host="test-host",
+        interface="eth0",
+        targets=["192.0.2.10/32"],
+        capture=True,
+    )
+    blank_request = request.model_copy(update={"reason": ""})
+
+    assert request.reason == "NCT network characterization initiated through the operator workspace"
+    assert ScanRunRequest.model_validate(blank_request.model_dump()).reason == request.reason
+
+
 def test_udp_failure_preserves_tcp_xml_as_analyzable_partial_result(tmp_path):
     db_path = tmp_path / "nct.db"
     data_dir = tmp_path / "data"

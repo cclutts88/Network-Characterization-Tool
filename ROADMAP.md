@@ -472,6 +472,10 @@ Available at https://x.x.x.x:443
 - [x] Standardize expandable sections on a left-side accent chevron across all
   seven operator views while preserving each section's default state, summary,
   and native keyboard behavior.
+- [x] Remove mandatory reason/authorization notes before Nmap runs and device
+  collections. Retain a neutral system context for scans, allow an optional
+  Device collection note, and continue requiring a note only when an operator
+  makes an explicit fallback authorization decision.
 - [ ] Add a contextual Hunt-to-Reach handoff that carries the selected host,
   protocol, and port while leaving source context under operator control.
 - [ ] Give the Analyze landing page a concise newest-result or retained-result
