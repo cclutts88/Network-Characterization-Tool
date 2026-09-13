@@ -28,7 +28,16 @@ case "$1" in
     ;;
   context) printf 'default\\n' ;;
   compose) exit 1 ;;
-  image) exit 0 ;;
+  image)
+    case "${4:-}" in
+      *RepoDigests*) printf 'nct@example.invalid/fixture@sha256:fake\\n' ;;
+      *Config.Env*) printf 'NCT_APP_VERSION=0.14.0-test\\nNCT_BUILD_ID=test-build\\n' ;;
+      *)
+        if [ "${3:-}" = "--format" ]; then printf 'sha256:fake\\n'; fi
+        ;;
+    esac
+    ;;
+  run) printf '0\\n' ;;
 esac
 """,
         encoding="utf-8",
@@ -37,6 +46,9 @@ esac
     fake_curl = fake_bin / "curl"
     fake_curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_curl.chmod(0o755)
+    fake_ss = fake_bin / "ss"
+    fake_ss.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_ss.chmod(0o755)
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
     environment["TMPDIR"] = str(tmp_path)
@@ -95,6 +107,38 @@ def test_launcher_records_immutable_image_identity_and_exact_build():
     assert 'mutable defaults are not permitted' in SCRIPT
 
 
+def test_launcher_requires_exact_prior_profile_promotion_receipts():
+    for required in (
+        '--promote-from-receipt FILE',
+        'deployment requires --promote-from-receipt from the preceding acceptance profile',
+        'required_receipt_profile="test"',
+        'required_receipt_profile="range"',
+        'Promotion receipt image ID does not match',
+        'Promotion receipt build does not match',
+        'Promotion receipt version does not match',
+        'application, runtime-tool, and NET_RAW acceptance results',
+    ):
+        assert required in SCRIPT
+
+
+def test_launcher_writes_atomic_promotion_receipts_after_full_acceptance():
+    for required in (
+        'write_promotion_receipt()',
+        'promotion_ready=yes',
+        'application_health=pass',
+        'external_access=pass',
+        'known_limitations=',
+        'rollback_container=',
+        'receipt_tmp=',
+        'mv "$receipt_tmp" "$receipt_file"',
+        'write_promotion_receipt || rollback',
+    ):
+        assert required in SCRIPT
+    assert SCRIPT.index('write_promotion_receipt || rollback\n') > SCRIPT.index(
+        'curl --fail --silent --show-error "$access_url/health"'
+    )
+
+
 def test_launcher_requires_checksums_for_every_offline_archive():
     assert 'Every offline image archive requires --image-sha256 before Test, Range, or Mission use.' in SCRIPT
     assert 'The supplied offline image archive has no checksum.' not in SCRIPT
@@ -127,6 +171,51 @@ def test_launcher_rejects_unverified_offline_archives_in_test(tmp_path):
     )
     assert rejected.returncode == 1
     assert "Every offline image archive requires --image-sha256" in rejected.stderr
+
+
+def test_range_preflight_accepts_only_an_exact_test_receipt(tmp_path):
+    receipt = tmp_path / "test.receipt"
+    receipt.write_text(
+        "\n".join(
+            (
+                "schema=1",
+                "profile=test",
+                "promotion_ready=yes",
+                "image_id=sha256:fake",
+                "version=0.14.0-test",
+                "build=test-build",
+                "application_health=pass",
+                "runtime_tools=ready",
+                "net_raw=ready",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    accepted = run_launcher_preflight(
+        tmp_path / "accepted-range",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--promote-from-receipt",
+        str(receipt),
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "Preflight complete" in accepted.stdout
+
+    receipt.write_text(receipt.read_text().replace("sha256:fake", "sha256:other"))
+    rejected = run_launcher_preflight(
+        tmp_path / "rejected-range",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--promote-from-receipt",
+        str(receipt),
+    )
+    assert rejected.returncode == 1
+    assert "Promotion receipt image ID does not match" in rejected.stderr
 
 
 def test_launcher_is_idempotent_for_an_already_current_direct_deployment():
@@ -184,6 +273,7 @@ def test_launcher_prints_verified_nct_banner_only_at_success_end():
     health = SCRIPT.index('reported_build=$(docker exec')
     assert banner > health
     assert 'Available at $access_url' in SCRIPT
+    assert SCRIPT.index('write_promotion_receipt || rollback\n') < banner
 
 
 def test_launcher_bootstraps_first_admin_without_fixed_credentials():

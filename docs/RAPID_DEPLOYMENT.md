@@ -24,9 +24,17 @@ Range may advance to an available port, while Mission must stop rather than
 silently changing its declared URL.
 
 This checkpoint supports **Test** and **Range** deployment. The **Mission**
-profile is present but intentionally stops before making changes until NCT's
-formal mission-promotion gate is implemented. A
+profile can run a non-mutating readiness preflight but intentionally stops
+before making changes until NCT's formal mission-promotion gate is complete. A
 successful Test or Range launch must not be reported as mission readiness.
+
+After all application, access-path, runtime-tool, and raw-packet checks pass,
+the launcher writes an atomic promotion receipt under
+`nct-deployment/receipts`. The receipt binds the acceptance results,
+compatibility details, known limitations, and rollback evidence to the exact
+local image ID, application version, and build. Range requires a Test receipt
+for that exact artifact; future Mission preflight requires the matching Range
+receipt. Receipts contain no credentials or application evidence.
 
 Authentication is optional for a local **Test** deployment and defaults to
 enabled for **Range**. Range cannot be launched with authentication disabled.
@@ -75,7 +83,8 @@ launcher never binds to every interface and does not alter the firewall unless
 sudo sh scripts/nct-deploy.sh --profile range --access lan \
   --bind 10.20.30.40 --port 8766 --source-cidr 10.20.30.0/24 \
   --configure-firewall --auth local --admin-user nctadmin \
-  --generate-admin-password --image nct:range-validated
+  --generate-admin-password --image nct:range-validated \
+  --promote-from-receipt nct-deployment/receipts/test-BUILD-TIMESTAMP.receipt
 ```
 
 Air-gapped packages must include an immutable image archive and SHA-256. The

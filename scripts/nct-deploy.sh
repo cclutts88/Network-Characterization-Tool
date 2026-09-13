@@ -15,6 +15,7 @@ https_port_supplied="no"
 image=""
 image_archive=""
 image_sha256=""
+promotion_receipt=""
 container="nct"
 data_volume="nct-data"
 volume_supplied="no"
@@ -54,6 +55,7 @@ Usage: sh scripts/nct-deploy.sh [options]
   --image IMAGE                    Immutable/versioned NCT image reference
   --image-archive FILE             Load an air-gapped Docker image archive
   --image-sha256 SHA256            Verify the archive before loading it
+  --promote-from-receipt FILE      Prior-profile receipt for Range/Mission
   --container NAME                 Active analyzer container name
   --volume NAME                    Persistent NCT data volume
   --tls-cert FILE --tls-key FILE   Enable the Caddy HTTPS proxy
@@ -82,6 +84,7 @@ while [ "$#" -gt 0 ]; do
         --image) image=${2:?missing image}; shift 2 ;;
         --image-archive) image_archive=${2:?missing archive}; shift 2 ;;
         --image-sha256) image_sha256=${2:?missing checksum}; shift 2 ;;
+        --promote-from-receipt) promotion_receipt=${2:?missing receipt}; shift 2 ;;
         --container) container=${2:?missing container}; shift 2 ;;
         --volume) data_volume=${2:?missing volume}; volume_supplied="yes"; shift 2 ;;
         --tls-cert) tls_cert=${2:?missing certificate}; shift 2 ;;
@@ -121,7 +124,7 @@ case "$app_port:$https_port" in *[!0-9:]*|:*) die "Ports must be numeric." ;; es
 [ "$app_port" -ge 1 ] && [ "$app_port" -le 65535 ] || die "Application port is outside 1-65535."
 [ "$https_port" -ge 1 ] && [ "$https_port" -le 65535 ] || die "HTTPS port is outside 1-65535."
 [ "$profile" != "mission" ] || [ "$skip_backup" = "no" ] || die "Mission upgrades cannot skip the backup."
-[ "$profile" != "mission" ] || die "Mission deployment is intentionally fail-closed until the mission promotion gate is complete. Use Test or Range for the current evaluation build."
+[ "$profile" != "mission" ] || [ "$check_only" = "yes" ] || die "Mission deployment is intentionally fail-closed until the mission promotion gate is complete. Use --check-only to evaluate readiness without changing the host."
 
 if ! mkdir "$lock_dir" 2>/dev/null; then
     die "Another deployment launcher appears active at $lock_dir."
@@ -243,6 +246,33 @@ target_version=${target_version:-unknown}
 [ "$check_only" = "yes" ] && [ "$target_image_id" = "unknown" ] || [ "$target_build" != "unknown" ] || die "All deployable NCT images must declare NCT_BUILD_ID."
 [ "$check_only" = "yes" ] && [ "$target_image_id" = "unknown" ] || [ "$target_version" != "unknown" ] || die "All deployable NCT images must declare NCT_APP_VERSION."
 printf 'image_id=%s\nimage_repo_digests=%s\ntarget_version=%s\ntarget_build=%s\n' "$target_image_id" "$target_repo_digests" "$target_version" "$target_build" >> "$log_file"
+
+receipt_value() {
+    awk -F= -v wanted="$1" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' "$promotion_receipt"
+}
+
+if [ "$profile" = "range" ] || [ "$profile" = "mission" ]; then
+    [ -n "$promotion_receipt" ] || die "$profile deployment requires --promote-from-receipt from the preceding acceptance profile."
+    [ -r "$promotion_receipt" ] || die "Promotion receipt is not readable: $promotion_receipt"
+    [ "$target_image_id" != "unknown" ] && [ "$target_build" != "unknown" ] && [ "$target_version" != "unknown" ] || die "$profile promotion requires the exact image to be available locally for identity verification."
+    required_receipt_profile="test"
+    [ "$profile" != "mission" ] || required_receipt_profile="range"
+    receipt_profile=$(receipt_value profile)
+    receipt_ready=$(receipt_value promotion_ready)
+    receipt_image_id=$(receipt_value image_id)
+    receipt_build=$(receipt_value build)
+    receipt_version=$(receipt_value version)
+    receipt_health=$(receipt_value application_health)
+    receipt_runtime=$(receipt_value runtime_tools)
+    receipt_raw=$(receipt_value net_raw)
+    [ "$receipt_profile" = "$required_receipt_profile" ] || die "$profile requires a $required_receipt_profile promotion receipt, not $receipt_profile."
+    [ "$receipt_ready" = "yes" ] || die "The supplied receipt is not marked promotion-ready."
+    [ "$receipt_image_id" = "$target_image_id" ] || die "Promotion receipt image ID does not match the selected local image."
+    [ "$receipt_build" = "$target_build" ] || die "Promotion receipt build does not match the selected image."
+    [ "$receipt_version" = "$target_version" ] || die "Promotion receipt version does not match the selected image."
+    [ "$receipt_health" = "pass" ] && [ "$receipt_runtime" = "ready" ] && [ "$receipt_raw" = "ready" ] || die "Promotion receipt does not contain complete application, runtime-tool, and NET_RAW acceptance results."
+    printf 'promotion_source=%s\npromotion_source_profile=%s\npromotion_source_image_id=%s\npromotion_source_build=%s\n' "$promotion_receipt" "$receipt_profile" "$receipt_image_id" "$receipt_build" >> "$log_file"
+fi
 
 existing_id=$(docker ps -aq --filter "name=^/${container}$" | head -n 1)
 existing_image="none"
@@ -561,6 +591,26 @@ wait_for_nct_health() {
     [ "$healthy" = "yes" ]
 }
 
+write_promotion_receipt() {
+    receipt_build_name=$(printf '%s' "$reported_build" | tr -c 'A-Za-z0-9._-' '_')
+    receipt_file="$state_dir/receipts/${profile}-${receipt_build_name}-$(date -u +%Y%m%dT%H%M%SZ).receipt"
+    receipt_tmp="${receipt_file}.tmp.$$"
+    known_limitations="range_evaluation_required"
+    [ "$profile" != "range" ] || known_limitations="mission_gate_incomplete"
+    mkdir -p "$state_dir/receipts" || return 1
+    {
+        printf 'schema=1\nprofile=%s\npromotion_ready=yes\ncompleted=%s\n' "$profile" "$(date -u +%FT%TZ)"
+        printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build"
+        printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
+        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$architecture"
+        printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url"
+        printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
+    } > "$receipt_tmp" || return 1
+    mv "$receipt_tmp" "$receipt_file" || return 1
+    printf 'promotion_receipt=%s\n' "$receipt_file" >> "$log_file" || return 1
+    say "Promotion receipt: $receipt_file"
+}
+
 bootstrap_started="no"
 if [ -n "$bootstrap_password_file" ]; then bootstrap_started="yes"; fi
 start_nct_container "$bootstrap_started" || rollback
@@ -648,6 +698,7 @@ printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nimag
 mv "$state_tmp" "$state_file"
 
 printf 'completed=%s\nreported_build=%s\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\naccount_count_before=%s\nbootstrap_admin=%s\nbackup=%s\nurl=%s\nrollback_container=%s\n' "$(date -u +%FT%TZ)" "$reported_build" "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}" "$account_count" "${admin_user:-none}" "$backup_file" "$access_url" "${rollback_name:-none}" >> "$log_file"
+write_promotion_receipt || rollback
 swap_started="no"
 
 cat <<EOF

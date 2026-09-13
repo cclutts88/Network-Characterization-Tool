@@ -6,6 +6,10 @@
   Mission: the launcher now requires an explicit versioned image with embedded
   application/build identity, rejects mutable `:latest` references, and
   requires SHA-256 verification for every supplied offline image archive.
+- Added atomic promotion receipts that bind deployment checks, compatibility,
+  limitations, and rollback evidence to one exact image ID and build. Range now
+  requires the matching Test receipt, while Mission can validate a matching
+  Range receipt in check-only mode and remains fail-closed for deployment.
 - Connected proposed policy and route comparisons to Map. Analysts can open a
   temporary projected-path focus with current-to-projected outcome, proposal,
   path-change, collateral-scope, evidence, and caveats while saved layouts stay

@@ -308,7 +308,7 @@ within Reachability.
   three profiles. Keep configuration, credentials, ports, certificates, and
   data volumes environment-specific, and never promote test or range data into
   a mission environment implicitly.
-- [ ] Define promotion gates from local testing to range evaluation and then to
+- [x] Define promotion gates from local testing to range evaluation and then to
   mission readiness. Preserve the exact NCT image digest, build version,
   deployment profile, test results, compatibility findings, known limitations,
   and rollback proof so a successful lab launch alone cannot be reported as
