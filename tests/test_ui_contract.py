@@ -1003,6 +1003,31 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "renderComparisonDetails" in html
 
 
+def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
+    html = analysis_page().body.decode()
+
+    assert 'id="networkOverview"' in html
+    assert "Current network evidence" in html
+    assert "Newest retained Nmap results and device configuration evidence" in html
+    assert "/api/analysis/network" in html
+    assert 'id="networkFocus"' in html
+    assert 'value="ip">IP address</option>' in html
+    assert 'value="port">Lowest observed port</option>' in html
+    assert 'value="service">Service name</option>' in html
+    assert 'value="mac">MAC address</option>' in html
+    assert 'value="hostname">Hostname</option>' in html
+    assert 'value="os">Operating system</option>' in html
+    assert 'value="last">Last observed</option>' in html
+    assert 'id="networkHostRows"' in html
+    assert 'id="networkPageSize"' in html
+    assert "renderNetworkInventory" in html
+    assert "else{await loadNetworkOverview()}" in html
+    assert "scanRef(item).primary" in html
+    assert "Open one specific retained scan" in html
+    assert 'id="retainedScanSelect"' in html
+    assert "currentNetwork.hosts" in html
+
+
 def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():
     hunt_html = hunting_page().body.decode()
     analyze_html = analysis_page().body.decode()

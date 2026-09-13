@@ -425,6 +425,7 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     with TestClient(app) as client:
         analysis = client.get(f"/api/hunting/{after_id}")
         network = client.get("/api/hunting/network")
+        current_evidence = client.get("/api/analysis/network")
         comparison = client.get(
             f"/api/hunting/compare?before={before_id}&after={after_id}"
         )
@@ -448,3 +449,9 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     assert network.json()["status"] == "hunting_network_complete"
     assert network.json()["source"]["scan_count"] == 1
     assert network.json()["facets"]["subnets"][0]["name"] == "10.0.0.0/24"
+    assert current_evidence.status_code == 200
+    assert current_evidence.json()["status"] == "analysis_network_complete"
+    assert current_evidence.json()["host_count"] == network.json()["host_count"]
+    source = current_evidence.json()["hosts"][0]["source_refs"][0]
+    assert source["analysis_url"] == f"/analysis?run={after_id}"
+    assert source["run_id"] == after_id

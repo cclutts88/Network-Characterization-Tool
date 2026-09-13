@@ -487,7 +487,7 @@ Available at https://x.x.x.x:443
   fields and a neutral identity in authentication-disabled Test mode.
 - [x] Add a contextual Hunt-to-Reach handoff that carries the selected host,
   protocol, and port while leaving source context under operator control.
-- [ ] Give the Analyze landing page a concise newest-result or retained-result
+- [x] Give the Analyze landing page a concise newest-result or retained-result
   picker without duplicating the full Nmap Scan History.
 - [x] Add explicit Device completion handoffs to Nmap and Network Device
   Analysis. Keep collection status, commands, and saved files on Device, and
@@ -536,23 +536,26 @@ Available at https://x.x.x.x:443
 
 ### Analyze current-evidence workspace — design candidate
 
-- [ ] Use the initial Analyze page as a current-evidence workspace built from
+- [x] Use the initial Analyze page as a current-evidence workspace built from
   the newest retained Nmap evidence for every network scope plus the newest
   usable network-device collections. Keep provenance and collection time on
   every normalized record so older evidence is never presented as current.
-- [ ] Present one combined host/device inventory row per correlated identity.
-  Keep IP, hostname, MAC, OS, latest observation, ports/services, and concise
-  capability badges visible; expand the row for capability evidence,
-  SearchSploit candidates, configuration provenance, and history instead of
-  duplicating the identity across separate flat tables.
-- [ ] Let the operator reorganize the same current evidence by IP address, port,
-  service, MAC address, or last-observed time. Filtering changes the evidence
-  shown under an identity rather than creating duplicate host rows.
+- [x] Present one combined host/device inventory row per correlated identity,
+  keeping IP, hostname, MAC, OS, device role, latest observation,
+  ports/services, concise capability badges, evidence origin, and source links
+  visible without duplicating the identity across separate flat tables.
+- [ ] Expand a current-evidence identity in place for capability evidence,
+  SearchSploit candidates, configuration provenance, and observation history.
+- [x] Let the operator reorganize the same current evidence by IP address, port,
+  service, MAC address, hostname, OS, or last-observed time. Keep all services
+  consolidated under one identity and provide search, subnet filtering, and
+  bounded client-side paging for large inventories.
 - [ ] Add a route and policy view that keeps network routing distinct from
   authorization: routes describe source/destination reachability, while
   firewall, ACL, and NAT evidence describes protocol/port decisions.
-- [ ] Preserve focused analysis of one retained scan and comparison of two
-  selected scans as explicit modes. Add a network-change mode that compares
+- [x] Preserve focused analysis of one retained scan and comparison of two
+  selected scans as explicit modes, including a compact retained-scan picker.
+- [ ] Add a network-change mode that compares
   the newest two comparable observations for every retained network scope and
   groups changes by subnet, host/device, port/service, identity, and route or
   policy evidence.

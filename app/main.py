@@ -1691,6 +1691,8 @@ def _comparison_evidence(manifests: list[dict], description: dict | None = None)
             {
                 "label": f"{item.get('display_name') or item['run_id']} XML",
                 "url": f"/api/scan-runs/{item['run_id']}/artifacts/xml",
+                "analysis_url": f"/analysis?run={item['run_id']}",
+                "run_id": item["run_id"],
             }
             for item in manifests
         ],
@@ -1797,8 +1799,7 @@ def _latest_hunting_groups() -> list[list[dict]]:
     return selected
 
 
-@app.get("/api/hunting/network")
-def analyze_hunting_network() -> dict:
+def _latest_network_evidence() -> dict:
     from app.network_map import build_topology
 
     groups = _latest_hunting_groups()
@@ -1842,7 +1843,21 @@ def analyze_hunting_network() -> dict:
             "evidence": {"label": "Latest network evidence", "sources": sources},
         },
     ), build_topology(), include_configuration_devices=True)
+    return result
+
+
+@app.get("/api/hunting/network")
+def analyze_hunting_network() -> dict:
+    result = _latest_network_evidence()
     result["status"] = "hunting_network_complete"
+    return result
+
+
+@app.get("/api/analysis/network")
+def analyze_current_network() -> dict:
+    """Return the newest retained evidence as one host/device inventory."""
+    result = _latest_network_evidence()
+    result["status"] = "analysis_network_complete"
     return result
 
 

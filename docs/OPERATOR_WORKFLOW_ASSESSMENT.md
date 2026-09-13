@@ -149,10 +149,13 @@ defaults, navigation, or operator decisions:
 
 The low-risk Hunt → Reach transfer, Device completion handoffs, Device versus
 Device Analysis boundary, loading convention, and search clear controls are
-complete. The next larger workflow decision is the initial Analyze
-current-evidence workspace: newest retained evidence by default, a compact
-specific-result picker, and bulk last-two-per-scope comparison without
-recreating Nmap Scan History.
+complete. Analyze now opens on the newest retained evidence from every network
+scope plus current device configuration evidence, consolidates correlated
+identity, services, capability datasets, provenance, and collection time into
+one paginated inventory, and includes a compact specific-result picker without
+recreating Nmap Scan History. The remaining larger Analyze work is the bulk
+last-two-per-scope change view, in-place evidence/history expansion, and the
+separate route/policy workflow.
 
 A separate Export Studio candidate is now recorded in the roadmap. It keeps
 one-click downloads for routine use, while a preview-first customized path can
