@@ -2,6 +2,51 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added Hunt-to-Reach shortcuts for inventory hosts, capability findings, and
+  SearchSploit matches. The selected destination plus available protocol and
+  port are loaded in a new Reach tab while Source remains an analyst choice.
+- Added post-collection Device handoffs to Network Device Analysis and Nmap,
+  including a Nmap handoff after accepting a config-derived Saved Network.
+  Device history now focuses on collection status, commands, raw/saved files,
+  reuse, and deletion; interpreted evidence and comparisons live in Analyze.
+- Standardized explicit loading messages across retained-evidence pages and
+  added a consistent one-click clear control to static and dynamically
+  rendered search fields.
+- Completed the operator export path: Hunt can download its full correlated
+  state as JSON or currently visible findings as CSV, Network Device Analysis
+  and Reach can export their current structured result, and Map can export a
+  portable styled SVG plus topology and current presentation/layout data as
+  JSON. Nmap analysis also has a self-contained, print-ready HTML report.
+  Existing Device, CSV, and hardening exports remain available. A broader
+  preview-first Export Studio is documented as a separate presentation rollout.
+- Removed manual creator/operator identity fields from Nmap construction,
+  Saved Networks, No-Strikes, fallback approval, and Device collection. The
+  signed-in account is now recorded automatically; authentication-disabled
+  Test mode uses a neutral local identity, while historical audit attribution
+  remains visible as Created, Scheduled, Executed, or Collected by.
+- Added personal and page-specific shared investigation notes to Reach. Evidence
+  links now deep-link to the relevant retained Nmap host or device routing,
+  policy, or NAT section, expand that section, and open in a new tab so the
+  original Hunt/Reach state remains intact.
+- Reduced avoidable workflow clutter without changing operator decisions:
+  Hunt hides its reset link in the normal network-wide view, Nmap places
+  profile lifecycle and scheduling in collapsed advanced sections, and Map
+  keeps retained artifact browsing in a collapsed Evidence Files drawer.
+- Reworked Reach evidence cards around plain-language effects. Matched firewall
+  rules and ACLs now explicitly say which selected flow they are expected to
+  allow or block, routes state that they provide a path but do not authorize a
+  port, and retained scan coverage states what exposure was or was not
+  observed. Supporting rules and commands are collapsed, with source links
+  opening the retained Nmap or device result in Analyze without replacing the
+  current page.
+- Added one-click clear controls to the Reach Source and Destination fields;
+  each control appears only when its field contains text and leaves the rest of
+  the current evaluation settings unchanged.
+- Added a separate `Check from Internet` comparison to internal Reach results.
+  It evaluates the same destination and service without replacing the original
+  result, can open its own WAN-focused Map overlay, labels broader defaults as
+  unused fallback routes, and excludes loopback metadata with no forwarding
+  interface from usable route evidence.
 - Separated human-facing scan references from retained artifact identifiers.
   Nmap, Analyze, and Hunt now show the operator's scan name, Saved Network or
   concise scope, friendly local time, and clear Manual/Scheduled context while
@@ -218,8 +263,8 @@
   screen for creating and reviewing named analyst accounts.
 - Bound authenticated scan plans, packages, profiles, schedules, Saved Network
   changes, No-Strike changes, fallback decisions, and device collection plans
-  to the signed-in server identity while preserving typed operator labels in
-  authentication-disabled Test mode.
+  to the signed-in server identity. Authentication-disabled Test mode now uses
+  a neutral local identity instead of manually typed attribution.
 - Added Administrator account enable/disable, password reset, forced session
   revocation, and account-audit history. NCT prevents an Administrator from
   disabling the account currently in use or the last active Administrator.
