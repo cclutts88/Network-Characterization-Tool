@@ -2,6 +2,12 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Standardized expandable sections across Device, Nmap, Analyze, Hunt, Network
+  Device Analysis, Reach, and Map on one left-side accent chevron while keeping
+  their existing open/closed defaults and keyboard behavior.
+- Completed a page-by-page operator-flow assessment and recorded proposed
+  handoffs, redundant controls, and page-boundary decisions for review without
+  changing the current workflow.
 - Added a repeat-reset mode to the guided installer. A saved non-sensitive
   preset can now skip repeated setup questions, but it never skips the review,
   non-destructive preflight, or final approval; four progress stages make the

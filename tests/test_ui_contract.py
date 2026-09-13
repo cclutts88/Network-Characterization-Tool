@@ -901,3 +901,29 @@ def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():
     assert "pageNode.textContent!==pageLabel" in VIEW_PREFERENCES_SCRIPT
     assert "if(pagerOnly)return" in VIEW_PREFERENCES_SCRIPT
     assert "Table density" not in VIEW_PREFERENCES_SCRIPT
+
+
+def test_expandable_sections_share_one_left_chevron_language():
+    pages = {
+        "nmap": operator_page().body.decode(),
+        "device": device_config_page().body.decode(),
+        "analyze": analysis_page().body.decode(),
+        "device-analysis": device_analysis_page().body.decode(),
+        "hunt": hunting_page().body.decode(),
+        "reach": reachability_page().body.decode(),
+        "map": network_map_page().body.decode(),
+    }
+    for html in pages.values():
+        assert "content:'▶'" in html
+        assert "rotate(90deg)" in html
+        assert "::-webkit-details-marker" in html
+
+    assert ".management-card>summary::after,.history-group>summary::after{content:none}" in pages["nmap"]
+    assert ".management-card>summary::before,.history-group>summary::before" in pages["nmap"]
+    assert "details.device-history>summary::before,details.run-card>summary::before,.result-section>summary::before" in pages["device"]
+    assert ".comparison-panel>summary::after{content:none}" in pages["analyze"]
+    assert ".comparison-panel>summary::before,.comparison-host>summary::before" in pages["analyze"]
+    assert "details>summary::before" in pages["device-analysis"]
+    assert ".searchsploit-result>summary::before,.exposure-detail>summary::before" in pages["hunt"]
+    assert ".report-source>summary::before,.report-result>summary::before" in pages["reach"]
+    assert ".summary-panel>summary::before,.hidden-objects>summary::before" in pages["map"]

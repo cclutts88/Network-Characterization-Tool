@@ -463,6 +463,30 @@ Deployment verified.
 Available at https://x.x.x.x:443
 ```
 
+### Operator workflow assessment — 2026-09-13
+
+- [x] Review the complete authenticated operator path through Device, Nmap,
+  Analyze, Hunt, Reach, and Map without starting scans or changing retained
+  evidence. Keep the detailed findings in
+  [`docs/OPERATOR_WORKFLOW_ASSESSMENT.md`](docs/OPERATOR_WORKFLOW_ASSESSMENT.md).
+- [x] Standardize expandable sections on a left-side accent chevron across all
+  seven operator views while preserving each section's default state, summary,
+  and native keyboard behavior.
+- [ ] Add a contextual Hunt-to-Reach handoff that carries the selected host,
+  protocol, and port while leaving source context under operator control.
+- [ ] Give the Analyze landing page a concise newest-result or retained-result
+  picker without duplicating the full Nmap Scan History.
+- [ ] Add explicit Device completion handoffs to Nmap and Network Device
+  Analysis before reducing the overlapping structured-review surface.
+- [ ] Hide or disable Hunt's reset action while the network-wide view is already
+  active, and separate advanced Nmap profile/schedule maintenance and Map
+  evidence browsing from each page's primary task.
+- [ ] Decide whether Reach receives page-specific shared notes and whether
+  Network Device Analysis notes follow the Device evidence type or Analyze page
+  before changing either shared-note scope.
+- [ ] Standardize evidence-page loading states so a requested retained result
+  never briefly appears to be an empty completed view.
+
 ### Future extension — Analyst Identity Overrides
 
 - [x] Allow an analyst to append or correct a host operating system when it is
