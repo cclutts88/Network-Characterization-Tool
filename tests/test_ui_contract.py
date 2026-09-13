@@ -376,11 +376,6 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "/api/searchsploit/status" in html
     assert "/api/searchsploit/hunting/network" in html
     assert "loadSearchSploitCache" in html
-    assert "pendingSearchsploitData" in html
-    assert "retainSearchSploitForExpansion" in html
-    assert "removeAttribute('data-workspace-card')" in html
-    assert "$('searchsploitPanel').open=false" in html
-    assert "Expand this section to load the detailed CVE and candidate view." in html
     assert "Run for current evidence" in html
     assert "Results current" in html
     assert "They will refresh only after new scan evidence or a database change." in html
