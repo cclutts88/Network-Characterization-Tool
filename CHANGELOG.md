@@ -29,6 +29,11 @@
   evidence before using a vendor rule for an allow/deny result, exposes the
   normalized rules and attachments in Device views, and leaves unresolved
   objects or applications at Unknown.
+- Added static vendor object resolution for Cisco address/service objects and
+  groups, VyOS address/network/port/interface groups, pfSense aliases, and
+  Juniper address books/sets and custom applications. Device views now expose
+  the normalized object inventory, while incomplete, missing, or cyclic objects
+  remain Unknown in Reach.
 - Improved Reach path selection to use source-attached router/firewall evidence,
   ignore switch management routes, preserve the newest usable collection when a
   later pull fails, and render the likely path in the interface.

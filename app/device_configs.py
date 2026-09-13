@@ -1350,6 +1350,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "policy_set_members": iptables_policy["counts"]["ipset_members"],
             "applied_policy_rules": (vendor_policy.get("counts") or {}).get("rules", 0),
             "policy_attachments": (vendor_policy.get("counts") or {}).get("attachments", 0),
+            "applied_policy_objects": (vendor_policy.get("counts") or {}).get("objects", 0),
             "switching": len(switching),
             "learned_macs": len(switch_detail["mac_table"]),
             "switch_ports": len(switch_detail["ports"]),

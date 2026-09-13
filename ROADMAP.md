@@ -566,10 +566,14 @@ within Reachability.
     an allow or deny decision.
   - [ ] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
     evaluation before treating complex configurations as allow or deny evidence.
-    - [ ] Resolve vendor address/service object groups, Juniper custom
-      applications, zone defaults, source NAT, policy-based NAT, established-flow
-      state, and multi-device translation paths; keep unsupported criteria at
-      Unknown.
+    - [x] Resolve static Cisco address and service objects/groups, VyOS address,
+      network, port, and interface groups, pfSense static and nested aliases,
+      and Juniper zone address books/sets and custom applications/application
+      sets. Expose the retained object inventory in Device views and keep
+      missing, incomplete, cyclic, or unsupported definitions at Unknown.
+    - [ ] Resolve dynamic and DNS-backed objects, Juniper zone defaults, source
+      NAT, policy-based NAT, established-flow state, and multi-device translation
+      paths; keep unsupported criteria at Unknown.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not
