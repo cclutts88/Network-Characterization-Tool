@@ -473,9 +473,9 @@ within Reachability.
 - [x] Let analysts confirm, dismiss, or investigate an inference while retaining
   its original evidence and audit history.
 
-### Future foundation — Multi-Analyst Workspaces
+### Future foundation — Multi-Analyst Workspaces — In progress
 
-- [ ] Add authenticated analyst identities and role-based permissions for shared
+- [x] Add authenticated analyst identities and role-based permissions for shared
   collection, safety, evidence, and administrative actions.
   - [x] Add opt-in local analyst authentication with PBKDF2 password hashes,
     expiring HttpOnly sessions, same-origin mutation checks, fail-closed first
@@ -503,13 +503,22 @@ within Reachability.
     personal layout.
   - [x] Store one default Map layout preference per analyst, permit either a
     personal or currently shared layout, and expose it as a hollow/filled star.
+  - [x] Autosave one owner-scoped Nmap builder draft per analyst, including the
+    selected interface, scope, profile, timeout, and scan options. Reject stale
+    browser writes instead of silently replacing a newer draft.
 - [ ] Keep shared evidence authoritative while requiring an explicit publish or
   share action to move personal layouts and investigations into a team workspace.
   - [x] Allow only an Administrator to deliberately publish or unpublish a
     versioned personal Map layout; other analysts can load shared layouts but do
     not overwrite the owner's copy.
-- [ ] Add version checks, conflict handling, scan ownership and queuing, live
+- [x] Add version checks, conflict handling, scan ownership and queuing, live
   status updates, and an audit trail for every shared change.
+  - [x] Replace concurrent-scan rejection with a persistent first-in/first-out
+    analyzer queue. Show the active owner and waiting positions, automatically
+    dispatch the next run, preserve unstarted manual requests across restart,
+    let owners cancel their runs, and let Administrators reassign queued work.
+  - [x] Retain and display queued, started, reassigned, cancellation, fallback,
+    interruption, and terminal events with the responsible server identity.
 
 ### Future major capability — Reachability Analysis
 

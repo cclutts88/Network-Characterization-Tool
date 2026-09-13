@@ -10,6 +10,11 @@ SearchSploit database, and visualizes retained topology evidence.
 - One **Nmap Scans** page with a scan builder at the top and actions to **Save as profile**, **Run now**, or **Generate package**.
 - Human-readable `Name_Date_Time` scan names. Scheduled execution manifests use `Name_(S)_Date_Time`.
 - Creator, scheduler, executor, execution method, target, protocol, port scope, interface, profile, and profile-version metadata in scan history.
+- A shared first-in/first-out analyzer queue with active ownership, waiting
+  positions, automatic next-run dispatch, owner cancellation, Administrator
+  reassignment, live status, and per-run audit history.
+- Owner-scoped autosaved scan-builder drafts for signed-in analysts, including
+  scope, profile, interface, timeout, and scan settings.
 - Reusable scan profiles with protected built-ins, clone, save, reuse, and immutable save-as-new-version behavior.
 - Saved Networks with normalized IPv4 CIDRs, operator ownership, tags,
   categories, archive behavior, and immutable scan-time snapshots. Scans can

@@ -50,6 +50,7 @@ from app.saved_networks import (
     update_saved_network,
 )
 from app.request_identity import bind_signed_in_actor
+from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -322,6 +323,20 @@ class FallbackDecision(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("This field cannot be blank")
+        return cleaned
+
+
+class ScanRunOwnerChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner: str = Field(min_length=1, max_length=100)
+
+    @field_validator("owner")
+    @classmethod
+    def clean_owner(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not cleaned:
+            raise ValueError("A queue owner is required")
         return cleaned
 
 
@@ -772,6 +787,8 @@ def build_scan_run_manifest(
         "status": status,
         "operator": plan.operator,
         "created_by": creator,
+        "owner": creator,
+        "requested_by": creator,
         "scheduled": plan.scheduled,
         "scheduled_by": plan.scheduled_by,
         "executed_by": plan.executed_by or ("scheduler" if plan.scheduled else plan.operator),
@@ -828,6 +845,7 @@ def build_scan_run_manifest(
 
 def init_poc_storage(db_path: Path = DB_PATH) -> None:
     init_saved_network_storage(db_path)
+    init_scan_collaboration_storage(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as db:
         db.execute(
@@ -1392,6 +1410,34 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
         )
 
 
+def _queued_run_ids(db_path: Path = DB_PATH) -> list[str]:
+    init_poc_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        return [
+            row[0]
+            for row in db.execute(
+                "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
+            ).fetchall()
+        ]
+
+
+def with_queue_state(
+    manifest: dict,
+    db_path: Path = DB_PATH,
+    queued_ids: list[str] | None = None,
+) -> dict:
+    result = dict(manifest)
+    queued_ids = _queued_run_ids(db_path) if queued_ids is None else queued_ids
+    if result.get("status") == "queued" and result.get("run_id") in queued_ids:
+        result["queue_position"] = queued_ids.index(result["run_id"]) + 1
+    else:
+        result["queue_position"] = None
+    result["queue_waiting_count"] = len(queued_ids)
+    result.setdefault("owner", result.get("created_by") or result.get("operator"))
+    result.setdefault("requested_by", result.get("created_by") or result.get("operator"))
+    return result
+
+
 def save_scan_run_plan(plan: ScanRunPlan, db_path: Path = DB_PATH) -> dict:
     manifest = build_scan_run_manifest(plan, db_path=db_path)
     insert_scan_run_manifest(manifest, db_path)
@@ -1412,6 +1458,14 @@ def prepare_scan_run(
         db_path=db_path,
     )
     insert_scan_run_manifest(manifest, db_path)
+    append_scan_audit(
+        db_path,
+        run_id=manifest["run_id"],
+        event="queued",
+        actor=manifest.get("requested_by") or manifest.get("created_by") or manifest["operator"],
+        details="Submitted to the shared analyzer queue",
+        changed_at=manifest["created_at"],
+    )
     return manifest
 
 
@@ -1422,7 +1476,11 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
             "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [with_host_count(json.loads(row[0])) for row in rows]
+    queued_ids = _queued_run_ids(db_path)
+    return [
+        with_queue_state(with_host_count(json.loads(row[0])), db_path, queued_ids)
+        for row in rows
+    ]
 
 
 def group_scan_runs_by_saved_network(runs: list[dict]) -> list[dict]:
@@ -1533,7 +1591,7 @@ def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
         row = db.execute(
             "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
-    return with_host_count(json.loads(row[0])) if row else None
+    return with_queue_state(with_host_count(json.loads(row[0])), db_path) if row else None
 
 
 def nmap_host_count(xml_path: Path) -> int | None:
@@ -2011,6 +2069,14 @@ def execute_scan_run(
         )
     manifest["started_at"] = utc_now()
     manifest["status"] = "running"
+    append_scan_audit(
+        db_path,
+        run_id=run_id,
+        event="started",
+        actor=manifest.get("owner") or manifest.get("executed_by") or "system",
+        details="Analyzer capacity assigned; scan execution started",
+        changed_at=manifest["started_at"],
+    )
     persist_scan_progress(manifest, phase="discovery", db_path=db_path, data_dir=data_dir)
     started = time.monotonic()
     deadline = started + int(manifest["timeout_seconds"])
@@ -2333,8 +2399,17 @@ def execute_scan_run(
             )
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
+        append_scan_audit(
+            db_path,
+            run_id=run_id,
+            event=manifest["status"],
+            actor=manifest.get("owner") or manifest.get("executed_by") or "system",
+            details=manifest.get("error") or manifest.get("execution_note") or "Scan execution finished",
+            changed_at=manifest["completed_at"],
+        )
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
 
 
 def launch_scan_run(
@@ -2344,16 +2419,71 @@ def launch_scan_run(
     data_dir: Path = DATA_DIR,
     interfaces: set[str] | None = None,
 ) -> dict:
-    """Queue one scan through the same capacity gate used by manual and scheduled runs."""
+    """Persist one scan in the shared FIFO queue and dispatch it when capacity is free."""
+    manifest = prepare_scan_run(request, db_path, interfaces)
+    dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+    return get_scan_run_plan(manifest["run_id"], db_path) or with_queue_state(manifest, db_path)
+
+
+def _scan_worker_entry(
+    run_id: str,
+    control: RunControl,
+    *,
+    db_path: Path,
+    data_dir: Path,
+) -> None:
+    """Keep an unexpected worker error from wedging the shared queue."""
+    try:
+        execute_scan_run(run_id, control, db_path=db_path, data_dir=data_dir)
+    except Exception as exc:
+        manifest = get_scan_run_plan(run_id, db_path)
+        if manifest is not None and manifest.get("status") in {
+            "queued",
+            "running",
+            "awaiting_fallback_approval",
+        }:
+            manifest["status"] = "failed"
+            manifest["success"] = False
+            manifest["completed_at"] = utc_now()
+            manifest["error"] = f"{type(exc).__name__}: {exc}"
+            if isinstance(manifest.get("progress"), dict):
+                update_scan_progress(
+                    manifest["progress"],
+                    phase="failed",
+                    updated_at=manifest["completed_at"],
+                )
+            update_scan_run_manifest(manifest, db_path)
+            append_scan_audit(
+                db_path,
+                run_id=run_id,
+                event="failed",
+                actor="system",
+                details=manifest["error"],
+                changed_at=manifest["completed_at"],
+            )
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+
+
+def dispatch_next_queued_run(
+    *, db_path: Path = DB_PATH, data_dir: Path = DATA_DIR
+) -> dict | None:
+    """Start the oldest queued run if the analyzer has free scan capacity."""
     with ACTIVE_RUNS_LOCK:
         if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
-            raise RuntimeError("Another scan is already running")
-        manifest = prepare_scan_run(request, db_path, interfaces)
+            return None
+        queued_ids = _queued_run_ids(db_path)
+        if not queued_ids:
+            return None
+        manifest = get_scan_run_plan(queued_ids[0], db_path)
+        if manifest is None or manifest.get("status") != "queued":
+            return None
         control = RunControl()
         ACTIVE_RUNS[manifest["run_id"]] = control
     try:
         worker = threading.Thread(
-            target=execute_scan_run,
+            target=_scan_worker_entry,
             args=(manifest["run_id"], control),
             kwargs={"db_path": db_path, "data_dir": data_dir},
             daemon=True,
@@ -2365,9 +2495,19 @@ def launch_scan_run(
             ACTIVE_RUNS.pop(manifest["run_id"], None)
         manifest["status"] = "failed"
         manifest["error"] = "The scan worker could not be started"
+        manifest["completed_at"] = utc_now()
         update_scan_run_manifest(manifest, db_path)
+        append_scan_audit(
+            db_path,
+            run_id=manifest["run_id"],
+            event="failed",
+            actor="system",
+            details=manifest["error"],
+            changed_at=manifest["completed_at"],
+        )
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
         raise
-    return manifest
+    return with_queue_state(manifest, db_path)
 
 
 def schedule_target_chunks(
@@ -2682,19 +2822,35 @@ def recover_scheduler_state(
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
 ) -> dict:
-    """Close orphaned runs and resume interrupted batches after completed chunks."""
+    """Close orphaned work, preserve manual queue entries, and recover scheduled batches."""
     init_poc_storage(db_path)
     recovered_at = utc_now()
     with sqlite3.connect(db_path) as db:
         rows = db.execute("SELECT manifest_json FROM scan_runs").fetchall()
     manifests = [json.loads(row[0]) for row in rows]
     orphaned = []
+    preserved_queue = []
     for manifest in manifests:
         if manifest.get("status") not in {
             "queued",
             "running",
             "awaiting_fallback_approval",
         }:
+            continue
+        if (
+            manifest.get("status") == "queued"
+            and not manifest.get("started_at")
+            and not manifest.get("scheduled")
+        ):
+            preserved_queue.append(manifest["run_id"])
+            append_scan_audit(
+                db_path,
+                run_id=manifest["run_id"],
+                event="queue_recovered",
+                actor="system",
+                details="Preserved unstarted manual request across analyzer restart",
+                changed_at=recovered_at,
+            )
             continue
         manifest["status"] = "interrupted"
         manifest["success"] = False
@@ -2706,6 +2862,14 @@ def recover_scheduler_state(
             )
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
+        append_scan_audit(
+            db_path,
+            run_id=manifest["run_id"],
+            event="interrupted",
+            actor="system",
+            details=manifest["error"],
+            changed_at=recovered_at,
+        )
         orphaned.append(manifest["run_id"])
 
     recovered_schedules = []
@@ -2778,8 +2942,10 @@ def recover_scheduler_state(
         )
         _store_scan_schedule(schedule, db_path)
         recovered_schedules.append(schedule["schedule_id"])
+    dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
     return {
         "orphaned_run_ids": orphaned,
+        "preserved_queue_run_ids": preserved_queue,
         "recovered_schedule_ids": recovered_schedules,
     }
 
@@ -3200,20 +3366,151 @@ def decide_scan_fallback(
         control.fallback_decided_by = request.decided_by
         control.fallback_authorization_note = request.authorization_note
         control.fallback_decision_event.set()
+    append_scan_audit(
+        DB_PATH,
+        run_id=run_id,
+        event=f"fallback_{request.decision}",
+        actor=request.decided_by,
+        details=request.authorization_note,
+    )
     return {"run_id": run_id, "decision": request.decision, "status": "decision_recorded"}
 
 
+def _scan_actor(request: Request) -> tuple[str | None, str | None]:
+    analyst = getattr(request.state, "analyst", None)
+    if not analyst:
+        return None, None
+    return str(analyst.get("username") or ""), str(analyst.get("role") or "")
+
+
+def _require_run_control(request: Request, manifest: dict) -> tuple[str, str]:
+    actor, role = _scan_actor(request)
+    if actor is None:
+        return "local-operator", "admin"
+    owner = str(manifest.get("owner") or manifest.get("created_by") or manifest.get("operator") or "")
+    if role != "admin" and actor != owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the scan owner or an Administrator can control this run",
+        )
+    return actor, role or "analyst"
+
+
 @router.post("/scan-runs/{run_id}/cancel", status_code=202)
-def cancel_scan_run(run_id: str) -> dict:
-    manifest = get_scan_run_plan(run_id)
+def cancel_scan_run(run_id: str, request: Request) -> dict:
+    manifest = get_scan_run_plan(run_id, DB_PATH)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
+    actor, _ = _require_run_control(request, manifest)
     with ACTIVE_RUNS_LOCK:
         control = ACTIVE_RUNS.get(run_id)
+    if manifest["status"] == "queued" and control is None:
+        changed_at = utc_now()
+        manifest.update(
+            {
+                "status": "cancelled",
+                "completed_at": changed_at,
+                "success": False,
+                "execution_note": "Cancelled before analyzer capacity was assigned",
+            }
+        )
+        if isinstance(manifest.get("progress"), dict):
+            update_scan_progress(manifest["progress"], phase="cancelled", updated_at=changed_at)
+        update_scan_run_manifest(manifest, DB_PATH)
+        append_scan_audit(
+            DB_PATH,
+            run_id=run_id,
+            event="cancelled",
+            actor=actor,
+            details=manifest["execution_note"],
+            changed_at=changed_at,
+        )
+        dispatch_next_queued_run(db_path=DB_PATH, data_dir=DATA_DIR)
+        return {"run_id": run_id, "status": "cancelled"}
     if control is None or manifest["status"] not in {"queued", "running", "awaiting_fallback_approval"}:
         raise HTTPException(status_code=409, detail="Scan run is not active")
     control.cancel_event.set()
+    append_scan_audit(
+        DB_PATH,
+        run_id=run_id,
+        event="cancellation_requested",
+        actor=actor,
+        details="Cancellation requested for the active analyzer process",
+    )
     return {"run_id": run_id, "status": "cancellation_requested"}
+
+
+@router.post("/scan-runs/{run_id}/owner")
+def change_scan_run_owner(
+    run_id: str, change: ScanRunOwnerChange, request: Request
+) -> dict:
+    actor, role = _scan_actor(request)
+    if actor is not None and role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator role required")
+    manifest = get_scan_run_plan(run_id, DB_PATH)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    if manifest.get("status") != "queued":
+        raise HTTPException(status_code=409, detail="Only queued scans can be reassigned")
+    if actor is not None:
+        with sqlite3.connect(DB_PATH) as db:
+            row = db.execute(
+                "SELECT role, disabled FROM analyst_users WHERE username = ?",
+                (change.owner,),
+            ).fetchone()
+        if row is None or row[1]:
+            raise HTTPException(status_code=422, detail="Choose an active analyst account")
+        if row[0] == "viewer":
+            raise HTTPException(status_code=422, detail="Viewer accounts cannot own queued scans")
+    previous = manifest.get("owner") or manifest.get("created_by") or manifest.get("operator")
+    manifest["owner"] = change.owner
+    manifest["owner_changed_at"] = utc_now()
+    manifest["owner_changed_by"] = actor or "local-operator"
+    update_scan_run_manifest(manifest, DB_PATH)
+    append_scan_audit(
+        DB_PATH,
+        run_id=run_id,
+        event="reassigned",
+        actor=actor or "local-operator",
+        details=f"Queue owner changed from {previous} to {change.owner}",
+        changed_at=manifest["owner_changed_at"],
+    )
+    return with_queue_state(manifest, DB_PATH)
+
+
+@router.get("/scan-runs/queue/status")
+def scan_queue_status(request: Request) -> dict:
+    actor, role = _scan_actor(request)
+    active_states = {"queued", "running", "awaiting_fallback_approval"}
+    runs = [
+        item
+        for item in list_scan_run_plans(db_path=DB_PATH, limit=200)
+        if item.get("status") in active_states
+    ]
+    runs.sort(
+        key=lambda item: (
+            0 if item.get("status") in {"running", "awaiting_fallback_approval"} else 1,
+            int(item.get("queue_position") or 0),
+            item.get("created_at") or "",
+        )
+    )
+    for item in runs:
+        owner = item.get("owner") or item.get("created_by") or item.get("operator")
+        item["can_cancel"] = actor is None or role == "admin" or actor == owner
+        item["can_reassign"] = bool(role == "admin" and item.get("status") == "queued")
+    return {
+        "capacity": MAX_ACTIVE_RUNS,
+        "active_count": sum(item.get("status") != "queued" for item in runs),
+        "queued_count": sum(item.get("status") == "queued" for item in runs),
+        "runs": runs,
+    }
+
+
+@router.get("/scan-runs/{run_id}/audit")
+def scan_run_audit(run_id: str, limit: int = Query(default=200, ge=1, le=1000)) -> list[dict]:
+    if get_scan_run_plan(run_id, DB_PATH) is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    return scan_audit_history(DB_PATH, run_id, limit)
 
 
 @router.post("/scan-runs/delete-challenge")

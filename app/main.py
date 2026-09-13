@@ -89,6 +89,13 @@ from app.workspaces import (
     save_layout,
     set_default_layout,
 )
+from app.scan_collaboration import (
+    DraftConflict,
+    delete_scan_draft,
+    get_scan_draft,
+    init_scan_collaboration_storage,
+    save_scan_draft,
+)
 import hashlib
 import io
 import ipaddress
@@ -202,6 +209,11 @@ class WorkspaceLayoutRequest(BaseModel):
 
 class WorkspacePublishRequest(BaseModel):
     shared: bool
+
+
+class ScanDraftRequest(BaseModel):
+    snapshot: dict
+    expected_version: int | None = Field(default=None, ge=0)
 
 
 def utc_now() -> str:
@@ -859,6 +871,7 @@ async def lifespan(_: FastAPI):
     init_poc_storage()
     init_auth_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
+    init_scan_collaboration_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1129,6 +1142,41 @@ def clear_workspace_layout_default(request: Request) -> dict:
     return set_default_layout(
         DB_PATH, owner=request.state.analyst["username"], layout_id=None
     )
+
+
+@app.get("/api/workspaces/scan-draft")
+def personal_scan_draft(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"server_persistence": False, "draft": None}
+    return {
+        "server_persistence": True,
+        "draft": get_scan_draft(DB_PATH, request.state.analyst["username"]),
+    }
+
+
+@app.put("/api/workspaces/scan-draft")
+def store_personal_scan_draft(request: Request, draft: ScanDraftRequest) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal drafts require authenticated mode")
+    try:
+        return save_scan_draft(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            snapshot=draft.snapshot,
+            expected_version=draft.expected_version,
+        )
+    except DraftConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/scan-draft")
+def remove_personal_scan_draft(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal drafts require authenticated mode")
+    return {
+        "owner": request.state.analyst["username"],
+        "deleted": delete_scan_draft(DB_PATH, request.state.analyst["username"]),
+    }
 
 
 @app.get("/api/os-overrides")

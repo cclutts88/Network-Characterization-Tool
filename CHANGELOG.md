@@ -2,6 +2,15 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added a shared first-in/first-out analyzer queue for multi-analyst operation.
+  The Nmap page shows the active scan, owners, waiting positions, and live
+  status; owners can cancel their own work and Administrators can reassign
+  queued scans. The next scan starts automatically, and unstarted manual queue
+  entries survive an analyzer restart.
+- Added per-analyst autosaved Nmap builder drafts, including scope, profile,
+  interface, timeout, and scan settings, with stale-browser conflict protection.
+  Added a readable per-run audit for queue, ownership, cancellation, fallback,
+  restart, and terminal events.
 - Added audited analyst OS corrections in Analyze. NCT preserves the original
   scanner OS, records the analyst, reason, and timestamp for set/update/remove
   events, gives the confirmed value precedence over inference in Hunt and Map,
