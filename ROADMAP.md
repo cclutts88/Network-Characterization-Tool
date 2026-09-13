@@ -536,9 +536,19 @@ within Reachability.
 
 - [ ] Evaluate source, destination, and service using open ports, routes,
   interfaces, firewall/ACL policy, NAT, Saved Networks, and device identity.
+  - [x] Add the first read-only Reach page and API using the current
+    network-wide host/service inventory, Saved Networks, newest per-device
+    collections, retained routes, and narrowly supported explicit ACL evidence.
+  - [ ] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
+    evaluation before treating complex configurations as allow or deny evidence.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
+  - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not
   Exposed without claiming unsupported certainty.
+  - [x] Report Local, Routed, exact-policy Expected Allowed/Blocked, and Unknown
+    with confidence, evidence, and prominent caveats.
+  - [ ] Report Not Exposed only when retained scan coverage proves that the
+    requested service was actually assessed and not exposed.
 - [ ] Group source-exposure reports by Saved Network and preserve policy objects
   and evidence.
 - [ ] Send saved reachability results to the map for focused visualization.

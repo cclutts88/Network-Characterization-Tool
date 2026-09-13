@@ -14,8 +14,8 @@ from app.poc import (
     run_directory,
     schedule_worker,
 )
-from app.device_configs import router as device_config_router
-from app.device_analysis import router as device_analysis_router
+from app.device_configs import history as device_collection_history, router as device_config_router
+from app.device_analysis import analyze_device_collection, router as device_analysis_router
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting import (
@@ -25,6 +25,9 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
+from app.reachability import evaluate_reachability
+from app.reachability_ui import reachability_page
+from app.saved_networks import list_saved_networks
 from app.ip_sort import ip_sort_key
 from app.os_inference import infer_os_identity
 from app.searchsploit import (
@@ -153,6 +156,12 @@ class TerrainSegment(BaseModel):
     def clean_name(cls, value: str) -> str:
         return value.strip()
 
+
+class ReachabilityQuery(BaseModel):
+    source: str = Field(min_length=1, max_length=64)
+    destination: str = Field(min_length=1, max_length=64)
+    protocol: Literal["tcp", "udp"] = "tcp"
+    port: int = Field(ge=1, le=65535)
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -1799,6 +1808,50 @@ def analyze_hunting_network() -> dict:
     return result
 
 
+def _latest_device_reachability_evidence() -> list[dict]:
+    analyses = []
+    seen_devices = set()
+    for record in device_collection_history(limit=100):
+        device_key = str(record.get("device_address") or record.get("device_name") or "").casefold()
+        if not device_key or device_key in seen_devices:
+            continue
+        try:
+            analysis = analyze_device_collection(record["run_id"])
+        except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        analyses.append(analysis)
+        seen_devices.add(device_key)
+    return analyses
+
+
+@app.get("/api/reachability/context")
+def reachability_context() -> dict:
+    hunting = analyze_hunting_network()
+    devices = _latest_device_reachability_evidence()
+    return {
+        "status": "reachability_context_complete",
+        "saved_networks": list_saved_networks(DB_PATH),
+        "hosts": hunting.get("hosts") or [],
+        "device_collections": len(devices),
+    }
+
+
+@app.post("/api/reachability/evaluate")
+def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
+    try:
+        return evaluate_reachability(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
 @app.get("/api/hunting/compare")
 def compare_hunting_scans(before: str, after: str) -> dict:
     if before == after:
@@ -2224,6 +2277,10 @@ def device_analysis():
 @app.get('/hunting')
 def hunting():
     return hunting_page()
+
+@app.get('/reachability')
+def reachability():
+    return reachability_page()
 
 from app.network_map import router as network_map_router
 from app.network_map_ui import network_map_page

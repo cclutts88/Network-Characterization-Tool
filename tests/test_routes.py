@@ -25,6 +25,7 @@ def test_primary_pages_and_profiles_are_available():
         device_page = client.get("/")
         scan_page = client.get("/scans")
         analysis_page = client.get("/analysis")
+        reachability_page = client.get("/reachability")
         profiles = client.get("/api/scan-profiles")
 
     assert device_page.status_code == 200
@@ -34,6 +35,9 @@ def test_primary_pages_and_profiles_are_available():
     assert analysis_page.status_code == 200
     assert "Compare scans" in analysis_page.text
     assert "Previous scans" not in analysis_page.text
+    assert reachability_page.status_code == 200
+    assert "Reachability Analysis" in reachability_page.text
+    assert "This page does not send network traffic" in reachability_page.text
     assert profiles.status_code == 200
     assert {item["profile_id"] for item in profiles.json()} >= {
         "builtin-standard",
@@ -41,6 +45,24 @@ def test_primary_pages_and_profiles_are_available():
         "builtin-quick-discovery",
         "builtin-ics-safe",
     }
+
+
+def test_reachability_api_is_conservative_without_retained_evidence():
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/reachability/evaluate",
+            json={
+                "source": "192.0.2.10",
+                "destination": "198.51.100.20",
+                "protocol": "tcp",
+                "port": 443,
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["outcome"] == "Unknown"
+    assert result["confidence"] == "low"
 
 
 def test_preview_and_package_use_the_same_udp_settings_and_required_n():
