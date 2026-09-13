@@ -27,8 +27,6 @@ OFFICIAL_ARCHIVE_URL = (
     "exploitdb-main.tar.gz"
 )
 _UPDATE_LOCK = threading.Lock()
-_CACHE_LOCK = threading.Lock()
-CACHE_SCHEMA_VERSION = 1
 GENERIC_PRODUCTS = {
     "", "unknown", "http", "https", "ssh", "ftp", "smtp", "dns", "domain",
     "microsoft", "windows", "linux", "network", "server",
@@ -42,108 +40,6 @@ def _configured_command() -> str:
 def _storage_root() -> Path:
     data_root = Path(os.environ.get("ANALYZER_DATA_DIR") or "/data")
     return data_root / "searchsploit"
-
-
-def _cache_identity(hunting: dict, status: dict) -> dict:
-    """Identify the retained scan evidence and offline database used by a result."""
-    evidence = {
-        "source": hunting.get("source") or {},
-        "findings": [
-            {
-                key: finding.get(key)
-                for key in (
-                    "host_key", "ip", "hostname", "protocol", "port", "service",
-                    "product", "version", "evidence_kind",
-                )
-            }
-            for finding in hunting.get("findings") or []
-        ],
-    }
-    evidence_json = json.dumps(
-        evidence, sort_keys=True, separators=(",", ":"), default=str
-    )
-    database = {
-        "active_version": status.get("active_version"),
-        "archive_sha256": status.get("archive_sha256"),
-        "database_updated_epoch": status.get("database_updated_epoch"),
-        "database_files": status.get("database_files"),
-        "database_path": status.get("database_path"),
-    }
-    database_json = json.dumps(
-        database, sort_keys=True, separators=(",", ":"), default=str
-    )
-    evidence_signature = hashlib.sha256(evidence_json.encode("utf-8")).hexdigest()
-    database_signature = hashlib.sha256(database_json.encode("utf-8")).hexdigest()
-    cache_key = hashlib.sha256(
-        f"{CACHE_SCHEMA_VERSION}:{evidence_signature}:{database_signature}".encode("utf-8")
-    ).hexdigest()
-    return {
-        "schema_version": CACHE_SCHEMA_VERSION,
-        "cache_key": cache_key,
-        "evidence_signature": evidence_signature,
-        "database_signature": database_signature,
-    }
-
-
-def _cache_file(identity: dict) -> Path:
-    return _storage_root() / "cache" / f"{identity['cache_key']}.json"
-
-
-def _cached_result(result: dict, envelope: dict, *, reused: bool) -> dict:
-    return {
-        **result,
-        "cache": {
-            "state": "current",
-            "reused": reused,
-            "generated_at": envelope.get("generated_at"),
-            "evidence_signature": envelope.get("evidence_signature"),
-            "database_signature": envelope.get("database_signature"),
-        },
-    }
-
-
-def get_cached_searchsploit_enrichment(hunting: dict) -> dict | None:
-    """Return saved enrichment only when both scan evidence and database still match."""
-    status = searchsploit_status()
-    if not status.get("available"):
-        return None
-    identity = _cache_identity(hunting, status)
-    path = _cache_file(identity)
-    with _CACHE_LOCK:
-        try:
-            envelope = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-    if any(envelope.get(key) != identity[key] for key in (
-        "schema_version", "evidence_signature", "database_signature"
-    )):
-        return None
-    result = envelope.get("result")
-    if not isinstance(result, dict) or result.get("status") != "searchsploit_complete":
-        return None
-    return _cached_result(result, envelope, reused=True)
-
-
-def searchsploit_cache_status(hunting: dict) -> dict:
-    cached = get_cached_searchsploit_enrichment(hunting)
-    if cached is not None:
-        return cached
-    status = searchsploit_status()
-    return {
-        "status": "searchsploit_cache_required",
-        "provider": status,
-        "matches": [],
-        "cache": {
-            "state": "required" if status.get("available") else "unavailable",
-            "reused": False,
-            "generated_at": None,
-            "reason": (
-                "No retained result matches the current scan evidence and active "
-                "SearchSploit database."
-                if status.get("available") else status.get("message")
-            ),
-        },
-    }
 
 
 def _active_database_path() -> Path | None:
@@ -621,39 +517,3 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         "warnings": warnings,
         "disclaimer": "Potential product/version matches require analyst validation.",
     }
-
-
-def enrich_hunting_with_searchsploit_cached(hunting: dict) -> dict:
-    """Reuse retained enrichment unless scan evidence or the database changed."""
-    with _CACHE_LOCK:
-        status = searchsploit_status()
-        if not status.get("available"):
-            return enrich_hunting_with_searchsploit(hunting)
-        identity = _cache_identity(hunting, status)
-        path = _cache_file(identity)
-        try:
-            envelope = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            envelope = None
-        if isinstance(envelope, dict):
-            valid = all(envelope.get(key) == identity[key] for key in (
-                "schema_version", "evidence_signature", "database_signature"
-            ))
-            result = envelope.get("result")
-            if valid and isinstance(result, dict) and result.get("status") == "searchsploit_complete":
-                return _cached_result(result, envelope, reused=True)
-
-        result = enrich_hunting_with_searchsploit(hunting)
-        if result.get("status") != "searchsploit_complete":
-            return result
-        generated_at = datetime.now(timezone.utc).isoformat()
-        envelope = {
-            **identity,
-            "generated_at": generated_at,
-            "result": result,
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
-        os.replace(temporary, path)
-        return _cached_result(result, envelope, reused=False)

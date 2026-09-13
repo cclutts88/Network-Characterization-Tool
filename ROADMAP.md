@@ -105,9 +105,6 @@ within Reachability.
   checks, database validation, atomic replacement, and rollback retention.
 - [x] Display database source, version/update time, and previous-version rollback
   controls in the NCT interface.
-- [x] Retain SearchSploit results by exact scan evidence and active database
-  version, restore them automatically on Hunt, and require a fresh run only
-  after the evidence or active Exploit-DB dataset changes.
 - [x] Complete the pre-map interface cleanup with a shared centered NCT brand,
   emphasized acronym letters, compact navigation, and active-button page identity.
 - [x] Show the automatic NCT host in a slim sticky origin banner on pages that
