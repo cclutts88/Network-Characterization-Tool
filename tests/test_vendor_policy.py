@@ -84,6 +84,26 @@ set firewall ipv4 forward filter default-action 'accept'
     assert result["rule"]["order"] == 10
 
 
+def test_current_vyos_established_flow_uses_state_rule():
+    text = """set firewall ipv4 forward filter rule 5 action 'accept'
+set firewall ipv4 forward filter rule 5 state 'established'
+set firewall ipv4 forward filter rule 10 action 'drop'
+set firewall ipv4 forward filter default-action 'drop'
+"""
+    result = evaluate_vendor_policy(
+        parse_vendor_policy(text),
+        source="10.90.0.10", destination="10.80.0.25",
+        protocol="tcp", port=443,
+        input_interface="eth1", output_interface="eth0",
+        flow_state="established",
+    )
+
+    assert result["status"] == "decided"
+    assert result["verdict"] == "allow"
+    assert result["rule"]["order"] == 5
+    assert "Connection state established matched" in result["match_basis"]
+
+
 def test_pfsense_active_pf_rule_is_evaluated_on_its_interface():
     text = "pass in quick on em1 inet proto tcp from 10.80.0.0/24 to 10.90.0.10 port = 443"
     result = evaluate(text, input_interface="em1", output_interface="em2")

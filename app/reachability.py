@@ -442,6 +442,7 @@ def _policy_decisions(
     protocol: str,
     port: int,
     device_analyses: list[dict],
+    flow_state: str = "new",
 ) -> tuple[list[dict], list[str]]:
     """Evaluate supported ordered iptables policy, then narrow explicit ACLs."""
     decisions = []
@@ -461,6 +462,7 @@ def _policy_decisions(
             destination_external=destination.kind == "external",
             input_interface=_endpoint_interface(source, analysis),
             output_interface=_egress_interface(destination, analysis),
+            flow_state=flow_state,
         )
         if result.get("status") != "decided":
             unresolved.append(
@@ -518,6 +520,7 @@ def _policy_decisions(
             destination_external=destination.kind == "external",
             input_interface=_endpoint_interface(source, analysis),
             output_interface=_egress_interface(destination, analysis),
+            flow_state=flow_state,
         )
         if result.get("status") == "not_applied":
             continue
@@ -589,6 +592,7 @@ def evaluate_reachability(
     hunting: dict,
     saved_networks: list[dict],
     device_analyses: list[dict],
+    flow_state: str = "new",
 ) -> dict:
     source = parse_endpoint(source_text)
     destination = parse_endpoint(destination_text)
@@ -597,6 +601,9 @@ def evaluate_reachability(
         raise ValueError("Protocol must be TCP or UDP")
     if not 1 <= port <= 65535:
         raise ValueError("Port must be between 1 and 65535")
+    flow_state = str(flow_state or "new").strip().lower()
+    if flow_state not in {"new", "established"}:
+        raise ValueError("Flow state must be new or established")
 
     transit_analyses = [item for item in device_analyses if _is_transit_device(item)]
     destination_translations, destination_nat_unresolved = _destination_nat_translations(
@@ -653,10 +660,15 @@ def evaluate_reachability(
         policy, policy_unresolved = [], []
     else:
         policy, policy_unresolved = _policy_decisions(
-            source, effective_destination, protocol, effective_port, transit_analyses
+            source, effective_destination, protocol, effective_port, transit_analyses,
+            flow_state,
         )
     evidence = []
     caveats = []
+    if flow_state == "established":
+        caveats.append(
+            "Established / related evaluates retained policy for packets already marked as part of an existing or related flow; it does not prove that a live device state-table entry exists."
+        )
 
     if source_network:
         evidence.append({"kind": "source_network", "title": source_network.get("name"), "detail": source_network.get("cidr")})
@@ -778,7 +790,11 @@ def evaluate_reachability(
         caveats.append("Conflicting allow and deny results require path and device review before drawing a conclusion.")
     elif actions == {"deny"}:
         outcome, confidence = "Expected Blocked", "high"
-        explanation = "The retained ordered policy denies this new flow for the selected endpoints and service."
+        explanation = (
+            "The retained ordered policy denies this established or related flow for the selected endpoints and service."
+            if flow_state == "established"
+            else "The retained ordered policy denies this new flow for the selected endpoints and service."
+        )
     elif service["state"] == "not_exposed":
         outcome, confidence = "Not Exposed", "high"
         explanation = (
@@ -787,7 +803,11 @@ def evaluate_reachability(
         )
     elif actions == {"permit"}:
         outcome, confidence = "Expected Allowed", "high"
-        explanation = "The retained ordered policy permits this new flow for the selected endpoints and service."
+        explanation = (
+            "The retained ordered policy permits this established or related flow for the selected endpoints and service."
+            if flow_state == "established"
+            else "The retained ordered policy permits this new flow for the selected endpoints and service."
+        )
     elif same_saved_network:
         outcome, confidence = "Local", "medium"
         explanation = "Source and destination are within the same Saved Network. Host firewall and local segmentation may still affect access."
@@ -851,6 +871,7 @@ def evaluate_reachability(
             "port": port,
             "effective_destination": effective_destination.entered,
             "effective_port": effective_port,
+            "flow_state": flow_state,
         },
         "source_network": source_network,
         "destination_network": destination_network,

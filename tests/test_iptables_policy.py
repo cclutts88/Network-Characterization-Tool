@@ -45,6 +45,30 @@ def test_ordered_policy_resolves_ip_and_port_sets_to_allow():
     assert set(result["match_basis"]) == {"CLIENTS matched", "WEB_PORTS matched"}
 
 
+def test_established_flow_matches_retained_conntrack_state_rule():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A FORWARD -m conntrack --ctstate NEW -j DROP
+COMMIT
+""")
+
+    established = evaluate_iptables_flow(
+        policy,
+        source="10.90.0.10", destination="10.80.0.25",
+        protocol="tcp", port=443, flow_state="established",
+    )
+    new = evaluate_iptables_flow(
+        policy,
+        source="10.90.0.10", destination="10.80.0.25",
+        protocol="tcp", port=443, flow_state="new",
+    )
+
+    assert established["verdict"] == "allow"
+    assert "Connection state ESTABLISHED/RELATED matched" in established["match_basis"]
+    assert new["verdict"] == "deny"
+
+
 def test_ordered_policy_continues_to_later_deny_when_set_does_not_match():
     result = evaluate_iptables_flow(
         parse_iptables_policy(POLICY),

@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added explicit new versus established/related flow evaluation to Reach.
+  Retained iptables and VyOS connection-state rules now match the selected
+  state, the supporting state is shown in policy evidence, and NCT clearly
+  distinguishes configuration projection from proof of a live session.
 - Connected Reach results to Map with a temporary investigation overlay. An
   analyst can open either an individual evaluation or any exposure-report path,
   focus the mapped source, destination, and retained route/policy/NAT devices,

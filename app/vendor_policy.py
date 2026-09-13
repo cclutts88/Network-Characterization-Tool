@@ -798,6 +798,7 @@ def _basic_rule_match(
     source_external: bool, destination_external: bool,
     input_interface: str | None = None, output_interface: str | None = None,
     policy: dict | None = None,
+    flow_state: str = "new",
 ) -> bool | None:
     checks = [
         _address_matches(rule.get("source"), source, source_external, policy),
@@ -833,7 +834,10 @@ def _basic_rule_match(
         ))
     states = set(rule.get("states") or [])
     if states:
-        checks.append("new" in states)
+        requested_states = {"new" if flow_state == "new" else "established"}
+        if flow_state == "established":
+            requested_states.add("related")
+        checks.append(bool(states & requested_states))
     if False in checks:
         return False
     if rule.get("unresolved") or None in checks:
@@ -841,7 +845,7 @@ def _basic_rule_match(
     return True
 
 
-def _resolved_basis(rule: dict) -> list[str]:
+def _resolved_basis(rule: dict, flow_state: str = "new") -> list[str]:
     names = []
     for value in (rule.get("source"), rule.get("destination")):
         if str(value or "").startswith("@"):
@@ -849,7 +853,15 @@ def _resolved_basis(rule: dict) -> list[str]:
     for field in ("service_ref", "input_interface_ref", "output_interface_ref"):
         if rule.get(field):
             names.append(str(rule[field]))
-    return [f"Resolved object {name}" for name in dict.fromkeys(names)]
+    basis = [f"Resolved object {name}" for name in dict.fromkeys(names)]
+    states = set(rule.get("states") or [])
+    requested = {"new" if flow_state == "new" else "established"}
+    if flow_state == "established":
+        requested.add("related")
+    matched_states = sorted(states & requested)
+    if matched_states:
+        basis.append("Connection state " + "/".join(matched_states) + " matched")
+    return basis
 
 
 def _junos_address_matches(
@@ -889,6 +901,7 @@ def _evaluate_vyos(
     policy: dict, *, source: object, destination: object, protocol: str, port: int,
     source_external: bool, destination_external: bool,
     input_interface: str | None, output_interface: str | None,
+    flow_state: str,
 ) -> dict:
     rules_by_chain: dict[str, list[dict]] = defaultdict(list)
     for rule in policy.get("rules") or []:
@@ -922,6 +935,7 @@ def _evaluate_vyos(
                 source_external=source_external, destination_external=destination_external,
                 input_interface=input_interface, output_interface=output_interface,
                 policy=policy,
+                flow_state=flow_state,
             )
             if matched is False:
                 continue
@@ -929,7 +943,7 @@ def _evaluate_vyos(
                 return {"status": "unknown", "reason": f"Applied VyOS policy {chain} contains unresolved match criteria.", "rule": rule}
             action = rule.get("action")
             if action in {"permit", "deny"}:
-                return {"status": "decided", "verdict": "allow" if action == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {chain}", *_resolved_basis(rule)]}
+                return {"status": "decided", "verdict": "allow" if action == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {chain}", *_resolved_basis(rule, flow_state)]}
             if action == "jump":
                 if not rule.get("jump_target"):
                     return {"status": "unknown", "reason": f"VyOS jump rule {chain} #{rule.get('order')} has no retained target.", "rule": rule}
@@ -963,7 +977,11 @@ def evaluate_vendor_policy(
     policy: dict, *, source: object, destination: object, protocol: str, port: int,
     source_external: bool = False, destination_external: bool = False,
     input_interface: str | None = None, output_interface: str | None = None,
+    flow_state: str = "new",
 ) -> dict:
+    flow_state = str(flow_state or "new").lower()
+    if flow_state not in {"new", "established"}:
+        raise ValueError("Flow state must be new or established")
     vendor = policy.get("vendor")
     rules = policy.get("rules") or []
     relevant = []
@@ -972,6 +990,7 @@ def evaluate_vendor_policy(
             policy, source=source, destination=destination, protocol=protocol, port=port,
             source_external=source_external, destination_external=destination_external,
             input_interface=input_interface, output_interface=output_interface,
+            flow_state=flow_state,
         )
     if vendor == "cisco":
         names = {
@@ -1034,9 +1053,10 @@ def evaluate_vendor_policy(
             source_external=source_external, destination_external=destination_external,
             input_interface=input_interface, output_interface=output_interface,
             policy=policy,
+            flow_state=flow_state,
         )
         if matched is None:
             return {"status": "unknown", "reason": f"Applied {vendor} policy {rule.get('policy')} contains unresolved match criteria.", "rule": rule}
         if matched:
-            return {"status": "decided", "verdict": "allow" if rule.get("action") == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {rule.get('policy')}", *_resolved_basis(rule)]}
+            return {"status": "decided", "verdict": "allow" if rule.get("action") == "permit" else "deny", "rule": rule, "match_basis": [f"Applied policy {rule.get('policy')}", *_resolved_basis(rule, flow_state)]}
     return {"status": "unknown", "reason": f"Applied {vendor} policy had no supported matching terminal rule."}

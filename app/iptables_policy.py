@@ -378,7 +378,15 @@ def _rule_matches(rule: dict, context: dict, ipsets: dict[str, dict]) -> tuple[b
         checks.append(None)
     states = set(rule.get("states") or [])
     if states:
-        checks.append("NEW" in states)
+        requested_states = {
+            "NEW" if context.get("flow_state") == "new" else "ESTABLISHED",
+        }
+        if context.get("flow_state") == "established":
+            requested_states.add("RELATED")
+        matched_states = sorted(states & requested_states)
+        checks.append(bool(matched_states))
+        if matched_states:
+            basis.append("Connection state " + "/".join(matched_states) + " matched")
     for set_match in rule.get("set_matches") or []:
         item = ipsets.get(set_match["name"])
         result = None if item is None else _member_matches(
@@ -413,8 +421,12 @@ def evaluate_iptables_flow(
     destination_external: bool = False,
     input_interface: str | None = None,
     output_interface: str | None = None,
+    flow_state: str = "new",
 ) -> dict:
-    """Conservatively walk the ordered FORWARD chain for a new IPv4 flow."""
+    """Conservatively walk the ordered FORWARD chain for an IPv4 flow."""
+    flow_state = str(flow_state or "new").lower()
+    if flow_state not in {"new", "established"}:
+        raise ValueError("Flow state must be new or established")
     rules_by_chain: dict[str, list[dict]] = defaultdict(list)
     for rule in policy.get("rules") or []:
         if rule.get("table") == "filter" and rule.get("chain"):
@@ -427,6 +439,7 @@ def evaluate_iptables_flow(
         "source_external": source_external, "destination_external": destination_external,
         "protocol": protocol.lower(), "port": port,
         "input_interface": input_interface, "output_interface": output_interface,
+        "flow_state": flow_state,
     }
     trace = []
 

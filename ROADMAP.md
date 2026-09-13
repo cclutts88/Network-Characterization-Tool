@@ -567,6 +567,11 @@ Available at https://x.x.x.x:443
     - [ ] Resolve dynamic and DNS-backed objects, vendor policy-based NAT,
       established-flow state, and multi-device translation paths; keep
       unsupported criteria at Unknown.
+      - [x] Let analysts evaluate either a new connection or an
+        established/related flow. Match retained iptables and VyOS state rules
+        against the selected state, include that basis in the evidence, and
+        warn that configuration evidence does not prove a live state-table
+        entry exists.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not

@@ -237,6 +237,37 @@ add HTTPS 443
     assert policy_evidence["title"].startswith("Ordered permit")
 
 
+def test_established_flow_state_is_evaluated_and_reported():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i servers -o inside -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A FORWARD -i servers -o inside -m conntrack --ctstate NEW -j DROP
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [{
+            "network": "10.80.0.0/24", "interface": "inside", "direct": True,
+        }]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(
+        source_text="10.90.0.10", destination_text="10.80.0.25",
+        device_analyses=[device], flow_state="established",
+        hunting={"hosts": [], "findings": []},
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["query"]["flow_state"] == "established"
+    assert "established or related flow" in result["explanation"]
+    assert any("does not prove" in caveat for caveat in result["caveats"])
+
+
 def test_ordered_iptables_unsupported_match_remains_routed_with_caveat():
     policy = parse_iptables_policy("""*filter
 :FORWARD ACCEPT [0:0]
