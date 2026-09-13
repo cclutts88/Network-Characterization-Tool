@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added explicit hardening-impact summaries for proposed policy and route
+  checks: current/projected paths, retained route alternatives, bounded address
+  scope, and a clear statement that only the selected representative flow was
+  evaluated.
 - Added vendor-neutral metric/preference comparisons for equally specific
   retained routes. Reach shows the selected path before and after, changes it
   only when every competing route has comparable priority evidence, and calls

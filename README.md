@@ -52,7 +52,10 @@ SearchSploit database, and visualizes retained topology evidence.
   removes an exact retained route in memory, exposes broader fallback routes,
   changes an explicit metric/preference, and exports the comparison without
   contacting a device. Equal-prefix path selection is projected only where all
-  competing retained routes have comparable numeric priority evidence.
+  competing retained routes have comparable numeric priority evidence. Both
+  policy and route checks show current/projected paths, retained alternatives,
+  and bounded collateral scope without extrapolating beyond the one evaluated
+  representative flow.
   On-demand exposure reports group every unique observed service by Internet and
   Saved Network source, retain route/policy/NAT objects, associate local
   SearchSploit candidates, and export the complete evidence as JSON. Individual

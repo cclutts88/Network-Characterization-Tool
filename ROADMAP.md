@@ -649,7 +649,9 @@ Available at https://x.x.x.x:443
       fallback visibility, evidence/caveats, and JSON export.
     - [x] Add metric/preference changes and vendor-neutral path-choice modeling
       for equally specific routes with complete comparable retained values.
-- [ ] Compare current and proposed paths, alternate paths, and collateral impact.
+- [x] Compare current and proposed paths, retained alternate routes, and bounded
+  collateral scope. State when only one representative flow was evaluated and
+  never extrapolate a route prefix into untested service/policy conclusions.
 - [ ] Export evidence-backed hardening reports and map comparisons.
 
 ### End-of-roadmap fringe-vendor validation

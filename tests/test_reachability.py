@@ -169,6 +169,9 @@ def test_proposed_exact_deny_compares_against_current_permit_without_device_chan
         "protocol": "tcp",
         "port": 443,
     }
+    assert result["comparison"]["path_changed"] is False
+    assert result["comparison"]["collateral_impact"]["address_pairs"] == 1
+    assert result["comparison"]["collateral_impact"]["evaluated_flows"] == 1
     assert result["projected"]["simulated"] is True
     assert result["projected"]["retained_objects"]["policy"][0]["simulated"] is True
     assert "changes no device configuration" in result["disclaimer"]
@@ -341,6 +344,10 @@ def test_proposed_route_priority_change_can_change_selected_equal_prefix_path(pr
     assert comparison["selected_route_after"]["via"] == "10.80.0.3"
     assert comparison["selected_route_before"][priority_kind] == 100
     assert comparison["selected_route_after"][priority_kind] == 200
+    assert len(comparison["alternate_routes_before"]) == 1
+    assert len(comparison["alternate_routes_after"]) == 1
+    assert comparison["collateral_impact"]["destination_addresses"] == 256
+    assert comparison["collateral_impact"]["evaluated_flows"] == 1
     assert result["proposal"]["priority_kind"] == priority_kind
     assert result["proposal"]["priority_value"] == 300
 

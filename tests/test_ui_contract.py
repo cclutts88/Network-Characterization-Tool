@@ -386,6 +386,8 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="policySimulationPanel"' in html
     assert 'id="simulationDevice"' in html
     assert 'id="simulationAction"' in html
+    assert 'id="simulationPath"' in html
+    assert 'id="simulationImpact"' in html
     assert 'id="exportSimulation"' in html
     assert "/api/reachability/simulate-policy" in html
     assert "changes no device configuration" in html
@@ -396,6 +398,8 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="routeSimulationPriorityKind"' in html
     assert 'id="routeSimulationPriorityValue"' in html
     assert 'id="routeSimulationPath"' in html
+    assert 'id="routeSimulationAlternates"' in html
+    assert 'id="routeSimulationImpact"' in html
     assert 'value="set_priority"' in html
     assert 'id="exportRouteSimulation"' in html
     assert "/api/reachability/simulate-route" in html

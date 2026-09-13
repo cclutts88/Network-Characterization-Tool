@@ -1088,6 +1088,22 @@ def _endpoint_address_count(endpoint: Endpoint) -> int | None:
     return int(endpoint.value.num_addresses)
 
 
+def _path_without_proposals(result: dict) -> list[dict]:
+    return [
+        {key: item.get(key) for key in ("kind", "label", "detail")}
+        for item in result.get("path") or [] if item.get("kind") != "proposal"
+    ]
+
+
+def _compact_route_options(routes: list[dict]) -> list[dict]:
+    fields = (
+        "device", "device_address", "network", "via", "interface",
+        "preference", "metric", "selection_basis", "selection_order",
+        "priority_comparable",
+    )
+    return [{field: item.get(field) for field in fields} for item in routes]
+
+
 def simulate_proposed_policy_control(
     *, source_text: str, destination_text: str, protocol: str, port: int,
     hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
@@ -1221,6 +1237,29 @@ def simulate_proposed_policy_control(
             "address_pairs": address_pairs,
             "protocol": protocol.lower(),
             "port": port,
+        },
+        "current_path": _path_without_proposals(baseline),
+        "projected_path": _path_without_proposals(projected),
+        "path_changed": (
+            _path_without_proposals(baseline) != _path_without_proposals(projected)
+        ),
+        "alternate_routes_before": _compact_route_options(
+            list((baseline.get("retained_objects") or {}).get("routes") or [])[1:]
+        ),
+        "alternate_routes_after": _compact_route_options(
+            list((projected.get("retained_objects") or {}).get("routes") or [])[1:]
+        ),
+        "collateral_impact": {
+            "bounded": address_pairs is not None,
+            "address_pairs": address_pairs,
+            "protocols": [protocol.lower()],
+            "ports": [port],
+            "evaluated_flows": 1,
+            "summary": (
+                f"The proposal is limited to {address_pairs} address pair{'s' if address_pairs != 1 else ''} on {protocol.upper()}/{port}; only the selected representative flow was evaluated."
+                if address_pairs is not None
+                else f"The proposal is limited to the entered endpoints on {protocol.upper()}/{port}; unbounded Internet scope is not enumerated."
+            ),
         },
     }
     return {
@@ -1405,7 +1444,10 @@ def simulate_proposed_route_control(
     projected_routes = list((projected.get("retained_objects") or {}).get("routes") or [])
     baseline_selected = baseline_routes[0] if baseline_routes else None
     projected_selected = projected_routes[0] if projected_routes else None
-    selected_fields = ("device", "device_address", "network", "via", "interface", "preference", "metric")
+    selected_fields = (
+        "device", "device_address", "network", "via", "interface",
+        "preference", "metric", "selection_basis", "priority_comparable",
+    )
     compact_selected = lambda item: (
         {field: item.get(field) for field in selected_fields} if item else None
     )
@@ -1430,6 +1472,18 @@ def simulate_proposed_route_control(
             "selected_route_before": compact_selected(baseline_selected),
             "selected_route_after": compact_selected(projected_selected),
             "path_changed": compact_selected(baseline_selected) != compact_selected(projected_selected),
+            "current_path": _path_without_proposals(baseline),
+            "projected_path": _path_without_proposals(projected),
+            "alternate_routes_before": _compact_route_options(baseline_routes[1:]),
+            "alternate_routes_after": _compact_route_options(projected_routes[1:]),
+            "collateral_impact": {
+                "bounded": True,
+                "destination_addresses": int(network.num_addresses),
+                "evaluated_flows": 1,
+                "summary": (
+                    f"The changed prefix covers {int(network.num_addresses)} destination address{'es' if int(network.num_addresses) != 1 else ''}; NCT evaluated only the selected flow and did not recompute every service or policy path in that prefix."
+                ),
+            },
         },
         "disclaimer": (
             "Read-only route projection from retained evidence. It sends no network traffic and changes no device configuration."
