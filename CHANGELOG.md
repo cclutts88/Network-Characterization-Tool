@@ -2,6 +2,11 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added retained-path exposure classifications to Hunt SearchSploit matches.
+  Potential CVE candidates can now be filtered by externally reachable,
+  internal-only, local-segment, externally blocked, not exposed, or unknown,
+  with per-Saved-Network policy and route evidence. These labels describe the
+  matched service path and never claim that the candidate is exploitable.
 - Added proof-based Not Exposed results to Reach. NCT now requires the exact
   requested protocol/port in retained per-host Nmap coverage, treats
   `open|filtered` observations as inconclusive, and shows the scan-time/NCT-host

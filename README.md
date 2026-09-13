@@ -49,7 +49,9 @@ SearchSploit database, and visualizes retained topology evidence.
   presentation, and later scanner disagreement is flagged.
 - Offline SearchSploit enrichment using a managed Exploit-DB database with
   connected updates, air-gapped uploads, source/version details, archive safety
-  validation, atomic activation, and prior-version rollback.
+  validation, atomic activation, and prior-version rollback. Hunt correlates
+  each potential match with retained external and per-Saved-Network Reach
+  evidence without presenting a product/version match as proven exploitability.
 - A network map with consolidated router/firewall identities, Saved Network and
   subnet grouping, collapsible endpoint groups, compact topology nodes, a sticky
   evidence panel, cursor-centered zoom, drag-to-pan, draggable nodes, and Fit.

@@ -25,7 +25,7 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
-from app.reachability import evaluate_reachability
+from app.reachability import classify_searchsploit_exposure, evaluate_reachability
 from app.reachability_ui import reachability_page
 from app.saved_networks import list_saved_networks
 from app.ip_sort import ip_sort_key
@@ -1963,12 +1963,24 @@ def rollback_searchsploit_database_version(version_id: str) -> dict:
 
 @app.post("/api/searchsploit/hunting/network")
 def searchsploit_hunting_network() -> dict:
-    return enrich_hunting_with_searchsploit(analyze_hunting_network())
+    hunting = analyze_hunting_network()
+    return classify_searchsploit_exposure(
+        enrich_hunting_with_searchsploit(hunting),
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
 
 
 @app.post("/api/searchsploit/hunting/{run_id}")
 def searchsploit_hunting_scan(run_id: str) -> dict:
-    return enrich_hunting_with_searchsploit(analyze_hunting_scan(run_id))
+    hunting = analyze_hunting_scan(run_id)
+    return classify_searchsploit_exposure(
+        enrich_hunting_with_searchsploit(hunting),
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
 
 
 @app.get("/api/scan-comparisons/candidates")

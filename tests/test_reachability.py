@@ -4,7 +4,11 @@ import pytest
 
 from app import main
 from app.iptables_policy import parse_iptables_policy
-from app.reachability import evaluate_reachability, parse_endpoint
+from app.reachability import (
+    classify_searchsploit_exposure,
+    evaluate_reachability,
+    parse_endpoint,
+)
 from app.vendor_policy import parse_vendor_policy
 
 
@@ -456,3 +460,86 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
     result = main._latest_device_reachability_evidence()
 
     assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
+
+
+def test_searchsploit_exposure_requires_internal_permit_and_external_deny_for_internal_only():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i outside -o servers -p tcp -d 10.90.0.10/32 --dport 443 -j DROP
+-A FORWARD -i users -o servers -p tcp -d 10.90.0.10/32 --dport 443 -j ACCEPT
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "users", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "interface": "servers", "direct": True},
+        ]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+    enrichment = {
+        "status": "searchsploit_complete",
+        "matches": [{
+            "match_key": "match-1",
+            "host_key": "ip:10.90.0.10",
+            "ip": "10.90.0.10",
+            "protocol": "tcp",
+            "port": 443,
+            "candidate_count": 2,
+            "candidates": [{"edb_id": "1"}, {"edb_id": "2"}],
+        }],
+    }
+
+    result = classify_searchsploit_exposure(
+        enrichment,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[device],
+    )
+
+    exposure = result["matches"][0]["exposure"]
+    assert exposure["classification"] == "internal_only"
+    assert exposure["label"] == "Internal only"
+    assert exposure["external"]["outcome"] == "Expected Blocked"
+    internal = {item["source"]["name"]: item["outcome"] for item in exposure["internal"]}
+    assert internal == {"Users": "Expected Allowed", "Servers": "Local"}
+    assert result["exposure_facets"] == [{
+        "classification": "internal_only",
+        "label": "Internal only",
+        "match_count": 1,
+        "candidate_count": 2,
+    }]
+
+
+def test_searchsploit_exposure_labels_external_permit_without_claiming_vulnerability():
+    policy = parse_iptables_policy("""*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i outside -o servers -p tcp -d 10.90.0.10/32 --dport 443 -j ACCEPT
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+    enrichment = {"matches": [{
+        "ip": "10.90.0.10", "protocol": "tcp", "port": 443,
+        "candidate_count": 1, "candidates": [{"edb_id": "1"}],
+    }]}
+
+    result = classify_searchsploit_exposure(
+        enrichment,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[device],
+    )
+
+    assert result["matches"][0]["exposure"]["classification"] == "external_reachable"
+    assert "not proof" in result["exposure_disclaimer"]

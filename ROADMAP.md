@@ -591,6 +591,10 @@ within Reachability.
     with confidence, evidence, and prominent caveats.
   - [x] Report Not Exposed only when retained scan coverage proves that the
     requested service was actually assessed and not exposed.
+  - [x] Correlate Hunt SearchSploit candidates with retained Reach evidence.
+    Show and filter conservative external, internal-only, local-segment,
+    externally-blocked, not-exposed, and unknown classifications per matched
+    service while keeping exploitability explicitly unconfirmed.
 - [ ] Group source-exposure reports by Saved Network and preserve policy objects
   and evidence.
 - [ ] Send saved reachability results to the map for focused visualization.

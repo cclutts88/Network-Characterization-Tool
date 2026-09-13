@@ -350,6 +350,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="cveFilter"' in html
     assert 'id="cveYearFilter"' in html
     assert 'id="cveStatusFilter"' in html
+    assert 'id="exposureFilter"' in html
+    assert "Matched-service exposure" in html
+    assert "Service exposure evidence" in html
+    assert "data.exposure_disclaimer" in html
     assert 'id="cveSummary"' in html
     assert "SearchSploit CVEs / common names" in html
     assert "SearchSploit candidate title" in html

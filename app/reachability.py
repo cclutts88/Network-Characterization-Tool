@@ -869,3 +869,195 @@ def evaluate_reachability(
             "evidence": len(evidence),
         },
     }
+
+
+def _compact_exposure_result(source: dict, result: dict) -> dict:
+    return {
+        "source": source,
+        "outcome": result.get("outcome"),
+        "confidence": result.get("confidence"),
+        "explanation": result.get("explanation"),
+        "evidence": [
+            {
+                field: item.get(field)
+                for field in ("kind", "title", "detail", "raw", "run_id")
+                if item.get(field) not in (None, "")
+            }
+            for item in result.get("evidence") or []
+        ],
+        "caveats": list(result.get("caveats") or []),
+    }
+
+
+def _exposure_summary(external: dict, internal: list[dict]) -> dict:
+    external_outcome = external.get("outcome")
+    permitted = [
+        item for item in internal if item.get("outcome") == "Expected Allowed"
+    ]
+    local = [item for item in internal if item.get("outcome") == "Local"]
+    if external_outcome == "Expected Allowed":
+        return {
+            "classification": "external_reachable",
+            "label": "Externally reachable",
+            "confidence": "high",
+            "summary": "Retained policy permits the matched service from the Internet source.",
+        }
+    if external_outcome == "Not Exposed":
+        return {
+            "classification": "not_exposed",
+            "label": "Not exposed",
+            "confidence": "high",
+            "summary": "Exact retained scan coverage did not observe the matched service exposed.",
+        }
+    if external_outcome == "Expected Blocked" and permitted:
+        names = ", ".join(
+            str(item.get("source", {}).get("name") or item.get("source", {}).get("cidr"))
+            for item in permitted
+        )
+        return {
+            "classification": "internal_only",
+            "label": "Internal only",
+            "confidence": "high",
+            "summary": f"Internet access is explicitly blocked; retained policy permits access from {names}.",
+        }
+    if permitted:
+        names = ", ".join(
+            str(item.get("source", {}).get("name") or item.get("source", {}).get("cidr"))
+            for item in permitted
+        )
+        return {
+            "classification": "internal_reachable",
+            "label": "Internal permitted · external unknown",
+            "confidence": "medium",
+            "summary": f"Retained policy permits access from {names}, but external exposure is not established.",
+        }
+    if external_outcome == "Expected Blocked" and local:
+        names = ", ".join(
+            str(item.get("source", {}).get("name") or item.get("source", {}).get("cidr"))
+            for item in local
+        )
+        return {
+            "classification": "local_segment",
+            "label": "External blocked · local segment",
+            "confidence": "medium",
+            "summary": f"Internet access is explicitly blocked; {names} contains the destination, but local host controls remain unknown.",
+        }
+    if external_outcome == "Expected Blocked":
+        return {
+            "classification": "external_blocked",
+            "label": "External blocked",
+            "confidence": "high",
+            "summary": "Retained policy explicitly blocks Internet access; no internal permit was established.",
+        }
+    if local:
+        names = ", ".join(
+            str(item.get("source", {}).get("name") or item.get("source", {}).get("cidr"))
+            for item in local
+        )
+        return {
+            "classification": "local_segment",
+            "label": "Local segment · external unknown",
+            "confidence": "medium",
+            "summary": f"{names} contains the destination, but external and routed policy remain unresolved.",
+        }
+    return {
+        "classification": "unknown",
+        "label": "Exposure unknown",
+        "confidence": "low",
+        "summary": "Retained routes and policy do not establish whether this matched service is externally or internally reachable.",
+    }
+
+
+def classify_searchsploit_exposure(
+    enrichment: dict,
+    *,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+) -> dict:
+    """Attach conservative retained-path classifications to SearchSploit matches."""
+    classified_matches = []
+    facet_counts: dict[str, dict] = {}
+    for original in enrichment.get("matches") or []:
+        match = dict(original)
+        try:
+            destination = str(ipaddress.ip_address(str(match.get("ip") or "")))
+            protocol = str(match.get("protocol") or "").lower()
+            port = int(match.get("port") or 0)
+            if protocol not in {"tcp", "udp"} or not 1 <= port <= 65535:
+                raise ValueError
+        except (TypeError, ValueError):
+            exposure = {
+                "classification": "unknown",
+                "label": "Exposure unknown",
+                "confidence": "low",
+                "summary": "The matched finding does not contain a usable IPv4 service endpoint.",
+                "external": None,
+                "internal": [],
+            }
+        else:
+            external_result = evaluate_reachability(
+                source_text="Internet",
+                destination_text=destination,
+                protocol=protocol,
+                port=port,
+                hunting=hunting,
+                saved_networks=saved_networks,
+                device_analyses=device_analyses,
+            )
+            external = _compact_exposure_result(
+                {"kind": "external", "name": "Internet", "cidr": None},
+                external_result,
+            )
+            internal = []
+            seen_networks = set()
+            for network in saved_networks:
+                cidr = str(network.get("cidr") or "").strip()
+                if not cidr or cidr in seen_networks:
+                    continue
+                seen_networks.add(cidr)
+                try:
+                    internal_result = evaluate_reachability(
+                        source_text=cidr,
+                        destination_text=destination,
+                        protocol=protocol,
+                        port=port,
+                        hunting=hunting,
+                        saved_networks=saved_networks,
+                        device_analyses=device_analyses,
+                    )
+                except ValueError:
+                    continue
+                internal.append(_compact_exposure_result(
+                    {
+                        "kind": "saved_network",
+                        "saved_network_id": network.get("saved_network_id"),
+                        "name": network.get("name") or cidr,
+                        "cidr": cidr,
+                    },
+                    internal_result,
+                ))
+            summary = _exposure_summary(external, internal)
+            exposure = {**summary, "external": external, "internal": internal}
+        match["exposure"] = exposure
+        classified_matches.append(match)
+        key = str(exposure["classification"])
+        facet = facet_counts.setdefault(key, {
+            "classification": key,
+            "label": exposure["label"],
+            "match_count": 0,
+            "candidate_count": 0,
+        })
+        facet["match_count"] += 1
+        facet["candidate_count"] += int(match.get("candidate_count") or 0)
+    return {
+        **enrichment,
+        "matches": classified_matches,
+        "exposure_facets": sorted(
+            facet_counts.values(), key=lambda item: (-item["match_count"], item["label"])
+        ),
+        "exposure_disclaimer": (
+            "Exposure describes the retained path to the matched service, not proof "
+            "that a SearchSploit candidate is exploitable."
+        ),
+    }
