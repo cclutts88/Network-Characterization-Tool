@@ -511,6 +511,10 @@ within Reachability.
   - [x] Allow only an Administrator to deliberately publish or unpublish a
     versioned personal Map layout; other analysts can load shared layouts but do
     not overwrite the owner's copy.
+  - [x] Add a CherryTree-style investigation notebook with personal notes on the
+    left, page-specific shared notes on the right, nested folders, retained page
+    context, version-conflict protection, owner-controlled branch sharing, and
+    portable Markdown export.
 - [x] Add version checks, conflict handling, scan ownership and queuing, live
   status updates, and an audit trail for every shared change.
   - [x] Replace concurrent-scan rejection with a persistent first-in/first-out

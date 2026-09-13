@@ -665,13 +665,15 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert '.summary-panel[open]>summary::before' in html
     assert 'id="edgeCount"' not in html
     assert 'id="sourceCount"' not in html
-    assert ".workspace>aside { position:sticky" in html
+    assert ".workspace>aside { display:none; }" in html
+    assert ".workspace.map-expanded .map-shell>#details { display:block;" in html
     assert 'id="toggleWorkspace"' in html
     assert 'class="workspace-toggle-dock"' in html
     assert '.workspace-toggle-dock{position:sticky;top:126px' in html
     assert 'body.map-expanded .workspace-toggle-dock{position:fixed;top:14px;left:50%' in html
     assert 'id="toggleDetails"' in html
     assert 'class="details-control"' in html
+    assert ".details-control{display:none}.workspace.map-expanded .details-control{display:flex}" in html
     assert 'id="workspaceSize"' in html
     assert "Large network · 4× area" in html
     assert ".workspace.map-expanded .details-control" in html

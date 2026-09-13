@@ -2,6 +2,16 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Added a CherryTree-style investigation notebook to every primary page when
+  analyst authentication is enabled. Personal notes and nested folders open
+  from the left edge; page-specific team notes open read-only from the right.
+  Owners can link notes to their current NCT view, explicitly share or unshare
+  a branch, and export one note or a complete folder tree as Markdown. Note
+  versions prevent stale browser sessions from silently replacing newer work.
+- Removed object details from the standard Map overview so the full map width
+  remains available. Object details and their toggle now appear only in the
+  expanded workspace; opening Map shared notes closes that expanded details
+  pane without clearing the selected object.
 - Added a shared first-in/first-out analyzer queue for multi-analyst operation.
   The Nmap page shows the active scan, owners, waiting positions, and live
   status; owners can cancel their own work and Administrators can reassign

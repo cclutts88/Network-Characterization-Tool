@@ -53,6 +53,15 @@ disabled, the current browser-local layout behavior remains unchanged. Each
 analyst can mark exactly one visible personal or shared layout as the default;
 that preference affects only their account and opens automatically on Map.
 
+Every primary page also provides two collapsed investigation-note rails.
+**Personal notes** open from the left and follow the signed-in analyst throughout
+NCT. They support nested folders, movable notes, page/record context links, and
+optimistic version checks. **Shared notes** open from the right and show only
+material explicitly published to the current Device, Nmap, Analyze, Hunt, or
+Map page. Shared material is read-only to other analysts and identifies its
+owner. Sharing or unsharing a folder applies to its complete branch. A selected
+note or folder tree can be downloaded as a portable Markdown document.
+
 An authorized host operator can use `scripts/nct-admin-recover.sh` when all
 Administrators are locked out. Recovery is limited to an existing Administrator,
 requires no active work, creates a backup, resets through a password-file mount,

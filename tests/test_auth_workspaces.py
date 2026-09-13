@@ -118,6 +118,10 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert account_script.status_code == 200
         assert "Sign out" in account_script.text
         assert "Accounts" in account_script.text
+        assert "Personal notes" in account_script.text
+        assert "shared notes" in account_script.text
+        assert ".nct-note-panel.personal" in account_script.text
+        assert ".nct-note-panel.shared" in account_script.text
         assert admin.post(
             "/api/auth/users",
             json={
@@ -249,6 +253,25 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         )
         assert defaulted.status_code == 200
         assert admin.get("/api/workspaces/layouts").json()["layouts"][0]["is_default"] is True
+        folder = admin.post(
+            "/api/workspaces/notes",
+            json={"title": "Investigation", "kind": "folder"},
+        ).json()
+        note = admin.post(
+            "/api/workspaces/notes",
+            json={
+                "title": "Gateway lead",
+                "kind": "note",
+                "content": "Validate the outside route.",
+                "parent_id": folder["note_id"],
+                "context": {"source_url": "/network-map"},
+            },
+        ).json()
+        assert note["owner"] == "nctadmin"
+        assert admin.post(
+            f"/api/workspaces/notes/{folder['note_id']}/share",
+            json={"shared": True, "page": "map", "expected_version": 1},
+        ).status_code == 200
 
     with TestClient(app) as viewer:
         assert viewer.post(
@@ -262,6 +285,14 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
             f"/api/workspaces/layouts/{saved['layout_id']}/default"
         ).status_code == 200
         assert viewer.get("/api/workspaces/layouts").json()["layouts"][0]["is_default"] is True
+        assert viewer.get("/api/workspaces/notes?page=hunt").json()["notes"] == []
+        shared_notes = viewer.get("/api/workspaces/notes?page=map").json()["notes"]
+        assert {item["title"] for item in shared_notes} == {"Investigation", "Gateway lead"}
+        assert all(item["writable"] is False for item in shared_notes)
+        assert viewer.post(
+            "/api/workspaces/notes",
+            json={"title": "Viewer edit", "kind": "note"},
+        ).status_code == 403
         assert viewer.post(
             "/api/workspaces/layouts",
             json={"name": "Viewer edit", "snapshot": {}},

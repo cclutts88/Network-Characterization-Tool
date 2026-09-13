@@ -96,6 +96,15 @@ from app.scan_collaboration import (
     init_scan_collaboration_storage,
     save_scan_draft,
 )
+from app.investigation_notes import (
+    NoteConflict,
+    delete_note,
+    export_note_markdown,
+    init_note_storage,
+    list_notes,
+    save_note,
+    share_note,
+)
 import hashlib
 import io
 import ipaddress
@@ -214,6 +223,22 @@ class WorkspacePublishRequest(BaseModel):
 class ScanDraftRequest(BaseModel):
     snapshot: dict
     expected_version: int | None = Field(default=None, ge=0)
+
+
+class InvestigationNoteRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=140)
+    kind: Literal["folder", "note"] = "note"
+    content: str = Field(default="", max_length=250_000)
+    context: dict = Field(default_factory=dict)
+    parent_id: str | None = Field(default=None, max_length=64)
+    note_id: str | None = Field(default=None, max_length=64)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class InvestigationNoteShareRequest(BaseModel):
+    shared: bool
+    expected_version: int = Field(ge=1)
+    page: Literal["device", "nmap", "analyze", "hunt", "map"] | None = None
 
 
 def utc_now() -> str:
@@ -872,6 +897,7 @@ async def lifespan(_: FastAPI):
     init_auth_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
     init_scan_collaboration_storage(DB_PATH)
+    init_note_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1177,6 +1203,102 @@ def remove_personal_scan_draft(request: Request) -> dict:
         "owner": request.state.analyst["username"],
         "deleted": delete_scan_draft(DB_PATH, request.state.analyst["username"]),
     }
+
+
+@app.get("/api/workspaces/notes")
+def investigation_notes(request: Request, page: str | None = None) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"server_persistence": False, "notes": []}
+    return {
+        "server_persistence": True,
+        "analyst": request.state.analyst,
+        "notes": list_notes(DB_PATH, request.state.analyst["username"], page),
+    }
+
+
+@app.post("/api/workspaces/notes")
+def store_investigation_note(
+    request: Request, note: InvestigationNoteRequest
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return save_note(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            **note.model_dump(),
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/notes/{note_id}")
+def remove_investigation_note(
+    request: Request, note_id: str, expected_version: int
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return delete_note(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            note_id=note_id,
+            expected_version=expected_version,
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+
+
+@app.post("/api/workspaces/notes/{note_id}/share")
+def change_investigation_note_sharing(
+    request: Request, note_id: str, sharing: InvestigationNoteShareRequest
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return share_note(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            note_id=note_id,
+            expected_version=sharing.expected_version,
+            shared=sharing.shared,
+            page=sharing.page,
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/notes/{note_id}/export")
+def export_investigation_note(
+    request: Request, note_id: str, page: str | None = None
+) -> Response:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        title, markdown = export_note_markdown(
+            DB_PATH,
+            viewer=request.state.analyst["username"],
+            note_id=note_id,
+            page=page,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Visible note not found") from exc
+    filename = safe_name(title, "nct-notes") + ".md"
+    return Response(
+        markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/os-overrides")
