@@ -80,6 +80,48 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["commands"] == ["show running-config", "show ip route"]
 
 
+def test_unifi_saved_rules_are_classified_by_iptables_table(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    run_dir = make_collection(config_dir, "b" * 32)
+    (run_dir / "uploaded-router-config.txt").write_text(
+        """*nat
+:PREROUTING ACCEPT [0:0]
+-A POSTROUTING -o eth9 -j MASQUERADE
+COMMIT
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD DROP [0:0]
+-A FORWARD -s 10.80.0.0/24 -o eth9 -j ACCEPT
+COMMIT
+create USERS hash:net family inet
+add USERS 10.80.0.0/24
+"""
+    )
+
+    result = device_collection_summary("b" * 32, config_dir=config_dir)
+
+    assert any("-A FORWARD" in item["evidence"] for item in result["firewall_acl"])
+    assert any("MASQUERADE" in item["evidence"] for item in result["nat"])
+    forward = next(item for item in result["firewall_acl"] if "-A FORWARD" in item["evidence"])
+    assert forward | {
+        "table": "filter",
+        "chain": "FORWARD",
+        "rule_order": 1,
+        "action": "ACCEPT",
+        "source": "10.80.0.0/24",
+    } == forward
+    masquerade = next(item for item in result["nat"] if "MASQUERADE" in item["evidence"])
+    assert masquerade | {
+        "table": "nat",
+        "chain": "POSTROUTING",
+        "rule_order": 1,
+        "action": "MASQUERADE",
+    } == masquerade
+    assert {item["evidence"] for item in result["network_objects"]} >= {
+        "create USERS hash:net family inet", "add USERS 10.80.0.0/24"
+    }
+
+
 def test_collection_artifacts_are_not_duplicated_when_upload_matches_config_suffix(tmp_path):
     config_dir = tmp_path / "device-configs"
     run_dir = make_collection(config_dir)

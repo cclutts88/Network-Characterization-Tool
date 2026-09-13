@@ -1275,6 +1275,24 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             node["state"] = "partial"
         parsed_devices.add(node["id"])
         interfaces, routes = parse_config_text(text)
+        declared_roles = {
+            str(item).lower()
+            for item in (manifest.get("device_types") or [manifest.get("device_type")])
+            if item
+        }
+        analyzed_roles = set(declared_roles & {"router", "firewall", "switch"})
+        if routes and declared_roles & {"router", "firewall"}:
+            analyzed_roles.add("router")
+        if declared_roles & {"router", "firewall"} and re.search(
+            r"(?im)^\*filter\s*$|^(?:ip\s+)?access-list\b|\bset\s+(?:firewall|security\s+policies)\b",
+            text,
+        ):
+            analyzed_roles.add("firewall")
+        role_order = ("router", "firewall", "switch")
+        node["roles"] = [role for role in role_order if role in analyzed_roles]
+        node["role_label"] = " + ".join(role.title() for role in node["roles"])
+        if {"router", "firewall"}.issubset(analyzed_roles):
+            node["role"] = "firewall"
         switch_detail = parse_switch_evidence(text, manifest.get("commands", []))
         interfaces = merge_switch_interfaces(interfaces, switch_detail)
         neighbors = parse_neighbor_text(text)

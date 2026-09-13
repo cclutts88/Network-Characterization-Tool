@@ -108,6 +108,8 @@ def test_device_analysis_summarizes_and_correlates_retained_evidence(tmp_path):
     )
 
     assert result["counts"]["default_routes"] == 1
+    assert result["device"]["roles"] == ["router", "firewall"]
+    assert result["device"]["role_label"] == "Router + Firewall"
     assert result["counts"]["next_hops"] == 3
     assert result["counts"]["multipath_destinations"] == 1
     assert result["route_analysis"]["protocol_counts"]["static"] == 3

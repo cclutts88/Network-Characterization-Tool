@@ -202,6 +202,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ip -6 neigh show",
             "bridge vlan show",
             "ss -lntup",
+            "ipset save",
             "iptables-save",
             "nft list ruleset",
             "lldpcli show neighbors details",
@@ -217,6 +218,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ip -6 neigh show",
             "bridge vlan show",
             "ss -lntup",
+            "ipset save",
             "iptables-save",
             "nft list ruleset",
             "lldpcli show neighbors details",
@@ -225,6 +227,8 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "uname -a",
             "cat /etc/os-release",
             "ubnt-device-info",
+            "mca-cli-op info",
+            "mca-cli-op show",
             "ip -details address show",
             "ip -details link show",
             "ip -4 route show table all",
@@ -234,6 +238,10 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "bridge link show",
             "bridge vlan show",
             "bridge fdb show",
+            "swctrl port show",
+            "swctrl mac show",
+            "swctrl vlan show",
+            "stp show",
             "lldpcli show neighbors details",
             "ss -lntup",
         ),
@@ -265,6 +273,9 @@ class DeviceConfigPlan(BaseModel):
     originating_host: str = Field(min_length=1, max_length=255)
     vendor: Literal["vyos", "cisco", "juniper", "pfsense", "unifi"]
     device_type: Literal["router", "firewall", "switch"]
+    device_types: list[Literal["router", "firewall", "switch"]] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
     device_address: str = Field(min_length=1, max_length=255)
     device_name: str | None = Field(default=None, max_length=100)
     username: str = Field(min_length=1, max_length=64)
@@ -276,12 +287,20 @@ class DeviceConfigPlan(BaseModel):
 
     @model_validator(mode="after")
     def validate_vendor_device_type(self) -> "DeviceConfigPlan":
-        if self.device_type not in TEMPLATES.get(self.vendor, {}):
+        selected = list(dict.fromkeys(self.device_types or [self.device_type]))
+        unsupported = [item for item in selected if item not in TEMPLATES.get(self.vendor, {})]
+        if unsupported:
             supported = ", ".join(DEVICE_TYPES_BY_VENDOR.get(self.vendor, ()))
             raise ValueError(
-                f"{self.vendor} does not provide a {self.device_type} collection profile; "
+                f"{self.vendor} does not provide a {unsupported[0]} collection profile; "
                 f"choose one of: {supported}"
             )
+        if "switch" in selected and len(selected) > 1:
+            raise ValueError("Switch collection cannot be combined with Router or Firewall")
+        self.device_types = selected
+        self.device_type = (
+            "firewall" if set(selected) == {"router", "firewall"} else selected[0]
+        )
         return self
 
     @field_validator("operator", "reason", "originating_host", "device_address", "username")
@@ -423,7 +442,12 @@ def _interactive_collection_command(
 
 
 def build_plan(plan: DeviceConfigPlan) -> dict:
-    template_commands = list(TEMPLATES[plan.vendor][plan.device_type])
+    selected_device_types = plan.device_types or [plan.device_type]
+    template_commands = list(dict.fromkeys(
+        command
+        for device_type in selected_device_types
+        for command in TEMPLATES[plan.vendor][device_type]
+    ))
     additional_commands = list(plan.additional_commands)
     commands = template_commands + additional_commands
     run_id = uuid.uuid4().hex
@@ -596,6 +620,8 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "operator": plan.operator,
         "vendor": plan.vendor,
         "device_type": plan.device_type,
+        "device_types": selected_device_types,
+        "device_role_label": " + ".join(item.title() for item in selected_device_types),
         "device_address": plan.device_address,
         "device_name": plan.device_name,
         "username": plan.username,
@@ -637,6 +663,8 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "originating_host": plan.originating_host,
         "vendor": plan.vendor,
         "device_type": plan.device_type,
+        "device_types": preview["device_types"],
+        "device_role_label": preview["device_role_label"],
         "device_address": plan.device_address,
         "device_name": plan.device_name,
         "username": plan.username,
@@ -975,8 +1003,12 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             if copied.returncode != 0 or not local_output.is_file():
                 raise RuntimeError("SCP could not copy the collected configuration back to the analyzer.")
         else:
+            remote_input, remote_command = _interactive_collection_command(
+                plan, preview["commands"], None
+            )
             collected = subprocess.run(
-                _control_ssh_args(session) + ["; ".join(preview["commands"])],
+                _control_ssh_args(session) + [remote_command],
+                input=remote_input,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -1102,6 +1134,84 @@ def _evidence_lines(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[di
     return records
 
 
+def _merge_evidence(*groups: list[dict]) -> list[dict]:
+    records: list[dict] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            evidence = str(item.get("evidence") or "")
+            if not evidence or evidence in seen:
+                continue
+            seen.add(evidence)
+            records.append(item)
+            if len(records) >= MAX_SUMMARY_ITEMS:
+                return records
+    return records
+
+
+def _linux_policy_evidence(text: str) -> dict[str, list[dict]]:
+    """Classify retained iptables-save and ipset-save output by table context."""
+    firewall_acl: list[dict] = []
+    nat: list[dict] = []
+    network_objects: list[dict] = []
+    table: str | None = None
+    chain_orders: dict[tuple[str, str], int] = {}
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if line.startswith("*") and len(line) > 1:
+            table = line[1:].strip().lower()
+            continue
+        if line == "COMMIT":
+            table = None
+            continue
+        record = {
+            "line_number": line_number,
+            "evidence": line[:1000],
+            "source_format": "linux_saved_rules",
+        }
+        rule = re.match(r"^-A\s+(?P<chain>\S+)(?P<body>.*)$", line, re.I)
+        if rule and table:
+            chain = rule.group("chain")
+            order_key = (table, chain)
+            chain_orders[order_key] = chain_orders.get(order_key, 0) + 1
+            record.update({
+                "table": table,
+                "chain": chain,
+                "rule_order": chain_orders[order_key],
+            })
+            action = re.search(r"(?:^|\s)-j\s+(\S+)", rule.group("body"), re.I)
+            protocol = re.search(r"(?:^|\s)-p\s+(\S+)", rule.group("body"), re.I)
+            source = re.search(r"(?:^|\s)-s\s+(\S+)", rule.group("body"), re.I)
+            destination = re.search(r"(?:^|\s)-d\s+(\S+)", rule.group("body"), re.I)
+            source_set = re.search(r"--match-set\s+(\S+)\s+src\b", rule.group("body"), re.I)
+            destination_set = re.search(r"--match-set\s+(\S+)\s+dst\b", rule.group("body"), re.I)
+            destination_port = re.search(r"(?:^|\s)--?dports?\s+(\S+)", rule.group("body"), re.I)
+            for key, match in (
+                ("action", action),
+                ("protocol", protocol),
+                ("source", source),
+                ("destination", destination),
+                ("source_set", source_set),
+                ("destination_set", destination_set),
+                ("destination_ports", destination_port),
+            ):
+                if match:
+                    record[key] = match.group(1)
+        elif table:
+            record["table"] = table
+        if table == "filter" and (line.startswith("-A ") or re.match(r"^:[A-Za-z0-9_.:-]+\s+(?:ACCEPT|DROP|REJECT|-)", line, re.I)):
+            firewall_acl.append(record)
+        elif table == "nat" and (line.startswith("-A ") or re.match(r"^:[A-Za-z0-9_.:-]+\s+(?:ACCEPT|DROP|REJECT|-)", line, re.I)):
+            nat.append(record)
+        elif re.match(r"^(?:create|add)\s+[A-Za-z0-9_.:-]+(?:\s|$)", line, re.I):
+            network_objects.append(record)
+    return {
+        "firewall_acl": firewall_acl[:MAX_SUMMARY_ITEMS],
+        "nat": nat[:MAX_SUMMARY_ITEMS],
+        "network_objects": network_objects[:MAX_SUMMARY_ITEMS],
+    }
+
+
 VLAN_PATTERNS = (
     re.compile(r"^vlan\s+\d+\b", re.I),
     re.compile(r"\bswitchport\s+(?:access|trunk).*\bvlan\b", re.I),
@@ -1167,9 +1277,19 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     neighbors = parse_neighbor_text(configuration_text)
     topology_neighbors = parse_topology_neighbors(configuration_text)
     vlans = _evidence_lines(configuration_text, VLAN_PATTERNS)
-    firewall_acl = _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS)
-    nat = _evidence_lines(configuration_text, NAT_PATTERNS)
-    network_objects = _evidence_lines(configuration_text, NETWORK_OBJECT_PATTERNS)
+    linux_policy = _linux_policy_evidence(configuration_text)
+    firewall_acl = _merge_evidence(
+        _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS),
+        linux_policy["firewall_acl"],
+    )
+    nat = _merge_evidence(
+        _evidence_lines(configuration_text, NAT_PATTERNS),
+        linux_policy["nat"],
+    )
+    network_objects = _merge_evidence(
+        _evidence_lines(configuration_text, NETWORK_OBJECT_PATTERNS),
+        linux_policy["network_objects"],
+    )
     switching = _evidence_lines(configuration_text, SWITCHING_PATTERNS)
     commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
     routes = [

@@ -103,5 +103,6 @@ def test_supported_templates_collect_interface_mac_evidence():
         assert "ip -4 neigh show" in commands
         assert "ip -6 neigh show" in commands
         assert "iptables-save" in commands
+        assert "ipset save" in commands
         assert "nft list ruleset" in commands
         assert "lldpcli show neighbors details" in commands

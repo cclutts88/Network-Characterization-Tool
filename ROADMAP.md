@@ -539,6 +539,15 @@ within Reachability.
   - [x] Add the first read-only Reach page and API using the current
     network-wide host/service inventory, Saved Networks, newest per-device
     collections, retained routes, and narrowly supported explicit ACL evidence.
+  - [x] Build the likely path only from source-attached router/firewall evidence,
+    show that path visually, and exclude ordinary switch management default
+    routes unless Layer-3 forwarding is explicitly established.
+  - [x] Parse retained UniFi `iptables-save` filter and NAT tables by table,
+    chain, rule order, action, protocol, and basic address/port selectors instead
+    of discarding bare saved-rule lines.
+  - [x] Collect and retain UniFi `ipset` definitions for future address-group
+    resolution. Existing collections remain useful but require a new pull to add
+    object membership that was not captured previously.
   - [ ] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
     evaluation before treating complex configurations as allow or deny evidence.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
@@ -552,6 +561,21 @@ within Reachability.
 - [ ] Group source-exposure reports by Saved Network and preserve policy objects
   and evidence.
 - [ ] Send saved reachability results to the map for focused visualization.
+
+### Device-role and switch evidence follow-up
+
+- [x] Allow Router and Firewall to be selected together in one device collection,
+  merge their read-only templates without duplicate commands, retain both roles,
+  and label the analyzed device and map object as `Router + Firewall` when the
+  collected evidence supports both functions.
+- [x] Run UniFi command sets through the guarded per-command wrapper so one
+  unavailable command no longer discards usable output from the rest of a pull.
+- [x] Add guarded UniFi switch fallbacks for platform, switch-control, forwarding,
+  VLAN, and spanning-tree evidence on firmware where standard Linux utilities are
+  absent.
+- [ ] Rerun the revised profile against representative UniFi switch models and add
+  parser fixtures for their actual retained `mca-cli-op`, `swctrl`, and `stp`
+  formats. Do not infer missing Layer-2 relationships from the older partial pulls.
 
 ### Future extension — Hardening Validation
 

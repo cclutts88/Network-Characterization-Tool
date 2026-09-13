@@ -20,7 +20,8 @@ HUNTING = {
 
 DEVICE = {
     "run_id": "a" * 32,
-    "device": {"name": "Edge Firewall", "address": "10.80.0.1"},
+    "device": {"name": "Edge Firewall", "address": "10.80.0.1", "type": "firewall"},
+    "interfaces": [{"name": "inside", "network": "10.80.0.0/24", "role": "internal"}],
     "route_analysis": {"routes": [{
         "network": "10.90.0.0/24", "via": "10.80.0.2",
         "interface": "inside", "protocol": "static",
@@ -71,6 +72,19 @@ def test_route_without_exact_policy_is_routed_not_allowed():
     result = assess(device_analyses=[device])
     assert result["outcome"] == "Routed"
     assert result["confidence"] == "medium"
+
+
+def test_switch_management_default_route_is_not_transit_evidence():
+    switch = {
+        **DEVICE,
+        "device": {"name": "Access Switch", "address": "10.80.0.2", "type": "switch"},
+        "route_analysis": {"routes": [{"network": "0.0.0.0/0", "via": "10.80.0.1"}]},
+        "policy": {"firewall_acl": []},
+    }
+    result = assess(destination_text="Internet", device_analyses=[switch])
+    assert result["outcome"] == "Unknown"
+    assert result["counts"]["routes"] == 0
+    assert result["counts"]["excluded_non_transit_routes"] == 1
 
 
 def test_missing_open_port_does_not_claim_blocked_or_not_exposed():

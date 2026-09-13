@@ -66,14 +66,59 @@ def _destination_matches(route_network: str, destination: Endpoint) -> bool:
     return destination.value.subnet_of(route) or destination.value.overlaps(route)
 
 
-def _matching_routes(destination: Endpoint, device_analyses: list[dict]) -> list[dict]:
+def _is_transit_device(analysis: dict) -> bool:
+    return str((analysis.get("device") or {}).get("type") or "").lower() in {
+        "router", "firewall"
+    }
+
+
+def _source_attached(source: Endpoint, analysis: dict) -> bool:
+    interfaces = analysis.get("interfaces") or []
+    if source.kind == "external":
+        return any(item.get("role") == "external" for item in interfaces)
+    if source.value is None:
+        return False
+    for item in interfaces:
+        try:
+            network = ipaddress.ip_network(str(item.get("network") or ""), strict=False)
+        except ValueError:
+            continue
+        if source.kind == "host" and source.value in network:
+            return True
+        if source.kind == "network" and source.value.overlaps(network):
+            return True
+    return False
+
+
+def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: list[dict]) -> tuple[list[dict], list[dict]]:
     candidates = []
+    excluded = []
+    seen = set()
     for analysis in device_analyses:
         device = analysis.get("device") or {}
         for route in (analysis.get("route_analysis") or {}).get("routes") or []:
             network = str(route.get("network") or "")
             if not _destination_matches(network, destination):
                 continue
+            if not _is_transit_device(analysis):
+                excluded.append({
+                    "device": device.get("name") or device.get("address") or "Network device",
+                    "device_type": device.get("type"),
+                    "network": network,
+                    "reason": "Switch management routes are not transit-path evidence unless Layer-3 forwarding is explicitly established.",
+                })
+                continue
+            if not _source_attached(source, analysis):
+                continue
+            key = (
+                str(device.get("address") or device.get("name") or ""),
+                network,
+                str(route.get("via") or ""),
+                str(route.get("interface") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
             try:
                 prefix = ipaddress.ip_network(network, strict=False).prefixlen
             except ValueError:
@@ -89,7 +134,7 @@ def _matching_routes(destination: Endpoint, device_analyses: list[dict]) -> list
                 "run_id": analysis.get("run_id"),
                 "prefix": prefix,
             })
-    return sorted(candidates, key=lambda item: item["prefix"], reverse=True)
+    return sorted(candidates, key=lambda item: item["prefix"], reverse=True), excluded
 
 
 def _service_observation(destination: Endpoint, protocol: str, port: int, hunting: dict) -> dict:
@@ -172,8 +217,9 @@ def evaluate_reachability(
     source_network = _network_for(source, saved_networks)
     destination_network = _network_for(destination, saved_networks)
     service = _service_observation(destination, protocol, port, hunting)
-    routes = _matching_routes(destination, device_analyses)
-    policy = _policy_decisions(source, destination, protocol, port, device_analyses)
+    routes, excluded_routes = _matching_routes(source, destination, device_analyses)
+    transit_analyses = [item for item in device_analyses if _is_transit_device(item)]
+    policy = _policy_decisions(source, destination, protocol, port, transit_analyses)
     evidence = []
     caveats = []
 
@@ -231,6 +277,19 @@ def evaluate_reachability(
     if service["state"] == "observed_exposed" and outcome == "Unknown":
         caveats.append("The service was observed open from the NCT host, but that does not prove it is reachable from the selected source.")
 
+    path = []
+    if source_network:
+        path.append({"kind": "source", "label": source_network.get("name") or source.entered, "detail": source_network.get("cidr")})
+    else:
+        path.append({"kind": "source", "label": source.entered, "detail": "Selected source"})
+    if outcome == "Local":
+        path.append({"kind": "segment", "label": "Same local segment", "detail": destination_network.get("cidr") if destination_network else ""})
+    elif routes:
+        route = routes[0]
+        path.append({"kind": "device", "label": route["device"], "detail": route.get("device_address") or "Routing device"})
+        path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "")})
+    path.append({"kind": "destination", "label": destination.entered, "detail": f"{protocol.upper()}/{port}"})
+
     return {
         "status": "reachability_analysis_complete",
         "outcome": outcome,
@@ -245,10 +304,12 @@ def evaluate_reachability(
         "source_network": source_network,
         "destination_network": destination_network,
         "service_observation": service["state"],
+        "path": path,
         "evidence": evidence,
         "caveats": list(dict.fromkeys(caveats)),
         "counts": {
             "routes": len(routes),
+            "excluded_non_transit_routes": len(excluded_routes),
             "policy_decisions": len(policy),
             "evidence": len(evidence),
         },

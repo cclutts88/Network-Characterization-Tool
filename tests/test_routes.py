@@ -428,10 +428,29 @@ def test_unifi_gateway_preview_uses_guarded_read_only_linux_collection_without_s
     assert "ip -4 neigh show" in data["commands"]
     assert "ip -6 neigh show" in data["commands"]
     assert "iptables-save" in data["commands"]
+    assert "ipset save" in data["commands"]
     assert "nft list ruleset" in data["commands"]
     assert "lldpcli show neighbors details" in data["commands"]
     assert "sh -c" in collection
     assert "Command unavailable or returned a non-zero status" in collection
+
+
+def test_router_and_firewall_profiles_can_be_combined_without_duplicate_commands():
+    body = device_password_plan()
+    body.update({
+        "vendor": "unifi",
+        "username": "root",
+        "device_type": "firewall",
+        "device_types": ["router", "firewall"],
+    })
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["device_types"] == ["router", "firewall"]
+    assert data["device_role_label"] == "Router + Firewall"
+    assert len(data["template_commands"]) == len(set(data["template_commands"]))
 
 
 def test_cisco_switch_preview_uses_switch_specific_read_only_evidence_commands():
@@ -470,6 +489,8 @@ def test_juniper_and_unifi_switch_profiles_cover_switching_evidence():
     assert unifi.status_code == 200
     assert "bridge vlan show" in unifi.json()["commands"]
     assert "bridge fdb show" in unifi.json()["commands"]
+    assert "mca-cli-op show" in unifi.json()["commands"]
+    assert "swctrl mac show" in unifi.json()["commands"]
     assert unifi.json()["transfer_method"] == "ssh_stdout"
 
 

@@ -201,6 +201,9 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "Cisco, Juniper, and UniFi devices return output directly through SSH and do not run SCP" in html
     assert '<option value="unifi">UniFi</option>' in html
     assert '<option value="switch">Switch</option>' in html
+    assert '<select id="type" multiple size="3"' in html
+    assert "device_types:deviceTypes" in html
+    assert "Router + Firewall selected" in html
     assert "supportsSwitch=['cisco','juniper','unifi'].includes(vendor)" in html
     assert "Switch collection is available for this vendor" in html
     assert "$('type').onchange=updateVendorHint" in html

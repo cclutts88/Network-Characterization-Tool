@@ -400,6 +400,41 @@ System Capabilities: Bridge Router
     assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
 
 
+def test_combined_router_firewall_is_labeled_as_both_on_map(tmp_path, monkeypatch):
+    run_id = "9" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": run_id,
+        "device_address": "10.80.0.1",
+        "device_name": "core-gateway",
+        "vendor": "unifi",
+        "device_type": "firewall",
+        "device_types": ["router", "firewall"],
+        "status": "completed",
+        "created_at": "2026-09-12T20:00:00+00:00",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        """2: eth0: <UP> mtu 1500
+    inet 10.80.0.1/24 scope global eth0
+default via 192.0.2.1 dev eth9
+*filter
+:FORWARD DROP [0:0]
+COMMIT
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    gateway = nodes["ip:10.80.0.1"]
+    assert gateway["role"] == "firewall"
+    assert gateway["roles"] == ["router", "firewall"]
+    assert gateway["role_label"] == "Router + Firewall"
+
+
 def test_switch_mac_table_correlates_known_nmap_mac_to_physical_port(tmp_path, monkeypatch):
     run_id = "b" * 32
     run_dir = tmp_path / run_id

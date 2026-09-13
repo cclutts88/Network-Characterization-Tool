@@ -278,6 +278,19 @@ def analyze_device_collection(
         })
     policy_count = len(summary.get("firewall_acl", []))
     nat_count = len(summary.get("nat", []))
+    declared_type = str(manifest.get("device_type") or "").lower()
+    declared_types = {
+        str(item).lower() for item in (manifest.get("device_types") or [declared_type])
+        if item
+    }
+    observed_roles: set[str] = set()
+    observed_roles.update(declared_types & {"router", "firewall", "switch"})
+    if routes and declared_types & {"router", "firewall"}:
+        observed_roles.add("router")
+    if (policy_count or nat_count) and declared_types & {"router", "firewall"}:
+        observed_roles.add("firewall")
+    role_order = ("router", "firewall", "switch")
+    roles = [role for role in role_order if role in observed_roles]
     if manifest.get("device_type") == "firewall" and not policy_count:
         review_items.append({
             "severity": "warning", "category": "policy",
@@ -324,6 +337,8 @@ def analyze_device_collection(
             "address": manifest.get("device_address"),
             "vendor": manifest.get("vendor"),
             "type": manifest.get("device_type"),
+            "roles": roles,
+            "role_label": " + ".join(role.title() for role in roles) or "Network Device",
         },
         "collection": {
             "status": manifest.get("status"),
