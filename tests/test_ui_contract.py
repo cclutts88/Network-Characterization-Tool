@@ -833,3 +833,4 @@ def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():
 
     assert "pageNode.textContent!==pageLabel" in VIEW_PREFERENCES_SCRIPT
     assert "if(pagerOnly)return" in VIEW_PREFERENCES_SCRIPT
+    assert "Table density" not in VIEW_PREFERENCES_SCRIPT

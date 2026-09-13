@@ -3,7 +3,7 @@
 ## 0.14.0-dev — Advanced Map Usability
 
 - Added private account-owned Hunt and Analyze working views. Filters,
-  collapsible cards, table density, row count, and natural IP/hostname sorting
+  collapsible cards, row count, and natural IP/hostname sorting
   now follow the signed-in analyst between sessions. Analysts can also create,
   update, load, and delete named filter presets without changing another
   operator's workspace.

@@ -507,10 +507,13 @@ within Reachability.
     selected interface, scope, profile, timeout, and scan options. Reject stale
     browser writes instead of silently replacing a newer draft.
   - [x] Preserve each analyst's Hunt and Analyze filters, collapsible-card state,
-    table density, natural IP/hostname sorting, and paginated row preference on
+    natural IP/hostname sorting, and paginated row preference on
     the server. Keep the working view isolated by account and reject stale writes.
   - [x] Add private named Hunt and Analyze filter presets that analysts can load,
     update, and delete without affecting another operator's view.
+- [ ] Add optional per-analyst themes for visual individuality. Themes must remain
+  presentation-only and must not change evidence meaning, shared data, exports,
+  or the visibility of warnings and status indicators.
 - [ ] Keep shared evidence authoritative while requiring an explicit publish or
   share action to move personal layouts and investigations into a team workspace.
   - [x] Allow only an Administrator to deliberately publish or unpublish a

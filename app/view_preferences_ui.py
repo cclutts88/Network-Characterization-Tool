@@ -30,9 +30,9 @@ VIEW_PREFERENCES_SCRIPT = r"""
   function installStyle() {
     const style = document.createElement('style');
     style.textContent = `
-      .nct-view-toolbar{display:grid;grid-template-columns:minmax(180px,1.3fr) minmax(150px,1fr) auto auto auto minmax(125px,.8fr) minmax(115px,.7fr) minmax(150px,.9fr);gap:8px;align-items:end;margin:0 0 18px;padding:12px 14px;border:1px solid var(--line,#315367);border-radius:11px;background:rgba(12,26,35,.97);box-shadow:0 9px 28px #0004}
+      .nct-view-toolbar{display:grid;grid-template-columns:minmax(180px,1.3fr) minmax(150px,1fr) auto auto auto minmax(115px,.7fr) minmax(150px,.9fr);gap:8px;align-items:end;margin:0 0 18px;padding:12px 14px;border:1px solid var(--line,#315367);border-radius:11px;background:rgba(12,26,35,.97);box-shadow:0 9px 28px #0004}
       .nct-view-toolbar label{margin:0;color:var(--muted,#9eb0b8);font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.nct-view-toolbar input,.nct-view-toolbar select,.nct-view-toolbar button{min-height:36px;padding:7px 9px;font-size:12px}.nct-view-toolbar button{white-space:nowrap}.nct-view-toolbar .danger{border-color:#81505a;background:transparent;color:#ffb1b8}.nct-view-toolbar .nct-view-status{grid-column:1/-1;min-height:0;color:var(--muted,#9eb0b8);font-size:11px}.nct-view-toolbar .nct-view-status.good{color:var(--good,#61d095)}.nct-view-toolbar .nct-view-status.bad{color:var(--bad,#ff837a)}
-      body.nct-density-compact table th,body.nct-density-compact table td{padding-top:4px!important;padding-bottom:4px!important}body.nct-density-compact .port-chip{padding-top:2px!important;padding-bottom:2px!important;margin-bottom:2px!important}.nct-page-hidden{display:none!important}.nct-table-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:9px;color:var(--muted,#9eb0b8);font-size:11px}.nct-table-pager button{min-height:30px;padding:4px 9px;font-size:11px}.nct-table-pager[hidden]{display:none}
+      .nct-page-hidden{display:none!important}.nct-table-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:9px;color:var(--muted,#9eb0b8);font-size:11px}.nct-table-pager button{min-height:30px;padding:4px 9px;font-size:11px}.nct-table-pager[hidden]{display:none}
       @media(max-width:1050px){.nct-view-toolbar{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:700px){.nct-view-toolbar{grid-template-columns:1fr 1fr}.nct-view-toolbar .nct-view-status{grid-column:1/-1}}
     `;
     document.head.append(style);
@@ -46,7 +46,6 @@ VIEW_PREFERENCES_SCRIPT = r"""
       <label>Personal preset<select data-preset><option value="">Current working view</option></select></label>
       <label>Preset name<input data-preset-name maxlength="100" placeholder="Example: Windows servers"></label>
       <button type="button" data-save-new>Save new</button><button type="button" data-update disabled>Update</button><button type="button" class="danger" data-delete disabled>Delete</button>
-      <label>Table density<select data-density><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
       <label>Rows per table<select data-page-size><option value="all">All rows</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
       <label>Table sorting<select data-sort><option value="ip-asc">IP · low to high</option><option value="ip-desc">IP · high to low</option><option value="hostname">Hostname</option></select></label>
       <div class="nct-view-status" data-view-status>Private to this analyst account.</div>`;
@@ -57,7 +56,7 @@ VIEW_PREFERENCES_SCRIPT = r"""
     toolbar.querySelector('[data-update]').onclick = updatePreset;
     toolbar.querySelector('[data-delete]').onclick = deletePreset;
     toolbar.querySelector('[data-preset]').onchange = selectPreset;
-    for (const selector of ['[data-density]','[data-page-size]','[data-sort]']) toolbar.querySelector(selector).onchange = () => { pageIndexes.clear(); applyPresentation(readPresentation()); scheduleSave(); };
+    for (const selector of ['[data-page-size]','[data-sort]']) toolbar.querySelector(selector).onchange = () => { pageIndexes.clear(); applyPresentation(readPresentation()); scheduleSave(); };
   }
 
   function captureFilters() {
@@ -72,7 +71,6 @@ VIEW_PREFERENCES_SCRIPT = r"""
   }
   function readPresentation() {
     return {
-      density: toolbar?.querySelector('[data-density]').value || 'comfortable',
       pageSize: toolbar?.querySelector('[data-page-size]').value || 'all',
       sort: toolbar?.querySelector('[data-sort]').value || 'ip-asc'
     };
@@ -97,13 +95,11 @@ VIEW_PREFERENCES_SCRIPT = r"""
     for (const [key, open] of Object.entries(cards)) { const node = document.querySelector(`details[data-workspace-card="${CSS.escape(key)}"]`); if (node) node.open = Boolean(open); }
   }
   function applyPresentation(value={}) {
-    const presentation = {density:'comfortable', pageSize:'all', sort:'ip-asc', ...value};
+    const presentation = {pageSize:'all', sort:'ip-asc', ...value};
     if (toolbar) {
-      toolbar.querySelector('[data-density]').value = presentation.density;
       toolbar.querySelector('[data-page-size]').value = presentation.pageSize;
       toolbar.querySelector('[data-sort]').value = presentation.sort;
     }
-    document.body.classList.toggle('nct-density-compact', presentation.density === 'compact');
     requestAnimationFrame(applyTablePresentation);
   }
   function ipParts(value) {
