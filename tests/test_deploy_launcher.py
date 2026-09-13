@@ -1,4 +1,5 @@
 import os
+import hashlib
 from pathlib import Path
 import subprocess
 
@@ -8,7 +9,14 @@ RECOVERY = (Path(__file__).parents[1] / "scripts" / "nct-admin-recover.sh").read
 
 
 def run_launcher_preflight(
-    tmp_path: Path, *args: str, compose_mode: str = "absent"
+    tmp_path: Path,
+    *args: str,
+    compose_mode: str = "absent",
+    api_version: str = "1.49",
+    architecture: str = "amd64",
+    os_type: str = "linux",
+    occupied_port: bool = False,
+    existing: str = "none",
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -18,13 +26,13 @@ def run_launcher_preflight(
 case "$1" in
   info)
     case "${3:-}" in
-      *Architecture*) printf 'amd64\\n' ;;
-      *OSType*) printf 'linux\\n' ;;
+      *Architecture*) printf '%s\\n' "${FAKE_ARCHITECTURE:-amd64}" ;;
+      *OSType*) printf '%s\\n' "${FAKE_OS_TYPE:-linux}" ;;
     esac
     ;;
   version)
     case "${3:-}" in
-      *APIVersion*) printf '1.49\\n' ;;
+      *APIVersion*) printf '%s\\n' "${FAKE_DOCKER_API:-1.49}" ;;
       *) printf '28.0.1\\n' ;;
     esac
     ;;
@@ -41,6 +49,25 @@ case "$1" in
         ;;
     esac
     ;;
+  ps)
+    if [ "${2:-}" = "-aq" ] && [ "${FAKE_EXISTING:-none}" != "none" ]; then
+      printf 'fixture-container\\n'
+    fi
+    ;;
+  inspect)
+    case "${3:-}" in
+      *Config.Image*) printf 'nct:older-build\\n' ;;
+      *'.Image'*) printf 'sha256:older\\n' ;;
+      *Mounts*) printf 'nct-data\\n' ;;
+      *Config.Env*) printf 'disabled\\n' ;;
+    esac
+    ;;
+  exec)
+    [ "${FAKE_EXISTING:-none}" != "active" ] || exit 42
+    ;;
+  port)
+    [ "${FAKE_EXISTING:-none}" = "none" ] || printf '127.0.0.1:8766\\n'
+    ;;
   run) printf '0\\n' ;;
 esac
 """,
@@ -51,7 +78,13 @@ esac
     fake_curl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_curl.chmod(0o755)
     fake_ss = fake_bin / "ss"
-    fake_ss.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_ss.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${FAKE_OCCUPIED_PORT:-no}\" = \"yes\" ]; then \n"
+        "  printf 'LISTEN 0 128 127.0.0.1:8766 0.0.0.0:*\\n'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
     fake_ss.chmod(0o755)
     if compose_mode == "legacy":
         fake_legacy_compose = fake_bin / "docker-compose"
@@ -60,6 +93,11 @@ esac
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
     environment["TMPDIR"] = str(tmp_path)
+    environment["FAKE_DOCKER_API"] = api_version
+    environment["FAKE_ARCHITECTURE"] = architecture
+    environment["FAKE_OS_TYPE"] = os_type
+    environment["FAKE_OCCUPIED_PORT"] = "yes" if occupied_port else "no"
+    environment["FAKE_EXISTING"] = existing
     if compose_mode == "plugin":
         environment["FAKE_COMPOSE_PLUGIN"] = "yes"
     return subprocess.run(
@@ -260,6 +298,113 @@ def test_preflight_reports_compose_v2_legacy_and_direct_engine_tiers(tmp_path):
         )
         assert completed.returncode == 0, completed.stderr
         assert f"Range compatibility: {outcome}" in completed.stdout
+
+
+def test_preflight_rejects_old_api_unsupported_architecture_and_windows_daemon(tmp_path):
+    old_api = run_launcher_preflight(
+        tmp_path / "old-api",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        api_version="1.40",
+    )
+    assert old_api.returncode == 1
+    assert "unsupported Docker API 1.40" in old_api.stderr
+
+    unsupported_arch = run_launcher_preflight(
+        tmp_path / "architecture",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        architecture="s390x",
+    )
+    assert unsupported_arch.returncode == 1
+    assert "Unsupported Docker architecture: s390x" in unsupported_arch.stderr
+
+    windows = run_launcher_preflight(
+        tmp_path / "windows",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        os_type="windows",
+    )
+    assert windows.returncode == 1
+    assert "requires Docker Linux containers" in windows.stderr
+
+
+def test_preflight_verifies_offline_archive_checksum(tmp_path):
+    archive = tmp_path / "nct.tar"
+    archive.write_bytes(b"offline NCT image fixture")
+    checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+    accepted = run_launcher_preflight(
+        tmp_path / "offline-pass",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        "--image-archive",
+        str(archive),
+        "--image-sha256",
+        checksum,
+        "--offline",
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    rejected = run_launcher_preflight(
+        tmp_path / "offline-fail",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        "--image-archive",
+        str(archive),
+        "--image-sha256",
+        "0" * 64,
+        "--offline",
+    )
+    assert rejected.returncode == 1
+    assert "checksum does not match" in rejected.stderr
+
+
+def test_preflight_selects_an_alternate_test_port_without_touching_listener(tmp_path):
+    completed = run_launcher_preflight(
+        tmp_path / "occupied-port",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        occupied_port=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "selected 8767" in completed.stderr
+    assert "Access: local on 127.0.0.1:8767" in completed.stdout
+
+
+def test_preflight_preserves_idle_existing_nct_and_blocks_active_work(tmp_path):
+    idle = run_launcher_preflight(
+        tmp_path / "idle-existing",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        existing="idle",
+    )
+    assert idle.returncode == 0, idle.stderr
+    assert "Existing: nct:older-build · Data: nct-data" in idle.stdout
+
+    active = run_launcher_preflight(
+        tmp_path / "active-existing",
+        "--profile",
+        "test",
+        "--image",
+        "nct:0.14.0-test",
+        existing="active",
+    )
+    assert active.returncode == 1
+    assert "has an active scan, collection, update, or migration" in active.stderr
 
 
 def test_launcher_is_idempotent_for_an_already_current_direct_deployment():

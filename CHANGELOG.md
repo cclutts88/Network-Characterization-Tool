@@ -14,6 +14,11 @@
   Compose v1, direct Docker Engine, and the unsupported-host appliance handoff.
   The selected tier and supported/degraded outcome are printed and retained in
   deployment logs and promotion receipts.
+- Added a repeatable, non-destructive Range matrix runner and expanded the
+  launcher fixtures for Docker API/OS/architecture boundaries, offline archive
+  integrity, occupied ports, existing NCT data, active-work blocking, and exact
+  promotion identity. Reports explicitly retain the remaining overlap and
+  representative-old-host gaps.
 - Connected proposed policy and route comparisons to Map. Analysts can open a
   temporary projected-path focus with current-to-projected outcome, proposal,
   path-change, collateral-scope, evidence, and caveats while saved layouts stay

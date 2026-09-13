@@ -100,6 +100,10 @@ blocked until the formal mission-readiness gate is complete. Range deployments
 require authentication; a fresh account store is initialized with an
 operator-selected Administrator and no fixed default credentials.
 
+Use the [Range compatibility matrix](docs/RANGE_COMPATIBILITY_MATRIX.md) to run
+the repeatable non-destructive deployment scenarios and optionally include a
+real `--check-only` preflight for one immutable local image.
+
 For a first-time private-lab HTTPS installation:
 
 ```bash

@@ -341,6 +341,13 @@ within Reachability.
   occupied ports and container names, bridge/VPN subnet overlap, existing older
   NCT deployments, preserved data, `NET_RAW`, packet capture, and scan
   reachability. Record pass, degraded, workaround, and unsupported outcomes.
+  - [x] Add an executable non-destructive baseline covering Compose v2, legacy
+    Compose, direct Engine, API/architecture rejection, verified offline
+    archives, occupied ports, existing/active NCT instances, data-volume
+    retention, and promotion receipt identity. Emit a timestamped report and
+    optionally include the real host/image `--check-only` result.
+  - [ ] Add bridge/VPN overlap cases and capture reports on representative older
+    Range hosts before closing the matrix.
 - [ ] Make the launcher idempotent: identify an existing NCT container, image,
   persistent data volume, configured ports, and running version before making
   changes. Distinguish an upgrade from a new installation, preserve evidence

@@ -128,6 +128,11 @@ health check passes. Final readiness also proves that Nmap, FPING, tcpdump, and
 SSH are installed inside the application container, packet-capture interfaces
 can be enumerated, `NET_RAW` is present, and a raw ICMP socket can be created.
 
+Run [the Range compatibility matrix](RANGE_COMPATIBILITY_MATRIX.md) before
+moving an image into range evaluation. It produces a retained summary of the
+simulated compatibility cases and can optionally include the current host and
+immutable image preflight.
+
 ## Administrator recovery
 
 If every Administrator is locked out, an authorized host operator can recover
