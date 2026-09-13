@@ -481,20 +481,85 @@ Available at https://x.x.x.x:443
   collections. Retain a neutral system context for scans, allow an optional
   Device collection note, and continue requiring a note only when an operator
   makes an explicit fallback authorization decision.
-- [ ] Add a contextual Hunt-to-Reach handoff that carries the selected host,
+- [x] Remove manual creator/operator identity fields from Nmap, Saved Networks,
+  No-Strikes, fallback approval, and Device collection. Attribute new actions
+  automatically to the signed-in account while retaining historical audit
+  fields and a neutral identity in authentication-disabled Test mode.
+- [x] Add a contextual Hunt-to-Reach handoff that carries the selected host,
   protocol, and port while leaving source context under operator control.
 - [ ] Give the Analyze landing page a concise newest-result or retained-result
   picker without duplicating the full Nmap Scan History.
-- [ ] Add explicit Device completion handoffs to Nmap and Network Device
-  Analysis before reducing the overlapping structured-review surface.
-- [ ] Hide or disable Hunt's reset action while the network-wide view is already
-  active, and separate advanced Nmap profile/schedule maintenance and Map
-  evidence browsing from each page's primary task.
-- [ ] Decide whether Reach receives page-specific shared notes and whether
-  Network Device Analysis notes follow the Device evidence type or Analyze page
-  before changing either shared-note scope.
-- [ ] Standardize evidence-page loading states so a requested retained result
+- [x] Add explicit Device completion handoffs to Nmap and Network Device
+  Analysis. Keep collection status, commands, and saved files on Device, and
+  move interpreted interfaces, routes, neighbors, VLANs, policy, and
+  comparisons to Network Device Analysis.
+- [x] Hide Hunt's reset action while the network-wide view is already active,
+  move Nmap profile lifecycle and scheduling into collapsed advanced sections,
+  and move Map file browsing into a collapsed Evidence Files drawer without
+  removing capability or changing scan behavior.
+- [x] Give Reach personal notes plus its own page-specific shared-note space.
+  Keep Network Device Analysis within the Device shared-note scope.
+- [x] Deep-link Reach evidence to the exact retained Nmap host or relevant
+  device routing/policy/NAT section, expand the destination, and preserve the
+  originating page state in its existing browser tab.
+- [x] Standardize evidence-page loading states so a requested retained result
   never briefly appears to be an empty completed view.
+- [x] Add one-click clear controls to current and dynamically rendered search
+  fields. Keep the control hidden on empty fields and re-run the field's normal
+  filtering behavior when cleared.
+- [x] Treat export as a first-class operator action at every workflow stage.
+  Preserve existing Nmap artifacts, Device files, and Analyze CSV exports; add
+  Hunt JSON/visible-findings CSV, Device Analysis JSON, primary Reach result
+  JSON, Nmap-analysis HTML, and Map SVG plus topology/layout JSON. Exports must
+  remain local and must not trigger network activity or alter retained evidence.
+
+### Export Studio — presentation workflow candidate
+
+- [ ] Add a consistent **Quick export** and **Customize export** entry on every
+  evidence page without making routine downloads slower.
+- [ ] Let the analyst choose the complete dataset or the currently filtered /
+  selected records, then choose CSV, plain text, Markdown, self-contained HTML,
+  or PDF. Keep raw evidence exports distinct from presentation reports.
+- [ ] Provide a preview-first report composer with selectable and reorderable
+  columns, sort order, grouping and breakdown fields, section order, headings,
+  analyst notes, and optional summary counts. Never alter retained evidence.
+- [ ] Preserve an export manifest in every format: NCT build, export time,
+  source scans/device collections, evidence timestamps, active filters,
+  selected fields, and warnings about inference or incomplete coverage.
+- [ ] Support reusable personal export templates and explicitly published team
+  templates with version/conflict handling; never include credentials or
+  secrets. Keep the generated files local unless the analyst separately moves
+  them.
+- [ ] Render PDF and HTML fully offline from bundled, pinned dependencies and
+  validate large tables for page breaks, repeated headers, readable maps, and
+  Windows-safe filenames before Range promotion.
+
+### Analyze current-evidence workspace — design candidate
+
+- [ ] Use the initial Analyze page as a current-evidence workspace built from
+  the newest retained Nmap evidence for every network scope plus the newest
+  usable network-device collections. Keep provenance and collection time on
+  every normalized record so older evidence is never presented as current.
+- [ ] Present one combined host/device inventory row per correlated identity.
+  Keep IP, hostname, MAC, OS, latest observation, ports/services, and concise
+  capability badges visible; expand the row for capability evidence,
+  SearchSploit candidates, configuration provenance, and history instead of
+  duplicating the identity across separate flat tables.
+- [ ] Let the operator reorganize the same current evidence by IP address, port,
+  service, MAC address, or last-observed time. Filtering changes the evidence
+  shown under an identity rather than creating duplicate host rows.
+- [ ] Add a route and policy view that keeps network routing distinct from
+  authorization: routes describe source/destination reachability, while
+  firewall, ACL, and NAT evidence describes protocol/port decisions.
+- [ ] Preserve focused analysis of one retained scan and comparison of two
+  selected scans as explicit modes. Add a network-change mode that compares
+  the newest two comparable observations for every retained network scope and
+  groups changes by subnet, host/device, port/service, identity, and route or
+  policy evidence.
+- [ ] Before implementation, define identity correlation, newest-usable
+  evidence selection, stale/conflicting evidence display, scale limits, and
+  partial-coverage warnings so the landing view cannot imply certainty that
+  the retained evidence does not support.
 
 ### Future extension — Analyst Identity Overrides
 
@@ -532,8 +597,8 @@ Available at https://x.x.x.x:443
   - [x] Show the signed-in identity and role on every primary page, provide
     sign-out, and give Administrators a focused account creation/listing screen.
   - [x] Bind authenticated scan, profile, schedule, safety, Saved Network, and
-    device-collection actor fields to the server session while preserving the
-    existing typed-operator workflow when authentication is disabled.
+    device-collection actor fields to the server session; remove manual actor
+    entry and use a neutral local identity when authentication is disabled.
   - [x] Add Administrator account enable/disable and password reset with session
     revocation, last-active-Administrator protection, and visible account audit
     history.
@@ -657,6 +722,17 @@ Available at https://x.x.x.x:443
     with confidence, evidence, and prominent caveats.
   - [x] Report Not Exposed only when retained scan coverage proves that the
     requested service was actually assessed and not exposed.
+  - [x] Lead Reach evidence cards with an explicit effect statement identifying
+    whether the matched firewall rule or ACL is expected to allow/block the
+    selected flow, whether scan coverage found the port exposed, or whether a
+    route only supplies a possible path. Collapse raw rules and commands under
+    supporting evidence and link retained sources into Analyze in a new tab.
+  - [x] Keep internal-path conclusions separate from external exposure checks.
+    An internal result can evaluate the same destination, protocol, port, and
+    flow state from Internet without replacing the original result; only that
+    external result emphasizes WAN when opened on Map. Label broader routes as
+    unused fallbacks and exclude loopback metadata without a forwarding
+    interface from usable route evidence.
   - [x] Correlate Hunt SearchSploit candidates with retained Reach evidence.
     Show and filter conservative external, internal-only, local-segment,
     externally-blocked, not-exposed, and unknown classifications per matched

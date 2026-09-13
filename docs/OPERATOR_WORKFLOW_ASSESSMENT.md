@@ -10,18 +10,18 @@ start a scan, contact a network device, change evidence, or inspect mission
 data. The live pages and their source were reviewed together so delayed data
 loading, collapsed states, and page-to-page handoffs were included.
 
-Recommendations in this document are observations only. They are not approval
-to change the workflow. The one implemented exception is the mechanical
-disclosure-consistency rollout recorded below.
+Recommendations in this document began as observations only. The approved
+mechanical consistency and low-risk handoff rollout is recorded below; the
+larger Analyze workspace redesign remains a separate decision.
 
 ## Current flow
 
 | Page | Primary operator job | Useful entry | Current exit / handoff |
 | --- | --- | --- | --- |
-| Device | Build and run a read-only configuration collection; import an existing result; promote identified networks to Saved Networks | Default landing page | Primary navigation to Nmap; retained collections can also be reopened locally |
+| Device | Build and run a read-only configuration collection; import an existing result; promote identified networks to Saved Networks | Default landing page | Successful collections can open Network Device Analysis or continue to Nmap; accepted Saved Networks offer a Nmap handoff |
 | Nmap | Manage authorized scope and exclusions, build or schedule a scan, monitor the analyzer, and reopen retained scans | Saved Network created from Device or an existing Saved Network | Per-run Open, Analyze, Hunt, and Compare actions |
 | Analyze | Inspect one Nmap result, compare two scans, or import XML; separately analyze retained device collections | Per-run Analyze action from Nmap | “Hunt this scan” for an opened Nmap run |
-| Hunt | Correlate newest evidence across network scopes, hosts, devices, datasets, and SearchSploit candidates | Network-wide view by default or a run-specific link | Primary navigation only; selected finding context is not carried forward |
+| Hunt | Correlate newest evidence across network scopes, hosts, devices, datasets, and SearchSploit candidates | Network-wide view by default or a run-specific link | Host, service, and SearchSploit rows can open Reach with destination/protocol/port loaded while leaving Source unchanged |
 | Reach | Evaluate a source, destination, protocol, port, and flow state using retained evidence; model policy or route changes | Manual query entry | “Show on Map” after a completed result or projection |
 | Map | Review and arrange the final evidence-backed topology and focused Reach paths | Normal Map navigation or Reach focus | Final visualization; evidence links return to retained files |
 
@@ -111,15 +111,50 @@ defaults, navigation, or operator decisions:
   Nmap records a neutral system context without asking the operator, Device
   accepts an optional collection note, and a note remains required only at an
   explicit fallback authorization decision.
+- Manual creator/operator identity entry was removed from scan, Saved Network,
+  No-Strike, fallback, and Device forms. Authenticated actions use the signed-in
+  analyst automatically; historical attribution remains available for audit.
+- Reach now participates in personal and page-specific shared notes. Its source
+  links open the relevant retained Analyze section expanded in a new tab so the
+  active Reach/Hunt context is not discarded.
+- Hunt now hides its network-wide reset action until the operator enters a
+  focused scan or comparison context.
+- Nmap keeps scan construction, queue state, and current-run status prominent
+  while profile lifecycle controls and scheduling are collapsed as advanced
+  operations.
+- Map keeps stored evidence available in a collapsed Evidence Files drawer
+  instead of mixing file browsing with the frequent map controls.
+- Hunt now opens Reach in a new tab with the selected destination and, when
+  available, protocol and port. Source and external/internal context remain
+  deliberate analyst choices, and the active Hunt filters remain intact.
+- Device now ends successful collections with **Analyze collection** and
+  **Continue to Nmap** actions. Accepted config-derived Saved Networks also
+  expose the Nmap handoff without starting a scan or selecting scope.
+- Device history is now limited to collection status, commands, raw/saved
+  files, reuse, and deletion. Interpreted routes, interfaces, neighbor, VLAN,
+  switching, policy, NAT, and comparison views remain in Network Device
+  Analysis.
+- Analyze, Network Device Analysis, Hunt, Reach, and Map now show explicit
+  retained-evidence loading states instead of temporarily resembling empty
+  completed views. Search inputs use one consistent clear control, including
+  filters rendered after a retained result loads.
+- Export is available throughout the workflow: retained collection files on
+  Device, artifacts on Nmap, host/port CSV on Analyze, structured JSON on
+  Network Device Analysis, filtered CSV plus full JSON on Hunt, result and
+  simulation JSON on Reach, and both portable SVG and topology/layout JSON on
+  Map. These browser-local downloads do not send network traffic or change
+  evidence.
 
-## Recommended order for a future workflow release
+## Remaining workflow release candidate
 
-1. Add Hunt → Reach context transfer.
-2. Give Analyze a retained-result landing state.
-3. Add Device completion → Nmap and collection → Analyze handoffs.
-4. Resolve Device versus Device Analysis duplication only after those links
-   exist and equivalent evidence has been verified.
-5. Contextually hide the redundant Hunt reset control.
-6. Reorganize Nmap advanced operations and Map evidence browsing without
-   removing capability.
-7. Decide note scope and a shared loading-state convention across every page.
+The low-risk Hunt → Reach transfer, Device completion handoffs, Device versus
+Device Analysis boundary, loading convention, and search clear controls are
+complete. The next larger workflow decision is the initial Analyze
+current-evidence workspace: newest retained evidence by default, a compact
+specific-result picker, and bulk last-two-per-scope comparison without
+recreating Nmap Scan History.
+
+A separate Export Studio candidate is now recorded in the roadmap. It keeps
+one-click downloads for routine use, while a preview-first customized path can
+choose complete versus filtered data, format, columns, ordering, grouping,
+section layout, and report notes with provenance carried into every output.
