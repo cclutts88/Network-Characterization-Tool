@@ -23,6 +23,23 @@ other Docker containers and host listeners through `ss` or `netstat`; Test and
 Range may advance to an available port, while Mission must stop rather than
 silently changing its declared URL.
 
+The preflight reports a four-step Range compatibility ladder:
+
+1. `compose-v2` — supported modern Compose is available.
+2. `legacy-compose-v1` — degraded but accepted; the launcher avoids relying on
+   the older orchestration behavior.
+3. `direct-engine` — degraded but accepted when the Docker API, Linux runtime,
+   architecture, and required container capabilities remain supported.
+4. `offline appliance required` — unsupported Docker API, kernel, image format,
+   networking, or security behavior must stop instead of being hidden behind a
+   fragile flag workaround. The appliance is a separately tracked artifact and
+   is not bundled by this checkpoint.
+
+For consistent backup and rollback semantics, the launcher performs the final
+transactional swap through the Docker Engine path in all supported tiers. The
+detected tier and supported/degraded result are recorded in the deployment log
+and promotion receipt.
+
 This checkpoint supports **Test** and **Range** deployment. The **Mission**
 profile can run a non-mutating readiness preflight but intentionally stops
 before making changes until NCT's formal mission-promotion gate is complete. A

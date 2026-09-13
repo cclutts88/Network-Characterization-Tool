@@ -7,7 +7,9 @@ SCRIPT = (Path(__file__).parents[1] / "scripts" / "nct-deploy.sh").read_text()
 RECOVERY = (Path(__file__).parents[1] / "scripts" / "nct-admin-recover.sh").read_text()
 
 
-def run_launcher_preflight(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_launcher_preflight(
+    tmp_path: Path, *args: str, compose_mode: str = "absent"
+) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
     fake_docker = fake_bin / "docker"
@@ -27,7 +29,9 @@ case "$1" in
     esac
     ;;
   context) printf 'default\\n' ;;
-  compose) exit 1 ;;
+  compose)
+    if [ "${FAKE_COMPOSE_PLUGIN:-no}" = "yes" ]; then printf '2.27.1\\n'; else exit 1; fi
+    ;;
   image)
     case "${4:-}" in
       *RepoDigests*) printf 'nct@example.invalid/fixture@sha256:fake\\n' ;;
@@ -49,9 +53,15 @@ esac
     fake_ss = fake_bin / "ss"
     fake_ss.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_ss.chmod(0o755)
+    if compose_mode == "legacy":
+        fake_legacy_compose = fake_bin / "docker-compose"
+        fake_legacy_compose.write_text("#!/bin/sh\nprintf '1.29.2\\n'\n", encoding="utf-8")
+        fake_legacy_compose.chmod(0o755)
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
     environment["TMPDIR"] = str(tmp_path)
+    if compose_mode == "plugin":
+        environment["FAKE_COMPOSE_PLUGIN"] = "yes"
     return subprocess.run(
         [
             "sh",
@@ -84,6 +94,20 @@ def test_launcher_checks_runtime_versions_conflicts_and_active_work():
         assert required in SCRIPT
     assert 'active_rc=$?' in SCRIPT
     assert '[ "$active_rc" -ne 42 ]' in SCRIPT
+
+
+def test_launcher_classifies_the_range_compatibility_ladder():
+    for required in (
+        'compatibility_tier="compose-v2"',
+        'compatibility_tier="legacy-compose-v1"',
+        'compatibility_tier="direct-engine"',
+        'compatibility_status="supported"',
+        'compatibility_status="degraded"',
+        'Range compatibility: unsupported Docker API',
+        'offline NCT appliance fallback',
+        'Range compatibility: $compatibility_status · $compatibility_tier',
+    ):
+        assert required in SCRIPT
 
 
 def test_launcher_supports_offline_integrity_backup_health_and_rollback():
@@ -203,6 +227,7 @@ def test_range_preflight_accepts_only_an_exact_test_receipt(tmp_path):
     )
     assert accepted.returncode == 0, accepted.stderr
     assert "Preflight complete" in accepted.stdout
+    assert "Range compatibility: degraded · direct-engine" in accepted.stdout
 
     receipt.write_text(receipt.read_text().replace("sha256:fake", "sha256:other"))
     rejected = run_launcher_preflight(
@@ -216,6 +241,25 @@ def test_range_preflight_accepts_only_an_exact_test_receipt(tmp_path):
     )
     assert rejected.returncode == 1
     assert "Promotion receipt image ID does not match" in rejected.stderr
+
+
+def test_preflight_reports_compose_v2_legacy_and_direct_engine_tiers(tmp_path):
+    expected = {
+        "plugin": "supported · compose-v2",
+        "legacy": "degraded · legacy-compose-v1",
+        "absent": "degraded · direct-engine",
+    }
+    for mode, outcome in expected.items():
+        completed = run_launcher_preflight(
+            tmp_path / mode,
+            "--profile",
+            "test",
+            "--image",
+            "nct:0.14.0-test",
+            compose_mode=mode,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert f"Range compatibility: {outcome}" in completed.stdout
 
 
 def test_launcher_is_idempotent_for_an_already_current_direct_deployment():

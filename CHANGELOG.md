@@ -10,6 +10,10 @@
   limitations, and rollback evidence to one exact image ID and build. Range now
   requires the matching Test receipt, while Mission can validate a matching
   Range receipt in check-only mode and remains fail-closed for deployment.
+- Added an explicit Range compatibility ladder for modern Compose v2, legacy
+  Compose v1, direct Docker Engine, and the unsupported-host appliance handoff.
+  The selected tier and supported/degraded outcome are printed and retained in
+  deployment logs and promotion receipts.
 - Connected proposed policy and route comparisons to Map. Analysts can open a
   temporary projected-path focus with current-to-projected outcome, proposal,
   path-change, collateral-scope, evidence, and caveats while saved layouts stay

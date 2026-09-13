@@ -325,7 +325,7 @@ within Reachability.
   `docker-compose`. Prefer the supported Compose path, fall back to a compatible
   direct-Docker deployment when Compose is absent or too old, and stop with a
   clear corrective action only when no safe path is available.
-- [ ] Implement a documented Range compatibility ladder: modern Compose v2,
+- [x] Implement a documented Range compatibility ladder: modern Compose v2,
   legacy `docker-compose`, direct Docker Engine, and finally a self-contained
   offline NCT VM/appliance when the installed Docker API, kernel, image format,
   networking, or security model is too old to support safely. Do not disguise

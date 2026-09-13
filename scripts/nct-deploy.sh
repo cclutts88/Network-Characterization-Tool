@@ -153,7 +153,7 @@ case "$server_api" in
             ok = (h[1] + 0 > n[1] + 0) || (h[1] + 0 == n[1] + 0 && h[2] + 0 >= n[2] + 0)
             print ok ? "yes" : "no"
         }')
-        [ "$api_supported" = "yes" ] || die "Docker API $server_api is older than supported API $minimum_api. Use the documented offline NCT appliance fallback on this host." ;;
+        [ "$api_supported" = "yes" ] || die "Range compatibility: unsupported Docker API $server_api (minimum $minimum_api); use the separately versioned offline NCT appliance fallback on this host." ;;
 esac
 
 compose_mode="absent"
@@ -165,6 +165,22 @@ elif command -v docker-compose >/dev/null 2>&1; then
     compose_mode="legacy"
     compose_version=$(docker-compose version --short 2>/dev/null || docker-compose version 2>/dev/null)
 fi
+
+compatibility_tier="direct-engine"
+compatibility_status="degraded"
+compatibility_guidance="Docker Engine is supported; Compose orchestration is unavailable. Preserve the direct-Docker deployment receipt."
+case "$compose_mode" in
+    plugin)
+        compatibility_tier="compose-v2"
+        compatibility_status="supported"
+        compatibility_guidance="Modern Compose v2 is available; the transactional launcher still uses its consistent direct-Docker swap path."
+        ;;
+    legacy)
+        compatibility_tier="legacy-compose-v1"
+        compatibility_status="degraded"
+        compatibility_guidance="Legacy docker-compose was detected; NCT will use the supported direct-Docker swap path instead of relying on legacy orchestration."
+        ;;
+esac
 
 architecture=$(docker info --format '{{.Architecture}}' 2>/dev/null || uname -m)
 case "$architecture" in amd64|x86_64|arm64|aarch64) ;; *) die "Unsupported Docker architecture: $architecture" ;; esac
@@ -206,7 +222,7 @@ log_file="$state_dir/logs/deploy-$(date -u +%Y%m%dT%H%M%SZ).log"
 umask 077
 {
     printf 'profile=%s\naccess=%s\nbind=%s\napp_port=%s\nhttps_port=%s\n' "$profile" "$access" "$bind_address" "$app_port" "$https_port"
-    printf 'docker_server=%s\ndocker_api=%s\ndocker_context=%s\ncompose=%s\ncompose_version=%s\narchitecture=%s\n' "$server_version" "$server_api" "$docker_context" "$compose_mode" "$compose_version" "$architecture"
+    printf 'docker_server=%s\ndocker_api=%s\ndocker_context=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\narchitecture=%s\n' "$server_version" "$server_api" "$docker_context" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$architecture"
     printf 'image=%s\nvolume=%s\ntls=%s\nstarted=%s\n' "$image" "$data_volume" "$tls_enabled" "$(date -u +%FT%TZ)"
 } > "$log_file"
 
@@ -461,6 +477,8 @@ if [ "$access" = "lan" ]; then
 fi
 
 say "Profile: $profile · Docker $server_version/API $server_api · Compose $compose_mode $compose_version"
+say "Range compatibility: $compatibility_status · $compatibility_tier"
+say "$compatibility_guidance"
 say "Image: $image · ID: $target_image_id · Build: $target_build · Existing: $existing_image · Data: $data_volume"
 say "Access: $access on $bind_address:$published_port · TLS: $tls_enabled · Authentication: $auth_mode"
 say "Deployment log: $log_file"
@@ -602,7 +620,7 @@ write_promotion_receipt() {
         printf 'schema=1\nprofile=%s\npromotion_ready=yes\ncompleted=%s\n' "$profile" "$(date -u +%FT%TZ)"
         printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build"
         printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
-        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$architecture"
+        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$architecture"
         printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url"
         printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
     } > "$receipt_tmp" || return 1
