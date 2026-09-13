@@ -571,9 +571,16 @@ within Reachability.
       and Juniper zone address books/sets and custom applications/application
       sets. Expose the retained object inventory in Device views and keep
       missing, incomplete, cyclic, or unsupported definitions at Unknown.
-    - [ ] Resolve dynamic and DNS-backed objects, Juniper zone defaults, source
-      NAT, policy-based NAT, established-flow state, and multi-device translation
-      paths; keep unsupported criteria at Unknown.
+    - [x] Walk supported Linux/UniFi `POSTROUTING` chains and nested chains for
+      exact source NAT and masquerade. Show the original and effective source,
+      outgoing interface, retained rule, and chain path in Reach; keep address
+      ranges and conflicting multi-device translations at Unknown.
+    - [ ] Comeback point: evaluate Juniper zone-default policy only after the
+      retained evidence and expected device behavior can be tested. This is
+      intentionally deferred from the current rollout.
+    - [ ] Resolve dynamic and DNS-backed objects, vendor policy-based NAT,
+      established-flow state, and multi-device translation paths; keep
+      unsupported criteria at Unknown.
 - [ ] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
   - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
 - [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not

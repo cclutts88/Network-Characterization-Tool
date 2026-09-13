@@ -24,6 +24,10 @@
 - Added ordered UniFi destination-NAT and local-redirect evaluation. Reach now
   shows the original and translated address/port, then evaluates retained
   routes, observed services, and firewall policy against the effective target.
+- Added ordered Linux/UniFi source-NAT and masquerade evaluation. Reach now
+  shows the pre- and post-translation source, outgoing interface, retained rule,
+  and chain path while leaving source ranges and competing device translations
+  unresolved. Juniper zone-default evaluation is explicitly deferred.
 - Added conservative applied-policy handling for Cisco IOS/IOS-XE/ASA, VyOS,
   pfSense, and Juniper. NCT requires retained interface or zone attachment
   evidence before using a vendor rule for an allow/deny result, exposes the

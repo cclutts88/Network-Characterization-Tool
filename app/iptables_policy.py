@@ -508,8 +508,12 @@ def evaluate_iptables_nat(
     destination_external: bool = False,
     input_interface: str | None = None,
     output_interface: str | None = None,
+    stage: str = "destination",
+    masquerade_source: str | None = None,
 ) -> dict:
-    """Walk ordered NAT PREROUTING and report a supported destination translation."""
+    """Walk ordered destination or source NAT and report a supported translation."""
+    if stage not in {"destination", "source"}:
+        raise ValueError("NAT stage must be destination or source")
     rules_by_chain: dict[str, list[dict]] = defaultdict(list)
     for rule in policy.get("nat_rules") or []:
         if rule.get("chain"):
@@ -555,6 +559,8 @@ def evaluate_iptables_nat(
                 "evidence": rule.get("evidence"), "match_basis": basis,
             })
             if action == "DNAT":
+                if stage != "destination":
+                    return {"status": "no_translation", "trace": trace.copy()}
                 address, translated_port = _translation_target(rule.get("to_destination"))
                 if address is None:
                     return {"status": "unknown", "reason": "The matched DNAT target is not a supported IPv4 address.", "rule": rule, "trace": trace.copy()}
@@ -564,6 +570,8 @@ def evaluate_iptables_nat(
                     "rule": rule, "match_basis": basis, "trace": trace.copy(),
                 }
             if action == "REDIRECT":
+                if stage != "destination":
+                    return {"status": "no_translation", "trace": trace.copy()}
                 redirect_port = rule.get("to_ports")
                 return {
                     "status": "redirected", "translation": "redirect",
@@ -571,9 +579,34 @@ def evaluate_iptables_nat(
                     "port": int(redirect_port) if str(redirect_port or "").isdigit() else port,
                     "rule": rule, "match_basis": basis, "trace": trace.copy(),
                 }
+            if action == "SNAT":
+                if stage != "source":
+                    return {"status": "no_translation", "trace": trace.copy()}
+                address, translated_port = _translation_target(rule.get("to_source"))
+                if address is None:
+                    return {
+                        "status": "unknown",
+                        "reason": "The matched SNAT target is not a supported single IPv4 address.",
+                        "rule": rule, "match_basis": basis, "trace": trace.copy(),
+                    }
+                return {
+                    "status": "translated", "translation": "snat",
+                    "source": address, "source_port": translated_port,
+                    "dynamic": False, "rule": rule,
+                    "match_basis": basis, "trace": trace.copy(),
+                }
+            if action == "MASQUERADE":
+                if stage != "source":
+                    return {"status": "no_translation", "trace": trace.copy()}
+                return {
+                    "status": "translated", "translation": "masquerade",
+                    "source": masquerade_source, "source_port": None,
+                    "dynamic": True, "output_interface": output_interface,
+                    "rule": rule, "match_basis": basis, "trace": trace.copy(),
+                }
             if action == "RETURN":
                 return {"status": "return", "trace": trace.copy()}
-            if action in {"ACCEPT", "SNAT", "MASQUERADE"}:
+            if action == "ACCEPT":
                 return {"status": "no_translation", "trace": trace.copy()}
             if action in NON_TERMINAL_TARGETS or not action:
                 continue
@@ -583,7 +616,7 @@ def evaluate_iptables_nat(
             return nested
         return {"status": "return", "trace": trace.copy()}
 
-    result = walk("PREROUTING", ())
+    result = walk("PREROUTING" if stage == "destination" else "POSTROUTING", ())
     if result["status"] == "return":
         return {"status": "no_translation", "trace": result.get("trace") or []}
     return result

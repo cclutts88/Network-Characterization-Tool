@@ -137,3 +137,63 @@ COMMIT
 
     assert result["status"] == "unknown"
     assert "unresolved match criteria" in result["reason"]
+
+
+def test_ordered_nat_resolves_exact_source_nat_in_postrouting():
+    policy = parse_iptables_policy("""*nat
+:POSTROUTING ACCEPT [0:0]
+:SNAT_OUT - [0:0]
+-A POSTROUTING -s 10.80.0.0/24 -o outside -j SNAT_OUT
+-A SNAT_OUT -p tcp --dport 443 -j SNAT --to-source 198.51.100.10
+COMMIT
+""")
+
+    result = evaluate_iptables_nat(
+        policy,
+        source="10.80.0.25", destination="203.0.113.20",
+        protocol="tcp", port=443, input_interface="inside",
+        output_interface="outside", stage="source",
+    )
+
+    assert result["status"] == "translated"
+    assert result["translation"] == "snat"
+    assert result["source"] == "198.51.100.10"
+    assert [item["chain"] for item in result["trace"]] == ["POSTROUTING", "SNAT_OUT"]
+
+
+def test_ordered_nat_resolves_masquerade_to_egress_interface_address():
+    policy = parse_iptables_policy("""*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.80.0.0/24 -o outside -j MASQUERADE
+COMMIT
+""")
+
+    result = evaluate_iptables_nat(
+        policy,
+        source="10.80.0.25", destination=None,
+        protocol="tcp", port=443, destination_external=True,
+        input_interface="inside", output_interface="outside",
+        stage="source", masquerade_source="198.51.100.2",
+    )
+
+    assert result["status"] == "translated"
+    assert result["translation"] == "masquerade"
+    assert result["source"] == "198.51.100.2"
+    assert result["dynamic"] is True
+
+
+def test_ordered_nat_source_range_remains_unknown():
+    policy = parse_iptables_policy("""*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.80.0.0/24 -j SNAT --to-source 198.51.100.10-198.51.100.20
+COMMIT
+""")
+
+    result = evaluate_iptables_nat(
+        policy,
+        source="10.80.0.25", destination="203.0.113.20",
+        protocol="tcp", port=443, stage="source",
+    )
+
+    assert result["status"] == "unknown"
+    assert "single IPv4 address" in result["reason"]

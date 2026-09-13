@@ -226,6 +226,67 @@ COMMIT
     assert result["query"]["effective_destination"] == "10.90.0.10"
 
 
+def test_source_masquerade_uses_outgoing_interface_address_in_reach():
+    policy = parse_iptables_policy("""*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.80.0.0/24 -o outside -j MASQUERADE
+COMMIT
+*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i inside -o outside -p tcp --dport 443 -j ACCEPT
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "address": "10.80.0.1/24", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "outside", "address": "198.51.100.2/24", "network": "198.51.100.0/24", "role": "external"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "via": "198.51.100.1", "interface": "outside"},
+        ]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(
+        destination_text="Internet", device_analyses=[device],
+        hunting={"hosts": [], "findings": []},
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["query"]["effective_source"] == "198.51.100.2"
+    assert result["counts"]["source_nat_translations"] == 1
+    assert result["counts"]["destination_nat_translations"] == 0
+    assert any(item["title"].startswith("Masquerade on") for item in result["evidence"])
+    assert any(item["label"].startswith("Masquerade on") for item in result["path"])
+
+
+def test_unsupported_source_nat_target_forces_unknown():
+    policy = parse_iptables_policy("""*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.80.0.0/24 -j SNAT --to-source 198.51.100.10-198.51.100.20
+COMMIT
+*filter
+:FORWARD ACCEPT [0:0]
+COMMIT
+""")
+    device = {
+        **DEVICE,
+        "interfaces": [{"name": "inside", "network": "10.80.0.0/24", "role": "internal"}],
+        "route_analysis": {"routes": [{"network": "0.0.0.0/0", "interface": "outside"}]},
+        "policy": {"firewall_acl": [], "iptables": policy},
+    }
+
+    result = assess(
+        destination_text="Internet", device_analyses=[device],
+        hunting={"hosts": [], "findings": []},
+    )
+
+    assert result["outcome"] == "Unknown"
+    assert result["counts"]["nat_unresolved"] == 1
+    assert any("single IPv4 address" in item for item in result["caveats"])
+
+
 def test_applied_cisco_acl_drives_reachability_but_unbound_acl_does_not():
     text = """ip access-list extended USERS_TO_SERVERS
  permit tcp any host 10.90.0.10 eq 443
