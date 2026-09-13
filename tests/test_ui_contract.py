@@ -387,6 +387,23 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "Retained route, policy, and NAT objects" in html
 
 
+def test_reachability_results_can_open_a_temporary_map_focus():
+    reach_html = reachability_page().body.decode()
+    map_html = network_map_page().body.decode()
+
+    assert 'id="showResultOnMap"' in reach_html
+    assert 'class="secondary show-report-on-map"' in reach_html
+    assert "sessionStorage.setItem(reachMapStorageKey" in reach_html
+    assert "location.href='/network-map?reach-focus=1'" in reach_html
+    assert 'id="reachFocusPanel"' in map_html
+    assert 'id="exitReachFocus"' in map_html
+    assert "function resolveReachFocusNodes" in map_html
+    assert "function applyReachFocus" in map_html
+    assert "reach-focus-match" in map_html
+    assert "reach-focus-dim" in map_html
+    assert "Temporary investigation overlay; saved map positions and layouts are unchanged." in map_html
+
+
 def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():
     expected = [">Device</a>", ">Nmap</a>", ">Analyze</a>", ">Hunt</a>", ">Map</a>"]
     for page in (operator_page(), analysis_page(), device_config_page(), hunting_page(), network_map_page()):

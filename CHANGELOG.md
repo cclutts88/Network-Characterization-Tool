@@ -2,6 +2,10 @@
 
 ## 0.14.0-dev — Advanced Map Usability
 
+- Connected Reach results to Map with a temporary investigation overlay. An
+  analyst can open either an individual evaluation or any exposure-report path,
+  focus the mapped source, destination, and retained route/policy/NAT devices,
+  review outcome evidence, and exit without changing the saved map layout.
 - Added on-demand source exposure reports to Reach. NCT now evaluates every
   unique retained observed service from Internet and each Saved Network, groups
   and filters the results, associates local SearchSploit candidates, preserves

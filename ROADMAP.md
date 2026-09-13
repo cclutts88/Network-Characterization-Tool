@@ -600,7 +600,10 @@ within Reachability.
   route, ordered-policy, and NAT objects plus rendered evidence, correlate local
   SearchSploit candidates, filter by source/outcome/candidate presence, and
   export the complete evidence report as JSON without generating network traffic.
-- [ ] Send saved reachability results to the map for focused visualization.
+- [x] Send individual Reach evaluations and source-exposure report paths to a
+  temporary Map investigation overlay that highlights mapped endpoints and
+  retained transit evidence, dims unrelated topology, fits the focused path,
+  preserves saved layouts, and provides an explicit exit back to the normal map.
 
 ### Device-role and switch evidence follow-up
 
