@@ -10,7 +10,7 @@ admin_user=""
 password_file=""
 generate_password="no"
 assume_yes="no"
-state_dir="./nct-deployment"
+state_dir="${NCT_PERSIST_ROOT:-/var/lib/nct}/deployment"
 temporary_password="no"
 retained_password="no"
 password_file_absolute=""
@@ -62,11 +62,23 @@ trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
 image=$(docker inspect --format '{{.Config.Image}}' "$container")
-data_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{if eq .Type "volume"}}{{.Name}}{{end}}{{end}}{{end}}' "$container")
-[ -n "$data_volume" ] || die "The container does not use a recognized named /data volume."
+data_mount_type=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}{{end}}{{end}}' "$container")
+case "$data_mount_type" in
+    volume)
+        data_source=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$container")
+        ;;
+    bind)
+        data_source=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$container")
+        case "$data_source" in /*) ;; *) die "The /data bind mount is not an absolute host path." ;; esac
+        ;;
+    *)
+        die "The container does not use a recognized named volume or host folder for /data."
+        ;;
+esac
+[ -n "$data_source" ] || die "The /data storage source could not be identified."
 
 set +e
-docker run --rm -v "$data_volume:/data:ro" "$image" python -c 'import glob,json,sys
+docker run --rm -v "$data_source:/data:ro" "$image" python -c 'import glob,json,sys
 active=[]
 for p in glob.glob("/data/**/manifest.json",recursive=True):
  try:
@@ -134,12 +146,12 @@ restart_original() {
 
 backup_name="nct-account-recovery-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
 backup_abs=$(cd "$state_dir/backups" && pwd)
-if ! docker run --rm -v "$data_volume:/data:ro" -v "$backup_abs:/backup" "$image" sh -c "cd /data && tar -czf /backup/$backup_name ."; then
+if ! docker run --rm -v "$data_source:/data:ro" -v "$backup_abs:/backup" "$image" sh -c "cd /data && tar -czf /backup/$backup_name ."; then
     restart_original
     die "Recovery backup failed; the original container was returned to its prior state."
 fi
 
-if ! docker run --rm -v "$data_volume:/data" -v "$password_file:/run/secrets/nct_recovery_password:ro" "$image" python -c 'import pathlib,sqlite3,sys
+if ! docker run --rm -v "$data_source:/data" -v "$password_file:/run/secrets/nct_recovery_password:ro" "$image" python -c 'import pathlib,sqlite3,sys
 from app.auth import reset_user_password,set_user_disabled
 db=pathlib.Path("/data/analyzer.db")
 username=sys.argv[1]
@@ -159,7 +171,13 @@ if [ "$was_running" = "true" ]; then
     healthy="no"
     attempt=0
     while [ "$attempt" -lt 30 ]; do
-        if docker exec "$container" python -c 'import json,urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=2))["status"]=="ok"' >/dev/null 2>&1; then healthy="yes"; break; fi
+        if docker exec "$container" python -c 'import json,ssl,urllib.request
+context=ssl._create_unverified_context()
+for url in ("http://127.0.0.1:8080/health","https://127.0.0.1:8445/health"):
+ try:
+  if json.load(urllib.request.urlopen(url,timeout=2,context=context))["status"] == "ok": raise SystemExit(0)
+ except Exception: pass
+raise SystemExit(1)' >/dev/null 2>&1; then healthy="yes"; break; fi
         attempt=$((attempt + 1))
         sleep 1
     done
@@ -169,7 +187,7 @@ fi
 [ "$temporary_password" = "no" ] || rm -f "$password_file"
 [ "$temporary_password" = "no" ] || password_file_absolute=""
 log_file="$state_dir/logs/admin-recovery-$(date -u +%Y%m%dT%H%M%SZ).log"
-printf 'completed=%s\ncontainer=%s\nadmin_user=%s\naction=password_reset_and_session_revocation\nbackup=%s\n' "$(date -u +%FT%TZ)" "$container" "$admin_user" "$backup_abs/$backup_name" > "$log_file"
+printf 'completed=%s\ncontainer=%s\nadmin_user=%s\ndata_mount_type=%s\ndata_source=%s\naction=password_reset_and_session_revocation\nbackup=%s\n' "$(date -u +%FT%TZ)" "$container" "$admin_user" "$data_mount_type" "$data_source" "$backup_abs/$backup_name" > "$log_file"
 say "Administrator $admin_user was recovered, all prior sessions were revoked, and NCT was returned to its prior running state."
 say "Backup: $backup_abs/$backup_name"
 if [ "$retained_password" = "yes" ]; then

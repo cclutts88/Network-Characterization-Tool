@@ -249,17 +249,33 @@ def _configuration_categories(node: dict) -> list[tuple[str, list[str]]]:
 
 def _device_type(host: dict, categories: set[str]) -> str:
     explicit = str(host.get("device_type") or host.get("role") or "").strip()
-    if explicit:
-        return explicit.replace("_", " ").title()
     identity = " ".join(
-        str(host.get(field) or "").strip().lower()
-        for field in ("os", "os_group")
+        [
+            *(
+                str(host.get(field) or "").strip().lower()
+                for field in ("os", "os_group", "vendor")
+            ),
+            *(
+                _service_text(item) for item in (host.get("ports") or [])
+            ),
+        ]
     )
     for marker, label in (
-        ("firewall", "Firewall"), ("router", "Router"), ("switch", "Switch"),
+        ("pfsense", "Firewall"), ("opnsense", "Firewall"),
+        ("fortigate", "Firewall"), ("cisco asa", "Firewall"),
+        ("firewall", "Firewall"), ("vyos", "Router"),
+        ("router", "Router"), ("switch", "Switch"),
         ("access point", "Wireless access point"), ("printer", "Printer"),
-        ("phone", "Phone"), ("workstation", "Workstation"),
-        ("server", "Server"),
+        ("phone", "Phone"),
+    ):
+        if marker in identity:
+            return label
+    if explicit.casefold() not in {
+        "", "unknown", "unclassified", "general purpose", "general-purpose"
+    }:
+        return explicit.replace("_", " ").title()
+    for marker, label in (
+        ("workstation", "Workstation"), ("server", "Server"),
     ):
         if marker in identity:
             return label
@@ -500,6 +516,10 @@ def build_hunting_analysis(
             "host_key": canonical_host_key(host),
             "ip": host.get("ip"),
             "hostname": host.get("hostname"),
+            "analyst_hostname": host.get("analyst_hostname"),
+            "hostname_aliases": list(host.get("hostname_aliases") or []),
+            "hostname_origin": host.get("hostname_origin"),
+            "hostname_conflict": bool(host.get("hostname_conflict")),
             "mac": host.get("mac"),
             "vendor": host.get("vendor"),
             "os": host.get("os"),
@@ -526,6 +546,7 @@ def build_hunting_analysis(
                 "service": item.get("service"),
                 "product": item.get("product"),
                 "version": item.get("version"),
+                "nonstandard_port": bool(item.get("nonstandard_port")),
             } for item in host_findings],
             "nonstandard_port": any(
                 item.get("nonstandard_port") for item in host_findings
@@ -643,7 +664,7 @@ def correlate_hunting_identity(
         if not host.get("os") and node.get("os"):
             host["os"] = node["os"]
         role = str(node.get("role") or "").strip()
-        if role and host.get("device_type") in {None, "", "Unclassified"}:
+        if role.casefold() in {"router", "firewall", "switch"}:
             host["device_type"] = role.replace("_", " ").title()
         if direct_mac:
             continue

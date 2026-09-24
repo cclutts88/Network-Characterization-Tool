@@ -90,10 +90,22 @@ function showPreview(data) { current=data; $('empty').classList.add('hidden'); $
 function element(tag,className,text) { const node=document.createElement(tag); if(className) node.className=className; if(text!==undefined) node.textContent=text; return node; }
 function formatTime(value) { if(!value) return 'Unknown time'; const date=new Date(value); return Number.isNaN(date.getTime())?value:date.toLocaleString(); }
 function formatBytes(value) { if(value<1024) return `${value} B`; if(value<1024*1024) return `${(value/1024).toFixed(1)} KB`; return `${(value/1024/1024).toFixed(1)} MB`; }
+async function saveArtifact(artifact,link) {
+  const original=link.textContent; link.setAttribute('aria-busy','true'); link.textContent=`Preparing ${artifact.name}…`;
+  try {
+    const response=await fetch(artifact.url,{credentials:'same-origin'});
+    if(!response.ok) { let detail=null; try { detail=await response.json(); } catch (_) {} throw new Error(apiError(detail,`Evidence download failed (${response.status})`)); }
+    const blob=await response.blob(),href=URL.createObjectURL(blob),download=document.createElement('a');
+    download.href=href; download.download=artifact.name||'nct-evidence'; document.body.append(download); download.click(); download.remove();
+    setTimeout(()=>URL.revokeObjectURL(href),30000); notice(`${artifact.name} is ready to save.`,'good');
+  } catch(error) { notice(error.message||'Evidence download failed.','bad'); }
+  finally { link.removeAttribute('aria-busy'); link.textContent=original; }
+}
+function artifactLink(artifact) { const link=element('a','',`${artifact.name} · ${formatBytes(artifact.size||0)}`); link.href=artifact.url; link.setAttribute('download',artifact.name||''); link.onclick=event=>{event.preventDefault();saveArtifact(artifact,link)}; return link; }
 function selectedDeviceTypes() { const values=[...$('type').options].filter(option=>option.selected&&!option.disabled).map(option=>option.value); if(!values.length){$('type').querySelector('[value="router"]').selected=true;return['router']} return values; }
 function updateVendorHint() { const vendor=$('vendor').value,type=$('type'),switchOption=type.querySelector('option[value="switch"]'),supportsSwitch=['cisco','juniper','unifi'].includes(vendor);switchOption.disabled=!supportsSwitch;if(switchOption.disabled)switchOption.selected=false;let selected=selectedDeviceTypes();if(selected.includes('switch')&&selected.length>1){switchOption.selected=false;selected=selectedDeviceTypes();notice('Switch uses its own collection profile and cannot be combined with Router or Firewall.','warn')}const unifi=vendor==='unifi',isSwitch=selected.includes('switch'),combined=selected.includes('router')&&selected.includes('firewall');$('vendorHint').textContent=isSwitch?(unifi?'UniFi switch collection uses guarded read-only platform, bridge, VLAN, forwarding-table, spanning-tree, and neighbor commands. Unsupported commands are reported without discarding usable output.':`The ${vendor==='cisco'?'Cisco':'Juniper'} switch profile collects VLAN, port mode/status, MAC table, spanning tree, aggregation, PoE, neighbor, interface, and routing evidence with read-only commands.`):(combined?'Router + Firewall selected. Both read-only templates will run once with duplicate commands removed. Hold Shift or Ctrl while selecting to change multiple roles.':(unifi?'UniFi OS gateways use a guarded read-only Linux evidence set over SSH. Hold Shift or Ctrl to select Router + Firewall together. Current consoles and gateways normally use the root SSH account. EdgeRouter devices should continue to use the VyOS template. Switch collection is available for this vendor.':(supportsSwitch?'Hold Shift or Ctrl to select Router + Firewall together. Switch collection is available for this vendor.':'Hold Shift or Ctrl to select Router + Firewall together.')));if(unifi&&!$('username').value.trim())$('username').value='root'; }
 function runField(label,value) { const box=element('div','run-field'); box.append(element('span','',label),element('strong','',value||'—')); return box; }
-function showLiveArtifacts(artifacts) { const box=$('liveArtifacts'); box.replaceChildren(); for(const artifact of (artifacts||[])) { const link=element('a','',`${artifact.name} · ${formatBytes(artifact.size||0)}`); link.href=artifact.url; link.setAttribute('download',''); box.append(link); } box.classList.toggle('hidden',!box.childElementCount); }
+function showLiveArtifacts(artifacts) { const box=$('liveArtifacts'); box.replaceChildren(); for(const artifact of (artifacts||[])) box.append(artifactLink(artifact)); box.classList.toggle('hidden',!box.childElementCount); }
 function networkCandidateStatus(message,kind='') { const node=$('networkCandidateStatus'); node.textContent=message; node.className=kind||'meta'; }
 function showCompletionActions(data) { const complete=data&&data.run_id&&['completed','uploaded'].includes(String(data.status||'').toLowerCase()); $('completionActions').classList.toggle('hidden',!complete); if(complete) $('analyzeCollection').href=`/device-analysis?run=${encodeURIComponent(data.run_id)}`; }
 function selectedNetworkCandidate() { return networkCandidates.find(item=>item.cidr===$('configNetworkCandidate').value)||null; }
@@ -131,7 +143,12 @@ function renderHistory(records) {
   if(!groups.size) { $('historyStatus').textContent=term?'No collected results match this search.':'No network-device configuration records have been saved yet.'; return; }
   for(const runs of groups.values()) runs.sort((a,b)=>new Date(b.completed_at||b.created_at||0)-new Date(a.completed_at||a.created_at||0));
   $('historyStatus').textContent=`${groups.size} network device${groups.size===1?'':'s'} · ${records.length} configuration record${records.length===1?'':'s'}`;
-  for(const [address,runs] of groups) {
+  const orderedGroups=[...groups.entries()].sort(([,leftRuns],[,rightRuns])=>{
+    const left=leftRuns[0]?.device_name||leftRuns[0]?.device_address||'Unknown device';
+    const right=rightRuns[0]?.device_name||rightRuns[0]?.device_address||'Unknown device';
+    return left.localeCompare(right,undefined,{numeric:true,sensitivity:'base'});
+  });
+  for(const [address,runs] of orderedGroups) {
     const device=element('details','device-history');
     const summary=element('summary','device-summary');
     const latest=runs[0]; const presetRecord=runs.find(run=>run.vendor&&run.device_type&&run.username)||latest;
@@ -149,7 +166,7 @@ function renderHistory(records) {
       if(Array.isArray(run.additional_commands)&&run.additional_commands.length) { body.append(element('label','','Additional validated commands'),element('pre','',run.additional_commands.join('\n'))); }
       if(Array.isArray(run.commands)&&run.commands.length) { body.append(element('label','','Commands executed'),element('pre','',run.commands.join('\n'))); }
       const artifacts=element('div','artifacts');
-      for(const artifact of (run.artifacts||[])) { const link=element('a','',`${artifact.name} · ${formatBytes(artifact.size||0)}`); link.href=artifact.url; link.setAttribute('download',''); artifacts.append(link); }
+      for(const artifact of (run.artifacts||[])) artifacts.append(artifactLink(artifact));
       if(artifacts.childElementCount) body.append(element('label','','Saved files'),artifacts);
       const actions=element('div','run-actions'); const analyzeButton=element('button','secondary','Analyze collection'); analyzeButton.type='button'; analyzeButton.onclick=event=>{event.preventDefault();event.stopPropagation();location.href=`/device-analysis?run=${encodeURIComponent(run.run_id)}`;}; const nmapLink=element('a','button-link secondary','Continue to Nmap'); nmapLink.href='/scans'; const deleteButton=element('button','danger','Delete result'); deleteButton.type='button'; deleteButton.onclick=event=>beginDeleteCollection(run,event); actions.append(analyzeButton,nmapLink,deleteButton); body.append(actions);
       card.append(body); runList.append(card);

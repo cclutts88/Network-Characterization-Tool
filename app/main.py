@@ -34,6 +34,19 @@ from app.reachability import (
 )
 from app.reachability_ui import reachability_page
 from app.saved_networks import list_saved_networks
+from app.network_semantics import (
+    apply_external_gateway_role,
+    clear_external_wan_gateway,
+    get_external_wan_gateway,
+    init_network_semantics_storage,
+    set_external_wan_gateway,
+)
+from app.host_identities import (
+    apply_analysis_host_identities,
+    import_host_identities,
+    init_host_identity_storage,
+    list_host_identities,
+)
 from app.ip_sort import ip_sort_key
 from app.os_inference import infer_os_identity
 from app.searchsploit import (
@@ -186,6 +199,13 @@ class ReachabilityRouteSimulationQuery(ReachabilityQuery):
     next_hop: str | None = Field(default=None, max_length=64)
     priority_kind: Literal["metric", "preference"] | None = None
     priority_value: int | None = Field(default=None, ge=0, le=4_294_967_295)
+
+
+class ExternalWanGatewayRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=255)
+    device_name: str = Field(default="", max_length=255)
+    device_address: str = Field(default="", max_length=255)
+    interface_name: str = Field(default="", max_length=255)
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -957,6 +977,8 @@ async def lifespan(_: FastAPI):
     init_scan_collaboration_storage(DB_PATH)
     init_note_storage(DB_PATH)
     init_view_preference_storage(DB_PATH)
+    init_network_semantics_storage(DB_PATH)
+    init_host_identity_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1611,6 +1633,7 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
         direct_source_url=f"/api/imports/{digest}/raw",
     )
     apply_analysis_os_overrides(response_analysis, DB_PATH)
+    apply_analysis_host_identities(response_analysis, DB_PATH)
     return {
         "sha256": digest,
         "duplicate": duplicate,
@@ -1646,6 +1669,7 @@ def analyze_scan_run(run_id: str) -> dict:
         direct_source_url=f"/api/scan-runs/{run_id}/artifacts/xml",
     )
     apply_analysis_os_overrides(analysis, DB_PATH)
+    apply_analysis_host_identities(analysis, DB_PATH)
     return {
         "run_id": run_id,
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
@@ -1679,7 +1703,8 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
 
 def _run_group_analysis_with_overrides(manifests: list[dict]) -> dict:
     """Apply current analyst identity only to presentation/correlation views."""
-    return apply_analysis_os_overrides(_run_group_analysis(manifests), DB_PATH)
+    analysis = apply_analysis_os_overrides(_run_group_analysis(manifests), DB_PATH)
+    return apply_analysis_host_identities(analysis, DB_PATH)
 
 
 def _comparison_evidence(manifests: list[dict], description: dict | None = None) -> dict:
@@ -1765,12 +1790,23 @@ def _hunting_subnets(group: list[dict]) -> list[str]:
             for item in (manifest.get("saved_networks") or [])
             if item.get("cidr")
         )
-        values.extend(
+        manual = (
             (manifest.get("target_selection") or {}).get("manual_targets")
             or manifest.get("targets")
             or (manifest.get("coverage") or {}).get("targets")
             or []
         )
+        for item in manual:
+            raw = str(item or "").strip()
+            if "/" not in raw:
+                continue
+            try:
+                network = ipaddress.ip_network(raw, strict=False)
+            except ValueError:
+                continue
+            if network.prefixlen == network.max_prefixlen:
+                continue
+            values.append(str(network))
     return list(dict.fromkeys(str(item) for item in values if item))
 
 
@@ -1859,6 +1895,38 @@ def analyze_current_network() -> dict:
     result = _latest_network_evidence()
     result["status"] = "analysis_network_complete"
     return result
+
+
+@app.get("/api/analysis/host-identities")
+def retained_host_identities() -> dict:
+    identities = list_host_identities(DB_PATH)
+    return {"count": len(identities), "identities": identities}
+
+
+@app.post("/api/analysis/host-identities/import")
+async def upload_host_identities(
+    request: Request, file: Annotated[UploadFile, File()]
+) -> dict:
+    filename = safe_name(file.filename or "hostnames.txt", "hostnames.txt")
+    if Path(filename).suffix.casefold() not in {".csv", ".txt"}:
+        raise HTTPException(
+            status_code=422, detail="Upload a .csv or .txt host identity file"
+        )
+    content = await file.read(5 * 1024 * 1024 + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413, detail="The host identity file exceeds the 5 MB limit"
+        )
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return import_host_identities(
+            DB_PATH, content, filename=filename, imported_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/api/analysis/network-changes")
@@ -1993,7 +2061,41 @@ def _latest_device_reachability_evidence() -> list[dict]:
             continue
         analyses.append(analysis)
         seen_devices.add(device_key)
-    return analyses
+    return apply_external_gateway_role(
+        analyses, get_external_wan_gateway(DB_PATH)
+    )
+
+
+@app.get("/api/network-semantics/external-wan-gateway")
+def external_wan_gateway_semantic() -> dict:
+    return {
+        "status": "network_semantics_complete",
+        "gateway": get_external_wan_gateway(DB_PATH),
+    }
+
+
+@app.put("/api/network-semantics/external-wan-gateway")
+def update_external_wan_gateway_semantic(
+    payload: ExternalWanGatewayRequest, request: Request
+) -> dict:
+    analyst = request.state.analyst
+    changed_by = analyst["username"] if analyst else "local-analyst"
+    return {
+        "status": "external_wan_gateway_saved",
+        "gateway": set_external_wan_gateway(
+            DB_PATH,
+            **payload.model_dump(),
+            changed_by=changed_by,
+        ),
+    }
+
+
+@app.delete("/api/network-semantics/external-wan-gateway")
+def delete_external_wan_gateway_semantic() -> dict:
+    return {
+        "status": "external_wan_gateway_cleared",
+        **clear_external_wan_gateway(DB_PATH),
+    }
 
 
 @app.get("/api/reachability/context")
@@ -2005,6 +2107,7 @@ def reachability_context() -> dict:
         "saved_networks": list_saved_networks(DB_PATH),
         "hosts": hunting.get("hosts") or [],
         "device_collections": len(devices),
+        "external_wan_gateway": get_external_wan_gateway(DB_PATH),
         "devices": [
             {
                 "name": (item.get("device") or {}).get("name"),
@@ -2390,6 +2493,7 @@ def export_import_host_summary(sha256: str) -> StreamingResponse:
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
     apply_analysis_os_overrides(item["analysis"], DB_PATH)
+    apply_analysis_host_identities(item["analysis"], DB_PATH)
     return csv_download(
         rows_to_csv(host_summary_rows(item["analysis"]), HOST_SUMMARY_FIELDS),
         compact_export_filename(
@@ -2404,6 +2508,7 @@ def export_import_ports(sha256: str) -> StreamingResponse:
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
     apply_analysis_os_overrides(item["analysis"], DB_PATH)
+    apply_analysis_host_identities(item["analysis"], DB_PATH)
     return csv_download(
         rows_to_csv(port_level_rows(item["analysis"]), PORT_LEVEL_FIELDS),
         compact_export_filename(

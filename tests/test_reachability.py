@@ -940,9 +940,97 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
         lambda run_id: {"run_id": run_id},
     )
 
+    monkeypatch.setattr(main, "get_external_wan_gateway", lambda db_path: None)
     result = main._latest_device_reachability_evidence()
 
     assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
+
+
+def test_reach_follows_each_retained_next_hop_without_inventing_devices():
+    edge = {
+        "run_id": "edge",
+        "device": {"name": "edge-wan-rtr", "address": "10.0.0.1", "type": "router"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "transit", "network": "10.0.12.0/30", "address": "10.0.12.1"},
+        ],
+        "external_wan_gateway": {"node_id": "ip:10.0.0.1"},
+        "route_analysis": {"routes": [{
+            "network": "10.90.0.0/24", "via": "10.0.12.2", "interface": "transit",
+            "line": "ip route 10.90.0.0 255.255.255.0 10.0.12.2",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+    distribution = {
+        "run_id": "distribution",
+        "device": {"name": "distribution-rtr", "address": "10.0.12.2", "type": "router"},
+        "interfaces": [
+            {"name": "uplink", "network": "10.0.12.0/30", "address": "10.0.12.2"},
+            {"name": "servers", "network": "10.90.0.0/24", "address": "10.90.0.1"},
+        ],
+        "route_analysis": {"routes": [{
+            "network": "10.90.0.0/24", "interface": "servers", "direct": True,
+            "line": "C 10.90.0.0/24 is directly connected",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet",
+        device_analyses=[edge, distribution],
+    )
+
+    assert [item["device"] for item in result["retained_objects"]["selected_path_routes"]] == [
+        "edge-wan-rtr", "distribution-rtr",
+    ]
+    assert [item["label"] for item in result["path"] if item["kind"] == "device"] == [
+        "edge-wan-rtr", "distribution-rtr",
+    ]
+    assert not any("Path is partial" in item for item in result["caveats"])
+
+
+def test_reach_reports_a_partial_path_when_next_hop_evidence_is_missing():
+    edge = {
+        **DEVICE,
+        "device": {"name": "edge-wan-rtr", "address": "10.0.0.1", "type": "router"},
+        "interfaces": [{"name": "outside", "network": "198.51.100.0/24", "role": "external"}],
+        "external_wan_gateway": {"node_id": "ip:10.0.0.1"},
+    }
+
+    result = assess(source_text="Internet", device_analyses=[edge])
+
+    assert any("Path is partial" in item for item in result["caveats"])
+
+
+def test_reach_infers_unmapped_source_as_external_but_keeps_known_source_internal():
+    edge = {
+        "run_id": "edge",
+        "device": {"name": "edge-wan-rtr", "address": "10.0.0.1", "type": "router"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "inside", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "external_wan_gateway": {"node_id": "ip:10.0.0.1"},
+        "route_analysis": {"routes": [{
+            "network": "10.90.0.0/24", "interface": "inside", "direct": True,
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+
+    outside = assess(
+        source_text="203.0.113.77",
+        device_analyses=[edge],
+    )
+    inside = assess(
+        source_text="10.90.0.25",
+        device_analyses=[edge],
+    )
+
+    assert outside["query"]["source_external"] is True
+    assert outside["query"]["source_external_basis"] == "inferred_outside_retained_network"
+    assert any("inferred this source is external" in item for item in outside["caveats"])
+    assert inside["query"]["source_external"] is False
+    assert inside["query"]["source_external_basis"] == "retained_internal_context"
 
 
 def test_searchsploit_exposure_requires_internal_permit_and_external_deny_for_internal_only():

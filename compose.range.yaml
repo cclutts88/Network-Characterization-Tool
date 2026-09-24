@@ -1,0 +1,35 @@
+services:
+  nct:
+    image: ${NCT_IMAGE}
+    container_name: nct
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+    ports:
+      - "${NCT_BIND_ADDRESS}:${NCT_HTTPS_PORT}:8445"
+    environment:
+      NCT_AUTH_MODE: local
+      NCT_SESSION_HOURS: "12"
+      NCT_COOKIE_SECURE: "1"
+      NCT_BOOTSTRAP_ADMIN: ${NCT_BOOTSTRAP_ADMIN:-}
+      NCT_BOOTSTRAP_PASSWORD_FILE: ${NCT_BOOTSTRAP_PASSWORD_FILE:-}
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8445"
+      - --loop
+      - asyncio
+      - --http
+      - h11
+      - --ssl-certfile
+      - /run/tls/nct-server.crt
+      - --ssl-keyfile
+      - /run/tls/nct-server.key
+    volumes:
+      - ${NCT_DATA_DIR}:/data:Z
+      - ${NCT_TLS_ROOT}/tls/nct-server.crt:/run/tls/nct-server.crt:ro
+      - ${NCT_TLS_ROOT}/tls/nct-server.key:/run/tls/nct-server.key:ro
+      - ${NCT_BOOTSTRAP_DIR}:/run/nct-bootstrap:ro

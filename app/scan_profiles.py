@@ -27,7 +27,7 @@ DEFAULT_SCAN_OPTIONS = {
     "service_detection": True,
     "os_detection": True,
     "timing": "fast",
-    "discovery_mode": "nmap",
+    "discovery_mode": "fping",
     "traceroute": False,
 }
 
@@ -71,6 +71,8 @@ BUILTIN_PROFILES = (
         },
     },
 )
+
+BUILTIN_PROFILE_VERSION = 2
 
 
 def utc_now() -> str:
@@ -124,7 +126,7 @@ def normalize_scan_options(value: Mapping[str, object] | None = None) -> dict:
     tcp_scope = str(options["tcp_scope"])
     udp_scope = str(options["udp_scope"])
     timing = str(options["timing"])
-    discovery_mode = str(options.get("discovery_mode", "nmap"))
+    discovery_mode = str(options.get("discovery_mode", "fping"))
     if protocol not in PROTOCOLS:
         raise ValueError("Protocol must be TCP, UDP, or TCP + UDP")
     if tcp_scope not in TCP_SCOPES:

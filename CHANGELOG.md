@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.15.2 — Device evidence hotfix
+
+- Restored browser downloads for both existing and newly collected Network
+  Device evidence by saving the authenticated response through the signed-in
+  page instead of relying on the browser's failed direct attachment handoff.
+- Changed Cisco collection to use an interactive terminal channel with paging
+  disabled for each read-only command, matching Cisco IOS behavior that can
+  reject SSH command-execution requests while still allowing a normal shell.
+- Retained partial Cisco output and command-specific errors when a collection
+  cannot be completed, so a failed run still preserves useful troubleshooting
+  evidence instead of producing an empty result.
+
+## 0.15.1 — Range usability and retained-data release
+
+- Prevented Hunt from rendering every detailed finding at page load, deferred
+  off-screen rows, fixed combined rows that remained visible after filtering,
+  and clarified the difference between ports and capability classifications.
+- Consolidated Hunt's duplicate Inventory and Capability Findings tables into
+  one Systems panel with Capabilities and Inventory views. Only the active view
+  is rendered, reducing large-range page load and browser memory use.
+- Replaced personal Hunt/Analyze presets with simple table controls that default
+  to 50 rows, while leaving prior saved preference records untouched.
+- Added filtered IP exports for both network-wide and individual Analyze views,
+  plus CSV/TXT hostname templates and retained analyst hostname imports.
+- Alphabetized outer Saved Network and network-device history groups while
+  keeping every group's scans or collections newest-first.
+- Made the active Nmap run appear automatically with live phase/progress and
+  disappear after work completes; scheduled scanning uses NCT Standard without
+  requiring operators to create a profile.
+- Preserved scheduled CIDR targets as compact networks instead of expanding an
+  unchunked `/24` into 256 host entries. Host expansion now occurs only when an
+  operator enables chunking, and No-Strike exclusions remain enforced.
+- Made FPING the default discovery method in the new NCT Standard profile
+  version while retaining the prior Nmap-discovery version for schedules
+  already pinned to it. The protocol and port-scope explanation is now
+  collapsible and closed by default.
+- Corrected Saved Network reuse and historical scan attribution, improved Cisco
+  collection output, and strengthened Reach external-address and path evidence.
+- Prioritized the Map canvas with a toggleable controls side panel, legend and
+  operator FAQ; defaulted workspace area to 4x, hid point-to-point /30 links by
+  default, color-coded common network-device vendors, protected locked layouts
+  by parking new objects, and added rotatable markup, text labels, and composite
+  shape grouping that retains every box and ellipse while drawing only the
+  combined outside border. Map Controls can now be dragged, snapped inside any
+  canvas corner, and remembered by the browser. Files and exports now open from
+  the top workspace controls beside Expand and Map FAQ.
+- Added a host-folder deployment and verified upgrade workflow that preserves
+  `/var/lib/nct/data`, creates a pre-upgrade backup, retains the old container
+  for rollback, and checks record/file counts after startup.
+
 ## 0.14.0-dev — Advanced Map Usability
 
 - Added Hunt-to-Reach shortcuts for inventory hosts, capability findings, and

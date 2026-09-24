@@ -253,6 +253,7 @@ umask 077
     printf 'image=%s\nvolume=%s\ntls=%s\nstarted=%s\n' "$image" "$data_volume" "$tls_enabled" "$(date -u +%FT%TZ)"
 } > "$log_file"
 
+actual_sha=""
 if [ -n "$image_archive" ]; then
     [ -r "$image_archive" ] || die "Offline image archive is not readable: $image_archive"
     [ -n "$image_sha256" ] || die "Every offline image archive requires --image-sha256 before Test, Range, or Mission use."
@@ -290,7 +291,7 @@ target_version=${target_version:-unknown}
 [ "$target_image_id" != "unknown" ] || [ "$check_only" = "yes" ] || die "The selected image identity could not be inspected."
 [ "$check_only" = "yes" ] && [ "$target_image_id" = "unknown" ] || [ "$target_build" != "unknown" ] || die "All deployable NCT images must declare NCT_BUILD_ID."
 [ "$check_only" = "yes" ] && [ "$target_image_id" = "unknown" ] || [ "$target_version" != "unknown" ] || die "All deployable NCT images must declare NCT_APP_VERSION."
-printf 'image_id=%s\nimage_repo_digests=%s\ntarget_version=%s\ntarget_build=%s\n' "$target_image_id" "$target_repo_digests" "$target_version" "$target_build" >> "$log_file"
+printf 'image_id=%s\nimage_repo_digests=%s\ntarget_version=%s\ntarget_build=%s\narchive_sha256=%s\n' "$target_image_id" "$target_repo_digests" "$target_version" "$target_build" "${actual_sha:-none}" >> "$log_file"
 
 receipt_value() {
     awk -F= -v wanted="$1" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' "$promotion_receipt"
@@ -305,6 +306,7 @@ if [ "$profile" = "range" ] || [ "$profile" = "mission" ]; then
     receipt_profile=$(receipt_value profile)
     receipt_ready=$(receipt_value promotion_ready)
     receipt_image_id=$(receipt_value image_id)
+    receipt_archive_sha=$(receipt_value archive_sha256)
     receipt_build=$(receipt_value build)
     receipt_version=$(receipt_value version)
     receipt_health=$(receipt_value application_health)
@@ -313,14 +315,23 @@ if [ "$profile" = "range" ] || [ "$profile" = "mission" ]; then
     receipt_compatibility=$(receipt_value compatibility_status)
     [ "$receipt_profile" = "$required_receipt_profile" ] || die "$profile requires a $required_receipt_profile promotion receipt, not $receipt_profile."
     [ "$receipt_ready" = "yes" ] || die "The supplied receipt is not marked promotion-ready."
-    [ "$receipt_image_id" = "$target_image_id" ] || die "Promotion receipt image ID does not match the selected local image."
+    if [ "$receipt_image_id" != "$target_image_id" ]; then
+        [ "$profile" = "range" ] || die "Promotion receipt image ID does not match the selected local image."
+        [ -n "$actual_sha" ] || die "Promotion receipt image ID does not match the selected local image. Re-run Range with the verified offline image archive."
+        [ -n "$receipt_archive_sha" ] || die "Promotion receipt image ID does not match the selected local image and the Test receipt does not record an offline archive checksum. Re-run the Test acceptance with this launcher."
+        [ "$receipt_archive_sha" = "$actual_sha" ] || die "Promotion receipt offline archive checksum does not match the verified Range archive."
+        say "Promotion receipt image IDs differ across Docker engines; accepting the exact verified offline archive SHA-256 instead."
+        promotion_identity="archive-sha256"
+    else
+        promotion_identity="image-id"
+    fi
     [ "$receipt_build" = "$target_build" ] || die "Promotion receipt build does not match the selected image."
     [ "$receipt_version" = "$target_version" ] || die "Promotion receipt version does not match the selected image."
     [ "$receipt_health" = "pass" ] && [ "$receipt_runtime" = "ready" ] && [ "$receipt_raw" = "ready" ] || die "Promotion receipt does not contain complete application, runtime-tool, and NET_RAW acceptance results."
     if [ "$profile" = "mission" ] && [ "$receipt_compatibility" != "supported" ]; then
         die "Mission promotion requires a supported Range runtime receipt; $receipt_compatibility compatibility cannot be promoted."
     fi
-    printf 'promotion_source=%s\npromotion_source_profile=%s\npromotion_source_image_id=%s\npromotion_source_build=%s\n' "$promotion_receipt" "$receipt_profile" "$receipt_image_id" "$receipt_build" >> "$log_file"
+    printf 'promotion_source=%s\npromotion_source_profile=%s\npromotion_source_image_id=%s\npromotion_source_build=%s\npromotion_source_archive_sha256=%s\npromotion_identity=%s\n' "$promotion_receipt" "$receipt_profile" "$receipt_image_id" "$receipt_build" "${receipt_archive_sha:-none}" "$promotion_identity" >> "$log_file"
 fi
 
 if [ "$legacy_range_runtime" = "yes" ]; then
@@ -658,6 +669,27 @@ if [ "$access" = "lan" ]; then
     printf 'firewall_tool=%s\nfirewall_state=%s\nfirewall_rule_status=%s\nfirewall_rule_spec=%s\nfirewall_changed=%s\n' "$firewall_tool" "$firewall_state" "$firewall_rule_status" "$firewall_rule_spec" "$firewall_changed" >> "$log_file"
 fi
 
+backup_file="none"
+write_promotion_receipt() {
+    receipt_build_name=$(printf '%s' "$reported_build" | tr -c 'A-Za-z0-9._-' '_')
+    receipt_file="$state_dir/receipts/${profile}-${receipt_build_name}-$(date -u +%Y%m%dT%H%M%SZ).receipt"
+    receipt_tmp="${receipt_file}.tmp.$$"
+    known_limitations="range_evaluation_required"
+    [ "$profile" != "range" ] || known_limitations="mission_gate_incomplete"
+    mkdir -p "$state_dir/receipts" || return 1
+    {
+        printf 'schema=1\nprofile=%s\npromotion_ready=yes\ncompleted=%s\n' "$profile" "$(date -u +%FT%TZ)"
+        printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\narchive_sha256=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build" "${actual_sha:-none}"
+        printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
+        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\nlegacy_range_runtime=%s\nruntime_thread_probe=%s\nruntime_seccomp=%s\nruntime_uvicorn=%s\nnetwork_overlap=%s\nnetwork_overlap_detail=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$legacy_range_runtime" "$runtime_thread_probe" "$runtime_seccomp" "$runtime_uvicorn" "$network_overlap" "$network_overlap_detail" "$architecture"
+        printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\nfirewall_tool=%s\nfirewall_state=%s\nfirewall_rule_status=%s\nfirewall_rule_spec=%s\nfirewall_changed=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url" "$firewall_tool" "$firewall_state" "$firewall_rule_status" "$firewall_rule_spec" "$firewall_changed"
+        printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
+    } > "$receipt_tmp" || return 1
+    mv "$receipt_tmp" "$receipt_file" || return 1
+    printf 'promotion_receipt=%s\n' "$receipt_file" >> "$log_file" || return 1
+    say "Promotion receipt: $receipt_file"
+}
+
 say "Profile: $profile · Docker $server_version/API $server_api · Compose $compose_mode $compose_version"
 say "Range compatibility: $compatibility_status · $compatibility_tier"
 say "$compatibility_guidance"
@@ -678,6 +710,17 @@ if [ -n "$existing_id" ] && [ "$existing_image_id" = "$target_image_id" ] && [ "
         mv "$state_tmp" "$state_file"
         printf 'completed=%s\nreported_build=%s\nresult=already-current\nurl=%s\n' "$(date -u +%FT%TZ)" "$target_build" "$access_url" >> "$log_file"
         say "This exact image is already healthy at $access_url; no backup or container swap was needed."
+        if [ "$profile" = "test" ]; then
+            runtime_tools=$(docker exec "$container" sh -ec 'for tool in nmap fping tcpdump ssh; do command -v "$tool" >/dev/null; done; nmap --version >/dev/null; fping -v >/dev/null 2>&1; tcpdump --version >/dev/null 2>&1; ssh -V >/dev/null 2>&1; tcpdump -D >/dev/null 2>&1; printf ready' 2>/dev/null || printf failed)
+            [ "$runtime_tools" = "ready" ] || die "The existing NCT container did not pass its runtime-tool acceptance check."
+            capabilities=$(docker inspect --format '{{range .HostConfig.CapAdd}}{{.}} {{end}}' "$container" 2>/dev/null || printf '')
+            printf '%s' "$capabilities" | grep -F NET_RAW >/dev/null 2>&1 || die "The existing NCT container is missing NET_RAW."
+            raw_socket=$(docker exec "$container" python -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_ICMP); s.close(); print("ready")' 2>/dev/null || printf failed)
+            [ "$raw_socket" = "ready" ] || die "The existing NCT container did not pass its raw-socket acceptance check."
+            reported_build=$(docker exec "$container" python -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8080/health"))["build_id"])' 2>/dev/null || printf unknown)
+            [ "$target_build" = "unknown" ] || [ "$reported_build" = "$target_build" ] || die "The existing NCT container reports a different build."
+            write_promotion_receipt || die "Unable to write the refreshed promotion receipt."
+        fi
         exit 0
     fi
 fi
@@ -805,26 +848,6 @@ wait_for_nct_health() {
     [ "$healthy" = "yes" ]
 }
 
-write_promotion_receipt() {
-    receipt_build_name=$(printf '%s' "$reported_build" | tr -c 'A-Za-z0-9._-' '_')
-    receipt_file="$state_dir/receipts/${profile}-${receipt_build_name}-$(date -u +%Y%m%dT%H%M%SZ).receipt"
-    receipt_tmp="${receipt_file}.tmp.$$"
-    known_limitations="range_evaluation_required"
-    [ "$profile" != "range" ] || known_limitations="mission_gate_incomplete"
-    mkdir -p "$state_dir/receipts" || return 1
-    {
-        printf 'schema=1\nprofile=%s\npromotion_ready=yes\ncompleted=%s\n' "$profile" "$(date -u +%FT%TZ)"
-        printf 'image=%s\nimage_id=%s\nimage_repo_digests=%s\nversion=%s\nbuild=%s\n' "$image" "$target_image_id" "$target_repo_digests" "$target_version" "$reported_build"
-        printf 'application_health=pass\nexternal_access=pass\nruntime_tools=%s\nnet_raw=%s\nauth_probe=%s\n' "$runtime_tools" "$raw_socket" "${auth_probe:-disabled}"
-        printf 'docker_server=%s\ndocker_api=%s\ncompose=%s\ncompose_version=%s\ncompatibility_tier=%s\ncompatibility_status=%s\nlegacy_range_runtime=%s\nruntime_thread_probe=%s\nruntime_seccomp=%s\nruntime_uvicorn=%s\nnetwork_overlap=%s\nnetwork_overlap_detail=%s\narchitecture=%s\n' "$server_version" "$server_api" "$compose_mode" "$compose_version" "$compatibility_tier" "$compatibility_status" "$legacy_range_runtime" "$runtime_thread_probe" "$runtime_seccomp" "$runtime_uvicorn" "$network_overlap" "$network_overlap_detail" "$architecture"
-        printf 'access=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\nurl=%s\nfirewall_tool=%s\nfirewall_state=%s\nfirewall_rule_status=%s\nfirewall_rule_spec=%s\nfirewall_changed=%s\n' "$access" "$bind_address" "$app_port" "$https_port" "$access_url" "$firewall_tool" "$firewall_state" "$firewall_rule_status" "$firewall_rule_spec" "$firewall_changed"
-        printf 'promotion_source=%s\nknown_limitations=%s\nrollback_container=%s\nbackup=%s\n' "${promotion_receipt:-none}" "$known_limitations" "${rollback_name:-none}" "$backup_file"
-    } > "$receipt_tmp" || return 1
-    mv "$receipt_tmp" "$receipt_file" || return 1
-    printf 'promotion_receipt=%s\n' "$receipt_file" >> "$log_file" || return 1
-    say "Promotion receipt: $receipt_file"
-}
-
 bootstrap_started="no"
 if [ -n "$bootstrap_password_file" ]; then bootstrap_started="yes"; fi
 start_nct_container "$bootstrap_started" || rollback
@@ -878,7 +901,7 @@ if [ "$tls_enabled" = "yes" ]; then
     cert_abs=$(cd "$(dirname "$tls_cert")" && pwd)/$(basename "$tls_cert")
     key_abs=$(cd "$(dirname "$tls_key")" && pwd)/$(basename "$tls_key")
     proxy_dir=$(cd "$state_dir/proxy" && pwd)
-    printf ':443 {\n  tls /certs/server.crt /certs/server.key\n  reverse_proxy %s:8080\n}\n' "$container" > "$proxy_dir/Caddyfile"
+    printf '{\n  auto_https off\n  default_sni %s\n}\n:443 {\n  tls /certs/server.crt /certs/server.key\n  reverse_proxy %s:8080\n}\n' "$bind_address" "$container" > "$proxy_dir/Caddyfile"
     docker rm -f "$proxy_name" >/dev/null 2>&1 || true
     docker run -d --name "$proxy_name" --restart unless-stopped --network "$network_name" \
         -p "$bind_address:$https_port:443" \

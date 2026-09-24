@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.device_configs import (
+    _run_cisco_command_sequence,
     artifact_records,
     bounded_collection_output,
     delete_device_collection,
@@ -156,6 +158,60 @@ def test_large_streamed_collection_is_bounded_and_reports_truncation(monkeypatch
     assert retained == "0123456789"
     assert truncated is True
     assert bounded_collection_output("short") == ("short", False)
+
+
+def test_cisco_collection_runs_each_command_and_requires_running_config(monkeypatch):
+    calls = []
+
+    def completed(args, **kwargs):
+        calls.append((args, kwargs["input"]))
+        command = next(
+            command
+            for command in ("show version", "show running-config")
+            if command in kwargs["input"]
+        )
+        output = {
+            "show version": "mako#show version\r\nCisco IOS XE Software, Version 17.12\r\nmako#",
+            "show running-config": "mako#show running-config\r\nhostname mako-eng-core-rtr\r\ninterface GigabitEthernet1\r\nmako#",
+        }[command]
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr("app.device_configs.subprocess.run", completed)
+
+    output, stderr, exit_code, failed, fatal_error = _run_cisco_command_sequence(
+        ["ssh", "admin@192.0.2.1"],
+        ["terminal length 0", "show version", "show running-config"],
+    )
+
+    assert len(calls) == 2
+    assert all("-tt" in args for args, _ in calls)
+    assert all("terminal length 0" in stdin for _, stdin in calls)
+    assert [stdin.splitlines()[-2] for _, stdin in calls] == ["show version", "show running-config"]
+    assert "hostname mako-eng-core-rtr" in output
+    assert "mako#show running-config" not in output
+    assert stderr == ""
+    assert exit_code == 0
+    assert failed == []
+    assert fatal_error is None
+
+
+def test_cisco_collection_never_reports_success_with_blank_running_config(monkeypatch):
+    def completed(_args, **kwargs):
+        output = "Cisco IOS XE Software, Version 17.12\n" * 2 if "show version" in kwargs["input"] else ""
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+    monkeypatch.setattr("app.device_configs.subprocess.run", completed)
+
+    output, stderr, exit_code, failed, fatal_error = _run_cisco_command_sequence(
+        ["ssh", "admin@192.0.2.1"],
+        ["terminal length 0", "show version", "show running-config"],
+    )
+
+    assert "show version" in output
+    assert stderr == ""
+    assert exit_code == 0
+    assert failed == ["show running-config"]
+    assert "running configuration" in fatal_error
 
 
 def test_collection_artifacts_are_not_duplicated_when_upload_matches_config_suffix(tmp_path):

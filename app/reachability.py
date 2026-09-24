@@ -64,6 +64,43 @@ def _network_for(endpoint: Endpoint, saved_networks: list[dict]) -> dict | None:
     return None
 
 
+def _endpoint_has_retained_internal_context(
+    endpoint: Endpoint,
+    *,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+) -> bool:
+    if endpoint.value is None or _network_for(endpoint, saved_networks):
+        return endpoint.value is not None
+    for host in hunting.get("hosts") or []:
+        try:
+            address = ipaddress.ip_address(str(host.get("ip") or ""))
+        except ValueError:
+            continue
+        if (
+            endpoint.kind == "host" and address == endpoint.value
+        ) or (
+            endpoint.kind == "network" and address in endpoint.value
+        ):
+            return True
+    for analysis in device_analyses:
+        for interface in analysis.get("interfaces") or []:
+            try:
+                network = ipaddress.ip_network(
+                    str(interface.get("network") or ""), strict=False
+                )
+            except ValueError:
+                continue
+            if (
+                endpoint.kind == "host" and endpoint.value in network
+            ) or (
+                endpoint.kind == "network" and endpoint.value.overlaps(network)
+            ):
+                return True
+    return False
+
+
 def _destination_matches(route_network: str, destination: Endpoint) -> bool:
     try:
         route = ipaddress.ip_network(route_network, strict=False)
@@ -237,8 +274,113 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                 "evidence": route.get("line"),
                 "run_id": analysis.get("run_id"),
                 "prefix": prefix,
+                "analyst_external_gateway": bool(
+                    analysis.get("external_wan_gateway")
+                ),
             })
+    if _is_external_endpoint(source) and any(
+        item.get("analyst_external_gateway") for item in candidates
+    ):
+        candidates = [
+            item for item in candidates if item.get("analyst_external_gateway")
+        ]
     return _rank_route_candidates(candidates), excluded
+
+
+def _analysis_identity(analysis: dict) -> tuple[str, str]:
+    device = analysis.get("device") or {}
+    return (
+        str(device.get("address") or "").casefold(),
+        str(device.get("name") or "").casefold(),
+    )
+
+
+def _analysis_for_next_hop(
+    next_hop: ipaddress.IPv4Address,
+    device_analyses: list[dict],
+    visited: set[tuple[str, str]],
+) -> dict | None:
+    exact = []
+    attached = []
+    for analysis in device_analyses:
+        identity = _analysis_identity(analysis)
+        if identity in visited or not _is_transit_device(analysis):
+            continue
+        device = analysis.get("device") or {}
+        addresses = [device.get("address")]
+        addresses.extend(
+            value
+            for interface in analysis.get("interfaces") or []
+            for value in (interface.get("address"), interface.get("ip"))
+        )
+        if any(str(value or "").split("/")[0] == str(next_hop) for value in addresses):
+            exact.append(analysis)
+            continue
+        for interface in analysis.get("interfaces") or []:
+            try:
+                network = ipaddress.ip_network(
+                    str(interface.get("network") or ""), strict=False
+                )
+            except ValueError:
+                continue
+            if next_hop in network:
+                attached.append(analysis)
+                break
+    candidates = exact or attached
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _selected_route_chain(
+    source: Endpoint,
+    destination: Endpoint,
+    device_analyses: list[dict],
+    initial_routes: list[dict],
+) -> tuple[list[dict], str | None]:
+    """Follow retained next hops without inventing intermediate devices."""
+    if not initial_routes:
+        return [], None
+    chain = [initial_routes[0]]
+    visited: set[tuple[str, str]] = {
+        (
+            str(initial_routes[0].get("device_address") or "").casefold(),
+            str(initial_routes[0].get("device") or "").casefold(),
+        )
+    }
+    for _ in range(len(device_analyses)):
+        selected = chain[-1]
+        next_hop_text = str(selected.get("via") or "").strip()
+        if not next_hop_text:
+            return chain, None
+        try:
+            next_hop = ipaddress.ip_address(next_hop_text)
+        except ValueError:
+            return chain, (
+                f"Path is partial after {selected['device']}; retained route evidence "
+                f"uses an unresolved next hop ({next_hop_text})."
+            )
+        if destination.kind == "host" and destination.value == next_hop:
+            return chain, None
+        analysis = _analysis_for_next_hop(next_hop, device_analyses, visited)
+        if analysis is None:
+            return chain, (
+                f"Path is partial after {selected['device']}; no single retained "
+                f"routing configuration matches next hop {next_hop}."
+            )
+        identity = _analysis_identity(analysis)
+        visited.add(identity)
+        next_source = Endpoint(
+            entered=str(next_hop), kind="host", value=next_hop
+        )
+        next_routes, _ = _matching_routes(next_source, destination, [analysis])
+        if not next_routes:
+            device = analysis.get("device") or {}
+            name = device.get("name") or device.get("address") or str(next_hop)
+            return chain, (
+                f"Path is partial at {name}; its retained routing configuration "
+                f"does not contain a route toward {destination.entered}."
+            )
+        chain.append(next_routes[0])
+    return chain, "Path is partial because the retained next-hop chain contains a loop."
 
 
 def _service_observation(destination: Endpoint, protocol: str, port: int, hunting: dict) -> dict:
@@ -785,6 +927,23 @@ def evaluate_reachability(
         raise ValueError("Flow state must be new or established")
 
     transit_analyses = [item for item in device_analyses if _is_transit_device(item)]
+    source_external_inferred = bool(
+        not source_external
+        and not _is_external_endpoint(source)
+        and not _endpoint_has_retained_internal_context(
+            source,
+            hunting=hunting,
+            saved_networks=saved_networks,
+            device_analyses=device_analyses,
+        )
+    )
+    if source_external_inferred:
+        source = Endpoint(
+            entered=source.entered,
+            kind=source.kind,
+            value=source.value,
+            external=True,
+        )
     (
         destination_translations,
         destination_nat_unresolved,
@@ -828,6 +987,9 @@ def evaluate_reachability(
         f"{protocol.upper()}/{effective_port}"
     )
     routes, excluded_routes = _matching_routes(source, effective_destination, device_analyses)
+    selected_path_routes, partial_path_caveat = _selected_route_chain(
+        source, effective_destination, device_analyses, routes
+    )
     same_saved_network = bool(
         source_network and destination_network
         and source_network.get("saved_network_id") == destination_network.get("saved_network_id")
@@ -845,7 +1007,15 @@ def evaluate_reachability(
         )
     evidence = []
     caveats = []
-    if source.external and source.value is not None:
+    if partial_path_caveat:
+        caveats.append(partial_path_caveat)
+    if source_external_inferred:
+        caveats.append(
+            "NCT inferred this source is external because it is absent from Saved "
+            "Networks, observed hosts, and retained device interface networks. This "
+            "is an evidence-boundary inference, not proof of address ownership."
+        )
+    elif source.external and source.value is not None:
         caveats.append(
             "The outside source designation is analyst-supplied. NCT uses the exact address or range for retained policy matching but does not verify ownership or live path availability."
         )
@@ -1006,6 +1176,26 @@ def evaluate_reachability(
                 if route.get("run_id") else None
             ),
         })
+    for hop_index, route in enumerate(selected_path_routes[1:], 2):
+        evidence.append({
+            "kind": "route",
+            "route_role": "selected_path_hop",
+            "title": f"Selected path hop {hop_index} on {route['device']}",
+            "effect": (
+                "This retained next-hop routing decision extends the selected path. "
+                "It does not by itself allow or block the service."
+            ),
+            "detail": (
+                f"{route['network']} via {route.get('via') or 'direct'}"
+                + (f" · {route['interface']}" if route.get("interface") else "")
+            ),
+            "raw": route.get("evidence"),
+            "run_id": route.get("run_id"),
+            "source_url": (
+                f"/device-analysis?run={route['run_id']}&focus=routing"
+                if route.get("run_id") else None
+            ),
+        })
     top_prefix_routes = [
         item for item in routes
         if routes and item.get("prefix") == routes[0].get("prefix")
@@ -1120,15 +1310,15 @@ def evaluate_reachability(
         })
     if outcome == "Local":
         path.append({"kind": "segment", "label": "Same local segment", "detail": destination_network.get("cidr") if destination_network else ""})
-    elif routes:
-        route = routes[0]
-        path.append({"kind": "device", "label": route["device"], "detail": route.get("device_address") or "Routing device"})
-        priority = ""
-        if route.get("preference") is not None:
-            priority += f" · preference {route['preference']}"
-        if route.get("metric") is not None:
-            priority += f" · metric {route['metric']}"
-        path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "") + priority})
+    elif selected_path_routes:
+        for route in selected_path_routes:
+            path.append({"kind": "device", "label": route["device"], "detail": route.get("device_address") or "Routing device"})
+            priority = ""
+            if route.get("preference") is not None:
+                priority += f" · preference {route['preference']}"
+            if route.get("metric") is not None:
+                priority += f" · metric {route['metric']}"
+            path.append({"kind": "route", "label": route["network"], "detail": f"via {route.get('via') or 'direct'}" + (f" · {route['interface']}" if route.get("interface") else "") + priority})
     for translation in source_translations:
         translated_display = translation.get("source") or (
             f"{translation.get('output_interface') or 'outgoing interface'} address"
@@ -1163,6 +1353,11 @@ def evaluate_reachability(
             "effective_port": effective_port,
             "flow_state": flow_state,
             "source_external": _is_external_endpoint(source),
+            "source_external_basis": (
+                "inferred_outside_retained_network"
+                if source_external_inferred else
+                "operator_designated" if source.external else "retained_internal_context"
+            ),
         },
         "source_network": source_network,
         "destination_network": destination_network,
@@ -1171,6 +1366,7 @@ def evaluate_reachability(
         "evidence": evidence,
         "retained_objects": {
             "routes": routes,
+            "selected_path_routes": selected_path_routes,
             "policy": policy,
             "nat": translations,
         },

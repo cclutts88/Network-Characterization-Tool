@@ -46,3 +46,57 @@ sh scripts/nct-range-matrix.sh --image nct:VERSION
 The historical success above validates the failure pattern and workaround. A
 current report is still required to prove that the reset VM and current NCT
 image have not changed incompatibly.
+
+## Proven direct recovery path
+
+On the recurring Docker 18.09/API 1.39 Range host, the proxy-based installer
+health check was incompatible with the host's TLS verification behavior. The
+working recovery was to run NCT directly with Uvicorn TLS. This preserves the
+existing `nct-data` volume, binds only the Range address, and applies the
+seccomp relaxation only to the NCT container.
+
+From the extracted project directory, substitute the Range address and image
+tag where needed:
+
+```sh
+docker run -d --name nct --restart unless-stopped \
+  --cap-add NET_RAW --security-opt seccomp=unconfined \
+  -p RANGE_VM_ADDRESS:8444:8444 \
+  -v nct-data:/data \
+  -v "$PWD/nct-deployment/tls-material-final/tls/nct-server.crt:/run/tls/nct-server.crt:ro" \
+  -v "$PWD/nct-deployment/tls-material-final/tls/nct-server.key:/run/tls/nct-server.key:ro" \
+  -e NCT_AUTH_MODE=local -e NCT_SESSION_HOURS=12 -e NCT_COOKIE_SECURE=1 \
+  network-characterization-tool:VERSION \
+  uvicorn app.main:app --host 0.0.0.0 --port 8444 --loop asyncio --http h11 \
+  --ssl-certfile /run/tls/nct-server.crt --ssl-keyfile /run/tls/nct-server.key
+```
+
+Then add the source-restricted host firewall rule:
+
+```sh
+firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=APPROVED_ANALYST_CIDR destination address=RANGE_VM_ADDRESS port port=8444 protocol=tcp accept'
+firewall-cmd --reload
+```
+
+Confirm the local application response with
+`curl -k https://RANGE_VM_ADDRESS:8444/health`. The `-k` flag is only a local
+diagnostic on this legacy host. Analyst workstations must import the generated
+`nct-lab-root.crt` into their trusted-root store and then use
+`https://RANGE_VM_ADDRESS:8444` without bypassing certificate verification.
+
+For the verified 2026-09-13 deployment, the concrete values were address
+`10.101.35.15`, analyst CIDR `10.101.35.0/24`, port `8444`, and image
+`network-characterization-tool:0.15.2-range-20260924`.
+
+If the initial Administrator exists but no usable password was delivered, a
+host operator can generate a replacement without reinstalling NCT or replacing
+the data volume:
+
+```sh
+docker exec nct python -c 'import secrets; from pathlib import Path; from app.auth import reset_user_password; p=secrets.token_urlsafe(18); reset_user_password(Path("/data/analyzer.db"), username="ADMIN_USERNAME", password=p, actor="host-recovery"); print("NEW PASSWORD:", p)'
+```
+
+Store the displayed password using the approved process and do not retain it in
+deployment notes or screenshots. This direct recovery was used because the
+legacy Range console did not reliably pass characters through an interactive
+hidden-password prompt.

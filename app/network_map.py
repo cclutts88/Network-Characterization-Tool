@@ -21,6 +21,7 @@ from app.mac_enrichment import (
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.ip_sort import ip_sort_key
 from app.identity_overrides import apply_inference_reviews, apply_os_overrides
+from app.host_identities import apply_topology_host_identities
 from app.os_inference import infer_os_identity, os_display
 from app.switching import interface_key, merge_switch_interfaces, parse_switch_evidence
 from app.topology_neighbors import parse_topology_neighbors
@@ -1698,6 +1699,7 @@ def build_topology() -> dict:
     imported_count = imported_hosts(nodes, edges, warnings)
     automated_count = automated_scan_hosts(nodes, edges, warnings)
     config_count = configuration_devices(nodes, edges, warnings)
+    apply_topology_host_identities(nodes, DB_PATH)
     apply_os_overrides(
         [
             node for node in nodes.values()

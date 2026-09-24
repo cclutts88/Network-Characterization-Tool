@@ -500,7 +500,11 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
     retained_output = run_dir / "stdout.txt"
     remote_file_workflow = interactive and plan.vendor in {"vyos", "pfsense"}
     remote_output = f"/tmp/{local_file}" if remote_file_workflow else None
-    transfer_method = "scp_control_session" if remote_file_workflow else "ssh_stdout"
+    transfer_method = (
+        "scp_control_session"
+        if remote_file_workflow
+        else "ssh_command_sequence" if plan.vendor == "cisco" else "ssh_stdout"
+    )
     scp_args: list[str] | None = None
     cleanup_args: list[str] | None = None
     execution_steps: list[dict[str, str]] = []
@@ -971,6 +975,88 @@ def bounded_collection_output(value: str) -> tuple[str, bool]:
     return value[:MAX_COLLECTION_OUTPUT_CHARS], len(value) > MAX_COLLECTION_OUTPUT_CHARS
 
 
+def _useful_device_output(value: str) -> bool:
+    cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", value or "").strip()
+    if not cleaned:
+        return False
+    meaningful = [
+        line.strip()
+        for line in cleaned.splitlines()
+        if line.strip()
+        and not line.lstrip().startswith(("% Invalid", "% Ambiguous", "% Incomplete"))
+    ]
+    return len("\n".join(meaningful)) >= 20
+
+
+def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
+    """Remove terminal echoes while preserving the device's evidence and errors."""
+    value = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", value or "").replace("\r", "")
+    retained: list[str] = []
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower().startswith("connection to ") and line.lower().endswith(" closed."):
+            continue
+        if line in sent_commands:
+            continue
+        if re.fullmatch(r".{0,160}[>#]\s*", line):
+            continue
+        if any(
+            re.fullmatch(rf".{{0,160}}[>#]\s*{re.escape(command)}\s*", line)
+            for command in sent_commands
+        ):
+            continue
+        retained.append(raw_line.rstrip())
+    return "\n".join(retained).strip()
+
+
+def _run_cisco_command_sequence(
+    ssh_prefix: list[str], commands: list[str]
+) -> tuple[str, str, int, list[str], str | None]:
+    """Use forced interactive shells because many Cisco SSH servers reject exec requests."""
+    sections: list[str] = []
+    errors: list[str] = []
+    failed_commands: list[str] = []
+    running_config_collected = False
+    last_exit = 0
+    pager_commands = {"terminal length 0", "terminal pager 0"}
+    pager_command = next((command for command in commands if command in pager_commands), None)
+    shell_args = ssh_prefix[:-1] + ["-tt", ssh_prefix[-1]]
+    for command in commands:
+        if command in pager_commands:
+            continue
+        sent_commands = ([pager_command] if pager_command else []) + [command, "exit"]
+        completed = subprocess.run(
+            shell_args,
+            input="\n".join(sent_commands) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        last_exit = completed.returncode
+        output = _clean_cisco_shell_output(completed.stdout or "", sent_commands)
+        if output.strip():
+            sections.append(f"===== {command} =====\n{output.rstrip()}\n")
+        if completed.stderr:
+            errors.append(f"{command}: {completed.stderr.strip()}")
+        if completed.returncode != 0 or not _useful_device_output(output):
+            failed_commands.append(command)
+        if command == "show running-config" and _useful_device_output(output):
+            running_config_collected = True
+    retained, _ = bounded_collection_output("\n".join(sections))
+    fatal_error = None
+    if not _useful_device_output(retained):
+        fatal_error = "The Cisco device returned no usable collection output."
+    elif "show running-config" in commands and not running_config_collected:
+        fatal_error = (
+            "The Cisco device did not return its running configuration; "
+            "the collection was not marked complete."
+        )
+    return retained, "\n".join(errors), last_exit, failed_commands, fatal_error
+
+
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     plan = session.plan
     preview = session.preview
@@ -1017,6 +1103,27 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 stderr_parts.append(copied.stderr[:20_000])
             if copied.returncode != 0 or not local_output.is_file():
                 raise RuntimeError("SCP could not copy the collected configuration back to the analyzer.")
+        elif plan.vendor == "cisco":
+            transfer_method = "ssh_command_sequence"
+            retained_output, command_stderr, exit_code, failed_commands, collection_error = (
+                _run_cisco_command_sequence(
+                    _control_ssh_args(session), preview["commands"]
+                )
+            )
+            retained_output, output_truncated = bounded_collection_output(retained_output)
+            local_output.write_text(retained_output)
+            (session.run_dir / "stdout.txt").write_text(
+                retained_output[:MAX_RESPONSE_OUTPUT_CHARS]
+            )
+            if command_stderr:
+                stderr_parts.append(command_stderr[:20_000])
+            if failed_commands:
+                stderr_parts.append(
+                    "Some Cisco commands returned no usable evidence: "
+                    + ", ".join(failed_commands)
+                )
+            if collection_error:
+                raise RuntimeError(collection_error)
         else:
             remote_input, remote_command = _interactive_collection_command(
                 plan, preview["commands"], None
@@ -1036,6 +1143,8 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 stderr_parts.append(collected.stderr[:20_000])
             if collected.returncode != 0:
                 raise RuntimeError("The remote collection command returned a non-zero result.")
+            if not _useful_device_output(retained_output):
+                raise RuntimeError("The device returned no usable collection output.")
         (session.run_dir / "stdout.txt").write_text(
             local_output.read_text(errors="replace")[:MAX_RESPONSE_OUTPUT_CHARS]
         )
@@ -1708,24 +1817,47 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     try:
         process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
         try:
-            completed = subprocess.run(
-                preview_data["ssh_args"],
-                input=preview_data["remote_input"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            stdout, output_truncated = bounded_collection_output(completed.stdout)
-            stderr = completed.stderr[:50_000]
-            exit_code = completed.returncode
-            status = "completed" if completed.returncode == 0 else "failed"
-            failure_class = None if completed.returncode == 0 else classify_ssh_failure(stderr, key["status"])
+            if plan.vendor == "cisco":
+                stdout, stderr, exit_code, failed_commands, collection_error = _run_cisco_command_sequence(
+                    preview_data["ssh_args"][:-1], preview_data["commands"]
+                )
+                output_truncated = len(stdout) >= MAX_COLLECTION_OUTPUT_CHARS
+                status = "failed" if collection_error else "completed"
+                failure_class = "empty_collection_output" if collection_error else None
+                if failed_commands:
+                    stderr = (stderr + "\n" if stderr else "") + (
+                        "Some Cisco commands returned no usable evidence: "
+                        + ", ".join(failed_commands)
+                    )
+                if collection_error:
+                    stderr = (stderr + "\n" if stderr else "") + collection_error
+            else:
+                completed = subprocess.run(
+                    preview_data["ssh_args"],
+                    input=preview_data["remote_input"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                stdout, output_truncated = bounded_collection_output(completed.stdout)
+                stderr = completed.stderr[:50_000]
+                exit_code = completed.returncode
+                status = "completed" if completed.returncode == 0 else "failed"
+                failure_class = None if completed.returncode == 0 else classify_ssh_failure(stderr, key["status"])
+                if status == "completed" and not _useful_device_output(stdout):
+                    status = "failed"
+                    failure_class = "empty_collection_output"
+                    stderr = (stderr + "\n" if stderr else "") + "The device returned no usable collection output."
         except subprocess.TimeoutExpired as exc:
             stderr = (exc.stderr or "Command timed out") if isinstance(exc.stderr, str) else "Command timed out"
             stderr = stderr[:50_000]
             status = "timed_out"
             failure_class = "network_connection_problem"
+        except RuntimeError as exc:
+            stderr = str(exc)
+            status = "failed"
+            failure_class = "empty_collection_output"
         except FileNotFoundError:
             stderr = "SSH client is not available in the analyzer."
             status = "failed"

@@ -31,9 +31,7 @@ fi
 openssl genrsa -out "$tls_dir/nct-lab-ca.key" 3072
 openssl req -x509 -new -key "$tls_dir/nct-lab-ca.key" -sha256 -days 3650 \
     -out "$cert_dir/nct-lab-root.crt" \
-    -subj "/CN=Network-Characterization-Tool-Lab-CA" \
-    -addext "basicConstraints=critical,CA:TRUE" \
-    -addext "keyUsage=critical,keyCertSign,cRLSign"
+    -subj "/CN=Network-Characterization-Tool-Lab-CA"
 
 openssl genrsa -out "$tls_dir/nct-server.key" 2048
 openssl req -new -key "$tls_dir/nct-server.key" -out "$tls_dir/nct-server.csr" \
@@ -50,6 +48,11 @@ printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical
 openssl x509 -req -in "$tls_dir/nct-server.csr" \
     -CA "$cert_dir/nct-lab-root.crt" -CAkey "$tls_dir/nct-lab-ca.key" -CAcreateserial \
     -out "$tls_dir/nct-server.crt" -days 825 -sha256 -extfile "$tls_dir/server.ext"
+
+openssl verify -CAfile "$cert_dir/nct-lab-root.crt" "$tls_dir/nct-server.crt" >/dev/null || {
+    printf '%s\n' "Generated TLS material did not pass local CA verification." >&2
+    exit 1
+}
 
 chmod 600 "$tls_dir/nct-lab-ca.key" "$tls_dir/nct-server.key"
 chmod 644 "$cert_dir/nct-lab-root.crt" "$tls_dir/nct-server.crt"

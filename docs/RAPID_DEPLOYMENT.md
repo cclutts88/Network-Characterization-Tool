@@ -43,9 +43,14 @@ defaults such as `:latest` are rejected even for Test so the content-addressed
 image tested locally is the same artifact that can be evaluated on a range.
 The launcher records the local image ID and any registry digest in its
 deployment log, then verifies that the running application reports the same
-build. Re-running the launcher against the exact same healthy direct-HTTP
-image, bind address, port, and data volume is a safe no-op rather than an
-unnecessary replacement.
+build. A Range promotion normally requires the same local image ID as its Test
+receipt. When Docker engines assign different local IDs to the same verified
+offline archive, Range may instead accept the Test receipt only when both runs
+record the identical archive SHA-256 plus the same version and build. Mission
+promotion remains image-ID exact. Re-running the launcher against the exact
+same healthy direct-HTTP image, bind address, port, and data volume is a safe
+no-op rather than an unnecessary replacement. A successful Test no-op still
+reruns the read-only acceptance checks and refreshes its promotion receipt.
 
 The selected application and HTTPS ports are stored in
 `nct-deployment/current.env` after successful validation. Unless an operator
@@ -90,13 +95,19 @@ successful Test or Range launch must not be reported as mission readiness.
 After all application, access-path, runtime-tool, and raw-packet checks pass,
 the launcher writes an atomic promotion receipt under
 `nct-deployment/receipts`. The receipt binds the acceptance results,
-compatibility details, known limitations, and rollback evidence to the exact
-local image ID, application version, and build. Range requires a Test receipt
-for that exact artifact; future Mission preflight requires the matching Range
-receipt. Receipts contain no credentials or application evidence.
+compatibility details, known limitations, and rollback evidence to the local
+image ID, application version, build, and, when applicable, verified offline
+archive SHA-256. Range requires a Test receipt for that exact artifact; a
+cross-engine Range promotion may use the matching archive checksum as its
+artifact identity. Future Mission preflight requires the matching Range
+receipt and remains image-ID exact. Receipts contain no credentials or
+application evidence.
 
 Authentication is optional for a local **Test** deployment and defaults to
 enabled for **Range**. Range cannot be launched with authentication disabled.
+For IP-addressed Range access, the TLS proxy uses the approved bind address as
+its default SNI identity so clients that omit SNI still receive the matching
+operator-issued certificate.
 On the first authenticated deployment, the launcher inspects the persistent
 account store. If it is empty, it creates the operator-selected first
 Administrator; NCT has no fixed default username or password. Existing accounts

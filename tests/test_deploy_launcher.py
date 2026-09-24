@@ -335,6 +335,65 @@ def test_range_preflight_accepts_only_an_exact_test_receipt(tmp_path):
     assert "Promotion receipt image ID does not match" in rejected.stderr
 
 
+def test_range_preflight_accepts_a_matching_verified_archive_across_docker_engines(tmp_path):
+    archive = tmp_path / "nct.tar"
+    archive.write_bytes(b"portable NCT image fixture")
+    checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+    receipt = tmp_path / "test-portable.receipt"
+    receipt.write_text(
+        "\n".join(
+            (
+                "schema=1",
+                "profile=test",
+                "promotion_ready=yes",
+                "image_id=sha256:other-engine-image-id",
+                f"archive_sha256={checksum}",
+                "version=0.14.0-test",
+                "build=test-build",
+                "application_health=pass",
+                "runtime_tools=ready",
+                "net_raw=ready",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    accepted = run_launcher_preflight(
+        tmp_path / "portable-range",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--image-archive",
+        str(archive),
+        "--image-sha256",
+        checksum,
+        "--offline",
+        "--promote-from-receipt",
+        str(receipt),
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "accepting the exact verified offline archive SHA-256" in accepted.stdout
+
+    receipt.write_text(receipt.read_text().replace(checksum, "0" * 64), encoding="utf-8")
+    rejected = run_launcher_preflight(
+        tmp_path / "portable-range-mismatch",
+        "--profile",
+        "range",
+        "--image",
+        "nct:0.14.0-test",
+        "--image-archive",
+        str(archive),
+        "--image-sha256",
+        checksum,
+        "--offline",
+        "--promote-from-receipt",
+        str(receipt),
+    )
+    assert rejected.returncode == 1
+    assert "offline archive checksum does not match" in rejected.stderr
+
+
 def test_preflight_reports_compose_v2_legacy_and_direct_engine_tiers(tmp_path):
     expected = {
         "plugin": "supported · compose-v2",
@@ -759,7 +818,7 @@ def test_launcher_detaches_one_time_bootstrap_secret_and_preserves_accounts():
 def test_host_recovery_is_admin_only_backed_up_and_secret_file_based():
     for required in (
         '--admin-user USER', '--password-file FILE', '--generate-password',
-        'v "$data_volume:/data:ro"', 'tar -czf',
+        'v "$data_source:/data:ro"', 'tar -czf',
         'Recovery is restricted to Administrator accounts',
         'reset_user_password', 'set_user_disabled',
         '/run/secrets/nct_recovery_password:ro',
@@ -769,3 +828,6 @@ def test_host_recovery_is_admin_only_backed_up_and_secret_file_based():
         assert required in RECOVERY
     assert 'NCT_BOOTSTRAP_PASSWORD=' not in RECOVERY
     assert 'password=%s' not in RECOVERY
+    assert 'data_mount_type' in RECOVERY
+    assert 'volume)' in RECOVERY
+    assert 'bind)' in RECOVERY

@@ -31,10 +31,12 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Generate package" in html
     assert "TCP + UDP" in html
     assert "ICS / OT" in html
-    assert "What this port scope includes" in html
+    assert "Protocol and port scope explanation" in html
+    assert '<details id="scopeDetailsPanel" class="scope-details span-12">' in html
     assert "102,502,789,1911,1962,2404" in html
     assert "FPING pre-scan" in html
-    assert 'id="fpingNote" class="hint hidden"' in html
+    assert '<option value="fping" selected>FPING pre-scan</option>' in html
+    assert 'id="fpingNote" class="hint"' in html
     assert "$('fpingNote').classList.toggle('hidden',!useFping)" in html
     assert "Collect traceroute paths" in html
     assert "normalizeCombinedScopes" in html
@@ -73,6 +75,10 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "chunk_delay_seconds" in html
     assert "Chunks never overlap" in html
     assert 'id="currentProgress"' in html
+    assert 'id="currentRunPanel"' in html
+    assert "currentLive=false" in html
+    assert "if(!currentLive)loadActiveRun()" in html
+    assert "$('currentRunPanel').classList.add('hidden')" in html
     assert 'role="progressbar"' in html
     assert 'id="currentHostsLabel">Nmap-reported hosts' in html
     assert "addresses in scope" in html
@@ -135,6 +141,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "/api/saved-networks" in html
     assert "/api/scan-runs-grouped?limit=200" in html
     assert 'class="history-group"' in html
+    assert "localeCompare(NCTScanReference.humanize(right.name||'')" in html
+    assert "function newestFirst(runs)" in html
     assert 'data-compare="' in html
     assert "candidateSavedName" in html
     assert "name:candidateSavedName(item)" in html
@@ -240,6 +248,16 @@ def test_device_collection_keeps_raw_collection_work_separate_from_analysis():
     assert "renderStructuredResults" not in html
     assert "/summary`" not in html
     assert "/delete-challenge`" in html
+
+
+def test_device_evidence_downloads_use_authenticated_page_fetch():
+    html = device_config_page().body.decode()
+    assert "async function saveArtifact(artifact,link)" in html
+    assert "fetch(artifact.url,{credentials:'same-origin'})" in html
+    assert "const blob=await response.blob()" in html
+    assert "URL.createObjectURL(blob)" in html
+    assert "function artifactLink(artifact)" in html
+    assert "event.preventDefault();saveArtifact(artifact,link)" in html
     assert 'id="deleteCollectionDialog"' in html
     assert "status, commands, and saved evidence files" in html
     assert "interpreted interfaces, routes, neighbors, VLANs, policy, and comparisons" in html
@@ -250,6 +268,8 @@ def test_device_collection_keeps_raw_collection_work_separate_from_analysis():
     assert "Analyze collection" in html
     assert "Continue to Nmap" in html
     assert "/device-analysis?run=" in html
+    assert "const orderedGroups=[...groups.entries()].sort" in html
+    assert "for(const runs of groups.values()) runs.sort" in html
 
 
 def test_network_device_analysis_has_unified_evidence_and_comparison_views():
@@ -306,12 +326,19 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "annotateSearchSploitNetworkData" in html
     assert "after all active filters" in html
     assert 'id="hostRows"' in html
-    assert '<details class="panel" id="inventoryPanel" data-workspace-card="inventory">' in html
+    assert 'id="systemsPanel" data-workspace-card="systems"' in html
+    assert 'id="capabilityViewTab"' in html
+    assert 'id="inventoryViewTab"' in html
+    assert 'id="capabilityView" role="tabpanel"' in html
+    assert 'id="inventoryView" role="tabpanel"' in html
     assert 'id="inventorySummary"' in html
     assert 'class="panel evidence-guide"' in html
     assert '<details class="panel evidence-guide" data-workspace-card="evidence-guide" open>' in html
     assert '<details class="panel" data-workspace-card="capability-datasets" open><summary>Capability datasets</summary>' in html
-    assert '<details class="panel" data-workspace-card="capability-findings" open><summary>Capability findings</summary>' in html
+    assert "One active list at a time" in html
+    assert "function setSystemView(view)" in html
+    assert "function renderHostInventoryRows()" in html
+    assert "hosts:[],findings:[]" in html
     assert "details.panel>summary::before" in html
     assert "details.panel[open]>summary::before" in html
     assert "position:sticky;top:var(--hunt-header-offset)" in html
@@ -332,8 +359,13 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "if(!(item.evidence_states||[]).includes('inferred'))return[]" in html
     assert 'id="findingSummaryRows"' in html
     assert "renderFindingSummaries(data.findings||[])" in html
-    assert "renderFindingSummaries(data.findings||[]);applyFilters()" in html
+    assert "activeSystemView==='capabilities'" in html
     assert "function anyHuntFilterActive()" in html
+    assert ".finding-summary-row.hidden-row{display:none}" in html
+    assert "content-visibility:auto" in html
+    assert "finding${Number(item.finding_count||0)===1?'':'s'}" in html
+    assert "capability classification${group.length===1?'':'s'} across" in html
+    assert "Apply a network filter to show one classification per row." in html
     assert "Combined view · one entry per IP with all ports visible." in html
     assert "Filtered view · individual matching findings." in html
     assert "function osIdentity(item)" in html
@@ -557,7 +589,8 @@ def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():
 def test_scan_history_keeps_run_actions_on_one_line():
     html = operator_page().body.decode()
     assert ".history-run-actions{display:flex;flex-wrap:nowrap" in html
-    assert '<div class="history-run-actions"><button class="secondary" data-open=' in html
+    assert '<div class="history-run-actions"><button class="secondary" data-preset=' in html
+    assert '>Use preset</button><button class="secondary" data-network=' in html
     assert 'data-hunt="${esc(run.run_id)}">Hunt</button>' in html
     assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}' in html
 
@@ -619,10 +652,32 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "lineMagnet" in html
     assert 'id="annotationTools"' in html
     assert 'id="addLabel"' not in html
+    assert 'id="addText"' in html
     assert 'id="addBox"' in html
     assert 'id="addEllipse"' in html
     assert "annotations=new Map()" in html
     assert "function renderAnnotations" in html
+    assert 'id="annotationRotation"' in html
+    assert "function enableAnnotationRotation" in html
+    assert "annotationTransform(item)" in html
+    assert 'class:\'annotation-rotate\'' in html
+    assert 'id="mergeAnnotations"' in html
+    assert "function mergeOverlappingAnnotations" in html
+    assert "Group touching shapes" in html
+    assert "function annotationGroupEntries" in html
+    assert "function rotateAnnotationEntries" in html
+    assert "function renderCompositeAnnotationOutlines" in html
+    assert "feMorphology" in html
+    assert "operator:'out'" in html
+    assert "Their original outlines, colors, sizes, and rotations were retained." in html
+    assert "function enableMapControlsDragging" in html
+    assert "function setMapControlsCorner" in html
+    assert "function updateMapControlsCanvasBounds" in html
+    assert "nct-map-controls-corner-v1" in html
+    assert "Map controls · drag to move" in html
+    assert 'id="mapFilesButton"' in html
+    assert 'id="mapFilesDialog"' in html
+    assert ".map-annotation.region .annotation-text{display:none}" in html
     assert 'id="gatewayGrouping"' in html
     assert "Gateway groups: Joined" in html
     assert "Gateway groups: Separate" in html
@@ -631,6 +686,13 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function expandGatewayCompanions" in html
     assert 'id="toggleEditMode"' in html
     assert 'id="parkingLot"' in html
+    assert 'id="mapControlSidebar"' in html
+    assert 'id="toggleMapControls"' in html
+    assert 'id="mapLegendOverlay"' in html
+    assert 'id="toggleLegend"' in html
+    assert 'id="mapFaqButton"' in html
+    assert 'id="mapFaqDialog"' in html
+    assert "Why did new scan results go to the parking lot?" in html
     assert 'id="connectionQueue"' in html
     assert 'id="parkSelection"' in html
     assert "Start with blank canvas" in html
@@ -643,6 +705,9 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function parkMapObjects" in html
     assert "function placeMapObjects" in html
     assert "function startBlankMap" in html
+    assert 'id="parkAllUnlocked"' in html
+    assert "function parkAllUnlockedObjects" in html
+    assert "New infrastructure is parked automatically when a saved layout has locked objects" in html
     assert "if(!editMode)return" in html
     assert "event.key==='Delete'||event.key==='Backspace'" in html
     assert "Shift-click boxes to select and move them together" in html
@@ -662,6 +727,10 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function arrangeSelectedNodes" in html
     assert "lockedNodeIds=new Set()" in html
     assert "lockedNodeIds.has(node.id)" in html
+    assert "knownNodeIds:[...topologyParkingUnitIds()]" in html
+    assert "snapshot.knownNodeIds||[...(snapshot.manualPositions||[]).map(entry=>entry[0])" in html
+    assert "function protectLockedLayoutFromNewObjects" in html
+    assert "moved to the parking lot to protect the locked layout" in html
     assert "function clearUnlockedManualPositions" in html
     assert "manualPositions.set(id,{x:box.x,y:box.y})" in html
     assert "function ensureLockedNodePositions" in html
@@ -726,9 +795,15 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "expected_version" in html
     assert "function publishSelectedLayout" in html
     assert 'id="overlayMode"' in html
+    assert 'id="transitVisibility"' in html
+    assert "/30 transit links: Hidden" in html
+    assert "pointToPoint30&&!showPointToPointTransit" in html
     assert 'id="overlayLegend"' in html
     assert "function overlayClass" in html
     assert "function updateOverlayLegend" in html
+    assert "function networkDeviceVendor" in html
+    assert "vendor-${deviceVendor}" in html
+    assert "vendor-swatch vendor-cisco" in html
     assert "overlay-exposure-dense" in html
     assert "overlay-gap-conflict" in html
     assert "dragIds=expandGatewayCompanions(selectedNodeIds.has(node.id)" in html
@@ -880,7 +955,8 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "height=Math.max(height,availableHeight)" in html
     assert "if(width/height<canvasRatio)width=Math.ceil(height*canvasRatio)" in html
     assert "expandedMapExtent=null" in html
-    assert "workspaceAreaScale=1" in html
+    assert "workspaceAreaScale=4" in html
+    assert "Screen · 1× area" not in html
     assert "dimensionScale=Math.sqrt(workspaceAreaScale)" in html
     assert "$('workspaceSize').onchange" in html
     assert "expandedMapExtent={width,height}" in html
@@ -1046,7 +1122,7 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "large policy tables are capped until narrowed" in html
 
 
-def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():
+def test_hunt_and_analyze_include_simple_table_controls_without_personal_presets():
     hunt_html = hunting_page().body.decode()
     analyze_html = analysis_page().body.decode()
     for html in (hunt_html, analyze_html):
@@ -1060,6 +1136,10 @@ def test_hunt_and_analyze_include_private_view_preferences_and_table_controls():
     assert "pageNode.textContent!==pageLabel" in VIEW_PREFERENCES_SCRIPT
     assert "if(pagerOnly)return" in VIEW_PREFERENCES_SCRIPT
     assert "Table density" not in VIEW_PREFERENCES_SCRIPT
+    assert '<span class="nct-view-status">Table display</span>' in VIEW_PREFERENCES_SCRIPT
+    assert '<option value="50" selected>50</option>' in VIEW_PREFERENCES_SCRIPT
+    assert '<label>Personal preset' not in VIEW_PREFERENCES_SCRIPT
+    assert 'data-preset-name' not in VIEW_PREFERENCES_SCRIPT.split('function captureFilters', 1)[0]
 
 
 def test_expandable_sections_share_one_left_chevron_language():
@@ -1095,10 +1175,10 @@ def test_nmap_advanced_operations_are_collapsed_without_removing_capability():
 
     assert '<details class="advanced-drawer" id="profileManagementPanel">' in html
     assert '<summary>Advanced profile management</summary>' in html
-    assert '<details class="panel advanced-panel" id="scheduledScansPanel">' in html
-    assert '<summary><span>Advanced · Scheduled scans</span>' in html
+    assert '<details class="advanced-drawer" id="scheduledScansPanel">' in html
+    assert '<summary>Scheduled scans</summary>' in html
+    assert html.index('id="scheduledScansPanel"') < html.index('id="runNow"')
     assert html.index('id="runNow"') < html.index('id="profileManagementPanel"')
-    assert html.index('id="queuePanel"') < html.index('id="scheduledScansPanel"')
     for control_id in (
         "profileName",
         "saveProfile",

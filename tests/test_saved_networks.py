@@ -5,9 +5,12 @@ from pathlib import Path
 import pytest
 
 from app.poc import (
+    ScanRunNetworkAttribution,
     ScanRunPlan,
+    attribute_scan_run_networks,
     build_scan_run_manifest,
     group_scan_runs_by_saved_network,
+    insert_scan_run_manifest,
 )
 from app.saved_networks import (
     SavedNetworkArchive,
@@ -108,6 +111,22 @@ def test_saved_network_can_be_updated_and_archived_without_deletion(tmp_path: Pa
     assert archived["active"] is False
     assert list_saved_networks(db_path) == []
     assert list_saved_networks(db_path, include_archived=True)[0]["name"] == "Lab West"
+
+
+def test_archived_network_does_not_invisibly_reserve_name_or_cidr(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    original = create_network(db_path)
+    archive_saved_network(
+        original["saved_network_id"],
+        SavedNetworkArchive(changed_by="reviewer"),
+        db_path,
+    )
+
+    replacement = create_network(db_path, name="Lab", cidr="192.0.2.4/30")
+
+    assert replacement["saved_network_id"] != original["saved_network_id"]
+    assert replacement["active"] is True
+    assert len(list_saved_networks(db_path, include_archived=True)) == 2
 
 
 def test_saved_manual_and_combined_targets_use_the_same_execution_scope(tmp_path: Path):
@@ -225,3 +244,44 @@ def test_scan_history_groups_preserve_saved_network_snapshots():
     assert saved_group["runs"][0]["run_id"] == "b" * 32
     assert groups[1]["scan_count"] == 1
     assert groups[2]["name"] == "Ad Hoc / Manual Scans"
+
+
+def test_completed_manual_scan_can_be_attributed_to_an_exact_saved_network(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+
+    updated = attribute_scan_run_networks(
+        manifest["run_id"],
+        ScanRunNetworkAttribution(
+            saved_network_ids=[saved["saved_network_id"]], changed_by="reviewer"
+        ),
+        db_path,
+    )
+
+    assert updated["saved_networks"][0]["name"] == "Lab"
+    assert updated["manual_targets"] == []
+    assert updated["targets"] == [saved["cidr"]]
+    assert updated["network_attribution_history"][0]["changed_by"] == "reviewer"
+    assert group_scan_runs_by_saved_network([updated])[0]["kind"] == "saved_network"
+
+
+def test_scan_attribution_rejects_a_saved_network_outside_executed_scope(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=["198.51.100.0/24"]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+
+    with pytest.raises(ValueError, match="not an exact target"):
+        attribute_scan_run_networks(
+            manifest["run_id"],
+            ScanRunNetworkAttribution(
+                saved_network_ids=[saved["saved_network_id"]], changed_by="reviewer"
+            ),
+            db_path,
+        )

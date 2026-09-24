@@ -30,10 +30,10 @@ VIEW_PREFERENCES_SCRIPT = r"""
   function installStyle() {
     const style = document.createElement('style');
     style.textContent = `
-      .nct-view-toolbar{display:grid;grid-template-columns:minmax(180px,1.3fr) minmax(150px,1fr) auto auto auto minmax(115px,.7fr) minmax(150px,.9fr);gap:8px;align-items:end;margin:0 0 18px;padding:12px 14px;border:1px solid var(--line,#315367);border-radius:11px;background:rgba(12,26,35,.97);box-shadow:0 9px 28px #0004}
-      .nct-view-toolbar label{margin:0;color:var(--muted,#9eb0b8);font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.nct-view-toolbar input,.nct-view-toolbar select,.nct-view-toolbar button{min-height:36px;padding:7px 9px;font-size:12px}.nct-view-toolbar button{white-space:nowrap}.nct-view-toolbar .danger{border-color:#81505a;background:transparent;color:#ffb1b8}.nct-view-toolbar .nct-view-status{grid-column:1/-1;min-height:0;color:var(--muted,#9eb0b8);font-size:11px}.nct-view-toolbar .nct-view-status.good{color:var(--good,#61d095)}.nct-view-toolbar .nct-view-status.bad{color:var(--bad,#ff837a)}
+      .nct-view-toolbar{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:end;margin:0 0 18px;padding:10px 14px;border:1px solid var(--line,#315367);border-radius:11px;background:rgba(12,26,35,.97);box-shadow:0 9px 28px #0004}
+      .nct-view-toolbar label{margin:0;color:var(--muted,#9eb0b8);font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.nct-view-toolbar input,.nct-view-toolbar select,.nct-view-toolbar button{min-height:36px;padding:7px 9px;font-size:12px}.nct-view-toolbar .nct-view-status{align-self:center;margin-right:auto;color:var(--muted,#9eb0b8);font-size:11px;font-weight:800;text-transform:uppercase}
       .nct-page-hidden{display:none!important}.nct-table-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:9px;color:var(--muted,#9eb0b8);font-size:11px}.nct-table-pager button{min-height:30px;padding:4px 9px;font-size:11px}.nct-table-pager[hidden]{display:none}
-      @media(max-width:1050px){.nct-view-toolbar{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:700px){.nct-view-toolbar{grid-template-columns:1fr 1fr}.nct-view-toolbar .nct-view-status{grid-column:1/-1}}
+      @media(max-width:700px){.nct-view-toolbar{justify-content:flex-start}.nct-view-toolbar label{flex:1 1 150px}.nct-view-toolbar .nct-view-status{flex-basis:100%}}
     `;
     document.head.append(style);
   }
@@ -41,22 +41,16 @@ VIEW_PREFERENCES_SCRIPT = r"""
   function installToolbar() {
     toolbar = document.createElement('section');
     toolbar.className = 'nct-view-toolbar';
-    toolbar.setAttribute('aria-label', 'Personal investigation view');
+    toolbar.setAttribute('aria-label', 'Table display controls');
     toolbar.innerHTML = `
-      <label>Personal preset<select data-preset><option value="">Current working view</option></select></label>
-      <label>Preset name<input data-preset-name maxlength="100" placeholder="Example: Windows servers"></label>
-      <button type="button" data-save-new>Save new</button><button type="button" data-update disabled>Update</button><button type="button" class="danger" data-delete disabled>Delete</button>
-      <label>Rows per table<select data-page-size><option value="all">All rows</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+      <span class="nct-view-status">Table display</span>
+      <label>Rows per table<select data-page-size><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="all">All rows</option></select></label>
       <label>Table sorting<select data-sort><option value="ip-asc">IP · low to high</option><option value="ip-desc">IP · high to low</option><option value="hostname">Hostname</option></select></label>
-      <div class="nct-view-status" data-view-status>Private to this analyst account.</div>`;
+      `;
     const main = document.querySelector('main');
     const anchor = page === 'analyze' ? main.querySelector('.analysis-tabs') : main.firstElementChild;
     if (anchor) anchor.insertAdjacentElement('afterend', toolbar); else main.prepend(toolbar);
-    toolbar.querySelector('[data-save-new]').onclick = saveNewPreset;
-    toolbar.querySelector('[data-update]').onclick = updatePreset;
-    toolbar.querySelector('[data-delete]').onclick = deletePreset;
-    toolbar.querySelector('[data-preset]').onchange = selectPreset;
-    for (const selector of ['[data-page-size]','[data-sort]']) toolbar.querySelector(selector).onchange = () => { pageIndexes.clear(); applyPresentation(readPresentation()); scheduleSave(); };
+    for (const selector of ['[data-page-size]','[data-sort]']) toolbar.querySelector(selector).onchange = () => { pageIndexes.clear(); applyPresentation(readPresentation()); };
   }
 
   function captureFilters() {
@@ -71,7 +65,7 @@ VIEW_PREFERENCES_SCRIPT = r"""
   }
   function readPresentation() {
     return {
-      pageSize: toolbar?.querySelector('[data-page-size]').value || 'all',
+      pageSize: toolbar?.querySelector('[data-page-size]').value || '50',
       sort: toolbar?.querySelector('[data-sort]').value || 'ip-asc'
     };
   }
@@ -95,7 +89,7 @@ VIEW_PREFERENCES_SCRIPT = r"""
     for (const [key, open] of Object.entries(cards)) { const node = document.querySelector(`details[data-workspace-card="${CSS.escape(key)}"]`); if (node) node.open = Boolean(open); }
   }
   function applyPresentation(value={}) {
-    const presentation = {pageSize:'all', sort:'ip-asc', ...value};
+    const presentation = {pageSize:'50', sort:'ip-asc', ...value};
     if (toolbar) {
       toolbar.querySelector('[data-page-size]').value = presentation.pageSize;
       toolbar.querySelector('[data-sort]').value = presentation.sort;
@@ -192,21 +186,13 @@ VIEW_PREFERENCES_SCRIPT = r"""
   }
 
   function bindChanges() {
-    document.addEventListener('input', event => { if (filterIds.includes(event.target.id)) { pageIndexes.clear(); scheduleSave(); setTimeout(applyTablePresentation,0); } });
-    document.addEventListener('change', event => { if (filterIds.includes(event.target.id)) { pageIndexes.clear(); scheduleSave(); setTimeout(applyTablePresentation,0); } });
-    document.addEventListener('toggle', event => { if (event.target.matches?.('details[data-workspace-card]')) scheduleSave(); }, true);
+    document.addEventListener('input', event => { if (filterIds.includes(event.target.id)) { pageIndexes.clear(); setTimeout(applyTablePresentation,0); } });
+    document.addEventListener('change', event => { if (filterIds.includes(event.target.id)) { pageIndexes.clear(); setTimeout(applyTablePresentation,0); } });
     const observer = new MutationObserver(records => { const pagerOnly=records.every(record=>(record.target.nodeType===1?record.target:record.target.parentElement)?.closest?.('.nct-table-pager')); if(pagerOnly)return; if (pendingSnapshot) applySnapshot(pendingSnapshot, true); applyTablePresentation(); });
     observer.observe(document.querySelector('main'), {subtree:true, childList:true});
   }
 
-  async function start() {
-    try {
-      const me = await api('/api/auth/me'); if (!me.authentication_enabled || !me.analyst) return;
-      canWrite = me.analyst.role !== 'viewer'; installStyle(); installToolbar();
-      if (!canWrite) { toolbar.querySelectorAll('button,input[data-preset-name]').forEach(node => node.disabled = true); status('Read-only account. Existing personal presets can be loaded.'); }
-      await reloadWorkspace(true); bindChanges();
-    } catch (error) { if (toolbar) status(error.message, 'bad'); }
-  }
+  function start() { installStyle(); installToolbar(); bindChanges(); applyPresentation(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true}); else start();
 })();
 """

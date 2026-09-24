@@ -9,7 +9,7 @@ from app.hunting import (
     correlate_hunting_identity,
     merge_hunting_analyses,
 )
-from app.main import app
+from app.main import _hunting_subnets, app
 from app.identity import enrich_analysis_macs
 
 
@@ -139,6 +139,41 @@ def test_hunting_inventory_keeps_hosts_without_findings_and_builds_filter_facets
     assert {item["name"] for item in result["facets"]["device_types"]} >= {
         "Server", "Workstation",
     }
+
+
+def test_hunt_subnet_facets_keep_networks_but_not_host_sized_manual_targets():
+    group = [{
+        "saved_networks": [{"name": "Operations", "cidr": "10.20.0.0/24"}],
+        "target_selection": {
+            "manual_targets": ["10.30.0.25", "10.40.0.19/24", "10.50.0.1/32"]
+        },
+    }]
+
+    assert _hunting_subnets(group) == ["10.20.0.0/24", "10.40.0.0/24"]
+
+
+def test_hunting_replaces_weak_general_purpose_role_with_server_evidence():
+    result = build_hunting_analysis({
+        "hosts": [{
+            **host("10.0.0.20", [port(445, "microsoft-ds")]),
+            "os_group": "Microsoft Windows Server 2016",
+            "device_type": "general purpose",
+        }]
+    })
+
+    assert result["hosts"][0]["device_type"] == "Server"
+
+
+def test_hunting_recognizes_firewall_appliance_even_if_scanner_says_server():
+    result = build_hunting_analysis({
+        "hosts": [{
+            **host("10.0.0.1", [port(443, "https", "pfSense")]),
+            "os_group": "FreeBSD server",
+            "device_type": "server",
+        }]
+    })
+
+    assert result["hosts"][0]["device_type"] == "Firewall"
 
 
 def test_hunting_exposes_service_based_os_inference_without_overwriting_os():
@@ -317,6 +352,7 @@ def test_network_hunt_correlates_matching_configuration_device_without_duplicati
     assert correlated["configuration_device_count"] == 1
     assert correlated["configuration_only_device_count"] == 0
     assert correlated["hosts"][0]["evidence_origin"] == "nmap_and_configuration"
+    assert correlated["hosts"][0]["device_type"] == "Firewall"
     assert {item["category"] for item in correlated["findings"]} == {
         "Web Applications & APIs", "Firewall, NAT & Policy",
     }

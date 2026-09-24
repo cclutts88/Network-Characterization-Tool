@@ -68,6 +68,29 @@ def test_reachability_api_is_conservative_without_retained_evidence():
     assert result["confidence"] == "low"
 
 
+def test_reachability_api_returns_json_for_explicit_external_address(monkeypatch):
+    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: {"hosts": [], "findings": []})
+    monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
+    monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: [])
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/reachability/evaluate",
+            json={
+                "source": "0.0.0.0",
+                "destination": "175.0.61.104",
+                "protocol": "tcp",
+                "port": 22,
+                "flow_state": "new",
+                "source_external": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["query"]["source_external"] is True
+
+
 def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
     hunting = {"hosts": [], "findings": []}
     saved = [{"saved_network_id": "one", "name": "One", "cidr": "10.0.0.0/24"}]
@@ -431,7 +454,7 @@ def test_vyos_password_preview_lists_the_real_temporary_file_workflow_in_order()
     assert "rm -f --" in commands
 
 
-def test_cisco_password_preview_streams_output_without_claiming_scp_or_remote_cleanup():
+def test_cisco_password_preview_collects_each_command_without_requiring_scp():
     body = device_password_plan()
     body["vendor"] = "cisco"
     with TestClient(app) as client:
@@ -441,7 +464,7 @@ def test_cisco_password_preview_streams_output_without_claiming_scp_or_remote_cl
     data = response.json()
     phases = [step["phase"] for step in data["execution_steps"]]
     commands = "\n".join(step["command"] for step in data["execution_steps"])
-    assert data["transfer_method"] == "ssh_stdout"
+    assert data["transfer_method"] == "ssh_command_sequence"
     assert data["remote_output_path"] is None
     assert data["scp_command"] is None
     assert "Copy temporary output to NCT" not in phases

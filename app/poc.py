@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.comparison import compare_analyses, coverage_warnings
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.scan_profiles import (
+    BUILTIN_PROFILE_VERSION,
     BUILTIN_PROFILES,
     build_nmap_flags,
     build_phase_nmap_flags,
@@ -110,7 +111,7 @@ class ScanOptions(BaseModel):
     service_detection: bool = True
     os_detection: bool = True
     timing: Literal["conservative", "normal", "fast"] = "fast"
-    discovery_mode: Literal["nmap", "fping"] = "nmap"
+    discovery_mode: Literal["nmap", "fping"] = "fping"
     traceroute: bool = False
 
     def normalized(self) -> dict:
@@ -346,6 +347,23 @@ class ScanRunOwnerChange(BaseModel):
         cleaned = value.strip().lower()
         if not cleaned:
             raise ValueError("A queue owner is required")
+        return cleaned
+
+
+class ScanRunNetworkAttribution(BaseModel):
+    """Attach retained scan evidence to active Saved Network snapshots."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    saved_network_ids: list[str] = Field(default_factory=list, max_length=100)
+    changed_by: str = Field(min_length=1, max_length=100)
+
+    @field_validator("changed_by")
+    @classmethod
+    def clean_attribution_actor(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("The analyst changing scan attribution is required")
         return cleaned
 
 
@@ -671,6 +689,38 @@ def expanded_discovery_targets(targets: list[str], no_strike: list[str]) -> list
     return addresses
 
 
+def compact_discovery_targets(targets: list[str], no_strike: list[str]) -> list[str]:
+    """Keep scheduled scope as compact CIDRs while removing excluded ranges."""
+    remaining = list(
+        ipaddress.collapse_addresses(
+            ipaddress.ip_network(item, strict=False) for item in targets
+        )
+    )
+    exclusions = list(
+        ipaddress.collapse_addresses(
+            ipaddress.ip_network(item, strict=False) for item in no_strike
+        )
+    )
+    for exclusion in exclusions:
+        updated: list[ipaddress.IPv4Network] = []
+        for target in remaining:
+            if not target.overlaps(exclusion):
+                updated.append(target)
+            elif target.subnet_of(exclusion):
+                continue
+            elif exclusion.subnet_of(target):
+                updated.extend(target.address_exclude(exclusion))
+        remaining = list(ipaddress.collapse_addresses(updated))
+    return [str(network) for network in remaining]
+
+
+def target_address_count(targets: list[str]) -> int:
+    """Count addresses represented by IP or CIDR target entries."""
+    return sum(
+        ipaddress.ip_network(item, strict=False).num_addresses for item in targets
+    )
+
+
 def apply_fping_fallback(manifest: dict) -> None:
     """Retarget Nmap when ICMP-only discovery cannot see approved hosts."""
     manifest["command_argv"] = build_nmap_argv(
@@ -915,6 +965,9 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
             """
         )
         for profile in BUILTIN_PROFILES:
+            # Retain the original Nmap-discovery version for schedules already
+            # pinned to it, then publish FPING-first behavior as the new latest
+            # built-in version for new scans and schedules.
             db.execute(
                 """
                 INSERT OR IGNORE INTO scan_profiles (
@@ -928,6 +981,29 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                     profile["name"],
                     profile["description"],
                     utc_now(),
+                    json.dumps(
+                        normalize_scan_options(
+                            {**profile["settings"], "discovery_mode": "nmap"}
+                        ),
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            db.execute(
+                """
+                INSERT OR IGNORE INTO scan_profiles (
+                    profile_id, version, name, description, built_in,
+                    created_at, created_by, source_profile_id,
+                    source_profile_version, settings_json
+                ) VALUES (?, ?, ?, ?, 1, ?, 'system', ?, 1, ?)
+                """,
+                (
+                    profile["profile_id"],
+                    BUILTIN_PROFILE_VERSION,
+                    profile["name"],
+                    profile["description"],
+                    utc_now(),
+                    profile["profile_id"],
                     json.dumps(normalize_scan_options(profile["settings"]), sort_keys=True),
                 ),
             )
@@ -1601,6 +1677,104 @@ def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
             "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
     return with_queue_state(with_host_count(json.loads(row[0])), db_path) if row else None
+
+
+def attribute_scan_run_networks(
+    run_id: str,
+    request: ScanRunNetworkAttribution,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Reclassify retained scan history without changing the executed scope."""
+    manifest = get_scan_run_plan(run_id, db_path)
+    if manifest is None:
+        raise KeyError("Scan run not found")
+    if manifest.get("status") in {"queued", "running", "awaiting_fallback_approval"}:
+        raise RuntimeError("Wait for the scan to finish before changing its network attribution")
+
+    target_cidrs = {
+        str(ipaddress.ip_network(value, strict=False))
+        for value in (manifest.get("targets") or [])
+    }
+    snapshots: list[dict] = []
+    selected_ids: list[str] = []
+    for saved_network_id in dict.fromkeys(request.saved_network_ids):
+        record = get_saved_network(saved_network_id, db_path)
+        if record is None or not record.get("active"):
+            raise ValueError("Choose an active Saved Network")
+        if record["cidr"] not in target_cidrs:
+            raise ValueError(
+                f"{record['name']} ({record['cidr']}) is not an exact target of this scan"
+            )
+        selected_ids.append(record["saved_network_id"])
+        snapshots.append(
+            {
+                "saved_network_id": record["saved_network_id"],
+                "name": record["name"],
+                "cidr": record["cidr"],
+                "description": record["description"],
+                "category": record["category"],
+                "tags": list(record["tags"]),
+            }
+        )
+
+    changed_at = utc_now()
+    previous = [
+        {
+            "saved_network_id": item.get("saved_network_id"),
+            "name": item.get("name"),
+            "cidr": item.get("cidr"),
+        }
+        for item in (manifest.get("saved_networks") or [])
+        if isinstance(item, dict)
+    ]
+    selected_cidrs = {item["cidr"] for item in snapshots}
+    manual_targets = [value for value in sorted(target_cidrs) if value not in selected_cidrs]
+    manifest.update(
+        {
+            "saved_network_ids": selected_ids,
+            "saved_networks": snapshots,
+            "manual_targets": manual_targets,
+            "target_selection": {
+                "saved_networks": snapshots,
+                "manual_targets": manual_targets,
+            },
+            "network_attribution_changed_at": changed_at,
+            "network_attribution_changed_by": request.changed_by,
+        }
+    )
+    history = list(manifest.get("network_attribution_history") or [])
+    history.append(
+        {
+            "changed_at": changed_at,
+            "changed_by": request.changed_by,
+            "previous_saved_networks": previous,
+            "saved_networks": [
+                {
+                    "saved_network_id": item["saved_network_id"],
+                    "name": item["name"],
+                    "cidr": item["cidr"],
+                }
+                for item in snapshots
+            ],
+        }
+    )
+    manifest["network_attribution_history"] = history
+    update_scan_run_manifest(manifest, db_path)
+    details = (
+        "Attributed retained scan to "
+        + ", ".join(f"{item['name']} ({item['cidr']})" for item in snapshots)
+        if snapshots
+        else "Returned retained scan to manual/ad hoc history"
+    )
+    append_scan_audit(
+        db_path,
+        run_id=run_id,
+        event="network_attribution_changed",
+        actor=request.changed_by,
+        details=details,
+        changed_at=changed_at,
+    )
+    return with_queue_state(with_host_count(manifest), db_path)
 
 
 def nmap_host_count(xml_path: Path) -> int | None:
@@ -2523,14 +2697,15 @@ def schedule_target_chunks(
     schedule: dict, db_path: Path = DB_PATH
 ) -> list[list[str]]:
     no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
-    addresses = expanded_discovery_targets(
-        schedule["targets"], no_strike
-    )
     chunking_enabled = bool(
         schedule.get("chunking_enabled", "chunk_size" in schedule)
     )
     if not chunking_enabled:
-        return [addresses] if addresses else []
+        compact_targets = compact_discovery_targets(schedule["targets"], no_strike)
+        return [compact_targets] if compact_targets else []
+    addresses = expanded_discovery_targets(
+        schedule["targets"], no_strike
+    )
     size = int(schedule.get("chunk_size") or 256)
     return [addresses[index:index + size] for index in range(0, len(addresses), size)]
 
@@ -2603,7 +2778,7 @@ def execute_schedule_batch(
         resume_after = min(
             max(int(schedule.get("resume_after_chunk") or 0), 0), total
         )
-        batch_hosts_total = sum(len(chunk) for chunk in chunks)
+        batch_hosts_total = sum(target_address_count(chunk) for chunk in chunks)
         occurrence_run_ids = (
             list(schedule.get("last_occurrence_run_ids") or [])
             if resume_after
@@ -2647,7 +2822,8 @@ def execute_schedule_batch(
                             chunk_count=total,
                             batch_hosts_total=batch_hosts_total,
                             batch_hosts_completed_before=sum(
-                                len(chunk) for chunk in chunks[: index - 1]
+                                target_address_count(chunk)
+                                for chunk in chunks[: index - 1]
                             ),
                             db_path=db_path,
                         ),
@@ -3487,6 +3663,26 @@ def change_scan_run_owner(
     return with_queue_state(manifest, DB_PATH)
 
 
+@router.put("/scan-runs/{run_id}/network-attribution")
+def change_scan_run_network_attribution(
+    run_id: str, change: ScanRunNetworkAttribution, request: Request
+) -> dict:
+    manifest = get_scan_run_plan(run_id, DB_PATH)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    actor, _ = _require_run_control(request, manifest)
+    if actor != "local-operator":
+        change = change.model_copy(update={"changed_by": actor})
+    try:
+        return attribute_scan_run_networks(run_id, change, DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan run not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/scan-runs/queue/status")
 def scan_queue_status(request: Request) -> dict:
     actor, role = _scan_actor(request)
@@ -3633,4 +3829,6 @@ def import_history_detail(sha256: str) -> dict:
     )
     from app.identity_overrides import apply_analysis_os_overrides
     item["analysis"] = apply_analysis_os_overrides(item["analysis"], DB_PATH)
+    from app.host_identities import apply_analysis_host_identities
+    item["analysis"] = apply_analysis_host_identities(item["analysis"], DB_PATH)
     return item

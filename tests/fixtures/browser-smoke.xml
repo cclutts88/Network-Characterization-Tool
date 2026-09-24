@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -sV 10.77.0.0/24" start="1790208000" startstr="Thu Sep 24 00:00:00 2026" version="7.95" xmloutputversion="1.05">
+  <scaninfo type="syn" protocol="tcp" numservices="3" services="22,80,443"/>
+  <host starttime="1790208001" endtime="1790208002">
+    <status state="up" reason="syn-ack" reason_ttl="64"/>
+    <address addr="10.77.0.10" addrtype="ipv4"/>
+    <address addr="001122334455" addrtype="mac" vendor="Cisco Systems"/>
+    <hostnames><hostname name="ssh-router" type="PTR"/></hostnames>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="ssh" product="OpenSSH" version="9.6" method="probed" conf="10"/></port>
+      <port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="https" product="Cisco IOS HTTPS" method="probed" conf="10"/></port>
+    </ports>
+  </host>
+  <host starttime="1790208001" endtime="1790208002">
+    <status state="up" reason="syn-ack" reason_ttl="128"/>
+    <address addr="10.77.0.20" addrtype="ipv4"/>
+    <address addr="00AABBCCDDEE" addrtype="mac" vendor="VMware"/>
+    <hostnames><hostname name="web-only" type="PTR"/></hostnames>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="http" product="Microsoft HTTPAPI httpd" version="2.0" method="probed" conf="10"/></port>
+    </ports>
+  </host>
+  <runstats><finished time="1790208003" timestr="Thu Sep 24 00:00:03 2026" elapsed="3.00" summary="Nmap done" exit="success"/><hosts up="2" down="0" total="2"/></runstats>
+</nmaprun>

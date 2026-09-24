@@ -132,13 +132,19 @@ def init_saved_network_storage(db_path: Path) -> None:
             )
             """
         )
+        # Archived entries remain available to historical scan snapshots, but
+        # they must not invisibly reserve a name or CIDR forever.  Earlier
+        # releases created unconditional unique indexes, so replace them in
+        # place with active-only indexes during normal startup.
+        db.execute("DROP INDEX IF EXISTS saved_networks_name_unique")
+        db.execute("DROP INDEX IF EXISTS saved_networks_cidr_unique")
         db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_name_unique "
-            "ON saved_networks(lower(name))"
+            "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_name_unique "
+            "ON saved_networks(lower(name)) WHERE active = 1"
         )
         db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_cidr_unique "
-            "ON saved_networks(cidr)"
+            "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_cidr_unique "
+            "ON saved_networks(cidr) WHERE active = 1"
         )
 
 
