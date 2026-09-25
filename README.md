@@ -162,6 +162,23 @@ official archive validated during Release 8 was approximately 47 MB compressed
 and approximately 309 MB after installation. Retaining another database version
 requires roughly the same additional installed space.
 
+## Range operator scripts
+
+For repeat Range deployments, use the small operator-focused scripts under
+`scripts/` rather than the older all-in-one launcher:
+
+- `nct-start-compose.sh` — start with Docker Compose when `docker compose` is available.
+- `nct-start-docker.sh` — start with the modern Docker CLI when Compose is unavailable.
+- `nct-start-legacy.sh` — compatibility start path for older Range Docker engines.
+- `nct-set-admin.sh` — inspect, create, replace, rename, or reset the NCT Administrator interactively.
+
+The older `nct-range-direct-deploy.sh` is retained for compatibility with prior
+deployment bundles, but it is not the preferred reset workflow. It now requires
+an explicit Administrator username and does not assume a personal account name.
+
+See [scripts/README.md](scripts/README.md) for the short decision tree and
+operator commands.
+
 ## Persistent and sensitive data
 
 Runtime data is stored in `./data`; logs and optional device keys use `./logs`
