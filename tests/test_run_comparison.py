@@ -121,6 +121,28 @@ def test_legacy_chunk_names_are_collapsed_to_one_readable_group_name():
     assert description["display_name"] == "DMZ_Baseline_(S)_2026-09-09_1000"
 
 
+def test_group_description_exposes_human_reference_context():
+    manifests = [{
+        **run("1" * 32, "2026-09-09T10:00:00+00:00", ["10.0.0.0/24"]),
+        "name": "DMZ Baseline",
+        "display_name": "DMZ_Baseline_(S)_2026-09-09_1000",
+        "scheduled": True,
+        "manual_targets": ["192.0.2.10"],
+        "saved_networks": [{
+            "saved_network_id": "dmz",
+            "name": "Operations DMZ",
+            "cidr": "10.0.0.0/24",
+        }],
+    }]
+
+    description = describe_run_group(manifests)
+
+    assert description["name"] == "DMZ Baseline"
+    assert description["scheduled"] is True
+    assert description["saved_networks"][0]["name"] == "Operations DMZ"
+    assert description["manual_targets"] == ["192.0.2.10"]
+
+
 def test_chunked_analysis_retains_full_summary_and_merged_coverage():
     first = {
         "scanner": "nmap", "started": "start-1", "finished": "finish-1",
@@ -167,6 +189,36 @@ def test_coverage_changes_are_explicit_warnings():
     assert any("Protocols differ" in warning for warning in warnings)
     assert any("UDP port scope differs" in warning for warning in warnings)
     assert any("Profile version differs" in warning for warning in warnings)
+
+
+def test_merged_host_retains_only_coverage_from_xmls_where_it_appeared():
+    tcp_coverage = {
+        "protocols": ["TCP"],
+        "scan_types": [{"type": "syn", "protocol": "TCP", "services": "22"}],
+    }
+    udp_coverage = {
+        "protocols": ["UDP"],
+        "scan_types": [{"type": "udp", "protocol": "UDP", "services": "53"}],
+    }
+    shared = {
+        "ip": "10.0.0.10", "state": "up", "os_group": "Unclassified",
+        "ports": [], "observed_ports": [], "scan_coverages": [tcp_coverage],
+    }
+    first = {"hosts": [shared], "coverage": tcp_coverage, "warnings": []}
+    second = {
+        "hosts": [
+            {**shared, "scan_coverages": [udp_coverage]},
+            {**shared, "ip": "10.0.0.20", "scan_coverages": [udp_coverage]},
+        ],
+        "coverage": udp_coverage,
+        "warnings": [],
+    }
+
+    merged = merge_analyses([first, second])
+
+    by_ip = {item["ip"]: item for item in merged["hosts"]}
+    assert by_ip["10.0.0.10"]["scan_coverages"] == [tcp_coverage, udp_coverage]
+    assert by_ip["10.0.0.20"]["scan_coverages"] == [udp_coverage]
 
 
 def test_xml_coverage_warnings_include_targets_and_exact_port_sets():

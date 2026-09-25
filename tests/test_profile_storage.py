@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -30,6 +31,7 @@ from app.poc import (
     remove_global_no_strike,
     recover_scheduler_state,
     record_schedule_conflict,
+    scan_safety_summary,
     schedule_target_chunks,
     set_scan_schedule_enabled,
 )
@@ -58,6 +60,7 @@ def test_profile_versions_are_immutable_and_schedules_remain_pinned(tmp_path):
         ),
         db_path,
     )
+    assert schedule["timeout_seconds"] == 45 * 60
     version_two = create_scan_profile_version(
         version_one["profile_id"],
         ScanProfileVersionCreate(
@@ -75,6 +78,17 @@ def test_profile_versions_are_immutable_and_schedules_remain_pinned(tmp_path):
     assert schedule["profile_version"] == 1
     assert schedule["profile_snapshot"]["protocol"] == "tcp"
     assert schedule["implementation_status"] == "active_scheduler"
+
+
+def test_latest_builtin_defaults_to_fping_without_changing_version_one(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+
+    original = get_scan_profile("builtin-standard", 1, db_path)
+    current = get_scan_profile("builtin-standard", db_path=db_path)
+
+    assert original["settings"]["discovery_mode"] == "nmap"
+    assert current["version"] == 2
+    assert current["settings"]["discovery_mode"] == "fping"
 
 
 def test_custom_profile_delete_is_protected_until_schedule_is_repinned(tmp_path):
@@ -223,8 +237,34 @@ def test_new_schedule_is_unchunked_unless_analyst_opts_in(tmp_path):
 
     assert schedule["chunking_enabled"] is False
     assert schedule["chunk_delay_seconds"] == 0
+    assert chunks == [["198.51.100.0/24"]]
+
+
+def test_unchunked_schedule_compacts_scope_after_no_strike_exclusion(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Protected Terrain",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["198.51.100.0/24"],
+            no_strike=["198.51.100.100/32"],
+            interface="eth0",
+            cadence="daily",
+            first_run_at=datetime(2026, 9, 10, 2, 0, tzinfo=timezone.utc),
+            chunking_enabled=False,
+        ),
+        db_path,
+    )
+
+    chunks = schedule_target_chunks(schedule, db_path)
+    effective = [ipaddress.ip_network(item) for item in chunks[0]]
+
     assert len(chunks) == 1
-    assert len(chunks[0]) == 256
+    assert len(effective) < 16
+    assert sum(network.num_addresses for network in effective) == 255
+    assert not any(ipaddress.ip_address("198.51.100.100") in network for network in effective)
 
 
 def test_schedule_batch_waits_after_completion_and_advances(monkeypatch, tmp_path):
@@ -514,3 +554,29 @@ def test_global_no_strike_is_automatic_and_requires_confirmation_to_remove(tmp_p
     removed = remove_global_no_strike(request, db_path)
     assert removed["removed"] == ["203.0.113.9/32"]
     assert removed["entries"] == []
+
+
+def test_scan_safety_summary_does_not_double_count_overlapping_exclusions(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.0/30"], changed_by="safety-officer"),
+        db_path,
+    )
+
+    summary = scan_safety_summary(
+        ["192.0.2.0/29"],
+        ["192.0.2.2/31", "192.0.2.6"],
+        db_path,
+    )
+
+    assert summary == {
+        "targets": ["192.0.2.0/29"],
+        "requested_address_count": 8,
+        "global_entry_count": 1,
+        "global_excluded_address_count": 4,
+        "additional_entry_count": 2,
+        "additional_excluded_address_count": 1,
+        "overlap_address_count": 2,
+        "excluded_address_count": 5,
+        "effective_address_count": 3,
+    }

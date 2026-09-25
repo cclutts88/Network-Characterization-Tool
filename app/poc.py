@@ -22,19 +22,36 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.comparison import compare_analyses, coverage_warnings
+from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.scan_profiles import (
+    BUILTIN_PROFILE_VERSION,
     BUILTIN_PROFILES,
     build_nmap_flags,
+    build_phase_nmap_flags,
     normalize_scan_options,
     scan_coverage,
     scan_display_name,
 )
-from app.scan_progress import latest_nmap_stats, new_scan_progress, update_scan_progress
+from app.scan_progress import latest_nmap_status, new_scan_progress, update_scan_progress
+from app.saved_networks import (
+    SavedNetworkArchive,
+    SavedNetworkCreate,
+    SavedNetworkUpdate,
+    archive_saved_network,
+    create_saved_network,
+    get_saved_network,
+    init_saved_network_storage,
+    list_saved_networks,
+    resolve_saved_network_targets,
+    update_saved_network,
+)
+from app.request_identity import bind_signed_in_actor
+from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -54,6 +71,9 @@ LEGACY_PROFILE_IDS = {
 }
 ARTIFACT_FILES = {
     "manifest": ("manifest.json", "application/json"),
+    "targets": ("targets.txt", "text/plain"),
+    "discovery_targets": ("discovery-targets.txt", "text/plain"),
+    "no_strike": ("no-strike.txt", "text/plain"),
     "xml": ("scan.xml", "application/xml"),
     "stdout": ("stdout.txt", "text/plain"),
     "stderr": ("stderr.txt", "text/plain"),
@@ -61,6 +81,16 @@ ARTIFACT_FILES = {
     "capture_stderr": ("capture-stderr.txt", "text/plain"),
     "fping_alive": ("fping-alive.txt", "text/plain"),
     "fping_stderr": ("fping-stderr.txt", "text/plain"),
+    "discovery_xml": ("discovery.xml", "application/xml"),
+    "discovery_stdout": ("discovery-stdout.txt", "text/plain"),
+    "discovery_stderr": ("discovery-stderr.txt", "text/plain"),
+    "discovery_alive": ("discovery-alive.txt", "text/plain"),
+    "tcp_xml": ("tcp-scan.xml", "application/xml"),
+    "tcp_stdout": ("tcp-stdout.txt", "text/plain"),
+    "tcp_stderr": ("tcp-stderr.txt", "text/plain"),
+    "udp_xml": ("udp-scan.xml", "application/xml"),
+    "udp_stdout": ("udp-stdout.txt", "text/plain"),
+    "udp_stderr": ("udp-stderr.txt", "text/plain"),
 }
 
 router = APIRouter(prefix="/api", tags=["poc"])
@@ -81,7 +111,7 @@ class ScanOptions(BaseModel):
     service_detection: bool = True
     os_detection: bool = True
     timing: Literal["conservative", "normal", "fast"] = "fast"
-    discovery_mode: Literal["nmap", "fping"] = "nmap"
+    discovery_mode: Literal["nmap", "fping"] = "fping"
     traceroute: bool = False
 
     def normalized(self) -> dict:
@@ -140,7 +170,7 @@ class ScanScheduleCreate(BaseModel):
     interval_minutes: int = Field(default=60, ge=5, le=10080)
     reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
     originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
-    timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    timeout_seconds: int = Field(default=2700, ge=10, le=3600)
     chunking_enabled: bool = False
     chunk_size: int = Field(default=256, ge=1, le=4096)
     chunk_delay_seconds: int = Field(default=30, ge=0, le=3600)
@@ -192,7 +222,10 @@ class ScanRunPlan(BaseModel):
 
     operator: str = Field(min_length=1, max_length=100)
     name: str = Field(default="Scan", min_length=1, max_length=100)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(
+        default="NCT network characterization initiated through the operator workspace",
+        max_length=500,
+    )
     originating_host: str = Field(min_length=1, max_length=255)
     interface: str = Field(min_length=1, max_length=64)
     profile: str = Field(default="standard", min_length=1, max_length=100)
@@ -211,16 +244,24 @@ class ScanRunPlan(BaseModel):
     chunk_delay_seconds: int | None = Field(default=None, ge=0, le=3600)
     batch_hosts_total: int | None = Field(default=None, ge=1)
     batch_hosts_completed_before: int = Field(default=0, ge=0)
-    targets: list[str] = Field(min_length=1)
+    targets: list[str] = Field(default_factory=list)
+    manual_targets: list[str] = Field(default_factory=list)
+    saved_network_ids: list[str] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
 
-    @field_validator("operator", "name", "reason", "originating_host", "interface", "profile")
+    @field_validator("operator", "name", "originating_host", "interface", "profile")
     @classmethod
     def clean_required_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("This field cannot be blank")
         return value
+
+    @field_validator("reason")
+    @classmethod
+    def clean_optional_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        return cleaned or "NCT network characterization initiated through the operator workspace"
 
     @field_validator("profile_id", "created_by", "scheduled_by", "executed_by")
     @classmethod
@@ -240,7 +281,7 @@ class ScanRunPlan(BaseModel):
 
 class ScanRunRequest(ScanRunPlan):
     capture: Literal[True] = True
-    timeout_seconds: int = Field(default=900, ge=10, le=3600)
+    timeout_seconds: int = Field(default=2700, ge=10, le=3600)
 
 
 class DeleteConfirmation(BaseModel):
@@ -266,6 +307,15 @@ class NoStrikeUpdate(BaseModel):
         return cleaned
 
 
+class ScanSafetySummaryRequest(BaseModel):
+    """Calculate the effective scan scope without starting a scan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    targets: list[str] = Field(min_length=1)
+    no_strike: list[str] = Field(default_factory=list)
+
+
 class NoStrikeRemoval(NoStrikeUpdate):
     confirmation: str = Field(min_length=1, max_length=64)
 
@@ -283,6 +333,37 @@ class FallbackDecision(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("This field cannot be blank")
+        return cleaned
+
+
+class ScanRunOwnerChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner: str = Field(min_length=1, max_length=100)
+
+    @field_validator("owner")
+    @classmethod
+    def clean_owner(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if not cleaned:
+            raise ValueError("A queue owner is required")
+        return cleaned
+
+
+class ScanRunNetworkAttribution(BaseModel):
+    """Attach retained scan evidence to active Saved Network snapshots."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    saved_network_ids: list[str] = Field(default_factory=list, max_length=100)
+    changed_by: str = Field(min_length=1, max_length=100)
+
+    @field_validator("changed_by")
+    @classmethod
+    def clean_attribution_actor(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("The analyst changing scan attribution is required")
         return cleaned
 
 
@@ -343,7 +424,7 @@ def normalize_ipv4_networks(entries: list[str], label: str) -> list[str]:
 
 
 def get_global_no_strike(db_path: Path = DB_PATH) -> dict:
-    """Return the protected no-strike list that applies to every scan path."""
+    """Return the excluded no-strike list that applies to every scan path."""
     init_poc_storage(db_path)
     with sqlite3.connect(db_path) as db:
         row = db.execute(
@@ -405,6 +486,59 @@ def effective_no_strike(
     )
 
 
+def scan_safety_summary(
+    targets: list[str],
+    additional: list[str] | None = None,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Return additive address counts for a pre-launch safety review."""
+    normalized_targets = normalize_ipv4_networks(targets, "target")
+    normalized_additional = (
+        normalize_ipv4_networks(additional, "no-strike") if additional else []
+    )
+    global_entries = get_global_no_strike(db_path)["entries"]
+
+    target_addresses = {
+        str(address)
+        for network in (
+            ipaddress.ip_network(entry, strict=False) for entry in normalized_targets
+        )
+        for address in network
+    }
+    global_addresses = {
+        str(address)
+        for network in (
+            ipaddress.ip_network(entry, strict=False) for entry in global_entries
+        )
+        for address in network
+        if str(address) in target_addresses
+    }
+    additional_addresses = {
+        str(address)
+        for network in (
+            ipaddress.ip_network(entry, strict=False)
+            for entry in normalized_additional
+        )
+        for address in network
+        if str(address) in target_addresses
+    }
+    overlap_addresses = global_addresses & additional_addresses
+    additional_unique = additional_addresses - global_addresses
+    excluded_addresses = global_addresses | additional_addresses
+
+    return {
+        "targets": normalized_targets,
+        "requested_address_count": len(target_addresses),
+        "global_entry_count": len(global_entries),
+        "global_excluded_address_count": len(global_addresses),
+        "additional_entry_count": len(normalized_additional),
+        "additional_excluded_address_count": len(additional_unique),
+        "overlap_address_count": len(overlap_addresses),
+        "excluded_address_count": len(excluded_addresses),
+        "effective_address_count": len(target_addresses - excluded_addresses),
+    }
+
+
 def remove_global_no_strike(
     request: NoStrikeRemoval, db_path: Path = DB_PATH
 ) -> dict:
@@ -451,6 +585,93 @@ def build_nmap_argv(
     return argv
 
 
+def build_nmap_discovery_argv(interface: str, *, include_no_strike: bool) -> list[str]:
+    argv = [
+        "nmap", "-sn", "-n", "--reason", "--stats-every", "2s",
+        "-e", interface, "-iL", "targets.txt",
+    ]
+    if include_no_strike:
+        argv.extend(["--excludefile", "no-strike.txt"])
+    argv.extend(["-oX", "discovery.xml"])
+    return argv
+
+
+def build_scan_phase_argv(
+    interface: str,
+    scan_options: dict,
+    protocol: str,
+    *,
+    include_no_strike: bool,
+    target_file: str,
+    pre_discovered: bool,
+) -> list[str]:
+    argv = [
+        "nmap",
+        *build_phase_nmap_flags(
+            scan_options, protocol, pre_discovered=pre_discovered
+        ),
+        "--stats-every", "2s", "-e", interface, "-iL", target_file,
+    ]
+    if include_no_strike:
+        argv.extend(["--excludefile", "no-strike.txt"])
+    argv.extend(["-oX", f"{protocol}-scan.xml"])
+    return argv
+
+
+def build_execution_phases(
+    interface: str,
+    scan_options: dict,
+    *,
+    include_no_strike: bool,
+    target_file: str,
+    pre_discovered: bool,
+) -> list[dict]:
+    selected = scan_options.get("protocol", "tcp")
+    protocols = ["tcp", "udp"] if selected == "tcp_udp" else [selected]
+    phases = []
+    for protocol in protocols:
+        command = build_scan_phase_argv(
+            interface,
+            scan_options,
+            protocol,
+            include_no_strike=include_no_strike,
+            target_file=target_file,
+            pre_discovered=pre_discovered,
+        )
+        execution = build_nmap_execution_argv(command)
+        phases.append({
+            "name": protocol,
+            "protocol": protocol.upper(),
+            "status": "pending",
+            "command_argv": command,
+            "exact_command": shlex.join(command),
+            "execution_command_argv": execution,
+            "exact_execution_command": shlex.join(execution),
+            "xml_filename": f"{protocol}-scan.xml",
+            "stdout_filename": f"{protocol}-stdout.txt",
+            "stderr_filename": f"{protocol}-stderr.txt",
+        })
+    return phases
+
+
+def build_nmap_execution_argv(
+    nmap_argv: list[str], *, platform_name: str | None = None
+) -> list[str]:
+    """Give Nmap a terminal on Linux so --stats-every emits live progress."""
+    platform_name = platform_name or os.name
+    if platform_name != "posix":
+        return list(nmap_argv)
+    return [
+        "script",
+        "--quiet",
+        "--return",
+        "--flush",
+        "--command",
+        shlex.join(nmap_argv),
+        "/dev/null",
+    ]
+
+
 def build_fping_argv(interface: str) -> list[str]:
     """Build the optional fast discovery command from a pre-certified address list."""
     return ["fping", "-a", "-I", interface, "-f", "discovery-targets.txt"]
@@ -468,6 +689,38 @@ def expanded_discovery_targets(targets: list[str], no_strike: list[str]) -> list
     return addresses
 
 
+def compact_discovery_targets(targets: list[str], no_strike: list[str]) -> list[str]:
+    """Keep scheduled scope as compact CIDRs while removing excluded ranges."""
+    remaining = list(
+        ipaddress.collapse_addresses(
+            ipaddress.ip_network(item, strict=False) for item in targets
+        )
+    )
+    exclusions = list(
+        ipaddress.collapse_addresses(
+            ipaddress.ip_network(item, strict=False) for item in no_strike
+        )
+    )
+    for exclusion in exclusions:
+        updated: list[ipaddress.IPv4Network] = []
+        for target in remaining:
+            if not target.overlaps(exclusion):
+                updated.append(target)
+            elif target.subnet_of(exclusion):
+                continue
+            elif exclusion.subnet_of(target):
+                updated.extend(target.address_exclude(exclusion))
+        remaining = list(ipaddress.collapse_addresses(updated))
+    return [str(network) for network in remaining]
+
+
+def target_address_count(targets: list[str]) -> int:
+    """Count addresses represented by IP or CIDR target entries."""
+    return sum(
+        ipaddress.ip_network(item, strict=False).num_addresses for item in targets
+    )
+
+
 def apply_fping_fallback(manifest: dict) -> None:
     """Retarget Nmap when ICMP-only discovery cannot see approved hosts."""
     manifest["command_argv"] = build_nmap_argv(
@@ -478,6 +731,19 @@ def apply_fping_fallback(manifest: dict) -> None:
         target_file="targets.txt",
     )
     manifest["exact_command"] = shlex.join(manifest["command_argv"])
+    manifest["execution_command_argv"] = build_nmap_execution_argv(
+        manifest["command_argv"]
+    )
+    manifest["exact_execution_command"] = shlex.join(
+        manifest["execution_command_argv"]
+    )
+    manifest["execution_phases"] = build_execution_phases(
+        manifest["interface"],
+        manifest["profile_settings"],
+        include_no_strike=bool(manifest.get("no_strike")),
+        target_file="targets.txt",
+        pre_discovered=False,
+    )
     manifest["discovery_fallback_used"] = True
 
 
@@ -496,7 +762,20 @@ def build_scan_run_manifest(
     status: str = "planned",
     db_path: Path = DB_PATH,
 ) -> dict:
-    targets = normalize_ipv4_networks(plan.targets, "target")
+    # New clients send resolved ``targets`` for legacy preview/package paths as
+    # well as explicit Saved Network IDs.  When IDs are present, only the
+    # explicit manual list belongs in the ad-hoc snapshot.
+    manual_source = (
+        plan.manual_targets
+        if plan.manual_targets or plan.saved_network_ids
+        else plan.targets
+    )
+    targets, saved_network_snapshots, manual_targets = resolve_saved_network_targets(
+        plan.saved_network_ids,
+        manual_source,
+        db_path,
+        max_addresses=MAX_EXPANDED_ADDRESSES,
+    )
     no_strike, global_no_strike = effective_no_strike(plan.no_strike, db_path)
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
@@ -508,7 +787,26 @@ def build_scan_run_manifest(
         scan_options=settings,
         target_file="fping-alive.txt" if use_fping else "targets.txt",
     )
-    discovery_argv = build_fping_argv(plan.interface) if use_fping else None
+    execution_argv = build_nmap_execution_argv(nmap_argv)
+    discovery_argv = (
+        build_fping_argv(plan.interface)
+        if use_fping
+        else build_nmap_discovery_argv(
+            plan.interface, include_no_strike=bool(no_strike)
+        )
+    )
+    discovery_execution_argv = (
+        discovery_argv
+        if use_fping
+        else build_nmap_execution_argv(discovery_argv)
+    )
+    execution_phases = build_execution_phases(
+        plan.interface,
+        settings,
+        include_no_strike=bool(no_strike),
+        target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
+        pre_discovered=True,
+    )
     capture_argv = build_tcpdump_argv(plan.interface) if capture else None
     created_at = utc_now()
     creator = plan.created_by or plan.operator
@@ -537,7 +835,10 @@ def build_scan_run_manifest(
         updated_at=created_at,
     )
     return {
-        "schema_version": 3,
+        "schema_version": 5,
+        "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "run_id": uuid.uuid4().hex,
         "name": plan.name,
         "display_name": display_name,
@@ -545,6 +846,8 @@ def build_scan_run_manifest(
         "status": status,
         "operator": plan.operator,
         "created_by": creator,
+        "owner": creator,
+        "requested_by": creator,
         "scheduled": plan.scheduled,
         "scheduled_by": plan.scheduled_by,
         "executed_by": plan.executed_by or ("scheduler" if plan.scheduled else plan.operator),
@@ -565,15 +868,33 @@ def build_scan_run_manifest(
         "profile_version": profile_record["version"],
         "profile_settings": settings,
         "targets": targets,
+        "manual_targets": manual_targets,
+        "saved_network_ids": [
+            item["saved_network_id"] for item in saved_network_snapshots
+        ],
+        "saved_networks": saved_network_snapshots,
+        "target_selection": {
+            "saved_networks": saved_network_snapshots,
+            "manual_targets": manual_targets,
+        },
         "no_strike": no_strike,
         "coverage": coverage,
         "capture_requested": capture,
         "discovery_mode": settings.get("discovery_mode", "nmap"),
         "discovery_command_argv": discovery_argv,
         "exact_discovery_command": shlex.join(discovery_argv) if discovery_argv else None,
+        "discovery_execution_command_argv": discovery_execution_argv,
+        "exact_discovery_execution_command": (
+            shlex.join(discovery_execution_argv)
+            if discovery_execution_argv else None
+        ),
         "timeout_seconds": timeout_seconds,
         "command_argv": nmap_argv,
         "exact_command": shlex.join(nmap_argv),
+        "execution_command_argv": execution_argv,
+        "exact_execution_command": shlex.join(execution_argv),
+        "execution_phases": execution_phases,
+        "workflow": ["discovery", *[item["name"] for item in execution_phases], "merge", "analysis"],
         "capture_command_argv": capture_argv,
         "exact_capture_command": shlex.join(capture_argv) if capture_argv else None,
         "artifacts": [],
@@ -582,6 +903,8 @@ def build_scan_run_manifest(
 
 
 def init_poc_storage(db_path: Path = DB_PATH) -> None:
+    init_saved_network_storage(db_path)
+    init_scan_collaboration_storage(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as db:
         db.execute(
@@ -642,6 +965,9 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
             """
         )
         for profile in BUILTIN_PROFILES:
+            # Retain the original Nmap-discovery version for schedules already
+            # pinned to it, then publish FPING-first behavior as the new latest
+            # built-in version for new scans and schedules.
             db.execute(
                 """
                 INSERT OR IGNORE INTO scan_profiles (
@@ -655,6 +981,29 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                     profile["name"],
                     profile["description"],
                     utc_now(),
+                    json.dumps(
+                        normalize_scan_options(
+                            {**profile["settings"], "discovery_mode": "nmap"}
+                        ),
+                        sort_keys=True,
+                    ),
+                ),
+            )
+            db.execute(
+                """
+                INSERT OR IGNORE INTO scan_profiles (
+                    profile_id, version, name, description, built_in,
+                    created_at, created_by, source_profile_id,
+                    source_profile_version, settings_json
+                ) VALUES (?, ?, ?, ?, 1, ?, 'system', ?, 1, ?)
+                """,
+                (
+                    profile["profile_id"],
+                    BUILTIN_PROFILE_VERSION,
+                    profile["name"],
+                    profile["description"],
+                    utc_now(),
+                    profile["profile_id"],
                     json.dumps(normalize_scan_options(profile["settings"]), sort_keys=True),
                 ),
             )
@@ -1146,6 +1495,34 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
         )
 
 
+def _queued_run_ids(db_path: Path = DB_PATH) -> list[str]:
+    init_poc_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        return [
+            row[0]
+            for row in db.execute(
+                "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
+            ).fetchall()
+        ]
+
+
+def with_queue_state(
+    manifest: dict,
+    db_path: Path = DB_PATH,
+    queued_ids: list[str] | None = None,
+) -> dict:
+    result = dict(manifest)
+    queued_ids = _queued_run_ids(db_path) if queued_ids is None else queued_ids
+    if result.get("status") == "queued" and result.get("run_id") in queued_ids:
+        result["queue_position"] = queued_ids.index(result["run_id"]) + 1
+    else:
+        result["queue_position"] = None
+    result["queue_waiting_count"] = len(queued_ids)
+    result.setdefault("owner", result.get("created_by") or result.get("operator"))
+    result.setdefault("requested_by", result.get("created_by") or result.get("operator"))
+    return result
+
+
 def save_scan_run_plan(plan: ScanRunPlan, db_path: Path = DB_PATH) -> dict:
     manifest = build_scan_run_manifest(plan, db_path=db_path)
     insert_scan_run_manifest(manifest, db_path)
@@ -1166,6 +1543,14 @@ def prepare_scan_run(
         db_path=db_path,
     )
     insert_scan_run_manifest(manifest, db_path)
+    append_scan_audit(
+        db_path,
+        run_id=manifest["run_id"],
+        event="queued",
+        actor=manifest.get("requested_by") or manifest.get("created_by") or manifest["operator"],
+        details="Submitted to the shared analyzer queue",
+        changed_at=manifest["created_at"],
+    )
     return manifest
 
 
@@ -1176,7 +1561,111 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
             "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [with_host_count(json.loads(row[0])) for row in rows]
+    queued_ids = _queued_run_ids(db_path)
+    return [
+        with_queue_state(with_host_count(json.loads(row[0])), db_path, queued_ids)
+        for row in rows
+    ]
+
+
+def group_scan_runs_by_saved_network(runs: list[dict]) -> list[dict]:
+    """Group history by the Saved Network snapshots retained by each run."""
+    groups: dict[str, dict] = {}
+    for run in runs:
+        target_selection = run.get("target_selection") or {}
+        snapshots = run.get("saved_networks") or target_selection.get("saved_networks") or []
+        unique_snapshots: list[dict] = []
+        seen: set[str] = set()
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict):
+                continue
+            identity = str(
+                snapshot.get("saved_network_id")
+                or snapshot.get("cidr")
+                or snapshot.get("name")
+                or ""
+            )
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            unique_snapshots.append(snapshot)
+
+        if len(unique_snapshots) == 1:
+            network = unique_snapshots[0]
+            identity = str(
+                network.get("saved_network_id")
+                or network.get("cidr")
+                or network.get("name")
+            )
+            group_id = f"saved:{identity}"
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "kind": "saved_network",
+                    "name": network.get("name") or "Unnamed Saved Network",
+                    "cidr": network.get("cidr") or "",
+                    "description": network.get("description") or "",
+                    "category": network.get("category") or "",
+                    "tags": list(network.get("tags") or []),
+                    "runs": [],
+                },
+            )
+        elif len(unique_snapshots) > 1:
+            group_id = "multiple-saved-networks"
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "kind": "multiple_saved_networks",
+                    "name": "Multiple Saved Networks",
+                    "cidr": "",
+                    "description": "Scans spanning more than one Saved Network snapshot.",
+                    "category": "",
+                    "tags": [],
+                    "runs": [],
+                },
+            )
+        else:
+            group_id = "ad-hoc-manual"
+            group = groups.setdefault(
+                group_id,
+                {
+                    "group_id": group_id,
+                    "kind": "manual",
+                    "name": "Ad Hoc / Manual Scans",
+                    "cidr": "",
+                    "description": "Scans created without a Saved Network snapshot.",
+                    "category": "",
+                    "tags": [],
+                    "runs": [],
+                },
+            )
+        group["runs"].append(run)
+
+    for group in groups.values():
+        group["runs"].sort(
+            key=lambda item: item.get("created_at") or "", reverse=True
+        )
+        latest = group["runs"][0]
+        group["scan_count"] = len(group["runs"])
+        group["latest_scan_at"] = latest.get("completed_at") or latest.get("created_at")
+        group["latest_scan_name"] = latest.get("display_name") or latest.get("name")
+        group["latest_host_count"] = latest.get("host_count")
+
+    kind_order = {
+        "saved_network": 0,
+        "multiple_saved_networks": 1,
+        "manual": 2,
+    }
+    return sorted(
+        groups.values(),
+        key=lambda item: (
+            kind_order.get(item["kind"], 99),
+            str(item["name"]).casefold(),
+            str(item.get("cidr") or ""),
+        ),
+    )
 
 
 def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
@@ -1187,7 +1676,105 @@ def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
         row = db.execute(
             "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
-    return with_host_count(json.loads(row[0])) if row else None
+    return with_queue_state(with_host_count(json.loads(row[0])), db_path) if row else None
+
+
+def attribute_scan_run_networks(
+    run_id: str,
+    request: ScanRunNetworkAttribution,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Reclassify retained scan history without changing the executed scope."""
+    manifest = get_scan_run_plan(run_id, db_path)
+    if manifest is None:
+        raise KeyError("Scan run not found")
+    if manifest.get("status") in {"queued", "running", "awaiting_fallback_approval"}:
+        raise RuntimeError("Wait for the scan to finish before changing its network attribution")
+
+    target_cidrs = {
+        str(ipaddress.ip_network(value, strict=False))
+        for value in (manifest.get("targets") or [])
+    }
+    snapshots: list[dict] = []
+    selected_ids: list[str] = []
+    for saved_network_id in dict.fromkeys(request.saved_network_ids):
+        record = get_saved_network(saved_network_id, db_path)
+        if record is None or not record.get("active"):
+            raise ValueError("Choose an active Saved Network")
+        if record["cidr"] not in target_cidrs:
+            raise ValueError(
+                f"{record['name']} ({record['cidr']}) is not an exact target of this scan"
+            )
+        selected_ids.append(record["saved_network_id"])
+        snapshots.append(
+            {
+                "saved_network_id": record["saved_network_id"],
+                "name": record["name"],
+                "cidr": record["cidr"],
+                "description": record["description"],
+                "category": record["category"],
+                "tags": list(record["tags"]),
+            }
+        )
+
+    changed_at = utc_now()
+    previous = [
+        {
+            "saved_network_id": item.get("saved_network_id"),
+            "name": item.get("name"),
+            "cidr": item.get("cidr"),
+        }
+        for item in (manifest.get("saved_networks") or [])
+        if isinstance(item, dict)
+    ]
+    selected_cidrs = {item["cidr"] for item in snapshots}
+    manual_targets = [value for value in sorted(target_cidrs) if value not in selected_cidrs]
+    manifest.update(
+        {
+            "saved_network_ids": selected_ids,
+            "saved_networks": snapshots,
+            "manual_targets": manual_targets,
+            "target_selection": {
+                "saved_networks": snapshots,
+                "manual_targets": manual_targets,
+            },
+            "network_attribution_changed_at": changed_at,
+            "network_attribution_changed_by": request.changed_by,
+        }
+    )
+    history = list(manifest.get("network_attribution_history") or [])
+    history.append(
+        {
+            "changed_at": changed_at,
+            "changed_by": request.changed_by,
+            "previous_saved_networks": previous,
+            "saved_networks": [
+                {
+                    "saved_network_id": item["saved_network_id"],
+                    "name": item["name"],
+                    "cidr": item["cidr"],
+                }
+                for item in snapshots
+            ],
+        }
+    )
+    manifest["network_attribution_history"] = history
+    update_scan_run_manifest(manifest, db_path)
+    details = (
+        "Attributed retained scan to "
+        + ", ".join(f"{item['name']} ({item['cidr']})" for item in snapshots)
+        if snapshots
+        else "Returned retained scan to manual/ad hoc history"
+    )
+    append_scan_audit(
+        db_path,
+        run_id=run_id,
+        event="network_attribution_changed",
+        actor=request.changed_by,
+        details=details,
+        changed_at=changed_at,
+    )
+    return with_queue_state(with_host_count(manifest), db_path)
 
 
 def nmap_host_count(xml_path: Path) -> int | None:
@@ -1203,6 +1790,103 @@ def nmap_host_count(xml_path: Path) -> int | None:
         for host in root.findall("host")
         if (host.find("status") is None or host.find("status").get("state") == "up")
     )
+
+
+def nmap_up_addresses(xml_path: Path) -> list[str]:
+    """Return unique IPv4 addresses marked up in an Nmap XML document."""
+    if not xml_path.is_file():
+        return []
+    try:
+        root = ET.parse(xml_path).getroot()
+    except (ET.ParseError, OSError):
+        return []
+    addresses = []
+    for host in root.findall("host"):
+        status = host.find("status")
+        if status is not None and status.get("state") != "up":
+            continue
+        address = next(
+            (
+                item.get("addr")
+                for item in host.findall("address")
+                if item.get("addrtype") == "ipv4" and item.get("addr")
+            ),
+            None,
+        )
+        if address and address not in addresses:
+            addresses.append(address)
+    return addresses
+
+
+def merge_nmap_xml(source_paths: list[Path], destination: Path) -> int:
+    """Merge successful protocol XML into the canonical analysis artifact."""
+    roots = []
+    for path in source_paths:
+        if not path.is_file():
+            continue
+        try:
+            roots.append(ET.parse(path).getroot())
+        except (ET.ParseError, OSError):
+            continue
+    if not roots:
+        raise ValueError("No readable Nmap phase XML was available to merge")
+    merged = ET.Element("nmaprun", dict(roots[0].attrib))
+    for root in roots:
+        for scaninfo in root.findall("scaninfo"):
+            merged.append(ET.fromstring(ET.tostring(scaninfo, encoding="unicode")))
+    hosts: dict[str, ET.Element] = {}
+    for root in roots:
+        for host in root.findall("host"):
+            address = next(
+                (
+                    item.get("addr")
+                    for item in host.findall("address")
+                    if item.get("addrtype") == "ipv4" and item.get("addr")
+                ),
+                ET.tostring(host, encoding="unicode"),
+            )
+            if address not in hosts:
+                copy = ET.fromstring(ET.tostring(host, encoding="unicode"))
+                hosts[address] = copy
+                merged.append(copy)
+                continue
+            existing = hosts[address]
+            existing_ports = existing.find("ports")
+            source_ports = host.find("ports")
+            if source_ports is None:
+                continue
+            if existing_ports is None:
+                existing_ports = ET.SubElement(existing, "ports")
+            known = {
+                (port.get("protocol"), port.get("portid"))
+                for port in existing_ports.findall("port")
+            }
+            for port in source_ports.findall("port"):
+                key = (port.get("protocol"), port.get("portid"))
+                if key not in known:
+                    existing_ports.append(
+                        ET.fromstring(ET.tostring(port, encoding="unicode"))
+                    )
+                    known.add(key)
+            for extraports in source_ports.findall("extraports"):
+                existing_ports.append(
+                    ET.fromstring(ET.tostring(extraports, encoding="unicode"))
+                )
+    finished = roots[-1].find("runstats/finished")
+    hosts_up = sum(
+        1
+        for host in hosts.values()
+        if host.find("status") is None or host.find("status").get("state") == "up"
+    )
+    runstats = ET.SubElement(merged, "runstats")
+    ET.SubElement(runstats, "finished", dict(finished.attrib) if finished is not None else {})
+    ET.SubElement(
+        runstats,
+        "hosts",
+        {"up": str(hosts_up), "down": "0", "total": str(len(hosts))},
+    )
+    ET.ElementTree(merged).write(destination, encoding="utf-8", xml_declaration=True)
+    return hosts_up
 
 
 def with_host_count(manifest: dict, data_dir: Path = DATA_DIR) -> dict:
@@ -1437,35 +2121,29 @@ def persist_scan_progress(
 
 def refresh_nmap_progress(
     manifest: dict,
-    stderr_path: Path,
+    output_path: Path,
     *,
+    phase: str = "nmap",
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
 ) -> bool:
-    """Read the newest Nmap status line without interfering with its output file."""
+    """Read the newest Nmap terminal status without interfering with its output."""
     try:
-        with stderr_path.open("rb") as handle:
+        with output_path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
             handle.seek(max(0, size - 131072))
-            stats = latest_nmap_stats(handle.read().decode("utf-8", errors="replace"))
+            status = latest_nmap_status(
+                handle.read().decode("utf-8", errors="replace")
+            )
     except OSError:
         return False
-    if stats is None:
-        return False
-    completed, up = stats
-    progress = manifest["progress"]
-    if (
-        completed == progress.get("hosts_completed")
-        and up == progress.get("hosts_up")
-        and progress.get("phase") == "nmap"
-    ):
+    if status is None:
         return False
     return persist_scan_progress(
         manifest,
-        phase="nmap",
-        hosts_completed=completed,
-        hosts_up=up,
+        phase=phase,
+        **status,
         db_path=db_path,
         data_dir=data_dir,
     )
@@ -1574,67 +2252,107 @@ def execute_scan_run(
         )
     manifest["started_at"] = utc_now()
     manifest["status"] = "running"
-    persist_scan_progress(
-        manifest,
-        phase="discovery" if manifest.get("discovery_mode") == "fping" else "nmap",
-        db_path=db_path,
-        data_dir=data_dir,
+    append_scan_audit(
+        db_path,
+        run_id=run_id,
+        event="started",
+        actor=manifest.get("owner") or manifest.get("executed_by") or "system",
+        details="Analyzer capacity assigned; scan execution started",
+        changed_at=manifest["started_at"],
     )
-    deadline = time.monotonic() + int(manifest["timeout_seconds"])
+    persist_scan_progress(manifest, phase="discovery", db_path=db_path, data_dir=data_dir)
+    started = time.monotonic()
+    deadline = started + int(manifest["timeout_seconds"])
     exit_code = None
+    successful_xml: list[Path] = []
+
+    def watch_process(
+        argv: list[str],
+        stdout_path: Path,
+        stderr_path: Path,
+        *,
+        phase: str,
+        process_attr: str,
+        allowed_exit_codes: set[int],
+        track_nmap: bool,
+    ) -> tuple[str, int | None]:
+        with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            process = popen_factory(
+                argv,
+                cwd=run_dir,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                start_new_session=True,
+            )
+            setattr(control, process_attr, process)
+            last_progress_check = 0.0
+            while True:
+                code = process.poll()
+                if code is not None:
+                    if track_nmap:
+                        refresh_nmap_progress(
+                            manifest, stdout_path, phase=phase,
+                            db_path=db_path, data_dir=data_dir,
+                        )
+                    return ("completed" if code in allowed_exit_codes else "failed", code)
+                if control.cancel_event.is_set():
+                    terminate_process(process)
+                    return "cancelled", process.poll()
+                if time.monotonic() >= deadline:
+                    terminate_process(process)
+                    return "timed_out", process.poll()
+                now = time.monotonic()
+                if now - last_progress_check >= 1:
+                    if track_nmap:
+                        refresh_nmap_progress(
+                            manifest, stdout_path, phase=phase,
+                            db_path=db_path, data_dir=data_dir,
+                        )
+                    persist_scan_progress(
+                        manifest,
+                        phase=phase,
+                        elapsed_seconds=max(0, int(now - started)),
+                        deadline_remaining_seconds=max(0, int(deadline - now)),
+                        db_path=db_path,
+                        data_dir=data_dir,
+                    )
+                    last_progress_check = now
+                sleep_fn(0.2)
 
     try:
         capture_error_path = run_dir / "capture-stderr.txt"
-        with (
-            (run_dir / "stdout.txt").open("wb") as stdout_handle,
-            (run_dir / "stderr.txt").open("wb") as stderr_handle,
-            capture_error_path.open("wb") as capture_error_handle,
-        ):
-            if manifest["capture_requested"]:
+        with capture_error_path.open("wb") as capture_error_handle:
+            def start_capture(label: str = "the scan") -> None:
+                if not manifest["capture_requested"]:
+                    return
                 control.capture_process = popen_factory(
-                    manifest["capture_command_argv"],
-                    cwd=run_dir,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=capture_error_handle,
-                    start_new_session=True,
+                    manifest["capture_command_argv"], cwd=run_dir,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=capture_error_handle, start_new_session=True,
                 )
                 sleep_fn(0.25)
                 capture_exit = control.capture_process.poll()
                 if capture_exit is not None:
-                    raise RuntimeError(f"tcpdump exited before the scan with status {capture_exit}")
-
-            run_nmap = True
-            if manifest.get("discovery_mode") == "fping":
-                with (
-                    (run_dir / "fping-alive.txt").open("wb") as alive_handle,
-                    (run_dir / "fping-stderr.txt").open("wb") as fping_error_handle,
-                ):
-                    control.discovery_process = popen_factory(
-                        manifest["discovery_command_argv"],
-                        cwd=run_dir,
-                        stdin=subprocess.DEVNULL,
-                        stdout=alive_handle,
-                        stderr=fping_error_handle,
-                        start_new_session=True,
+                    raise RuntimeError(
+                        f"tcpdump exited before {label} with status {capture_exit}"
                     )
-                    while True:
-                        discovery_exit = control.discovery_process.poll()
-                        if discovery_exit is not None:
-                            if discovery_exit not in {0, 1}:
-                                raise RuntimeError(f"fping failed with status {discovery_exit}")
-                            break
-                        if control.cancel_event.is_set():
-                            manifest["status"] = "cancelled"
-                            terminate_process(control.discovery_process)
-                            run_nmap = False
-                            break
-                        if time.monotonic() >= deadline:
-                            manifest["status"] = "timed_out"
-                            terminate_process(control.discovery_process)
-                            run_nmap = False
-                            break
-                        sleep_fn(0.2)
+
+            start_capture()
+            run_phases = True
+            alive_hosts: list[str] = []
+            if manifest.get("discovery_mode") == "fping":
+                discovery_status, discovery_exit = watch_process(
+                    manifest["discovery_command_argv"],
+                    run_dir / "fping-alive.txt",
+                    run_dir / "fping-stderr.txt",
+                    phase="discovery", process_attr="discovery_process",
+                    allowed_exit_codes={0, 1}, track_nmap=False,
+                )
+                exit_code = discovery_exit
+                if discovery_status != "completed":
+                    manifest["status"] = discovery_status
+                    run_phases = False
                 alive_hosts = [
                     line.strip()
                     for line in (run_dir / "fping-alive.txt").read_text(
@@ -1643,22 +2361,11 @@ def execute_scan_run(
                     if line.strip()
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
-                if run_nmap and alive_hosts:
-                    persist_scan_progress(
-                        manifest,
-                        phase="nmap",
-                        hosts_completed=0,
-                        hosts_total=len(alive_hosts),
-                        hosts_up=0,
-                        db_path=db_path,
-                        data_dir=data_dir,
-                    )
-                if run_nmap and not alive_hosts:
+                if run_phases and not alive_hosts:
                     terminate_process(control.capture_process)
                     control.capture_process = None
                     fallback_argv = build_nmap_argv(
-                        manifest["profile"],
-                        manifest["interface"],
+                        manifest["profile"], manifest["interface"],
                         include_no_strike=bool(manifest.get("no_strike")),
                         scan_options=manifest["profile_settings"],
                         target_file="targets.txt",
@@ -1666,22 +2373,17 @@ def execute_scan_run(
                     manifest["fallback_command_argv"] = fallback_argv
                     manifest["exact_fallback_command"] = shlex.join(fallback_argv)
                     if manifest.get("fallback_policy") == "stop_without_nmap":
-                        manifest["status"] = "completed_without_nmap"
-                        manifest["fallback_approval_required"] = False
-                        manifest["fallback_decision"] = "policy_stop"
-                        manifest["fallback_decided_at"] = utc_now()
-                        manifest["discovery_note"] = (
-                            "FPING found no responsive hosts. The pinned scheduled-scan "
-                            "policy finished without starting the full Nmap fallback."
-                        )
-                        exit_code = 0
-                        run_nmap = False
-                        persist_scan_progress(
-                            manifest,
-                            phase="completed_without_nmap",
-                            db_path=db_path,
-                            data_dir=data_dir,
-                        )
+                        manifest.update({
+                            "status": "completed_without_nmap",
+                            "fallback_approval_required": False,
+                            "fallback_decision": "policy_stop",
+                            "fallback_decided_at": utc_now(),
+                            "discovery_note": (
+                                "FPING found no responsive hosts. The pinned scheduled-scan "
+                                "policy finished without starting the full Nmap fallback."
+                            ),
+                        })
+                        exit_code, run_phases = 0, False
                     else:
                         manifest["status"] = "awaiting_fallback_approval"
                         manifest["fallback_approval_required"] = True
@@ -1691,24 +2393,21 @@ def execute_scan_run(
                         )
                         collect_artifacts(manifest, data_dir)
                         persist_scan_progress(
-                            manifest,
-                            phase="awaiting_approval",
-                            db_path=db_path,
-                            data_dir=data_dir,
+                            manifest, phase="awaiting_approval",
+                            db_path=db_path, data_dir=data_dir,
                         )
                         while not control.fallback_decision_event.is_set():
                             if control.cancel_event.is_set():
-                                manifest["status"] = "cancelled"
-                                run_nmap = False
+                                manifest["status"], run_phases = "cancelled", False
                                 break
                             sleep_fn(0.2)
-                        if run_nmap:
-                            manifest["fallback_decision"] = control.fallback_decision
-                            manifest["fallback_decided_by"] = control.fallback_decided_by
-                            manifest["fallback_authorization_note"] = (
-                                control.fallback_authorization_note
-                            )
-                            manifest["fallback_decided_at"] = utc_now()
+                        if run_phases:
+                            manifest.update({
+                                "fallback_decision": control.fallback_decision,
+                                "fallback_decided_by": control.fallback_decided_by,
+                                "fallback_authorization_note": control.fallback_authorization_note,
+                                "fallback_decided_at": utc_now(),
+                            })
                             if control.fallback_decision == "approve":
                                 apply_fping_fallback(manifest)
                                 manifest["status"] = "running"
@@ -1717,34 +2416,9 @@ def execute_scan_run(
                                     f"approved by {control.fallback_decided_by}: "
                                     f"{control.fallback_authorization_note}"
                                 )
-                                persist_scan_progress(
-                                    manifest,
-                                    phase="nmap",
-                                    hosts_completed=0,
-                                    hosts_total=int(
-                                        manifest["progress"].get("scope_hosts_total") or 0
-                                    ),
-                                    hosts_up=0,
-                                    db_path=db_path,
-                                    data_dir=data_dir,
-                                )
-                                deadline = time.monotonic() + int(manifest["timeout_seconds"])
-                                if manifest["capture_requested"]:
-                                    control.capture_process = popen_factory(
-                                        manifest["capture_command_argv"],
-                                        cwd=run_dir,
-                                        stdin=subprocess.DEVNULL,
-                                        stdout=subprocess.DEVNULL,
-                                        stderr=capture_error_handle,
-                                        start_new_session=True,
-                                    )
-                                    sleep_fn(0.25)
-                                    capture_exit = control.capture_process.poll()
-                                    if capture_exit is not None:
-                                        raise RuntimeError(
-                                            "tcpdump exited before the approved fallback "
-                                            f"with status {capture_exit}"
-                                        )
+                                started = time.monotonic()
+                                deadline = started + int(manifest["timeout_seconds"])
+                                start_capture("the approved fallback")
                             else:
                                 manifest["status"] = "completed_without_nmap"
                                 manifest["discovery_note"] = (
@@ -1752,58 +2426,122 @@ def execute_scan_run(
                                     f"{control.fallback_decided_by} chose to finish without "
                                     f"Nmap fallback: {control.fallback_authorization_note}"
                                 )
-                                exit_code = 0
-                                run_nmap = False
-                            persist_scan_progress(
-                                manifest,
-                                phase=(
-                                    "nmap" if run_nmap else "completed_without_nmap"
-                                ),
-                                db_path=db_path,
-                                data_dir=data_dir,
-                            )
-
-            if run_nmap:
-                control.nmap_process = popen_factory(
-                    manifest["command_argv"],
-                    cwd=run_dir,
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_handle,
-                    stderr=stderr_handle,
-                    start_new_session=True,
+                                exit_code, run_phases = 0, False
+            else:
+                discovery_status, discovery_exit = watch_process(
+                    manifest["discovery_execution_command_argv"],
+                    run_dir / "discovery-stdout.txt",
+                    run_dir / "discovery-stderr.txt",
+                    phase="discovery", process_attr="nmap_process",
+                    allowed_exit_codes={0}, track_nmap=True,
                 )
-                last_progress_check = 0.0
-                while True:
-                    exit_code = control.nmap_process.poll()
-                    if exit_code is not None:
-                        refresh_nmap_progress(
-                            manifest,
-                            run_dir / "stderr.txt",
-                            db_path=db_path,
-                            data_dir=data_dir,
+                exit_code = discovery_exit
+                if discovery_status != "completed":
+                    manifest["status"] = discovery_status
+                    run_phases = False
+                else:
+                    alive_hosts = nmap_up_addresses(run_dir / "discovery.xml")
+                    (run_dir / "discovery-alive.txt").write_text(
+                        "\n".join(alive_hosts) + ("\n" if alive_hosts else ""),
+                        encoding="utf-8",
+                    )
+                    manifest["discovery_host_count"] = len(alive_hosts)
+                    if not alive_hosts:
+                        shutil.copyfile(run_dir / "discovery.xml", run_dir / "scan.xml")
+                        manifest["status"] = "completed"
+                        manifest["discovery_note"] = (
+                            "Nmap discovery completed, but no responsive hosts were found; "
+                            "TCP and UDP port phases were skipped."
                         )
-                        manifest["status"] = "completed" if exit_code == 0 else "failed"
-                        break
-                    if control.cancel_event.is_set():
-                        manifest["status"] = "cancelled"
-                        terminate_process(control.nmap_process)
-                        exit_code = control.nmap_process.poll()
-                        break
-                    if time.monotonic() >= deadline:
-                        manifest["status"] = "timed_out"
-                        terminate_process(control.nmap_process)
-                        exit_code = control.nmap_process.poll()
-                        break
-                    now = time.monotonic()
-                    if now - last_progress_check >= 1:
-                        refresh_nmap_progress(
-                            manifest,
-                            run_dir / "stderr.txt",
-                            db_path=db_path,
-                            data_dir=data_dir,
+                        run_phases = False
+
+            if run_phases:
+                hosts_total = len(alive_hosts) or int(
+                    manifest["progress"].get("scope_hosts_total") or 0
+                )
+                for phase in manifest.get("execution_phases") or []:
+                    phase_name = phase["name"]
+                    phase["status"] = "running"
+                    phase["started_at"] = utc_now()
+                    persist_scan_progress(
+                        manifest, phase=phase_name, hosts_completed=0,
+                        hosts_total=hosts_total, hosts_up=0,
+                        db_path=db_path, data_dir=data_dir,
+                    )
+                    phase_status, phase_exit = watch_process(
+                        phase["execution_command_argv"],
+                        run_dir / phase["stdout_filename"],
+                        run_dir / phase["stderr_filename"],
+                        phase=phase_name, process_attr="nmap_process",
+                        allowed_exit_codes={0}, track_nmap=True,
+                    )
+                    xml_path = run_dir / phase["xml_filename"]
+                    if phase_status == "completed" and not xml_path.is_file():
+                        phase_status = "failed"
+                    exit_code = phase_exit
+                    phase["status"] = phase_status
+                    phase["exit_code"] = phase_exit
+                    phase["completed_at"] = utc_now()
+                    if phase_status == "completed" and xml_path.is_file():
+                        successful_xml.append(xml_path)
+                        continue
+                    tcp_succeeded = any(
+                        item.get("name") == "tcp" and item.get("status") == "completed"
+                        for item in manifest.get("execution_phases") or []
+                    )
+                    if phase_name == "udp" and tcp_succeeded:
+                        manifest["partial_results"] = True
+                        manifest["execution_note"] = (
+                            f"TCP results were preserved. The UDP phase {phase_status}"
+                            + (f" with exit code {phase_exit}." if phase_exit is not None else ".")
                         )
-                        last_progress_check = now
-                    sleep_fn(0.2)
+                        manifest["status"] = "completed"
+                        break
+                    manifest["status"] = phase_status
+                    break
+                else:
+                    manifest["status"] = "completed"
+
+                if successful_xml:
+                    persist_scan_progress(
+                        manifest, phase="merge", db_path=db_path, data_dir=data_dir
+                    )
+                    merge_nmap_xml(successful_xml, run_dir / "scan.xml")
+                    persist_scan_progress(
+                        manifest, phase="analysis", db_path=db_path, data_dir=data_dir
+                    )
+                    successful_protocols = [
+                        item["protocol"]
+                        for item in manifest.get("execution_phases") or []
+                        if item.get("status") == "completed"
+                    ]
+                    manifest["coverage"]["actual_protocols"] = successful_protocols
+                    manifest["coverage"]["partial_results"] = bool(
+                        manifest.get("partial_results")
+                    )
+                    if manifest.get("partial_results"):
+                        manifest["coverage"]["requested_protocols"] = manifest[
+                            "coverage"
+                        ].get("protocols", [])
+                        manifest["coverage"]["protocols"] = successful_protocols
+
+            output_sources = [
+                run_dir / "discovery-stdout.txt",
+                run_dir / "tcp-stdout.txt",
+                run_dir / "udp-stdout.txt",
+            ]
+            error_sources = [
+                run_dir / "discovery-stderr.txt",
+                run_dir / "fping-stderr.txt",
+                run_dir / "tcp-stderr.txt",
+                run_dir / "udp-stderr.txt",
+            ]
+            (run_dir / "stdout.txt").write_bytes(
+                b"\n".join(path.read_bytes() for path in output_sources if path.is_file())
+            )
+            (run_dir / "stderr.txt").write_bytes(
+                b"\n".join(path.read_bytes() for path in error_sources if path.is_file())
+            )
     except Exception as exc:
         manifest["status"] = "failed"
         manifest["error"] = f"{type(exc).__name__}: {exc}"
@@ -1813,9 +2551,7 @@ def execute_scan_run(
         terminate_process(control.capture_process)
         manifest["completed_at"] = utc_now()
         manifest["exit_code"] = exit_code
-        manifest["success"] = manifest["status"] in {
-            "completed", "completed_without_nmap"
-        }
+        manifest["success"] = manifest["status"] in {"completed", "completed_without_nmap"}
         manifest["host_count"] = nmap_host_count(run_dir / "scan.xml")
         progress = manifest["progress"]
         if manifest["status"] == "completed":
@@ -1846,8 +2582,17 @@ def execute_scan_run(
             )
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
+        append_scan_audit(
+            db_path,
+            run_id=run_id,
+            event=manifest["status"],
+            actor=manifest.get("owner") or manifest.get("executed_by") or "system",
+            details=manifest.get("error") or manifest.get("execution_note") or "Scan execution finished",
+            changed_at=manifest["completed_at"],
+        )
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
 
 
 def launch_scan_run(
@@ -1857,16 +2602,71 @@ def launch_scan_run(
     data_dir: Path = DATA_DIR,
     interfaces: set[str] | None = None,
 ) -> dict:
-    """Queue one scan through the same capacity gate used by manual and scheduled runs."""
+    """Persist one scan in the shared FIFO queue and dispatch it when capacity is free."""
+    manifest = prepare_scan_run(request, db_path, interfaces)
+    dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+    return get_scan_run_plan(manifest["run_id"], db_path) or with_queue_state(manifest, db_path)
+
+
+def _scan_worker_entry(
+    run_id: str,
+    control: RunControl,
+    *,
+    db_path: Path,
+    data_dir: Path,
+) -> None:
+    """Keep an unexpected worker error from wedging the shared queue."""
+    try:
+        execute_scan_run(run_id, control, db_path=db_path, data_dir=data_dir)
+    except Exception as exc:
+        manifest = get_scan_run_plan(run_id, db_path)
+        if manifest is not None and manifest.get("status") in {
+            "queued",
+            "running",
+            "awaiting_fallback_approval",
+        }:
+            manifest["status"] = "failed"
+            manifest["success"] = False
+            manifest["completed_at"] = utc_now()
+            manifest["error"] = f"{type(exc).__name__}: {exc}"
+            if isinstance(manifest.get("progress"), dict):
+                update_scan_progress(
+                    manifest["progress"],
+                    phase="failed",
+                    updated_at=manifest["completed_at"],
+                )
+            update_scan_run_manifest(manifest, db_path)
+            append_scan_audit(
+                db_path,
+                run_id=run_id,
+                event="failed",
+                actor="system",
+                details=manifest["error"],
+                changed_at=manifest["completed_at"],
+            )
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+
+
+def dispatch_next_queued_run(
+    *, db_path: Path = DB_PATH, data_dir: Path = DATA_DIR
+) -> dict | None:
+    """Start the oldest queued run if the analyzer has free scan capacity."""
     with ACTIVE_RUNS_LOCK:
         if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
-            raise RuntimeError("Another scan is already running")
-        manifest = prepare_scan_run(request, db_path, interfaces)
+            return None
+        queued_ids = _queued_run_ids(db_path)
+        if not queued_ids:
+            return None
+        manifest = get_scan_run_plan(queued_ids[0], db_path)
+        if manifest is None or manifest.get("status") != "queued":
+            return None
         control = RunControl()
         ACTIVE_RUNS[manifest["run_id"]] = control
     try:
         worker = threading.Thread(
-            target=execute_scan_run,
+            target=_scan_worker_entry,
             args=(manifest["run_id"], control),
             kwargs={"db_path": db_path, "data_dir": data_dir},
             daemon=True,
@@ -1878,23 +2678,34 @@ def launch_scan_run(
             ACTIVE_RUNS.pop(manifest["run_id"], None)
         manifest["status"] = "failed"
         manifest["error"] = "The scan worker could not be started"
+        manifest["completed_at"] = utc_now()
         update_scan_run_manifest(manifest, db_path)
+        append_scan_audit(
+            db_path,
+            run_id=manifest["run_id"],
+            event="failed",
+            actor="system",
+            details=manifest["error"],
+            changed_at=manifest["completed_at"],
+        )
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
         raise
-    return manifest
+    return with_queue_state(manifest, db_path)
 
 
 def schedule_target_chunks(
     schedule: dict, db_path: Path = DB_PATH
 ) -> list[list[str]]:
     no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
-    addresses = expanded_discovery_targets(
-        schedule["targets"], no_strike
-    )
     chunking_enabled = bool(
         schedule.get("chunking_enabled", "chunk_size" in schedule)
     )
     if not chunking_enabled:
-        return [addresses] if addresses else []
+        compact_targets = compact_discovery_targets(schedule["targets"], no_strike)
+        return [compact_targets] if compact_targets else []
+    addresses = expanded_discovery_targets(
+        schedule["targets"], no_strike
+    )
     size = int(schedule.get("chunk_size") or 256)
     return [addresses[index:index + size] for index in range(0, len(addresses), size)]
 
@@ -1929,7 +2740,7 @@ def _scheduled_request(
         targets=targets,
         no_strike=no_strike,
         capture=True,
-        timeout_seconds=int(schedule.get("timeout_seconds") or 900),
+        timeout_seconds=int(schedule.get("timeout_seconds") or 2700),
         fallback_policy=schedule.get("fallback_policy", "require_approval"),
         schedule_id=schedule["schedule_id"],
         schedule_batch_id=batch_id,
@@ -1967,7 +2778,7 @@ def execute_schedule_batch(
         resume_after = min(
             max(int(schedule.get("resume_after_chunk") or 0), 0), total
         )
-        batch_hosts_total = sum(len(chunk) for chunk in chunks)
+        batch_hosts_total = sum(target_address_count(chunk) for chunk in chunks)
         occurrence_run_ids = (
             list(schedule.get("last_occurrence_run_ids") or [])
             if resume_after
@@ -2011,7 +2822,8 @@ def execute_schedule_batch(
                             chunk_count=total,
                             batch_hosts_total=batch_hosts_total,
                             batch_hosts_completed_before=sum(
-                                len(chunk) for chunk in chunks[: index - 1]
+                                target_address_count(chunk)
+                                for chunk in chunks[: index - 1]
                             ),
                             db_path=db_path,
                         ),
@@ -2195,19 +3007,35 @@ def recover_scheduler_state(
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
 ) -> dict:
-    """Close orphaned runs and resume interrupted batches after completed chunks."""
+    """Close orphaned work, preserve manual queue entries, and recover scheduled batches."""
     init_poc_storage(db_path)
     recovered_at = utc_now()
     with sqlite3.connect(db_path) as db:
         rows = db.execute("SELECT manifest_json FROM scan_runs").fetchall()
     manifests = [json.loads(row[0]) for row in rows]
     orphaned = []
+    preserved_queue = []
     for manifest in manifests:
         if manifest.get("status") not in {
             "queued",
             "running",
             "awaiting_fallback_approval",
         }:
+            continue
+        if (
+            manifest.get("status") == "queued"
+            and not manifest.get("started_at")
+            and not manifest.get("scheduled")
+        ):
+            preserved_queue.append(manifest["run_id"])
+            append_scan_audit(
+                db_path,
+                run_id=manifest["run_id"],
+                event="queue_recovered",
+                actor="system",
+                details="Preserved unstarted manual request across analyzer restart",
+                changed_at=recovered_at,
+            )
             continue
         manifest["status"] = "interrupted"
         manifest["success"] = False
@@ -2219,6 +3047,14 @@ def recover_scheduler_state(
             )
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
+        append_scan_audit(
+            db_path,
+            run_id=manifest["run_id"],
+            event="interrupted",
+            actor="system",
+            details=manifest["error"],
+            changed_at=recovered_at,
+        )
         orphaned.append(manifest["run_id"])
 
     recovered_schedules = []
@@ -2291,8 +3127,10 @@ def recover_scheduler_state(
         )
         _store_scan_schedule(schedule, db_path)
         recovered_schedules.append(schedule["schedule_id"])
+    dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
     return {
         "orphaned_run_ids": orphaned,
+        "preserved_queue_run_ids": preserved_queue,
         "recovered_schedule_ids": recovered_schedules,
     }
 
@@ -2436,14 +3274,69 @@ def scan_profile_history(all_versions: bool = False) -> list[dict]:
     return list_scan_profiles(all_versions=all_versions)
 
 
+@router.get("/saved-networks")
+def saved_network_history(include_archived: bool = False) -> list[dict]:
+    return list_saved_networks(DB_PATH, include_archived=include_archived)
+
+
+@router.get("/saved-networks/{saved_network_id}")
+def saved_network_detail(saved_network_id: str) -> dict:
+    record = get_saved_network(saved_network_id, DB_PATH)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Saved Network not found")
+    return record
+
+
+@router.post("/saved-networks", status_code=201)
+def save_saved_network(request: SavedNetworkCreate, http_request: Request) -> dict:
+    try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
+        return create_saved_network(request, DB_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/saved-networks/{saved_network_id}")
+def edit_saved_network(
+    saved_network_id: str, request: SavedNetworkUpdate, http_request: Request
+) -> dict:
+    try:
+        request = bind_signed_in_actor(http_request, request, "updated_by")
+        return update_saved_network(saved_network_id, request, DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Saved Network not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/saved-networks/{saved_network_id}/archive")
+def archive_saved_network_record(
+    saved_network_id: str, request: SavedNetworkArchive, http_request: Request
+) -> dict:
+    try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
+        return archive_saved_network(saved_network_id, request, DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Saved Network not found") from exc
+
+
 @router.get("/safety/no-strike")
 def global_no_strike_list() -> dict:
     return get_global_no_strike()
 
 
-@router.post("/safety/no-strike", status_code=201)
-def add_to_global_no_strike(request: NoStrikeUpdate) -> dict:
+@router.post("/safety/scan-summary")
+def preview_scan_safety(request: ScanSafetySummaryRequest) -> dict:
     try:
+        return scan_safety_summary(request.targets, request.no_strike)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/safety/no-strike", status_code=201)
+def add_to_global_no_strike(request: NoStrikeUpdate, http_request: Request) -> dict:
+    try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return add_global_no_strike(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2462,8 +3355,11 @@ def global_no_strike_remove_challenge(entries: list[str]) -> dict:
 
 
 @router.post("/safety/no-strike/remove")
-def remove_from_global_no_strike(request: NoStrikeRemoval) -> dict:
+def remove_from_global_no_strike(
+    request: NoStrikeRemoval, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return remove_global_no_strike(request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2482,16 +3378,20 @@ def scan_profile_detail(profile_id: str, version: int) -> dict:
 
 
 @router.post("/scan-profiles", status_code=201)
-def save_scan_profile(request: ScanProfileCreate) -> dict:
+def save_scan_profile(request: ScanProfileCreate, http_request: Request) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_profile(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-profiles/{profile_id}/versions", status_code=201)
-def save_scan_profile_version(profile_id: str, request: ScanProfileVersionCreate) -> dict:
+def save_scan_profile_version(
+    profile_id: str, request: ScanProfileVersionCreate, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_profile_version(profile_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2500,8 +3400,11 @@ def save_scan_profile_version(profile_id: str, request: ScanProfileVersionCreate
 
 
 @router.post("/scan-profiles/{profile_id}/clone", status_code=201)
-def clone_saved_scan_profile(profile_id: str, request: ScanProfileClone) -> dict:
+def clone_saved_scan_profile(
+    profile_id: str, request: ScanProfileClone, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return clone_scan_profile(profile_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2537,16 +3440,20 @@ def scan_schedule_history() -> list[dict]:
 
 
 @router.post("/scan-schedules", status_code=201)
-def save_scan_schedule(request: ScanScheduleCreate) -> dict:
+def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_schedule(request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-schedules/{schedule_id}/state")
-def change_scan_schedule_state(schedule_id: str, request: ScheduleStateChange) -> dict:
+def change_scan_schedule_state(
+    schedule_id: str, request: ScheduleStateChange, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return set_scan_schedule_enabled(
             schedule_id, request.enabled, changed_by=request.changed_by
         )
@@ -2555,8 +3462,11 @@ def change_scan_schedule_state(schedule_id: str, request: ScheduleStateChange) -
 
 
 @router.post("/scan-schedules/{schedule_id}/profile")
-def repin_scan_schedule_profile(schedule_id: str, request: ScheduleProfileChange) -> dict:
+def repin_scan_schedule_profile(
+    schedule_id: str, request: ScheduleProfileChange, http_request: Request
+) -> dict:
     try:
+        request = bind_signed_in_actor(http_request, request, "changed_by")
         return change_scan_schedule_profile(schedule_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
@@ -2598,16 +3508,24 @@ def delete_saved_scan_schedule(schedule_id: str, confirmation: DeleteConfirmatio
 
 
 @router.post("/scan-runs/plans", status_code=201)
-def create_scan_run_plan(plan: ScanRunPlan) -> dict:
+def create_scan_run_plan(plan: ScanRunPlan, http_request: Request) -> dict:
     try:
+        actor_fields = ["operator", "created_by", "executed_by"]
+        if plan.scheduled:
+            actor_fields.append("scheduled_by")
+        plan = bind_signed_in_actor(http_request, plan, *actor_fields)
         return save_scan_run_plan(plan)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-runs", status_code=202)
-def start_scan_run(request: ScanRunRequest) -> dict:
+def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
     try:
+        actor_fields = ["operator", "created_by", "executed_by"]
+        if request.scheduled:
+            actor_fields.append("scheduled_by")
+        request = bind_signed_in_actor(http_request, request, *actor_fields)
         return launch_scan_run(request)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2616,7 +3534,10 @@ def start_scan_run(request: ScanRunRequest) -> dict:
 
 
 @router.post("/scan-runs/{run_id}/fallback-decision", status_code=202)
-def decide_scan_fallback(run_id: str, request: FallbackDecision) -> dict:
+def decide_scan_fallback(
+    run_id: str, request: FallbackDecision, http_request: Request
+) -> dict:
+    request = bind_signed_in_actor(http_request, request, "decided_by")
     manifest = get_scan_run_plan(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
@@ -2630,20 +3551,171 @@ def decide_scan_fallback(run_id: str, request: FallbackDecision) -> dict:
         control.fallback_decided_by = request.decided_by
         control.fallback_authorization_note = request.authorization_note
         control.fallback_decision_event.set()
+    append_scan_audit(
+        DB_PATH,
+        run_id=run_id,
+        event=f"fallback_{request.decision}",
+        actor=request.decided_by,
+        details=request.authorization_note,
+    )
     return {"run_id": run_id, "decision": request.decision, "status": "decision_recorded"}
 
 
+def _scan_actor(request: Request) -> tuple[str | None, str | None]:
+    analyst = getattr(request.state, "analyst", None)
+    if not analyst:
+        return None, None
+    return str(analyst.get("username") or ""), str(analyst.get("role") or "")
+
+
+def _require_run_control(request: Request, manifest: dict) -> tuple[str, str]:
+    actor, role = _scan_actor(request)
+    if actor is None:
+        return "local-operator", "admin"
+    owner = str(manifest.get("owner") or manifest.get("created_by") or manifest.get("operator") or "")
+    if role != "admin" and actor != owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the scan owner or an Administrator can control this run",
+        )
+    return actor, role or "analyst"
+
+
 @router.post("/scan-runs/{run_id}/cancel", status_code=202)
-def cancel_scan_run(run_id: str) -> dict:
-    manifest = get_scan_run_plan(run_id)
+def cancel_scan_run(run_id: str, request: Request) -> dict:
+    manifest = get_scan_run_plan(run_id, DB_PATH)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
+    actor, _ = _require_run_control(request, manifest)
     with ACTIVE_RUNS_LOCK:
         control = ACTIVE_RUNS.get(run_id)
+    if manifest["status"] == "queued" and control is None:
+        changed_at = utc_now()
+        manifest.update(
+            {
+                "status": "cancelled",
+                "completed_at": changed_at,
+                "success": False,
+                "execution_note": "Cancelled before analyzer capacity was assigned",
+            }
+        )
+        if isinstance(manifest.get("progress"), dict):
+            update_scan_progress(manifest["progress"], phase="cancelled", updated_at=changed_at)
+        update_scan_run_manifest(manifest, DB_PATH)
+        append_scan_audit(
+            DB_PATH,
+            run_id=run_id,
+            event="cancelled",
+            actor=actor,
+            details=manifest["execution_note"],
+            changed_at=changed_at,
+        )
+        dispatch_next_queued_run(db_path=DB_PATH, data_dir=DATA_DIR)
+        return {"run_id": run_id, "status": "cancelled"}
     if control is None or manifest["status"] not in {"queued", "running", "awaiting_fallback_approval"}:
         raise HTTPException(status_code=409, detail="Scan run is not active")
     control.cancel_event.set()
+    append_scan_audit(
+        DB_PATH,
+        run_id=run_id,
+        event="cancellation_requested",
+        actor=actor,
+        details="Cancellation requested for the active analyzer process",
+    )
     return {"run_id": run_id, "status": "cancellation_requested"}
+
+
+@router.post("/scan-runs/{run_id}/owner")
+def change_scan_run_owner(
+    run_id: str, change: ScanRunOwnerChange, request: Request
+) -> dict:
+    actor, role = _scan_actor(request)
+    if actor is not None and role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator role required")
+    manifest = get_scan_run_plan(run_id, DB_PATH)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    if manifest.get("status") != "queued":
+        raise HTTPException(status_code=409, detail="Only queued scans can be reassigned")
+    if actor is not None:
+        with sqlite3.connect(DB_PATH) as db:
+            row = db.execute(
+                "SELECT role, disabled FROM analyst_users WHERE username = ?",
+                (change.owner,),
+            ).fetchone()
+        if row is None or row[1]:
+            raise HTTPException(status_code=422, detail="Choose an active analyst account")
+        if row[0] == "viewer":
+            raise HTTPException(status_code=422, detail="Viewer accounts cannot own queued scans")
+    previous = manifest.get("owner") or manifest.get("created_by") or manifest.get("operator")
+    manifest["owner"] = change.owner
+    manifest["owner_changed_at"] = utc_now()
+    manifest["owner_changed_by"] = actor or "local-operator"
+    update_scan_run_manifest(manifest, DB_PATH)
+    append_scan_audit(
+        DB_PATH,
+        run_id=run_id,
+        event="reassigned",
+        actor=actor or "local-operator",
+        details=f"Queue owner changed from {previous} to {change.owner}",
+        changed_at=manifest["owner_changed_at"],
+    )
+    return with_queue_state(manifest, DB_PATH)
+
+
+@router.put("/scan-runs/{run_id}/network-attribution")
+def change_scan_run_network_attribution(
+    run_id: str, change: ScanRunNetworkAttribution, request: Request
+) -> dict:
+    manifest = get_scan_run_plan(run_id, DB_PATH)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    actor, _ = _require_run_control(request, manifest)
+    if actor != "local-operator":
+        change = change.model_copy(update={"changed_by": actor})
+    try:
+        return attribute_scan_run_networks(run_id, change, DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan run not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/scan-runs/queue/status")
+def scan_queue_status(request: Request) -> dict:
+    actor, role = _scan_actor(request)
+    active_states = {"queued", "running", "awaiting_fallback_approval"}
+    runs = [
+        item
+        for item in list_scan_run_plans(db_path=DB_PATH, limit=200)
+        if item.get("status") in active_states
+    ]
+    runs.sort(
+        key=lambda item: (
+            0 if item.get("status") in {"running", "awaiting_fallback_approval"} else 1,
+            int(item.get("queue_position") or 0),
+            item.get("created_at") or "",
+        )
+    )
+    for item in runs:
+        owner = item.get("owner") or item.get("created_by") or item.get("operator")
+        item["can_cancel"] = actor is None or role == "admin" or actor == owner
+        item["can_reassign"] = bool(role == "admin" and item.get("status") == "queued")
+    return {
+        "capacity": MAX_ACTIVE_RUNS,
+        "active_count": sum(item.get("status") != "queued" for item in runs),
+        "queued_count": sum(item.get("status") == "queued" for item in runs),
+        "runs": runs,
+    }
+
+
+@router.get("/scan-runs/{run_id}/audit")
+def scan_run_audit(run_id: str, limit: int = Query(default=200, ge=1, le=1000)) -> list[dict]:
+    if get_scan_run_plan(run_id, DB_PATH) is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    return scan_audit_history(DB_PATH, run_id, limit)
 
 
 @router.post("/scan-runs/delete-challenge")
@@ -2688,6 +3760,13 @@ def scan_interfaces() -> dict:
 @router.get("/scan-runs")
 def scan_run_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
     return list_scan_run_plans(limit=limit)
+
+
+@router.get("/scan-runs-grouped")
+def grouped_scan_run_history(
+    limit: int = Query(default=200, ge=1, le=200),
+) -> list[dict]:
+    return group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit))
 
 
 @router.get("/scan-runs/{run_id}")
@@ -2740,4 +3819,16 @@ def import_history_detail(sha256: str) -> dict:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
+    from app.identity import enrich_analysis_macs
+    from app.network_map import build_topology
+    item["analysis"] = enrich_analysis_macs(
+        item.get("analysis") or {},
+        build_topology(),
+        direct_source_label=item.get("filename") or "Imported Nmap XML",
+        direct_source_url=f"/api/imports/{sha256}/raw",
+    )
+    from app.identity_overrides import apply_analysis_os_overrides
+    item["analysis"] = apply_analysis_os_overrides(item["analysis"], DB_PATH)
+    from app.host_identities import apply_analysis_host_identities
+    item["analysis"] = apply_analysis_host_identities(item["analysis"], DB_PATH)
     return item

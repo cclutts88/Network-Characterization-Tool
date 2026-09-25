@@ -19,16 +19,27 @@ from app.mac_enrichment import (
     parse_neighbor_text,
 )
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
+from app.ip_sort import ip_sort_key
+from app.identity_overrides import apply_inference_reviews, apply_os_overrides
+from app.host_identities import apply_topology_host_identities
+from app.os_inference import infer_os_identity, os_display
+from app.switching import interface_key, merge_switch_interfaces, parse_switch_evidence
 from app.topology_neighbors import parse_topology_neighbors
 
 
 router = APIRouter(prefix="/api/network-map", tags=["network-map"])
 
+# Keep this aligned with the retained device-collection limit. The map needs
+# interface and topology evidence from large configurations even though it
+# deliberately does not return the full routing table to the browser.
+MAX_MAP_CONFIG_BYTES = 100 * 1024 * 1024
+
 IPV4_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 CIDR_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}(?![\w.])")
 VIA_RE = re.compile(r"\bvia\s+((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
+NEXT_HOP_RE = re.compile(r"\bnext-hop\s+['\"]?((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
 INTERFACE_RE = re.compile(r"\b(?:dev\s+)?([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b")
-DIRECT_MARKERS = ("directly connected", " connected", "direct/", "link#")
+DIRECT_MARKERS = ("directly connected", " connected", "direct/", "link#", "scope link")
 MAC_CANDIDATE_RE = re.compile(
     r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])"
     r"|(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{4}\.){2}[0-9A-Fa-f]{4}(?![0-9A-Fa-f])"
@@ -45,6 +56,28 @@ def valid_ip(value: object) -> str | None:
     except ValueError:
         return None
     return str(parsed)
+
+
+def container_default_gateway() -> str | None:
+    """Return Docker's private bridge gateway without classifying it as mission evidence."""
+    if not Path("/.dockerenv").exists():
+        return None
+    try:
+        rows = Path("/proc/net/route").read_text(encoding="utf-8").splitlines()[1:]
+    except OSError:
+        return None
+    for row in rows:
+        fields = row.split()
+        if len(fields) < 4 or fields[1] != "00000000":
+            continue
+        try:
+            if not int(fields[3], 16) & 0x2:
+                continue
+            octets = bytes.fromhex(fields[2])[::-1]
+            return valid_ip(".".join(str(value) for value in octets))
+        except (ValueError, IndexError):
+            continue
+    return None
 
 
 def valid_network(value: object) -> str | None:
@@ -119,7 +152,7 @@ def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
     for key in ("hostname", "role", "vendor", "mac", "os", "state"):
         if values.get(key) and not node.get(key):
             node[key] = values[key]
-    if values.get("role") in {"router", "firewall"}:
+    if values.get("role") in {"router", "firewall", "switch"}:
         node["kind"] = "device"
     elif values.get("kind") == "gateway" and node["kind"] == "host":
         node["kind"] = "gateway"
@@ -240,6 +273,21 @@ def apply_subnet_zone(subnet: dict, zone: str | None, source: dict | None = None
     subnet["label"] = f"{' / '.join(zones)} · {subnet['network']}"
     if source:
         add_source(subnet, source)
+
+
+def apply_saved_network_names(nodes: dict[str, dict], saved_networks: list[dict]) -> None:
+    """Prefer analyst-assigned Saved Network names while retaining the CIDR."""
+    names_by_cidr = {
+        str(item.get("cidr") or ""): str(item.get("name") or "").strip()
+        for item in saved_networks
+        if item.get("active", True)
+    }
+    for subnet in (node for node in nodes.values() if node.get("kind") == "subnet"):
+        name = names_by_cidr.get(str(subnet.get("network") or ""))
+        if not name:
+            continue
+        subnet["saved_network_name"] = name
+        subnet["label"] = f"{name} · {subnet['network']}"
 
 
 def ensure_interface_node(nodes: dict[str, dict], device: dict, name: str,
@@ -422,6 +470,7 @@ def add_analysis_hosts(
     edges: dict[tuple[str, str, str], dict] | None = None,
 ) -> int:
     added = 0
+    tool_gateway = container_default_gateway()
     for host in analysis.get("hosts") or []:
         ip = valid_ip(host.get("ip"))
         if not ip:
@@ -479,6 +528,20 @@ def add_analysis_hosts(
                 hop_ip = valid_ip(hop.get("ip"))
                 if not hop_ip:
                     continue
+                path.append(
+                    {
+                        "ttl": hop.get("ttl"),
+                        "rtt": hop.get("rtt"),
+                        "ip": hop_ip,
+                        "hostname": hop.get("hostname"),
+                        "tool_local": bool(not previous_id and tool_gateway == hop_ip),
+                    }
+                )
+                # Docker's bridge gateway is part of the scanner runtime, not the
+                # assessed network. Preserve it in the raw path while keeping it
+                # out of the mission topology and layout calculations.
+                if not previous_id and tool_gateway == hop_ip:
+                    continue
                 hop_node = (
                     destination
                     if hop_ip == ip
@@ -489,14 +552,6 @@ def add_analysis_hosts(
                         kind="gateway",
                         source=source,
                     )
-                )
-                path.append(
-                    {
-                        "ttl": hop.get("ttl"),
-                        "rtt": hop.get("rtt"),
-                        "ip": hop_ip,
-                        "hostname": hop.get("hostname"),
-                    }
                 )
                 if edges is not None and previous_id and previous_id != hop_node["id"]:
                     add_edge(
@@ -666,10 +721,10 @@ def interface_name(line: str) -> str | None:
     if not stripped:
         return None
     first = stripped.split()[0].rstrip(":,")
-    # FreeBSD ifconfig emits a link-layer line such as ``ether <mac>``.
-    # ``ether`` begins with ``eth`` but is not an interface name; do not let
-    # it replace the preceding vtnet/igb/etc. header while parsing addresses.
-    if first.lower() == "ether":
+    # FreeBSD ifconfig and Linux `ip -details` emit type/detail lines beginning
+    # with ``ether`` or ``bridge``. They are not interface headers; do not let
+    # them replace the preceding vtnet/igb/br/etc. name while parsing addresses.
+    if first.lower() in {"ether", "bridge"}:
         return None
     if re.fullmatch(
         r"(?:eth|ens|enp|lo|bond|br|bridge|vlan|ge-|xe-|em|fxp|vtnet|vmx|ix|igb|lagg|tap|tun|wg|enc|pflog|pfsync|pppoe|gif|gre)[A-Za-z0-9_.:/-]*",
@@ -677,8 +732,45 @@ def interface_name(line: str) -> str | None:
         re.I,
     ):
         return first
+    linux_dev = re.search(r"\bdev\s+([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b", line, re.I)
+    if linux_dev:
+        return linux_dev.group(1)
+    cisco_route_interface = re.search(
+        r",\s*((?:Fast|Gigabit|TenGigabit|TwentyFiveGigE|FortyGigabit|HundredGigE)?Ethernet"
+        r"|Serial|Loopback|Vlan|Port-channel|Tunnel|Dialer|Null)[A-Za-z0-9_.:/-]*\s*$",
+        line,
+        re.I,
+    )
+    if cisco_route_interface:
+        return cisco_route_interface.group(0).lstrip(", ").strip()
     direct = re.search(r"directly connected,\s*([A-Za-z0-9_.:/-]+)", line, re.I)
     return direct.group(1).rstrip(",") if direct else None
+
+
+def route_sort_key(route: dict) -> tuple:
+    """Return a stable network order without changing routing semantics."""
+    try:
+        network = ipaddress.ip_network(str(route.get("network") or ""), strict=False)
+        version = network.version
+        address = int(network.network_address)
+        prefix = -network.prefixlen
+    except ValueError:
+        version, address, prefix = 99, 0, 0
+    via = str(route.get("via") or "")
+    try:
+        parsed_via = ipaddress.ip_address(via)
+        via_key = (parsed_via.version, int(parsed_via))
+    except ValueError:
+        via_key = (99, via.casefold())
+    return (
+        version,
+        address,
+        prefix,
+        0 if route.get("direct") else 1,
+        via_key,
+        str(route.get("interface") or "").casefold(),
+        str(route.get("line") or "").casefold(),
+    )
 
 
 def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
@@ -690,6 +782,8 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
     interface_macs: dict[str, str] = {}
     interface_mac_evidence: dict[str, str] = {}
     current_iface: str | None = None
+    current_cisco_route_network: str | None = None
+    current_cisco_route_code: str | None = None
 
     def set_zone(name: str | None, value: str | None) -> None:
         if not name or not value:
@@ -717,6 +811,9 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
         line = raw_line.strip()
         if not line:
             continue
+        if line.startswith("====="):
+            current_cisco_route_network = None
+            current_cisco_route_code = None
         ifconfig_header = re.match(r"^([A-Za-z][A-Za-z0-9_.:/-]*):\s+(?:flags|link|mtu)\b", line, re.I)
         ip_header = re.match(r"^\d+:\s+([^:@\s]+)(?:@[^:]+)?:", line)
         config_header = re.match(r"^interface\s+([A-Za-z0-9_.:/-]+)\b", line, re.I)
@@ -821,10 +918,132 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             if prefix is not None:
                 add_interface(current_iface, f"{cisco_address.group(1)}/{prefix}")
 
+        # Cisco operational routing output can omit ``/32`` from learned host
+        # routes even though the destination is a single address. Retain those
+        # routes (and any indented equal-cost continuation paths) instead of
+        # requiring CIDR notation that is not present in the device output.
+        cisco_operational_route = re.match(
+            r"^(?P<code>[A-Za-z][A-Za-z0-9*+]*(?:\s+[A-Za-z][A-Za-z0-9*+]*)?)\s+"
+            r"(?P<destination>(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?)\s+"
+            r"(?P<body>(?:\[[^\]]+\]\s+)?(?:via\b|is\s+directly\s+connected\b).*)$",
+            line,
+            re.I,
+        )
+        if cisco_operational_route:
+            destination = cisco_operational_route.group("destination")
+            network = valid_network(
+                destination if "/" in destination else f"{destination}/32"
+            )
+            body = cisco_operational_route.group("body")
+            via_match = VIA_RE.search(body)
+            via = valid_ip(via_match.group(1)) if via_match else None
+            direct = "directly connected" in body.lower()
+            iface = interface_name(line)
+            if network and (direct or via):
+                route_key = (network, via, iface, direct)
+                if route_key not in seen_routes:
+                    routes.append(
+                        {
+                            "network": network,
+                            "via": via,
+                            "interface": iface,
+                            "direct": direct,
+                            "line": line[:500],
+                        }
+                    )
+                    seen_routes.add(route_key)
+                current_cisco_route_network = network
+                current_cisco_route_code = cisco_operational_route.group("code")
+        else:
+            cisco_continuation = re.match(
+                r"^(?:\[[^\]]+\]\s+)?via\s+((?:\d{1,3}\.){3}\d{1,3})\b.*$",
+                line,
+                re.I,
+            )
+            if (
+                cisco_continuation
+                and current_cisco_route_network
+                and raw_line[:1].isspace()
+            ):
+                via = valid_ip(cisco_continuation.group(1))
+                iface = interface_name(line)
+                route_key = (current_cisco_route_network, via, iface, False)
+                if via and route_key not in seen_routes:
+                    evidence = f"{current_cisco_route_code or ''} {line}".strip()
+                    routes.append(
+                        {
+                            "network": current_cisco_route_network,
+                            "via": via,
+                            "interface": iface,
+                            "direct": False,
+                            "line": evidence[:500],
+                        }
+                    )
+                    seen_routes.add(route_key)
+
+        route_parts = line.strip(" ;").split()
+        lower_route_parts = [value.lower() for value in route_parts]
+        explicit_route: tuple[str, str | None, str | None] | None = None
+        if len(route_parts) >= 4 and lower_route_parts[:2] == ["ip", "route"]:
+            destination = route_parts[2]
+            remaining = route_parts[3:]
+            network = valid_network(destination) if "/" in destination else None
+            if network is None and remaining:
+                prefix = prefix_from_netmask(remaining[0])
+                if prefix is not None:
+                    network = valid_network(f"{destination}/{prefix}")
+                    remaining = remaining[1:]
+            gateway = next((valid_ip(value) for value in remaining if valid_ip(value)), None)
+            route_interface = next(
+                (value for value in remaining if not valid_ip(value)), None
+            )
+            if network and gateway:
+                explicit_route = (network, gateway, route_interface)
+        elif len(route_parts) >= 5 and lower_route_parts[0] == "route":
+            prefix = prefix_from_netmask(route_parts[3])
+            gateway = valid_ip(route_parts[4])
+            network = (
+                valid_network(f"{route_parts[2]}/{prefix}")
+                if prefix is not None
+                else None
+            )
+            if network and gateway:
+                explicit_route = (network, gateway, route_parts[1])
+        if explicit_route:
+            network, gateway, route_interface = explicit_route
+            route_key = (network, gateway, route_interface, False)
+            if route_key not in seen_routes:
+                routes.append(
+                    {
+                        "network": network,
+                        "via": gateway,
+                        "interface": route_interface,
+                        "direct": False,
+                        "line": line[:500],
+                    }
+                )
+                seen_routes.add(route_key)
+
+        if route_parts and lower_route_parts[0] == "default":
+            gateway = next((valid_ip(value) for value in route_parts[1:] if valid_ip(value)), None)
+            route_interface = interface_name(line)
+            route_key = ("0.0.0.0/0", gateway, route_interface, False)
+            if (gateway or route_interface) and route_key not in seen_routes:
+                routes.append(
+                    {
+                        "network": "0.0.0.0/0",
+                        "via": gateway,
+                        "interface": route_interface,
+                        "direct": False,
+                        "line": line[:500],
+                    }
+                )
+                seen_routes.add(route_key)
+
         lower = f" {line.lower()}"
         cidrs = [valid_network(value) for value in CIDR_RE.findall(line)]
         cidrs = [value for value in cidrs if value]
-        via_match = VIA_RE.search(line)
+        via_match = VIA_RE.search(line) or NEXT_HOP_RE.search(line)
         via = valid_ip(via_match.group(1)) if via_match else None
         direct = any(marker in lower for marker in DIRECT_MARKERS)
         iface = interface_name(line)
@@ -884,7 +1103,161 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             zone = zone_by_interface.get(name.rsplit(".", 1)[0])
         if zone:
             interface["zone"] = zone
+    routes.sort(key=route_sort_key)
     return interfaces, routes
+
+
+def configuration_network_candidates(
+    *,
+    config_dir: Path | None = None,
+    db_path: Path | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Return review-only IPv4 subnet candidates found in saved device configs."""
+    from app.saved_networks import list_saved_networks
+
+    config_dir = CONFIG_DIR if config_dir is None else config_dir
+    db_path = DB_PATH if db_path is None else db_path
+    saved_by_cidr = {
+        item["cidr"]: item
+        for item in list_saved_networks(db_path, include_archived=True)
+    }
+    candidates: dict[str, dict] = {}
+
+    def add_candidate(network_value: str, source: dict) -> None:
+        network = ipaddress.ip_network(network_value, strict=False)
+        if (
+            network.version != 4
+            or network.prefixlen in {0, 32}
+            or network.is_loopback
+            or network.is_link_local
+            or network.is_multicast
+            or network.is_unspecified
+        ):
+            return
+        cidr = str(network)
+        if cidr in saved_by_cidr:
+            return
+        label = source.get("zone") or source.get("device_name") or source.get("interface")
+        suggested_name = f"{label} · {cidr}" if label else cidr
+        if len(suggested_name) > 100:
+            suggested_name = f"{suggested_name[: max(0, 97 - len(cidr))].rstrip()} · {cidr}"
+        record = candidates.setdefault(
+            cidr,
+            {
+                "cidr": cidr,
+                "suggested_name": suggested_name,
+                "category": "Device configuration",
+                "tags": ["config-derived"],
+                "description": "",
+                "sources": [],
+            },
+        )
+        # Manifests are newest-first. Keep one useful provenance row for the
+        # same device/interface path instead of repeating it for every pull or
+        # for both an interface address and its equivalent connected route.
+        signature = (
+            source.get("device_address") or source.get("device_name"),
+            source.get("interface"),
+            source.get("zone"),
+            None if source.get("interface") or source.get("zone") else source.get("kind"),
+        )
+        if signature not in {
+            (
+                item.get("device_address") or item.get("device_name"),
+                item.get("interface"), item.get("zone"),
+                None if item.get("interface") or item.get("zone") else item.get("kind"),
+            )
+            for item in record["sources"]
+        }:
+            record["sources"].append(source)
+
+    if not config_dir.exists():
+        return []
+    manifests = sorted(
+        config_dir.glob("*/manifest.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    for manifest_path in manifests:
+        try:
+            manifest = json.loads(manifest_path.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("status") not in {"completed", "uploaded"}:
+            continue
+        run_dir = manifest_path.parent
+        artifacts = sorted(path for path in run_dir.glob("uploaded-*") if path.is_file())
+        if not artifacts:
+            artifacts = sorted(path for path in run_dir.glob("*-config.txt") if path.is_file())
+        if not artifacts and (run_dir / "stdout.txt").is_file():
+            artifacts = [run_dir / "stdout.txt"]
+        if not artifacts:
+            continue
+        try:
+            text = "\n".join(path.read_text(errors="replace") for path in artifacts)
+        except OSError:
+            continue
+        interfaces, routes = parse_config_text(text)
+        device_name = manifest.get("device_name") or manifest.get("device_address")
+        common = {
+            "run_id": manifest.get("run_id") or run_dir.name,
+            "device_name": device_name,
+            "device_address": manifest.get("device_address"),
+            "vendor": manifest.get("vendor"),
+            "observed_at": manifest.get("completed_at") or manifest.get("created_at"),
+        }
+        for interface in interfaces:
+            address = valid_interface_address(interface.get("address"))
+            if not address:
+                continue
+            network = str(ipaddress.ip_interface(address).network)
+            add_candidate(
+                network,
+                {
+                    **common,
+                    "kind": "interface",
+                    "interface": interface.get("name"),
+                    "zone": interface.get("zone"),
+                    "evidence": address,
+                },
+            )
+        for route in routes:
+            network = valid_network(route.get("network"))
+            if not network:
+                continue
+            add_candidate(
+                network,
+                {
+                    **common,
+                    "kind": "connected route" if route.get("direct") else "route",
+                    "interface": route.get("interface"),
+                    "zone": None,
+                    "evidence": route.get("line"),
+                },
+            )
+
+    for record in candidates.values():
+        source_labels = []
+        for source in record["sources"]:
+            label = source.get("device_name") or source.get("device_address") or "device config"
+            if source.get("zone"):
+                label += f" zone {source['zone']}"
+            elif source.get("interface"):
+                label += f" interface {source['interface']}"
+            if label not in source_labels:
+                source_labels.append(label)
+        record["description"] = (
+            "Identified from " + ", ".join(source_labels[:4])
+            + ". Review authorization before scanning."
+        )[:500]
+    return sorted(
+        candidates.values(),
+        key=lambda item: (
+            int(ipaddress.ip_network(item["cidr"]).network_address),
+            ipaddress.ip_network(item["cidr"]).prefixlen,
+        ),
+    )
 
 
 def replace_edge_node(edges: dict[tuple[str, str, str], dict], old_id: str, new_id: str) -> None:
@@ -948,7 +1321,7 @@ def config_result_text(run_dir: Path, manifest: dict) -> tuple[str, str | None]:
         path for path in run_dir.glob("uploaded-*") if path.is_file()
     )
     for path in candidates:
-        if not path.is_file() or path.stat().st_size > 2_000_000:
+        if not path.is_file() or path.stat().st_size > MAX_MAP_CONFIG_BYTES:
             continue
         try:
             return path.read_text(encoding="utf-8", errors="replace"), path.name
@@ -1015,6 +1388,26 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             node["state"] = "partial"
         parsed_devices.add(node["id"])
         interfaces, routes = parse_config_text(text)
+        declared_roles = {
+            str(item).lower()
+            for item in (manifest.get("device_types") or [manifest.get("device_type")])
+            if item
+        }
+        analyzed_roles = set(declared_roles & {"router", "firewall", "switch"})
+        if routes and declared_roles & {"router", "firewall"}:
+            analyzed_roles.add("router")
+        if declared_roles & {"router", "firewall"} and re.search(
+            r"(?im)^\*filter\s*$|^(?:ip\s+)?access-list\b|\bset\s+(?:firewall|security\s+policies)\b",
+            text,
+        ):
+            analyzed_roles.add("firewall")
+        role_order = ("router", "firewall", "switch")
+        node["roles"] = [role for role in role_order if role in analyzed_roles]
+        node["role_label"] = " + ".join(role.title() for role in node["roles"])
+        if {"router", "firewall"}.issubset(analyzed_roles):
+            node["role"] = "firewall"
+        switch_detail = parse_switch_evidence(text, manifest.get("commands", []))
+        interfaces = merge_switch_interfaces(interfaces, switch_detail)
         neighbors = parse_neighbor_text(text)
         topology_neighbors = parse_topology_neighbors(text)
         interfaces = [
@@ -1027,7 +1420,12 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             )
         ]
         node["interfaces"] = interfaces
-        node["routes"] = routes
+        # Routes are consumed below to build topology relationships, but the
+        # full list can contain tens of thousands of entries and is not useful
+        # in the map details pane. Reach and Analyze read the retained source
+        # independently when they need the complete routing table.
+        node["routes"] = []
+        node["switching"] = switch_detail
         for interface in interfaces:
             address = valid_interface_address(interface.get("address"))
             if address:
@@ -1080,6 +1478,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                     source,
                 )
             interface_nodes[name] = interface_node
+            if interface.get("switching"):
+                interface_node["switching"] = interface["switching"]
             add_edge(
                 edges,
                 node["id"],
@@ -1179,6 +1579,71 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 observation.get("evidence"),
                 True,
             )
+            if local_interface:
+                local_key = interface_key(local_interface)
+                for switch_port in switch_detail.get("ports", []):
+                    if interface_key(switch_port.get("interface")) == local_key:
+                        switch_port["uplink"] = True
+                        switch_port["neighbor"] = (
+                            observation.get("neighbor_name")
+                            or observation.get("management_ip")
+                            or observation.get("chassis_id")
+                        )
+                        break
+        switch_source = source_record(
+            "switch_forwarding_table",
+            f"{manifest.get('vendor', 'device')} learned MAC table",
+            source["timestamp"],
+            evidence_url,
+        )
+        interface_nodes_by_key = {
+            interface_key(name): interface_node for name, interface_node in interface_nodes.items()
+        }
+        for observation in switch_detail.get("mac_table", []):
+            learned_mac = normalize_mac(observation.get("mac"))
+            if not learned_mac:
+                continue
+            candidates = []
+            for candidate in nodes.values():
+                if candidate["id"] == node["id"] or candidate.get("kind") in {"interface", "subnet"}:
+                    continue
+                candidate_macs = {normalize_mac(candidate.get("mac"))}
+                candidate_macs.update(
+                    normalize_mac(item.get("mac"))
+                    for item in candidate.get("mac_observations") or []
+                )
+                if learned_mac in candidate_macs:
+                    candidates.append(candidate)
+            if not candidates:
+                continue
+            origin = interface_nodes_by_key.get(interface_key(observation.get("interface"))) or node
+            for candidate in candidates:
+                add_source(candidate, switch_source)
+                port_observation = {
+                    **observation,
+                    "switch_id": node["id"],
+                    "switch_label": node.get("label"),
+                    "source_kind": switch_source["kind"],
+                    "source_label": switch_source["label"],
+                    "source_url": switch_source["url"],
+                    "timestamp": switch_source["timestamp"],
+                }
+                if port_observation not in candidate.setdefault("switchport_observations", []):
+                    candidate["switchport_observations"].append(port_observation)
+                label_parts = [observation.get("interface") or "switch port"]
+                if observation.get("vlan_id") is not None:
+                    label_parts.append(f"VLAN {observation['vlan_id']}")
+                label_parts.append("learned MAC")
+                add_edge(
+                    edges,
+                    origin["id"],
+                    candidate["id"],
+                    "switchport_learning",
+                    " · ".join(label_parts),
+                    "confirmed",
+                    observation.get("evidence"),
+                    True,
+                )
         for route in routes:
             network = route["network"]
             parsed_network = ipaddress.ip_network(network)
@@ -1292,8 +1757,106 @@ def add_membership_edges(nodes: dict[str, dict], edges: dict[tuple[str, str, str
             break
 
 
+def add_point_to_point_edges(
+    nodes: dict[str, dict],
+    edges: dict[tuple[str, str, str], dict],
+    warnings: list[str],
+) -> None:
+    """Promote confirmed two-ended /30 and /31 segments to device links.
+
+    Only interface evidence on a directly connected subnet is eligible. Static
+    route next hops are intentionally excluded because they do not prove a
+    physical or point-to-point adjacency.
+    """
+    for subnet in sorted(
+        (node for node in nodes.values() if node.get("kind") == "subnet"),
+        key=lambda item: ip_sort_key(item.get("network")),
+    ):
+        try:
+            network = ipaddress.ip_network(str(subnet.get("network") or ""), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4 or network.prefixlen not in {30, 31}:
+            continue
+        endpoints: dict[str, dict] = {}
+        for edge in edges.values():
+            if edge.get("relation") != "directly_connected" or edge.get("target") != subnet["id"]:
+                continue
+            interface = nodes.get(str(edge.get("source") or ""))
+            if not interface or interface.get("kind") != "interface":
+                continue
+            owner_id = str(interface.get("device_id") or "")
+            owner = nodes.get(owner_id)
+            if not owner or owner.get("kind") not in {"device", "gateway"}:
+                continue
+            addresses = interface.get("addresses") or [interface.get("address")]
+            address = None
+            for candidate in addresses:
+                try:
+                    parsed = ipaddress.ip_interface(str(candidate)).ip
+                except ValueError:
+                    continue
+                if parsed in network:
+                    address = str(parsed)
+                    break
+            if not address:
+                continue
+            previous = endpoints.get(owner_id)
+            if previous and previous.get("conflict"):
+                continue
+            if previous and previous.get("address") != address:
+                warnings.append(
+                    f"Point-to-point segment {network} has conflicting interface addresses "
+                    f"for {owner.get('label') or owner_id}; no direct link was inferred."
+                )
+                endpoints[owner_id] = {"conflict": True}
+                continue
+            if not previous:
+                endpoints[owner_id] = {
+                    "owner_id": owner_id,
+                    "address": address,
+                    "interface_id": interface["id"],
+                    "interface_name": interface.get("interface") or interface.get("label") or "interface",
+                }
+        valid_endpoints = [item for item in endpoints.values() if not item.get("conflict")]
+        if len(valid_endpoints) > 2:
+            warnings.append(
+                f"Point-to-point segment {network} is connected to more than two network devices; "
+                "no direct link was inferred."
+            )
+            continue
+        if len(valid_endpoints) != 2 or any(item.get("conflict") for item in endpoints.values()):
+            continue
+        valid_endpoints.sort(
+            key=lambda item: (int(ipaddress.ip_address(item["address"])), item["owner_id"])
+        )
+        first, second = valid_endpoints
+        transit_key = (
+            first["owner_id"], second["owner_id"], f"transit_segment:{network}"
+        )
+        transit = edges.setdefault(transit_key, {
+            "id": f"edge:{len(edges) + 1}",
+            "source": first["owner_id"],
+            "target": second["owner_id"],
+            "relation": "transit_segment",
+            "label": str(network),
+            "confidence": "confirmed",
+            "evidence": f"Confirmed by both device interfaces on {network}",
+            "interface_label": True,
+        })
+        transit.update({
+            "network": str(network),
+            "source_interface_id": first["interface_id"],
+            "source_interface_name": first["interface_name"],
+            "source_interface_address": first["address"],
+            "target_interface_id": second["interface_id"],
+            "target_interface_name": second["interface_name"],
+            "target_interface_address": second["address"],
+        })
+
+
 def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
-    """Retain scanned router/firewall addresses in their owning subnet summary."""
+    """Retain scanned router/firewall/switch addresses in their owning subnet summary."""
     infrastructure_kinds = {"device", "gateway"}
     scanned_devices = [
         node for node in nodes.values()
@@ -1325,9 +1888,18 @@ def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
                         "source_url": observation.get("source_url"),
                     }
                 )
-        observations.sort(key=lambda item: (item["ip"], item["label"]))
+        observations.sort(key=lambda item: (ip_sort_key(item["ip"]), item["label"].casefold()))
         subnet["infrastructure_observations"] = observations
         subnet["infrastructure_count"] = len(observations)
+
+
+def annotate_os_inferences(nodes: dict[str, dict]) -> None:
+    """Add non-destructive OS hints after all service and device evidence is merged."""
+    for node in nodes.values():
+        if node.get("kind") not in {"host", "device", "gateway"}:
+            continue
+        node["os_inference"] = infer_os_identity(node)
+        node["os_display"] = os_display(node)
 
 
 def build_topology() -> dict:
@@ -1337,11 +1909,38 @@ def build_topology() -> dict:
     imported_count = imported_hosts(nodes, edges, warnings)
     automated_count = automated_scan_hosts(nodes, edges, warnings)
     config_count = configuration_devices(nodes, edges, warnings)
+    apply_topology_host_identities(nodes, DB_PATH)
+    apply_os_overrides(
+        [
+            node for node in nodes.values()
+            if node.get("kind") in {"host", "device", "gateway"}
+        ],
+        DB_PATH,
+    )
+    annotate_os_inferences(nodes)
+    identity_nodes = [
+        node for node in nodes.values()
+        if node.get("kind") in {"host", "device", "gateway"}
+    ]
+    apply_inference_reviews(identity_nodes, DB_PATH)
+    for node in identity_nodes:
+        node["os_display"] = os_display(node)
     add_membership_edges(nodes, edges)
+    add_point_to_point_edges(nodes, edges, warnings)
     annotate_subnet_scan_observations(nodes)
+    try:
+        from app.saved_networks import list_saved_networks
+
+        apply_saved_network_names(nodes, list_saved_networks(DB_PATH))
+    except sqlite3.Error as exc:
+        warnings.append(f"Saved Network names could not be loaded for the map: {exc}")
     node_list = sorted(
         nodes.values(),
-        key=lambda item: ({"device": 0, "gateway": 1, "interface": 2, "subnet": 3, "host": 4}.get(item["kind"], 5), item["label"]),
+        key=lambda item: (
+            {"device": 0, "gateway": 1, "interface": 2, "subnet": 3, "host": 4}.get(item["kind"], 5),
+            ip_sort_key(item.get("ip") or item.get("network") or item.get("address") or item.get("label")),
+            str(item.get("label") or "").casefold(),
+        ),
     )
     for node in node_list:
         node["sources"].sort(key=lambda item: item.get("timestamp") or "", reverse=True)
@@ -1366,6 +1965,9 @@ def build_topology() -> dict:
         ),
         "topology_neighbors": sum(
             1 for edge in edges.values() if edge.get("relation") == "topology_neighbor"
+        ),
+        "switchport_links": sum(
+            1 for edge in edges.values() if edge.get("relation") == "switchport_learning"
         ),
     }
     if not node_list:

@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+from fastapi.responses import HTMLResponse
+
+
+def hostname_page() -> HTMLResponse:
+    return HTMLResponse(
+        r'''<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NCT · Hostnames</title>
+  <style>
+    :root{color-scheme:dark;--bg:#091016;--panel:#111c25;--line:#263f49;--text:#edf6fb;--muted:#9eb0b8;--accent:#53d1b6;--blue:#64a9ff;--good:#61d095;--warn:#ffc66d;--bad:#ff837a}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#102c35,#091016 44%);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}header,main{max-width:1480px;margin:auto}header{position:sticky;top:0;z-index:100;padding:16px 0 14px;border-bottom:1px solid var(--line);background:rgba(9,16,22,.96);backdrop-filter:blur(14px);box-shadow:0 9px 24px #0006}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;color:var(--text);line-height:1;text-align:center}.nct-brand>strong{padding-left:.24em;font-size:40px;letter-spacing:.24em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}.nct-brand span b{color:var(--accent);font-size:1.16em;font-weight:950}.nav{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin-top:8px}.nav a{border:1px solid #315264;background:#142d38;color:#b9cadc;border-radius:7px;padding:6px 13px;text-decoration:none;font-weight:700}.nav a.active{background:var(--accent);border-color:var(--accent);color:#07171b}main{padding:24px 0 60px}.panel{margin-bottom:18px;padding:20px;border:1px solid var(--line);border-radius:13px;background:rgba(17,28,37,.95);box-shadow:0 12px 38px #0004}h2{margin:0 0 8px;font-size:20px}h3{margin:0 0 6px}.meta,.hint{color:var(--muted)}.notice{padding:12px 14px;border:1px solid #3d6e61;border-radius:9px;background:#102a27;color:#b9f0e2}.cards{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:9px;margin-top:14px}.card{padding:12px;border:1px solid var(--line);border-radius:9px;background:#0b171f}.card b{display:block;color:var(--blue);font-size:22px}.methods{display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:10px;margin-top:14px}.method{padding:13px;border:1px solid var(--line);border-radius:9px;background:#0b171f}.method strong{display:flex;align-items:center;justify-content:space-between;gap:8px}.method p{margin:7px 0 0;color:var(--muted)}.mode{padding:2px 7px;border:1px solid #406b60;border-radius:99px;color:#b9f0e2;font-size:10px;text-transform:uppercase}.controls{display:grid;grid-template-columns:minmax(240px,1.4fr) minmax(190px,.7fr) auto;gap:10px;align-items:end}.import-grid{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end}.actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center}label{display:block;margin:5px 0;color:#bed0da;font-size:12px;font-weight:700}input,select{width:100%;padding:10px 11px;border:1px solid #344754;border-radius:8px;background:#0b141b;color:var(--text);font:inherit}button{padding:9px 12px;border:1px solid #3b6f91;border-radius:7px;background:#174665;color:#fff;font:inherit;font-weight:750;cursor:pointer}button.secondary{background:transparent;border-color:#49617d}button:disabled{opacity:.5;cursor:not-allowed}.status{min-height:22px;margin-top:10px;color:var(--muted)}.status.good{color:var(--good)}.status.bad{color:var(--bad)}.status.warn{color:var(--warn)}.table-wrap{overflow:auto;max-height:62vh;border:1px solid var(--line);border-radius:9px}table{width:100%;min-width:1280px;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{position:sticky;top:0;z-index:3;background:#0b171f;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em}td{font-size:12px}.ip{font-weight:800;color:#dcecf5}.candidate{display:block;width:100%;margin:0 0 5px;padding:6px 7px;border-color:#315264;background:#0d2029;text-align:left;font-size:11px;font-weight:650}.candidate.selected{border-color:var(--accent);background:#17483f;color:#e8fff9}.candidate small{display:block;margin-top:2px;color:var(--muted);font-weight:500}.empty{color:#657984}.operator-entry{display:grid;grid-template-columns:1fr auto;gap:5px}.selected-name{color:#b9f0e2;font-weight:800}.selected-name small{display:block;color:var(--muted);font-weight:500}.source-chip{display:inline-block;margin-top:5px;padding:2px 6px;border:1px solid #406b60;border-radius:99px;color:#b9f0e2;font-size:10px}.evidence-link{display:inline-block;margin:2px 7px 0 0;color:#9cd4ff;font-size:10px}.lease{color:#ffe3a8!important}.hidden{display:none!important}.collector-grid{display:grid;grid-template-columns:repeat(2,minmax(300px,1fr));gap:10px;margin:14px 0}.collector{border:1px solid var(--line);border-radius:9px;background:#0b171f;overflow:hidden}.collector summary{padding:13px;cursor:pointer;color:#dcecf5;font-weight:800}.collector-body{padding:0 13px 13px}.collector-body p{color:var(--muted)}.script-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:8px 0}.script-head strong{color:#b9f0e2}pre{max-height:340px;overflow:auto;margin:0;padding:12px;border:1px solid #29424e;border-radius:8px;background:#071016;color:#d7edf5;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.collection-upload{display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr) auto;gap:10px;align-items:end;margin-top:14px}.collection-note{padding:10px 12px;border-left:3px solid var(--blue);background:#0c1b25;color:var(--muted)}@media(max-width:1500px){header,main{padding-left:3vw;padding-right:3vw}}@media(max-width:900px){.methods,.collector-grid{grid-template-columns:1fr 1fr}.controls,.import-grid,.collection-upload{grid-template-columns:1fr 1fr}.cards{grid-template-columns:1fr 1fr}}@media(max-width:620px){.methods,.collector-grid,.controls,.import-grid,.collection-upload{grid-template-columns:1fr}}
+  </style>
+  <script src="/assets/nct-session.js" defer></script>
+</head>
+<body>
+  <header><h1 class="sr-only">Hostnames</h1><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div><nav class="nav" aria-label="Primary"><a href="/device-config">Device</a><a href="/scans">Nmap</a><a class="active" href="/hostnames" aria-current="page">Hostnames</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/reachability">Reach</a><a href="/network-map">Map</a></nav></header>
+  <main>
+    <section class="panel">
+      <h2>Hostname evidence workspace</h2>
+      <p class="hint">Review every retained name for an IP, then select the name NCT should use. Selecting a candidate preserves its source instead of hiding conflicting evidence.</p>
+      <div class="notice"><strong>No network contact:</strong> Refreshing this page only reads completed Nmap scans, saved router/firewall/switch pulls, and operator imports already retained by NCT.</div>
+      <div id="summaryCards" class="cards"></div>
+      <div id="methods" class="methods"></div>
+    </section>
+    <section class="panel">
+      <h2>Collect from DHCP and DNS servers</h2>
+      <p class="hint">Run the matching read-only collection on an authorized server, then upload its output here. NCT retains the result and does not contact the server when this page is refreshed.</p>
+      <div class="collector-grid">
+        <details class="collector">
+          <summary>Windows Server 2012 and newer</summary>
+          <div class="collector-body">
+            <p>Uses the installed DHCP and DNS PowerShell modules. Change <code>$Server</code> only when collecting from a different authorized Windows server.</p>
+            <div class="script-head"><strong>PowerShell</strong><button type="button" class="secondary" data-copy-target="windowsModern">Copy</button></div>
+            <pre id="windowsModern">$Server = $env:COMPUTERNAME
+$Out = Join-Path (Get-Location) "nct-hostname-evidence-windows.csv"
+$Observed = (Get-Date).ToUniversalTime().ToString("o")
+$Rows = @()
+
+Import-Module DhcpServer -ErrorAction SilentlyContinue
+if (Get-Command Get-DhcpServerv4Scope -ErrorAction SilentlyContinue) {
+  Get-DhcpServerv4Scope -ComputerName $Server | ForEach-Object {
+    Get-DhcpServerv4Lease -ComputerName $Server -ScopeId $_.ScopeId | Where-Object { $_.HostName } | ForEach-Object {
+      $Rows += New-Object PSObject -Property ([ordered]@{
+        source="dhcp"; ip=$_.IPAddress.IPAddressToString; hostname=$_.HostName.TrimEnd(".")
+        lease_expires_at=if ($_.LeaseExpiryTime) {$_.LeaseExpiryTime.ToUniversalTime().ToString("o")} else {""}
+        observed_at=$Observed
+      })
+    }
+  }
+}
+
+Import-Module DnsServer -ErrorAction SilentlyContinue
+if (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue) {
+  Get-DnsServerZone -ComputerName $Server | Where-Object { -not $_.IsReverseLookupZone -and $_.ZoneType -ne "Cache" } | ForEach-Object {
+    $Zone = $_.ZoneName
+    Get-DnsServerResourceRecord -ComputerName $Server -ZoneName $Zone -RRType A | ForEach-Object {
+      $Name = if ($_.HostName -eq "@") {$Zone} else {"$($_.HostName).$Zone"}
+      $Rows += New-Object PSObject -Property ([ordered]@{
+        source="dns"; ip=$_.RecordData.IPv4Address.IPAddressToString; hostname=$Name.TrimEnd(".")
+        lease_expires_at=""; observed_at=$Observed
+      })
+    }
+  }
+}
+
+$Rows | Export-Csv -Path $Out -NoTypeInformation -Encoding UTF8
+Write-Host "Created $Out with $($Rows.Count) rows"</pre>
+          </div>
+        </details>
+        <details class="collector">
+          <summary>Legacy Windows Server fallback</summary>
+          <div class="collector-body">
+            <p>For older systems without the DHCP/DNS PowerShell modules. Enter the approved scope IDs and forward lookup zones before running.</p>
+            <div class="script-head"><strong>PowerShell with netsh and dnscmd</strong><button type="button" class="secondary" data-copy-target="windowsLegacy">Copy</button></div>
+            <pre id="windowsLegacy">$Server = $env:COMPUTERNAME
+$Scopes = @("10.0.0.0")       # Replace with DHCP scope IDs
+$Zones = @("example.local")   # Replace with forward lookup zones
+$Out = Join-Path (Get-Location) "nct-hostname-evidence-windows-legacy.txt"
+
+"# NCT legacy Windows DHCP and DNS evidence" | Out-File $Out -Encoding utf8
+foreach ($Scope in $Scopes) {
+  "===== DHCP scope $Scope =====" | Out-File $Out -Append -Encoding utf8
+  netsh dhcp server "\\$Server" scope $Scope show clients 1 | Out-File $Out -Append -Encoding utf8
+}
+foreach ($Zone in $Zones) {
+  "===== DNS zone $Zone =====" | Out-File $Out -Append -Encoding utf8
+  dnscmd $Server /enumrecords $Zone @ /type A /additional | Out-File $Out -Append -Encoding utf8
+}
+Write-Host "Created $Out"</pre>
+          </div>
+        </details>
+        <details class="collector">
+          <summary>Linux DHCP and DNS servers</summary>
+          <div class="collector-body">
+            <p>Covers ISC DHCP, dnsmasq, and common BIND layouts used by both current and legacy systems. A Kea <code>kea-leases4.csv</code> file can also be uploaded directly.</p>
+            <div class="script-head"><strong>Shell</strong><button type="button" class="secondary" data-copy-target="linuxCollection">Copy</button></div>
+            <pre id="linuxCollection">OUT="$PWD/nct-hostname-evidence-linux.txt"
+sudo sh -c '
+for file in /var/lib/dhcp/dhcpd.leases /var/lib/dhcpd/dhcpd.leases /var/lib/misc/dnsmasq.leases /var/lib/libvirt/dnsmasq/*.leases; do
+  [ -r "$file" ] || continue
+  echo "===== DHCP leases $file ====="
+  cat "$file"
+done
+for file in /etc/bind/db.* /var/named/*.zone /var/named/data/*.zone; do
+  [ -r "$file" ] || continue
+  zone=$(basename "$file")
+  zone=${zone#db.}
+  zone=${zone%.zone}
+  echo "===== DNS zone $zone ====="
+  cat "$file"
+done
+' &gt; "$OUT"
+echo "Created $OUT"</pre>
+          </div>
+        </details>
+        <details class="collector">
+          <summary>Accountability PCAP</summary>
+          <div class="collector-body">
+            <p>Run this on an authorized Linux collection host or sensor that can see the traffic, then press <code>Ctrl+C</code> afterward. Replace <code>SERVER_IP</code> for a smaller remote-collection capture. A local-file export can legitimately produce an empty capture.</p>
+            <div class="script-head"><strong>Simple tcpdump capture</strong><button type="button" class="secondary" data-copy-target="tcpdumpCommand">Copy</button></div>
+            <pre id="tcpdumpCommand">sudo tcpdump -i any -nn -s 0 -w nct-hostname-collection-accountability.pcap
+
+# Optional remote-server filter:
+sudo tcpdump -i any -nn -s 0 -w nct-hostname-collection-accountability.pcap 'host SERVER_IP'</pre>
+          </div>
+        </details>
+      </div>
+      <div class="collection-note"><strong>Legacy support:</strong> the importer recognizes NCT CSV, raw ISC DHCP lease blocks, dnsmasq leases, Kea lease CSV, BIND A records, and the <code>netsh</code>/<code>dnscmd</code> output generated above.</div>
+      <p class="hint">Collection outputs may be up to 50 MB. The optional PCAP may be up to 100 MB and stays attached to the retained evidence.</p>
+      <form id="evidenceImportForm" class="collection-upload">
+        <div><label for="evidenceFile">DHCP/DNS collection output</label><input id="evidenceFile" type="file" accept=".csv,.txt,.log,text/csv,text/plain" required></div>
+        <div><label for="accountabilityFile">Accountability capture (optional)</label><input id="accountabilityFile" type="file" accept=".pcap,.pcapng,application/vnd.tcpdump.pcap"></div>
+        <button type="submit">Upload server evidence</button>
+      </form>
+      <div id="evidenceImportStatus" class="status" role="status"></div>
+    </section>
+    <section class="panel">
+      <h2>Import operator hostname lists</h2>
+      <p class="hint">Upload UTF-8 CSV with <code>ip,hostname</code> columns or TXT with one <code>IP hostname</code> pair per line. This is the same retained import previously shown on Analyze.</p>
+      <form id="importForm" class="import-grid">
+        <div><label for="identityFile">Completed hostname list</label><input id="identityFile" type="file" accept=".csv,.txt,text/csv,text/plain" required></div>
+        <button type="submit">Import names</button>
+        <button id="csvTemplate" type="button" class="secondary">CSV template</button>
+        <button id="txtTemplate" type="button" class="secondary">TXT template</button>
+      </form>
+      <div id="importStatus" class="status" role="status"></div>
+    </section>
+    <section class="panel">
+      <div class="controls">
+        <div><label for="search">Find an IP or hostname</label><input id="search" type="search" placeholder="IP address or any attained name"></div>
+        <div><label for="bulkSource">Choose one retained source</label><select id="bulkSource"></select></div>
+        <button id="bulkApply" type="button">Use source where available</button>
+      </div>
+      <div class="actions"><button id="refresh" type="button" class="secondary">Refresh retained evidence</button><span id="visibleCount" class="meta"></span></div>
+      <div id="status" class="status" role="status">Loading retained hostname evidence…</div>
+      <div class="table-wrap"><table><thead><tr><th>IP address</th><th>Nmap</th><th>DHCP / lease</th><th>DNS</th><th>LLDP / CDP</th><th>Configuration</th><th>Operator input</th><th>Selected name</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+  </main>
+<script>
+const $=id=>document.getElementById(id),esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const sourceLabels={nmap:'Nmap',dhcp:'DHCP',dns:'DNS',lldp:'LLDP',cdp:'CDP',config:'Configuration',operator:'Operator',operator_input:'Operator',operator_import:'Operator import'};
+let workspace={rows:[],source_counts:{}};
+function setStatus(id,message,kind=''){const node=$(id);node.textContent=message;node.className=`status${kind?' '+kind:''}`}
+function duration(seconds){if(seconds===null||seconds===undefined)return'';seconds=Number(seconds);if(seconds<=0)return'lease expired';const days=Math.floor(seconds/86400),hours=Math.floor((seconds%86400)/3600),minutes=Math.floor((seconds%3600)/60);return days?`${days}d ${hours}h left`:hours?`${hours}h ${minutes}m left`:`${Math.max(1,minutes)}m left`}
+function evidenceMeta(candidate){const pieces=[];if(candidate.lease_time_left_seconds!==null&&candidate.lease_time_left_seconds!==undefined)pieces.push(duration(candidate.lease_time_left_seconds));if(candidate.observed_at)pieces.push(new Date(candidate.observed_at).toLocaleString());const label=pieces.join(' · ');return`${label?`<small class="${candidate.lease_time_left_seconds!==null?'lease':''}">${esc(label)}</small>`:''}${candidate.evidence_url?`<a class="evidence-link" href="${esc(candidate.evidence_url)}" target="_blank" rel="noopener">Open evidence</a>`:''}${candidate.accountability_url?`<a class="evidence-link" href="${esc(candidate.accountability_url)}">PCAP</a>`:''}`}
+function candidateButton(row,candidate){const rawSource=String(row.selected_source||''),selectedSource=rawSource.startsWith('operator')?'operator':rawSource;const selected=row.selected_hostname===candidate.hostname&&selectedSource===candidate.source;return`<button class="candidate${selected?' selected':''}" type="button" data-ip="${esc(row.ip)}" data-name="${esc(candidate.hostname)}" data-source="${esc(candidate.source)}">${esc(candidate.hostname)}${evidenceMeta(candidate)}</button>`}
+function sourceCell(row,sources){const candidates=sources.flatMap(source=>row.candidates[source]||[]);return candidates.length?candidates.map(candidate=>candidateButton(row,candidate)).join(''):'<span class="empty">—</span>'}
+function rowSearch(row){return[row.ip,row.selected_hostname,...Object.values(row.candidates).flat().map(item=>item.hostname)].join(' ').toLowerCase()}
+function renderRows(){const term=$('search').value.trim().toLowerCase(),visible=workspace.rows.filter(row=>!term||rowSearch(row).includes(term));$('visibleCount').textContent=`${visible.length} of ${workspace.rows.length} IP addresses`;$('rows').innerHTML=visible.length?visible.map(row=>`<tr><td><span class="ip">${esc(row.ip)}</span></td><td>${sourceCell(row,['nmap'])}</td><td>${sourceCell(row,['dhcp'])}</td><td>${sourceCell(row,['dns'])}</td><td>${sourceCell(row,['lldp','cdp'])}</td><td>${sourceCell(row,['config'])}</td><td>${sourceCell(row,['operator'])}<div class="operator-entry"><input data-operator-ip="${esc(row.ip)}" aria-label="Operator hostname for ${esc(row.ip)}" placeholder="Enter hostname"><button type="button" data-save-operator="${esc(row.ip)}">Save</button></div></td><td><span class="selected-name">${esc(row.selected_hostname||'Not selected')}<small>${row.selected_source?`Source: ${esc(sourceLabels[row.selected_source]||row.selected_source)}${row.selection_persisted?' · operator approved':' · observed default'}`:'Choose a name from any source'}</small></span></td></tr>`).join(''):'<tr><td colspan="8" class="empty">No retained IP addresses match this filter.</td></tr>';document.querySelectorAll('.candidate').forEach(button=>button.onclick=()=>saveSelection(button.dataset.ip,button.dataset.name,button.dataset.source));document.querySelectorAll('[data-save-operator]').forEach(button=>button.onclick=()=>{const input=document.querySelector(`[data-operator-ip="${CSS.escape(button.dataset.saveOperator)}"]`);if(input?.value.trim())saveSelection(button.dataset.saveOperator,input.value.trim(),'operator_input')})}
+function renderSummary(){const counts=workspace.source_counts||{};$('summaryCards').innerHTML=[[workspace.row_count,'IP addresses'],[workspace.selected_count,'operator-approved'],[counts.nmap||0,'with Nmap names'],[(counts.lldp||0)+(counts.cdp||0),'with LLDP/CDP names']].map(([value,label])=>`<div class="card"><b>${Number(value).toLocaleString()}</b>${esc(label)}</div>`).join('');$('methods').innerHTML=(workspace.methods||[]).map(item=>`<div class="method"><strong>${esc(item.label)}<span class="mode">${item.mode==='device_pull'?'normal pull':item.mode}</span></strong><p>${esc(item.detail)}</p></div>`).join('');const bulk=['nmap','dhcp','dns','lldp','cdp','config'].map(source=>`<option value="${source}"${Number(counts[source]||0)?'':' disabled'}>${esc(sourceLabels[source])} · ${Number(counts[source]||0)} available</option>`).join('');$('bulkSource').innerHTML=bulk;renderRows()}
+async function loadWorkspace(message='Loading retained hostname evidence…'){setStatus('status',message);try{const response=await fetch('/api/hostnames'),data=await response.json();if(!response.ok)throw new Error(data.detail||'Hostname evidence could not be loaded');workspace=data;renderSummary();setStatus('status',`Loaded ${Number(data.row_count||0)} IP-centered hostname records without contacting the network.`,'good')}catch(error){setStatus('status',error.message,'bad')}}
+async function saveSelection(ip,hostname,source){setStatus('status',`Saving ${hostname} for ${ip}…`);try{const response=await fetch('/api/hostnames/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip,hostname,source})}),data=await response.json();if(!response.ok)throw new Error(data.detail||'Hostname selection could not be saved');await loadWorkspace(`Refreshing ${ip}…`);setStatus('status',`${hostname} is now the approved name for ${ip}.`,'good')}catch(error){setStatus('status',error.message,'bad')}}
+async function applySource(){const source=$('bulkSource').value,count=Number(workspace.source_counts?.[source]||0);if(!source||!count)return;if(!confirm(`Use ${sourceLabels[source]} names for up to ${count} IP addresses where that source has evidence? Existing operator selections for those IPs will be updated.`))return;$('bulkApply').disabled=true;setStatus('status',`Applying retained ${sourceLabels[source]} names…`);try{const response=await fetch('/api/hostnames/select-source',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source})}),data=await response.json();if(!response.ok)throw new Error(data.detail||'Bulk hostname selection failed');await loadWorkspace();setStatus('status',`Approved ${Number(data.updated_count||0)} ${sourceLabels[source]} hostname${Number(data.updated_count||0)===1?'':'s'}.`,'good')}catch(error){setStatus('status',error.message,'bad')}finally{$('bulkApply').disabled=false}}
+function download(name,text,type){const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([text],{type}));link.download=name;document.body.appendChild(link);link.click();setTimeout(()=>{URL.revokeObjectURL(link.href);link.remove()},0)}
+function templateIps(){return workspace.rows.map(row=>row.ip)}
+function csvTemplate(){download('NCT-hostname-template.csv','ip,hostname\r\n'+templateIps().map(ip=>`"${ip}",`).join('\r\n')+'\r\n','text/csv;charset=utf-8')}
+function txtTemplate(){download('NCT-hostname-template.txt',['# NCT hostname template','# Enter one hostname after each IP address. Keep one device per line.','# Example: 10.10.10.1 core-router.example.mil',...templateIps().map(ip=>`${ip}\t`)].join('\r\n')+'\r\n','text/plain;charset=utf-8')}
+async function importNames(event){event.preventDefault();const file=$('identityFile').files[0];if(!file)return;const body=new FormData();body.append('file',file);setStatus('importStatus','Validating and importing hostname evidence…');try{const response=await fetch('/api/hostnames/import',{method:'POST',body}),data=await response.json();if(!response.ok)throw new Error(data.detail||'Hostname import failed');$('identityFile').value='';const skipped=Number(data.skipped_count||0)+Number(data.duplicate_count||0);setStatus('importStatus',`Retained ${Number(data.retained_count||0)} IP-to-hostname records. ${Number(data.created_count||0)} created, ${Number(data.updated_count||0)} updated${skipped?`, ${skipped} skipped or duplicate rows`:''}.`,'good');await loadWorkspace()}catch(error){setStatus('importStatus',error.message,'bad')}}
+async function importServerEvidence(event){event.preventDefault();const file=$('evidenceFile').files[0];if(!file)return;const pcap=$('accountabilityFile').files[0],body=new FormData();body.append('file',file);if(pcap)body.append('accountability',pcap);setStatus('evidenceImportStatus','Validating and retaining DHCP/DNS server evidence…');try{const response=await fetch('/api/hostnames/evidence/import',{method:'POST',body}),data=await response.json();if(!response.ok)throw new Error(data.detail||'Server evidence import failed');$('evidenceFile').value='';$('accountabilityFile').value='';const counts=data.source_counts||{};setStatus('evidenceImportStatus',`Retained ${Number(data.valid_count||0)} records: ${Number(counts.dhcp||0)} DHCP and ${Number(counts.dns||0)} DNS.${data.accountability_url?' Accountability PCAP attached.':''}`,'good');await loadWorkspace()}catch(error){setStatus('evidenceImportStatus',error.message,'bad')}}
+async function copyCollectionText(button){const target=$(button.dataset.copyTarget);if(!target)return;try{await navigator.clipboard.writeText(target.textContent);const original=button.textContent;button.textContent='Copied';setTimeout(()=>button.textContent=original,1200)}catch(error){setStatus('evidenceImportStatus','Copy was blocked by the browser. Select the command text and copy it manually.','warn')}}
+$('search').oninput=renderRows;$('refresh').onclick=()=>loadWorkspace('Re-reading retained evidence…');$('bulkApply').onclick=applySource;$('csvTemplate').onclick=csvTemplate;$('txtTemplate').onclick=txtTemplate;$('importForm').onsubmit=importNames;$('evidenceImportForm').onsubmit=importServerEvidence;document.querySelectorAll('[data-copy-target]').forEach(button=>button.onclick=()=>copyCollectionText(button));loadWorkspace();
+</script>
+</body>
+</html>'''
+    )

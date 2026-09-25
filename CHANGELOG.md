@@ -1,5 +1,763 @@
 # Changelog
 
+## 0.15.9 — DHCP and DNS server evidence collection
+
+- Added copyable collection instructions for modern and legacy Windows DHCP/DNS
+  servers plus current and legacy Linux ISC DHCP, dnsmasq, Kea, and BIND data.
+- Added retained DHCP/DNS evidence uploads that preserve source attribution,
+  lease expiration, original exports, and optional accountability PCAPs.
+- Added a 50 MB infrastructure-evidence limit, a 100 MB PCAP limit, and coverage
+  proving records beyond the former 5 MB boundary are parsed instead of cut off.
+
+## 0.15.8 — Retained hostname evidence workspace
+
+- Added a dedicated Hostnames page directly after Nmap that combines names
+  already retained in Nmap scans, normal device pulls, and operator imports.
+- Added read-only DHCP, DNS host-table, and neighbor-name commands to normal
+  router, firewall, and switch pulls without adding a separate hostname scan.
+- Added per-IP source review, operator-approved selection, bulk source
+  selection, manual names, and DHCP lease time remaining when available.
+- Moved CSV/TXT hostname import from Analyze to Hostnames and kept the existing
+  Analyze import API as a compatibility path.
+
+## 0.15.7 — Large device-analysis route controls
+
+- Changed Network Device Analysis to open routing tables larger than 50 entries
+  on local and connected routes, cap the visible result at 50 rows, and provide
+  a full-table search for destination, next hop, interface, protocol, and raw
+  route evidence.
+
+## 0.15.4 — Cisco and pfSense collection validation
+
+- Kept Cisco read-only commands inside one authenticated interactive session so
+  devices that close a shared session on `exit` cannot stop collection after
+  `show version`; retained output remains separated and checked per command.
+- Corrected mixed IPv4/IPv6 pfSense policy evaluation, interface-negated rules,
+  `quick` and last-match ordering, runtime tables, and dynamic interface-address
+  targets such as `(self)` and `(vmx1)`.
+
+## 0.15.3 — Large routing and policy validation
+
+- Retained and analyzed complete device outputs up to 100 MB, removed the
+  previous 500-route and 2 MB Map limits, and added explicit completeness
+  reporting for interrupted or size-limited collections.
+- Added bounded routing-table views with local-route and search filters while
+  keeping complete retained routes available to Reach. Route ordering is now
+  stable and numeric, including tables with more than 100,000 entries.
+- Added interface-IP connection labels to Map, removed route dumps from device
+  details, made merged markup use one constant fill, and limited the legend to
+  object, relationship, OS, and vendor types currently visible on the canvas.
+- Added vendor-written proposed policy validation with interface selection,
+  ordered existing-rule placement, common vendor templates, and shadowing
+  feedback.
+- Combined Analyze network changes and scan comparison, removed the redundant
+  visible Routes and Policy panel, simplified the Hunt network overview, and
+  compacted eligible historical host target displays back to their /24 scope.
+- Restored authenticated Nmap evidence downloads and made SearchSploit errors
+  tolerate empty, plain-text, or non-JSON responses.
+
+## 0.15.2 — Device evidence hotfix
+
+- Restored browser downloads for both existing and newly collected Network
+  Device evidence by saving the authenticated response through the signed-in
+  page instead of relying on the browser's failed direct attachment handoff.
+- Changed Cisco collection to use an interactive terminal channel with paging
+  disabled for each read-only command, matching Cisco IOS behavior that can
+  reject SSH command-execution requests while still allowing a normal shell.
+- Retained partial Cisco output and command-specific errors when a collection
+  cannot be completed, so a failed run still preserves useful troubleshooting
+  evidence instead of producing an empty result.
+
+## 0.15.1 — Range usability and retained-data release
+
+- Prevented Hunt from rendering every detailed finding at page load, deferred
+  off-screen rows, fixed combined rows that remained visible after filtering,
+  and clarified the difference between ports and capability classifications.
+- Consolidated Hunt's duplicate Inventory and Capability Findings tables into
+  one Systems panel with Capabilities and Inventory views. Only the active view
+  is rendered, reducing large-range page load and browser memory use.
+- Replaced personal Hunt/Analyze presets with simple table controls that default
+  to 50 rows, while leaving prior saved preference records untouched.
+- Added filtered IP exports for both network-wide and individual Analyze views,
+  plus CSV/TXT hostname templates and retained analyst hostname imports.
+- Alphabetized outer Saved Network and network-device history groups while
+  keeping every group's scans or collections newest-first.
+- Made the active Nmap run appear automatically with live phase/progress and
+  disappear after work completes; scheduled scanning uses NCT Standard without
+  requiring operators to create a profile.
+- Preserved scheduled CIDR targets as compact networks instead of expanding an
+  unchunked `/24` into 256 host entries. Host expansion now occurs only when an
+  operator enables chunking, and No-Strike exclusions remain enforced.
+- Made FPING the default discovery method in the new NCT Standard profile
+  version while retaining the prior Nmap-discovery version for schedules
+  already pinned to it. The protocol and port-scope explanation is now
+  collapsible and closed by default.
+- Corrected Saved Network reuse and historical scan attribution, improved Cisco
+  collection output, and strengthened Reach external-address and path evidence.
+- Prioritized the Map canvas with a toggleable controls side panel, legend and
+  operator FAQ; defaulted workspace area to 4x, hid point-to-point /30 links by
+  default, color-coded common network-device vendors, protected locked layouts
+  by parking new objects, and added rotatable markup, text labels, and composite
+  shape grouping that retains every box and ellipse while drawing only the
+  combined outside border. Map Controls can now be dragged, snapped inside any
+  canvas corner, and remembered by the browser. Files and exports now open from
+  the top workspace controls beside Expand and Map FAQ.
+- Added a host-folder deployment and verified upgrade workflow that preserves
+  `/var/lib/nct/data`, creates a pre-upgrade backup, retains the old container
+  for rollback, and checks record/file counts after startup.
+
+## 0.14.0-dev — Advanced Map Usability
+
+- Added Hunt-to-Reach shortcuts for inventory hosts, capability findings, and
+  SearchSploit matches. The selected destination plus available protocol and
+  port are loaded in a new Reach tab while Source remains an analyst choice.
+- Added post-collection Device handoffs to Network Device Analysis and Nmap,
+  including a Nmap handoff after accepting a config-derived Saved Network.
+  Device history now focuses on collection status, commands, raw/saved files,
+  reuse, and deletion; interpreted evidence and comparisons live in Analyze.
+- Standardized explicit loading messages across retained-evidence pages and
+  added a consistent one-click clear control to static and dynamically
+  rendered search fields.
+- Completed the operator export path: Hunt can download its full correlated
+  state as JSON or currently visible findings as CSV, Network Device Analysis
+  and Reach can export their current structured result, and Map can export a
+  portable styled SVG plus topology and current presentation/layout data as
+  JSON. Nmap analysis also has a self-contained, print-ready HTML report.
+  Existing Device, CSV, and hardening exports remain available. A broader
+  preview-first Export Studio is documented as a separate presentation rollout.
+- Removed manual creator/operator identity fields from Nmap construction,
+  Saved Networks, No-Strikes, fallback approval, and Device collection. The
+  signed-in account is now recorded automatically; authentication-disabled
+  Test mode uses a neutral local identity, while historical audit attribution
+  remains visible as Created, Scheduled, Executed, or Collected by.
+- Added personal and page-specific shared investigation notes to Reach. Evidence
+  links now deep-link to the relevant retained Nmap host or device routing,
+  policy, or NAT section, expand that section, and open in a new tab so the
+  original Hunt/Reach state remains intact.
+- Reduced avoidable workflow clutter without changing operator decisions:
+  Hunt hides its reset link in the normal network-wide view, Nmap places
+  profile lifecycle and scheduling in collapsed advanced sections, and Map
+  keeps retained artifact browsing in a collapsed Evidence Files drawer.
+- Reworked Reach evidence cards around plain-language effects. Matched firewall
+  rules and ACLs now explicitly say which selected flow they are expected to
+  allow or block, routes state that they provide a path but do not authorize a
+  port, and retained scan coverage states what exposure was or was not
+  observed. Supporting rules and commands are collapsed, with source links
+  opening the retained Nmap or device result in Analyze without replacing the
+  current page.
+- Added one-click clear controls to the Reach Source and Destination fields;
+  each control appears only when its field contains text and leaves the rest of
+  the current evaluation settings unchanged.
+- Added a separate `Check from Internet` comparison to internal Reach results.
+  It evaluates the same destination and service without replacing the original
+  result, can open its own WAN-focused Map overlay, labels broader defaults as
+  unused fallback routes, and excludes loopback metadata with no forwarding
+  interface from usable route evidence.
+- Separated human-facing scan references from retained artifact identifiers.
+  Nmap, Analyze, and Hunt now show the operator's scan name, Saved Network or
+  concise scope, friendly local time, and clear Manual/Scheduled context while
+  keeping full targets, UTC timestamps, artifact names, and short IDs in detail
+  text. Existing scan history is humanized without renaming stored evidence.
+- Removed the mandatory pre-run reason/authorization note. Nmap retains a
+  neutral system context automatically, while Device exposes only an optional
+  collection note; explicit fallback approval notes remain required at the
+  actual authorization decision.
+- Standardized expandable sections across Device, Nmap, Analyze, Hunt, Network
+  Device Analysis, Reach, and Map on one left-side accent chevron while keeping
+  their existing open/closed defaults and keyboard behavior.
+- Completed a page-by-page operator-flow assessment and recorded proposed
+  handoffs, redundant controls, and page-boundary decisions for review without
+  changing the current workflow.
+- Added a repeat-reset mode to the guided installer. A saved non-sensitive
+  preset can now skip repeated setup questions, but it never skips the review,
+  non-destructive preflight, or final approval; four progress stages make the
+  active deployment step visible.
+- Added a guided Test/Range installer that prompts for access, address, TLS,
+  ports, firewall scope, legacy-runtime consent, immutable image/offline
+  archive, acceptance receipt, authentication, and initial Administrator. It
+  supports a non-mutating plan, always preflights before deployment, and saves
+  only non-sensitive reset defaults after success. Fresh air-gapped hosts get a
+  separate checksum-verified image-staging prompt before exact-image preflight.
+- Made private-lab TLS generation certificate-only: it accepts an isolated
+  output directory, handles IP or DNS SANs, refuses to overwrite existing
+  material, and can no longer start Compose or rebuild containers as a side
+  effect.
+- Expanded Linux Range firewall preflight to identify active versus inactive
+  firewalld/UFW, detect and reuse an existing exact rule, require an approved
+  source CIDR before Range/Mission changes, verify created rules after reload,
+  record the decision, and roll back only rules created by NCT.
+- Recovered the verified deployment history for the regularly reset Range VM
+  family and encoded it as a sanitized API 1.39 compatibility fixture. An
+  explicit Range-only launcher mode now bypasses incompatible Compose, probes
+  Python threading, conditionally scopes the seccomp workaround to the NCT
+  analyzer, forces Uvicorn asyncio/h11, records the result, and cannot be
+  promoted as Mission-ready.
+- Made rapid deployment artifact identity fail closed across Test, Range, and
+  Mission: the launcher now requires an explicit versioned image with embedded
+  application/build identity, rejects mutable `:latest` references, and
+  requires SHA-256 verification for every supplied offline image archive.
+- Added atomic promotion receipts that bind deployment checks, compatibility,
+  limitations, and rollback evidence to one exact image ID and build. Range now
+  requires the matching Test receipt, while Mission can validate a matching
+  Range receipt in check-only mode and remains fail-closed for deployment.
+- Added an explicit Range compatibility ladder for modern Compose v2, legacy
+  Compose v1, direct Docker Engine, and the unsupported-host appliance handoff.
+  The selected tier and supported/degraded outcome are printed and retained in
+  deployment logs and promotion receipts.
+- Added a repeatable, non-destructive Range matrix runner and expanded the
+  launcher fixtures for Docker API/OS/architecture boundaries, offline archive
+  integrity, occupied ports, existing NCT data, active-work blocking, and exact
+  promotion identity. Reports explicitly retain the remaining overlap and
+  representative-old-host gaps.
+- Added pre-deployment Docker subnet overlap analysis against non-Docker host
+  LAN/VPN routes and active Saved Networks. Test records a visible warning;
+  Range and Mission stop until the Docker address pool is corrected, and the
+  result is retained in deployment logs, receipts, and the matrix report.
+- Connected proposed policy and route comparisons to Map. Analysts can open a
+  temporary projected-path focus with current-to-projected outcome, proposal,
+  path-change, collateral-scope, evidence, and caveats while saved layouts stay
+  unchanged; complete comparison exports remain available as short-name JSON.
+- Added explicit hardening-impact summaries for proposed policy and route
+  checks: current/projected paths, retained route alternatives, bounded address
+  scope, and a clear statement that only the selected representative flow was
+  evaluated.
+- Added vendor-neutral metric/preference comparisons for equally specific
+  retained routes. Reach shows the selected path before and after, changes it
+  only when every competing route has comparable priority evidence, and calls
+  incomplete or vendor-specific tie-breaks unresolved.
+- Added a read-only proposed-route check to Reach. Analysts can add a route on
+  a retained interface or remove an exact retained route, compare current and
+  projected paths, preserve broader fallback routes and limitations, and export
+  the complete JSON comparison without contacting or changing a device.
+- Added the first read-only hardening simulation to Reach. Analysts can compare
+  the retained outcome with an exact permit or deny on a selected current-vendor
+  router/firewall, review source attachment and affected address-pair scope, and
+  export the complete evidence comparison without contacting or changing a device.
+- Added explicit external source IP/CIDR evaluation to Reach. Analysts can mark
+  an exact address or range as outside the network, retain it for precise rule
+  matching, and evaluate it through WAN-facing Cisco, VyOS, pfSense, and UniFi
+  policy without treating every unsaved address as external.
+- Added retained vendor-NAT evaluation for exact Cisco static/object NAT, VyOS
+  source and destination NAT, and active pfSense `rdr`/NAT rules. Unsupported
+  policy NAT and unresolved translation criteria remain Unknown.
+- Added sequential multi-device NAT paths. Reach now carries the effective
+  address and port through each retained translation, shows every translation
+  in order, and stops conservatively on ambiguous or looping paths.
+- Added explicit new versus established/related flow evaluation to Reach.
+  Retained iptables and VyOS connection-state rules now match the selected
+  state, the supporting state is shown in policy evidence, and NCT clearly
+  distinguishes configuration projection from proof of a live session.
+- Added retained runtime resolution for pfSense DNS-backed aliases. Device
+  collection now captures active pf tables, Reach uses only that timestamped
+  membership, Device Analysis distinguishes static, resolved-dynamic, and
+  unresolved objects, and other dynamic vendor objects remain Unknown when
+  runtime membership was not retained.
+- Connected Reach results to Map with a temporary investigation overlay. An
+  analyst can open either an individual evaluation or any exposure-report path,
+  focus the mapped source, destination, and retained route/policy/NAT devices,
+  review outcome evidence, and exit without changing the saved map layout.
+- Added on-demand source exposure reports to Reach. NCT now evaluates every
+  unique retained observed service from Internet and each Saved Network, groups
+  and filters the results, associates local SearchSploit candidates, preserves
+  complete route/policy/NAT objects and evidence, and exports a complete JSON
+  report without generating network traffic.
+- Added retained-path exposure classifications to Hunt SearchSploit matches.
+  Potential CVE candidates can now be filtered by externally reachable,
+  internal-only, local-segment, externally blocked, not exposed, or unknown,
+  with per-Saved-Network policy and route evidence. These labels describe the
+  matched service path and never claim that the candidate is exploitable.
+- Added proof-based Not Exposed results to Reach. NCT now requires the exact
+  requested protocol/port in retained per-host Nmap coverage, treats
+  `open|filtered` observations as inconclusive, and shows the scan-time/NCT-host
+  limitation. Explicit policy denies remain Expected Blocked even when the
+  service was also not exposed.
+- Added combined Router + Firewall device collection. The Device page merges
+  both read-only templates without duplicate commands, and Device Analysis and
+  Map retain and display both observed roles.
+- Corrected UniFi gateway parsing for retained `iptables-save` filter and NAT
+  tables, added `ipset` collection, exposed table/chain/order/action fields,
+  and kept unavailable commands from discarding the rest of a guarded pull.
+- Added guarded UniFi switch fallback commands and explicit partial-evidence
+  warnings when a failed pull contains no structured forwarding records.
+- Added UniFi `swctrl` port and learned MAC/VLAN parsing using the actual retained
+  switch output format. Expanded streamed collection retention from 200 KB to a
+  reported 5 MB limit and prioritized firewall-table capture before large
+  address sets.
+- Added full UniFi IP-set definition and membership parsing, accurate object
+  totals beside a bounded review preview, and conservative ordered `FORWARD`
+  chain evaluation for IP, network, port, interface, connection-state, and
+  nested user-chain matches. Unsupported DPI/GeoIP criteria now stop at Unknown
+  instead of being guessed. Corrected gateway identity collection to request the
+  supported `ubnt-device-info summary` form and preserved exact Linux bridge
+  interface names for policy path matching.
+- Corrected Reach handling for explicit UniFi denies applied to a Saved Network.
+  CIDR inputs now match retained network objects as ranges, metadata-only default
+  routes no longer hide the usable WAN interface, and drop-or-continue threat
+  prechecks can converge on a later explicit deny without guessing their match.
+- Added ordered UniFi destination-NAT and local-redirect evaluation. Reach now
+  shows the original and translated address/port, then evaluates retained
+  routes, observed services, and firewall policy against the effective target.
+- Added ordered Linux/UniFi source-NAT and masquerade evaluation. Reach now
+  shows the pre- and post-translation source, outgoing interface, retained rule,
+  and chain path while leaving source ranges and competing device translations
+  unresolved. Juniper zone-default evaluation is explicitly deferred to the
+  end-of-roadmap fringe-vendor validation stage.
+- Added conservative applied-policy handling for Cisco IOS/IOS-XE/ASA, VyOS,
+  pfSense, and Juniper. NCT requires retained interface or zone attachment
+  evidence before using a vendor rule for an allow/deny result, exposes the
+  normalized rules and attachments in Device views, and leaves unresolved
+  objects or applications at Unknown.
+- Added static vendor object resolution for Cisco address/service objects and
+  groups, VyOS address/network/port/interface groups, pfSense aliases, and
+  Juniper address books/sets and custom applications. Device views now expose
+  the normalized object inventory, while incomplete, missing, or cyclic objects
+  remain Unknown in Reach.
+- Improved Reach path selection to use source-attached router/firewall evidence,
+  ignore switch management routes, preserve the newest usable collection when a
+  later pull fails, and render the likely path in the interface.
+- Deduplicated config-derived Saved Network suggestions that referred to the
+  same current device/interface path across repeated pulls.
+- Added private account-owned Hunt and Analyze working views. Filters,
+  collapsible cards, row count, and natural IP/hostname sorting
+  now follow the signed-in analyst between sessions. Analysts can also create,
+  update, load, and delete named filter presets without changing another
+  operator's workspace.
+- Added a CherryTree-style investigation notebook to every primary page when
+  analyst authentication is enabled. Personal notes and nested folders open
+  from the left edge; page-specific team notes open read-only from the right.
+  Owners can link notes to their current NCT view, explicitly share or unshare
+  a branch, and export one note or a complete folder tree as Markdown. Note
+  versions prevent stale browser sessions from silently replacing newer work.
+- Removed object details from the standard Map overview so the full map width
+  remains available. Object details and their toggle now appear only in the
+  expanded workspace; opening Map shared notes closes that expanded details
+  pane without clearing the selected object.
+- Added a shared first-in/first-out analyzer queue for multi-analyst operation.
+  The Nmap page shows the active scan, owners, waiting positions, and live
+  status; owners can cancel their own work and Administrators can reassign
+  queued scans. The next scan starts automatically, and unstarted manual queue
+  entries survive an analyzer restart.
+- Added per-analyst autosaved Nmap builder drafts, including scope, profile,
+  interface, timeout, and scan settings, with stale-browser conflict protection.
+  Added a readable per-run audit for queue, ownership, cancellation, fallback,
+  restart, and terminal events.
+- Added audited analyst OS corrections in Analyze. NCT preserves the original
+  scanner OS, records the analyst, reason, and timestamp for set/update/remove
+  events, gives the confirmed value precedence over inference in Hunt and Map,
+  includes both values in exports, and flags later scanner disagreement.
+- Added audited Confirm, Dismiss, and Needs investigation decisions for inferred
+  operating systems. Each decision retains the exact inference evidence it
+  reviewed, becomes stale when that evidence changes, and is reflected in
+  Analyze, Hunt, and Map without rewriting scanner observations.
+- Hardened the rapid-deployment launcher with content-addressed image and build
+  receipts, versioned-image enforcement for Range, an already-current no-op,
+  exact running-build validation, and runtime checks for Nmap, FPING, tcpdump,
+  SSH, packet-capture visibility, `NET_RAW`, and raw sockets.
+- Extended deployment port handling to detect both Docker and host-process
+  listeners, reuse recognized NCT bindings during upgrades, and atomically
+  retain the validated application and HTTPS ports for later runs.
+- Added an opt-in local-authentication foundation with hardened password hashes,
+  expiring HttpOnly sessions, Admin / Analyst / Viewer roles, fail-closed first
+  startup, personal server-side Map layouts, optimistic version conflicts, and
+  administrator-only explicit layout publishing. Authentication remains off by
+  default for the current single-user Test workflow.
+- Bound authenticated OS corrections and inference reviews to the signed-in
+  analyst on the server, preventing a client-supplied name from changing the
+  audit identity.
+- Added compact signed-in account controls to every primary page, including the
+  active display name and role, sign-out, and an Administrator-only account
+  screen for creating and reviewing named analyst accounts.
+- Bound authenticated scan plans, packages, profiles, schedules, Saved Network
+  changes, No-Strike changes, fallback decisions, and device collection plans
+  to the signed-in server identity. Authentication-disabled Test mode now uses
+  a neutral local identity instead of manually typed attribution.
+- Added Administrator account enable/disable, password reset, forced session
+  revocation, and account-audit history. NCT prevents an Administrator from
+  disabling the account currently in use or the last active Administrator.
+- Completed first-run account setup in the rapid deployment launcher. Fresh
+  authenticated installations require an operator-selected Administrator and a
+  protected password source, verify the account, then restart without bootstrap
+  material. Existing account stores are preserved. Added backup-first,
+  administrator-only host recovery with complete session revocation.
+- Stabilized every visible Map object when Edit mode begins and retained every
+  rendered object coordinate in saved layouts, preventing a single untouched
+  auto-layout node from moving during redraws. The map boundary now grows to
+  contain saved edge positions rather than clamping the outlying object inward.
+  Added a per-analyst `☆` / `★` default selector for one personal or shared
+  layout that opens automatically.
+
+- Added the first rapid-deployment checkpoint for controlled Linux Docker Test
+  and Range hosts. The launcher performs Docker/Compose and compatibility
+  preflight, explicit local or selected-address binding, image/offline archive
+  validation, existing-instance and active-work checks, conflict handling,
+  backup, health verification, application/HTTPS proxy rollback, narrow
+  opt-in firewall handling, a concise deployment log, and the requested NCT
+  success banner. Mission deployment remains deliberately fail-closed pending
+  promotion-gate work.
+
+- Added an explicit Map Edit mode. Line routing, node movement, alignment,
+  locking, markup, and other map-building controls stay hidden and inactive in
+  the normal investigation view.
+- Simplified the Map selection shortcuts: `F` fits the current selection (or
+  the whole map when nothing is selected), and `L` locks or unlocks selected
+  objects. Button hover text now shows those exact keys.
+- Added a type-organized Map parking lot and blank-canvas workflow. Parked
+  objects keep their evidence and upstream/downstream/peer dependencies,
+  endpoints remain bundled in subnet groups, and connections reappear only when
+  both objects are placed.
+- Persisted parked presentation objects in private layouts and kept joined
+  gateway/subnet pairs together while parking or placing them.
+- Excluded Docker's private bridge gateway from mission-map topology while
+  retaining it in raw traceroute path evidence, and changed the standard viewer
+  to fit placed content instead of empty expanded-workspace borders.
+- Kept viewport navigation separate from object geometry so moving around the
+  workspace cannot rewrite or snap object and line coordinates. The wheel
+  performs pointer-centered zoom; click-and-drag pans the map.
+- Fixed locked objects from older or incomplete browser layouts drifting during
+  responsive zoom redraws. Every locked object now receives a concrete manual
+  coordinate before and after layout calculation.
+- Restored Individual endpoint expansion while editing a Map. Hosts now remain
+  attached to a placed subnet and stay off-canvas only when their subnet is in
+  the parking lot.
+- Removed the redundant standalone label annotation. Colored boxes and ellipses
+  still support text, and selected shapes can now be deleted with Delete or
+  Backspace in Edit mode.
+- Added an analyst-local External WAN gateway designation that promotes a
+  selected device or discovered host into a single top-boundary WAN object,
+  removes its duplicate canvas node, connects the boundary to the nearest
+  visible internal device, and preserves the choice with private saved Map
+  layouts.
+- Added reversible object hiding, multi-object hiding, and a collapsible Hidden
+  objects list with individual restore and Restore all controls. Hidden objects
+  remain in the underlying evidence.
+- Map subnet titles now prefer matching analyst-assigned Saved Network names
+  while retaining the CIDR on the map.
+- Added Direct and Right-angle trunks Map line styles. The right-angle option
+  creates vertical drops and horizontal backbones while preserving the same
+  topology evidence, hover detail, undo history, and private layout storage.
+- Added a Hybrid backbone map style that uses structured right-angle routes for
+  infrastructure links and direct lines for endpoint membership. Any selected
+  connection can override the map default and use a movable vertical-first or
+  horizontal-first bend.
+- Added optional 20- and 40-pixel object grids plus visual line magnets that
+  align nearby compatible trunks without inventing or combining evidence.
+- Added private Map markup with colored labels, rectangles, and ellipses. These
+  presentation objects can be moved, resized, edited, and saved in named browser
+  layouts without changing the shared network record.
+- Added Joined and Separate gateway presentation modes. Joined mode visually
+  combines a routed next-hop gateway with its containing subnet, moves the pair
+  together, and keeps router, subnet, and route evidence independently selectable.
+- Added Switch as a first-class Device collection type for Cisco, Juniper, and
+  UniFi, with guarded vendor-specific read-only profiles for VLAN, port,
+  forwarding-table, spanning-tree, aggregation, PoE, neighbor, and routing
+  evidence. Unsupported VyOS and pfSense switch combinations are blocked.
+- Added structured Switching evidence to Device history, Device Analysis, and
+  device-to-device comparison.
+- Expanded that switching evidence into structured Layer-2 ports,
+  access/native/allowed VLANs, learned MAC tables, port channels,
+  spanning-tree state, PoE state, and inferred uplinks, with honest
+  per-command completion, unavailable, or not-individually-reported status.
+- Correlated learned switch MAC entries to existing Nmap/MAC identities without
+  inventing IP addresses. Matching hosts retain attributable switch-port and
+  VLAN evidence, and Individual Map views can show confirmed switch-to-host
+  connections while grouped subnets remain uncluttered.
+- Added conservative evidence-based OS inference across Analyze, Hunt, and Map.
+  Inferences include a confidence level and concise service/device evidence,
+  while direct Nmap OS identification remains authoritative and unchanged.
+- Styled inferred OS families distinctly, exposed their basis on hover and in
+  details, included them in Hunt filtering/search, and preserved inference
+  fields in analysis CSV exports.
+- Added an inferred File Transfer finding for SSH fingerprints because SSH may
+  expose SCP or SFTP. Direct `scp` or `sftp` identification remains observed
+  evidence, while File Sharing stays reserved for SMB, NFS, AFP, and similar
+  persistent shared-filesystem services.
+- Added per-finding hover explanations to Inferred evidence badges so analysts
+  can see the exact port or capability relationship behind the inference.
+- Shortened Hunt scan-selection entries to name, completion time, and profile;
+  the full comparison scope remains available as option hover text.
+- Made table header rows remain visible while scrolling throughout NCT, with
+  live offsets that keep them below each page's sticky navigation and guides.
+- Limited inference coloring in Match Basis to findings that actually carry
+  Inferred evidence, preventing observed-only evidence from appearing inferred.
+- Combined Hunt capability findings into one host-centric row per IP by default,
+  with every port visible; applying any filter switches to individual findings.
+- Reordered the primary workflow to Device, Nmap, Analyze, Hunt, and Map, and
+  made Device the default landing page so network-device and subnet evidence
+  naturally precedes scan construction.
+- Replaced the Map's large count cards with a compact, collapsible network
+  inventory summary and removed Relationships and Evidence records from that
+  visual header.
+- Moved Expand workspace to a sticky top-center control that stays available in
+  the same location as Exit expanded workspace.
+- Changed Analyze actions to open directly on the selected scan results instead
+  of automatically jumping into comparison output. Comparison now lives in a
+  compact collapsible section near the top with simple earlier/later selectors,
+  replacing the large Previous scans panel.
+- Replaced fragmented effective-CIDR labels in Analyze and comparison selectors
+  with the operator's original scan scope plus a concise excluded-address count;
+  exact post-exclusion CIDRs remain retained as comparison evidence.
+- Replaced Device's generic SSH/SCP/cleanup preview blocks with one ordered
+  execution plan generated from the selected vendor and authentication path.
+  The preview now identifies where each action runs, shows the exact temporary
+  file creation, SCP copy-back, and removal steps for interactive VyOS and
+  pfSense collection, and correctly shows Cisco, Juniper, and key-based
+  collection as direct SSH streams with no remote temporary file.
+- Added UniFi OS Gateway to the Device Router and Firewall vendor choices with
+  a guarded, read-only Linux SSH evidence set covering platform, interfaces,
+  IPv4/IPv6 routes, neighbor tables, bridge VLANs, listening services,
+  iptables/nftables, and LLDP. UniFi output streams directly to NCT without SCP;
+  unavailable firmware-specific utilities are recorded without discarding the
+  rest of the collection. Linux interface MACs, connected routes, and default
+  routes are now normalized for Device Analysis and Map.
+- Added an expanded map workspace that uses the available browser window and
+  returns to the standard workspace with its button or Escape.
+- Kept subnet endpoints collapsed by default and added individual-line and
+  organized grouped-box presentation modes.
+- Added per-subnet and map-wide endpoint sorting and breakdowns by IP address,
+  hostname, or operating system, with grouped host rows opening the retained
+  host evidence in the details panel.
+- Kept each endpoint breakdown as one logical pool when it flows into multiple
+  columns, with one centered heading and one total spanning the entire group.
+- Added lower-right resize handles to grouped endpoint boxes; widening a box
+  reflows its host pool into additional columns, and Reset layout restores the
+  automatic size.
+- Preserved analyst-positioned map boxes when endpoint groups are expanded,
+  collapsed, switched between grouped and individual views, or re-sorted. A
+  new layout preset or Reset layout remains the explicit way to reflow them.
+- Made the standard map a true scaled overview of the complete expanded mission
+  workspace instead of fitting only the occupied device boundary. Locked boxes
+  retain their exact map coordinates when leaving expanded mode.
+- Stopped details, endpoint visibility, and endpoint sorting redraws from
+  automatically invoking Fit devices in the standard viewer. The current view
+  now remains under analyst control, and a fully fitted workspace is centered
+  instead of snapping into the upper-left corner.
+- Changed IP presentation to one numerically sorted host pool instead of
+  arbitrary address-range subgroups; hostname and OS headings now appear only
+  when the selected field contains multiple meaningful values.
+- Moved individual-versus-grouped and expand-versus-collapse controls into each
+  subnet box, and simplified the map toolbar to Expand all and Collapse all.
+- Color-coded grouped host rows by observed OS family, with exact OS text and a
+  legend so a mixed Windows, Linux, macOS, network, other, or unknown pool is
+  immediately distinguishable.
+- Kept expanded-workspace details available as an optional floating panel while
+  anchoring it inside the map canvas border. Expanded mode starts with the panel
+  hidden and provides Show details / Hide details without letting it escape the
+  map area at narrower browser widths.
+- Moved the expanded-workspace details toggle to the map's upper-right control
+  area and made the SVG coordinate space follow the expanded canvas aspect ratio,
+  allowing the full map width to be used for layout, dragging, and panning.
+- Changed map details to an automatic, selection-driven pane in both workspace
+  sizes. With no selection it disappears and returns its space to the map;
+  Hide details suppresses it even while an object remains selected, and Show
+  details restores the selected object's information.
+- Replaced the expanded map's fixed height estimate with a flexible canvas that
+  consumes all remaining space down to the workspace's bottom border.
+- Expanded the SVG coordinate boundary itself to match the entire visible canvas
+  at its current aspect ratio, eliminating inactive space to the right and below
+  the former fixed 1120-by-720 map boundary.
+- Made expanded workspace the topology's 1:1 working surface and retained that
+  coordinate extent when returning to the standard form, where the same layout
+  is scaled down as an overview instead of being rebuilt or rearranged.
+- Kept Show details / Hide details independent of map scale so opening the
+  floating panel never changes an expanded 100% workspace into a fitted view.
+- Added a Large network workspace option providing four times the screen area
+  (twice the width and twice the height) at 100%, while standard mode retains a
+  fitted overview of the selected mission workspace.
+- Changed Fit to Fit devices, calculating the visible node boundary so a sparse
+  topology fills the viewport without sacrificing unused mission workspace.
+- Added edge-triggered auto-pan during node dragging. Holding a node near any map
+  edge now scrolls the mission workspace in that direction, allowing placement
+  throughout 1× and 4× areas without repeatedly zooming out.
+- Added Shift-click multi-object selection and group dragging. Selected boxes
+  retain their relative positions while moving, relationship lines update live,
+  and edge-triggered auto-pan continues to work for the complete selection.
+- Made Shift-click on an expanded subnet in Individual view select or deselect
+  that subnet and every dependent host node, allowing the complete branch to be
+  repositioned together.
+- Added automatic zoom-dependent detail levels: Overview, Summary, Full detail,
+  and Evidence detail. The active level is visible beside the map scale, and
+  labels, endpoint rows, controls, and evidence summaries adapt to the scale.
+- Added a live minimap to the expanded workspace with topology and selection
+  markers, a current-viewport frame, and click-drag navigation across 1× and 4×
+  mission areas.
+- Added Small, Medium, Large, and hidden minimap controls.
+- Added a 50-step presentation Undo / Redo history covering map moves, grouped
+  box resizing, endpoint presentation changes, sorting, workspace size, layout
+  reset, layout presets, locking, and selection arrangement.
+- Added object locking plus a contextual selection bar for fitting, locking,
+  row or column alignment, even distribution, and compact arrangement.
+- Added box selection, right-click node actions, and keyboard controls for
+  Undo / Redo, fit, lock, box select, zoom, selection clearing, and coarse or
+  precise arrow-key movement. Shift+R aligns an unlocked multi-selection into a
+  row, Shift+C aligns it into a column, F fits a selection (or the whole map
+  when nothing is selected), and L locks or unlocks selected objects.
+- Added Spider web, Hierarchy, and Grid automatic layout presets.
+- Added an analyst-selectable WAN anchor. Device details suggest interfaces
+  named WAN, outside, internet, uplink, or external, permit any interface to be
+  chosen when evidence is ambiguous, and place, label, and lock that device at
+  the map's top center. An external WAN marker now sits above the map border and
+  connects directly to the anchored device with a visible uplink. The marker
+  follows the uplink during movement, zoom, and pan and disappears when its
+  anchored device is outside the visible map or removed by an isolated search.
+- Reworked interface connection labels into stacked interface, IP, and zone
+  lines. Lower zoom levels suppress extra detail, while hover text preserves the
+  complete relationship and evidence.
+- Expanded map search with result counts, previous/next navigation, automatic
+  focus on the active match, and an isolate-matches presentation mode.
+- Added named private browser layouts that save and restore manual placement,
+  group sizes and modes, locks, WAN anchor, map preset, workspace size, zoom,
+  minimap presentation, sorting, and analytical overlay selection.
+- Added optional OS-family, service-exposure, and identity-gap overlays with a
+  concise legend. Service exposure is presented as port-density context rather
+  than a vulnerability finding, while identity gaps distinguish missing
+  OS/MAC/evidence from conflicting observations.
+- Added zoom-safe network-diagram symbols for routers, firewalls, switches,
+  wireless devices, and unknown infrastructure. Device borders remain solid
+  when identity is confirmed by configuration evidence and dashed when the
+  type is inferred, leaving color available for analytical overlays. Shortened
+  the router arrowheads so its crossed arrows remain distinct at map scale.
+- Added explanatory hover text to the Map search navigation arrows and Isolate
+  control.
+- Standardized host and network presentation on numeric IP ordering across scan
+  analysis, Hunt, comparisons, device candidates, and Map collections, including
+  IPv4, IPv6, CIDR, and canonical host identifiers.
+- Kept map presentation state local to each analyst browser so display changes
+  do not modify shared evidence or another analyst's view.
+
+## 0.13.0-dev — Network Map Core
+
+- Added cursor-centered wheel zoom and click-drag canvas panning while retaining
+  toolbar zoom, Fit, node dragging, and centered layout reset behavior.
+- Replaced oversized interface-expanded device boxes with compact device nodes;
+  complete addresses, interfaces, routes, services, MACs, and provenance remain
+  available in the sticky details panel.
+
+## 0.12.1-dev — Network-wide hunting workflow
+
+- Made Hunt a top-level page in the Nmap, Device, Analyze, Hunt, Map workflow.
+- Made Hunt load a network-wide view by default using the newest completed
+  evidence for each retained network scope.
+- Added a complete host/device inventory alongside capability findings, keeping
+  hosts even when no matching service capability is present.
+- Added operating-system, subnet, and device-type filters and expanded the
+  capability-evidence explanations.
+- Cross-referenced Nmap IPs with retained router/firewall neighbor-table MAC
+  evidence in Hunt and Nmap Analysis, with direct-versus-correlated source
+  labels, hover detail, timestamps, and links to the supplying collection.
+- Added a future audited analyst OS-override capability to the rollout roadmap.
+- Kept the capability evidence guide pinned below the Hunt navigation while
+  scrolling through host and finding tables.
+- Renamed Hunt's analyst-facing capability categories to datasets throughout
+  the summary, filter, findings table, and comparison language.
+- Expanded Hunt to a 26-dataset classification catalog including authentication,
+  identity, name resolution, VPN, monitoring, virtualization, storage, OT, IoT,
+  routing, and policy domains while keeping only active datasets in the summary
+  and filter dropdown.
+- Made the Host and device inventory collapsible and kept its current host count
+  visible in the collapsed heading.
+- Added offline SearchSploit enrichment with CVE categorization, candidate-title
+  filtering, network-wide filters, database provenance, connected updates,
+  air-gapped archive uploads, and retained-version rollback.
+- Validated the official Exploit-DB archive on an empty NCT data volume through
+  upload, activation, restart persistence, second-version staging, and rollback.
+- Made the major Hunt panels collapsible, added clear open/closed chevrons, and
+  kept active Network and SearchSploit filters visible in collapsed headings.
+- Replaced the separate visible page-title blocks with a centered NCT wordmark
+  and active Nmap, Device, Analyze, Hunt, and Map navigation state.
+- Enlarged and spaced the NCT wordmark, highlighted the N/C/T initials in its
+  full-name underline, and shortened the shared navigation buttons.
+- Removed the originating-host banner and operator-entered host field from the
+  Nmap page while continuing to record the analyzer hostname automatically.
+- Added a slim origin notice beneath the sticky navigation on Nmap, Device, and
+  Hunt so outbound scan, collection, and connected-update traffic is attributed
+  to the current NCT host without an operator-entered field.
+
+## 0.12.0-dev — Dedicated service hunting
+
+- Added a dedicated Hunt Services view for completed automated Nmap scans.
+- Classified exposed services into Remote Access, File Transfer, File Sharing,
+  Web, Identity, Databases, Email, Network Management, and uncategorized
+  exposure without hiding unknown services.
+- Distinguished exposed, port-inferred, fingerprint-observed, and correlated
+  capability evidence, including fingerprint matches on nonstandard ports.
+- Added combined host, category, protocol, evidence-level, and nonstandard-port
+  filters while allowing multiple capability categories per host.
+- Added scan-to-scan hunting comparisons with added, removed, and changed
+  findings, host category changes, coverage warnings, and retained XML links.
+- Added direct Hunt actions to completed scan history and analysis history.
+
+## 0.11.0-dev — Unified network-device analysis
+
+- Added a dedicated Network Device Analysis view under Analyze Results, plus a
+  direct Analyze action on each retained device collection.
+- Added route protocol, default-route, next-hop, multipath, interface-role, and
+  review-item summaries derived from retained configuration evidence.
+- Added collection-to-collection comparison for interfaces, routes,
+  firewall/ACL rules, NAT statements, and network objects.
+- Correlated Saved Networks and retained Nmap hosts with parsed interfaces,
+  routes, policy, NAT, and network objects, including confidence labels and
+  links back to source evidence.
+- Added network-object extraction to the structured device-configuration view.
+
+## 0.10.0-dev — Split scan execution engine
+
+- Split local scan execution into visible Discovery, TCP, UDP, Merge, and
+  Analysis preparation phases with separate retained evidence for each stage.
+- Added a dedicated Nmap host-discovery pass; responsive targets are certified
+  once and passed to protocol scans without repeating discovery.
+- Preserved successful TCP XML as the canonical analyzable result when the UDP
+  phase fails or reaches its time limit, while clearly marking the run partial.
+- Bounded UDP work with profile-aware retry limits and per-host timeouts, used
+  light service detection, and kept OS detection in the TCP phase.
+- Added phase-aware progress labels and command accountability to the scan page.
+- Added regression coverage for phase commands, TCP/UDP XML merging, and the
+  TCP-success/UDP-failure recovery path.
+
+## 0.9.0-dev — Network-device collection usability
+
+- Added structured, collapsible review sections for interfaces, routes,
+  neighbors, VLANs, firewall/ACL evidence, NAT evidence, executed commands,
+  configuration text, and raw output.
+- Added route-type filtering, result search, route counts, and bounded table
+  rendering for large collection results.
+- Added confirmation-protected deletion of one device collection result with
+  strict run-directory validation and active-session protection.
+- Removed duplicate artifact links when an uploaded file also matches the
+  normal collected-configuration filename pattern.
+- Kept Open, Analyze, Compare, and Delete scan-history actions on one row so
+  the Delete control no longer wraps onto a line by itself.
+- Shortened host and port CSV export filenames to a compact NCT label and
+  eight-character result identifier for reliable opening on Windows.
+
+## 0.8.0-dev — Subnet-grouped scan history
+
+- Replaced the flat Nmap run table with collapsible groups based on the immutable
+  Saved Network snapshots retained with each scan.
+- Kept scans spanning several Saved Networks in a dedicated multi-network group
+  and legacy/manual scans in an Ad Hoc / Manual group without duplicating runs.
+- Added group summaries for scan count, latest scan, completion time, and latest
+  host count while preserving per-run scope, profile, ownership, evidence, and
+  deletion controls.
+- Added direct Analyze and Compare actions from grouped history; Compare opens
+  Analysis with the selected run preselected for a second-run comparison.
+- Added a live pre-launch scope and safety summary showing requested, globally
+  excluded, scan-specific excluded, and effective scan address counts.
+- Standardized the No-Strike interface on “excluded” wording and prevented
+  overlapping global and scan-specific exclusions from being double-counted.
+- Reconciled the repository roadmap with the revised Nmap → Net Devices →
+  Analysis → Hunt → Map → Reachability / Hardening release sequence.
+
+## 0.7.1-dev — Scan workspace layout
+
+- Added expandable Saved Networks and No-Strikes panels directly below the
+  primary page navigation.
+- Consolidated manual Saved Network management and review-only subnet
+  suggestions from device configurations into the Saved Networks panel.
+- Added an explicit scan-scope selector for a Saved Network, manual IPv4 host
+  or CIDR entry, or a combination of both sources.
+- Kept global No-Strikes separate from per-scan exclusions while placing all
+  global safety-list management in one expandable panel.
+
 ## 0.6.3 — Cleaner topology labels
 
 - Removed interface MAC addresses from network-map connection labels to reduce

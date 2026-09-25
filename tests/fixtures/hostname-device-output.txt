@@ -1,0 +1,15 @@
+===== show running-config =====
+hostname edge-router
+ip host dns-name.example 10.20.30.9
+!
+===== show hosts =====
+core-dns.example          None  (perm, OK)  0   IP    10.20.30.5
+===== show ip dhcp binding =====
+10.20.30.20  aa:bb:cc:dd:ee:ff  active 2026-09-25 20:00:00 workstation-20
+===== show lldp neighbors detail =====
+Local interface: GigabitEthernet1
+Chassis ID: 00:11:22:33:44:55
+Port ID: Ethernet1
+System Name: access-switch-1
+Management address: 10.20.30.2
+System Capabilities: Bridge Router

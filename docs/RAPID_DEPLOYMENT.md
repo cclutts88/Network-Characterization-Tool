@@ -1,0 +1,221 @@
+# NCT rapid deployment launcher
+
+The normal operator entry point is the guided installer:
+
+```sh
+sudo sh scripts/install-nct.sh
+```
+
+It supplies built-in prompts for Test/Range selection, local or LAN access,
+server address, HTTPS generation or existing certificate paths, available port,
+firewall approval and source CIDR, legacy-runtime consent when detected,
+versioned image and offline archive, Test acceptance receipt, authentication,
+and the initial Administrator. It shows a concise review, runs the launcher's
+non-mutating preflight, and asks once more before deployment. `--plan-only`
+completes the guided review without changing any state.
+
+When a successful prior installation has saved a preset, the installer offers
+to reuse those non-sensitive answers and skip the individual setup questions.
+Use `--reuse-preset` for the same repeat-reset path without the initial reuse
+question. Preset reuse never skips the complete review, immutable-image and
+host preflight, or final deployment approval. It also prints four concise
+progress stages so an operator can tell whether it is staging the image,
+handling TLS, preflighting, or installing and checking health.
+
+On a fresh air-gapped host, the installer explicitly asks before verifying and
+loading the offline image into Docker's local cache. This staging step changes
+no container, port, firewall rule, or NCT data; it makes the exact image
+available so the subsequent preflight can verify its build and Test receipt.
+
+After a successful deployment it saves only non-sensitive defaults in
+`nct-deployment/range-preset.env`. Passwords are generated or entered through
+the underlying secret-file workflow and never enter the preset. Operators who
+need automation can continue to call `nct-deploy.sh` directly.
+
+The launcher is intended for controlled Linux Docker hosts. It validates the
+runtime, image, ports, access boundary, firewall posture, TLS material,
+persistent volume, active work, backup, health, and rollback path before it
+reports NCT as available.
+
+Every Test, Range, or Mission deployment must name an explicit version tag or
+digest and the image must declare its NCT version and build identity. Mutable
+defaults such as `:latest` are rejected even for Test so the content-addressed
+image tested locally is the same artifact that can be evaluated on a range.
+The launcher records the local image ID and any registry digest in its
+deployment log, then verifies that the running application reports the same
+build. A Range promotion normally requires the same local image ID as its Test
+receipt. When Docker engines assign different local IDs to the same verified
+offline archive, Range may instead accept the Test receipt only when both runs
+record the identical archive SHA-256 plus the same version and build. Mission
+promotion remains image-ID exact. Re-running the launcher against the exact
+same healthy direct-HTTP image, bind address, port, and data volume is a safe
+no-op rather than an unnecessary replacement. A successful Test no-op still
+reruns the read-only acceptance checks and refreshes its promotion receipt.
+
+The selected application and HTTPS ports are stored in
+`nct-deployment/current.env` after successful validation. Unless an operator
+supplies a new port explicitly, later runs reuse that stable selection and also
+reuse a safely recognized existing NCT binding. Port preflight checks both
+other Docker containers and host listeners through `ss` or `netstat`; Test and
+Range may advance to an available port, while Mission must stop rather than
+silently changing its declared URL.
+
+The preflight reports a five-step Range compatibility ladder:
+
+1. `compose-v2` — supported modern Compose is available.
+2. `legacy-compose-v1` — degraded but accepted; the launcher avoids relying on
+   the older orchestration behavior.
+3. `direct-engine` — degraded but accepted when the Docker API, Linux runtime,
+   architecture, and required container capabilities remain supported.
+4. `legacy-range-direct-engine` — an explicit Range-only workaround for the
+   recurring API 1.39/1.40 VM pattern. The launcher bypasses Compose, probes
+   Python thread creation, selects container-only seccomp compatibility only
+   when proven necessary, and forces Uvicorn `asyncio` + `h11`. This tier cannot
+   be promoted to Mission.
+5. `offline appliance required` — unsupported Docker API, kernel, image format,
+   networking, or security behavior must stop instead of being hidden behind a
+   fragile flag workaround. The appliance is a separately tracked artifact and
+   is not bundled by this checkpoint.
+
+For consistent backup and rollback semantics, the launcher performs the final
+transactional swap through the Docker Engine path in all supported tiers. The
+detected tier and supported/degraded/workaround result are recorded in the deployment log
+and promotion receipt.
+
+See the [Recurring Range VM compatibility baseline](RECURRING_RANGE_VM_BASELINE.md)
+for the sanitized record of the previously successful old-runtime, occupied-port,
+and firewall recovery. The compatibility flag is deliberately not automatic
+because it may relax seccomp for the analyzer container.
+
+This checkpoint supports **Test** and **Range** deployment. The **Mission**
+profile can run a non-mutating readiness preflight but intentionally stops
+before making changes until NCT's formal mission-promotion gate is complete. A
+successful Test or Range launch must not be reported as mission readiness.
+
+After all application, access-path, runtime-tool, and raw-packet checks pass,
+the launcher writes an atomic promotion receipt under
+`nct-deployment/receipts`. The receipt binds the acceptance results,
+compatibility details, known limitations, and rollback evidence to the local
+image ID, application version, build, and, when applicable, verified offline
+archive SHA-256. Range requires a Test receipt for that exact artifact; a
+cross-engine Range promotion may use the matching archive checksum as its
+artifact identity. Future Mission preflight requires the matching Range
+receipt and remains image-ID exact. Receipts contain no credentials or
+application evidence.
+
+Authentication is optional for a local **Test** deployment and defaults to
+enabled for **Range**. Range cannot be launched with authentication disabled.
+For IP-addressed Range access, the TLS proxy uses the approved bind address as
+its default SNI identity so clients that omit SNI still receive the matching
+operator-issued certificate.
+On the first authenticated deployment, the launcher inspects the persistent
+account store. If it is empty, it creates the operator-selected first
+Administrator; NCT has no fixed default username or password. Existing accounts
+are preserved on upgrade and bootstrap is not repeated.
+
+Run a non-mutating preflight first:
+
+```sh
+sh scripts/nct-deploy.sh --profile test --access local \
+  --image network-characterization-tool:0.14.0-dev-42d8636 --check-only
+```
+
+Deploy a local test build:
+
+```sh
+sh scripts/nct-deploy.sh --profile test --access local --port 8766 \
+  --image network-characterization-tool:0.14.0-dev-42d8636
+```
+
+Enable authentication for that Test build and securely generate its first
+Administrator password:
+
+```sh
+sh scripts/nct-deploy.sh --profile test --access local --port 8766 \
+  --auth local --admin-user nctadmin --generate-admin-password \
+  --image network-characterization-tool:VERSION
+```
+
+The launcher prints the generated password-file path only after it verifies the
+new Administrator. Sign in, store the password using the approved site process,
+then delete that file. For unattended deployment, use
+`--admin-password-file FILE` instead; the file is mounted read-only and its
+contents never appear in container metadata or the deployment log. Interactive
+deployment prompts twice without echoing the password. In every path, the
+bootstrap mount is removed and NCT is restarted without it before success is
+reported.
+
+For a range host, choose its exact LAN address and approved source range. The
+launcher never binds to every interface and does not alter the firewall unless
+`--configure-firewall` is explicitly supplied from an elevated shell:
+
+```sh
+sudo sh scripts/nct-deploy.sh --profile range --access lan \
+  --bind 10.20.30.40 --port 8766 --source-cidr 10.20.30.0/24 \
+  --configure-firewall --auth local --admin-user nctadmin \
+  --generate-admin-password --image nct:range-validated \
+  --promote-from-receipt nct-deployment/receipts/test-BUILD-TIMESTAMP.receipt
+```
+
+LAN preflight distinguishes active firewalld, active UFW, an installed but
+inactive manager, and an unmanaged host. It queries the selected port and
+source before deployment, reuses an existing matching rule without duplication,
+and records the rule decision. Range and Mission firewall changes require an
+approved `--source-cidr`; the launcher will not create an unrestricted
+Internet-facing rule for those profiles. A rule created by NCT is verified after
+reload and removed if the deployment rolls back.
+
+On the repeatedly reset legacy Range VM family, add
+`--allow-legacy-range-runtime` only after reviewing the preflight. The known
+successful alternate HTTPS port was `8444`; the current launcher will also
+detect an occupied requested port and record a safe Range alternate without
+stopping the existing service.
+
+Air-gapped packages must include an immutable image archive and SHA-256. The
+launcher rejects an archive without a checksum in every deployment profile:
+
+```sh
+sh scripts/nct-deploy.sh --profile range --access local --offline \
+  --image nct:range-validated --image-archive offline-images/nct.tar \
+  --image-sha256 EXPECTED_SHA256
+```
+
+The future Mission mode additionally requires a LAN address, certificate, key,
+trusted CA file, stable ports, authentication, successful active-work
+detection, backup, application health, and a trusted HTTPS request. A failed
+Test or Range container is removed and the previous named application and HTTPS
+proxy containers are restored automatically. Any narrow firewall rule created
+by the launcher is removed during rollback. The old containers remain stopped
+under timestamped rollback names after success until an operator removes them
+under the site's retention procedure.
+
+The deployment log records decisions and results but never credentials or NCT
+evidence. A success banner and access URL are printed only after the final
+health check passes. Final readiness also proves that Nmap, FPING, tcpdump, and
+SSH are installed inside the application container, packet-capture interfaces
+can be enumerated, `NET_RAW` is present, and a raw ICMP socket can be created.
+
+Run [the Range compatibility matrix](RANGE_COMPATIBILITY_MATRIX.md) before
+moving an image into range evaluation. It produces a retained summary of the
+simulated compatibility cases and can optionally include the current host and
+immutable image preflight.
+
+## Administrator recovery
+
+If every Administrator is locked out, an authorized host operator can recover
+one existing Administrator without enabling an application-level back door:
+
+```sh
+sudo sh scripts/nct-admin-recover.sh --container nct \
+  --admin-user nctadmin --generate-password
+```
+
+Recovery refuses to proceed while NCT has active work, verifies that the target
+is an Administrator, stops the existing container when necessary, creates a
+timestamped data backup, resets the password through a read-only secret-file
+mount, revokes all prior sessions for that account, and returns the original
+container to its previous running state. It cannot create a new account or
+promote an Analyst. The generated recovery password remains in the protected
+state directory only long enough for the operator to store it and confirm
+sign-in; delete it afterward. A supplied `--password-file` is never deleted by
+the script.

@@ -27,7 +27,7 @@ DEFAULT_SCAN_OPTIONS = {
     "service_detection": True,
     "os_detection": True,
     "timing": "fast",
-    "discovery_mode": "nmap",
+    "discovery_mode": "fping",
     "traceroute": False,
 }
 
@@ -71,6 +71,8 @@ BUILTIN_PROFILES = (
         },
     },
 )
+
+BUILTIN_PROFILE_VERSION = 2
 
 
 def utc_now() -> str:
@@ -124,7 +126,7 @@ def normalize_scan_options(value: Mapping[str, object] | None = None) -> dict:
     tcp_scope = str(options["tcp_scope"])
     udp_scope = str(options["udp_scope"])
     timing = str(options["timing"])
-    discovery_mode = str(options.get("discovery_mode", "nmap"))
+    discovery_mode = str(options.get("discovery_mode", "fping"))
     if protocol not in PROTOCOLS:
         raise ValueError("Protocol must be TCP, UDP, or TCP + UDP")
     if tcp_scope not in TCP_SCOPES:
@@ -210,6 +212,42 @@ def build_nmap_flags(value: Mapping[str, object] | None = None) -> list[str]:
         flags.append("--traceroute")
     if "-n" not in flags:
         raise RuntimeError("All generated Nmap commands must include -n")
+    return flags
+
+
+def build_phase_nmap_flags(
+    value: Mapping[str, object] | None,
+    protocol: str,
+    *,
+    pre_discovered: bool,
+) -> list[str]:
+    """Build one protocol phase without losing the parent profile's settings."""
+    if protocol not in {"tcp", "udp"}:
+        raise ValueError("A scan phase must be TCP or UDP")
+    phase_options = {**DEFAULT_SCAN_OPTIONS, **dict(value or {}), "protocol": protocol}
+    # OS fingerprinting is TCP-oriented and traceroute only needs to run once in
+    # a split TCP+UDP workflow. Keep the UDP phase focused and bounded.
+    if protocol == "udp":
+        phase_options["os_detection"] = False
+        if str((value or {}).get("protocol", "tcp")) == "tcp_udp":
+            phase_options["traceroute"] = False
+    flags = build_nmap_flags(phase_options)
+    if pre_discovered and "-Pn" not in flags:
+        insert_at = max(
+            (flags.index(item) + 1 for item in ("-sS", "-sU") if item in flags),
+            default=1,
+        )
+        flags.insert(insert_at, "-Pn")
+    if protocol == "udp":
+        timing = str(phase_options.get("timing", "fast"))
+        retries, host_timeout = {
+            "conservative": ("2", "10m"),
+            "normal": ("1", "5m"),
+            "fast": ("1", "3m"),
+        }[timing]
+        flags.extend(["--max-retries", retries, "--host-timeout", host_timeout])
+        if "-sV" in flags:
+            flags.append("--version-light")
     return flags
 
 

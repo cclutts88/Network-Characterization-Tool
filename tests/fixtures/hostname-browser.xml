@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap" args="nmap -sV 10.20.30.0/24" start="1790294400" startstr="Thu Sep 24 19:00:00 2026">
+  <host>
+    <status state="up" reason="syn-ack"/>
+    <address addr="10.20.30.9" addrtype="ipv4"/>
+    <hostnames><hostname name="nmap-name.example" type="PTR"/></hostnames>
+    <ports><port protocol="tcp" portid="443"><state state="open"/><service name="https"/></port></ports>
+  </host>
+  <host>
+    <status state="up" reason="arp-response"/>
+    <address addr="10.20.30.20" addrtype="ipv4"/>
+    <ports/>
+  </host>
+  <runstats><finished time="1790294460" timestr="Thu Sep 24 19:01:00 2026"/><hosts up="2" down="0" total="2"/></runstats>
+</nmaprun>

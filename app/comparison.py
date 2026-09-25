@@ -9,6 +9,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Iterable
 
+from app.ip_sort import ip_sort_key
+
 
 TERMINAL_STATES = {
     "completed",
@@ -121,12 +123,42 @@ def describe_run_group(manifests: list[dict]) -> dict:
     first = manifests[0]
     display_name = str(first.get("display_name") or first.get("name") or "Scan")
     display_name = _CHUNK_NAME_RE.sub("", display_name)
+    saved_networks: list[dict] = []
+    seen_networks: set[str] = set()
+    manual_targets: list[str] = []
+    for manifest in manifests:
+        values = manifest.get("saved_networks") or (
+            manifest.get("target_selection") or {}
+        ).get("saved_networks") or []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            key = str(
+                value.get("saved_network_id")
+                or value.get("name")
+                or value.get("cidr")
+                or ""
+            ).casefold()
+            if not key or key in seen_networks:
+                continue
+            seen_networks.add(key)
+            saved_networks.append(value)
+        for value in manifest.get("manual_targets") or (
+            manifest.get("target_selection") or {}
+        ).get("manual_targets") or []:
+            value = str(value).strip()
+            if value and value not in manual_targets:
+                manual_targets.append(value)
     return {
         "group_id": run_group_key(first),
         "run_ids": [item["run_id"] for item in manifests],
+        "name": first.get("name") or first.get("campaign"),
         "display_name": display_name,
+        "scheduled": bool(first.get("scheduled") or first.get("schedule_id")),
         "schedule_id": first.get("schedule_id"),
         "schedule_batch_id": first.get("schedule_batch_id"),
+        "saved_networks": saved_networks,
+        "manual_targets": manual_targets,
         "created_at": min((item.get("created_at") or "" for item in manifests), default=""),
         "completed_at": max((item.get("completed_at") or "" for item in manifests), default=""),
         "chunk_count": len(manifests),
@@ -273,10 +305,21 @@ def merge_analyses(analyses: Iterable[dict]) -> dict:
                     values = {_port_key(item): item for item in merged.get(field, []) or []}
                     values.update({_port_key(item): item for item in host.get(field, []) or []})
                     merged[field] = [values[item] for item in sorted(values)]
+                coverage_values = list(merged.get("scan_coverages") or [])
+                coverage_keys = {
+                    json.dumps(item, sort_keys=True, default=str)
+                    for item in coverage_values
+                }
+                for coverage in host.get("scan_coverages") or []:
+                    coverage_key = json.dumps(coverage, sort_keys=True, default=str)
+                    if coverage_key not in coverage_keys:
+                        coverage_values.append(coverage)
+                        coverage_keys.add(coverage_key)
+                merged["scan_coverages"] = coverage_values
                 for field, value in host.items():
-                    if field not in {"ports", "observed_ports"} and value not in (None, "", [], {}):
+                    if field not in {"ports", "observed_ports", "scan_coverages"} and value not in (None, "", [], {}):
                         merged[field] = value
-    values = [hosts[key] for key in sorted(hosts)]
+    values = sorted(hosts.values(), key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     summary = _summarize_hosts(values)
     first, last = analysis_list[0], analysis_list[-1]
     return {
@@ -476,10 +519,10 @@ def compare_analyses(
         for host in after_analysis.get("hosts", []) or []
         if canonical_host_key(host)
     }
-    added_keys = sorted(set(after) - set(before))
-    removed_keys = sorted(set(before) - set(after))
+    added_keys = sorted(set(after) - set(before), key=ip_sort_key)
+    removed_keys = sorted(set(before) - set(after), key=ip_sort_key)
     changed = []
-    for key in sorted(set(before) & set(after)):
+    for key in sorted(set(before) & set(after), key=ip_sort_key):
         old_host, new_host = before[key], after[key]
         old_ports = _port_inventory(old_host)
         new_ports = _port_inventory(new_host)

@@ -57,7 +57,9 @@ def test_device_collection_templates_request_neighbor_evidence():
     for vendor, device_types in TEMPLATES.items():
         for device_type, commands in device_types.items():
             command_text = "\n".join(commands).lower()
-            assert "arp" in command_text, f"{vendor} {device_type} is missing ARP collection"
-            assert any(term in command_text for term in ("ipv6 neighbor", "ndp")), (
+            assert any(term in command_text for term in ("arp", "ip -4 neigh", "ip neigh")), (
+                f"{vendor} {device_type} is missing ARP collection"
+            )
+            assert any(term in command_text for term in ("ipv6 neighbor", "ndp", "ip -6 neigh", "ip neigh")), (
                 f"{vendor} {device_type} is missing IPv6-neighbor collection"
             )

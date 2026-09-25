@@ -8,8 +8,11 @@ from app.network_map import (
     add_analysis_hosts,
     add_edge,
     add_membership_edges,
+    add_point_to_point_edges,
     annotate_subnet_scan_observations,
+    apply_saved_network_names,
     apply_subnet_zone,
+    configuration_network_candidates,
     configuration_devices,
     ensure_ip_node,
     ensure_interface_node,
@@ -18,6 +21,7 @@ from app.network_map import (
     merge_device_alias,
     parse_config_text,
 )
+from app.saved_networks import SavedNetworkCreate, create_saved_network
 
 
 SAMPLE_XML = b'''<?xml version="1.0"?>
@@ -55,6 +59,35 @@ def test_parser_surfaces_mac_hostname_protocol_and_coverage():
     assert host["trace"]["hops"][0]["ip"] == "10.20.30.1"
     assert host["trace"]["hops"][0]["ttl"] == 1
     assert len(host["observed_ports"]) == 2
+    assert host["scan_coverages"] == [analysis["coverage"]]
+
+
+def test_parser_warns_when_reset_responses_make_an_entire_subnet_look_online():
+    hosts = "".join(
+        f'''<host><status state="up" reason="reset" reason_ttl="63"/>
+        <address addr="10.0.0.{index}" addrtype="ipv4"/></host>'''
+        for index in range(1, 65)
+    )
+    xml = f'''<?xml version="1.0"?>
+    <nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 10.0.0.0/26">
+      <scaninfo type="syn" protocol="tcp" numservices="1" services="80"/>
+      {hosts}
+      <runstats><finished timestr="done"/><hosts up="64" down="0" total="64"/></runstats>
+    </nmaprun>'''.encode()
+
+    analysis = parse_xml(xml)
+
+    assert analysis["discovery_reason_counts"] == {"reset": 64}
+    assert analysis["hosts"][0]["state_reason"] == "reset"
+    assert analysis["hosts"][0]["state_reason_ttl"] == "63"
+    assert any("Docker Desktop NAT" in warning for warning in analysis["warnings"])
+
+
+def test_parser_does_not_warn_for_a_small_directly_observed_scan():
+    analysis = parse_xml(SAMPLE_XML)
+
+    assert analysis["discovery_reason_counts"] == {"arp-response": 1}
+    assert not any("Scan-quality warning" in warning for warning in analysis["warnings"])
 
 
 def test_parser_retains_non_open_port_observations_for_comparison():
@@ -103,6 +136,43 @@ def test_traceroute_hops_become_observed_map_relationships():
     assert nodes["ip:10.20.30.1"]["kind"] == "gateway"
     assert nodes["ip:10.20.30.15"]["paths"][0]["hops"][0]["ttl"] == 1
     assert any(edge["relation"] == "trace_hop" for edge in edges.values())
+
+
+def test_docker_bridge_gateway_stays_in_path_but_out_of_mission_map(monkeypatch):
+    monkeypatch.setattr(
+        "app.network_map.container_default_gateway", lambda: "172.17.0.1"
+    )
+    nodes, edges = {}, {}
+    add_analysis_hosts(
+        nodes,
+        {
+            "hosts": [
+                {
+                    "ip": "10.0.0.20",
+                    "ports": [],
+                    "trace": {
+                        "hops": [
+                            {"ttl": 1, "ip": "172.17.0.1", "rtt": "0.10"},
+                            {"ttl": 2, "ip": "10.0.0.1", "rtt": "0.50"},
+                            {"ttl": 3, "ip": "10.0.0.20", "rtt": "0.90"},
+                        ]
+                    },
+                }
+            ]
+        },
+        {"kind": "automated_nmap", "label": "container scan"},
+        edges,
+    )
+
+    assert "ip:172.17.0.1" not in nodes
+    path = nodes["ip:10.0.0.20"]["paths"][0]
+    assert path["hops"][0]["ip"] == "172.17.0.1"
+    assert path["hops"][0]["tool_local"] is True
+    assert any(
+        edge["source"] == "ip:10.0.0.1"
+        and edge["target"] == "ip:10.0.0.20"
+        for edge in edges.values()
+    )
 
 
 def test_scanned_infrastructure_counts_as_subnet_characterization():
@@ -175,6 +245,27 @@ set interfaces ge-0/0/3 unit 0 family inet address 10.60.0.1/24
     assert subnet["zone_names"] == ["OPERATIONS-LAN"]
 
 
+def test_saved_network_name_labels_matching_map_subnet_without_hiding_cidr():
+    subnet = ensure_subnet_node({}, "10.40.0.0/24")
+    apply_subnet_zone(subnet, "OPERATIONS-LAN")
+
+    apply_saved_network_names(
+        {subnet["id"]: subnet},
+        [{"name": "Plant Operations", "cidr": "10.40.0.0/24", "active": True}],
+    )
+
+    assert subnet["label"] == "Plant Operations · 10.40.0.0/24"
+    assert subnet["saved_network_name"] == "Plant Operations"
+    assert subnet["zone_names"] == ["OPERATIONS-LAN"]
+
+
+def test_switch_role_promotes_scanned_ip_to_map_device():
+    node = ensure_ip_node({}, "10.40.0.2", role="switch")
+
+    assert node["kind"] == "device"
+    assert node["role"] == "switch"
+
+
 def test_configuration_parser_associates_hardware_addresses_with_interfaces():
     interfaces, _ = parse_config_text(
         """
@@ -199,6 +290,73 @@ vtnet0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
     assert by_name["ge-0/0/3.0"]["mac"] == "00:11:22:33:44:77"
     assert by_name["vtnet0"]["mac"] == "00:11:22:33:44:88"
     assert all(item.get("mac_evidence") for item in by_name.values())
+
+
+def test_configuration_parser_reads_unifi_linux_interfaces_connected_and_default_routes():
+    interfaces, routes = parse_config_text(
+        """
+2: br0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
+    link/ether 00:11:22:33:44:99 brd ff:ff:ff:ff:ff:ff
+    bridge forward_delay 1500 hello_time 200 stp_state 0
+    inet 10.80.0.1/24 brd 10.80.0.255 scope global br0
+10.80.0.0/24 dev br0 proto kernel scope link src 10.80.0.1
+default via 192.0.2.254 dev eth8 proto static
+"""
+    )
+
+    by_name = {item["name"]: item for item in interfaces}
+    assert by_name["br0"]["address"] == "10.80.0.1/24"
+    assert "bridge" not in by_name
+    assert by_name["br0"]["mac"] == "00:11:22:33:44:99"
+    by_network = {item["network"]: item for item in routes}
+    assert by_network["10.80.0.0/24"]["interface"] == "br0"
+    assert by_network["10.80.0.0/24"]["direct"] is True
+    assert by_network["0.0.0.0/0"]["via"] == "192.0.2.254"
+    assert by_network["0.0.0.0/0"]["interface"] == "eth8"
+
+
+def test_configuration_routes_have_stable_numeric_longest_prefix_order():
+    _, routes = parse_config_text(
+        """
+ip route 10.0.1.1 255.255.255.255 192.0.2.4
+ip route 10.0.0.0 255.0.0.0 192.0.2.3
+ip route 0.0.0.0 0.0.0.0 192.0.2.1
+ip route 10.0.0.0 255.255.255.0 192.0.2.2
+"""
+    )
+
+    assert [route["network"] for route in routes] == [
+        "0.0.0.0/0",
+        "10.0.0.0/24",
+        "10.0.0.0/8",
+        "10.0.1.1/32",
+    ]
+
+
+def test_configuration_parser_reads_cisco_operational_host_and_multipath_routes():
+    _, routes = parse_config_text(
+        """
+B    3.13.152.157 [20/0] via 175.0.92.21, 1w6d
+B    3.13.205.162 [20/0] via 175.0.92.21, 1w6d
+O E2 10.80.0.0/24 [110/20] via 175.0.92.21, 00:10:00, GigabitEthernet1
+     [110/20] via 175.0.92.25, 00:10:00, GigabitEthernet2
+C    175.0.92.20/30 is directly connected, GigabitEthernet1
+"""
+    )
+
+    assert any(
+        route["network"] == "3.13.152.157/32"
+        and route["via"] == "175.0.92.21"
+        for route in routes
+    )
+    multipath = [route for route in routes if route["network"] == "10.80.0.0/24"]
+    assert {route["via"] for route in multipath} == {"175.0.92.21", "175.0.92.25"}
+    assert {route["interface"] for route in multipath} == {
+        "GigabitEthernet1", "GigabitEthernet2"
+    }
+    connected = next(route for route in routes if route["network"] == "175.0.92.20/30")
+    assert connected["direct"] is True
+    assert connected["interface"] == "GigabitEthernet1"
 
 
 def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
@@ -241,6 +399,44 @@ def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
     assert edge["relation"] == "topology_neighbor"
     assert edge["confidence"] == "confirmed"
     assert edge["interface_label"] is True
+
+
+def test_two_confirmed_device_interfaces_create_one_point_to_point_link():
+    nodes, edges, warnings = {}, {}, []
+    source = {"kind": "configuration", "label": "device configs", "timestamp": None}
+    left = ensure_ip_node(nodes, "192.0.2.1", hostname="edge-a", role="router", source=source)
+    right = ensure_ip_node(nodes, "192.0.2.2", hostname="edge-b", role="router", source=source)
+    subnet = ensure_subnet_node(nodes, "10.0.0.0/31", source)
+    left_interface = ensure_interface_node(nodes, left, "eth0", "10.0.0.0/31", source)
+    right_interface = ensure_interface_node(nodes, right, "eth0", "10.0.0.1/31", source)
+    add_edge(edges, left_interface["id"], subnet["id"], "directly_connected", "eth0", "confirmed")
+    add_edge(edges, right_interface["id"], subnet["id"], "directly_connected", "eth0", "confirmed")
+
+    add_point_to_point_edges(nodes, edges, warnings)
+
+    transit = [edge for edge in edges.values() if edge["relation"] == "transit_segment"]
+    assert len(transit) == 1
+    assert transit[0]["source"] == left["id"]
+    assert transit[0]["target"] == right["id"]
+    assert transit[0]["network"] == "10.0.0.0/31"
+    assert transit[0]["source_interface_address"] == "10.0.0.0"
+    assert transit[0]["target_interface_address"] == "10.0.0.1"
+    assert warnings == []
+
+
+def test_static_route_next_hop_does_not_create_a_point_to_point_link():
+    nodes, edges, warnings = {}, {}, []
+    source = {"kind": "configuration", "label": "device config", "timestamp": None}
+    router = ensure_ip_node(nodes, "192.0.2.1", hostname="edge-a", role="router", source=source)
+    gateway = ensure_ip_node(nodes, "192.0.2.2", hostname="edge-b", role="router", source=source)
+    add_edge(
+        edges, router["id"], gateway["id"], "next_hop",
+        "10.20.0.0/16 via 192.0.2.2", "confirmed",
+    )
+
+    add_point_to_point_edges(nodes, edges, warnings)
+
+    assert not any(edge["relation"] == "transit_segment" for edge in edges.values())
 
 
 def test_collected_configuration_adds_lldp_link_to_complete_topology(tmp_path, monkeypatch):
@@ -290,6 +486,127 @@ System Capabilities: Bridge Router
     assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
 
 
+def test_large_uploaded_configuration_still_supplies_map_interface_ip(tmp_path, monkeypatch):
+    run_id = "f" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "operation": "manual_upload",
+                "device_address": "192.0.2.10",
+                "device_name": "large-route-router",
+                "vendor": "cisco",
+                "device_type": "router",
+                "status": "uploaded",
+                "created_at": "2026-09-24T12:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    padding = "! retained route evidence padding\n" * 70_000
+    source = run_dir / "uploaded-large-config.txt"
+    source.write_text(
+        "interface GigabitEthernet0/1\n"
+        " ip address 10.80.0.1 255.255.255.0\n"
+        "ip route 10.90.0.0 255.255.255.0 192.0.2.1\n"
+        + padding,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+    device = nodes["ip:192.0.2.10"]
+    assert device["interfaces"] == [
+        {"name": "GigabitEthernet0/1", "address": "10.80.0.1/24"}
+    ]
+    assert device["routes"] == []
+    ownership = next(
+        edge for edge in edges.values() if edge["relation"] == "owns_interface"
+    )
+    assert ownership["evidence"] == "10.80.0.1/24"
+    assert source.stat().st_size > 2_000_000
+
+
+def test_combined_router_firewall_is_labeled_as_both_on_map(tmp_path, monkeypatch):
+    run_id = "9" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": run_id,
+        "device_address": "10.80.0.1",
+        "device_name": "core-gateway",
+        "vendor": "unifi",
+        "device_type": "firewall",
+        "device_types": ["router", "firewall"],
+        "status": "completed",
+        "created_at": "2026-09-12T20:00:00+00:00",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        """2: eth0: <UP> mtu 1500
+    inet 10.80.0.1/24 scope global eth0
+default via 192.0.2.1 dev eth9
+*filter
+:FORWARD DROP [0:0]
+COMMIT
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    gateway = nodes["ip:10.80.0.1"]
+    assert gateway["role"] == "firewall"
+    assert gateway["roles"] == ["router", "firewall"]
+    assert gateway["role_label"] == "Router + Firewall"
+
+
+def test_switch_mac_table_correlates_known_nmap_mac_to_physical_port(tmp_path, monkeypatch):
+    run_id = "b" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": run_id,
+        "operation": "configuration_pull",
+        "device_address": "10.80.0.2",
+        "device_name": "access-switch",
+        "vendor": "cisco",
+        "device_type": "switch",
+        "status": "completed",
+        "commands": ["show interfaces switchport", "show mac address-table"],
+        "created_at": "2026-09-12T20:00:00+00:00",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        """
+interface GigabitEthernet1/0/10
+ switchport mode access
+ switchport access vlan 80
+80 0011.2233.4455 DYNAMIC Gi1/0/10
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    source = {
+        "kind": "automated_nmap", "label": "Nmap", "timestamp": "2026-09-12T19:00:00+00:00", "url": "/scan.xml",
+    }
+    nodes, edges, warnings = {}, {}, []
+    host = ensure_ip_node(nodes, "10.80.0.25", mac="00:11:22:33:44:55", source=source)
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    switch = nodes["ip:10.80.0.2"]
+    assert switch["switching"]["mac_table"][0]["interface"] == "Gi1/0/10"
+    assert host["switchport_observations"][0]["switch_label"] == "access-switch"
+    link = next(edge for edge in edges.values() if edge["relation"] == "switchport_learning")
+    assert link["source"] == "interface:10.80.0.2:GigabitEthernet1-0-10"
+    assert link["target"] == "ip:10.80.0.25"
+    assert link["label"] == "Gi1/0/10 · VLAN 80 · learned MAC"
+
+
 def test_pfsense_self_arp_entry_does_not_spawn_endpoint(tmp_path, monkeypatch):
     run_id = "c" * 32
     run_dir = tmp_path / run_id
@@ -328,3 +645,50 @@ em0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> metric 0 mtu 1500
     assert not any(edge["relation"] == "arp_neighbor" for edge in edges.values())
     em0 = nodes["interface:172.22.70.1:em0"]
     assert em0["mac"] == "BC:24:11:01:A1:79"
+
+
+def test_config_identified_subnet_disappears_after_it_is_saved(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("a" * 32)
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "a" * 32,
+                "status": "uploaded",
+                "device_name": "Core Firewall",
+                "device_address": "192.0.2.1",
+                "vendor": "cisco",
+                "completed_at": "2026-09-11T12:00:00+00:00",
+            }
+        )
+    )
+    (run_dir / "uploaded-config.txt").write_text(
+        """interface GigabitEthernet0/1
+description OPERATIONS-LAN
+ip address 10.40.0.1 255.255.255.0
+ip route 10.50.0.0/24 192.0.2.2
+ip route 0.0.0.0/0 192.0.2.254
+"""
+    )
+
+    candidates = configuration_network_candidates(
+        config_dir=config_dir, db_path=db_path
+    )
+    assert [item["cidr"] for item in candidates] == ["10.40.0.0/24", "10.50.0.0/24"]
+    interface_candidate = candidates[0]
+    assert interface_candidate["suggested_name"] == "OPERATIONS-LAN · 10.40.0.0/24"
+    assert interface_candidate["sources"][0]["device_name"] == "Core Firewall"
+    assert len(interface_candidate["sources"]) == 1
+
+    create_saved_network(
+        SavedNetworkCreate(
+            name=interface_candidate["suggested_name"],
+            cidr=interface_candidate["cidr"],
+            created_by="operator",
+        ),
+        db_path,
+    )
+    remaining = configuration_network_candidates(config_dir=config_dir, db_path=db_path)
+    assert [item["cidr"] for item in remaining] == ["10.50.0.0/24"]

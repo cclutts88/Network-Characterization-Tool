@@ -94,6 +94,16 @@ def test_supported_templates_collect_interface_mac_evidence():
     for device_type in ("router", "firewall"):
         assert "ifconfig" in TEMPLATES["pfsense"][device_type]
         assert "cat /cf/conf/config.xml" in TEMPLATES["pfsense"][device_type]
+        assert any("__NCT_PF_TABLE__" in command for command in TEMPLATES["pfsense"][device_type])
         assert "pfSsh.php playback config" not in TEMPLATES["pfsense"][device_type]
     for device_type in ("router", "firewall"):
         assert "show configuration commands" in TEMPLATES["vyos"][device_type]
+    for device_type in ("router", "firewall"):
+        commands = TEMPLATES["unifi"][device_type]
+        assert "ip -details address show" in commands
+        assert "ip -4 neigh show" in commands
+        assert "ip -6 neigh show" in commands
+        assert "iptables-save" in commands
+        assert "ipset save" in commands
+        assert "nft list ruleset" in commands
+        assert "lldpcli show neighbors details" in commands

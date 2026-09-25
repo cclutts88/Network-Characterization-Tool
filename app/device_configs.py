@@ -20,7 +20,10 @@ from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.request_identity import bind_signed_in_actor, signed_in_username
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 CONFIG_DIR = DATA_DIR / "device-configs"
@@ -33,8 +36,14 @@ RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ARTIFACT_NAMES = ("manifest.json", "stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt")
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_SUMMARY_ITEMS = 500
+MAX_RETAINED_COLLECTION_BYTES = 100 * 1024 * 1024
+MAX_UPLOAD_BYTES = MAX_RETAINED_COLLECTION_BYTES
+MAX_SUMMARY_TEXT_BYTES = MAX_RETAINED_COLLECTION_BYTES
+MAX_RESPONSE_OUTPUT_CHARS = 200_000
+COLLECTION_COPY_CHUNK_BYTES = 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
+CISCO_COLLECTION_TIMEOUT_SECONDS = 600
 MAX_ADDITIONAL_COMMANDS = 20
 READ_ONLY_COMMAND_PREFIXES = {
     "show", "display", "get", "ping", "traceroute", "mtr",
@@ -45,8 +54,8 @@ READ_ONLY_FILTER_PREFIXES = {
     "head", "tail", "count", "no-more",
 }
 
-VENDORS = ("vyos", "cisco", "juniper", "pfsense")
-DEVICE_TYPES = ("router", "firewall")
+VENDORS = ("vyos", "cisco", "juniper", "pfsense", "unifi")
+DEVICE_TYPES = ("router", "firewall", "switch")
 
 TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
     "vyos": {
@@ -58,6 +67,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show arp",
             "show ipv6 neighbors",
             "show lldp neighbors detail",
+            "show dhcp server leases",
             "show firewall",
         ),
         "firewall": (
@@ -68,6 +78,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show arp",
             "show ipv6 neighbors",
             "show lldp neighbors detail",
+            "show dhcp server leases",
             "show firewall",
         ),
     },
@@ -83,6 +94,8 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show ipv6 neighbors",
             "show cdp neighbors detail",
             "show lldp neighbors detail",
+            "show hosts",
+            "show ip dhcp binding",
             "show access-lists",
         ),
         "firewall": (
@@ -96,7 +109,33 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show ipv6 neighbor",
             "show cdp neighbors detail",
             "show lldp neighbors detail",
+            "show hosts",
+            "show dhcpd binding",
             "show access-list",
+        ),
+        "switch": (
+            "terminal length 0",
+            "show version",
+            "show running-config",
+            "show ip interface brief",
+            "show interfaces status",
+            "show interfaces description",
+            "show interfaces switchport",
+            "show interfaces trunk",
+            "show vlan brief",
+            "show mac address-table",
+            "show spanning-tree summary",
+            "show spanning-tree",
+            "show etherchannel summary",
+            "show port-channel summary",
+            "show power inline",
+            "show ip arp",
+            "show ipv6 neighbors",
+            "show cdp neighbors detail",
+            "show lldp neighbors detail",
+            "show hosts",
+            "show ip dhcp snooping binding",
+            "show ip route",
         ),
     },
     "juniper": {
@@ -123,6 +162,23 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "show security policies",
             "show firewall",
         ),
+        "switch": (
+            "show version",
+            "show configuration | display set",
+            "show interfaces terse",
+            "show interfaces descriptions",
+            "show ethernet-switching interfaces detail",
+            "show ethernet-switching table",
+            "show vlans detail",
+            "show spanning-tree bridge",
+            "show spanning-tree interface",
+            "show lacp interfaces",
+            "show poe interface all",
+            "show arp no-resolve",
+            "show ipv6 neighbors",
+            "show lldp neighbors detail",
+            "show route",
+        ),
     },
     "pfsense": {
         "router": (
@@ -133,6 +189,9 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ndp -an",
             "pfctl -sr",
             "pfctl -sn",
+            "cat /var/dhcpd/var/db/dhcpd.leases",
+            "cat /var/unbound/host_entries.conf",
+            "for table in $(pfctl -s Tables | tr -d '<>'); do printf '__NCT_PF_TABLE__ %s\\n' \"$table\"; pfctl -t \"$table\" -T show; done",
             "cat /cf/conf/config.xml",
         ),
         "firewall": (
@@ -143,9 +202,79 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "ndp -an",
             "pfctl -sr",
             "pfctl -sn",
+            "cat /var/dhcpd/var/db/dhcpd.leases",
+            "cat /var/unbound/host_entries.conf",
+            "for table in $(pfctl -s Tables | tr -d '<>'); do printf '__NCT_PF_TABLE__ %s\\n' \"$table\"; pfctl -t \"$table\" -T show; done",
             "cat /cf/conf/config.xml",
         ),
     },
+    "unifi": {
+        "router": (
+            "uname -a",
+            "cat /etc/os-release",
+            "ubnt-device-info summary",
+            "ip -details address show",
+            "ip -4 route show table all",
+            "ip -6 route show table all",
+            "ip -4 neigh show",
+            "ip -6 neigh show",
+            "bridge vlan show",
+            "ss -lntup",
+            "iptables-save",
+            "nft list ruleset",
+            "ipset save",
+            "lldpcli show neighbors details",
+            "cat /run/dnsmasq.leases",
+            "cat /mnt/data/udapi-config/dnsmasq.lease",
+        ),
+        "firewall": (
+            "uname -a",
+            "cat /etc/os-release",
+            "ubnt-device-info summary",
+            "ip -details address show",
+            "ip -4 route show table all",
+            "ip -6 route show table all",
+            "ip -4 neigh show",
+            "ip -6 neigh show",
+            "bridge vlan show",
+            "ss -lntup",
+            "iptables-save",
+            "nft list ruleset",
+            "ipset save",
+            "lldpcli show neighbors details",
+            "cat /run/dnsmasq.leases",
+            "cat /mnt/data/udapi-config/dnsmasq.lease",
+        ),
+        "switch": (
+            "uname -a",
+            "cat /etc/os-release",
+            "ubnt-device-info",
+            "mca-cli-op info",
+            "mca-cli-op show",
+            "ip -details address show",
+            "ip -details link show",
+            "ip -4 route show table all",
+            "ip -6 route show table all",
+            "ip -4 neigh show",
+            "ip -6 neigh show",
+            "bridge link show",
+            "bridge vlan show",
+            "bridge fdb show",
+            "swctrl port show",
+            "swctrl mac show",
+            "swctrl vlan show",
+            "stp show",
+            "lldpcli show neighbors details",
+            "cat /run/dnsmasq.leases",
+            "cat /mnt/data/udapi-config/dnsmasq.lease",
+            "ss -lntup",
+        ),
+    },
+}
+
+DEVICE_TYPES_BY_VENDOR = {
+    vendor: tuple(templates)
+    for vendor, templates in TEMPLATES.items()
 }
 
 router = APIRouter(prefix="/api/device-configs", tags=["device-configs"])
@@ -164,10 +293,13 @@ class DeviceConfigPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=100)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=500)
     originating_host: str = Field(min_length=1, max_length=255)
-    vendor: Literal["vyos", "cisco", "juniper", "pfsense"]
-    device_type: Literal["router", "firewall"]
+    vendor: Literal["vyos", "cisco", "juniper", "pfsense", "unifi"]
+    device_type: Literal["router", "firewall", "switch"]
+    device_types: list[Literal["router", "firewall", "switch"]] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
     device_address: str = Field(min_length=1, max_length=255)
     device_name: str | None = Field(default=None, max_length=100)
     username: str = Field(min_length=1, max_length=64)
@@ -177,13 +309,36 @@ class DeviceConfigPlan(BaseModel):
     accountability_interface: str = Field(min_length=1, max_length=64)
     additional_commands: list[str] = Field(default_factory=list, max_length=MAX_ADDITIONAL_COMMANDS)
 
-    @field_validator("operator", "reason", "originating_host", "device_address", "username")
+    @model_validator(mode="after")
+    def validate_vendor_device_type(self) -> "DeviceConfigPlan":
+        selected = list(dict.fromkeys(self.device_types or [self.device_type]))
+        unsupported = [item for item in selected if item not in TEMPLATES.get(self.vendor, {})]
+        if unsupported:
+            supported = ", ".join(DEVICE_TYPES_BY_VENDOR.get(self.vendor, ()))
+            raise ValueError(
+                f"{self.vendor} does not provide a {unsupported[0]} collection profile; "
+                f"choose one of: {supported}"
+            )
+        if "switch" in selected and len(selected) > 1:
+            raise ValueError("Switch collection cannot be combined with Router or Firewall")
+        self.device_types = selected
+        self.device_type = (
+            "firewall" if set(selected) == {"router", "firewall"} else selected[0]
+        )
+        return self
+
+    @field_validator("operator", "originating_host", "device_address", "username")
     @classmethod
     def clean_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("This field cannot be blank")
         return value
+
+    @field_validator("reason")
+    @classmethod
+    def clean_optional_reason(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("device_address")
     @classmethod
@@ -253,8 +408,75 @@ class DeviceConfigPlan(BaseModel):
         return cleaned
 
 
+def _control_ssh_args_for_plan(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
+    return [
+        "ssh", "-S", str(control_path), "-p", str(plan.ssh_port),
+        f"{plan.username}@{plan.device_address}",
+    ]
+
+
+def _interactive_master_args(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
+    """Build the internal SSH command with the PTY as its controlling terminal."""
+    target = f"{plan.username}@{plan.device_address}"
+    return [
+        "setsid", "--ctty", "ssh", "-M", "-N", "-T",
+        "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
+        "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
+        "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
+        "-o", "PreferredAuthentications=keyboard-interactive,password",
+        "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
+        "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
+        "-p", str(plan.ssh_port), target,
+    ]
+
+
+def _interactive_collection_command(
+    plan: DeviceConfigPlan,
+    commands: list[str],
+    remote_output: str | None,
+) -> tuple[str | None, str]:
+    """Return the stdin and remote command used by the interactive collector."""
+    if plan.vendor == "vyos":
+        if not remote_output:
+            raise ValueError("VyOS interactive collection requires a remote output path")
+        remote_input = "\n".join(
+            ["source /opt/vyatta/etc/functions/script-template"]
+            + [f"run {command}" for command in commands]
+            + ["exit"]
+        ) + "\n"
+        return remote_input, f"vbash -s > {shlex.quote(remote_output)}"
+    if plan.vendor == "pfsense":
+        if not remote_output:
+            raise ValueError("pfSense interactive collection requires a remote output path")
+        labeled_commands: list[str] = []
+        for command in commands:
+            labeled_commands.extend([f"printf '\\n===== {command} =====\\n'", command])
+        remote_script = "{ " + "; ".join(labeled_commands) + f"; }} > {shlex.quote(remote_output)}"
+        return None, f"sh -c {shlex.quote(remote_script)}"
+    if plan.vendor == "unifi":
+        labeled_commands = []
+        for command in commands:
+            labeled_commands.extend(
+                [
+                    f"printf '\\n===== {command} =====\\n'",
+                    (
+                        f"{command} 2>&1 || "
+                        "printf '\\n[NCT] Command unavailable or returned a non-zero status.\\n'"
+                    ),
+                ]
+            )
+        remote_script = "{ " + "; ".join(labeled_commands) + "; }"
+        return None, f"sh -c {shlex.quote(remote_script)}"
+    return None, "; ".join(commands)
+
+
 def build_plan(plan: DeviceConfigPlan) -> dict:
-    template_commands = list(TEMPLATES[plan.vendor][plan.device_type])
+    selected_device_types = plan.device_types or [plan.device_type]
+    template_commands = list(dict.fromkeys(
+        command
+        for device_type in selected_device_types
+        for command in TEMPLATES[plan.vendor][device_type]
+    ))
     additional_commands = list(plan.additional_commands)
     commands = template_commands + additional_commands
     run_id = uuid.uuid4().hex
@@ -284,40 +506,178 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         ssh_args += [target, remote]
         script_lines = remote_input.rstrip("\n").splitlines()
         ssh_command = f"printf '%s\\n' {shlex.join(script_lines)} | {shlex.join(ssh_args)}"
+    elif plan.vendor == "unifi":
+        remote_input, remote = _interactive_collection_command(plan, commands, None)
+        ssh_args += [target, remote]
+        ssh_command = shlex.join(ssh_args)
     else:
         remote_input = None
         ssh_args += [target, "; ".join(commands)]
         ssh_command = shlex.join(ssh_args)
+    run_dir = CONFIG_DIR / run_id
     local_file = f"{name}-{run_id[:12]}-config.txt"
-    scp_args = ["scp", "-P", str(plan.ssh_port)]
-    if plan.key_path:
-        scp_args += ["-i", plan.key_path]
-    scp_args += [f"{target}:/tmp/{local_file}", f"./{local_file}"]
+    local_output = run_dir / local_file
+    retained_output = run_dir / "stdout.txt"
+    remote_file_workflow = interactive and plan.vendor in {"vyos", "pfsense"}
+    remote_output = f"/tmp/{local_file}" if remote_file_workflow else None
+    transfer_method = (
+        "scp_control_session"
+        if remote_file_workflow
+        else "ssh_command_sequence" if plan.vendor == "cisco" else "ssh_stdout"
+    )
+    scp_args: list[str] | None = None
+    cleanup_args: list[str] | None = None
+    execution_steps: list[dict[str, str]] = []
+
+    def add_step(phase: str, location: str, kind: str, command: str, detail: str) -> None:
+        execution_steps.append(
+            {
+                "phase": phase,
+                "location": location,
+                "kind": kind,
+                "command": command,
+                "detail": detail,
+            }
+        )
+
+    if not interactive and plan.key_path:
+        add_step(
+            "Validate local SSH key",
+            "NCT host",
+            "system command",
+            shlex.join(["ssh-keygen", "-y", "-f", plan.key_path]),
+            "Confirms that the analyzer can read and parse the selected private key without exposing its contents.",
+        )
+    add_step(
+        "Start accountability capture",
+        "NCT host",
+        "system command",
+        shlex.join(capture_argv(plan.accountability_interface, run_dir / "accountability.pcap")),
+        "Starts before the SSH connection and is stopped after the session closes.",
+    )
+    if interactive:
+        control_path = Path("<runtime-ssh-control-socket>")
+        control_args = _control_ssh_args_for_plan(plan, control_path)
+        add_step(
+            "Open one-time SSH session",
+            "NCT host",
+            "system command",
+            shlex.join(_interactive_master_args(plan, control_path)),
+            "The runtime replaces the displayed control-socket placeholder with a private temporary path. The password is entered through the protected prompt and never added to this command.",
+        )
+        add_step(
+            "Verify authenticated SSH session",
+            "NCT host",
+            "system command",
+            shlex.join(control_args[:-1] + ["-O", "check", control_args[-1]]),
+            "Checks the private control session after immediate authentication or again after the one-time password prompt succeeds.",
+        )
+        remote_input, remote_command = _interactive_collection_command(plan, commands, remote_output)
+        collection_args = control_args + [remote_command]
+        collection_command = shlex.join(collection_args)
+        if remote_input:
+            script_lines = remote_input.rstrip("\n").splitlines()
+            collection_command = f"printf '%s\\n' {shlex.join(script_lines)} | {collection_command}"
+        add_step(
+            "Run read-only device collection",
+            "Network device over SSH",
+            "device command",
+            collection_command,
+            (
+                f"The device writes the command output to the temporary file {remote_output}."
+                if remote_file_workflow
+                else "The device returns the command output directly through the authenticated SSH stream; no remote file is created."
+            ),
+        )
+        if remote_file_workflow:
+            scp_args = [
+                "scp", "-q", "-P", str(plan.ssh_port),
+                "-o", f"ControlPath={control_path}",
+                f"{target}:{remote_output}", str(local_output),
+            ]
+            add_step(
+                "Copy temporary output to NCT",
+                "NCT host",
+                "system command",
+                shlex.join(scp_args),
+                f"Creates the retained local collection file {local_output}.",
+            )
+        else:
+            add_step(
+                "Retain streamed output",
+                "NCT evidence storage",
+                "internal file write",
+                str(local_output),
+                "NCT writes the SSH standard output directly to this local file.",
+            )
+        add_step(
+            "Normalize retained output",
+            "NCT evidence storage",
+            "internal file write",
+            str(retained_output),
+            "NCT keeps the complete collection file for analysis and stores a small normalized response preview alongside it.",
+        )
+        if remote_file_workflow:
+            cleanup_args = control_args + [f"rm -f -- {shlex.quote(remote_output)}"]
+            add_step(
+                "Remove temporary device file",
+                "Network device over SSH",
+                "cleanup command",
+                shlex.join(cleanup_args),
+                "Runs even when collection or copy-back fails; the saved manifest records whether cleanup was confirmed.",
+            )
+        add_step(
+            "Close one-time SSH session",
+            "NCT host",
+            "system command",
+            shlex.join(control_args[:-1] + ["-O", "exit", control_args[-1]]),
+            "Closes the in-memory authenticated connection and removes its temporary control socket.",
+        )
+    else:
+        add_step(
+            "Run read-only device collection",
+            "Network device over SSH",
+            "device command",
+            ssh_command,
+            "The device returns output through SSH; key-based collection does not create or copy a remote temporary file.",
+        )
+        add_step(
+            "Retain streamed output",
+            "NCT evidence storage",
+            "internal file write",
+            str(local_output),
+            "NCT writes SSH standard output directly to this complete local evidence file and keeps a small API response preview separately.",
+        )
     return {
         "run_id": run_id,
+        "operator": plan.operator,
         "vendor": plan.vendor,
         "device_type": plan.device_type,
+        "device_types": selected_device_types,
+        "device_role_label": " + ".join(item.title() for item in selected_device_types),
         "device_address": plan.device_address,
         "device_name": plan.device_name,
         "username": plan.username,
         "accountability_interface": plan.accountability_interface,
-        "capture_command": shlex.join([
-            "tcpdump", "-i", plan.accountability_interface, "-p", "-nn", "-U", "-s", "0",
-            "-w", "accountability.pcap",
-        ]),
+        "capture_command": next(
+            step["command"] for step in execution_steps
+            if step["phase"] == "Start accountability capture"
+        ),
         "template_commands": template_commands,
         "additional_commands": additional_commands,
         "commands": commands,
         "ssh_command": ssh_command,
         "ssh_args": ssh_args,
         "remote_input": remote_input,
-        "scp_command": shlex.join(scp_args),
-        "remote_output_path": f"/tmp/{local_file}",
+        "scp_command": shlex.join(scp_args) if scp_args else None,
+        "remote_output_path": remote_output,
         "local_output_name": local_file,
         "authentication_mode": plan.authentication_mode,
+        "transfer_method": transfer_method,
+        "execution_steps": execution_steps,
         "cleanup_plan": (
             "Create a temporary output file on the device, copy it back to the analyzer, delete the remote file, and close the SSH session."
-            if plan.vendor in {"vyos", "pfsense"}
+            if remote_file_workflow
             else "Collect through the SSH output stream, create no remote file, and close the SSH session."
         ),
         "notes": "The template and validated operator additions are read-only except for session-only terminal pagination settings on Cisco devices.",
@@ -326,6 +686,9 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
 
 def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: object) -> dict:
     value = {
+        "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "run_id": preview["run_id"],
         "created_at": utc_now(),
         "operator": plan.operator,
@@ -333,6 +696,8 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "originating_host": plan.originating_host,
         "vendor": plan.vendor,
         "device_type": plan.device_type,
+        "device_types": preview["device_types"],
+        "device_role_label": preview["device_role_label"],
         "device_address": plan.device_address,
         "device_name": plan.device_name,
         "username": plan.username,
@@ -347,6 +712,9 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "commands": preview["commands"],
         "ssh_command": preview["ssh_command"],
         "scp_command": preview["scp_command"],
+        "transfer_method": preview["transfer_method"],
+        "remote_output_path": preview["remote_output_path"],
+        "execution_steps": preview["execution_steps"],
         "cleanup_plan": preview["cleanup_plan"],
         "status": status,
     }
@@ -449,6 +817,12 @@ class InteractivePasswordSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     password: SecretStr = Field(min_length=1, max_length=1024)
+
+
+class DeviceDeleteConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str = Field(min_length=1, max_length=100)
 
 
 @dataclass
@@ -589,6 +963,9 @@ def _finish_interactive_session(
     )
     if extra:
         session.manifest.update(extra)
+    session.manifest["output_complete"] = (
+        status == "completed" and not bool(session.manifest.get("output_truncated"))
+    )
     (session.run_dir / "manifest.json").write_text(json.dumps(session.manifest, indent=2) + "\n")
     stdout = stdout_path.read_text(errors="replace")[:200_000]
     return {
@@ -613,25 +990,324 @@ def _expire_interactive_session(session_id: str) -> None:
 
 
 def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
-    return [
-        "ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port),
-        f"{session.plan.username}@{session.plan.device_address}",
-    ]
+    return _control_ssh_args_for_plan(session.plan, session.control_path)
 
 
-def _interactive_master_args(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
-    """Build the internal SSH command with the PTY as its controlling terminal."""
-    target = f"{plan.username}@{plan.device_address}"
-    return [
-        "setsid", "--ctty", "ssh", "-M", "-N", "-T",
-        "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
-        "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
-        "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
-        "-o", "PreferredAuthentications=keyboard-interactive,password",
-        "-o", "KbdInteractiveAuthentication=yes", "-o", "PasswordAuthentication=yes",
-        "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
-        "-p", str(plan.ssh_port), target,
+def _read_text_prefix(path: Path, limit: int) -> str:
+    if not path.is_file() or limit <= 0:
+        return ""
+    with path.open("rb") as handle:
+        return handle.read(limit).decode("utf-8", errors="replace")
+
+
+def _limit_retained_collection_file(path: Path) -> bool:
+    """Apply the disk-safety boundary after a streamed collection."""
+    if not path.is_file() or path.stat().st_size <= MAX_RETAINED_COLLECTION_BYTES:
+        return False
+    with path.open("r+b") as handle:
+        handle.truncate(MAX_RETAINED_COLLECTION_BYTES)
+    return True
+
+
+def _file_has_useful_device_output(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    meaningful_length = 0
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.lstrip().startswith(("% Invalid", "% Ambiguous", "% Incomplete")):
+                continue
+            meaningful_length += len(line)
+            if meaningful_length >= 20:
+                return True
+    return False
+
+
+def _stream_command_to_file(
+    args: list[str], *, input_text: str | None, output_path: Path, timeout: int
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Send SSH stdout directly to retained storage instead of holding it in memory."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", errors="replace") as output:
+        completed = subprocess.run(
+            args,
+            input=input_text,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    return completed, _limit_retained_collection_file(output_path)
+
+
+def _useful_device_output(value: str) -> bool:
+    cleaned = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", value or "").strip()
+    if not cleaned:
+        return False
+    meaningful = [
+        line.strip()
+        for line in cleaned.splitlines()
+        if line.strip()
+        and not line.lstrip().startswith(("% Invalid", "% Ambiguous", "% Incomplete"))
     ]
+    return len("\n".join(meaningful)) >= 20
+
+
+def _normalized_cisco_shell_line(raw_line: str) -> str:
+    """Remove terminal control sequences while retaining readable evidence."""
+    value = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line or "")
+    value = value.replace("\r", "").rstrip("\n")
+    while "\b" in value:
+        value = re.sub(r"[^\b]\b", "", value)
+    return value.replace("\b", "")
+
+
+def _cisco_echoed_command(line: str, sent_commands: list[str]) -> str | None:
+    stripped = line.strip()
+    for command in sent_commands:
+        if stripped == command or re.fullmatch(
+            rf".{{0,160}}[>#]\s*{re.escape(command)}\s*", stripped
+        ):
+            return command
+    return None
+
+
+def _cisco_transcript_lines(lines, sent_commands: list[str]):
+    """Yield the command and cleaned evidence from one Cisco shell transcript."""
+    current_command: str | None = None
+    for raw_line in lines:
+        raw_line = _normalized_cisco_shell_line(raw_line)
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower().startswith("connection to ") and line.lower().endswith(" closed."):
+            continue
+        echoed_command = _cisco_echoed_command(line, sent_commands)
+        if echoed_command:
+            current_command = echoed_command
+            continue
+        if re.fullmatch(r".{0,160}[>#]\s*", line):
+            continue
+        if current_command:
+            yield current_command, raw_line.rstrip()
+
+
+def _clean_cisco_shell_lines(lines, sent_commands: list[str]):
+    """Yield cleaned Cisco evidence one line at a time."""
+    for _command, line in _cisco_transcript_lines(lines, sent_commands):
+        yield line
+
+
+def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
+    """Remove terminal echoes while preserving the device's evidence and errors."""
+    return "\n".join(_clean_cisco_shell_lines((value or "").splitlines(), sent_commands)).strip()
+
+
+def _read_cisco_pty_until_prompt(
+    master_fd: int,
+    process: subprocess.Popen[bytes],
+    timeout: float,
+) -> tuple[str, str | None, bool]:
+    """Read one Cisco shell response through its PTY until the next device prompt."""
+    deadline = time.monotonic() + max(0.1, timeout)
+    output = bytearray()
+    prompt: str | None = None
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select(
+            [master_fd], [], [], min(0.25, max(0.0, deadline - time.monotonic()))
+        )
+        if ready:
+            try:
+                chunk = os.read(master_fd, 65_536)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            output.extend(chunk)
+            prompt_window = output[-8192:]
+            normalized = "\n".join(
+                _normalized_cisco_shell_line(line)
+                for line in prompt_window.decode(errors="replace").splitlines()
+            )
+            match = re.search(r"(?:^|\n)([^\n]{1,160}[>#])\s*$", normalized)
+            if match:
+                prompt = match.group(1).strip()
+                return output.decode(errors="replace"), prompt, True
+        elif process.poll() is not None:
+            break
+    return output.decode(errors="replace"), prompt, False
+
+
+def _collect_cisco_command_outputs(
+    ssh_prefix: list[str], commands: list[str]
+) -> tuple[dict[str, str], set[str], str, int, str | None]:
+    """Run Cisco commands one at a time, waiting for the prompt after every command."""
+    pager_commands = {"terminal length 0", "terminal pager 0"}
+    pager_command = next((command for command in commands if command in pager_commands), None)
+    requested_commands = [command for command in commands if command not in pager_commands]
+    send_commands = ([pager_command] if pager_command else []) + requested_commands
+    shell_args = ssh_prefix[:-1] + ["-tt", ssh_prefix[-1]]
+    master_fd, slave_fd = pty.openpty()
+    process: subprocess.Popen[bytes] | None = None
+    output_by_command: dict[str, str] = {}
+    responded_commands: set[str] = set()
+    transcript_tail = ""
+    transport_error: str | None = None
+    deadline = time.monotonic() + CISCO_COLLECTION_TIMEOUT_SECONDS
+    try:
+        process = subprocess.Popen(
+            shell_args,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+        initial, _prompt, ready = _read_cisco_pty_until_prompt(
+            master_fd, process, min(30.0, max(0.1, deadline - time.monotonic()))
+        )
+        transcript_tail = initial[-4000:]
+        if not ready:
+            transport_error = "The Cisco SSH session did not reach a device prompt."
+        for command in send_commands:
+            if transport_error:
+                break
+            os.write(master_fd, (command + "\n").encode())
+            response, _prompt, complete = _read_cisco_pty_until_prompt(
+                master_fd, process, max(0.1, deadline - time.monotonic())
+            )
+            transcript_tail = (transcript_tail + response)[-4000:]
+            if not complete:
+                transport_error = (
+                    "The Cisco SSH session ended before every requested command completed."
+                )
+                break
+            responded_commands.add(command)
+            if command in requested_commands:
+                output_by_command[command] = _clean_cisco_shell_output(response, [command])
+        if not transport_error:
+            os.write(master_fd, b"exit\n")
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                transport_error = "The Cisco SSH session did not close cleanly after collection."
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+        elif process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+        exit_code = process.returncode if process.returncode is not None else 255
+        return output_by_command, responded_commands, transcript_tail, exit_code, transport_error
+    finally:
+        if slave_fd >= 0:
+            os.close(slave_fd)
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=3)
+
+
+def _run_cisco_command_sequence(
+    ssh_prefix: list[str], commands: list[str]
+) -> tuple[str, str, int, list[str], str | None]:
+    """Collect every Cisco command through one prompt-gated interactive shell."""
+    pager_commands = {"terminal length 0", "terminal pager 0"}
+    requested_commands = [command for command in commands if command not in pager_commands]
+    outputs, responded, transcript_tail, exit_code, transport_error = (
+        _collect_cisco_command_outputs(ssh_prefix, commands)
+    )
+    sections = [
+        f"===== {command} =====\n{outputs.get(command, '').rstrip()}\n"
+        for command in requested_commands if command in responded
+    ]
+    failed_commands = [
+        command for command in requested_commands
+        if exit_code != 0
+        or command not in responded
+        or not _useful_device_output(outputs.get(command, ""))
+    ]
+    running_config_collected = _useful_device_output(outputs.get("show running-config", ""))
+    retained = "\n".join(sections)
+    if not _useful_device_output(retained):
+        fallback = _clean_cisco_shell_output(transcript_tail, commands)
+        if fallback:
+            retained = f"===== Cisco interactive session =====\n{fallback.rstrip()}\n"
+    fatal_error = None
+    if transport_error:
+        fatal_error = transport_error
+    elif not _useful_device_output(retained):
+        fatal_error = "The Cisco device returned no usable collection output."
+    elif "show running-config" in commands and not running_config_collected:
+        fatal_error = (
+            "The Cisco device did not return its running configuration; "
+            "the collection was not marked complete."
+        )
+    elif exit_code != 0:
+        fatal_error = "The Cisco SSH session ended before a clean collection completion."
+    return retained, transport_error or "", exit_code, failed_commands, fatal_error
+
+
+def _run_cisco_command_sequence_to_file(
+    ssh_prefix: list[str], commands: list[str], output_path: Path
+) -> tuple[str, int, list[str], str | None, bool]:
+    """Retain one prompt-gated Cisco shell response for each requested command."""
+    pager_commands = {"terminal length 0", "terminal pager 0"}
+    requested_commands = [command for command in commands if command not in pager_commands]
+    outputs, responded, _transcript_tail, exit_code, transport_error = (
+        _collect_cisco_command_outputs(ssh_prefix, commands)
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", errors="replace") as retained:
+        first = True
+        for command in requested_commands:
+            if command not in responded:
+                continue
+            if not first:
+                retained.write("\n")
+            retained.write(f"===== {command} =====\n")
+            value = outputs.get(command, "").rstrip()
+            if value:
+                retained.write(value + "\n")
+            first = False
+    useful_lengths = {
+        command: len(outputs.get(command, "").strip())
+        if _useful_device_output(outputs.get(command, "")) else 0
+        for command in requested_commands
+    }
+    overall_useful_length = sum(useful_lengths.values())
+    failed_commands = [
+        command for command in requested_commands
+        if exit_code != 0 or command not in responded or useful_lengths[command] < 20
+    ]
+    running_config_collected = useful_lengths.get("show running-config", 0) >= 20
+    output_truncated = _limit_retained_collection_file(output_path)
+    fatal_error = None
+    if transport_error:
+        fatal_error = transport_error
+    elif overall_useful_length < 20:
+        fatal_error = "The Cisco device returned no usable collection output."
+    elif "show running-config" in commands and not running_config_collected:
+        fatal_error = (
+            "The Cisco device did not return its running configuration; "
+            "the collection was not marked complete."
+        )
+    elif exit_code != 0:
+        fatal_error = "The Cisco SSH session ended before a clean collection completion."
+    return transport_error or "", exit_code, failed_commands, fatal_error, output_truncated
 
 
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
@@ -645,24 +1321,14 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     transfer_method = "ssh_stdout"
     cleanup_status = "not_required"
     remote_created = False
+    output_truncated = False
     try:
         if plan.vendor in {"vyos", "pfsense"}:
             transfer_method = "scp_control_session"
             remote_created = True
-            if plan.vendor == "vyos":
-                remote_input = "\n".join(
-                    ["source /opt/vyatta/etc/functions/script-template"]
-                    + [f"run {command}" for command in preview["commands"]]
-                    + ["exit"]
-                ) + "\n"
-                remote_command = f"vbash -s > {shlex.quote(remote_output)}"
-            else:
-                remote_input = None
-                labeled_commands = []
-                for command in preview["commands"]:
-                    labeled_commands.extend([f"printf '\\n===== {command} =====\\n'", command])
-                remote_script = "{ " + "; ".join(labeled_commands) + f"; }} > {shlex.quote(remote_output)}"
-                remote_command = f"sh -c {shlex.quote(remote_script)}"
+            remote_input, remote_command = _interactive_collection_command(
+                plan, preview["commands"], remote_output
+            )
             collected = subprocess.run(
                 _control_ssh_args(session) + [remote_command],
                 input=remote_input,
@@ -690,21 +1356,42 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 stderr_parts.append(copied.stderr[:20_000])
             if copied.returncode != 0 or not local_output.is_file():
                 raise RuntimeError("SCP could not copy the collected configuration back to the analyzer.")
+        elif plan.vendor == "cisco":
+            transfer_method = "ssh_command_sequence"
+            command_stderr, exit_code, failed_commands, collection_error, output_truncated = (
+                _run_cisco_command_sequence_to_file(
+                    _control_ssh_args(session), preview["commands"], local_output
+                )
+            )
+            if command_stderr:
+                stderr_parts.append(command_stderr[:20_000])
+            if failed_commands:
+                stderr_parts.append(
+                    "Some Cisco commands returned no usable evidence: "
+                    + ", ".join(failed_commands)
+                )
+            if collection_error:
+                raise RuntimeError(collection_error)
         else:
-            collected = subprocess.run(
-                _control_ssh_args(session) + ["; ".join(preview["commands"])],
-                capture_output=True,
-                text=True,
+            remote_input, remote_command = _interactive_collection_command(
+                plan, preview["commands"], None
+            )
+            collected, output_truncated = _stream_command_to_file(
+                _control_ssh_args(session) + [remote_command],
+                input_text=remote_input,
+                output_path=local_output,
                 timeout=120,
-                check=False,
             )
             exit_code = collected.returncode
-            local_output.write_text(collected.stdout[:200_000])
             if collected.stderr:
                 stderr_parts.append(collected.stderr[:20_000])
             if collected.returncode != 0:
                 raise RuntimeError("The remote collection command returned a non-zero result.")
-        (session.run_dir / "stdout.txt").write_text(local_output.read_text(errors="replace")[:200_000])
+            if not _file_has_useful_device_output(local_output):
+                raise RuntimeError("The device returned no usable collection output.")
+        if plan.vendor in {"vyos", "pfsense"}:
+            output_truncated = _limit_retained_collection_file(local_output)
+        (session.run_dir / "stdout.txt").write_text(_read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS))
         status = "completed"
         failure_class = None
     except subprocess.TimeoutExpired:
@@ -716,6 +1403,10 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
         failure_class = "remote_command_failed"
         stderr_parts.append(str(exc))
     finally:
+        if local_output.is_file() and not (session.run_dir / "stdout.txt").is_file():
+            (session.run_dir / "stdout.txt").write_text(
+                _read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS)
+            )
         if remote_created:
             try:
                 cleaned = subprocess.run(
@@ -742,6 +1433,10 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             "remote_temp_created": remote_created,
             "remote_cleanup_status": cleanup_status,
             "local_output_name": preview["local_output_name"],
+            "output_truncated": output_truncated,
+            "output_complete": status == "completed" and not output_truncated,
+            "retained_output_bytes": local_output.stat().st_size if local_output.is_file() else 0,
+            "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
         },
     )
 
@@ -756,6 +1451,9 @@ def artifact_records(run_id: str, run_dir: Path) -> list[dict]:
         path.name for path in sorted(run_dir.glob("*-config.txt"))
         if path.is_file() and COLLECTION_ARTIFACT_RE.fullmatch(path.name)
     )
+    # An uploaded filename can also match the normal collection-result suffix.
+    # Preserve display order while ensuring it appears only once in history.
+    names = list(dict.fromkeys(names))
     return [
         {
             "name": name,
@@ -765,6 +1463,307 @@ def artifact_records(run_id: str, run_dir: Path) -> list[dict]:
         for name in names
         if (run_dir / name).is_file()
     ]
+
+
+def device_collection_directory(run_id: str, config_dir: Path | None = None) -> Path:
+    """Resolve one collection directory without permitting path traversal."""
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("Invalid device collection identifier")
+    root = (CONFIG_DIR if config_dir is None else config_dir).resolve()
+    candidate = (root / run_id).resolve()
+    if candidate.parent != root:
+        raise ValueError("Invalid device collection path")
+    return candidate
+
+
+def _read_summary_text(run_dir: Path, filenames: list[str]) -> tuple[str, str | None, bool]:
+    for filename in filenames:
+        path = run_dir / filename
+        if not path.is_file():
+            continue
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_SUMMARY_TEXT_BYTES + 1)
+        truncated = len(raw) > MAX_SUMMARY_TEXT_BYTES
+        return raw[:MAX_SUMMARY_TEXT_BYTES].decode("utf-8", errors="replace"), filename, truncated
+    return "", None, False
+
+
+def _configuration_source_names(run_dir: Path) -> list[str]:
+    uploaded = [
+        path.name for path in sorted(run_dir.glob("uploaded-*"))
+        if path.is_file() and UPLOADED_ARTIFACT_RE.fullmatch(path.name)
+    ]
+    collected = [
+        path.name for path in sorted(run_dir.glob("*-config.txt"))
+        if path.is_file() and COLLECTION_ARTIFACT_RE.fullmatch(path.name)
+    ]
+    return list(dict.fromkeys(uploaded + collected + ["stdout.txt"]))
+
+
+def _evidence_lines(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[dict]:
+    records: list[dict] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line in seen or not any(pattern.search(line) for pattern in patterns):
+            continue
+        seen.add(line)
+        records.append({"line_number": line_number, "evidence": line[:1000]})
+        if len(records) >= MAX_SUMMARY_ITEMS:
+            break
+    return records
+
+
+def _merge_evidence(*groups: list[dict]) -> list[dict]:
+    records: list[dict] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            evidence = str(item.get("evidence") or "")
+            if not evidence or evidence in seen:
+                continue
+            seen.add(evidence)
+            records.append(item)
+            if len(records) >= MAX_SUMMARY_ITEMS:
+                return records
+    return records
+
+
+def _linux_policy_evidence(text: str) -> dict[str, list[dict]]:
+    """Classify retained iptables-save and ipset-save output by table context."""
+    firewall_acl: list[dict] = []
+    nat: list[dict] = []
+    network_objects: list[dict] = []
+    table: str | None = None
+    chain_orders: dict[tuple[str, str], int] = {}
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if line.startswith("*") and len(line) > 1:
+            table = line[1:].strip().lower()
+            continue
+        if line == "COMMIT":
+            table = None
+            continue
+        record = {
+            "line_number": line_number,
+            "evidence": line[:1000],
+            "source_format": "linux_saved_rules",
+        }
+        rule = re.match(r"^-A\s+(?P<chain>\S+)(?P<body>.*)$", line, re.I)
+        if rule and table:
+            chain = rule.group("chain")
+            order_key = (table, chain)
+            chain_orders[order_key] = chain_orders.get(order_key, 0) + 1
+            record.update({
+                "table": table,
+                "chain": chain,
+                "rule_order": chain_orders[order_key],
+            })
+            action = re.search(r"(?:^|\s)-j\s+(\S+)", rule.group("body"), re.I)
+            protocol = re.search(r"(?:^|\s)-p\s+(\S+)", rule.group("body"), re.I)
+            source = re.search(r"(?:^|\s)-s\s+(\S+)", rule.group("body"), re.I)
+            destination = re.search(r"(?:^|\s)-d\s+(\S+)", rule.group("body"), re.I)
+            source_set = re.search(r"--match-set\s+(\S+)\s+src\b", rule.group("body"), re.I)
+            destination_set = re.search(r"--match-set\s+(\S+)\s+dst\b", rule.group("body"), re.I)
+            destination_port = re.search(r"(?:^|\s)--?dports?\s+(\S+)", rule.group("body"), re.I)
+            for key, match in (
+                ("action", action),
+                ("protocol", protocol),
+                ("source", source),
+                ("destination", destination),
+                ("source_set", source_set),
+                ("destination_set", destination_set),
+                ("destination_ports", destination_port),
+            ):
+                if match:
+                    record[key] = match.group(1)
+        elif table:
+            record["table"] = table
+        if table == "filter" and (line.startswith("-A ") or re.match(r"^:[A-Za-z0-9_.:-]+\s+(?:ACCEPT|DROP|REJECT|-)", line, re.I)):
+            firewall_acl.append(record)
+        elif table == "nat" and (line.startswith("-A ") or re.match(r"^:[A-Za-z0-9_.:-]+\s+(?:ACCEPT|DROP|REJECT|-)", line, re.I)):
+            nat.append(record)
+        elif re.match(r"^(?:create|add)\s+[A-Za-z0-9_.:-]+(?:\s|$)", line, re.I):
+            network_objects.append(record)
+    return {
+        "firewall_acl": firewall_acl[:MAX_SUMMARY_ITEMS],
+        "nat": nat[:MAX_SUMMARY_ITEMS],
+        "network_objects": network_objects[:MAX_SUMMARY_ITEMS],
+    }
+
+
+VLAN_PATTERNS = (
+    re.compile(r"^vlan\s+\d+\b", re.I),
+    re.compile(r"\bswitchport\s+(?:access|trunk).*\bvlan\b", re.I),
+    re.compile(r"\bset\s+vlans\s+\S+\s+vlan-id\s+\d+\b", re.I),
+    re.compile(r"\bvif\s+\d+\b", re.I),
+    re.compile(r"<(?:vlan|vlanif)>", re.I),
+)
+FIREWALL_ACL_PATTERNS = (
+    re.compile(r"^(?:ip\s+)?access-list\b", re.I),
+    re.compile(r"^(?:standard|extended)\s+ip\s+access\s+list\b", re.I),
+    re.compile(r"\bset\s+(?:firewall|security\s+policies)\b", re.I),
+    re.compile(r"^(?:pass|block)\s+(?:in|out)\b", re.I),
+    re.compile(r"^(?:iptables\s+-A|nft\s+add\s+rule)\b", re.I),
+    re.compile(r"<rule>", re.I),
+)
+NAT_PATTERNS = (
+    re.compile(r"\bset\s+nat\b", re.I),
+    re.compile(r"^ip\s+nat\b", re.I),
+    re.compile(r"^nat\s*\(", re.I),
+    re.compile(r"\b(?:source-nat|destination-nat)\b", re.I),
+    re.compile(r"<(?:nat|outbound)>", re.I),
+)
+NETWORK_OBJECT_PATTERNS = (
+    re.compile(r"^(?:object|object-group)\s+network\b", re.I),
+    re.compile(r"^network-object\b", re.I),
+    re.compile(r"\bset\s+(?:firewall\s+group|security\s+address-book)\b", re.I),
+    re.compile(r"^(?:host|subnet)\s+(?:\d{1,3}\.){3}\d{1,3}\b", re.I),
+    re.compile(r"<(?:alias|network)>\b", re.I),
+)
+SWITCHING_PATTERNS = (
+    re.compile(r"\bswitchport\b", re.I),
+    re.compile(r"\b(?:mac\s+address-table|ethernet-switching\s+table|bridge\s+fdb)\b", re.I),
+    re.compile(r"\bspanning[- ]tree\b", re.I),
+    re.compile(r"\b(?:channel-group|port-channel|etherchannel|lacp|802\.3ad)\b", re.I),
+    re.compile(r"\b(?:power\s+inline|poe)\b", re.I),
+    re.compile(r"\b(?:interface-mode|port-mode)\s+(?:access|trunk)\b", re.I),
+    re.compile(r"\bvlan\s+members\b", re.I),
+    re.compile(r"^[0-9A-Fa-f:.]{11,17}\s+dev\s+[A-Za-z0-9_.:/-]+", re.I),
+)
+
+
+def device_collection_summary(run_id: str, config_dir: Path | None = None) -> dict:
+    """Create a bounded, review-oriented summary from retained device evidence."""
+    run_dir = device_collection_directory(run_id, config_dir)
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError("Device collection was not found")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8", errors="replace"))
+    configuration_text, source_filename, configuration_truncated = _read_summary_text(
+        run_dir, _configuration_source_names(run_dir)
+    )
+    raw_output, raw_filename, raw_truncated = _read_summary_text(
+        run_dir, ["stdout.txt"] + _configuration_source_names(run_dir)
+    )
+
+    from app.mac_enrichment import parse_neighbor_text
+    from app.iptables_policy import parse_iptables_policy
+    from app.network_map import parse_config_text
+    from app.switching import merge_switch_interfaces, parse_switch_evidence
+    from app.topology_neighbors import parse_topology_neighbors
+    from app.vendor_policy import parse_vendor_policy
+
+    interfaces, routes = parse_config_text(configuration_text)
+    switch_detail = parse_switch_evidence(configuration_text, manifest.get("commands", []))
+    interfaces = merge_switch_interfaces(interfaces, switch_detail)
+    neighbors = parse_neighbor_text(configuration_text)
+    topology_neighbors = parse_topology_neighbors(configuration_text)
+    vlans = _evidence_lines(configuration_text, VLAN_PATTERNS)
+    linux_policy = _linux_policy_evidence(configuration_text)
+    iptables_policy = parse_iptables_policy(
+        configuration_text, source_truncated=configuration_truncated
+    )
+    vendor_policy = parse_vendor_policy(configuration_text)
+    firewall_acl = _merge_evidence(
+        _evidence_lines(configuration_text, FIREWALL_ACL_PATTERNS),
+        linux_policy["firewall_acl"],
+    )
+    nat = _merge_evidence(
+        _evidence_lines(configuration_text, NAT_PATTERNS),
+        linux_policy["nat"],
+    )
+    network_objects = _merge_evidence(
+        _evidence_lines(configuration_text, NETWORK_OBJECT_PATTERNS),
+        linux_policy["network_objects"],
+    )
+    network_objects_total = max(
+        len(network_objects),
+        int(iptables_policy["counts"]["ipsets"])
+        + int(iptables_policy["counts"]["ipset_members"]),
+    )
+    switching = _evidence_lines(configuration_text, SWITCHING_PATTERNS)
+    commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
+    routes = [
+        {
+            **route,
+            "route_type": (
+                "default" if route.get("network") in {"0.0.0.0/0", "::/0"}
+                else "connected" if route.get("direct")
+                else "routed"
+            ),
+        }
+        for route in routes
+    ]
+    result = {
+        "run_id": run_id,
+        "source_filename": source_filename,
+        "raw_filename": raw_filename,
+        "configuration_truncated": configuration_truncated,
+        "raw_truncated": raw_truncated,
+        "counts": {
+            "interfaces": len(interfaces),
+            "routes": len(routes),
+            "neighbors": len(neighbors),
+            "topology_neighbors": len(topology_neighbors),
+            "vlans": len(vlans),
+            "switch_vlans": len(switch_detail.get("vlans") or []),
+            "firewall_acl": len(firewall_acl),
+            "nat": len(nat),
+            "network_objects": len(network_objects),
+            "network_objects_total": network_objects_total,
+            "policy_chains": iptables_policy["counts"]["chains"],
+            "policy_rules": iptables_policy["counts"]["rules"],
+            "policy_sets": iptables_policy["counts"]["ipsets"],
+            "policy_set_members": iptables_policy["counts"]["ipset_members"],
+            "applied_policy_rules": (vendor_policy.get("counts") or {}).get("rules", 0),
+            "policy_attachments": (vendor_policy.get("counts") or {}).get("attachments", 0),
+            "applied_policy_objects": (vendor_policy.get("counts") or {}).get("objects", 0),
+            "switching": len(switching),
+            "learned_macs": len(switch_detail["mac_table"]),
+            "switch_ports": len(switch_detail["ports"]),
+            "port_channels": len(switch_detail["port_channels"]),
+            "spanning_tree": len(switch_detail["spanning_tree"]),
+            "command_results": len(switch_detail["command_results"]),
+            "commands": len(commands),
+            "lines": len(configuration_text.splitlines()),
+        },
+        "interfaces": interfaces[:MAX_SUMMARY_ITEMS],
+        "routes": routes,
+        "neighbors": neighbors[:MAX_SUMMARY_ITEMS],
+        "topology_neighbors": topology_neighbors[:MAX_SUMMARY_ITEMS],
+        "vlans": vlans,
+        "firewall_acl": firewall_acl,
+        "nat": nat,
+        "network_objects": network_objects,
+        "iptables_policy": iptables_policy,
+        "vendor_policy": vendor_policy,
+        "switching": switching,
+        "switch_detail": switch_detail,
+        "command_results": switch_detail["command_results"],
+        "commands": commands,
+        "configuration_text": configuration_text,
+        "raw_output": raw_output,
+    }
+    return result
+
+
+def delete_device_collection(
+    run_id: str, confirmation: str, config_dir: Path | None = None
+) -> dict:
+    """Delete exactly one inactive collection after a valid short-lived challenge."""
+    run_dir = device_collection_directory(run_id, config_dir)
+    if not (run_dir / "manifest.json").is_file():
+        raise FileNotFoundError("Device collection was not found")
+    with _INTERACTIVE_SESSIONS_LOCK:
+        if any(session.preview.get("run_id") == run_id for session in _INTERACTIVE_SESSIONS.values()):
+            raise RuntimeError("An active SSH collection cannot be deleted")
+    from app.poc import consume_delete_challenge
+
+    if not consume_delete_challenge("device-collection", run_id, confirmation):
+        raise PermissionError("The confirmation code is invalid or expired")
+    shutil.rmtree(run_dir)
+    return {"deleted": True, "run_id": run_id}
 
 
 def classify_ssh_failure(stderr: str, key_status: str) -> str:
@@ -782,11 +1781,22 @@ def classify_ssh_failure(stderr: str, key_status: str) -> str:
 
 @router.get("/vendors")
 def vendors() -> dict:
-    return {"vendors": list(VENDORS), "device_types": list(DEVICE_TYPES), "templates": {k: list(v) for k, v in TEMPLATES.items()}}
+    return {
+        "vendors": list(VENDORS),
+        "device_types": list(DEVICE_TYPES),
+        "device_types_by_vendor": {
+            vendor: list(types) for vendor, types in DEVICE_TYPES_BY_VENDOR.items()
+        },
+        "templates": {
+            vendor: {device_type: list(commands) for device_type, commands in templates.items()}
+            for vendor, templates in TEMPLATES.items()
+        },
+    }
 
 
 @router.post("/preview")
-def preview(plan: DeviceConfigPlan) -> dict:
+def preview(plan: DeviceConfigPlan, request: Request) -> dict:
+    plan = bind_signed_in_actor(request, plan, "operator")
     value = build_plan(plan)
     value.pop("ssh_args", None)
     value.pop("remote_input", None)
@@ -797,6 +1807,7 @@ def preview(plan: DeviceConfigPlan) -> dict:
 def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     """Open a short-lived SSH control session and stop at the device password prompt."""
     _require_secure_password_transport(request)
+    plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "password_prompt":
         raise HTTPException(status_code=422, detail="Choose password-prompt authentication for this workflow")
     preview_data = build_plan(plan)
@@ -969,8 +1980,9 @@ def cancel_interactive_session(session_id: str) -> dict:
 
 
 @router.post("/preflight")
-def preflight(plan: DeviceConfigPlan) -> dict:
+def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     """Validate the key and capture every non-interactive SSH access check."""
+    plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     key = key_preflight(plan.key_path)
@@ -1027,7 +2039,8 @@ def preflight(plan: DeviceConfigPlan) -> dict:
 
 
 @router.post("/execute")
-def execute(plan: DeviceConfigPlan) -> dict:
+def execute(plan: DeviceConfigPlan, request: Request) -> dict:
+    plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     preview_data = build_plan(plan)
@@ -1035,6 +2048,7 @@ def execute(plan: DeviceConfigPlan) -> dict:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
+    local_output = run_dir / preview_data["local_output_name"]
     manifest = manifest_for(plan, preview_data, "running", operation="configuration_pull", key_status=key["status"])
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     stdout = ""
@@ -1042,6 +2056,7 @@ def execute(plan: DeviceConfigPlan) -> dict:
     exit_code = None
     status = "failed"
     failure_class = None
+    output_truncated = False
     process = None
     capture_stderr = None
     if key["status"] in {"missing", "unreadable", "invalid"}:
@@ -1055,24 +2070,43 @@ def execute(plan: DeviceConfigPlan) -> dict:
     try:
         process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
         try:
-            completed = subprocess.run(
-                preview_data["ssh_args"],
-                input=preview_data["remote_input"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            stdout = completed.stdout[:200_000]
-            stderr = completed.stderr[:50_000]
-            exit_code = completed.returncode
-            status = "completed" if completed.returncode == 0 else "failed"
-            failure_class = None if completed.returncode == 0 else classify_ssh_failure(stderr, key["status"])
+            if plan.vendor == "cisco":
+                stderr, exit_code, failed_commands, collection_error, output_truncated = _run_cisco_command_sequence_to_file(
+                    preview_data["ssh_args"][:-1], preview_data["commands"], local_output
+                )
+                status = "failed" if collection_error else "completed"
+                failure_class = "empty_collection_output" if collection_error else None
+                if failed_commands:
+                    stderr = (stderr + "\n" if stderr else "") + (
+                        "Some Cisco commands returned no usable evidence: "
+                        + ", ".join(failed_commands)
+                    )
+                if collection_error:
+                    stderr = (stderr + "\n" if stderr else "") + collection_error
+            else:
+                completed, output_truncated = _stream_command_to_file(
+                    preview_data["ssh_args"],
+                    input_text=preview_data["remote_input"],
+                    output_path=local_output,
+                    timeout=120,
+                )
+                stderr = completed.stderr[:50_000]
+                exit_code = completed.returncode
+                status = "completed" if completed.returncode == 0 else "failed"
+                failure_class = None if completed.returncode == 0 else classify_ssh_failure(stderr, key["status"])
+                if status == "completed" and not _file_has_useful_device_output(local_output):
+                    status = "failed"
+                    failure_class = "empty_collection_output"
+                    stderr = (stderr + "\n" if stderr else "") + "The device returned no usable collection output."
         except subprocess.TimeoutExpired as exc:
             stderr = (exc.stderr or "Command timed out") if isinstance(exc.stderr, str) else "Command timed out"
             stderr = stderr[:50_000]
             status = "timed_out"
             failure_class = "network_connection_problem"
+        except RuntimeError as exc:
+            stderr = str(exc)
+            status = "failed"
+            failure_class = "empty_collection_output"
         except FileNotFoundError:
             stderr = "SSH client is not available in the analyzer."
             status = "failed"
@@ -1087,13 +2121,24 @@ def execute(plan: DeviceConfigPlan) -> dict:
         status = "failed"
         failure_class = "accountability_capture_problem"
         stderr = (stderr + "\n" if stderr else "") + "Mandatory tcpdump accountability did not produce a valid PCAP."
+    stdout = _read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS)
     (run_dir / "stdout.txt").write_text(stdout)
     (run_dir / "stderr.txt").write_text(stderr)
-    manifest.update({"status": status, "completed_at": utc_now(), "exit_code": exit_code, "failure_class": failure_class})
+    manifest.update({
+        "status": status,
+        "completed_at": utc_now(),
+        "exit_code": exit_code,
+        "failure_class": failure_class,
+        "output_truncated": output_truncated,
+        "output_complete": status == "completed" and not output_truncated,
+        "retained_output_bytes": local_output.stat().st_size if local_output.is_file() else 0,
+        "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
+        "local_output_name": preview_data["local_output_name"],
+    })
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return {
         **manifest,
-        "stdout": stdout,
+        "stdout": stdout[:MAX_RESPONSE_OUTPUT_CHARS],
         "stderr": stderr,
         "scp_command": preview_data["scp_command"],
         "artifacts": artifact_records(preview_data["run_id"], run_dir),
@@ -1102,8 +2147,9 @@ def execute(plan: DeviceConfigPlan) -> dict:
 
 @router.post("/upload")
 async def upload_result(
+    request: Request,
     operator: str = Form(...),
-    reason: str = Form(...),
+    reason: str = Form(""),
     originating_host: str = Form(...),
     vendor: str = Form(...),
     device_type: str = Form(...),
@@ -1111,40 +2157,67 @@ async def upload_result(
     device_name: str = Form(""),
     result_file: UploadFile = File(...),
 ) -> dict:
-    """Import an existing router/firewall configuration result without contacting a device."""
+    """Import an existing router, firewall, or switch result without contacting a device."""
     values = {
-        "operator": operator.strip(),
+        "operator": signed_in_username(request) or operator.strip(),
         "reason": reason.strip(),
         "originating_host": originating_host.strip(),
         "device_address": device_address.strip(),
     }
-    if any(not value for value in values.values()):
-        raise HTTPException(status_code=422, detail="Operator, reason, originating host, and device address are required")
+    required_values = (
+        values["operator"],
+        values["originating_host"],
+        values["device_address"],
+    )
+    if any(not value for value in required_values):
+        raise HTTPException(status_code=422, detail="Operator, originating host, and device address are required")
     if len(values["operator"]) > 100 or len(values["reason"]) > 500 or len(values["originating_host"]) > 255:
         raise HTTPException(status_code=422, detail="One or more upload fields exceed the allowed length")
     clean_device_name = device_name.strip()
     if len(clean_device_name) > 100:
         raise HTTPException(status_code=422, detail="Device name is limited to 100 characters")
-    if vendor not in VENDORS or device_type not in DEVICE_TYPES:
+    if (
+        vendor not in VENDORS
+        or device_type not in DEVICE_TYPES
+        or device_type not in TEMPLATES.get(vendor, {})
+    ):
         raise HTTPException(status_code=422, detail="Choose a supported vendor and device type")
     if not HOST_RE.fullmatch(values["device_address"]):
         raise HTTPException(status_code=422, detail="Use a hostname or IP address without shell characters")
 
-    content = await result_file.read(MAX_UPLOAD_BYTES + 1)
-    await result_file.close()
-    if not content:
-        raise HTTPException(status_code=422, detail="Choose a non-empty result file")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Result files are limited to 5 MB")
-
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex
     run_dir = CONFIG_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     original_name = (result_file.filename or "configuration-result.txt").strip()
     stored_name = f"uploaded-{safe_name(original_name, 'configuration-result.txt')}"
-    (run_dir / stored_name).write_bytes(content)
+    stored_path = run_dir / stored_name
+    uploaded_size = 0
+    try:
+        with stored_path.open("wb") as retained:
+            while chunk := await result_file.read(COLLECTION_COPY_CHUNK_BYTES):
+                uploaded_size += len(chunk)
+                if uploaded_size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Result files are limited to 100 MB",
+                    )
+                retained.write(chunk)
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        run_dir.rmdir()
+        raise
+    finally:
+        await result_file.close()
+    if uploaded_size == 0:
+        stored_path.unlink(missing_ok=True)
+        run_dir.rmdir()
+        raise HTTPException(status_code=422, detail="Choose a non-empty result file")
     completed_at = utc_now()
     manifest = {
+        "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "run_id": run_id,
         "created_at": completed_at,
         "completed_at": completed_at,
@@ -1161,7 +2234,10 @@ async def upload_result(
         "network_contacted": False,
         "source_filename": original_name[:255],
         "source_content_type": result_file.content_type or "application/octet-stream",
-        "uploaded_size": len(content),
+        "uploaded_size": uploaded_size,
+        "output_complete": True,
+        "retained_output_bytes": uploaded_size,
+        "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
         "commands": [],
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -1186,6 +2262,47 @@ def history(limit: int = Query(default=30, ge=1, le=100)) -> list[dict]:
         if len(records) >= limit:
             break
     return records
+
+
+@router.get("/network-candidates")
+def network_candidates() -> dict:
+    """List config-derived subnets that still need explicit operator review."""
+    from app.network_map import configuration_network_candidates
+
+    return {"candidates": configuration_network_candidates()}
+
+
+@router.get("/{run_id}/summary")
+def collection_summary(run_id: str) -> dict:
+    try:
+        return device_collection_summary(run_id)
+    except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+
+
+@router.post("/{run_id}/delete-challenge")
+def collection_delete_challenge(run_id: str) -> dict:
+    try:
+        run_dir = device_collection_directory(run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    if not (run_dir / "manifest.json").is_file():
+        raise HTTPException(status_code=404, detail="Device collection was not found")
+    from app.poc import issue_delete_challenge
+
+    return issue_delete_challenge("device-collection", run_id)
+
+
+@router.post("/{run_id}/delete")
+def delete_collection(run_id: str, body: DeviceDeleteConfirmation) -> dict:
+    try:
+        return delete_device_collection(run_id, body.confirmation)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @router.get("/{run_id}/files/{filename}")

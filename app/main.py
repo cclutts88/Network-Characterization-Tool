@@ -14,8 +14,73 @@ from app.poc import (
     run_directory,
     schedule_worker,
 )
-from app.device_configs import router as device_config_router
+from app.device_configs import history as device_collection_history, router as device_config_router
+from app.device_analysis import analyze_device_collection, router as device_analysis_router
+from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
+from app.hunting import (
+    build_hunting_analysis,
+    compare_hunting_results,
+    correlate_hunting_identity,
+    merge_hunting_analyses,
+)
+from app.hunting_ui import hunting_page
+from app.reachability import (
+    build_vendor_policy_rule,
+    build_source_exposure_report,
+    classify_searchsploit_exposure,
+    evaluate_reachability,
+    policy_rule_context,
+    simulate_proposed_policy_control,
+    simulate_proposed_route_control,
+)
+from app.reachability_ui import reachability_page
+from app.saved_networks import list_saved_networks
+from app.network_semantics import (
+    apply_external_gateway_role,
+    clear_external_wan_gateway,
+    get_external_wan_gateway,
+    get_external_wan_gateways,
+    init_network_semantics_storage,
+    set_external_wan_gateway,
+)
+from app.host_identities import (
+    apply_analysis_host_identities,
+    import_host_identities,
+    init_host_identity_storage,
+    list_host_identities,
+    select_host_identities,
+    select_host_identity,
+)
+from app.hostname_evidence import build_hostname_workspace
+from app.hostname_imports import (
+    HOSTNAME_EVIDENCE_DIR,
+    hostname_accountability_file,
+    hostname_evidence_file,
+    store_hostname_evidence,
+)
+from app.hostname_ui import hostname_page
+from app.ip_sort import ip_sort_key
+from app.os_inference import infer_os_identity
+from app.searchsploit import (
+    MAX_ARCHIVE_BYTES,
+    enrich_hunting_with_searchsploit,
+    install_searchsploit_archive,
+    rollback_searchsploit_database,
+    searchsploit_status,
+    update_searchsploit_from_internet,
+)
+from app.identity import enrich_analysis_macs
+from app.identity_overrides import (
+    apply_analysis_os_overrides,
+    delete_os_override,
+    inference_review_history,
+    init_os_override_storage,
+    list_os_overrides,
+    os_override_history,
+    set_inference_review,
+    set_os_override,
+)
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
 from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
 from app.comparison import (
@@ -31,6 +96,60 @@ from app.comparison import (
 )
 from app.analysis_ui import analysis_page
 from app.ui import operator_page
+from app.session_ui import analyst_admin_page, session_script
+from app.scan_references_ui import scan_references_script
+from app.view_preferences_ui import view_preferences_script
+from app.request_identity import bind_signed_in_actor
+from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.auth import (
+    SESSION_COOKIE,
+    auth_enabled,
+    auth_audit_history,
+    cookie_secure,
+    create_session,
+    create_user,
+    end_session,
+    init_auth_storage,
+    list_users,
+    reset_user_password,
+    session_hours,
+    session_identity,
+    set_user_disabled,
+    verify_credentials,
+)
+from app.workspaces import (
+    WorkspaceConflict,
+    delete_layout,
+    init_workspace_storage,
+    list_layouts,
+    publish_layout,
+    save_layout,
+    set_default_layout,
+)
+from app.scan_collaboration import (
+    DraftConflict,
+    delete_scan_draft,
+    get_scan_draft,
+    init_scan_collaboration_storage,
+    save_scan_draft,
+)
+from app.investigation_notes import (
+    NoteConflict,
+    delete_note,
+    export_note_markdown,
+    init_note_storage,
+    list_notes,
+    save_note,
+    share_note,
+)
+from app.view_preferences import (
+    ViewPreferenceConflict,
+    delete_filter_preset,
+    get_view_workspace,
+    init_view_preference_storage,
+    save_filter_preset,
+    save_view_preference,
+)
 import hashlib
 import io
 import ipaddress
@@ -41,6 +160,7 @@ import re
 import shlex
 import sqlite3
 import threading
+import uuid
 import zipfile
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
@@ -49,17 +169,20 @@ from pathlib import Path
 from typing import Annotated, Literal
 from defusedxml import ElementTree as ET
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 
-APP_VERSION = "0.6.3"
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
 DB_PATH = DATA_DIR / "analyzer.db"
 MAX_EXPANDED_ADDRESSES = 65536
+MAX_HOSTNAME_EVIDENCE_BYTES = 50 * 1024 * 1024
+_DEVICE_EVIDENCE_CACHE_LOCK = threading.Lock()
+_DEVICE_EVIDENCE_CACHE_KEY: tuple | None = None
+_DEVICE_EVIDENCE_CACHE_VALUE: list[dict] = []
 
 class TerrainSegment(BaseModel):
     name: str = Field(min_length=1, max_length=80)
@@ -70,6 +193,62 @@ class TerrainSegment(BaseModel):
     def clean_name(cls, value: str) -> str:
         return value.strip()
 
+
+class ReachabilityQuery(BaseModel):
+    source: str = Field(min_length=1, max_length=64)
+    destination: str = Field(min_length=1, max_length=64)
+    protocol: Literal["tcp", "udp"] = "tcp"
+    port: int = Field(ge=1, le=65535)
+    flow_state: Literal["new", "established"] = "new"
+    source_external: bool = False
+
+
+class ReachabilitySimulationQuery(ReachabilityQuery):
+    action: Literal["permit", "deny"]
+    device_key: str = Field(min_length=1, max_length=160)
+    interface_name: str | None = Field(default=None, max_length=160)
+    insertion_index: int = Field(default=0, ge=0, le=100_000)
+    vendor_rule: str | None = Field(default=None, max_length=20_000)
+    template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+
+
+class ReachabilityPolicyTemplateQuery(ReachabilityQuery):
+    action: Literal["permit", "deny"]
+    device_key: str = Field(min_length=1, max_length=160)
+    interface_name: str = Field(min_length=1, max_length=160)
+    insertion_index: int = Field(default=0, ge=0, le=100_000)
+    template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+
+
+class ReachabilityRouteSimulationQuery(ReachabilityQuery):
+    action: Literal["add", "remove", "set_priority"]
+    device_key: str = Field(min_length=1, max_length=160)
+    route_network: str = Field(min_length=1, max_length=64)
+    route_interface: str | None = Field(default=None, max_length=160)
+    next_hop: str | None = Field(default=None, max_length=64)
+    priority_kind: Literal["metric", "preference"] | None = None
+    priority_value: int | None = Field(default=None, ge=0, le=4_294_967_295)
+
+
+class ExternalWanGatewayRequest(BaseModel):
+    node_id: str = Field(min_length=1, max_length=255)
+    device_name: str = Field(default="", max_length=255)
+    device_address: str = Field(default="", max_length=255)
+    interface_name: str = Field(default="", max_length=255)
+    slot: Literal["primary", "secondary"] = "primary"
+
+
+class HostnameSelectionRequest(BaseModel):
+    ip: str = Field(min_length=1, max_length=64)
+    hostname: str = Field(min_length=1, max_length=253)
+    source: Literal[
+        "nmap", "dhcp", "dns", "lldp", "cdp", "config",
+        "operator", "operator_input",
+    ]
+
+
+class HostnameBulkSelectionRequest(BaseModel):
+    source: Literal["nmap", "dhcp", "dns", "lldp", "cdp", "config"]
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -90,6 +269,93 @@ class CampaignSpec(BaseModel):
     @classmethod
     def clean_campaign_name(cls, value: str) -> str:
         return value.strip()
+
+
+class OsOverrideRequest(BaseModel):
+    ip: str | None = Field(default=None, max_length=64)
+    mac: str | None = Field(default=None, max_length=32)
+    os_name: str = Field(min_length=1, max_length=120)
+    analyst: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+    scanner_os: str | None = Field(default=None, max_length=240)
+
+
+class OsOverrideDeleteRequest(BaseModel):
+    analyst: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class OsInferenceReviewRequest(BaseModel):
+    ip: str | None = Field(default=None, max_length=64)
+    mac: str | None = Field(default=None, max_length=32)
+    inference: dict
+    status: Literal["confirmed", "dismissed", "investigate"]
+    analyst: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AnalystUserRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    role: Literal["admin", "analyst", "viewer"]
+    password: str = Field(min_length=12, max_length=256)
+
+
+class AnalystUserStateRequest(BaseModel):
+    disabled: bool
+
+
+class AnalystPasswordResetRequest(BaseModel):
+    password: str = Field(min_length=12, max_length=256)
+
+
+class WorkspaceLayoutRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    snapshot: dict
+    layout_id: str | None = Field(default=None, max_length=64)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class WorkspacePublishRequest(BaseModel):
+    shared: bool
+
+
+class ScanDraftRequest(BaseModel):
+    snapshot: dict
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class InvestigationNoteRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=140)
+    kind: Literal["folder", "note"] = "note"
+    content: str = Field(default="", max_length=250_000)
+    context: dict = Field(default_factory=dict)
+    parent_id: str | None = Field(default=None, max_length=64)
+    note_id: str | None = Field(default=None, max_length=64)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class InvestigationNoteShareRequest(BaseModel):
+    shared: bool
+    expected_version: int = Field(ge=1)
+    page: Literal["device", "nmap", "analyze", "hunt", "map"] | None = None
+
+
+class AnalystViewPreferenceRequest(BaseModel):
+    snapshot: dict
+    expected_version: int | None = Field(default=None, ge=0)
+
+
+class AnalystFilterPresetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    snapshot: dict
+    preset_id: str | None = Field(default=None, max_length=64)
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 def utc_now() -> str:
@@ -122,6 +388,7 @@ def init_storage() -> None:
             db.execute(
                 "ALTER TABLE imports ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
             )
+    init_os_override_storage(DB_PATH)
 
 
 def parse_networks(entries: list[str], label: str) -> list[ipaddress.IPv4Network]:
@@ -325,6 +592,8 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
     manifest = {
         "schema_version": 2,
         "application_version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
         "campaign": spec.name,
         "display_name": display_name,
         "created_at": created_at,
@@ -523,12 +792,15 @@ def parse_xml(content: bytes) -> dict:
     if finished is None:
         warnings.append("The XML does not contain completed run statistics")
 
+    coverage = nmap_xml_coverage(root)
     hosts: list[dict] = []
     port_frequency: Counter[tuple[str, int]] = Counter()
     peer_groups: defaultdict[str, list[str]] = defaultdict(list)
     for host in root.findall("host"):
         state_node = host.find("status")
         state = state_node.get("state", "unknown") if state_node is not None else "unknown"
+        state_reason = state_node.get("reason", "") if state_node is not None else ""
+        state_reason_ttl = state_node.get("reason_ttl", "") if state_node is not None else ""
         ipv4 = ""
         mac = ""
         vendor = ""
@@ -608,11 +880,13 @@ def parse_xml(content: bytes) -> dict:
                     if hop.get("ipaddr")
                 ],
             }
-        hosts.append({
+        host_record = {
             "ip": ipv4,
             "hostname": hostnames[0] if hostnames else "",
             "hostnames": hostnames,
             "state": state,
+            "state_reason": state_reason,
+            "state_reason_ttl": state_reason_ttl,
             "mac": mac,
             "vendor": vendor,
             "os": os_name,
@@ -624,10 +898,42 @@ def parse_xml(content: bytes) -> dict:
             "classification_basis": classification_basis,
             "ports": ports,
             "observed_ports": observed_ports,
+            # Retain coverage beside the host that was actually present in this
+            # XML so grouped scans cannot borrow proof from another file.
+            "scan_coverages": [coverage],
             "trace": trace,
-        })
+        }
+        host_record["os_inference"] = infer_os_identity(host_record)
+        hosts.append(host_record)
 
+    hosts.sort(key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     up_hosts = [host for host in hosts if host["state"] == "up"]
+    reported_total = int(hosts_stats.get("total", "0")) if hosts_stats is not None else len(hosts)
+    discovery_reason_counts = Counter(
+        host["state_reason"] for host in up_hosts if host.get("state_reason")
+    )
+    reset_discovered = sum(
+        count
+        for reason, count in discovery_reason_counts.items()
+        if "reset" in reason.lower()
+    )
+    mac_count = sum(1 for host in hosts if host["mac"])
+    nearly_every_target_up = (
+        reported_total >= 64
+        and len(up_hosts) >= math.ceil(reported_total * 0.95)
+    )
+    reset_dominated = (
+        reset_discovered >= 16
+        and reset_discovered >= math.ceil(max(1, len(up_hosts)) * 0.50)
+    )
+    if nearly_every_target_up and mac_count == 0 and reset_dominated:
+        warnings.append(
+            "Scan-quality warning: nearly every target was reported up, no MAC addresses "
+            f"were observed, and {reset_discovered} hosts were marked up by TCP reset "
+            "responses. A translated or proxying path such as Docker Desktop NAT may be "
+            "creating false-positive host discovery. Prefer FPING pre-scan or a directly "
+            "attached Linux analyzer."
+        )
     grouped_hosts: defaultdict[str, list[dict]] = defaultdict(list)
     for host in up_hosts:
         grouped_hosts[host["os_group"]].append(host)
@@ -688,15 +994,16 @@ def parse_xml(content: bytes) -> dict:
         "nmap_version": root.get("version", ""),
         "started": root.get("startstr", ""),
         "finished": finished.get("timestr", "") if finished is not None else "",
-        "reported_total": int(hosts_stats.get("total", "0")) if hosts_stats is not None else len(hosts),
+        "reported_total": reported_total,
         "host_count": len(hosts),
         "up_count": len(up_hosts),
-        "mac_count": sum(1 for host in hosts if host["mac"]),
-        "coverage": nmap_xml_coverage(root),
+        "mac_count": mac_count,
+        "discovery_reason_counts": dict(sorted(discovery_reason_counts.items())),
+        "coverage": coverage,
         "warnings": warnings,
         "hosts": hosts,
         "peer_groups": [
-            {"open_ports": signature, "hosts": values}
+            {"open_ports": signature, "hosts": sorted(values, key=ip_sort_key)}
             for signature, values in sorted(peer_groups.items())
         ],
         "os_groups": os_groups,
@@ -708,6 +1015,13 @@ def parse_xml(content: bytes) -> dict:
 async def lifespan(_: FastAPI):
     init_storage()
     init_poc_storage()
+    init_auth_storage(DB_PATH)
+    init_workspace_storage(DB_PATH)
+    init_scan_collaboration_storage(DB_PATH)
+    init_note_storage(DB_PATH)
+    init_view_preference_storage(DB_PATH)
+    init_network_semantics_storage(DB_PATH)
+    init_host_identity_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -727,16 +1041,547 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifespan)
 app.include_router(poc_router)
 app.include_router(device_config_router)
+app.include_router(device_analysis_router)
+
+
+@app.middleware("http")
+async def local_authentication_guard(request: Request, call_next):
+    request.state.analyst = None
+    if not auth_enabled():
+        return await call_next(request)
+    public_paths = {"/health", "/login", "/api/auth/login"}
+    if request.url.path in public_paths:
+        return await call_next(request)
+    analyst = session_identity(DB_PATH, request.cookies.get(SESSION_COOKIE))
+    if analyst is None:
+        if not request.url.path.startswith("/api/"):
+            destination = request.url.path
+            if request.url.query:
+                destination += f"?{request.url.query}"
+            return RedirectResponse(f"/login?next={destination}", status_code=303)
+        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+    request.state.analyst = analyst
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
+            return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
+        personal_default_change = (
+            request.url.path == "/api/workspaces/layouts/default/clear"
+            or request.url.path.endswith("/default")
+            and request.url.path.startswith("/api/workspaces/layouts/")
+        )
+        if (
+            analyst["role"] == "viewer"
+            and request.url.path != "/api/auth/logout"
+            and not personal_default_change
+        ):
+            return JSONResponse({"detail": "Viewer accounts cannot make changes"}, status_code=403)
+    return await call_next(request)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "version": APP_VERSION}
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "build_id": BUILD_ID,
+        "build_commit": BUILD_COMMIT,
+    }
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page() -> HTMLResponse:
+    if not auth_enabled():
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse('''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NCT · Sign in</title><style>:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#07121a;color:#eaf4f8;font:16px system-ui}.card{width:min(420px,calc(100vw - 32px));padding:28px;border:1px solid #315367;border-radius:14px;background:#0d1c26;box-shadow:0 24px 70px #0009}h1{margin:0;text-align:center;letter-spacing:.25em}p{color:#a9c3cf}form{display:grid;gap:12px}label{font-weight:750}input,button{width:100%;padding:12px;border:1px solid #3c6072;border-radius:8px;background:#091722;color:inherit;font:inherit}button{margin-top:6px;background:#57d6bf;color:#06201d;font-weight:850;cursor:pointer}.bad{color:#ff9f9f}</style></head><body><main class="card"><h1>N C T</h1><p>Network Characterization Tool · Analyst sign in</p><form id="login"><label for="username">Username</label><input id="username" autocomplete="username" required><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required><div id="status" role="status"></div><button>Sign in</button></form></main><script>const form=document.getElementById('login'),status=document.getElementById('status');form.onsubmit=async event=>{event.preventDefault();status.textContent='Signing in…';status.className='';const response=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})}),data=await response.json();if(!response.ok){status.textContent=data.detail||'Sign in failed';status.className='bad';return}const next=new URLSearchParams(location.search).get('next')||'/';location.href=next.startsWith('/')&&!next.startsWith('//')?next:'/'};</script></body></html>''')
+
+
+@app.post("/api/auth/login")
+def login(request: LoginRequest) -> Response:
+    if not auth_enabled():
+        raise HTTPException(status_code=409, detail="Local authentication is disabled")
+    analyst = verify_credentials(DB_PATH, request.username, request.password)
+    if analyst is None:
+        raise HTTPException(status_code=401, detail="Username or password is incorrect")
+    token, expires_at = create_session(DB_PATH, analyst["username"])
+    response = JSONResponse({"authenticated": True, "analyst": analyst, "expires_at": expires_at})
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=session_hours() * 3600,
+        httponly=True,
+        secure=cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request) -> Response:
+    end_session(DB_PATH, request.cookies.get(SESSION_COOKIE))
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(SESSION_COOKIE, path="/", samesite="strict")
+    return response
+
+
+@app.get("/api/auth/me")
+def current_analyst(request: Request) -> dict:
+    return {
+        "authentication_enabled": auth_enabled(),
+        "analyst": request.state.analyst,
+    }
+
+
+@app.get("/assets/nct-session.js")
+def account_controls_script() -> Response:
+    return session_script()
+
+
+@app.get("/assets/nct-scan-references.js")
+def scan_reference_controls_script() -> Response:
+    return scan_references_script()
+
+
+@app.get("/assets/nct-view-preferences.js")
+def analyst_view_preferences_script() -> Response:
+    return view_preferences_script()
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def analyst_accounts_page(request: Request) -> HTMLResponse:
+    require_admin(request)
+    return analyst_admin_page()
+
+
+def require_admin(request: Request) -> dict:
+    analyst = request.state.analyst
+    if analyst is None or analyst.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Administrator role required")
+    return analyst
+
+
+@app.get("/api/auth/users")
+def analyst_users(request: Request) -> list[dict]:
+    require_admin(request)
+    return list_users(DB_PATH)
+
+
+@app.post("/api/auth/users")
+def add_analyst_user(request: Request, user: AnalystUserRequest) -> dict:
+    actor = require_admin(request)
+    try:
+        return create_user(DB_PATH, **user.model_dump(), created_by=actor["username"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/users/{username}/state")
+def change_analyst_user_state(
+    request: Request, username: str, state: AnalystUserStateRequest
+) -> dict:
+    actor = require_admin(request)
+    if state.disabled and username.strip().lower() == actor["username"]:
+        raise HTTPException(status_code=409, detail="You cannot disable your active account")
+    try:
+        return set_user_disabled(
+            DB_PATH,
+            username=username,
+            disabled=state.disabled,
+            actor=actor["username"],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/users/{username}/password")
+def change_analyst_password(
+    request: Request, username: str, reset: AnalystPasswordResetRequest
+) -> dict:
+    actor = require_admin(request)
+    try:
+        return reset_user_password(
+            DB_PATH,
+            username=username,
+            password=reset.password,
+            actor=actor["username"],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/auth/audit")
+def analyst_account_audit(request: Request, limit: int = 200) -> list[dict]:
+    require_admin(request)
+    return auth_audit_history(DB_PATH, limit)
+
+
+@app.get("/api/workspaces/layouts")
+def workspace_layouts(request: Request) -> dict:
+    if not auth_enabled():
+        return {"server_persistence": False, "layouts": []}
+    analyst = request.state.analyst
+    return {
+        "server_persistence": True,
+        "analyst": analyst,
+        "layouts": list_layouts(DB_PATH, analyst["username"]),
+    }
+
+
+@app.post("/api/workspaces/layouts")
+def store_workspace_layout(request: Request, layout: WorkspaceLayoutRequest) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    try:
+        return save_layout(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            **layout.model_dump(),
+        )
+    except WorkspaceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal layout not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/layouts/{layout_id}")
+def remove_workspace_layout(request: Request, layout_id: str, expected_version: int) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    try:
+        return delete_layout(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            layout_id=layout_id,
+            expected_version=expected_version,
+        )
+    except WorkspaceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal layout not found") from exc
+
+
+@app.post("/api/workspaces/layouts/{layout_id}/publish")
+def share_workspace_layout(
+    request: Request, layout_id: str, publish: WorkspacePublishRequest
+) -> dict:
+    actor = require_admin(request)
+    try:
+        return publish_layout(
+            DB_PATH,
+            layout_id=layout_id,
+            actor=actor["username"],
+            shared=publish.shared,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Layout not found") from exc
+
+
+@app.post("/api/workspaces/layouts/{layout_id}/default")
+def make_workspace_layout_default(request: Request, layout_id: str) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    try:
+        return set_default_layout(
+            DB_PATH, owner=request.state.analyst["username"], layout_id=layout_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Visible layout not found") from exc
+
+
+@app.post("/api/workspaces/layouts/default/clear")
+def clear_workspace_layout_default(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Server workspaces require authenticated mode")
+    return set_default_layout(
+        DB_PATH, owner=request.state.analyst["username"], layout_id=None
+    )
+
+
+@app.get("/api/workspaces/views/{page}")
+def analyst_view_workspace(request: Request, page: Literal["hunt", "analyze"]) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {
+            "server_persistence": False,
+            "page": page,
+            "preference": None,
+            "presets": [],
+        }
+    result = get_view_workspace(
+        DB_PATH, owner=request.state.analyst["username"], page=page
+    )
+    result["server_persistence"] = True
+    return result
+
+
+@app.put("/api/workspaces/views/{page}")
+def store_analyst_view_preference(
+    request: Request,
+    page: Literal["hunt", "analyze"],
+    preference: AnalystViewPreferenceRequest,
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal views require authenticated mode")
+    try:
+        return save_view_preference(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            page=page,
+            **preference.model_dump(),
+        )
+    except ViewPreferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/workspaces/views/{page}/presets")
+def store_analyst_filter_preset(
+    request: Request,
+    page: Literal["hunt", "analyze"],
+    preset: AnalystFilterPresetRequest,
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal presets require authenticated mode")
+    try:
+        return save_filter_preset(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            page=page,
+            **preset.model_dump(),
+        )
+    except ViewPreferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal preset not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/views/{page}/presets/{preset_id}")
+def remove_analyst_filter_preset(
+    request: Request,
+    page: Literal["hunt", "analyze"],
+    preset_id: str,
+    expected_version: int,
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal presets require authenticated mode")
+    try:
+        return delete_filter_preset(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            page=page,
+            preset_id=preset_id,
+            expected_version=expected_version,
+        )
+    except ViewPreferenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal preset not found") from exc
+
+
+@app.get("/api/workspaces/scan-draft")
+def personal_scan_draft(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"server_persistence": False, "draft": None}
+    return {
+        "server_persistence": True,
+        "draft": get_scan_draft(DB_PATH, request.state.analyst["username"]),
+    }
+
+
+@app.put("/api/workspaces/scan-draft")
+def store_personal_scan_draft(request: Request, draft: ScanDraftRequest) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal drafts require authenticated mode")
+    try:
+        return save_scan_draft(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            snapshot=draft.snapshot,
+            expected_version=draft.expected_version,
+        )
+    except DraftConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/scan-draft")
+def remove_personal_scan_draft(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Personal drafts require authenticated mode")
+    return {
+        "owner": request.state.analyst["username"],
+        "deleted": delete_scan_draft(DB_PATH, request.state.analyst["username"]),
+    }
+
+
+@app.get("/api/workspaces/notes")
+def investigation_notes(request: Request, page: str | None = None) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"server_persistence": False, "notes": []}
+    return {
+        "server_persistence": True,
+        "analyst": request.state.analyst,
+        "notes": list_notes(DB_PATH, request.state.analyst["username"], page),
+    }
+
+
+@app.post("/api/workspaces/notes")
+def store_investigation_note(
+    request: Request, note: InvestigationNoteRequest
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return save_note(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            **note.model_dump(),
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/notes/{note_id}")
+def remove_investigation_note(
+    request: Request, note_id: str, expected_version: int
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return delete_note(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            note_id=note_id,
+            expected_version=expected_version,
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+
+
+@app.post("/api/workspaces/notes/{note_id}/share")
+def change_investigation_note_sharing(
+    request: Request, note_id: str, sharing: InvestigationNoteShareRequest
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return share_note(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            note_id=note_id,
+            expected_version=sharing.expected_version,
+            shared=sharing.shared,
+            page=sharing.page,
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/notes/{note_id}/export")
+def export_investigation_note(
+    request: Request, note_id: str, page: str | None = None
+) -> Response:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        title, markdown = export_note_markdown(
+            DB_PATH,
+            viewer=request.state.analyst["username"],
+            note_id=note_id,
+            page=page,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Visible note not found") from exc
+    filename = safe_name(title, "nct-notes") + ".md"
+    return Response(
+        markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/os-overrides")
+def get_os_overrides() -> list[dict]:
+    return list_os_overrides(DB_PATH)
+
+
+@app.get("/api/os-overrides/history")
+def get_os_override_history(identity_key: str) -> list[dict]:
+    return os_override_history(DB_PATH, identity_key)
+
+
+@app.post("/api/os-overrides")
+def save_os_override(http_request: Request, request: OsOverrideRequest) -> dict:
+    try:
+        values = request.model_dump()
+        if http_request.state.analyst:
+            values["analyst"] = http_request.state.analyst["username"]
+        return set_os_override(DB_PATH, **values)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/os-overrides/{identity_key}")
+def remove_os_override(
+    http_request: Request, identity_key: str, request: OsOverrideDeleteRequest
+) -> dict:
+    try:
+        analyst = (
+            http_request.state.analyst["username"]
+            if http_request.state.analyst else request.analyst
+        )
+        return delete_os_override(
+            DB_PATH, identity_key, analyst=analyst, reason=request.reason
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="OS correction not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/os-inference-reviews/history")
+def get_os_inference_review_history(identity_key: str) -> list[dict]:
+    return inference_review_history(DB_PATH, identity_key)
+
+
+@app.post("/api/os-inference-reviews")
+def save_os_inference_review(
+    http_request: Request, request: OsInferenceReviewRequest
+) -> dict:
+    try:
+        values = request.model_dump()
+        if http_request.state.analyst:
+            values["analyst"] = http_request.state.analyst["username"]
+        return set_inference_review(DB_PATH, **values)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/api/packages")
-def create_package(spec: CampaignSpec) -> StreamingResponse:
+def create_package(http_request: Request, spec: CampaignSpec) -> StreamingResponse:
     try:
+        fields = ["created_by"]
+        if spec.scheduled:
+            fields.append("scheduled_by")
+        spec = bind_signed_in_actor(http_request, spec, *fields)
         filename, content = build_package(spec)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -823,13 +1668,22 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
     if row:
         imported_at = row[0]
         metadata = json.loads(row[1] or "{}")
+    from app.network_map import build_topology
+    response_analysis = enrich_analysis_macs(
+        analysis,
+        build_topology(),
+        direct_source_label=original_name,
+        direct_source_url=f"/api/imports/{digest}/raw",
+    )
+    apply_analysis_os_overrides(response_analysis, DB_PATH)
+    apply_analysis_host_identities(response_analysis, DB_PATH)
     return {
         "sha256": digest,
         "duplicate": duplicate,
         "original_preserved": True,
         "imported_at": imported_at,
         "metadata": metadata,
-        "analysis": analysis,
+        "analysis": response_analysis,
     }
 
 
@@ -850,6 +1704,15 @@ def analyze_scan_run(run_id: str) -> dict:
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     description = describe_run_group(group)
+    from app.network_map import build_topology
+    analysis = enrich_analysis_macs(
+        analysis,
+        build_topology(),
+        direct_source_label=description.get("display_name") or "Automated Nmap scan",
+        direct_source_url=f"/api/scan-runs/{run_id}/artifacts/xml",
+    )
+    apply_analysis_os_overrides(analysis, DB_PATH)
+    apply_analysis_host_identities(analysis, DB_PATH)
     return {
         "run_id": run_id,
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
@@ -866,7 +1729,25 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
         if not xml_path.is_file():
             raise FileNotFoundError(manifest["run_id"])
         analyses.append(parse_xml(xml_path.read_bytes()))
-    return merge_analyses(analyses)
+    merged = merge_analyses(analyses)
+    partial_notes = [
+        str(manifest.get("execution_note") or "A scan phase did not complete.")
+        for manifest in manifests
+        if manifest.get("partial_results")
+    ]
+    if partial_notes:
+        merged["warnings"] = list(dict.fromkeys([
+            *(merged.get("warnings") or []),
+            *[f"Partial scan evidence: {note}" for note in partial_notes],
+        ]))
+        merged.setdefault("coverage", {})["partial_results"] = True
+    return merged
+
+
+def _run_group_analysis_with_overrides(manifests: list[dict]) -> dict:
+    """Apply current analyst identity only to presentation/correlation views."""
+    analysis = apply_analysis_os_overrides(_run_group_analysis(manifests), DB_PATH)
+    return apply_analysis_host_identities(analysis, DB_PATH)
 
 
 def _comparison_evidence(manifests: list[dict], description: dict | None = None) -> dict:
@@ -878,6 +1759,8 @@ def _comparison_evidence(manifests: list[dict], description: dict | None = None)
             {
                 "label": f"{item.get('display_name') or item['run_id']} XML",
                 "url": f"/api/scan-runs/{item['run_id']}/artifacts/xml",
+                "analysis_url": f"/analysis?run={item['run_id']}",
+                "run_id": item["run_id"],
             }
             for item in manifests
         ],
@@ -894,6 +1777,895 @@ def _comparison_name(manifests: list[dict], description: dict | None = None) -> 
     scope = ", ".join(description.get("scope", {}).get("targets") or []) or "scope unavailable"
     completed = description.get("completed_at") or description.get("created_at") or "time unavailable"
     return f"{description.get('display_name') or 'Scan'} · {mode} · {completed} · {scope} · {profile_label}"
+
+
+def _hunting_group(selected_id: str) -> list[dict]:
+    manifests = list_scan_run_plans(limit=5000)
+    group = next(
+        (
+            items
+            for items in group_run_manifests(manifests)
+            if any(item.get("run_id") == selected_id for item in items)
+        ),
+        None,
+    )
+    if group is None:
+        raise HTTPException(status_code=404, detail="Scan result was not found")
+    if not all((run_directory(item["run_id"]) / "scan.xml").is_file() for item in group):
+        raise HTTPException(
+            status_code=409,
+            detail="This scan does not retain completed XML for every chunk",
+        )
+    return group
+
+
+def _hunting_scope_tokens(group: list[dict]) -> tuple[str, ...]:
+    first = group[0]
+    saved_ids = sorted({
+        str(item)
+        for manifest in group
+        for item in (manifest.get("saved_network_ids") or [])
+        if item
+    })
+    if saved_ids:
+        return tuple(f"saved:{item}" for item in saved_ids)
+    targets = sorted({
+        str(item)
+        for manifest in group
+        for item in (
+            (manifest.get("target_selection") or {}).get("manual_targets")
+            or manifest.get("targets")
+            or (manifest.get("coverage") or {}).get("targets")
+            or []
+        )
+        if item
+    })
+    return tuple(f"target:{item}" for item in targets) or (
+        f"run:{first.get('run_id')}",
+    )
+
+
+def _hunting_subnets(group: list[dict]) -> list[str]:
+    values = []
+    for manifest in group:
+        values.extend(
+            item.get("cidr")
+            for item in (manifest.get("saved_networks") or [])
+            if item.get("cidr")
+        )
+        manual = (
+            (manifest.get("target_selection") or {}).get("manual_targets")
+            or manifest.get("targets")
+            or (manifest.get("coverage") or {}).get("targets")
+            or []
+        )
+        for item in manual:
+            raw = str(item or "").strip()
+            if "/" not in raw:
+                continue
+            try:
+                network = ipaddress.ip_network(raw, strict=False)
+            except ValueError:
+                continue
+            if network.prefixlen == network.max_prefixlen:
+                continue
+            values.append(str(network))
+    return list(dict.fromkeys(str(item) for item in values if item))
+
+
+def _latest_hunting_groups() -> list[list[dict]]:
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    groups = [
+        group for group in group_run_manifests(manifests)
+        if group_is_comparable(group)
+    ]
+    groups.sort(
+        key=lambda group: describe_run_group(group).get("completed_at")
+        or describe_run_group(group).get("created_at") or "",
+        reverse=True,
+    )
+    selected, covered = [], set()
+    for group in groups:
+        tokens = set(_hunting_scope_tokens(group))
+        if tokens and tokens.issubset(covered):
+            continue
+        selected.append(group)
+        covered.update(tokens)
+    return selected
+
+
+def _latest_network_evidence() -> dict:
+    from app.network_map import build_topology
+
+    groups = _latest_hunting_groups()
+    analyses, sources, scope_summaries = [], [], []
+    for group in groups:
+        description = describe_run_group(group)
+        evidence = _comparison_evidence(group, description)
+        source = {
+            **description,
+            "comparison_name": _comparison_name(group, description),
+            "evidence": evidence,
+        }
+        analyses.append(build_hunting_analysis(
+            _run_group_analysis_with_overrides(group),
+            evidence=source,
+            subnets=_hunting_subnets(group),
+        ))
+        sources.extend(evidence.get("sources") or [])
+        scope_summaries.append({
+            "name": description.get("name"),
+            "display_name": description.get("display_name"),
+            "completed_at": description.get("completed_at")
+            or description.get("created_at"),
+            "scheduled": description.get("scheduled"),
+            "saved_networks": description.get("saved_networks") or [],
+            "manual_targets": description.get("manual_targets") or [],
+            "scope": description.get("scope") or {},
+            "subnets": _hunting_subnets(group),
+            "run_ids": description.get("run_ids") or [],
+        })
+    result = correlate_hunting_identity(merge_hunting_analyses(
+        analyses,
+        source={
+            "display_name": "Latest network-wide evidence",
+            "comparison_name": (
+                f"Newest completed evidence from {len(groups)} network scope"
+                f"{'s' if len(groups) != 1 else ''}"
+            ),
+            "scan_count": len(groups),
+            "scope_summaries": scope_summaries,
+            "evidence": {"label": "Latest network evidence", "sources": sources},
+        },
+    ), build_topology(), include_configuration_devices=True)
+    return result
+
+
+@app.get("/api/hunting/network")
+def analyze_hunting_network() -> dict:
+    result = _latest_network_evidence()
+    result["status"] = "hunting_network_complete"
+    return result
+
+
+@app.get("/api/analysis/network")
+def analyze_current_network() -> dict:
+    """Return the newest retained evidence as one host/device inventory."""
+    result = _latest_network_evidence()
+    result["status"] = "analysis_network_complete"
+    return result
+
+
+@app.get("/api/hostnames/identities")
+@app.get("/api/analysis/host-identities")
+def retained_host_identities() -> dict:
+    identities = list_host_identities(DB_PATH)
+    return {"count": len(identities), "identities": identities}
+
+
+@app.get("/api/hostnames")
+def hostname_workspace() -> dict:
+    return build_hostname_workspace(DB_PATH)
+
+
+@app.post("/api/hostnames/select")
+def select_hostname(request: Request, body: HostnameSelectionRequest) -> dict:
+    workspace = build_hostname_workspace(DB_PATH)
+    if body.source != "operator_input":
+        row = next((item for item in workspace["rows"] if item["ip"] == body.ip), None)
+        candidates = (row or {}).get("candidates", {}).get(body.source, [])
+        if not any(
+            item.get("hostname", "").casefold() == body.hostname.casefold()
+            for item in candidates
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="That hostname is not present in the retained source evidence",
+            )
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return select_host_identity(
+            DB_PATH,
+            ip=body.ip,
+            hostname=body.hostname,
+            selection_source=body.source,
+            imported_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/hostnames/select-source")
+def select_hostname_source(request: Request, body: HostnameBulkSelectionRequest) -> dict:
+    workspace = build_hostname_workspace(DB_PATH)
+    selections = [
+        {
+            "ip": row["ip"],
+            "hostname": row["candidates"][body.source][0]["hostname"],
+            "source": body.source,
+        }
+        for row in workspace["rows"]
+        if row["candidates"].get(body.source)
+    ]
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return select_host_identities(DB_PATH, selections, imported_by=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/hostnames/import")
+@app.post("/api/analysis/host-identities/import")
+async def upload_host_identities(
+    request: Request, file: Annotated[UploadFile, File()]
+) -> dict:
+    filename = safe_name(file.filename or "hostnames.txt", "hostnames.txt")
+    if Path(filename).suffix.casefold() not in {".csv", ".txt"}:
+        raise HTTPException(
+            status_code=422, detail="Upload a .csv or .txt host identity file"
+        )
+    content = await file.read(5 * 1024 * 1024 + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413, detail="The host identity file exceeds the 5 MB limit"
+        )
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return import_host_identities(
+            DB_PATH, content, filename=filename, imported_by=actor
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/hostnames/evidence/import")
+async def upload_hostname_server_evidence(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    accountability: Annotated[UploadFile | None, File()] = None,
+) -> dict:
+    filename = safe_name(file.filename or "hostname-evidence.txt", "hostname-evidence.txt")
+    if Path(filename).suffix.casefold() not in {".csv", ".txt", ".log"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Upload a .csv, .txt, or .log DHCP/DNS evidence file",
+        )
+    content = await file.read(MAX_HOSTNAME_EVIDENCE_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="The hostname evidence file is empty")
+    if len(content) > MAX_HOSTNAME_EVIDENCE_BYTES:
+        raise HTTPException(
+            status_code=413, detail="The hostname evidence file exceeds the 50 MB limit"
+        )
+    pcap_content = None
+    pcap_filename = None
+    if accountability and accountability.filename:
+        pcap_filename = safe_name(
+            accountability.filename, "hostname-collection-accountability.pcap"
+        )
+        if Path(pcap_filename).suffix.casefold() not in {".pcap", ".pcapng"}:
+            raise HTTPException(
+                status_code=422,
+                detail="The optional accountability capture must be a .pcap or .pcapng file",
+            )
+        pcap_content = await accountability.read(100 * 1024 * 1024 + 1)
+        if not pcap_content:
+            raise HTTPException(status_code=422, detail="The accountability capture is empty")
+        if len(pcap_content) > 100 * 1024 * 1024:
+            raise HTTPException(
+                status_code=413, detail="The accountability capture exceeds the 100 MB limit"
+            )
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return store_hostname_evidence(
+            HOSTNAME_EVIDENCE_DIR,
+            content,
+            filename=filename,
+            imported_by=actor,
+            accountability_pcap=pcap_content,
+            accountability_filename=pcap_filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/hostnames/evidence/{evidence_id}/file")
+def download_hostname_server_evidence(evidence_id: str) -> FileResponse:
+    item = hostname_evidence_file(HOSTNAME_EVIDENCE_DIR, evidence_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Hostname evidence file not found")
+    path, filename = item
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
+
+
+@app.get("/api/hostnames/evidence/{evidence_id}/accountability")
+def download_hostname_accountability(evidence_id: str) -> FileResponse:
+    item = hostname_accountability_file(HOSTNAME_EVIDENCE_DIR, evidence_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Accountability capture not found")
+    path, filename = item
+    return FileResponse(path, filename=filename, media_type="application/vnd.tcpdump.pcap")
+
+
+@app.get("/api/analysis/network-changes")
+def analyze_current_network_changes() -> dict:
+    """Compare the newest two complete observations for each exact scan scope."""
+    manifests = list_scan_run_plans(limit=5000)
+    for manifest in manifests:
+        manifest["_comparison_xml_available"] = (
+            run_directory(manifest["run_id"]) / "scan.xml"
+        ).is_file()
+    groups = [
+        group for group in group_run_manifests(manifests)
+        if group_is_comparable(group)
+    ]
+    groups.sort(
+        key=lambda group: describe_run_group(group).get("completed_at")
+        or describe_run_group(group).get("created_at") or "",
+        reverse=True,
+    )
+    by_scope: dict[tuple[str, ...], list[list[dict]]] = {}
+    for group in groups:
+        by_scope.setdefault(_hunting_scope_tokens(group), []).append(group)
+
+    summary_keys = (
+        "hosts_added", "hosts_removed", "hosts_changed", "ports_added",
+        "ports_removed", "port_state_changes", "identity_changes", "route_changes",
+    )
+    aggregate = {key: 0 for key in summary_keys}
+    scopes = []
+    for scope_groups in by_scope.values():
+        after_group = scope_groups[0]
+        after_description = describe_run_group(after_group)
+        scope_item = {
+            "scope": after_description.get("scope") or {},
+            "saved_networks": after_description.get("saved_networks") or [],
+            "current": {
+                **after_description,
+                "comparison_name": _comparison_name(after_group, after_description),
+            },
+        }
+        if len(scope_groups) < 2:
+            scopes.append({
+                **scope_item,
+                "status": "no_baseline",
+                "message": "Only one complete observation is retained for this scope.",
+                "baseline": None,
+            })
+            continue
+        before_group = scope_groups[1]
+        before_description = describe_run_group(before_group)
+        before_evidence = _comparison_evidence(before_group, before_description)
+        after_evidence = _comparison_evidence(after_group, after_description)
+        comparison = compare_analyses(
+            _run_group_analysis(before_group),
+            _run_group_analysis(after_group),
+            before_evidence=before_evidence,
+            after_evidence=after_evidence,
+        )
+        warnings = coverage_warnings(
+            representative_coverage(before_group),
+            representative_coverage(after_group),
+        )
+        for key in summary_keys:
+            aggregate[key] += int((comparison.get("summary") or {}).get(key) or 0)
+        scopes.append({
+            **scope_item,
+            "status": "comparison_complete",
+            "message": "Compared the newest two complete observations for this scope.",
+            "baseline": {
+                **before_description,
+                "comparison_name": _comparison_name(before_group, before_description),
+            },
+            "before": before_description,
+            "after": after_description,
+            "coverage_compatible": not warnings,
+            "coverage_warnings": warnings,
+            **comparison,
+        })
+    return {
+        "status": "network_changes_complete",
+        "scope_count": len(scopes),
+        "compared_scope_count": sum(
+            item["status"] == "comparison_complete" for item in scopes
+        ),
+        "no_baseline_scope_count": sum(
+            item["status"] == "no_baseline" for item in scopes
+        ),
+        "summary": aggregate,
+        "scopes": scopes,
+    }
+
+
+NETWORK_CONTROL_ROUTE_LIMIT = 50
+
+
+def _network_control_route_text(route: dict) -> str:
+    fields = (
+        "network", "destination", "prefix", "target", "next_hop", "gateway",
+        "via", "interface", "device", "protocol", "metric", "line",
+    )
+    return " ".join(
+        str(route.get(field) or "") for field in fields
+    ).casefold()
+
+
+def _network_control_local_route(route: dict) -> bool:
+    return bool(
+        route.get("direct") is True
+        or str(route.get("route_type") or "").casefold() == "connected"
+        or str(route.get("protocol") or "").casefold() in {"connected", "local"}
+    )
+
+
+def _network_control_route_result(
+    analysis: dict, *, scope: str | None = None, search: str = ""
+) -> dict:
+    routes = list((analysis.get("route_analysis") or {}).get("routes") or [])
+    route_total = len(routes)
+    selected_scope = scope or ("local" if route_total > NETWORK_CONTROL_ROUTE_LIMIT else "all")
+    normalized_search = search.strip().casefold()
+    matches = [
+        route for route in routes
+        if (selected_scope != "local" or _network_control_local_route(route))
+        and (not normalized_search or normalized_search in _network_control_route_text(route))
+    ]
+    return {
+        "routes": matches[:NETWORK_CONTROL_ROUTE_LIMIT],
+        "route_total": route_total,
+        "route_match_count": len(matches),
+        "routes_limited": len(matches) > NETWORK_CONTROL_ROUTE_LIMIT,
+        "route_scope": selected_scope,
+        "route_search": search.strip(),
+    }
+
+
+def _network_control_device(analysis: dict) -> dict:
+    policy = analysis.get("policy") or {}
+    return {
+        "run_id": analysis.get("run_id"),
+        "device": analysis.get("device") or {},
+        "collection": analysis.get("collection") or {},
+        "evidence": analysis.get("evidence") or [],
+        "route_analysis": _network_control_route_result(analysis),
+        "policy": {
+            "firewall_acl": policy.get("firewall_acl") or [],
+            "nat": policy.get("nat") or [],
+        },
+    }
+
+
+@app.get("/api/analysis/network-controls")
+def analyze_current_network_controls() -> dict:
+    """Expose newest retained routing and policy evidence without inferring permission."""
+    devices = _latest_device_reachability_evidence()
+    return {
+        "status": "network_controls_complete",
+        "device_count": len(devices),
+        "route_count": sum(
+            len((item.get("route_analysis") or {}).get("routes") or [])
+            for item in devices
+        ),
+        "policy_count": sum(
+            len((item.get("policy") or {}).get("firewall_acl") or [])
+            for item in devices
+        ),
+        "nat_count": sum(
+            len((item.get("policy") or {}).get("nat") or [])
+            for item in devices
+        ),
+        "devices": [_network_control_device(item) for item in devices],
+        "disclaimer": (
+            "A retained route describes a possible forwarding path. Only explicit "
+            "firewall or ACL evidence can support an allow or deny conclusion."
+        ),
+    }
+
+
+@app.get("/api/analysis/network-controls/{run_id}/routes")
+def analyze_network_control_routes(
+    run_id: str,
+    scope: str = Query(default="local", pattern="^(local|all)$"),
+    search: str = Query(default="", max_length=200),
+) -> dict:
+    """Return one bounded, server-filtered page from a retained routing table."""
+    analysis = next(
+        (
+            item for item in _latest_device_reachability_evidence()
+            if str(item.get("run_id") or "") == run_id
+        ),
+        None,
+    )
+    if analysis is None:
+        try:
+            analysis = analyze_device_collection(run_id)
+        except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+            raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    return {
+        "status": "network_control_routes_complete",
+        "run_id": run_id,
+        **_network_control_route_result(analysis, scope=scope, search=search),
+    }
+
+
+def _latest_device_reachability_evidence() -> list[dict]:
+    global _DEVICE_EVIDENCE_CACHE_KEY, _DEVICE_EVIDENCE_CACHE_VALUE
+    records = device_collection_history(limit=100)
+    selected_records = []
+    seen_devices = set()
+    for record in records:
+        device_key = str(record.get("device_address") or record.get("device_name") or "").casefold()
+        if not device_key or device_key in seen_devices:
+            continue
+        if str(record.get("status") or "").casefold() not in {"completed", "uploaded"}:
+            continue
+        selected_records.append(record)
+        seen_devices.add(device_key)
+    gateway = get_external_wan_gateway(DB_PATH)
+    cache_key = (
+        id(device_collection_history),
+        id(analyze_device_collection),
+        tuple(
+            (
+                str(record.get("run_id") or ""),
+                str(record.get("completed_at") or record.get("created_at") or ""),
+                int(record.get("retained_output_bytes") or record.get("uploaded_size") or 0),
+            )
+            for record in selected_records
+        ),
+        json.dumps(gateway, sort_keys=True, default=str) if gateway else "",
+    )
+    with _DEVICE_EVIDENCE_CACHE_LOCK:
+        if cache_key == _DEVICE_EVIDENCE_CACHE_KEY:
+            return _DEVICE_EVIDENCE_CACHE_VALUE
+
+    analyses = []
+    for record in selected_records:
+        try:
+            analysis = analyze_device_collection(record["run_id"])
+        except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+        analyses.append(analysis)
+    result = apply_external_gateway_role(analyses, gateway)
+    with _DEVICE_EVIDENCE_CACHE_LOCK:
+        _DEVICE_EVIDENCE_CACHE_KEY = cache_key
+        _DEVICE_EVIDENCE_CACHE_VALUE = result
+    return result
+
+
+@app.get("/api/network-semantics/external-wan-gateway")
+def external_wan_gateway_semantic() -> dict:
+    return {
+        "status": "network_semantics_complete",
+        "gateway": get_external_wan_gateway(DB_PATH),
+        "gateways": get_external_wan_gateways(DB_PATH),
+    }
+
+
+@app.put("/api/network-semantics/external-wan-gateway")
+def update_external_wan_gateway_semantic(
+    payload: ExternalWanGatewayRequest, request: Request
+) -> dict:
+    analyst = request.state.analyst
+    changed_by = analyst["username"] if analyst else "local-analyst"
+    return {
+        "status": "external_wan_gateway_saved",
+        "gateway": set_external_wan_gateway(
+            DB_PATH,
+            **payload.model_dump(),
+            changed_by=changed_by,
+        ),
+        "gateways": get_external_wan_gateways(DB_PATH),
+    }
+
+
+@app.delete("/api/network-semantics/external-wan-gateway")
+def delete_external_wan_gateway_semantic(
+    slot: Literal["primary", "secondary"] = "primary",
+) -> dict:
+    return {
+        "status": "external_wan_gateway_cleared",
+        **clear_external_wan_gateway(DB_PATH, slot=slot),
+        "gateways": get_external_wan_gateways(DB_PATH),
+    }
+
+
+@app.get("/api/reachability/context")
+def reachability_context() -> dict:
+    hunting = analyze_hunting_network()
+    devices = _latest_device_reachability_evidence()
+    return {
+        "status": "reachability_context_complete",
+        "saved_networks": list_saved_networks(DB_PATH),
+        "hosts": hunting.get("hosts") or [],
+        "device_collections": len(devices),
+        "external_wan_gateway": get_external_wan_gateway(DB_PATH),
+        "devices": [
+            {
+                "name": (item.get("device") or {}).get("name"),
+                "address": (item.get("device") or {}).get("address"),
+                "type": (item.get("device") or {}).get("type"),
+                "vendor": (item.get("device") or {}).get("vendor"),
+                "run_id": item.get("run_id"),
+                "interfaces": [
+                    value.get("name") for value in item.get("interfaces") or []
+                    if value.get("name")
+                ],
+                "interface_details": [
+                    {
+                        "name": value.get("name"),
+                        "address": value.get("address"),
+                        "network": value.get("network"),
+                        "role": value.get("role"),
+                    }
+                    for value in item.get("interfaces") or [] if value.get("name")
+                ],
+            }
+            for item in devices if str((item.get("device") or {}).get("type") or "").lower()
+            in {"router", "firewall"}
+        ],
+    }
+
+
+@app.get("/api/reachability/policy-context/{run_id}")
+def reachability_policy_context(run_id: str) -> dict:
+    try:
+        selected = next(
+            item for item in _latest_device_reachability_evidence()
+            if str(item.get("run_id") or "") == run_id
+        )
+    except StopIteration:
+        raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
+    return {
+        "status": "reachability_policy_context_complete",
+        **policy_rule_context(selected),
+    }
+
+
+@app.post("/api/reachability/policy-template")
+def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict:
+    try:
+        devices = _latest_device_reachability_evidence()
+        selected = next(
+            item for item in devices
+            if query.device_key in {
+                str(item.get("run_id") or ""),
+                str((item.get("device") or {}).get("address") or ""),
+                str((item.get("device") or {}).get("name") or ""),
+            }
+        )
+        return {
+            "status": "reachability_policy_template_complete",
+            **build_vendor_policy_rule(
+                analysis=selected,
+                source_text=query.source,
+                destination_text=query.destination,
+                protocol=query.protocol,
+                port=query.port,
+                action=query.action,
+                interface_name=query.interface_name,
+                insertion_index=query.insertion_index,
+                template_id=query.template_id,
+                source_external=query.source_external,
+            ),
+        }
+    except StopIteration:
+        raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.post("/api/reachability/evaluate")
+def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
+    try:
+        return evaluate_reachability(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            flow_state=query.flow_state,
+            source_external=query.source_external,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.post("/api/reachability/exposure-report")
+def generate_source_exposure_report() -> dict:
+    hunting = analyze_hunting_network()
+    return build_source_exposure_report(
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+        searchsploit=enrich_hunting_with_searchsploit(hunting),
+    )
+
+
+@app.post("/api/reachability/simulate-policy")
+def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict:
+    try:
+        return simulate_proposed_policy_control(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            flow_state=query.flow_state,
+            source_external=query.source_external,
+            action=query.action,
+            device_key=query.device_key,
+            interface_name=query.interface_name,
+            insertion_index=query.insertion_index,
+            vendor_rule=query.vendor_rule,
+            template_id=query.template_id,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.post("/api/reachability/simulate-route")
+def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> dict:
+    try:
+        return simulate_proposed_route_control(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            flow_state=query.flow_state,
+            source_external=query.source_external,
+            action=query.action,
+            device_key=query.device_key,
+            route_network=query.route_network,
+            route_interface=query.route_interface,
+            next_hop=query.next_hop,
+            priority_kind=query.priority_kind,
+            priority_value=query.priority_value,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.get("/api/hunting/compare")
+def compare_hunting_scans(before: str, after: str) -> dict:
+    if before == after:
+        raise HTTPException(status_code=422, detail="Choose two different scans")
+    before_group, after_group = _hunting_group(before), _hunting_group(after)
+    before_description = describe_run_group(before_group)
+    after_description = describe_run_group(after_group)
+    before_result = build_hunting_analysis(
+        _run_group_analysis_with_overrides(before_group),
+        evidence={
+            **before_description,
+            "comparison_name": _comparison_name(before_group, before_description),
+            "evidence": _comparison_evidence(before_group, before_description),
+        },
+        subnets=_hunting_subnets(before_group),
+    )
+    after_result = build_hunting_analysis(
+        _run_group_analysis_with_overrides(after_group),
+        evidence={
+            **after_description,
+            "comparison_name": _comparison_name(after_group, after_description),
+            "evidence": _comparison_evidence(after_group, after_description),
+        },
+        subnets=_hunting_subnets(after_group),
+    )
+    warnings = coverage_warnings(
+        representative_coverage(before_group), representative_coverage(after_group)
+    )
+    return {
+        **compare_hunting_results(before_result, after_result),
+        "coverage_compatible": not warnings,
+        "coverage_warnings": warnings,
+    }
+
+
+@app.get("/api/hunting/{run_id}")
+def analyze_hunting_scan(run_id: str) -> dict:
+    from app.network_map import build_topology
+
+    group = _hunting_group(run_id)
+    description = describe_run_group(group)
+    return correlate_hunting_identity(build_hunting_analysis(
+        _run_group_analysis_with_overrides(group),
+        evidence={
+            **description,
+            "comparison_name": _comparison_name(group, description),
+            "evidence": _comparison_evidence(group, description),
+        },
+        subnets=_hunting_subnets(group),
+    ), build_topology())
+
+
+@app.get("/api/searchsploit/status")
+def get_searchsploit_status() -> dict:
+    return searchsploit_status()
+
+
+@app.post("/api/searchsploit/database/update-online")
+def update_searchsploit_database_online() -> dict:
+    try:
+        return update_searchsploit_from_internet()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/searchsploit/database/upload")
+async def upload_searchsploit_database(file: UploadFile = File(...)) -> dict:
+    incoming = DATA_DIR / "searchsploit" / ".incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+    archive_path = incoming / f"upload-{uuid.uuid4().hex}.archive"
+    total = 0
+    try:
+        with archive_path.open("wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_ARCHIVE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="The update archive is larger than the 1.5 GB limit.",
+                    )
+                output.write(chunk)
+        try:
+            return install_searchsploit_archive(
+                archive_path,
+                source=f"uploaded:{Path(file.filename or 'offline-update').name}",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        await file.close()
+        archive_path.unlink(missing_ok=True)
+
+
+@app.post("/api/searchsploit/database/rollback/{version_id}")
+def rollback_searchsploit_database_version(version_id: str) -> dict:
+    try:
+        return rollback_searchsploit_database(version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/searchsploit/hunting/network")
+def searchsploit_hunting_network() -> dict:
+    hunting = analyze_hunting_network()
+    return classify_searchsploit_exposure(
+        enrich_hunting_with_searchsploit(hunting),
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
+
+
+@app.post("/api/searchsploit/hunting/{run_id}")
+def searchsploit_hunting_scan(run_id: str) -> dict:
+    hunting = analyze_hunting_scan(run_id)
+    return classify_searchsploit_exposure(
+        enrich_hunting_with_searchsploit(hunting),
+        hunting=hunting,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
 
 
 @app.get("/api/scan-comparisons/candidates")
@@ -1053,15 +2825,25 @@ def csv_download(content: bytes, filename: str) -> StreamingResponse:
     )
 
 
+def compact_export_filename(label: str, identifier: str, suffix: str) -> str:
+    """Keep recognizable NCT exports comfortably below Windows path limits."""
+    stem = safe_name(Path(label).stem, "results")[:36].rstrip("-._") or "results"
+    short_id = safe_name(identifier, "export")[:8]
+    return f"NCT-{stem}-{short_id}-{suffix}.csv"
+
+
 @app.get("/api/imports/{sha256}/exports/hosts.csv")
 def export_import_host_summary(sha256: str) -> StreamingResponse:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
-    stem = safe_name(item.get("display_name") or item["filename"], "nmap-results")
+    apply_analysis_os_overrides(item["analysis"], DB_PATH)
+    apply_analysis_host_identities(item["analysis"], DB_PATH)
     return csv_download(
         rows_to_csv(host_summary_rows(item["analysis"]), HOST_SUMMARY_FIELDS),
-        f"{stem}-host-summary.csv",
+        compact_export_filename(
+            item.get("display_name") or item["filename"], sha256, "hosts"
+        ),
     )
 
 
@@ -1070,10 +2852,13 @@ def export_import_ports(sha256: str) -> StreamingResponse:
     item = get_import_history_item(sha256)
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
-    stem = safe_name(item.get("display_name") or item["filename"], "nmap-results")
+    apply_analysis_os_overrides(item["analysis"], DB_PATH)
+    apply_analysis_host_identities(item["analysis"], DB_PATH)
     return csv_download(
         rows_to_csv(port_level_rows(item["analysis"]), PORT_LEVEL_FIELDS),
-        f"{stem}-port-level.csv",
+        compact_export_filename(
+            item.get("display_name") or item["filename"], sha256, "ports"
+        ),
     )
 
 
@@ -1081,7 +2866,7 @@ HTML = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Nmap Terrain Analyzer</title>
 <style>
-:root{--bg:#091016;--panel:#111c25;--line:#263541;--text:#edf6fb;--muted:#93a8b5;--accent:#53d1b6;--accent2:#64a9ff;--bad:#ff837a;--warn:#ffc66d}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#102c35 0,#091016 42%);color:var(--text);font:15px system-ui,sans-serif;min-height:100vh}.wrap{max-width:1080px;margin:auto;padding:38px 20px 70px}header{display:flex;justify-content:space-between;gap:20px;align-items:end;margin-bottom:26px}h1{margin:0;font-size:34px;letter-spacing:-1px}header p{color:var(--muted);margin:7px 0 0}.badge{border:1px solid #327a6d;color:var(--accent);padding:7px 10px;border-radius:99px;font-size:12px;white-space:nowrap}.tabs{display:flex;gap:8px;margin-bottom:14px}.tab{background:#13212b;color:var(--muted);border:1px solid var(--line);padding:10px 15px;border-radius:10px;cursor:pointer}.tab.active{color:#06130f;background:var(--accent);border-color:var(--accent)}.panel{display:none;background:rgba(17,28,37,.94);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 22px 70px #0005}.panel.active{display:block}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.full{grid-column:1/-1}label{display:block;color:#b9cbd5;font-weight:600;margin-bottom:7px}input,select,textarea{width:100%;background:#0b141b;border:1px solid #344754;color:var(--text);border-radius:9px;padding:11px 12px;font:inherit}textarea{min-height:100px;resize:vertical}.hint{color:var(--muted);font-size:12px;margin-top:6px}.segment{background:#0d171e;border:1px solid var(--line);border-radius:12px;padding:15px;margin-bottom:10px}.row{display:flex;gap:10px}.row>:first-child{flex:1}.remove{width:auto;background:#321b20;border-color:#63313b;color:#ffaaa3}.button{background:var(--accent);border:0;color:#06130f;font-weight:800;padding:12px 17px;border-radius:10px;cursor:pointer;width:auto}.secondary{background:#183144;color:#bfe0fa;border:1px solid #31546b}.actions{display:flex;gap:10px;align-items:center;margin-top:20px}.status{margin-top:18px;padding:13px;border-radius:10px;background:#0b141b;border:1px solid var(--line);color:var(--muted);display:none}.status.show{display:block}.status.error{border-color:#6c3336;color:#ffaaa3}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.card{padding:13px;background:#0b141b;border-radius:10px}.card b{font-size:24px;display:block;color:var(--accent2)}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}code{color:#9cd4ff}.filterbar{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin:20px 0}.port-chip{display:block;padding:5px 7px;margin:0 0 4px;border-left:3px solid transparent;border-radius:5px}.port-chip.outlier{background:#4a3218;border-left-color:var(--warn);color:#ffe1ad}.outlier-tag{display:inline-block;margin-left:7px;padding:2px 5px;border-radius:99px;background:var(--warn);color:#291906;font-size:10px;font-weight:900;text-transform:uppercase}.group-label{display:inline-block;margin-top:5px;color:var(--accent2);font-weight:700}.outlier-group{margin:12px 0 18px;padding:15px;background:#0b141b;border:1px solid var(--line);border-radius:11px}.outlier-group h4{margin:0 0 8px}.empty{color:var(--muted);font-style:italic}.table-wrap{overflow-x:auto}@media(max-width:700px){.grid,.cards,.filterbar{grid-template-columns:1fr}header{display:block}.badge{display:inline-block;margin-top:12px}}
+:root{--bg:#091016;--panel:#111c25;--line:#263541;--text:#edf6fb;--muted:#93a8b5;--accent:#53d1b6;--accent2:#64a9ff;--bad:#ff837a;--warn:#ffc66d}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#102c35 0,#091016 42%);color:var(--text);font:15px system-ui,sans-serif;min-height:100vh}.wrap{max-width:1080px;margin:auto;padding:38px 20px 70px}header{display:flex;justify-content:space-between;gap:20px;align-items:end;margin-bottom:26px}h1{margin:0;font-size:34px;letter-spacing:-1px}header p{color:var(--muted);margin:7px 0 0}.badge{border:1px solid #327a6d;color:var(--accent);padding:7px 10px;border-radius:99px;font-size:12px;white-space:nowrap}.tabs{display:flex;gap:8px;margin-bottom:14px}.tab{background:#13212b;color:var(--muted);border:1px solid var(--line);padding:10px 15px;border-radius:10px;cursor:pointer}.tab.active{color:#06130f;background:var(--accent);border-color:var(--accent)}.panel{display:none;background:rgba(17,28,37,.94);border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 22px 70px #0005}.panel.active{display:block}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.full{grid-column:1/-1}label{display:block;color:#b9cbd5;font-weight:600;margin-bottom:7px}input,select,textarea{width:100%;background:#0b141b;border:1px solid #344754;color:var(--text);border-radius:9px;padding:11px 12px;font:inherit}textarea{min-height:100px;resize:vertical}.hint{color:var(--muted);font-size:12px;margin-top:6px}.segment{background:#0d171e;border:1px solid var(--line);border-radius:12px;padding:15px;margin-bottom:10px}.row{display:flex;gap:10px}.row>:first-child{flex:1}.remove{width:auto;background:#321b20;border-color:#63313b;color:#ffaaa3}.button{background:var(--accent);border:0;color:#06130f;font-weight:800;padding:12px 17px;border-radius:10px;cursor:pointer;width:auto}.secondary{background:#183144;color:#bfe0fa;border:1px solid #31546b}.actions{display:flex;gap:10px;align-items:center;margin-top:20px}.status{margin-top:18px;padding:13px;border-radius:10px;background:#0b141b;border:1px solid var(--line);color:var(--muted);display:none}.status.show{display:block}.status.error{border-color:#6c3336;color:#ffaaa3}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.card{padding:13px;background:#0b141b;border-radius:10px}.card b{font-size:24px;display:block;color:var(--accent2)}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}code{color:#9cd4ff}.filterbar{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin:20px 0}.port-chip{display:block;padding:5px 7px;margin:0 0 4px;border-left:3px solid transparent;border-radius:5px}.port-chip.outlier{background:#4a3218;border-left-color:var(--warn);color:#ffe1ad}.outlier-tag{display:inline-block;margin-left:7px;padding:2px 5px;border-radius:99px;background:var(--warn);color:#291906;font-size:10px;font-weight:900;text-transform:uppercase}.group-label{display:inline-block;margin-top:5px;color:var(--accent2);font-weight:700}.os-inferred{color:#ffe1ad;font-weight:800;text-decoration:underline dotted;text-underline-offset:3px}.os-inferred .badge{margin-left:4px;padding:2px 6px;border-color:#9b762f;color:#ffe1ad}.os-inferred-evidence{display:block;margin-top:4px;color:#d4b77f;font-size:11px;font-weight:500}.outlier-group{margin:12px 0 18px;padding:15px;background:#0b141b;border:1px solid var(--line);border-radius:11px}.outlier-group h4{margin:0 0 8px}.empty{color:var(--muted);font-style:italic}.table-wrap{overflow-x:auto}@media(max-width:700px){.grid,.cards,.filterbar{grid-template-columns:1fr}header{display:block}.badge{display:inline-block;margin-top:12px}}
 
     #analysis-history-panel { margin-top:18px; padding:16px; border:1px solid #243b47; border-radius:12px; background:rgba(15,29,39,.95); }
     #analysis-history-panel h3 { margin:0 0 6px; }
@@ -1100,6 +2885,8 @@ HTML = r'''<!doctype html>
     .analysis-history-muted { color:#9eb0b8; }
     .analysis-history-good { color:#61d095; }
     .analysis-history-warning { color:#f4c95d; }
+    .table-wrap { overflow:visible; }
+    .table-wrap thead th,.analysis-history-table thead th { position:sticky; top:0; z-index:2; background:#0b141b; box-shadow:0 2px 0 #344754; }
 </style></head><body><main class="wrap">
 <header><div><h1>Nmap Terrain Analyzer</h1><p>Build on PythonTool · scan from Kali · return XML for terrain analysis.</p></div><span class="badge">Generator only · never executes Nmap</span></header>
 <div class="tabs"><button class="tab active" data-target="generate">Build scan package</button><button class="tab" data-target="analyze">Analyze Nmap XML</button><a href='/operator' style='display:inline-block;margin-left:.5rem;padding:.55rem .9rem;border:1px solid #3b82f6;border-radius:.5rem;color:#bfdbfe;text-decoration:none'>Automated Scan</a><a href='/device-config' style='display:inline-block;margin-left:.5rem;padding:.55rem .9rem;border:1px solid #3b82f6;border-radius:.5rem;color:#bfdbfe;text-decoration:none'>Device Configurations</a><a href="/network-map" style="display:inline-block;margin-left:.5rem;padding:.55rem .9rem;border:1px solid #3b82f6;border-radius:.5rem;color:#bfdbfe;text-decoration:none">Network Map</a></div>
@@ -1130,17 +2917,18 @@ q('#addSegment').onclick=()=>addSegment();addSegment('Management','192.168.1.0/2
 q('#noStrikeMode').onchange=()=>q('#noStrikeBox').style.display=q('#noStrikeMode').value==='entered'?'block':'none';
 function lines(v){return v.split(/[\n,]+/).map(x=>x.trim()).filter(Boolean)}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function osIdentity(h){const inference=h.os_inference;if(!inference)return esc(h.os||'Unknown');const evidence=(inference.evidence||[]).join(' · '),title=`Inferred OS · ${inference.confidence||'unspecified'} confidence${evidence?' · '+evidence:''}`;return`<span class="os-inferred" title="${esc(title)}">${esc(inference.family)} <span class="badge">inferred</span><span class="os-inferred-evidence">${esc(inference.confidence||'unspecified')} confidence${evidence?' · '+esc(evidence):''}</span></span>`}
 function show(el,msg,error=false){el.className='status show'+(error?' error':'');el.textContent=msg}
 function csvCell(v){return '"'+String(v??'').replace(/"/g,'""')+'"'}
 function renderAnalysis(a){
  const outlierTotal=(a.os_groups||[]).reduce((n,g)=>n+g.outlying_ports.length,0);
  const options=(a.os_groups||[]).map(g=>`<option value="${esc(g.name)}">${esc(g.name)} (${g.host_count})</option>`).join('');
  const groups=(a.os_groups||[]).map(g=>`<section class="outlier-group" data-outlier-group="${esc(g.name)}"><h4>${esc(g.name)} · ${g.host_count} host${g.host_count===1?'':'s'}</h4>${g.host_count<2?'<p class="empty">At least two hosts in this group are needed to identify outliers.</p>':g.outlying_ports.length?`<div class="table-wrap"><table><thead><tr><th>Outlying port</th><th>Service</th><th>Seen on</th><th>Affected hosts</th></tr></thead><tbody>${g.outlying_ports.map(p=>`<tr><td><strong>${esc(p.port)}/${esc(p.protocol)}</strong></td><td>${esc(p.service)}${p.product?' · '+esc(p.product):''}</td><td>${p.host_count} of ${p.group_host_count} (${p.prevalence_percent}%)</td><td>${p.hosts.map(esc).join('<br>')||'—'}</td></tr>`).join('')}</tbody></table></div>`:'<p class="empty">No ports are statistical outliers in this group.</p>'}</section>`).join('');
- const rows=a.hosts.map((h,index)=>{const search=[h.ip,h.mac,h.vendor,h.os,h.os_family,h.os_generation,h.device_type,h.os_group,...h.ports.flatMap(p=>[p.port,p.protocol,p.service,p.product,p.version])].join(' ').toLowerCase();const ports=h.ports.map(p=>`<span class="port-chip${p.outlier?' outlier':''}" title="Seen on ${p.group_port_host_count||0} of ${p.group_host_count||0} ${esc(h.os_group)} hosts">${esc(p.port)}/${esc(p.protocol)} ${esc(p.service)}${p.product?' · '+esc(p.product):''}${p.outlier?'<span class="outlier-tag">Outlier</span>':''}</span>`).join('')||'None reported';return `<tr class="host-row" data-index="${index}" data-group="${esc(h.os_group)}" data-search="${esc(search)}"><td>${esc(h.ip||'—')}</td><td>${esc(h.state)}</td><td>${esc(h.mac||'—')}<br>${esc(h.vendor||'')}</td><td>${esc(h.os||'Unknown')}<br><span class="group-label">${esc(h.os_group)}</span><br><span class="hint">${esc(h.classification_basis)}</span></td><td>${ports}</td></tr>`}).join('');
+ const rows=a.hosts.map((h,index)=>{const search=[h.ip,h.mac,h.vendor,h.os,h.os_family,h.os_generation,h.device_type,h.os_group,h.os_inference?.family,...(h.os_inference?.evidence||[]),...h.ports.flatMap(p=>[p.port,p.protocol,p.service,p.product,p.version])].join(' ').toLowerCase();const ports=h.ports.map(p=>`<span class="port-chip${p.outlier?' outlier':''}" title="Seen on ${p.group_port_host_count||0} of ${p.group_host_count||0} ${esc(h.os_group)} hosts">${esc(p.port)}/${esc(p.protocol)} ${esc(p.service)}${p.product?' · '+esc(p.product):''}${p.outlier?'<span class="outlier-tag">Outlier</span>':''}</span>`).join('')||'None reported';return `<tr class="host-row" data-index="${index}" data-group="${esc(h.os_group)}" data-search="${esc(search)}"><td>${esc(h.ip||'—')}</td><td>${esc(h.state)}</td><td>${esc(h.mac||'—')}<br>${esc(h.vendor||'')}</td><td>${osIdentity(h)}<br><span class="group-label">${esc(h.os_group)}</span><br><span class="hint">${esc(h.classification_basis)}</span></td><td>${ports}</td></tr>`}).join('');
  q('#results').innerHTML=`<div class="cards"><div class="card"><b id="visibleHosts">${a.host_count}</b>matching hosts</div><div class="card"><b>${a.up_count}</b>hosts up</div><div class="card"><b>${outlierTotal}</b>OS-group outlying ports</div></div><div class="filterbar"><div><label>Search results</label><input id="hostSearch" type="search" placeholder="IP, OS, vendor, service, product, or port"></div><div><label>OS / role group</label><select id="osFilter"><option value="">All OS groups</option>${options}</select></div><div class="full"><button type="button" class="button secondary" id="exportCsv">Export visible hosts to CSV</button></div></div><h3>Outlying ports by OS type</h3><p class="hint">A port is highlighted when it appears on only one host in a small peer group, or on no more than 20% of a larger group. Groups need at least two hosts.</p><div id="outlierGroups">${groups||'<p class="empty">No OS groups were detected.</p>'}</div><h3>Host inventory</h3><div class="table-wrap"><table><thead><tr><th>IP</th><th>State</th><th>MAC / vendor</th><th>OS / peer group</th><th>Open services</th></tr></thead><tbody id="hostRows">${rows}</tbody></table></div>`;
  const apply=()=>{const term=q('#hostSearch').value.trim().toLowerCase(),group=q('#osFilter').value;let visible=0;qa('.host-row').forEach(row=>{const showRow=(!group||row.dataset.group===group)&&(!term||row.dataset.search.includes(term));row.style.display=showRow?'':'none';if(showRow)visible++});q('#visibleHosts').textContent=visible;qa('.outlier-group').forEach(card=>card.style.display=(!group||card.dataset.outlierGroup===group)?'':'none')};
  q('#hostSearch').oninput=apply;q('#osFilter').onchange=apply;
- q('#exportCsv').onclick=()=>{const visible=qa('.host-row').filter(row=>row.style.display!=='none').map(row=>a.hosts[+row.dataset.index]);const header=['IP','State','MAC','Vendor','Detected OS','OS family','OS generation','OS role group','Classification basis','Outlying ports','Open services'];const records=visible.map(h=>[h.ip,h.state,h.mac,h.vendor,h.os,h.os_family,h.os_generation,h.os_group,h.classification_basis,h.ports.filter(p=>p.outlier).map(p=>`${p.port}/${p.protocol} ${p.service} (${p.group_port_host_count} of ${p.group_host_count} peers)`).join('; '),h.ports.map(p=>`${p.port}/${p.protocol} ${p.service}${p.product?' '+p.product:''}${p.version?' '+p.version:''}`).join('; ')]);const csv=[header,...records].map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='nmap-terrain-results-'+new Date().toISOString().slice(0,10)+'.csv';link.click();URL.revokeObjectURL(link.href)};
+ q('#exportCsv').onclick=()=>{const visible=qa('.host-row').filter(row=>row.style.display!=='none').map(row=>a.hosts[+row.dataset.index]);const header=['IP','State','MAC','Vendor','Detected OS','Inferred OS','Inference confidence','Inference evidence','OS family','OS generation','OS role group','Classification basis','Outlying ports','Open services'];const records=visible.map(h=>[h.ip,h.state,h.mac,h.vendor,h.os,h.os_inference?.family,h.os_inference?.confidence,(h.os_inference?.evidence||[]).join('; '),h.os_family,h.os_generation,h.os_group,h.classification_basis,h.ports.filter(p=>p.outlier).map(p=>`${p.port}/${p.protocol} ${p.service} (${p.group_port_host_count} of ${p.group_host_count} peers)`).join('; '),h.ports.map(p=>`${p.port}/${p.protocol} ${p.service}${p.product?' '+p.product:''}${p.version?' '+p.version:''}`).join('; ')]);const csv=[header,...records].map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='nmap-terrain-results-'+new Date().toISOString().slice(0,10)+'.csv';link.click();URL.revokeObjectURL(link.href)};
 }
 function campaignBody(){return{name:q('#campaign').value,profile:q('#profile').value,chunk_size:+q('#chunkSize').value,no_strike_mode:q('#noStrikeMode').value,no_strike:lines(q('#noStrike').value),terrain:qa('.segment').map(d=>({name:d.querySelector('.segName').value,targets:lines(d.querySelector('.segTargets').value)}))}}
 q('#previewCommands').onclick=async()=>{const out=q('#commandPreview'),copy=q('#copyCommands');out.value='Generating and validating commands…';copy.disabled=true;try{const r=await fetch('/api/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(campaignBody())});const x=await r.json();if(!r.ok)throw new Error(x.detail||'Command preview failed');out.value=x.copy_text;copy.disabled=false}catch(err){out.value='Error: '+err.message}};
@@ -1169,7 +2957,7 @@ document.getElementById('analysisHistoryRefresh')?.addEventListener('click',load
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return operator_page()
+    return device_config_page()
 
 @app.get('/operator')
 def operator():
@@ -1183,9 +2971,25 @@ def scans():
 def analysis():
     return analysis_page()
 
+@app.get('/hostnames')
+def hostnames():
+    return hostname_page()
+
 @app.get('/device-config')
 def device_config():
     return device_config_page()
+
+@app.get('/device-analysis')
+def device_analysis():
+    return device_analysis_page()
+
+@app.get('/hunting')
+def hunting():
+    return hunting_page()
+
+@app.get('/reachability')
+def reachability():
+    return reachability_page()
 
 from app.network_map import router as network_map_router
 from app.network_map_ui import network_map_page
