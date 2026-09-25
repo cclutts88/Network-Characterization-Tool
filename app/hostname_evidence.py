@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.device_configs import CONFIG_DIR
 from app.host_identities import list_host_identities
+from app.hostname_imports import HOSTNAME_EVIDENCE_DIR, list_hostname_evidence
 from app.ip_sort import ip_sort_key
 from app.topology_neighbors import parse_topology_neighbors
 
@@ -209,6 +210,7 @@ def build_hostname_workspace(
     *,
     topology: dict | None = None,
     config_dir: Path | None = None,
+    evidence_dir: Path | None = None,
 ) -> dict:
     """Build an IP-centered hostname review table without contacting the network."""
     if topology is None:
@@ -235,6 +237,7 @@ def build_hostname_workspace(
         observed_at: str | None = None,
         evidence_label: str | None = None,
         evidence_url: str | None = None,
+        accountability_url: str | None = None,
         lease_expires_at: str | None = None,
         lease_time_left_seconds: int | None = None,
     ) -> None:
@@ -252,6 +255,7 @@ def build_hostname_workspace(
             "observed_at": observed_at,
             "evidence_label": evidence_label,
             "evidence_url": evidence_url,
+            "accountability_url": accountability_url,
             "lease_expires_at": lease_expires_at,
             "lease_time_left_seconds": lease_time_left_seconds,
         }
@@ -323,6 +327,19 @@ def build_hostname_workspace(
                 evidence_label=f"{source.upper()} neighbor detail",
                 evidence_url=evidence_url,
             )
+
+    imported_root = HOSTNAME_EVIDENCE_DIR if evidence_dir is None else evidence_dir
+    for evidence in list_hostname_evidence(imported_root):
+        expiry = evidence.get("lease_expires_at")
+        add_candidate(
+            evidence.get("ip"), evidence.get("hostname"), evidence.get("source", ""),
+            observed_at=evidence.get("observed_at"),
+            evidence_label=evidence.get("evidence_label"),
+            evidence_url=evidence.get("evidence_url"),
+            accountability_url=evidence.get("accountability_url"),
+            lease_expires_at=expiry,
+            lease_time_left_seconds=_lease_remaining(expiry),
+        )
 
     for ip, identity in retained.items():
         add_candidate(

@@ -52,6 +52,12 @@ from app.host_identities import (
     select_host_identity,
 )
 from app.hostname_evidence import build_hostname_workspace
+from app.hostname_imports import (
+    HOSTNAME_EVIDENCE_DIR,
+    hostname_accountability_file,
+    hostname_evidence_file,
+    store_hostname_evidence,
+)
 from app.hostname_ui import hostname_page
 from app.ip_sort import ip_sort_key
 from app.os_inference import infer_os_identity
@@ -172,6 +178,7 @@ IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
 DB_PATH = DATA_DIR / "analyzer.db"
 MAX_EXPANDED_ADDRESSES = 65536
+MAX_HOSTNAME_EVIDENCE_BYTES = 50 * 1024 * 1024
 _DEVICE_EVIDENCE_CACHE_LOCK = threading.Lock()
 _DEVICE_EVIDENCE_CACHE_KEY: tuple | None = None
 _DEVICE_EVIDENCE_CACHE_VALUE: list[dict] = []
@@ -2016,6 +2023,76 @@ async def upload_host_identities(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/hostnames/evidence/import")
+async def upload_hostname_server_evidence(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    accountability: Annotated[UploadFile | None, File()] = None,
+) -> dict:
+    filename = safe_name(file.filename or "hostname-evidence.txt", "hostname-evidence.txt")
+    if Path(filename).suffix.casefold() not in {".csv", ".txt", ".log"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Upload a .csv, .txt, or .log DHCP/DNS evidence file",
+        )
+    content = await file.read(MAX_HOSTNAME_EVIDENCE_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="The hostname evidence file is empty")
+    if len(content) > MAX_HOSTNAME_EVIDENCE_BYTES:
+        raise HTTPException(
+            status_code=413, detail="The hostname evidence file exceeds the 50 MB limit"
+        )
+    pcap_content = None
+    pcap_filename = None
+    if accountability and accountability.filename:
+        pcap_filename = safe_name(
+            accountability.filename, "hostname-collection-accountability.pcap"
+        )
+        if Path(pcap_filename).suffix.casefold() not in {".pcap", ".pcapng"}:
+            raise HTTPException(
+                status_code=422,
+                detail="The optional accountability capture must be a .pcap or .pcapng file",
+            )
+        pcap_content = await accountability.read(100 * 1024 * 1024 + 1)
+        if not pcap_content:
+            raise HTTPException(status_code=422, detail="The accountability capture is empty")
+        if len(pcap_content) > 100 * 1024 * 1024:
+            raise HTTPException(
+                status_code=413, detail="The accountability capture exceeds the 100 MB limit"
+            )
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return store_hostname_evidence(
+            HOSTNAME_EVIDENCE_DIR,
+            content,
+            filename=filename,
+            imported_by=actor,
+            accountability_pcap=pcap_content,
+            accountability_filename=pcap_filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/hostnames/evidence/{evidence_id}/file")
+def download_hostname_server_evidence(evidence_id: str) -> FileResponse:
+    item = hostname_evidence_file(HOSTNAME_EVIDENCE_DIR, evidence_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Hostname evidence file not found")
+    path, filename = item
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
+
+
+@app.get("/api/hostnames/evidence/{evidence_id}/accountability")
+def download_hostname_accountability(evidence_id: str) -> FileResponse:
+    item = hostname_accountability_file(HOSTNAME_EVIDENCE_DIR, evidence_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Accountability capture not found")
+    path, filename = item
+    return FileResponse(path, filename=filename, media_type="application/vnd.tcpdump.pcap")
 
 
 @app.get("/api/analysis/network-changes")

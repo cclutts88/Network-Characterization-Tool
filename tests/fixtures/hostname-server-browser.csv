@@ -1,0 +1,3 @@
+source,ip,hostname,lease_expires_at,observed_at
+dhcp,10.66.0.10,range-client-10,2030-01-02T03:04:05Z,2026-09-24T20:00:00Z
+dns,10.66.0.10,range-client-10.example,,2026-09-24T20:00:00Z

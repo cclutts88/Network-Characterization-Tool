@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.9 — DHCP and DNS server evidence collection
+
+- Added copyable collection instructions for modern and legacy Windows DHCP/DNS
+  servers plus current and legacy Linux ISC DHCP, dnsmasq, Kea, and BIND data.
+- Added retained DHCP/DNS evidence uploads that preserve source attribution,
+  lease expiration, original exports, and optional accountability PCAPs.
+- Added a 50 MB infrastructure-evidence limit, a 100 MB PCAP limit, and coverage
+  proving records beyond the former 5 MB boundary are parsed instead of cut off.
+
 ## 0.15.8 — Retained hostname evidence workspace
 
 - Added a dedicated Hostnames page directly after Nmap that combines names
