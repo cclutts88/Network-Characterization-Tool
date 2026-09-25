@@ -6,7 +6,7 @@ HOST_PORT=8445
 
 WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
-IMAGE="network-characterization-tool:0.15.4-range-20260924"
+IMAGE="network-characterization-tool:0.15.5-range-20260924"
 CONTAINER="nct"
 DATA_DIR="$PERSIST_ROOT/data"
 RANGE_IP="${1:-}"
@@ -108,4 +108,3 @@ fi
 
 printf '%s\n' "NCT is ready at https://$RANGE_IP:$HOST_PORT"
 printf '%s\n' "Persistent operator data: $DATA_DIR"
-printf '%s\n' "The existing nmap-terrain-analyzer deployment was not changed."

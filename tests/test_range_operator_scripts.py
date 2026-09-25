@@ -18,7 +18,7 @@ def test_range_start_scripts_share_the_operator_facing_defaults():
         assert 'PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"' in content
         assert 'DATA_DIR="$PERSIST_ROOT/data"' in content
         assert ':Z"' in content or 'export NCT_DATA_DIR="$DATA_DIR"' in content
-        assert "nmap-terrain-analyzer" in content
+        assert "nmap-terrain-analyzer" not in content
         assert "clutts" not in content.lower()
         assert 'docker inspect "$CONTAINER"' in content
         assert 'sh "$WORKDIR/scripts/nct-set-admin.sh" "$ADMIN_USER"' in content
@@ -68,7 +68,7 @@ def test_quick_start_selects_one_of_the_three_launch_paths():
     assert "nct-set-admin.sh" in content
     assert "nct-migrate-data.sh" in content
     assert "/var/lib/nct/data" in content
-    assert "nmap-terrain-analyzer" in content
+    assert "nmap-terrain-analyzer" not in content
     assert "API **1.41 or newer**" in content
     assert "API **1.39 or 1.40**" in content
     assert "older than **1.39**" in content
