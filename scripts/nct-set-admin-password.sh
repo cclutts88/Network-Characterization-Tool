@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-admin_user="${1:-clutts}"
+admin_user="${1:-}"
 container="${2:-nct}"
 
 [ -t 0 ] || { printf '%s\n' "Run this command from an interactive terminal." >&2; exit 1; }
