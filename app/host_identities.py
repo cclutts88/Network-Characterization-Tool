@@ -28,9 +28,18 @@ def init_host_identity_storage(db_path: Path) -> None:
                    source_filename TEXT NOT NULL,
                    imported_by TEXT NOT NULL,
                    imported_at TEXT NOT NULL,
+                   selection_source TEXT NOT NULL DEFAULT 'operator_import',
                    version INTEGER NOT NULL DEFAULT 1
                )"""
         )
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(analyst_host_identities)")
+        }
+        if "selection_source" not in columns:
+            db.execute(
+                "ALTER TABLE analyst_host_identities "
+                "ADD COLUMN selection_source TEXT NOT NULL DEFAULT 'operator_import'"
+            )
 
 
 def _clean_hostname(value: object) -> str:
@@ -137,27 +146,30 @@ def import_host_identities(
     with sqlite3.connect(db_path) as db:
         for identity in parsed["identities"]:
             row = db.execute(
-                "SELECT hostname, source_filename, imported_by FROM analyst_host_identities WHERE ip = ?",
+                """SELECT hostname, source_filename, imported_by, selection_source
+                   FROM analyst_host_identities WHERE ip = ?""",
                 (identity["ip"],),
             ).fetchone()
             if row is None:
                 db.execute(
                     """INSERT INTO analyst_host_identities
-                       (ip, hostname, source_filename, imported_by, imported_at, version)
-                       VALUES (?, ?, ?, ?, ?, 1)""",
+                       (ip, hostname, source_filename, imported_by, imported_at,
+                        selection_source, version)
+                       VALUES (?, ?, ?, ?, ?, 'operator_import', 1)""",
                     (
                         identity["ip"], identity["hostname"], filename,
                         imported_by, imported_at,
                     ),
                 )
                 created += 1
-            elif row == (identity["hostname"], filename, imported_by):
+            elif row == (identity["hostname"], filename, imported_by, "operator_import"):
                 unchanged += 1
             else:
                 db.execute(
                     """UPDATE analyst_host_identities
                        SET hostname = ?, source_filename = ?, imported_by = ?,
-                           imported_at = ?, version = version + 1
+                           imported_at = ?, selection_source = 'operator_import',
+                           version = version + 1
                        WHERE ip = ?""",
                     (
                         identity["hostname"], filename, imported_by,
@@ -185,6 +197,133 @@ def list_host_identities(db_path: Path) -> list[dict]:
             "SELECT * FROM analyst_host_identities ORDER BY length(ip), ip"
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def select_host_identity(
+    db_path: Path,
+    *,
+    ip: object,
+    hostname: object,
+    selection_source: str,
+    imported_by: str,
+) -> dict:
+    """Persist one operator-approved hostname while retaining its evidence source."""
+    cleaned_ip = _clean_ip(ip)
+    cleaned_hostname = _clean_hostname(hostname)
+    source = re.sub(r"[^a-z0-9_-]+", "_", selection_source.strip().casefold())[:40]
+    if not source:
+        raise ValueError("hostname source is missing")
+    actor = str(imported_by or "local operator").strip()[:100] or "local operator"
+    observed_at = _now()
+    source_filename = f"Hostname workspace · {source.replace('_', ' ').title()}"
+    init_host_identity_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        current = db.execute(
+            """SELECT hostname, selection_source, source_filename, imported_by, version
+               FROM analyst_host_identities WHERE ip = ?""",
+            (cleaned_ip,),
+        ).fetchone()
+        if current is None:
+            db.execute(
+                """INSERT INTO analyst_host_identities
+                   (ip, hostname, source_filename, imported_by, imported_at,
+                    selection_source, version)
+                   VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                (
+                    cleaned_ip, cleaned_hostname, source_filename, actor,
+                    observed_at, source,
+                ),
+            )
+            version = 1
+        elif current[0] == cleaned_hostname and current[1] == source:
+            version = int(current[4])
+        else:
+            db.execute(
+                """UPDATE analyst_host_identities
+                   SET hostname = ?, source_filename = ?, imported_by = ?,
+                       imported_at = ?, selection_source = ?, version = version + 1
+                   WHERE ip = ?""",
+                (
+                    cleaned_hostname, source_filename, actor, observed_at, source,
+                    cleaned_ip,
+                ),
+            )
+            version = int(current[4]) + 1
+    return {
+        "ip": cleaned_ip,
+        "hostname": cleaned_hostname,
+        "selection_source": source,
+        "source_filename": source_filename,
+        "imported_by": actor,
+        "imported_at": observed_at,
+        "version": version,
+    }
+
+
+def select_host_identities(
+    db_path: Path, selections: list[dict], *, imported_by: str
+) -> dict:
+    """Persist a reviewed batch from one retained hostname evidence source."""
+    actor = str(imported_by or "local operator").strip()[:100] or "local operator"
+    observed_at = _now()
+    prepared = []
+    for item in selections:
+        source = re.sub(
+            r"[^a-z0-9_-]+", "_",
+            str(item.get("source") or "retained_evidence").strip().casefold(),
+        )[:40]
+        if not source:
+            raise ValueError("hostname source is missing")
+        prepared.append({
+            "ip": _clean_ip(item.get("ip")),
+            "hostname": _clean_hostname(item.get("hostname")),
+            "source": source,
+            "source_filename": f"Hostname workspace · {source.replace('_', ' ').title()}",
+        })
+    init_host_identity_storage(db_path)
+    saved = []
+    with sqlite3.connect(db_path) as db:
+        for item in prepared:
+            current = db.execute(
+                "SELECT hostname, selection_source, version FROM analyst_host_identities WHERE ip = ?",
+                (item["ip"],),
+            ).fetchone()
+            if current is None:
+                version = 1
+                db.execute(
+                    """INSERT INTO analyst_host_identities
+                       (ip, hostname, source_filename, imported_by, imported_at,
+                        selection_source, version)
+                       VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                    (
+                        item["ip"], item["hostname"], item["source_filename"],
+                        actor, observed_at, item["source"],
+                    ),
+                )
+            elif current[0] == item["hostname"] and current[1] == item["source"]:
+                version = int(current[2])
+            else:
+                version = int(current[2]) + 1
+                db.execute(
+                    """UPDATE analyst_host_identities
+                       SET hostname = ?, source_filename = ?, imported_by = ?,
+                           imported_at = ?, selection_source = ?, version = ?
+                       WHERE ip = ?""",
+                    (
+                        item["hostname"], item["source_filename"], actor,
+                        observed_at, item["source"], version, item["ip"],
+                    ),
+                )
+            saved.append({
+                "ip": item["ip"],
+                "hostname": item["hostname"],
+                "selection_source": item["source"],
+                "source_filename": item["source_filename"],
+                "imported_by": actor,
+                "imported_at": observed_at,
+                "version": version,
+            })
+    return {"updated_count": len(saved), "selections": saved}
 
 
 def apply_analysis_host_identities(analysis: dict, db_path: Path) -> dict:

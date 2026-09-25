@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.8 — Retained hostname evidence workspace
+
+- Added a dedicated Hostnames page directly after Nmap that combines names
+  already retained in Nmap scans, normal device pulls, and operator imports.
+- Added read-only DHCP, DNS host-table, and neighbor-name commands to normal
+  router, firewall, and switch pulls without adding a separate hostname scan.
+- Added per-IP source review, operator-approved selection, bulk source
+  selection, manual names, and DHCP lease time remaining when available.
+- Moved CSV/TXT hostname import from Analyze to Hostnames and kept the existing
+  Analyze import API as a compatibility path.
+
 ## 0.15.7 — Large device-analysis route controls
 
 - Changed Network Device Analysis to open routing tables larger than 50 entries

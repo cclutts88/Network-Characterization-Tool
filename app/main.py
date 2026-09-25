@@ -48,7 +48,11 @@ from app.host_identities import (
     import_host_identities,
     init_host_identity_storage,
     list_host_identities,
+    select_host_identities,
+    select_host_identity,
 )
+from app.hostname_evidence import build_hostname_workspace
+from app.hostname_ui import hostname_page
 from app.ip_sort import ip_sort_key
 from app.os_inference import infer_os_identity
 from app.searchsploit import (
@@ -223,6 +227,19 @@ class ExternalWanGatewayRequest(BaseModel):
     device_name: str = Field(default="", max_length=255)
     device_address: str = Field(default="", max_length=255)
     interface_name: str = Field(default="", max_length=255)
+
+
+class HostnameSelectionRequest(BaseModel):
+    ip: str = Field(min_length=1, max_length=64)
+    hostname: str = Field(min_length=1, max_length=253)
+    source: Literal[
+        "nmap", "dhcp", "dns", "lldp", "cdp", "config",
+        "operator", "operator_input",
+    ]
+
+
+class HostnameBulkSelectionRequest(BaseModel):
+    source: Literal["nmap", "dhcp", "dns", "lldp", "cdp", "config"]
 
 class CampaignSpec(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -1914,12 +1931,67 @@ def analyze_current_network() -> dict:
     return result
 
 
+@app.get("/api/hostnames/identities")
 @app.get("/api/analysis/host-identities")
 def retained_host_identities() -> dict:
     identities = list_host_identities(DB_PATH)
     return {"count": len(identities), "identities": identities}
 
 
+@app.get("/api/hostnames")
+def hostname_workspace() -> dict:
+    return build_hostname_workspace(DB_PATH)
+
+
+@app.post("/api/hostnames/select")
+def select_hostname(request: Request, body: HostnameSelectionRequest) -> dict:
+    workspace = build_hostname_workspace(DB_PATH)
+    if body.source != "operator_input":
+        row = next((item for item in workspace["rows"] if item["ip"] == body.ip), None)
+        candidates = (row or {}).get("candidates", {}).get(body.source, [])
+        if not any(
+            item.get("hostname", "").casefold() == body.hostname.casefold()
+            for item in candidates
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="That hostname is not present in the retained source evidence",
+            )
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return select_host_identity(
+            DB_PATH,
+            ip=body.ip,
+            hostname=body.hostname,
+            selection_source=body.source,
+            imported_by=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/hostnames/select-source")
+def select_hostname_source(request: Request, body: HostnameBulkSelectionRequest) -> dict:
+    workspace = build_hostname_workspace(DB_PATH)
+    selections = [
+        {
+            "ip": row["ip"],
+            "hostname": row["candidates"][body.source][0]["hostname"],
+            "source": body.source,
+        }
+        for row in workspace["rows"]
+        if row["candidates"].get(body.source)
+    ]
+    analyst = getattr(request.state, "analyst", None) or {}
+    actor = analyst.get("username") or "local operator"
+    try:
+        return select_host_identities(DB_PATH, selections, imported_by=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/hostnames/import")
 @app.post("/api/analysis/host-identities/import")
 async def upload_host_identities(
     request: Request, file: Annotated[UploadFile, File()]
@@ -2814,6 +2886,10 @@ def scans():
 @app.get('/analysis')
 def analysis():
     return analysis_page()
+
+@app.get('/hostnames')
+def hostnames():
+    return hostname_page()
 
 @app.get('/device-config')
 def device_config():
