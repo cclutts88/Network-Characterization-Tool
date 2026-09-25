@@ -7,9 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.device_configs import (
+    _limit_retained_collection_file,
     _run_cisco_command_sequence,
+    _run_cisco_command_sequence_to_file,
     artifact_records,
-    bounded_collection_output,
     delete_device_collection,
     device_collection_directory,
     device_collection_summary,
@@ -104,6 +105,22 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["commands"] == ["show running-config", "show ip route"]
 
 
+def test_collection_summary_retains_routes_beyond_legacy_500_item_limit(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    run_dir = make_collection(config_dir, "c" * 32)
+    route_lines = [
+        f"ip route 10.{index // 256}.{index % 256}.0 255.255.255.0 192.0.2.1"
+        for index in range(600)
+    ]
+    (run_dir / "uploaded-router-config.txt").write_text("\n".join(route_lines))
+
+    result = device_collection_summary("c" * 32, config_dir=config_dir)
+
+    assert result["counts"]["routes"] == 600
+    assert len(result["routes"]) == 600
+    assert result["routes"][-1]["network"] == "10.2.87.0/24"
+
+
 def test_unifi_saved_rules_are_classified_by_iptables_table(tmp_path):
     config_dir = tmp_path / "device-configs"
     run_dir = make_collection(config_dir, "b" * 32)
@@ -150,14 +167,30 @@ add USERS 10.80.0.0/24
     assert result["iptables_policy"]["ipsets"][0]["members"][0]["value"] == "10.80.0.0/24"
 
 
-def test_large_streamed_collection_is_bounded_and_reports_truncation(monkeypatch):
-    monkeypatch.setattr("app.device_configs.MAX_COLLECTION_OUTPUT_CHARS", 10)
+def test_large_streamed_collection_file_is_bounded_and_reports_truncation(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.device_configs.MAX_RETAINED_COLLECTION_BYTES", 10)
+    retained = tmp_path / "retained.txt"
+    retained.write_text("0123456789extra")
 
-    retained, truncated = bounded_collection_output("0123456789extra")
+    truncated = _limit_retained_collection_file(retained)
 
-    assert retained == "0123456789"
     assert truncated is True
-    assert bounded_collection_output("short") == ("short", False)
+    assert retained.read_text() == "0123456789"
+
+
+def test_collection_summary_reads_routes_after_the_previous_five_megabyte_boundary(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    run_dir = make_collection(config_dir, "9" * 32)
+    padding_line = "! " + ("x" * 1021) + "\n"
+    evidence = SAMPLE_CONFIG + (padding_line * 5121) + "ip route 203.0.113.0 255.255.255.0 192.0.2.2\n"
+    assert len(evidence.encode()) > 5 * 1024 * 1024
+    (run_dir / "uploaded-router-config.txt").write_text(evidence)
+
+    result = device_collection_summary("9" * 32, config_dir=config_dir)
+
+    assert result["configuration_truncated"] is False
+    assert result["counts"]["routes"] == 2
+    assert result["routes"][-1]["network"] == "203.0.113.0/24"
 
 
 def test_cisco_collection_runs_each_command_and_requires_running_config(monkeypatch):
@@ -212,6 +245,45 @@ def test_cisco_collection_never_reports_success_with_blank_running_config(monkey
     assert exit_code == 0
     assert failed == ["show running-config"]
     assert "running configuration" in fatal_error
+
+
+def test_cisco_collection_streams_cleaned_commands_to_retained_file(tmp_path, monkeypatch):
+    calls = []
+
+    def completed(args, **kwargs):
+        calls.append((args, kwargs["input"]))
+        command = next(
+            command
+            for command in ("show version", "show running-config", "show ip route")
+            if command in kwargs["input"]
+        )
+        output = {
+            "show version": "mako#show version\r\nCisco IOS XE Software, Version 17.12\r\nmako#",
+            "show running-config": "mako#show running-config\r\nhostname mako-eng-core-rtr\r\ninterface GigabitEthernet1\r\nmako#",
+            "show ip route": "mako#show ip route\r\nS 10.0.0.0/8 [1/0] via 192.0.2.1\r\nmako#",
+        }[command]
+        kwargs["stdout"].write(output)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("app.device_configs.subprocess.run", completed)
+    retained = tmp_path / "router-config.txt"
+
+    stderr, exit_code, failed, fatal_error, truncated = _run_cisco_command_sequence_to_file(
+        ["ssh", "admin@192.0.2.1"],
+        ["terminal length 0", "show version", "show running-config", "show ip route"],
+        retained,
+    )
+
+    output = retained.read_text()
+    assert len(calls) == 3
+    assert "===== show ip route =====" in output
+    assert "S 10.0.0.0/8 [1/0] via 192.0.2.1" in output
+    assert "mako#show ip route" not in output
+    assert stderr == ""
+    assert exit_code == 0
+    assert failed == []
+    assert fatal_error is None
+    assert truncated is False
 
 
 def test_collection_artifacts_are_not_duplicated_when_upload_matches_config_suffix(tmp_path):

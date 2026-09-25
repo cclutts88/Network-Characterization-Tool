@@ -36,11 +36,12 @@ RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ARTIFACT_NAMES = ("manifest.json", "stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt")
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-MAX_SUMMARY_TEXT_BYTES = 2 * 1024 * 1024
 MAX_SUMMARY_ITEMS = 500
-MAX_COLLECTION_OUTPUT_CHARS = 5 * 1024 * 1024
+MAX_RETAINED_COLLECTION_BYTES = 100 * 1024 * 1024
+MAX_UPLOAD_BYTES = MAX_RETAINED_COLLECTION_BYTES
+MAX_SUMMARY_TEXT_BYTES = MAX_RETAINED_COLLECTION_BYTES
 MAX_RESPONSE_OUTPUT_CHARS = 200_000
+COLLECTION_COPY_CHUNK_BYTES = 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
 MAX_ADDITIONAL_COMMANDS = 20
 READ_ONLY_COMMAND_PREFIXES = {
@@ -595,7 +596,7 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
             "NCT evidence storage",
             "internal file write",
             str(retained_output),
-            "NCT stores a bounded analysis copy of the collected output alongside the manifest and accountability capture.",
+            "NCT keeps the complete collection file for analysis and stores a small normalized response preview alongside it.",
         )
         if remote_file_workflow:
             cleanup_args = control_args + [f"rm -f -- {shlex.quote(remote_output)}"]
@@ -625,8 +626,8 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
             "Retain streamed output",
             "NCT evidence storage",
             "internal file write",
-            str(retained_output),
-            "NCT writes the captured SSH standard output to this local evidence file.",
+            str(local_output),
+            "NCT writes SSH standard output directly to this complete local evidence file and keeps a small API response preview separately.",
         )
     return {
         "run_id": run_id,
@@ -943,6 +944,9 @@ def _finish_interactive_session(
     )
     if extra:
         session.manifest.update(extra)
+    session.manifest["output_complete"] = (
+        status == "completed" and not bool(session.manifest.get("output_truncated"))
+    )
     (session.run_dir / "manifest.json").write_text(json.dumps(session.manifest, indent=2) + "\n")
     stdout = stdout_path.read_text(errors="replace")[:200_000]
     return {
@@ -970,9 +974,53 @@ def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
     return _control_ssh_args_for_plan(session.plan, session.control_path)
 
 
-def bounded_collection_output(value: str) -> tuple[str, bool]:
-    """Bound retained streamed output while making any evidence loss explicit."""
-    return value[:MAX_COLLECTION_OUTPUT_CHARS], len(value) > MAX_COLLECTION_OUTPUT_CHARS
+def _read_text_prefix(path: Path, limit: int) -> str:
+    if not path.is_file() or limit <= 0:
+        return ""
+    with path.open("rb") as handle:
+        return handle.read(limit).decode("utf-8", errors="replace")
+
+
+def _limit_retained_collection_file(path: Path) -> bool:
+    """Apply the disk-safety boundary after a streamed collection."""
+    if not path.is_file() or path.stat().st_size <= MAX_RETAINED_COLLECTION_BYTES:
+        return False
+    with path.open("r+b") as handle:
+        handle.truncate(MAX_RETAINED_COLLECTION_BYTES)
+    return True
+
+
+def _file_has_useful_device_output(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    meaningful_length = 0
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.lstrip().startswith(("% Invalid", "% Ambiguous", "% Incomplete")):
+                continue
+            meaningful_length += len(line)
+            if meaningful_length >= 20:
+                return True
+    return False
+
+
+def _stream_command_to_file(
+    args: list[str], *, input_text: str | None, output_path: Path, timeout: int
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Send SSH stdout directly to retained storage instead of holding it in memory."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", errors="replace") as output:
+        completed = subprocess.run(
+            args,
+            input=input_text,
+            stdout=output,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    return completed, _limit_retained_collection_file(output_path)
 
 
 def _useful_device_output(value: str) -> bool:
@@ -988,11 +1036,10 @@ def _useful_device_output(value: str) -> bool:
     return len("\n".join(meaningful)) >= 20
 
 
-def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
-    """Remove terminal echoes while preserving the device's evidence and errors."""
-    value = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", value or "").replace("\r", "")
-    retained: list[str] = []
-    for raw_line in value.splitlines():
+def _clean_cisco_shell_lines(lines, sent_commands: list[str]):
+    """Yield cleaned Cisco evidence one line at a time."""
+    for raw_line in lines:
+        raw_line = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line or "").replace("\r", "").rstrip("\n")
         line = raw_line.strip()
         if not line:
             continue
@@ -1007,8 +1054,12 @@ def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
             for command in sent_commands
         ):
             continue
-        retained.append(raw_line.rstrip())
-    return "\n".join(retained).strip()
+        yield raw_line.rstrip()
+
+
+def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
+    """Remove terminal echoes while preserving the device's evidence and errors."""
+    return "\n".join(_clean_cisco_shell_lines((value or "").splitlines(), sent_commands)).strip()
 
 
 def _run_cisco_command_sequence(
@@ -1045,7 +1096,7 @@ def _run_cisco_command_sequence(
             failed_commands.append(command)
         if command == "show running-config" and _useful_device_output(output):
             running_config_collected = True
-    retained, _ = bounded_collection_output("\n".join(sections))
+    retained = "\n".join(sections)
     fatal_error = None
     if not _useful_device_output(retained):
         fatal_error = "The Cisco device returned no usable collection output."
@@ -1055,6 +1106,79 @@ def _run_cisco_command_sequence(
             "the collection was not marked complete."
         )
     return retained, "\n".join(errors), last_exit, failed_commands, fatal_error
+
+
+def _run_cisco_command_sequence_to_file(
+    ssh_prefix: list[str], commands: list[str], output_path: Path
+) -> tuple[str, int, list[str], str | None, bool]:
+    """Run Cisco commands independently while streaming cleaned evidence to disk."""
+    errors: list[str] = []
+    failed_commands: list[str] = []
+    running_config_collected = False
+    overall_useful_length = 0
+    last_exit = 0
+    pager_commands = {"terminal length 0", "terminal pager 0"}
+    pager_command = next((command for command in commands if command in pager_commands), None)
+    shell_args = ssh_prefix[:-1] + ["-tt", ssh_prefix[-1]]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", errors="replace") as retained:
+        for command in commands:
+            if command in pager_commands:
+                continue
+            sent_commands = ([pager_command] if pager_command else []) + [command, "exit"]
+            with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as raw_output:
+                timed_out: subprocess.TimeoutExpired | None = None
+                try:
+                    completed = subprocess.run(
+                        shell_args,
+                        input="\n".join(sent_commands) + "\n",
+                        stdout=raw_output,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=120,
+                        check=False,
+                    )
+                    last_exit = completed.returncode
+                    command_stderr = completed.stderr or ""
+                except subprocess.TimeoutExpired as exc:
+                    completed = None
+                    command_stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+                    timed_out = exc
+                raw_output.seek(0)
+                cleaned_lines = _clean_cisco_shell_lines(raw_output, sent_commands)
+                command_useful_length = 0
+                wrote_header = False
+                for line in cleaned_lines:
+                    if not wrote_header:
+                        retained.write(f"===== {command} =====\n")
+                        wrote_header = True
+                    retained.write(line + "\n")
+                    stripped = line.strip()
+                    if stripped and not stripped.lstrip().startswith(("% Invalid", "% Ambiguous", "% Incomplete")):
+                        command_useful_length += len(stripped)
+                if wrote_header:
+                    retained.write("\n")
+                overall_useful_length += command_useful_length
+                command_useful = command_useful_length >= 20
+                if command_stderr:
+                    errors.append(f"{command}: {command_stderr.strip()}")
+                if completed is None or completed.returncode != 0 or not command_useful:
+                    failed_commands.append(command)
+                if command == "show running-config" and command_useful:
+                    running_config_collected = True
+                if timed_out is not None:
+                    retained.flush()
+                    raise timed_out
+    output_truncated = _limit_retained_collection_file(output_path)
+    fatal_error = None
+    if overall_useful_length < 20:
+        fatal_error = "The Cisco device returned no usable collection output."
+    elif "show running-config" in commands and not running_config_collected:
+        fatal_error = (
+            "The Cisco device did not return its running configuration; "
+            "the collection was not marked complete."
+        )
+    return "\n".join(errors), last_exit, failed_commands, fatal_error, output_truncated
 
 
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
@@ -1105,15 +1229,10 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 raise RuntimeError("SCP could not copy the collected configuration back to the analyzer.")
         elif plan.vendor == "cisco":
             transfer_method = "ssh_command_sequence"
-            retained_output, command_stderr, exit_code, failed_commands, collection_error = (
-                _run_cisco_command_sequence(
-                    _control_ssh_args(session), preview["commands"]
+            command_stderr, exit_code, failed_commands, collection_error, output_truncated = (
+                _run_cisco_command_sequence_to_file(
+                    _control_ssh_args(session), preview["commands"], local_output
                 )
-            )
-            retained_output, output_truncated = bounded_collection_output(retained_output)
-            local_output.write_text(retained_output)
-            (session.run_dir / "stdout.txt").write_text(
-                retained_output[:MAX_RESPONSE_OUTPUT_CHARS]
             )
             if command_stderr:
                 stderr_parts.append(command_stderr[:20_000])
@@ -1128,26 +1247,22 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             remote_input, remote_command = _interactive_collection_command(
                 plan, preview["commands"], None
             )
-            collected = subprocess.run(
+            collected, output_truncated = _stream_command_to_file(
                 _control_ssh_args(session) + [remote_command],
-                input=remote_input,
-                capture_output=True,
-                text=True,
+                input_text=remote_input,
+                output_path=local_output,
                 timeout=120,
-                check=False,
             )
             exit_code = collected.returncode
-            retained_output, output_truncated = bounded_collection_output(collected.stdout)
-            local_output.write_text(retained_output)
             if collected.stderr:
                 stderr_parts.append(collected.stderr[:20_000])
             if collected.returncode != 0:
                 raise RuntimeError("The remote collection command returned a non-zero result.")
-            if not _useful_device_output(retained_output):
+            if not _file_has_useful_device_output(local_output):
                 raise RuntimeError("The device returned no usable collection output.")
-        (session.run_dir / "stdout.txt").write_text(
-            local_output.read_text(errors="replace")[:MAX_RESPONSE_OUTPUT_CHARS]
-        )
+        if plan.vendor in {"vyos", "pfsense"}:
+            output_truncated = _limit_retained_collection_file(local_output)
+        (session.run_dir / "stdout.txt").write_text(_read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS))
         status = "completed"
         failure_class = None
     except subprocess.TimeoutExpired:
@@ -1159,6 +1274,10 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
         failure_class = "remote_command_failed"
         stderr_parts.append(str(exc))
     finally:
+        if local_output.is_file() and not (session.run_dir / "stdout.txt").is_file():
+            (session.run_dir / "stdout.txt").write_text(
+                _read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS)
+            )
         if remote_created:
             try:
                 cleaned = subprocess.run(
@@ -1186,7 +1305,9 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             "remote_cleanup_status": cleanup_status,
             "local_output_name": preview["local_output_name"],
             "output_truncated": output_truncated,
-            "output_limit_bytes": MAX_COLLECTION_OUTPUT_CHARS,
+            "output_complete": status == "completed" and not output_truncated,
+            "retained_output_bytes": local_output.stat().st_size if local_output.is_file() else 0,
+            "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
         },
     )
 
@@ -1231,7 +1352,8 @@ def _read_summary_text(run_dir: Path, filenames: list[str]) -> tuple[str, str | 
         path = run_dir / filename
         if not path.is_file():
             continue
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_SUMMARY_TEXT_BYTES + 1)
         truncated = len(raw) > MAX_SUMMARY_TEXT_BYTES
         return raw[:MAX_SUMMARY_TEXT_BYTES].decode("utf-8", errors="replace"), filename, truncated
     return "", None, False
@@ -1477,7 +1599,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "lines": len(configuration_text.splitlines()),
         },
         "interfaces": interfaces[:MAX_SUMMARY_ITEMS],
-        "routes": routes[:MAX_SUMMARY_ITEMS],
+        "routes": routes,
         "neighbors": neighbors[:MAX_SUMMARY_ITEMS],
         "topology_neighbors": topology_neighbors[:MAX_SUMMARY_ITEMS],
         "vlans": vlans,
@@ -1796,6 +1918,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
+    local_output = run_dir / preview_data["local_output_name"]
     manifest = manifest_for(plan, preview_data, "running", operation="configuration_pull", key_status=key["status"])
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     stdout = ""
@@ -1818,10 +1941,9 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
         try:
             if plan.vendor == "cisco":
-                stdout, stderr, exit_code, failed_commands, collection_error = _run_cisco_command_sequence(
-                    preview_data["ssh_args"][:-1], preview_data["commands"]
+                stderr, exit_code, failed_commands, collection_error, output_truncated = _run_cisco_command_sequence_to_file(
+                    preview_data["ssh_args"][:-1], preview_data["commands"], local_output
                 )
-                output_truncated = len(stdout) >= MAX_COLLECTION_OUTPUT_CHARS
                 status = "failed" if collection_error else "completed"
                 failure_class = "empty_collection_output" if collection_error else None
                 if failed_commands:
@@ -1832,20 +1954,17 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
                 if collection_error:
                     stderr = (stderr + "\n" if stderr else "") + collection_error
             else:
-                completed = subprocess.run(
+                completed, output_truncated = _stream_command_to_file(
                     preview_data["ssh_args"],
-                    input=preview_data["remote_input"],
-                    capture_output=True,
-                    text=True,
+                    input_text=preview_data["remote_input"],
+                    output_path=local_output,
                     timeout=120,
-                    check=False,
                 )
-                stdout, output_truncated = bounded_collection_output(completed.stdout)
                 stderr = completed.stderr[:50_000]
                 exit_code = completed.returncode
                 status = "completed" if completed.returncode == 0 else "failed"
                 failure_class = None if completed.returncode == 0 else classify_ssh_failure(stderr, key["status"])
-                if status == "completed" and not _useful_device_output(stdout):
+                if status == "completed" and not _file_has_useful_device_output(local_output):
                     status = "failed"
                     failure_class = "empty_collection_output"
                     stderr = (stderr + "\n" if stderr else "") + "The device returned no usable collection output."
@@ -1872,6 +1991,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         status = "failed"
         failure_class = "accountability_capture_problem"
         stderr = (stderr + "\n" if stderr else "") + "Mandatory tcpdump accountability did not produce a valid PCAP."
+    stdout = _read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS)
     (run_dir / "stdout.txt").write_text(stdout)
     (run_dir / "stderr.txt").write_text(stderr)
     manifest.update({
@@ -1880,7 +2000,10 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         "exit_code": exit_code,
         "failure_class": failure_class,
         "output_truncated": output_truncated,
-        "output_limit_bytes": MAX_COLLECTION_OUTPUT_CHARS,
+        "output_complete": status == "completed" and not output_truncated,
+        "retained_output_bytes": local_output.stat().st_size if local_output.is_file() else 0,
+        "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
+        "local_output_name": preview_data["local_output_name"],
     })
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return {
@@ -1932,19 +2055,34 @@ async def upload_result(
     if not HOST_RE.fullmatch(values["device_address"]):
         raise HTTPException(status_code=422, detail="Use a hostname or IP address without shell characters")
 
-    content = await result_file.read(MAX_UPLOAD_BYTES + 1)
-    await result_file.close()
-    if not content:
-        raise HTTPException(status_code=422, detail="Choose a non-empty result file")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Result files are limited to 5 MB")
-
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex
     run_dir = CONFIG_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     original_name = (result_file.filename or "configuration-result.txt").strip()
     stored_name = f"uploaded-{safe_name(original_name, 'configuration-result.txt')}"
-    (run_dir / stored_name).write_bytes(content)
+    stored_path = run_dir / stored_name
+    uploaded_size = 0
+    try:
+        with stored_path.open("wb") as retained:
+            while chunk := await result_file.read(COLLECTION_COPY_CHUNK_BYTES):
+                uploaded_size += len(chunk)
+                if uploaded_size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Result files are limited to 100 MB",
+                    )
+                retained.write(chunk)
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        run_dir.rmdir()
+        raise
+    finally:
+        await result_file.close()
+    if uploaded_size == 0:
+        stored_path.unlink(missing_ok=True)
+        run_dir.rmdir()
+        raise HTTPException(status_code=422, detail="Choose a non-empty result file")
     completed_at = utc_now()
     manifest = {
         "application_version": APP_VERSION,
@@ -1966,7 +2104,10 @@ async def upload_result(
         "network_contacted": False,
         "source_filename": original_name[:255],
         "source_content_type": result_file.content_type or "application/octet-stream",
-        "uploaded_size": len(content),
+        "uploaded_size": uploaded_size,
+        "output_complete": True,
+        "retained_output_bytes": uploaded_size,
+        "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
         "commands": [],
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

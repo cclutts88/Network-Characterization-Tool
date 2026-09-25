@@ -26,9 +26,11 @@ from app.hunting import (
 )
 from app.hunting_ui import hunting_page
 from app.reachability import (
+    build_vendor_policy_rule,
     build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
+    policy_rule_context,
     simulate_proposed_policy_control,
     simulate_proposed_route_control,
 )
@@ -156,7 +158,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from defusedxml import ElementTree as ET
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -166,6 +168,9 @@ IMPORT_DIR = DATA_DIR / "imports"
 PACKAGE_DIR = DATA_DIR / "packages"
 DB_PATH = DATA_DIR / "analyzer.db"
 MAX_EXPANDED_ADDRESSES = 65536
+_DEVICE_EVIDENCE_CACHE_LOCK = threading.Lock()
+_DEVICE_EVIDENCE_CACHE_KEY: tuple | None = None
+_DEVICE_EVIDENCE_CACHE_VALUE: list[dict] = []
 
 class TerrainSegment(BaseModel):
     name: str = Field(min_length=1, max_length=80)
@@ -189,6 +194,18 @@ class ReachabilityQuery(BaseModel):
 class ReachabilitySimulationQuery(ReachabilityQuery):
     action: Literal["permit", "deny"]
     device_key: str = Field(min_length=1, max_length=160)
+    interface_name: str | None = Field(default=None, max_length=160)
+    insertion_index: int = Field(default=0, ge=0, le=100_000)
+    vendor_rule: str | None = Field(default=None, max_length=20_000)
+    template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+
+
+class ReachabilityPolicyTemplateQuery(ReachabilityQuery):
+    action: Literal["permit", "deny"]
+    device_key: str = Field(min_length=1, max_length=160)
+    interface_name: str = Field(min_length=1, max_length=160)
+    insertion_index: int = Field(default=0, ge=0, le=100_000)
+    template_id: str = Field(default="exact-service", min_length=1, max_length=80)
 
 
 class ReachabilityRouteSimulationQuery(ReachabilityQuery):
@@ -2019,6 +2036,64 @@ def analyze_current_network_changes() -> dict:
     }
 
 
+NETWORK_CONTROL_ROUTE_LIMIT = 50
+
+
+def _network_control_route_text(route: dict) -> str:
+    fields = (
+        "network", "destination", "prefix", "target", "next_hop", "gateway",
+        "via", "interface", "device", "protocol", "metric", "line",
+    )
+    return " ".join(
+        str(route.get(field) or "") for field in fields
+    ).casefold()
+
+
+def _network_control_local_route(route: dict) -> bool:
+    return bool(
+        route.get("direct") is True
+        or str(route.get("route_type") or "").casefold() == "connected"
+        or str(route.get("protocol") or "").casefold() in {"connected", "local"}
+    )
+
+
+def _network_control_route_result(
+    analysis: dict, *, scope: str | None = None, search: str = ""
+) -> dict:
+    routes = list((analysis.get("route_analysis") or {}).get("routes") or [])
+    route_total = len(routes)
+    selected_scope = scope or ("local" if route_total > NETWORK_CONTROL_ROUTE_LIMIT else "all")
+    normalized_search = search.strip().casefold()
+    matches = [
+        route for route in routes
+        if (selected_scope != "local" or _network_control_local_route(route))
+        and (not normalized_search or normalized_search in _network_control_route_text(route))
+    ]
+    return {
+        "routes": matches[:NETWORK_CONTROL_ROUTE_LIMIT],
+        "route_total": route_total,
+        "route_match_count": len(matches),
+        "routes_limited": len(matches) > NETWORK_CONTROL_ROUTE_LIMIT,
+        "route_scope": selected_scope,
+        "route_search": search.strip(),
+    }
+
+
+def _network_control_device(analysis: dict) -> dict:
+    policy = analysis.get("policy") or {}
+    return {
+        "run_id": analysis.get("run_id"),
+        "device": analysis.get("device") or {},
+        "collection": analysis.get("collection") or {},
+        "evidence": analysis.get("evidence") or [],
+        "route_analysis": _network_control_route_result(analysis),
+        "policy": {
+            "firewall_acl": policy.get("firewall_acl") or [],
+            "nat": policy.get("nat") or [],
+        },
+    }
+
+
 @app.get("/api/analysis/network-controls")
 def analyze_current_network_controls() -> dict:
     """Expose newest retained routing and policy evidence without inferring permission."""
@@ -2038,7 +2113,7 @@ def analyze_current_network_controls() -> dict:
             len((item.get("policy") or {}).get("nat") or [])
             for item in devices
         ),
-        "devices": devices,
+        "devices": [_network_control_device(item) for item in devices],
         "disclaimer": (
             "A retained route describes a possible forwarding path. Only explicit "
             "firewall or ACL evidence can support an allow or deny conclusion."
@@ -2046,24 +2121,75 @@ def analyze_current_network_controls() -> dict:
     }
 
 
+@app.get("/api/analysis/network-controls/{run_id}/routes")
+def analyze_network_control_routes(
+    run_id: str,
+    scope: str = Query(default="local", pattern="^(local|all)$"),
+    search: str = Query(default="", max_length=200),
+) -> dict:
+    """Return one bounded, server-filtered page from a retained routing table."""
+    analysis = next(
+        (
+            item for item in _latest_device_reachability_evidence()
+            if str(item.get("run_id") or "") == run_id
+        ),
+        None,
+    )
+    if analysis is None:
+        try:
+            analysis = analyze_device_collection(run_id)
+        except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+            raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    return {
+        "status": "network_control_routes_complete",
+        "run_id": run_id,
+        **_network_control_route_result(analysis, scope=scope, search=search),
+    }
+
+
 def _latest_device_reachability_evidence() -> list[dict]:
-    analyses = []
+    global _DEVICE_EVIDENCE_CACHE_KEY, _DEVICE_EVIDENCE_CACHE_VALUE
+    records = device_collection_history(limit=100)
+    selected_records = []
     seen_devices = set()
-    for record in device_collection_history(limit=100):
+    for record in records:
         device_key = str(record.get("device_address") or record.get("device_name") or "").casefold()
         if not device_key or device_key in seen_devices:
             continue
         if str(record.get("status") or "").casefold() not in {"completed", "uploaded"}:
             continue
+        selected_records.append(record)
+        seen_devices.add(device_key)
+    gateway = get_external_wan_gateway(DB_PATH)
+    cache_key = (
+        id(device_collection_history),
+        id(analyze_device_collection),
+        tuple(
+            (
+                str(record.get("run_id") or ""),
+                str(record.get("completed_at") or record.get("created_at") or ""),
+                int(record.get("retained_output_bytes") or record.get("uploaded_size") or 0),
+            )
+            for record in selected_records
+        ),
+        json.dumps(gateway, sort_keys=True, default=str) if gateway else "",
+    )
+    with _DEVICE_EVIDENCE_CACHE_LOCK:
+        if cache_key == _DEVICE_EVIDENCE_CACHE_KEY:
+            return _DEVICE_EVIDENCE_CACHE_VALUE
+
+    analyses = []
+    for record in selected_records:
         try:
             analysis = analyze_device_collection(record["run_id"])
         except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
             continue
         analyses.append(analysis)
-        seen_devices.add(device_key)
-    return apply_external_gateway_role(
-        analyses, get_external_wan_gateway(DB_PATH)
-    )
+    result = apply_external_gateway_role(analyses, gateway)
+    with _DEVICE_EVIDENCE_CACHE_LOCK:
+        _DEVICE_EVIDENCE_CACHE_KEY = cache_key
+        _DEVICE_EVIDENCE_CACHE_VALUE = result
+    return result
 
 
 @app.get("/api/network-semantics/external-wan-gateway")
@@ -2113,15 +2239,74 @@ def reachability_context() -> dict:
                 "name": (item.get("device") or {}).get("name"),
                 "address": (item.get("device") or {}).get("address"),
                 "type": (item.get("device") or {}).get("type"),
+                "vendor": (item.get("device") or {}).get("vendor"),
+                "run_id": item.get("run_id"),
                 "interfaces": [
                     value.get("name") for value in item.get("interfaces") or []
                     if value.get("name")
+                ],
+                "interface_details": [
+                    {
+                        "name": value.get("name"),
+                        "address": value.get("address"),
+                        "network": value.get("network"),
+                        "role": value.get("role"),
+                    }
+                    for value in item.get("interfaces") or [] if value.get("name")
                 ],
             }
             for item in devices if str((item.get("device") or {}).get("type") or "").lower()
             in {"router", "firewall"}
         ],
     }
+
+
+@app.get("/api/reachability/policy-context/{run_id}")
+def reachability_policy_context(run_id: str) -> dict:
+    try:
+        selected = next(
+            item for item in _latest_device_reachability_evidence()
+            if str(item.get("run_id") or "") == run_id
+        )
+    except StopIteration:
+        raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
+    return {
+        "status": "reachability_policy_context_complete",
+        **policy_rule_context(selected),
+    }
+
+
+@app.post("/api/reachability/policy-template")
+def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict:
+    try:
+        devices = _latest_device_reachability_evidence()
+        selected = next(
+            item for item in devices
+            if query.device_key in {
+                str(item.get("run_id") or ""),
+                str((item.get("device") or {}).get("address") or ""),
+                str((item.get("device") or {}).get("name") or ""),
+            }
+        )
+        return {
+            "status": "reachability_policy_template_complete",
+            **build_vendor_policy_rule(
+                analysis=selected,
+                source_text=query.source,
+                destination_text=query.destination,
+                protocol=query.protocol,
+                port=query.port,
+                action=query.action,
+                interface_name=query.interface_name,
+                insertion_index=query.insertion_index,
+                template_id=query.template_id,
+                source_external=query.source_external,
+            ),
+        }
+    except StopIteration:
+        raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.post("/api/reachability/evaluate")
@@ -2165,6 +2350,10 @@ def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict
             source_external=query.source_external,
             action=query.action,
             device_key=query.device_key,
+            interface_name=query.interface_name,
+            insertion_index=query.insertion_index,
+            vendor_rule=query.vendor_rule,
+            template_id=query.template_id,
             hunting=analyze_hunting_network(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),

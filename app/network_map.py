@@ -29,6 +29,11 @@ from app.topology_neighbors import parse_topology_neighbors
 
 router = APIRouter(prefix="/api/network-map", tags=["network-map"])
 
+# Keep this aligned with the retained device-collection limit. The map needs
+# interface and topology evidence from large configurations even though it
+# deliberately does not return the full routing table to the browser.
+MAX_MAP_CONFIG_BYTES = 100 * 1024 * 1024
+
 IPV4_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 CIDR_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}(?![\w.])")
 VIA_RE = re.compile(r"\bvia\s+((?:\d{1,3}\.){3}\d{1,3})\b", re.IGNORECASE)
@@ -734,6 +739,32 @@ def interface_name(line: str) -> str | None:
     return direct.group(1).rstrip(",") if direct else None
 
 
+def route_sort_key(route: dict) -> tuple:
+    """Return a stable network order without changing routing semantics."""
+    try:
+        network = ipaddress.ip_network(str(route.get("network") or ""), strict=False)
+        version = network.version
+        address = int(network.network_address)
+        prefix = -network.prefixlen
+    except ValueError:
+        version, address, prefix = 99, 0, 0
+    via = str(route.get("via") or "")
+    try:
+        parsed_via = ipaddress.ip_address(via)
+        via_key = (parsed_via.version, int(parsed_via))
+    except ValueError:
+        via_key = (99, via.casefold())
+    return (
+        version,
+        address,
+        prefix,
+        0 if route.get("direct") else 1,
+        via_key,
+        str(route.get("interface") or "").casefold(),
+        str(route.get("line") or "").casefold(),
+    )
+
+
 def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
     interfaces: list[dict] = []
     routes: list[dict] = []
@@ -996,6 +1027,7 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             zone = zone_by_interface.get(name.rsplit(".", 1)[0])
         if zone:
             interface["zone"] = zone
+    routes.sort(key=route_sort_key)
     return interfaces, routes
 
 
@@ -1213,7 +1245,7 @@ def config_result_text(run_dir: Path, manifest: dict) -> tuple[str, str | None]:
         path for path in run_dir.glob("uploaded-*") if path.is_file()
     )
     for path in candidates:
-        if not path.is_file() or path.stat().st_size > 2_000_000:
+        if not path.is_file() or path.stat().st_size > MAX_MAP_CONFIG_BYTES:
             continue
         try:
             return path.read_text(encoding="utf-8", errors="replace"), path.name
@@ -1312,7 +1344,11 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             )
         ]
         node["interfaces"] = interfaces
-        node["routes"] = routes
+        # Routes are consumed below to build topology relationships, but the
+        # full list can contain tens of thousands of entries and is not useful
+        # in the map details pane. Reach and Analyze read the retained source
+        # independently when they need the complete routing table.
+        node["routes"] = []
         node["switching"] = switch_detail
         for interface in interfaces:
             address = valid_interface_address(interface.get("address"))

@@ -187,8 +187,8 @@ find /var/lib/nct/data -maxdepth 2 -type f | sort
 curl -k https://RANGE_IP:8445/health
 ```
 
-Confirm that the health response shows version `0.15.2` and build ID
-`0.15.2-range-20260924`. Sign in, open **Nmap Scans**, and confirm that the
+Confirm that the health response shows version `0.15.3` and build ID
+`0.15.3-range-20260924`. Sign in, open **Nmap Scans**, and confirm that the
 existing scan history is present. Then open **Network Devices**, expand an
 existing collection, and download `manifest.json` and `stdout.txt`. Confirm
 that both files save through the browser before accepting the upgrade.

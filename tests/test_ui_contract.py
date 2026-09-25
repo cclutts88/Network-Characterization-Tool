@@ -23,6 +23,12 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="operator"' not in html
     assert 'id="savedNetworkOperator"' not in html
     assert 'id="noStrikeOperator"' not in html
+    assert "function saveScanArtifact(event)" in html
+    assert "fetch(url,{credentials:'same-origin'})" in html
+    assert "response.blob()" in html
+    assert "function historicalTargetDisplay(run)" in html
+    assert "function consolidateCompletedHostTargets(values)" in html
+    assert "individual host targets were executed and remain retained" in html
     assert 'id="fallbackApprover"' not in html
     assert "function auditActor()" in html
     assert html.index("Build scan") < html.index("Scan history")
@@ -244,6 +250,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
 def test_device_collection_keeps_raw_collection_work_separate_from_analysis():
     html = device_config_page().body.decode()
     assert 'id="historySearch"' in html
+    assert "Configuration result file (maximum 100 MB)" in html
     assert 'id="routeFilter"' not in html
     assert "renderStructuredResults" not in html
     assert "/summary`" not in html
@@ -332,6 +339,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="capabilityView" role="tabpanel"' in html
     assert 'id="inventoryView" role="tabpanel"' in html
     assert 'id="inventorySummary"' in html
+    assert "Network evidence overview" in html
+    assert 'id="sources"' not in html
+    assert "$('sources').innerHTML=sourceLinks(source)" not in html
     assert 'class="panel evidence-guide"' in html
     assert '<details class="panel evidence-guide" data-workspace-card="evidence-guide" open>' in html
     assert '<details class="panel" data-workspace-card="capability-datasets" open><summary>Capability datasets</summary>' in html
@@ -407,6 +417,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "renderHostCveDropdowns" in html
     assert "/api/searchsploit/status" in html
     assert "/api/searchsploit/hunting/network" in html
+    assert "function responseJson(response,label='Request')" in html
+    assert "returned an empty server response" in html
+    assert "returned an unreadable server response" in html
+    assert "await timedJson(endpoint,{method:'POST'},'SearchSploit enrichment',180000)" in html
     assert 'id="searchsploitOnline"' in html
     assert 'id="searchsploitUpload"' in html
     assert 'id="searchsploitRollback"' in html
@@ -434,12 +448,20 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "source_external:$('sourceExternal').checked" in html
     assert 'id="policySimulationPanel"' in html
     assert 'id="simulationDevice"' in html
+    assert 'id="simulationInterface"' in html
     assert 'id="simulationAction"' in html
+    assert 'id="simulationTemplate"' in html
+    assert 'id="simulationPosition"' in html
+    assert 'id="simulationRule"' in html
+    assert 'id="simulationExistingRules"' in html
+    assert 'id="generatePolicyRule"' in html
     assert 'id="simulationPath"' in html
     assert 'id="simulationImpact"' in html
     assert 'id="exportSimulation"' in html
     assert 'id="showPolicySimulationOnMap"' in html
     assert "/api/reachability/simulate-policy" in html
+    assert "/api/reachability/policy-context/" in html
+    assert "/api/reachability/policy-template" in html
     assert "changes no device configuration" in html
     assert 'id="routeSimulationPanel"' in html
     assert 'id="routeSimulationDevice"' in html
@@ -608,10 +630,46 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "infrastructure_count" in html
     assert "observed_count" in html
     assert "collapseTransitSegments" in html
+
+
+def test_large_route_tables_are_filtered_and_map_details_stay_compact():
+    analyze_html = analysis_page().body.decode()
+    map_html = network_map_page().body.decode()
+
+    assert "LARGE_ROUTE_TABLE=50" in analyze_html
+    assert "Local / connected routes" in analyze_html
+    assert "Search this routing table" in analyze_html
+    assert "ROUTE_DISPLAY_LIMIT=50" in analyze_html
+    assert "Search and route view are applied before results are sent to this page" in analyze_html
+    assert "if(filter.term.trim()){filter.scope='all'" in analyze_html
+    assert "loadNetworkDeviceRoutes" in analyze_html
+    assert "renderRouteFreeDetailsBase" in map_html
+    assert "heading.textContent!=='Parsed routes'" in map_html
+
+
+def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_fill():
+    html = network_map_page().body.decode()
+
+    assert "source_interface_address" in html
+    assert "target_interface_address" in html
+    assert "edge-endpoint-label" in html
+    assert "function positionEndpointLabel" in html
+    assert "Interface IP addresses" in html
+    assert "composite-annotation-fill" in html
+    assert "annotationUnionFill" in html
+    assert "Grouped ${merged.size} touching shapes with one constant fill color" in html
     assert "transit_segment" in html
     assert "webLayout" in html
     assert "Spider-web network topology" in html
     assert "Labeled transit subnet" in html
+    assert 'id="mapLegendItems"' in html
+    assert "function renderLegend(view)" in html
+    assert "deviceTypes.has(key)" in html
+    assert "osFamilies.has(key)" in html
+    assert "vendors.has(key)" in html
+    assert "renderLegend(view)" in html
+    assert "Shift-click boxes to select and move them together" not in html
+    assert "Use subnet toggles to select the endpoint view" not in html
     assert "placeLevel(" not in html
     assert 'id="resetLayout"' in html
     assert '<details class="evidence-files-drawer"><summary>Evidence files</summary>' in html
@@ -669,7 +727,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function renderCompositeAnnotationOutlines" in html
     assert "feMorphology" in html
     assert "operator:'out'" in html
-    assert "Their original outlines, colors, sizes, and rotations were retained." in html
+    assert ".map-annotation.region.grouped .annotation-shape{fill-opacity:0}" in html
     assert "function enableMapControlsDragging" in html
     assert "function setMapControlsCorner" in html
     assert "function updateMapControlsCanvasBounds" in html
@@ -710,14 +768,13 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "New infrastructure is parked automatically when a saved layout has locked objects" in html
     assert "if(!editMode)return" in html
     assert "event.key==='Delete'||event.key==='Backspace'" in html
-    assert "Shift-click boxes to select and move them together" in html
     assert "const selectedNodeIds=new Set()" in html
     assert "function selectMapNode" in html
     assert "function selectionBranchIds" in html
     assert "endpointModes.get(id)==='individual'" in html
     assert "groupHosts.get(id)||[]" in html
     assert "targets.every(target=>selectedNodeIds.has(target))" in html
-    assert "Shift-click a subnet to select its full host branch" in html
+    assert "Shift-click a subnet to select its full host branch" not in html
     assert "function clearMapSelection" in html
     assert 'id="selectionTools"' in html
     assert 'id="toggleSelectionLock"' in html
@@ -803,7 +860,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "function updateOverlayLegend" in html
     assert "function networkDeviceVendor" in html
     assert "vendor-${deviceVendor}" in html
-    assert "vendor-swatch vendor-cisco" in html
+    assert "vendor-swatch vendor-${key}" in html
     assert "overlay-exposure-dense" in html
     assert "overlay-gap-conflict" in html
     assert "dragIds=expandGatewayCompanions(selectedNodeIds.has(node.id)" in html
@@ -1013,7 +1070,7 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert ".group-host-row.os-unknown rect" in html
     assert "function enableGroupedResize" in html
     assert "group-resize-handle" in html
-    assert "Resize grouped boxes from the lower-right corner" in html
+    assert "Resize grouped boxes from the lower-right corner" not in html
     assert "groupedSizes.clear()" in html
     assert ">Sort by IP</option>" in html
     assert "Group / sort by hostname" in html
@@ -1045,7 +1102,7 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "Analysis cautions" in html
     assert "prepareRunComparison" in html
     assert "Comparison opened with the selected scan as the later scan" in html
-    assert "$('comparisonPanel').scrollIntoView({behavior:'smooth',block:'start'})" in html
+    assert "$('networkChangesPanel').scrollIntoView({behavior:'smooth',block:'start'})" in html
     assert "Export host summary CSV" in html
     assert "Export port-level CSV" in html
     assert "compactExportLabel" in html
@@ -1060,10 +1117,10 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "`${currentLabel}-hosts.csv`" in html
     assert "`${currentLabel}-ports.csv`" in html
     assert "MAC / vendor" in html
-    assert 'id="comparisonPanel" class="panel comparison-panel"' in html
+    assert "Network changes and scan comparison" in html
     assert 'id="comparisonBaseline"' in html
     assert 'id="comparisonCurrent"' in html
-    assert "Comparison stays out of the way until you need it" in html
+    assert "Compare two specific scans" in html
     assert "await openRun(runId);focusRequestedEvidence()" in html
     assert "coverage_warnings" in html
     assert 'id="comparisonResult"' in html
@@ -1112,14 +1169,10 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="loadNetworkChanges"' in html
     assert "/api/analysis/network-changes" in html
     assert "renderNetworkChanges" in html
-    assert 'id="networkControlsPanel"' in html
-    assert "Routes show where traffic could be forwarded" in html
-    assert "a route alone does not authorize a protocol or port" in html
-    assert 'id="networkControlsSearch"' in html
-    assert 'id="loadNetworkControls"' in html
-    assert "/api/analysis/network-controls" in html
-    assert "renderNetworkControls" in html
-    assert "large policy tables are capped until narrowed" in html
+    assert 'id="networkControlsPanel"' not in html
+    assert '<span>Routes and policy</span>' not in html
+    assert 'id="comparisonBaseline"' in html
+    assert 'id="comparisonCurrent"' in html
 
 
 def test_hunt_and_analyze_include_simple_table_controls_without_personal_presets():
@@ -1129,7 +1182,7 @@ def test_hunt_and_analyze_include_simple_table_controls_without_personal_presets
         assert '/assets/nct-view-preferences.js' in html
         assert 'data-workspace-card=' in html
     assert 'data-workspace-card="network-filters"' in hunt_html
-    assert 'data-workspace-card="scan-comparison"' in analyze_html
+    assert 'data-workspace-card="network-changes"' in analyze_html
     assert 'id="analysisHostRows"' in analyze_html
     from app.view_preferences_ui import VIEW_PREFERENCES_SCRIPT
 

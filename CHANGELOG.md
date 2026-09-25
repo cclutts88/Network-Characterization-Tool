@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.15.3 — Large routing and policy validation
+
+- Retained and analyzed complete device outputs up to 100 MB, removed the
+  previous 500-route and 2 MB Map limits, and added explicit completeness
+  reporting for interrupted or size-limited collections.
+- Added bounded routing-table views with local-route and search filters while
+  keeping complete retained routes available to Reach. Route ordering is now
+  stable and numeric, including tables with more than 100,000 entries.
+- Added interface-IP connection labels to Map, removed route dumps from device
+  details, made merged markup use one constant fill, and limited the legend to
+  object, relationship, OS, and vendor types currently visible on the canvas.
+- Added vendor-written proposed policy validation with interface selection,
+  ordered existing-rule placement, common vendor templates, and shadowing
+  feedback.
+- Combined Analyze network changes and scan comparison, removed the redundant
+  visible Routes and Policy panel, simplified the Hunt network overview, and
+  compacted eligible historical host target displays back to their /24 scope.
+- Restored authenticated Nmap evidence downloads and made SearchSploit errors
+  tolerate empty, plain-text, or non-JSON responses.
+
 ## 0.15.2 — Device evidence hotfix
 
 - Restored browser downloads for both existing and newly collected Network

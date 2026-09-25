@@ -59,6 +59,7 @@ def _port(value: str) -> int | None:
 
 def _parse_acl_rule(line: str, acl_name: str, body: str, order: int) -> dict | None:
     tokens = body.split()
+    sequence = int(tokens[0]) if tokens and tokens[0].isdigit() else None
     if tokens and tokens[0].isdigit():
         tokens = tokens[1:]
     if tokens and tokens[0].lower() in {"extended", "standard"}:
@@ -90,7 +91,7 @@ def _parse_acl_rule(line: str, acl_name: str, body: str, order: int) -> dict | N
     elif index + 1 < len(tokens) and tokens[index].lower() in {"object", "object-group"}:
         service_ref = tokens[index + 1]
     return {
-        "policy": acl_name, "order": order, "action": action,
+        "policy": acl_name, "order": order, "sequence": sequence, "action": action,
         "protocol": protocol, "source": source, "destination": destination,
         "destination_port": destination_port, "service_ref": service_ref,
         "unresolved": source_unresolved or destination_unresolved or port_unresolved,

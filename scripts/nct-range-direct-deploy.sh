@@ -5,8 +5,8 @@ set -eu
 server_ip="${1:-}"
 source_cidr="${2:-}"
 admin_user="${3:-clutts}"
-image="network-characterization-tool:0.15.2-range-20260924"
-https_port="${4:-8444}"
+image="network-characterization-tool:0.15.3-range-20260924"
+https_port="${4:-8445}"
 
 if [ -z "$server_ip" ] || [ -z "$source_cidr" ]; then
     printf '%s\n' "Usage: sh $0 RANGE_IP APPROVED_ANALYST_CIDR [ADMIN_USERNAME] [HTTPS_PORT]" >&2

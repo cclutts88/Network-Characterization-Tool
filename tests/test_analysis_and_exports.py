@@ -314,6 +314,24 @@ default via 192.0.2.254 dev eth8 proto static
     assert by_network["0.0.0.0/0"]["interface"] == "eth8"
 
 
+def test_configuration_routes_have_stable_numeric_longest_prefix_order():
+    _, routes = parse_config_text(
+        """
+ip route 10.0.1.1 255.255.255.255 192.0.2.4
+ip route 10.0.0.0 255.0.0.0 192.0.2.3
+ip route 0.0.0.0 0.0.0.0 192.0.2.1
+ip route 10.0.0.0 255.255.255.0 192.0.2.2
+"""
+    )
+
+    assert [route["network"] for route in routes] == [
+        "0.0.0.0/0",
+        "10.0.0.0/24",
+        "10.0.0.0/8",
+        "10.0.1.1/32",
+    ]
+
+
 def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
     nodes, edges, aliases = {}, {}, {}
     source = {
@@ -401,6 +419,50 @@ System Capabilities: Bridge Router
     assert len(links) == 1
     assert links[0]["label"] == "GigabitEthernet0/1 ↔ GigabitEthernet1/0/24 (LLDP)"
     assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
+
+
+def test_large_uploaded_configuration_still_supplies_map_interface_ip(tmp_path, monkeypatch):
+    run_id = "f" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "operation": "manual_upload",
+                "device_address": "192.0.2.10",
+                "device_name": "large-route-router",
+                "vendor": "cisco",
+                "device_type": "router",
+                "status": "uploaded",
+                "created_at": "2026-09-24T12:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    padding = "! retained route evidence padding\n" * 70_000
+    source = run_dir / "uploaded-large-config.txt"
+    source.write_text(
+        "interface GigabitEthernet0/1\n"
+        " ip address 10.80.0.1 255.255.255.0\n"
+        "ip route 10.90.0.0 255.255.255.0 192.0.2.1\n"
+        + padding,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+    device = nodes["ip:192.0.2.10"]
+    assert device["interfaces"] == [
+        {"name": "GigabitEthernet0/1", "address": "10.80.0.1/24"}
+    ]
+    assert device["routes"] == []
+    ownership = next(
+        edge for edge in edges.values() if edge["relation"] == "owns_interface"
+    )
+    assert ownership["evidence"] == "10.80.0.1/24"
+    assert source.stat().st_size > 2_000_000
 
 
 def test_combined_router_firewall_is_labeled_as_both_on_map(tmp_path, monkeypatch):

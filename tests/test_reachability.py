@@ -5,12 +5,15 @@ import pytest
 from app import main
 from app.iptables_policy import parse_iptables_policy
 from app.reachability import (
+    build_vendor_policy_rule,
     build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
     parse_endpoint,
+    policy_rule_context,
     simulate_proposed_policy_control,
     simulate_proposed_route_control,
+    validate_vendor_policy_rule,
 )
 from app.vendor_policy import parse_vendor_policy
 
@@ -237,6 +240,88 @@ def test_proposed_cidr_control_reports_address_pair_scope():
     assert result["comparison"]["scope"]["source_addresses"] == 256
     assert result["comparison"]["scope"]["destination_addresses"] == 256
     assert result["comparison"]["scope"]["address_pairs"] == 65536
+
+
+@pytest.mark.parametrize("vendor", ["cisco", "vyos", "pfsense", "juniper", "unifi"])
+def test_vendor_policy_templates_parse_and_validate_on_selected_interface(vendor):
+    device = {
+        **DEVICE,
+        "device": {**DEVICE["device"], "vendor": vendor},
+        "interfaces": [
+            {"name": "inside", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [{
+            "network": "10.90.0.0/24", "interface": "servers", "direct": True,
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+
+    template = build_vendor_policy_rule(
+        analysis=device,
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        action="permit",
+        interface_name="inside",
+        insertion_index=0,
+    )
+    validation = validate_vendor_policy_rule(
+        analysis=device,
+        rule_text=template["rule_text"],
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        action="permit",
+        interface_name="inside",
+    )
+
+    assert template["vendor"] == vendor
+    assert template["interface"] == "inside"
+    assert validation["valid"] is True
+    assert validation["verdict"] == "allow"
+
+
+def test_policy_context_preserves_rule_order_and_offers_vendor_templates():
+    applied = parse_vendor_policy("""ip access-list extended USERS
+ 10 deny tcp host 10.80.0.25 host 10.90.0.20 eq 443
+ 20 permit tcp host 10.80.0.25 host 10.90.0.10 eq 443
+!
+interface inside
+ ip access-group USERS in
+""")
+    context = policy_rule_context({
+        **DEVICE,
+        "device": {**DEVICE["device"], "vendor": "cisco"},
+        "policy": {"firewall_acl": [], "applied": applied},
+    })
+
+    assert [item["position"] for item in context["rules"]] == [1, 2]
+    assert [item["order"] for item in context["rules"]] == [10, 20]
+    assert [item["action"] for item in context["rules"]] == ["deny", "permit"]
+    assert context["rules"][0]["interface"] == "inside"
+    assert context["positions"][-1]["index"] == 2
+    assert {item["id"] for item in context["templates"]} == {
+        "exact-service", "interface-service",
+    }
+
+
+def test_proposed_rule_after_existing_match_is_valid_but_does_not_override_it():
+    result = simulate_proposed_policy_control(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=HUNTING,
+        saved_networks=SAVED, device_analyses=[DEVICE],
+        action="deny", device_key="10.80.0.1",
+        interface_name="inside", insertion_index=1,
+    )
+
+    assert result["proposal"]["validation"]["valid"] is True
+    assert result["comparison"]["proposal_effective"] is False
+    assert result["comparison"]["before"] == "Expected Allowed"
+    assert result["comparison"]["after"] == "Expected Allowed"
+    assert "already decides this flow" in result["projected"]["explanation"]
 
 
 def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
@@ -934,16 +1019,23 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
         {"run_id": "upload", "device_address": "10.80.0.2", "status": "uploaded"},
     ]
     monkeypatch.setattr(main, "device_collection_history", lambda limit: records)
-    monkeypatch.setattr(
-        main,
-        "analyze_device_collection",
-        lambda run_id: {"run_id": run_id},
-    )
+    analyzed = []
+
+    def analyze(run_id):
+        analyzed.append(run_id)
+        return {"run_id": run_id}
+
+    monkeypatch.setattr(main, "analyze_device_collection", analyze)
+    monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_KEY", None)
+    monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_VALUE", [])
 
     monkeypatch.setattr(main, "get_external_wan_gateway", lambda db_path: None)
     result = main._latest_device_reachability_evidence()
+    cached = main._latest_device_reachability_evidence()
 
     assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
+    assert cached is result
+    assert analyzed == ["usable", "upload"]
 
 
 def test_reach_follows_each_retained_next_hop_without_inventing_devices():
@@ -987,6 +1079,34 @@ def test_reach_follows_each_retained_next_hop_without_inventing_devices():
         "edge-wan-rtr", "distribution-rtr",
     ]
     assert not any("Path is partial" in item for item in result["caveats"])
+
+
+def test_reach_uses_a_matching_route_after_the_legacy_500_route_boundary():
+    filler_routes = [
+        {
+            "network": f"172.{index // 256}.{index % 256}.0/24",
+            "via": "10.80.0.2",
+            "interface": "inside",
+            "protocol": "static",
+        }
+        for index in range(500)
+    ]
+    matching_route = {
+        "network": "10.90.0.0/24",
+        "via": "10.80.0.2",
+        "interface": "inside",
+        "protocol": "static",
+        "line": "ip route 10.90.0.0 255.255.255.0 10.80.0.2",
+    }
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [*filler_routes, matching_route]},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["retained_objects"]["routes"][0]["network"] == "10.90.0.0/24"
 
 
 def test_reach_reports_a_partial_path_when_next_hop_evidence_is_missing():

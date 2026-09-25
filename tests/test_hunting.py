@@ -524,4 +524,65 @@ def test_analyze_network_controls_keep_routes_separate_from_policy(monkeypatch):
     assert payload["route_count"] == 1
     assert payload["policy_count"] == 1
     assert payload["nat_count"] == 1
+    assert payload["devices"][0]["route_analysis"]["route_total"] == 1
+    assert payload["devices"][0]["route_analysis"]["route_match_count"] == 1
     assert "possible forwarding path" in payload["disclaimer"]
+
+
+def test_analyze_network_controls_bounds_large_route_payloads_and_defaults_local(monkeypatch):
+    routes = [
+        {"network": f"10.0.{index}.0/24", "protocol": "static"}
+        for index in range(100)
+    ]
+    routes.append({
+        "network": "192.0.2.0/24", "protocol": "connected", "direct": True,
+    })
+    monkeypatch.setattr(
+        "app.main._latest_device_reachability_evidence",
+        lambda: [{
+            "run_id": "a" * 32,
+            "device": {"name": "Core", "roles": ["router"]},
+            "route_analysis": {
+                "routes": routes,
+                "next_hops": [{"address": "192.0.2.1", "networks": ["large"] * 100}],
+            },
+            "policy": {"firewall_acl": [], "nat": []},
+        }],
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/analysis/network-controls")
+
+    assert response.status_code == 200
+    route_view = response.json()["devices"][0]["route_analysis"]
+    assert route_view["route_total"] == 101
+    assert route_view["route_match_count"] == 1
+    assert route_view["route_scope"] == "local"
+    assert route_view["routes"] == [routes[-1]]
+    assert "next_hops" not in route_view
+
+
+def test_analyze_network_control_route_search_filters_before_limiting(monkeypatch):
+    routes = [
+        {"network": f"172.16.{index}.0/24", "protocol": "static"}
+        for index in range(75)
+    ]
+    routes.append({
+        "network": "10.90.0.0/24", "via": "192.0.2.2", "protocol": "static",
+    })
+    monkeypatch.setattr(
+        "app.main.analyze_device_collection",
+        lambda run_id: {"route_analysis": {"routes": routes}},
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/analysis/network-controls/{'b' * 32}/routes",
+            params={"scope": "all", "search": "10.90.0.0"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["route_total"] == 76
+    assert payload["route_match_count"] == 1
+    assert payload["routes"][0]["network"] == "10.90.0.0/24"
