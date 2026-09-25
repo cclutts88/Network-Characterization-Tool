@@ -26,6 +26,31 @@ interface GigabitEthernet0/1
     assert unbound["status"] == "not_applied"
 
 
+def test_cisco_show_access_lists_output_preserves_rule_order_and_type():
+    text = """Extended IP access list USERS_TO_SERVERS
+    10 permit tcp 10.80.0.0 0.0.0.255 host 10.90.0.10 eq 443 (25 matches)
+    20 deny ip any any
+Standard IP access list MANAGEMENT
+    10 permit 10.70.0.0 0.0.0.255
+"""
+
+    policy = parse_vendor_policy(text)
+
+    assert [rule["order"] for rule in policy["rules"][:2]] == [1, 2]
+    assert policy["rules"][0] | {
+        "policy": "USERS_TO_SERVERS",
+        "sequence": 10,
+        "action": "permit",
+        "protocol": "tcp",
+        "source": "10.80.0.0/24",
+        "destination": "10.90.0.10/32",
+        "destination_port": 443,
+    } == policy["rules"][0]
+    management = next(rule for rule in policy["rules"] if rule["policy"] == "MANAGEMENT")
+    assert management["protocol"] == "ip"
+    assert management["source"] == "10.70.0.0/24"
+
+
 def test_cisco_asa_access_group_binding_is_supported():
     text = """access-list OUTSIDE_IN extended permit tcp any host 10.90.0.10 eq https
 access-group OUTSIDE_IN in interface outside

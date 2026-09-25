@@ -332,6 +332,32 @@ ip route 10.0.0.0 255.255.255.0 192.0.2.2
     ]
 
 
+def test_configuration_parser_reads_cisco_operational_host_and_multipath_routes():
+    _, routes = parse_config_text(
+        """
+B    3.13.152.157 [20/0] via 175.0.92.21, 1w6d
+B    3.13.205.162 [20/0] via 175.0.92.21, 1w6d
+O E2 10.80.0.0/24 [110/20] via 175.0.92.21, 00:10:00, GigabitEthernet1
+     [110/20] via 175.0.92.25, 00:10:00, GigabitEthernet2
+C    175.0.92.20/30 is directly connected, GigabitEthernet1
+"""
+    )
+
+    assert any(
+        route["network"] == "3.13.152.157/32"
+        and route["via"] == "175.0.92.21"
+        for route in routes
+    )
+    multipath = [route for route in routes if route["network"] == "10.80.0.0/24"]
+    assert {route["via"] for route in multipath} == {"175.0.92.21", "175.0.92.25"}
+    assert {route["interface"] for route in multipath} == {
+        "GigabitEthernet1", "GigabitEthernet2"
+    }
+    connected = next(route for route in routes if route["network"] == "175.0.92.20/30")
+    assert connected["direct"] is True
+    assert connected["interface"] == "GigabitEthernet1"
+
+
 def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
     nodes, edges, aliases = {}, {}, {}
     source = {

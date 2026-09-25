@@ -735,6 +735,14 @@ def interface_name(line: str) -> str | None:
     linux_dev = re.search(r"\bdev\s+([A-Za-z][A-Za-z0-9_.:/-]{0,31})\b", line, re.I)
     if linux_dev:
         return linux_dev.group(1)
+    cisco_route_interface = re.search(
+        r",\s*((?:Fast|Gigabit|TenGigabit|TwentyFiveGigE|FortyGigabit|HundredGigE)?Ethernet"
+        r"|Serial|Loopback|Vlan|Port-channel|Tunnel|Dialer|Null)[A-Za-z0-9_.:/-]*\s*$",
+        line,
+        re.I,
+    )
+    if cisco_route_interface:
+        return cisco_route_interface.group(0).lstrip(", ").strip()
     direct = re.search(r"directly connected,\s*([A-Za-z0-9_.:/-]+)", line, re.I)
     return direct.group(1).rstrip(",") if direct else None
 
@@ -774,6 +782,8 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
     interface_macs: dict[str, str] = {}
     interface_mac_evidence: dict[str, str] = {}
     current_iface: str | None = None
+    current_cisco_route_network: str | None = None
+    current_cisco_route_code: str | None = None
 
     def set_zone(name: str | None, value: str | None) -> None:
         if not name or not value:
@@ -801,6 +811,9 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
         line = raw_line.strip()
         if not line:
             continue
+        if line.startswith("====="):
+            current_cisco_route_network = None
+            current_cisco_route_code = None
         ifconfig_header = re.match(r"^([A-Za-z][A-Za-z0-9_.:/-]*):\s+(?:flags|link|mtu)\b", line, re.I)
         ip_header = re.match(r"^\d+:\s+([^:@\s]+)(?:@[^:]+)?:", line)
         config_header = re.match(r"^interface\s+([A-Za-z0-9_.:/-]+)\b", line, re.I)
@@ -904,6 +917,69 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
             prefix = prefix_from_netmask(cisco_address.group(2))
             if prefix is not None:
                 add_interface(current_iface, f"{cisco_address.group(1)}/{prefix}")
+
+        # Cisco operational routing output can omit ``/32`` from learned host
+        # routes even though the destination is a single address. Retain those
+        # routes (and any indented equal-cost continuation paths) instead of
+        # requiring CIDR notation that is not present in the device output.
+        cisco_operational_route = re.match(
+            r"^(?P<code>[A-Za-z][A-Za-z0-9*+]*(?:\s+[A-Za-z][A-Za-z0-9*+]*)?)\s+"
+            r"(?P<destination>(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?)\s+"
+            r"(?P<body>(?:\[[^\]]+\]\s+)?(?:via\b|is\s+directly\s+connected\b).*)$",
+            line,
+            re.I,
+        )
+        if cisco_operational_route:
+            destination = cisco_operational_route.group("destination")
+            network = valid_network(
+                destination if "/" in destination else f"{destination}/32"
+            )
+            body = cisco_operational_route.group("body")
+            via_match = VIA_RE.search(body)
+            via = valid_ip(via_match.group(1)) if via_match else None
+            direct = "directly connected" in body.lower()
+            iface = interface_name(line)
+            if network and (direct or via):
+                route_key = (network, via, iface, direct)
+                if route_key not in seen_routes:
+                    routes.append(
+                        {
+                            "network": network,
+                            "via": via,
+                            "interface": iface,
+                            "direct": direct,
+                            "line": line[:500],
+                        }
+                    )
+                    seen_routes.add(route_key)
+                current_cisco_route_network = network
+                current_cisco_route_code = cisco_operational_route.group("code")
+        else:
+            cisco_continuation = re.match(
+                r"^(?:\[[^\]]+\]\s+)?via\s+((?:\d{1,3}\.){3}\d{1,3})\b.*$",
+                line,
+                re.I,
+            )
+            if (
+                cisco_continuation
+                and current_cisco_route_network
+                and raw_line[:1].isspace()
+            ):
+                via = valid_ip(cisco_continuation.group(1))
+                iface = interface_name(line)
+                route_key = (current_cisco_route_network, via, iface, False)
+                if via and route_key not in seen_routes:
+                    evidence = f"{current_cisco_route_code or ''} {line}".strip()
+                    routes.append(
+                        {
+                            "network": current_cisco_route_network,
+                            "via": via,
+                            "interface": iface,
+                            "direct": False,
+                            "line": evidence[:500],
+                        }
+                    )
+                    seen_routes.add(route_key)
 
         route_parts = line.strip(" ;").split()
         lower_route_parts = [value.lower() for value in route_parts]

@@ -312,21 +312,33 @@ def _parse_cisco(text: str) -> dict:
     attachments = []
     order_by_acl: dict[str, int] = defaultdict(int)
     current_acl = None
+    current_acl_type = None
     current_interface = None
     for raw in text.splitlines():
         line = raw.strip()
-        named = re.match(r"^ip access-list (?:extended|standard) (\S+)$", line, re.I)
+        named = re.match(r"^ip access-list (extended|standard) (\S+)$", line, re.I)
         if named:
-            current_acl = named.group(1)
+            current_acl_type = named.group(1).lower()
+            current_acl = named.group(2)
+            current_interface = None
+            continue
+        operational = re.match(
+            r"^(extended|standard)\s+ip\s+access\s+list\s+(\S+)$", line, re.I
+        )
+        if operational:
+            current_acl_type = operational.group(1).lower()
+            current_acl = operational.group(2)
             current_interface = None
             continue
         interface = re.match(r"^interface\s+(\S+)$", line, re.I)
         if interface:
             current_interface = interface.group(1)
             current_acl = None
+            current_acl_type = None
             continue
         if line == "!":
             current_acl = None
+            current_acl_type = None
             current_interface = None
             continue
         numbered = re.match(r"^access-list\s+(\S+)\s+(.*)$", line, re.I)
@@ -341,7 +353,13 @@ def _parse_cisco(text: str) -> dict:
             continue
         if current_acl and re.match(r"^(?:\d+\s+)?(?:permit|deny)\b", line, re.I):
             order_by_acl[current_acl] += 1
-            rule = _parse_acl_rule(line, current_acl, line, order_by_acl[current_acl])
+            tokens = line.split(maxsplit=1)
+            if tokens and tokens[0].isdigit():
+                remainder = tokens[1] if len(tokens) > 1 else ""
+                body = f"{tokens[0]} {current_acl_type or 'extended'} {remainder}".strip()
+            else:
+                body = f"{current_acl_type or 'extended'} {line}".strip()
+            rule = _parse_acl_rule(line, current_acl, body, order_by_acl[current_acl])
             if rule:
                 rules.append(rule)
             continue

@@ -1583,6 +1583,7 @@ VLAN_PATTERNS = (
 )
 FIREWALL_ACL_PATTERNS = (
     re.compile(r"^(?:ip\s+)?access-list\b", re.I),
+    re.compile(r"^(?:standard|extended)\s+ip\s+access\s+list\b", re.I),
     re.compile(r"\bset\s+(?:firewall|security\s+policies)\b", re.I),
     re.compile(r"^(?:pass|block)\s+(?:in|out)\b", re.I),
     re.compile(r"^(?:iptables\s+-A|nft\s+add\s+rule)\b", re.I),

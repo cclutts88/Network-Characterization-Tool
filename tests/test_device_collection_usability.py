@@ -106,6 +106,24 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["commands"] == ["show running-config", "show ip route"]
 
 
+def test_collection_summary_parses_cisco_show_access_lists_output(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    run_dir = make_collection(config_dir, "a" * 32)
+    (run_dir / "uploaded-router-config.txt").write_text(
+        """Extended IP access list USERS_TO_SERVERS
+    10 permit tcp 10.80.0.0 0.0.0.255 host 10.90.0.10 eq 443
+    20 deny ip any any
+"""
+    )
+
+    result = device_collection_summary("a" * 32, config_dir=config_dir)
+
+    assert result["firewall_acl"][0]["evidence"] == (
+        "Extended IP access list USERS_TO_SERVERS"
+    )
+    assert [rule["sequence"] for rule in result["vendor_policy"]["rules"]] == [10, 20]
+
+
 def test_collection_summary_retains_routes_beyond_legacy_500_item_limit(tmp_path):
     config_dir = tmp_path / "device-configs"
     run_dir = make_collection(config_dir, "c" * 32)
