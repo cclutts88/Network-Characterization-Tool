@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.7 — Large device-analysis route controls
+
+- Changed Network Device Analysis to open routing tables larger than 50 entries
+  on local and connected routes, cap the visible result at 50 rows, and provide
+  a full-table search for destination, next hop, interface, protocol, and raw
+  route evidence.
+
 ## 0.15.4 — Cisco and pfSense collection validation
 
 - Kept Cisco read-only commands inside one authenticated interactive session so

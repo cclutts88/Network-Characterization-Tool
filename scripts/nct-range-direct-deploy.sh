@@ -5,7 +5,7 @@ set -eu
 server_ip="${1:-}"
 source_cidr="${2:-}"
 admin_user="${3:-clutts}"
-image="network-characterization-tool:0.15.6-range-20260924"
+image="network-characterization-tool:0.15.7-range-20260924"
 https_port="${4:-8445}"
 
 if [ -z "$server_ip" ] || [ -z "$source_cidr" ]; then

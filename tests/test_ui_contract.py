@@ -296,6 +296,18 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "Firewall / ACL added" in html
 
 
+def test_network_device_analysis_bounds_large_route_tables_and_adds_filters():
+    html = device_analysis_page().body.decode()
+    assert "LARGE_ROUTE_TABLE=50" in html
+    assert "ROUTE_DISPLAY_LIMIT=50" in html
+    assert "Local / connected routes" in html
+    assert "Search this routing table" in html
+    assert "matches.slice(0,ROUTE_DISPLAY_LIMIT)" in html
+    assert "routeScope=(data.route_analysis?.routes||[]).length>LARGE_ROUTE_TABLE?'local':'all'" in html
+    assert "if(routeSearch.trim())routeScope='all'" in html
+    assert "Showing the first ${ROUTE_DISPLAY_LIMIT} matching routes" in html
+
+
 def test_nmap_analysis_labels_direct_and_correlated_mac_provenance():
     html = analysis_page().body.decode()
     assert "mac-provenance" in html
