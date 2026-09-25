@@ -1,231 +1,301 @@
-# Air-gapped Range quick start
+# NCT air-gapped Range installation and upgrade
 
-The focused scripts in this package replace the older all-in-one deployment
-path. They do not install packages, use the Internet, replace an existing
-container named `nct`, or alter the legacy `nmap-terrain-analyzer` deployment.
-All operator-created NCT data is stored in the visible host folder
-`/var/lib/nct/data`, outside the container and outside the extracted package.
+This guide is written for an operator with little or no Docker experience.
+Follow the steps in order and copy the commands exactly. Text written in
+CAPITAL LETTERS is a value that you must replace, such as the Range server's IP
+address.
 
-## 1. Extract the package
+## What this package does
+
+NCT runs inside a Docker container. Think of the container as the program and
+`/var/lib/nct/data` as its permanent filing cabinet. Replacing or upgrading the
+container does not remove the filing cabinet.
+
+The included scripts do the Docker work for you. They:
+
+- verify the offline NCT image before using it;
+- preserve accounts, settings, scans, and evidence in `/var/lib/nct/data`;
+- keep the previous container as a rollback copy during an upgrade; and
+- leave the older `nmap-terrain-analyzer` installation alone.
+
+Do not manually delete the current `nct` container or the `nct-data` volume.
+
+## Before you begin
+
+You need:
+
+- the file `NCT-Air-Gapped-Range-Deployment-0.15.3-20260924.zip` uploaded to
+  the Range server;
+- access to a terminal on the Range server with root or `sudo` privileges;
+- the Range server's IP address; and
+- an approved analyst network address for the firewall rule, if a new rule is
+  required.
+
+In the examples below, the ZIP is in `/root`. If your browser placed it in a
+different folder, use that folder in the first command.
+
+## 1. Open the package
+
+Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-unzip NCT-Air-Gapped-Range-Deployment-20260924.zip
+unzip NCT-Air-Gapped-Range-Deployment-0.15.3-20260924.zip
 cd /root/NCT-Air-Gapped-Range-Deployment
 ```
 
-The scripts use `/root/NCT-Air-Gapped-Range-Deployment` as the full working path.
-If the package must live elsewhere, set `NCT_WORKDIR` to that full path before
-running a script.
-
-## 2. Check Docker and Compose
+What success looks like: the last command returns to the prompt without an
+error. Run the following command to confirm the package contents are visible:
 
 ```sh
-docker version
-docker compose version
-docker version --format 'Server {{.Server.Version}} / API {{.Server.APIVersion}}'
+ls
 ```
 
-- **Current / standard path:** Docker server API **1.41 or newer**. If
-  `docker compose version` succeeds, use `nct-start-compose.sh`; if it fails,
-  use `nct-start-docker.sh`.
-- **Older recurring Range path:** Docker server API **1.39 or 1.40**. Use
-  `nct-start-legacy.sh`. The repeatedly reset Range VM previously observed as
-  Docker 18.09 / API 1.39 is in this category.
-- **Unsupported by these scripts:** Docker server API older than **1.39**.
-  Stop and use the separately validated NCT appliance path rather than trying
-  to weaken the host configuration.
+You should see `compose.range.yaml`, `offline-images`, and `scripts`.
 
-The API value is the decision point; the displayed Docker product version is
-included for the deployment record. The `legacy` path relaxes the security
-profile only for the NCT container and should not be used on API 1.41 or newer.
+If the package must remain somewhere other than
+`/root/NCT-Air-Gapped-Range-Deployment`, stop here and ask the Range
+administrator to set `NCT_WORKDIR` to its full location.
 
-The old standalone `docker-compose` command is not required by these scripts.
+## 2. Find which start method this server supports
 
-## 3. Migrate an existing `nct-data` volume, when present
+Run:
 
-Skip this section on a new installation. If an earlier NCT deployment used the
-Docker volume named `nct-data`, verify it exists and run the migration:
+```sh
+docker version --format 'Server {{.Server.Version}} / API {{.Server.APIVersion}}'
+docker compose version
+```
+
+The first command should print a Docker server version and API number. The
+second command may either print a Compose version or an error. Use this simple
+table to choose a start method later:
+
+| What you see | Start method |
+| --- | --- |
+| API 1.41 or newer, and the Compose command works | `compose` |
+| API 1.41 or newer, but the Compose command fails | `docker` |
+| API 1.39 or 1.40 | `legacy` |
+| API older than 1.39, or the first command fails | Stop and contact the Range administrator |
+
+The older recurring Range VM has previously reported API 1.39, so `legacy` is
+the expected choice there. You do not need to install Compose.
+
+## 3. Decide whether this is a new installation or an upgrade
+
+Run:
+
+```sh
+docker inspect nct --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+```
+
+Choose only one of these paths:
+
+- If the output includes `/var/lib/nct/data -> /data`, this is an **upgrade**.
+  Go to step 6.
+- If Docker says that no container named `nct` exists, this is a **new
+  installation**. Go to step 4.
+- If the output includes `nct-data` or a Docker volume path pointing to
+  `/data`, this is an **older installation that must be migrated**. Continue
+  with step 3A below.
+- If the output is different or unclear, stop. Do not remove anything; ask the
+  Range administrator to review it.
+
+### 3A. Move an older Docker volume into the permanent host folder
+
+First confirm that the old volume exists:
 
 ```sh
 docker volume inspect nct-data
+```
+
+Then run:
+
+```sh
 sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-migrate-data.sh
 ```
 
-The migration refuses to run during active NCT work, stops and retains the old
-container under a timestamped rollback name, copies the volume into
-`/var/lib/nct/data`, and compares every copied file before reporting success.
-It does not delete or modify `nct-data`. Keep the printed migration receipt and
-rollback-container name until the new deployment has been accepted.
+The migration will refuse to start if NCT is busy. It stops and retains the old
+container, copies the data, and compares every copied file. It does not delete
+the old `nct-data` volume.
 
-## 4. Check port 8445
+What success looks like: the script prints a successful migration receipt and
+a rollback-container name. Write down both names. After a successful
+migration, use the **new installation** start in step 5; existing accounts and
+data will still be preserved.
+
+## 4. Confirm that the web port is available
+
+NCT uses HTTPS port 8445 by default. Before starting NCT, run:
 
 ```sh
 ss -ltn | grep ':8445 ' || echo PORT_8445_FREE
-sudo ss -lntp | grep ':8445 '
 ```
 
-If the first command prints `PORT_8445_FREE`, use the default. If a listener is
-shown, open the selected start script and change the clearly marked line near
-the top:
+`PORT_8445_FREE` means the port is available. If the command shows another
+program already using 8445, stop and ask the Range administrator to select an
+approved unused port and update the `HOST_PORT=8445` line in the selected start
+script.
 
-```sh
-HOST_PORT=8445
-```
+## 5. Start a new or newly migrated installation
 
-Replace `8445` with an approved unused TCP port, save the file, and repeat the
-port check with the new number.
+Skip this step when upgrading an installation that already uses
+`/var/lib/nct/data`.
 
-## 5. Choose one path: new installation or upgrade
+Replace `RANGE_IP` with the server's real IP address. Use the one command that
+matches the method selected in step 2:
 
-Use **5A** for a new installation or for the first start after the volume
-migration in step 3. Use **5B** when the existing `nct` container already stores
-its `/data` files in `/var/lib/nct/data`. Do not run both paths.
-
-### 5A. Start a new or newly migrated installation
-
-Substitute the Range address. The script will ask for the Administrator username
-to create, then prompt twice for its password. The username does not need to be
-`admin`. Spaces and symbols are accepted in the password, the password is not
-placed on the command line, and the temporary bootstrap secret is removed after
-the chosen password is set.
-
-Older Range Docker:
+For `legacy`:
 
 ```sh
 sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-legacy.sh RANGE_IP
 ```
 
-Current Docker without Compose:
+For `docker`:
 
 ```sh
 sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-docker.sh RANGE_IP
 ```
 
-Current Docker with the Compose plugin:
+For `compose`:
 
 ```sh
 sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-compose.sh RANGE_IP
 ```
 
-On a migrated installation, the start script preserves all existing accounts
-and does not prompt for or reset a password. On a new installation, it creates
-the selected Administrator and securely prompts for the initial password.
+On a completely new installation, the script asks you to enter an
+Administrator username and password. The password is hidden while you type.
+On a migrated installation, the existing accounts are kept and no password is
+reset.
 
-### 5B. Upgrade an existing host-folder installation
+What success looks like: the script reports that NCT is healthy and returns to
+the prompt without an error. Continue with step 7.
 
-If `docker inspect nct` shows that `/data` already points to
-`/var/lib/nct/data`, use the upgrade helper instead of removing the current
-container by hand:
+## 6. Upgrade an existing host-folder installation
+
+Use this step only when step 3 showed `/var/lib/nct/data -> /data`.
+
+Replace `RANGE_IP` with the server's real IP address:
 
 ```sh
 sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-upgrade.sh RANGE_IP
 ```
 
-The helper refuses active scans or collections, verifies and loads the packaged
-image, stops NCT, creates a checksum-protected data backup, retains the prior
-container under a timestamped rollback name, starts the release, and confirms
-that stored file and record counts did not decrease. It automatically uses
-Compose when available. To force the older compatibility path, append
-`legacy`; to force current Docker without Compose, append `docker`.
+The helper automatically chooses Compose when it is available. If step 2 told
+you to use `legacy`, add that word to the end:
 
-When the helper finishes, keep the printed backup, receipt, and rollback
-container names until the release has been accepted. Continue with step 6.
+```sh
+sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-upgrade.sh RANGE_IP legacy
+```
 
-## 6. Restrict Range access
+For current Docker without Compose, add `docker` instead.
 
-Substitute the same address, selected HTTPS port, and approved analyst network:
+The upgrade will refuse to start if a scan or collection is running. It checks
+the packaged image, backs up the permanent data, retains the old container,
+starts NCT 0.15.3, and confirms that stored file and record counts did not go
+down.
+
+What success looks like: the script prints a successful upgrade receipt, a
+backup location, and a rollback-container name. Write down all three and keep
+them until testing is complete.
+
+## 7. Allow approved analysts through the Range firewall
+
+Skip this step if the existing Range firewall rule already allows the approved
+analyst network to reach HTTPS port 8445.
+
+Replace `APPROVED_ANALYST_CIDR` and `RANGE_IP` with the approved values:
 
 ```sh
 firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=APPROVED_ANALYST_CIDR destination address=RANGE_IP port port=8445 protocol=tcp accept'
 firewall-cmd --reload
 ```
 
-If `HOST_PORT` was changed, use that port in the firewall rule.
+If a different web port was approved, replace 8445 in the firewall rule.
 
-## 7. Open NCT
+## 8. Open and sign in to NCT
 
-Open `https://RANGE_IP:8445`, or the replacement port selected above. The
-Range uses a self-signed HTTPS certificate, so the browser warning is expected.
-Use the browser's approved option to continue to the site.
+In a browser, open:
 
-Sign in with the Administrator username selected in step 5A. On an upgrade,
-sign in with an existing Administrator username. Do not assume the username is
-`admin`.
-
-## 8. Change or recover the Administrator later
-
-Run the account helper with no hard-coded username:
-
-```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-set-admin.sh
+```text
+https://RANGE_IP:8445
 ```
 
-It lists the current Administrator accounts and lets the operator keep the
-current username, create a replacement Administrator, and set a new password.
-When replacing the only active Administrator, it creates the new account before
-offering to disable the old one. Existing operator data is not moved or deleted.
+Replace `RANGE_IP` with the server's address. The Range uses its own HTTPS
+certificate, so the browser may display the Range's expected certificate
+warning. Follow the site's approved procedure for reaching the login page.
 
-For emergency password recovery with a verified backup first, use:
+For a new installation, sign in with the Administrator account created in
+step 5. For an upgrade, use an existing Administrator account. The username is
+not necessarily `admin`.
 
-```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-admin-recover.sh --admin-user ADMIN_USERNAME
-```
+## 9. Verify the installation before accepting it
 
-The recovery helper recognizes both the new `/var/lib/nct/data` host folder and
-older named volumes. It stops NCT only after approval, writes a backup under
-`/var/lib/nct/deployment/backups`, resets the selected Administrator, revokes
-that account's earlier sessions, and returns the container to its prior state.
-
-## 9. Verify the deployment
+Run these checks in the Range terminal:
 
 ```sh
 docker ps --filter name=nct
 docker logs nct
 docker inspect nct --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
-find /var/lib/nct/data -maxdepth 2 -type f | sort
 curl -k https://RANGE_IP:8445/health
 ```
 
-Confirm that the health response shows version `0.15.3` and build ID
-`0.15.3-range-20260924`. Sign in, open **Nmap Scans**, and confirm that the
-existing scan history is present. Then open **Network Devices**, expand an
-existing collection, and download `manifest.json` and `stdout.txt`. Confirm
-that both files save through the browser before accepting the upgrade.
+Replace `RANGE_IP` in the last command. Confirm all of the following:
 
-For the Cisco acceptance check, collect the known test router with the same
-read-only Cisco preset used previously. Confirm that the result is completed,
-the displayed output is not blank, and its saved configuration file downloads.
-If the device rejects a command, NCT should retain the returned Cisco message
-in the evidence instead of reporting an empty successful collection.
+- the `nct` container is running;
+- the health response shows version `0.15.3`;
+- the build ID is `0.15.3-range-20260924`;
+- the `/data` mount points to `/var/lib/nct/data`; and
+- the logs do not show repeated startup errors.
 
-The `/data` mount shown by `docker inspect` must point to
-`/var/lib/nct/data`. Keep that folder on the VM's local disk and include
-`/var/lib/nct` in the normal Range or Proxmox backup scope. Do not place the
-live folder on NFS, SMB, OneDrive, or another synchronized/network filesystem.
+Then verify the saved information in the browser:
 
-## 10. Roll back after a failed acceptance check
+1. Open **Nmap Scans** and confirm the existing scan history is present.
+2. Open **Network Devices** and expand an existing collection.
+3. Download `manifest.json` and `stdout.txt`, and confirm both files save.
+4. Run the established read-only Cisco test collection. Confirm it completes,
+   displays non-blank output, and allows its saved configuration to download.
 
-Only use this if the new host-folder deployment fails acceptance. Substitute
-the exact rollback-container name printed by `nct-migrate-data.sh`:
+Do not accept the upgrade until all checks pass. Keep `/var/lib/nct` in the
+normal Range or Proxmox backup scope. The live data folder must stay on the
+VM's local disk, not NFS, SMB, OneDrive, or another synchronized folder.
+
+## 10. Roll back if the new release fails testing
+
+Only use this procedure after a failed acceptance check. Use the exact
+rollback-container name printed during migration or upgrade in place of
+`ROLLBACK_CONTAINER_NAME`:
 
 ```sh
 docker stop nct
 docker rm nct
-docker rename nct-volume-rollback-TIMESTAMP nct
+docker rename ROLLBACK_CONTAINER_NAME nct
 docker start nct
 ```
 
-For a volume migration, this returns to the original container and retained
-`nct-data` volume. It does not remove `/var/lib/nct/data`, so the verified copy
-remains available for investigation or another migration attempt.
+This restores the earlier container. It does not erase the copied host-folder
+data, old Docker volume, or upgrade backup. Record the failure and preserve
+those items for investigation.
 
-For an upgrade, substitute the exact rollback-container name printed by
-`nct-upgrade.sh` and use the same stop, remove, rename, and start sequence. The
-checksum-protected pre-upgrade backup remains under
-`/var/lib/nct/deployment/backups`.
+## Administrator password help
 
-## 11. Add offline SearchSploit data, when needed
+To list Administrator accounts and interactively set an account and password:
 
-For offline SearchSploit data, upload the unextracted official Exploit-DB
-archive through **Hunt -> SearchSploit enrichment -> Manage offline database**.
+```sh
+sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-set-admin.sh
+```
+
+For emergency recovery, make sure a verified backup exists, then run:
+
+```sh
+sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-admin-recover.sh --admin-user ADMIN_USERNAME
+```
+
+Replace `ADMIN_USERNAME` with the actual account name. The recovery helper
+backs up the data, resets only the selected Administrator, revokes that
+account's earlier sessions, and returns NCT to its prior running state.
+
+## Add offline SearchSploit data later
+
+Upload the unextracted official Exploit-DB archive from **Hunt -> SearchSploit
+enrichment -> Manage offline database**. NCT does not require Internet access
+for this import.
