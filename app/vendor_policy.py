@@ -572,6 +572,7 @@ def _pfsense_runtime_tables(text: str) -> dict[str, list[str]]:
         marker = re.match(r"^__NCT_PF_TABLE__\s+<?([^>\s]+)>?$", line)
         if marker:
             current = marker.group(1)
+            tables.setdefault(current, [])
             continue
         if line.startswith("====="):
             current = None
@@ -582,8 +583,7 @@ def _pfsense_runtime_tables(text: str) -> dict[str, list[str]]:
             network = ipaddress.ip_network(line, strict=False)
         except ValueError:
             continue
-        if network.version == 4:
-            tables[current].append(str(network))
+        tables[current].append(str(network))
     return dict(tables)
 
 
@@ -623,10 +623,7 @@ def _parse_pfsense_aliases(text: str) -> tuple[dict[str, dict], dict[str, dict]]
                 continue
             try:
                 network = ipaddress.ip_network(value, strict=False)
-                if network.version == 4:
-                    item["members"].append({"value": str(network)})
-                else:
-                    item["complete"] = False
+                item["members"].append({"value": str(network)})
             except ValueError:
                 item["members"].append({"dns_name": value})
                 item["dynamic"] = True
@@ -642,7 +639,42 @@ def _parse_pfsense_aliases(text: str) -> tuple[dict[str, dict], dict[str, dict]]
                 )
                 item["resolution_source"] = "Retained pfctl runtime table snapshot"
                 item["complete"] = True
+    for name, resolved in runtime_tables.items():
+        if name in addresses:
+            continue
+        item = _empty_object("address", f"Retained pfctl table <{name}>")
+        item["dynamic"] = True
+        item["resolution_source"] = "Retained pfctl runtime table snapshot"
+        item["members"] = [
+            {"value": value, "resolved_from": "pfctl runtime table"}
+            for value in resolved
+        ]
+        addresses[name] = item
     return addresses, services
+
+
+def _pfsense_interface_addresses(text: str) -> dict[str, list[str]]:
+    addresses: dict[str, list[str]] = defaultdict(list)
+    current_interface: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        header = re.match(r"^([A-Za-z][A-Za-z0-9_.:/-]*):\s+flags[= ]", line, re.I)
+        if header:
+            current_interface = header.group(1)
+            continue
+        if not current_interface:
+            continue
+        match = re.match(r"^inet6?\s+([^\s%]+)", line, re.I)
+        if not match:
+            continue
+        try:
+            address = ipaddress.ip_address(match.group(1))
+        except ValueError:
+            continue
+        normalized = str(address)
+        if normalized not in addresses[current_interface]:
+            addresses[current_interface].append(normalized)
+    return dict(addresses)
 
 
 def _pf_address_token(value: str) -> str:
@@ -709,7 +741,8 @@ def _parse_pfsense(text: str) -> dict:
         if not match:
             continue
         action, direction, body = match.groups()
-        iface = re.search(r"\bon\s+(\S+)", body, re.I)
+        iface = re.search(r"\bon\s+(!\s+)?(\S+)", body, re.I)
+        family = re.search(r"\b(inet6|inet)\b", body, re.I)
         proto = re.search(r"\bproto\s+(tcp|udp|icmp)\b", body, re.I)
         addresses = re.search(r"\bfrom\s+(\S+)\s+to\s+(\S+)", body, re.I)
         port_match = re.search(r"\bport\s*(?:=)?\s*(\S+)", body, re.I)
@@ -722,13 +755,16 @@ def _parse_pfsense(text: str) -> dict:
         rules.append({
             "policy": "pfctl-active", "order": order,
             "action": "permit" if action.lower() == "pass" else "deny",
-            "direction": direction.lower(), "interface": iface.group(1) if iface else None,
+            "direction": direction.lower(), "interface": iface.group(2) if iface else None,
+            "interface_negated": bool(iface and iface.group(1)),
+            "quick": bool(re.search(r"\bquick\b", body, re.I)),
+            "ip_version": 6 if family and family.group(1).lower() == "inet6" else 4 if family else None,
             "protocol": proto.group(1).lower() if proto else "ip",
             "source": f"@{source_ref.group(1)}" if source_ref else source_value,
             "destination": f"@{destination_ref.group(1)}" if destination_ref else destination_value,
             "destination_port": _port(raw_port) if raw_port and not port_ref else None,
             "service_ref": port_ref.group(1) if port_ref else None,
-            "unresolved": iface is None or addresses is None or (
+            "unresolved": (addresses is None and not re.search(r"\ball\b", body, re.I)) or (
                 port_match is not None and not port_ref and _port(raw_port or "") is None
             ),
             "evidence": line[:2000],
@@ -736,6 +772,7 @@ def _parse_pfsense(text: str) -> dict:
     return {
         "vendor": "pfsense", "rules": rules, "attachments": [],
         "address_objects": address_objects, "service_objects": service_objects,
+        "interface_addresses": _pfsense_interface_addresses(text),
         "nat_rules": _parse_pfsense_nat(text),
     }
 
@@ -970,9 +1007,32 @@ def _literal_address_matches(specification: str, endpoint: object, external: boo
         actual = ipaddress.ip_network(str(endpoint), strict=False)
     except ValueError:
         return None
+    if actual.version != expected.version:
+        return False
     if actual.subnet_of(expected):
         return True
     if actual.overlaps(expected):
+        return None
+    return False
+
+
+def _interface_address_matches(
+    policy: dict, name: str, endpoint: object, external: bool,
+) -> bool | None:
+    if external or endpoint is None:
+        return None
+    interface_addresses = policy.get("interface_addresses") or {}
+    candidates = (
+        [value for values in interface_addresses.values() for value in values]
+        if name.lower() == "self"
+        else interface_addresses.get(name) or []
+    )
+    if not candidates:
+        return None
+    results = [_literal_address_matches(value, endpoint, False) for value in candidates]
+    if True in results:
+        return True
+    if None in results:
         return None
     return False
 
@@ -1015,8 +1075,13 @@ def _address_matches(
     specification: str | None, endpoint: object, external: bool,
     policy: dict | None = None,
 ) -> bool | None:
-    if not specification or specification.lower() in {"any", "any-ipv4"}:
+    if not specification or specification.lower() in {"any", "any-ipv4", "any-ipv6"}:
         return True
+    interface_address = re.fullmatch(r"\(([^)]+)\)", specification)
+    if interface_address:
+        return _interface_address_matches(
+            policy or {}, interface_address.group(1), endpoint, external
+        )
     if specification.startswith("@"):
         return _address_object_matches(
             (policy or {}).get("address_objects") or {}, specification[1:], endpoint, external
@@ -1078,6 +1143,18 @@ def _basic_rule_match(
     policy: dict | None = None,
     flow_state: str = "new",
 ) -> bool | None:
+    rule_ip_version = rule.get("ip_version")
+    if rule_ip_version:
+        endpoint_versions = []
+        for endpoint in (source, destination):
+            if endpoint is None:
+                continue
+            try:
+                endpoint_versions.append(ipaddress.ip_network(str(endpoint), strict=False).version)
+            except ValueError:
+                continue
+        if any(version != int(rule_ip_version) for version in endpoint_versions):
+            return False
     checks = [
         _address_matches(rule.get("source"), source, source_external, policy),
         _address_matches(rule.get("destination"), destination, destination_external, policy),
@@ -1292,10 +1369,21 @@ def evaluate_vendor_policy(
         }
         relevant = [item for item in rules if item.get("policy") in names]
     elif vendor == "pfsense":
+        direction = "in" if input_interface else "out"
+        path_interface = input_interface if direction == "in" else output_interface
         relevant = [
             item for item in rules
-            if (item.get("direction") == "in" and item.get("interface") == input_interface)
-            or (item.get("direction") == "out" and item.get("interface") == output_interface)
+            if item.get("direction") == direction and (
+                item.get("interface") is None
+                or (
+                    path_interface is not None
+                    and (
+                        path_interface != item.get("interface")
+                        if item.get("interface_negated")
+                        else path_interface == item.get("interface")
+                    )
+                )
+            )
         ]
     elif vendor == "juniper":
         zones = policy.get("interface_zones") or {}
@@ -1336,6 +1424,54 @@ def evaluate_vendor_policy(
             }
     if not relevant:
         return {"status": "not_applied", "reason": "No retained policy attachment matches the interface path."}
+    if vendor == "pfsense":
+        last_decision = None
+        unresolved_rule = None
+        for rule in sorted(relevant, key=lambda item: int(item.get("order") or 0)):
+            matched = _basic_rule_match(
+                rule, source=source, destination=destination, protocol=protocol, port=port,
+                source_external=source_external, destination_external=destination_external,
+                input_interface=input_interface, output_interface=output_interface,
+                policy=policy,
+                flow_state=flow_state,
+            )
+            if matched is False:
+                continue
+            if matched is None:
+                unresolved_rule = rule
+                if rule.get("quick"):
+                    return {
+                        "status": "unknown",
+                        "reason": "Applied pfsense quick rule contains unresolved match criteria.",
+                        "rule": rule,
+                    }
+                continue
+            decision = {
+                "status": "decided",
+                "verdict": "allow" if rule.get("action") == "permit" else "deny",
+                "rule": rule,
+                "match_basis": [
+                    f"Applied policy {rule.get('policy')}",
+                    f"{str(rule.get('direction') or '').upper()} interface {path_interface or '?'}",
+                    *_resolved_basis(rule, flow_state, policy),
+                ],
+            }
+            if rule.get("quick"):
+                return decision
+            last_decision = decision
+            unresolved_rule = None
+        if unresolved_rule:
+            return {
+                "status": "unknown",
+                "reason": "A later applied pfsense rule contains unresolved match criteria.",
+                "rule": unresolved_rule,
+            }
+        if last_decision:
+            return last_decision
+        return {
+            "status": "unknown",
+            "reason": "Applied pfsense policy had no supported matching terminal rule.",
+        }
     for rule in sorted(relevant, key=lambda item: int(item.get("order") or 0)):
         matched = _basic_rule_match(
             rule, source=source, destination=destination, protocol=protocol, port=port,

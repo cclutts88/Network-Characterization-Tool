@@ -43,6 +43,7 @@ MAX_SUMMARY_TEXT_BYTES = MAX_RETAINED_COLLECTION_BYTES
 MAX_RESPONSE_OUTPUT_CHARS = 200_000
 COLLECTION_COPY_CHUNK_BYTES = 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
+CISCO_COLLECTION_TIMEOUT_SECONDS = 600
 MAX_ADDITIONAL_COMMANDS = 20
 READ_ONLY_COMMAND_PREFIXES = {
     "show", "display", "get", "ping", "traceroute", "mtr",
@@ -1036,25 +1037,49 @@ def _useful_device_output(value: str) -> bool:
     return len("\n".join(meaningful)) >= 20
 
 
-def _clean_cisco_shell_lines(lines, sent_commands: list[str]):
-    """Yield cleaned Cisco evidence one line at a time."""
+def _normalized_cisco_shell_line(raw_line: str) -> str:
+    """Remove terminal control sequences while retaining readable evidence."""
+    value = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line or "")
+    value = value.replace("\r", "").rstrip("\n")
+    while "\b" in value:
+        value = re.sub(r"[^\b]\b", "", value)
+    return value.replace("\b", "")
+
+
+def _cisco_echoed_command(line: str, sent_commands: list[str]) -> str | None:
+    stripped = line.strip()
+    for command in sent_commands:
+        if stripped == command or re.fullmatch(
+            rf".{{0,160}}[>#]\s*{re.escape(command)}\s*", stripped
+        ):
+            return command
+    return None
+
+
+def _cisco_transcript_lines(lines, sent_commands: list[str]):
+    """Yield the command and cleaned evidence from one Cisco shell transcript."""
+    current_command: str | None = None
     for raw_line in lines:
-        raw_line = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line or "").replace("\r", "").rstrip("\n")
+        raw_line = _normalized_cisco_shell_line(raw_line)
         line = raw_line.strip()
         if not line:
             continue
         if line.lower().startswith("connection to ") and line.lower().endswith(" closed."):
             continue
-        if line in sent_commands:
+        echoed_command = _cisco_echoed_command(line, sent_commands)
+        if echoed_command:
+            current_command = echoed_command
             continue
         if re.fullmatch(r".{0,160}[>#]\s*", line):
             continue
-        if any(
-            re.fullmatch(rf".{{0,160}}[>#]\s*{re.escape(command)}\s*", line)
-            for command in sent_commands
-        ):
-            continue
-        yield raw_line.rstrip()
+        if current_command:
+            yield current_command, raw_line.rstrip()
+
+
+def _clean_cisco_shell_lines(lines, sent_commands: list[str]):
+    """Yield cleaned Cisco evidence one line at a time."""
+    for _command, line in _cisco_transcript_lines(lines, sent_commands):
+        yield line
 
 
 def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
@@ -1065,38 +1090,44 @@ def _clean_cisco_shell_output(value: str, sent_commands: list[str]) -> str:
 def _run_cisco_command_sequence(
     ssh_prefix: list[str], commands: list[str]
 ) -> tuple[str, str, int, list[str], str | None]:
-    """Use forced interactive shells because many Cisco SSH servers reject exec requests."""
-    sections: list[str] = []
-    errors: list[str] = []
-    failed_commands: list[str] = []
-    running_config_collected = False
-    last_exit = 0
+    """Collect every Cisco command through one forced interactive shell."""
     pager_commands = {"terminal length 0", "terminal pager 0"}
     pager_command = next((command for command in commands if command in pager_commands), None)
+    requested_commands = [command for command in commands if command not in pager_commands]
+    sent_commands = ([pager_command] if pager_command else []) + requested_commands + ["exit"]
     shell_args = ssh_prefix[:-1] + ["-tt", ssh_prefix[-1]]
-    for command in commands:
-        if command in pager_commands:
-            continue
-        sent_commands = ([pager_command] if pager_command else []) + [command, "exit"]
-        completed = subprocess.run(
-            shell_args,
-            input="\n".join(sent_commands) + "\n",
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        last_exit = completed.returncode
-        output = _clean_cisco_shell_output(completed.stdout or "", sent_commands)
-        if output.strip():
-            sections.append(f"===== {command} =====\n{output.rstrip()}\n")
-        if completed.stderr:
-            errors.append(f"{command}: {completed.stderr.strip()}")
-        if completed.returncode != 0 or not _useful_device_output(output):
-            failed_commands.append(command)
-        if command == "show running-config" and _useful_device_output(output):
-            running_config_collected = True
+    completed = subprocess.run(
+        shell_args,
+        input="\n".join(sent_commands) + "\n",
+        capture_output=True,
+        text=True,
+        timeout=CISCO_COLLECTION_TIMEOUT_SECONDS,
+        check=False,
+    )
+    evidence_by_command: dict[str, list[str]] = {command: [] for command in requested_commands}
+    for command, line in _cisco_transcript_lines(
+        (completed.stdout or "").splitlines(), sent_commands
+    ):
+        if command in evidence_by_command:
+            evidence_by_command[command].append(line)
+    sections = [
+        f"===== {command} =====\n" + "\n".join(evidence_by_command[command]).rstrip() + "\n"
+        for command in requested_commands if evidence_by_command[command]
+    ]
+    useful = {
+        command: _useful_device_output("\n".join(evidence_by_command[command]))
+        for command in requested_commands
+    }
+    failed_commands = [
+        command for command in requested_commands
+        if completed.returncode != 0 or not useful[command]
+    ]
+    running_config_collected = useful.get("show running-config", False)
     retained = "\n".join(sections)
+    if not _useful_device_output(retained):
+        fallback = _clean_cisco_shell_output(completed.stdout or "", sent_commands)
+        if fallback:
+            retained = f"===== Cisco interactive session =====\n{fallback.rstrip()}\n"
     fatal_error = None
     if not _useful_device_output(retained):
         fatal_error = "The Cisco device returned no usable collection output."
@@ -1105,70 +1136,55 @@ def _run_cisco_command_sequence(
             "The Cisco device did not return its running configuration; "
             "the collection was not marked complete."
         )
-    return retained, "\n".join(errors), last_exit, failed_commands, fatal_error
+    elif completed.returncode != 0:
+        fatal_error = "The Cisco SSH session ended before a clean collection completion."
+    return retained, completed.stderr or "", completed.returncode, failed_commands, fatal_error
 
 
 def _run_cisco_command_sequence_to_file(
     ssh_prefix: list[str], commands: list[str], output_path: Path
 ) -> tuple[str, int, list[str], str | None, bool]:
-    """Run Cisco commands independently while streaming cleaned evidence to disk."""
-    errors: list[str] = []
-    failed_commands: list[str] = []
-    running_config_collected = False
-    overall_useful_length = 0
-    last_exit = 0
+    """Stream one Cisco interactive shell transcript into ordered command sections."""
     pager_commands = {"terminal length 0", "terminal pager 0"}
     pager_command = next((command for command in commands if command in pager_commands), None)
+    requested_commands = [command for command in commands if command not in pager_commands]
+    sent_commands = ([pager_command] if pager_command else []) + requested_commands + ["exit"]
     shell_args = ssh_prefix[:-1] + ["-tt", ssh_prefix[-1]]
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", errors="replace") as retained:
-        for command in commands:
-            if command in pager_commands:
-                continue
-            sent_commands = ([pager_command] if pager_command else []) + [command, "exit"]
-            with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as raw_output:
-                timed_out: subprocess.TimeoutExpired | None = None
-                try:
-                    completed = subprocess.run(
-                        shell_args,
-                        input="\n".join(sent_commands) + "\n",
-                        stdout=raw_output,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=120,
-                        check=False,
-                    )
-                    last_exit = completed.returncode
-                    command_stderr = completed.stderr or ""
-                except subprocess.TimeoutExpired as exc:
-                    completed = None
-                    command_stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-                    timed_out = exc
-                raw_output.seek(0)
-                cleaned_lines = _clean_cisco_shell_lines(raw_output, sent_commands)
-                command_useful_length = 0
-                wrote_header = False
-                for line in cleaned_lines:
-                    if not wrote_header:
-                        retained.write(f"===== {command} =====\n")
-                        wrote_header = True
-                    retained.write(line + "\n")
-                    stripped = line.strip()
-                    if stripped and not stripped.lstrip().startswith(("% Invalid", "% Ambiguous", "% Incomplete")):
-                        command_useful_length += len(stripped)
-                if wrote_header:
-                    retained.write("\n")
-                overall_useful_length += command_useful_length
-                command_useful = command_useful_length >= 20
-                if command_stderr:
-                    errors.append(f"{command}: {command_stderr.strip()}")
-                if completed is None or completed.returncode != 0 or not command_useful:
-                    failed_commands.append(command)
-                if command == "show running-config" and command_useful:
-                    running_config_collected = True
-                if timed_out is not None:
-                    retained.flush()
-                    raise timed_out
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as raw_output:
+        completed = subprocess.run(
+            shell_args,
+            input="\n".join(sent_commands) + "\n",
+            stdout=raw_output,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=CISCO_COLLECTION_TIMEOUT_SECONDS,
+            check=False,
+        )
+        raw_output.seek(0)
+        useful_lengths = {command: 0 for command in requested_commands}
+        wrote_headers: set[str] = set()
+        with output_path.open("w", encoding="utf-8", errors="replace") as retained:
+            for command, line in _cisco_transcript_lines(raw_output, sent_commands):
+                if command not in useful_lengths:
+                    continue
+                if command not in wrote_headers:
+                    if wrote_headers:
+                        retained.write("\n")
+                    retained.write(f"===== {command} =====\n")
+                    wrote_headers.add(command)
+                retained.write(line + "\n")
+                stripped = line.strip()
+                if stripped and not stripped.lstrip().startswith(
+                    ("% Invalid", "% Ambiguous", "% Incomplete")
+                ):
+                    useful_lengths[command] += len(stripped)
+        overall_useful_length = sum(useful_lengths.values())
+        failed_commands = [
+            command for command in requested_commands
+            if completed.returncode != 0 or useful_lengths[command] < 20
+        ]
+        running_config_collected = useful_lengths.get("show running-config", 0) >= 20
     output_truncated = _limit_retained_collection_file(output_path)
     fatal_error = None
     if overall_useful_length < 20:
@@ -1178,7 +1194,9 @@ def _run_cisco_command_sequence_to_file(
             "The Cisco device did not return its running configuration; "
             "the collection was not marked complete."
         )
-    return "\n".join(errors), last_exit, failed_commands, fatal_error, output_truncated
+    elif completed.returncode != 0:
+        fatal_error = "The Cisco SSH session ended before a clean collection completion."
+    return completed.stderr or "", completed.returncode, failed_commands, fatal_error, output_truncated
 
 
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:

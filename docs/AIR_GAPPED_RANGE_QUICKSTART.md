@@ -24,7 +24,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.15.3-20260924.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.15.4-20260924.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -40,7 +40,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-unzip NCT-Air-Gapped-Range-Deployment-0.15.3-20260924.zip
+unzip NCT-Air-Gapped-Range-Deployment-0.15.4-20260924.zip
 cd /root/NCT-Air-Gapped-Range-Deployment
 ```
 
@@ -72,10 +72,10 @@ table to choose a start method later:
 
 | What you see | Start method |
 | --- | --- |
-| API 1.41 or newer, and the Compose command works | `compose` |
-| API 1.41 or newer, but the Compose command fails | `docker` |
-| API 1.39 or 1.40 | `legacy` |
-| API older than 1.39, or the first command fails | Stop and contact the Range administrator |
+| API **1.41 or newer**, and the Compose command works | `compose` |
+| API **1.41 or newer**, but the Compose command fails | `docker` |
+| API **1.39 or 1.40** | `legacy` |
+| API older than **1.39**, or the first command fails | Stop and contact the Range administrator |
 
 The older recurring Range VM has previously reported API 1.39, so `legacy` is
 the expected choice there. You do not need to install Compose.
@@ -191,7 +191,7 @@ For current Docker without Compose, add `docker` instead.
 
 The upgrade will refuse to start if a scan or collection is running. It checks
 the packaged image, backs up the permanent data, retains the old container,
-starts NCT 0.15.3, and confirms that stored file and record counts did not go
+starts NCT 0.15.4, and confirms that stored file and record counts did not go
 down.
 
 What success looks like: the script prints a successful upgrade receipt, a
@@ -242,8 +242,8 @@ curl -k https://RANGE_IP:8445/health
 Replace `RANGE_IP` in the last command. Confirm all of the following:
 
 - the `nct` container is running;
-- the health response shows version `0.15.3`;
-- the build ID is `0.15.3-range-20260924`;
+- the health response shows version `0.15.4`;
+- the build ID is `0.15.4-range-20260924`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 

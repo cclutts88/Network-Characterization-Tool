@@ -111,6 +111,80 @@ def test_pfsense_active_pf_rule_is_evaluated_on_its_interface():
     assert result["verdict"] == "allow"
 
 
+def test_pfsense_ipv4_flow_skips_ipv6_rules_without_crashing():
+    text = """block in quick on em1 inet6 from fe80::/64 to any
+pass in quick on em1 inet proto tcp from 10.80.0.0/24 to 10.90.0.10 port = 443"""
+    result = evaluate(text, input_interface="em1", output_interface="em2")
+    assert result["status"] == "decided"
+    assert result["verdict"] == "allow"
+    assert result["rule"]["order"] == 2
+
+
+def test_pfsense_ipv6_flow_skips_ipv4_rules_without_crashing():
+    text = """block in quick on em1 inet from 10.80.0.0/24 to any
+pass in quick on em1 inet6 proto tcp from 2001:db8:1::/64 to 2001:db8:2::10 port = 443"""
+    result = evaluate_vendor_policy(
+        parse_vendor_policy(text),
+        source="2001:db8:1::25", destination="2001:db8:2::10",
+        protocol="tcp", port=443,
+        input_interface="em1", output_interface="em2",
+    )
+    assert result["status"] == "decided"
+    assert result["verdict"] == "allow"
+    assert result["rule"]["order"] == 2
+
+
+def test_pfsense_active_rules_use_family_interface_addresses_and_quick_order():
+    text = """vmx1: flags=1008943<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST>
+    inet 192.168.1.205 netmask 0xffffff00 broadcast 192.168.1.255
+__NCT_PF_TABLE__ sshguard
+===== next section =====
+block drop in log inet all label "Default deny rule IPv4"
+block drop in log quick on vmx1 inet6 from fe80::/64 to any
+pass in quick on vmx1 inet proto tcp from any to (vmx1) port = https"""
+    result = evaluate_vendor_policy(
+        parse_vendor_policy(text),
+        source="203.0.113.5", destination="192.168.1.205",
+        protocol="tcp", port=443,
+        input_interface="vmx1", output_interface=None,
+    )
+    assert result["status"] == "decided"
+    assert result["verdict"] == "allow"
+    assert result["rule"]["quick"] is True
+    assert result["rule"]["destination"] == "(vmx1)"
+
+
+def test_pfsense_quick_block_wins_before_later_interface_allow():
+    text = """vmx1: flags=1008943<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST>
+    inet 192.168.1.205 netmask 0xffffff00 broadcast 192.168.1.255
+block drop in log quick inet from 169.254.0.0/16 to any
+block drop in log inet all label "Default deny rule IPv4"
+pass in quick on vmx1 inet proto tcp from any to (vmx1) port = https"""
+    result = evaluate_vendor_policy(
+        parse_vendor_policy(text),
+        source="169.254.1.1", destination="192.168.1.205",
+        protocol="tcp", port=443,
+        input_interface="vmx1", output_interface=None,
+    )
+    assert result["status"] == "decided"
+    assert result["verdict"] == "deny"
+    assert result["rule"]["source"] == "169.254.0.0/16"
+
+
+def test_pfsense_negated_interface_rule_is_skipped_on_excluded_interface():
+    text = """block drop in log quick on ! vmx1 inet from 192.168.1.0/24 to any
+pass in quick on vmx1 inet from 192.168.1.0/24 to any"""
+    result = evaluate_vendor_policy(
+        parse_vendor_policy(text),
+        source="192.168.1.10", destination="8.8.8.8",
+        protocol="tcp", port=443,
+        input_interface="vmx1", output_interface="vmx0",
+    )
+    assert result["status"] == "decided"
+    assert result["verdict"] == "allow"
+    assert result["rule"]["interface"] == "vmx1"
+
+
 def test_juniper_zone_policy_resolves_builtin_application():
     text = """set security zones security-zone trust interfaces ge-0/0/1.0
 set security zones security-zone servers interfaces ge-0/0/2.0

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.4 — Cisco and pfSense collection validation
+
+- Kept Cisco read-only commands inside one authenticated interactive session so
+  devices that close a shared session on `exit` cannot stop collection after
+  `show version`; retained output remains separated and checked per command.
+- Corrected mixed IPv4/IPv6 pfSense policy evaluation, interface-negated rules,
+  `quick` and last-match ordering, runtime tables, and dynamic interface-address
+  targets such as `(self)` and `(vmx1)`.
+
 ## 0.15.3 — Large routing and policy validation
 
 - Retained and analyzed complete device outputs up to 100 MB, removed the

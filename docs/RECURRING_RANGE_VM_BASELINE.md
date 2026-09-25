@@ -86,7 +86,7 @@ diagnostic on this legacy host. Analyst workstations must import the generated
 
 For the verified 2026-09-13 deployment, the concrete values were address
 `10.101.35.15`, analyst CIDR `10.101.35.0/24`, port `8444`, and image
-`network-characterization-tool:0.15.3-range-20260924`.
+`network-characterization-tool:0.15.4-range-20260924`.
 
 If the initial Administrator exists but no usable password was delivered, a
 host operator can generate a replacement without reinstalling NCT or replacing

@@ -193,20 +193,20 @@ def test_collection_summary_reads_routes_after_the_previous_five_megabyte_bounda
     assert result["routes"][-1]["network"] == "203.0.113.0/24"
 
 
-def test_cisco_collection_runs_each_command_and_requires_running_config(monkeypatch):
+def test_cisco_collection_runs_one_session_and_requires_running_config(monkeypatch):
     calls = []
 
     def completed(args, **kwargs):
         calls.append((args, kwargs["input"]))
-        command = next(
-            command
-            for command in ("show version", "show running-config")
-            if command in kwargs["input"]
-        )
-        output = {
-            "show version": "mako#show version\r\nCisco IOS XE Software, Version 17.12\r\nmako#",
-            "show running-config": "mako#show running-config\r\nhostname mako-eng-core-rtr\r\ninterface GigabitEthernet1\r\nmako#",
-        }[command]
+        output = """mako#terminal length 0\r
+mako#show version\r
+Cisco IOS XE Software, Version 17.12\r
+mako#show running-config\r
+hostname mako-eng-core-rtr\r
+interface GigabitEthernet1\r
+mako#exit\r
+Connection to 192.0.2.1 closed.\r
+"""
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     monkeypatch.setattr("app.device_configs.subprocess.run", completed)
@@ -216,10 +216,14 @@ def test_cisco_collection_runs_each_command_and_requires_running_config(monkeypa
         ["terminal length 0", "show version", "show running-config"],
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert all("-tt" in args for args, _ in calls)
     assert all("terminal length 0" in stdin for _, stdin in calls)
-    assert [stdin.splitlines()[-2] for _, stdin in calls] == ["show version", "show running-config"]
+    assert calls[0][1].splitlines() == [
+        "terminal length 0", "show version", "show running-config", "exit",
+    ]
+    assert "===== show version =====" in output
+    assert "===== show running-config =====" in output
     assert "hostname mako-eng-core-rtr" in output
     assert "mako#show running-config" not in output
     assert stderr == ""
@@ -230,7 +234,13 @@ def test_cisco_collection_runs_each_command_and_requires_running_config(monkeypa
 
 def test_cisco_collection_never_reports_success_with_blank_running_config(monkeypatch):
     def completed(_args, **kwargs):
-        output = "Cisco IOS XE Software, Version 17.12\n" * 2 if "show version" in kwargs["input"] else ""
+        output = """mako#terminal length 0
+mako#show version
+Cisco IOS XE Software, Version 17.12
+Cisco IOS XE Software, Version 17.12
+mako#show running-config
+mako#exit
+"""
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     monkeypatch.setattr("app.device_configs.subprocess.run", completed)
@@ -240,11 +250,36 @@ def test_cisco_collection_never_reports_success_with_blank_running_config(monkey
         ["terminal length 0", "show version", "show running-config"],
     )
 
-    assert "show version" in output
+    assert "===== show version =====" in output
     assert stderr == ""
     assert exit_code == 0
     assert failed == ["show running-config"]
     assert "running configuration" in fatal_error
+
+
+def test_cisco_collection_never_reports_success_after_unclean_ssh_exit(monkeypatch):
+    def completed(_args, **_kwargs):
+        output = """mako#terminal length 0
+mako#show version
+Cisco IOS XE Software, Version 17.12
+mako#show running-config
+hostname mako-eng-core-rtr
+interface GigabitEthernet1
+mako#exit
+"""
+        return SimpleNamespace(returncode=255, stdout=output, stderr="Connection closed")
+
+    monkeypatch.setattr("app.device_configs.subprocess.run", completed)
+
+    _output, stderr, exit_code, failed, fatal_error = _run_cisco_command_sequence(
+        ["ssh", "admin@192.0.2.1"],
+        ["terminal length 0", "show version", "show running-config"],
+    )
+
+    assert stderr == "Connection closed"
+    assert exit_code == 255
+    assert failed == ["show version", "show running-config"]
+    assert "clean collection completion" in fatal_error
 
 
 def test_cisco_collection_streams_cleaned_commands_to_retained_file(tmp_path, monkeypatch):
@@ -252,16 +287,16 @@ def test_cisco_collection_streams_cleaned_commands_to_retained_file(tmp_path, mo
 
     def completed(args, **kwargs):
         calls.append((args, kwargs["input"]))
-        command = next(
-            command
-            for command in ("show version", "show running-config", "show ip route")
-            if command in kwargs["input"]
-        )
-        output = {
-            "show version": "mako#show version\r\nCisco IOS XE Software, Version 17.12\r\nmako#",
-            "show running-config": "mako#show running-config\r\nhostname mako-eng-core-rtr\r\ninterface GigabitEthernet1\r\nmako#",
-            "show ip route": "mako#show ip route\r\nS 10.0.0.0/8 [1/0] via 192.0.2.1\r\nmako#",
-        }[command]
+        output = """mako#terminal length 0\r
+mako#show version\r
+Cisco IOS XE Software, Version 17.12\r
+mako#show running-config\r
+hostname mako-eng-core-rtr\r
+interface GigabitEthernet1\r
+mako#show ip route\r
+S 10.0.0.0/8 [1/0] via 192.0.2.1\r
+mako#exit\r
+"""
         kwargs["stdout"].write(output)
         return SimpleNamespace(returncode=0, stderr="")
 
@@ -275,7 +310,10 @@ def test_cisco_collection_streams_cleaned_commands_to_retained_file(tmp_path, mo
     )
 
     output = retained.read_text()
-    assert len(calls) == 3
+    assert len(calls) == 1
+    assert calls[0][1].splitlines() == [
+        "terminal length 0", "show version", "show running-config", "show ip route", "exit",
+    ]
     assert "===== show ip route =====" in output
     assert "S 10.0.0.0/8 [1/0] via 192.0.2.1" in output
     assert "mako#show ip route" not in output
