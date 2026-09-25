@@ -4,12 +4,12 @@ set -eu
 
 server_ip="${1:-}"
 source_cidr="${2:-}"
-admin_user="${3:-clutts}"
+admin_user="${3:-}"
 image="network-characterization-tool:0.15.9-range-20260924"
 https_port="${4:-8445}"
 
-if [ -z "$server_ip" ] || [ -z "$source_cidr" ]; then
-    printf '%s\n' "Usage: sh $0 RANGE_IP APPROVED_ANALYST_CIDR [ADMIN_USERNAME] [HTTPS_PORT]" >&2
+if [ -z "$server_ip" ] || [ -z "$source_cidr" ] || [ -z "$admin_user" ]; then
+    printf '%s\n' "Usage: sh $0 RANGE_IP APPROVED_ANALYST_CIDR ADMIN_USERNAME [HTTPS_PORT]" >&2
     exit 2
 fi
 
@@ -131,6 +131,6 @@ printf '%s\n' "NCT is healthy at https://$server_ip:$https_port"
 printf '%s\n' "Administrator username: $admin_user"
 printf '%s\n' "Initial password file: $password_file"
 printf '%s\n' "Display it once with: cat $password_file"
-printf '%s\n' "Set a chosen password with: sh $bundle_dir/scripts/nct-set-admin-password.sh $admin_user"
+printf '%s\n' "Set or replace the Administrator with: sh $bundle_dir/scripts/nct-set-admin.sh $admin_user"
 printf '%s\n' "After successful sign-in, delete that password file."
 printf '%s\n' "Analyst CA certificate: $tls_root/certs/nct-lab-root.crt"

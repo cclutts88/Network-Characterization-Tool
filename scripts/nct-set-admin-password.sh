@@ -1,10 +1,15 @@
 #!/bin/sh
 set -eu
 
-admin_user="${1:-clutts}"
+admin_user="${1:-}"
 container="${2:-nct}"
 
 [ -t 0 ] || { printf '%s\n' "Run this command from an interactive terminal." >&2; exit 1; }
+[ -n "$admin_user" ] || {
+    printf '%s\n' "Usage: sh $0 ADMIN_USERNAME [CONTAINER_NAME]" >&2
+    printf '%s\n' "For Administrator creation, replacement, rename, or reset, prefer scripts/nct-set-admin.sh." >&2
+    exit 2
+}
 docker inspect "$container" >/dev/null 2>&1 || { printf '%s\n' "Container $container was not found." >&2; exit 1; }
 
 terminal_state=$(stty -g)
