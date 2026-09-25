@@ -5,6 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+EXTERNAL_WAN_ROLES = {
+    "primary": "external_wan_gateway",
+    "secondary": "external_wan_gateway_secondary",
+}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -48,6 +54,34 @@ def get_external_wan_gateway(db_path: Path) -> dict | None:
     }
 
 
+def get_external_wan_gateways(db_path: Path) -> list[dict]:
+    """Return the shared WAN gateways in stable primary/secondary order."""
+    gateways: list[dict] = []
+    primary = get_external_wan_gateway(db_path)
+    if primary:
+        gateways.append({**primary, "slot": "primary"})
+    init_network_semantics_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        row = db.execute(
+            """SELECT node_id, device_name, device_address, interface_name,
+                      changed_at, changed_by
+               FROM network_semantics
+               WHERE role = 'external_wan_gateway_secondary'"""
+        ).fetchone()
+    if row is not None:
+        gateways.append({
+            "role": "external_wan_gateway_secondary",
+            "slot": "secondary",
+            "node_id": row[0],
+            "device_name": row[1],
+            "device_address": row[2],
+            "interface_name": row[3],
+            "changed_at": row[4],
+            "changed_by": row[5],
+        })
+    return gateways
+
+
 def set_external_wan_gateway(
     db_path: Path,
     *,
@@ -56,7 +90,11 @@ def set_external_wan_gateway(
     device_address: str,
     interface_name: str,
     changed_by: str,
+    slot: str = "primary",
 ) -> dict:
+    if slot not in EXTERNAL_WAN_ROLES:
+        raise ValueError("WAN gateway slot must be primary or secondary")
+    role = EXTERNAL_WAN_ROLES[slot]
     changed_at = utc_now()
     init_network_semantics_storage(db_path)
     with sqlite3.connect(db_path) as db:
@@ -65,7 +103,7 @@ def set_external_wan_gateway(
             INSERT INTO network_semantics (
                 role, node_id, device_name, device_address, interface_name,
                 changed_at, changed_by
-            ) VALUES ('external_wan_gateway', ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(role) DO UPDATE SET
                 node_id = excluded.node_id,
                 device_name = excluded.device_name,
@@ -75,20 +113,35 @@ def set_external_wan_gateway(
                 changed_by = excluded.changed_by
             """,
             (
-                node_id.strip(), device_name.strip(), device_address.strip(),
+                role, node_id.strip(), device_name.strip(), device_address.strip(),
                 interface_name.strip(), changed_at, changed_by.strip(),
             ),
         )
-    return get_external_wan_gateway(db_path)
+        db.execute(
+            "DELETE FROM network_semantics WHERE role = ? AND node_id = ?",
+            (
+                EXTERNAL_WAN_ROLES["secondary" if slot == "primary" else "primary"],
+                node_id.strip(),
+            ),
+        )
+    if slot == "primary":
+        return get_external_wan_gateway(db_path)
+    return next(
+        gateway for gateway in get_external_wan_gateways(db_path)
+        if gateway["slot"] == slot
+    )
 
 
-def clear_external_wan_gateway(db_path: Path) -> dict:
+def clear_external_wan_gateway(db_path: Path, slot: str = "primary") -> dict:
+    if slot not in EXTERNAL_WAN_ROLES:
+        raise ValueError("WAN gateway slot must be primary or secondary")
+    role = EXTERNAL_WAN_ROLES[slot]
     init_network_semantics_storage(db_path)
     with sqlite3.connect(db_path) as db:
         removed = db.execute(
-            "DELETE FROM network_semantics WHERE role = 'external_wan_gateway'"
+            "DELETE FROM network_semantics WHERE role = ?", (role,)
         ).rowcount
-    return {"cleared": bool(removed), "role": "external_wan_gateway"}
+    return {"cleared": bool(removed), "role": role, "slot": slot}
 
 
 def gateway_matches_analysis(gateway: dict | None, analysis: dict) -> bool:

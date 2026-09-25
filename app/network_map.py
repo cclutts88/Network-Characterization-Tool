@@ -1757,6 +1757,104 @@ def add_membership_edges(nodes: dict[str, dict], edges: dict[tuple[str, str, str
             break
 
 
+def add_point_to_point_edges(
+    nodes: dict[str, dict],
+    edges: dict[tuple[str, str, str], dict],
+    warnings: list[str],
+) -> None:
+    """Promote confirmed two-ended /30 and /31 segments to device links.
+
+    Only interface evidence on a directly connected subnet is eligible. Static
+    route next hops are intentionally excluded because they do not prove a
+    physical or point-to-point adjacency.
+    """
+    for subnet in sorted(
+        (node for node in nodes.values() if node.get("kind") == "subnet"),
+        key=lambda item: ip_sort_key(item.get("network")),
+    ):
+        try:
+            network = ipaddress.ip_network(str(subnet.get("network") or ""), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4 or network.prefixlen not in {30, 31}:
+            continue
+        endpoints: dict[str, dict] = {}
+        for edge in edges.values():
+            if edge.get("relation") != "directly_connected" or edge.get("target") != subnet["id"]:
+                continue
+            interface = nodes.get(str(edge.get("source") or ""))
+            if not interface or interface.get("kind") != "interface":
+                continue
+            owner_id = str(interface.get("device_id") or "")
+            owner = nodes.get(owner_id)
+            if not owner or owner.get("kind") not in {"device", "gateway"}:
+                continue
+            addresses = interface.get("addresses") or [interface.get("address")]
+            address = None
+            for candidate in addresses:
+                try:
+                    parsed = ipaddress.ip_interface(str(candidate)).ip
+                except ValueError:
+                    continue
+                if parsed in network:
+                    address = str(parsed)
+                    break
+            if not address:
+                continue
+            previous = endpoints.get(owner_id)
+            if previous and previous.get("conflict"):
+                continue
+            if previous and previous.get("address") != address:
+                warnings.append(
+                    f"Point-to-point segment {network} has conflicting interface addresses "
+                    f"for {owner.get('label') or owner_id}; no direct link was inferred."
+                )
+                endpoints[owner_id] = {"conflict": True}
+                continue
+            if not previous:
+                endpoints[owner_id] = {
+                    "owner_id": owner_id,
+                    "address": address,
+                    "interface_id": interface["id"],
+                    "interface_name": interface.get("interface") or interface.get("label") or "interface",
+                }
+        valid_endpoints = [item for item in endpoints.values() if not item.get("conflict")]
+        if len(valid_endpoints) > 2:
+            warnings.append(
+                f"Point-to-point segment {network} is connected to more than two network devices; "
+                "no direct link was inferred."
+            )
+            continue
+        if len(valid_endpoints) != 2 or any(item.get("conflict") for item in endpoints.values()):
+            continue
+        valid_endpoints.sort(
+            key=lambda item: (int(ipaddress.ip_address(item["address"])), item["owner_id"])
+        )
+        first, second = valid_endpoints
+        transit_key = (
+            first["owner_id"], second["owner_id"], f"transit_segment:{network}"
+        )
+        transit = edges.setdefault(transit_key, {
+            "id": f"edge:{len(edges) + 1}",
+            "source": first["owner_id"],
+            "target": second["owner_id"],
+            "relation": "transit_segment",
+            "label": str(network),
+            "confidence": "confirmed",
+            "evidence": f"Confirmed by both device interfaces on {network}",
+            "interface_label": True,
+        })
+        transit.update({
+            "network": str(network),
+            "source_interface_id": first["interface_id"],
+            "source_interface_name": first["interface_name"],
+            "source_interface_address": first["address"],
+            "target_interface_id": second["interface_id"],
+            "target_interface_name": second["interface_name"],
+            "target_interface_address": second["address"],
+        })
+
+
 def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
     """Retain scanned router/firewall/switch addresses in their owning subnet summary."""
     infrastructure_kinds = {"device", "gateway"}
@@ -1828,6 +1926,7 @@ def build_topology() -> dict:
     for node in identity_nodes:
         node["os_display"] = os_display(node)
     add_membership_edges(nodes, edges)
+    add_point_to_point_edges(nodes, edges, warnings)
     annotate_subnet_scan_observations(nodes)
     try:
         from app.saved_networks import list_saved_networks

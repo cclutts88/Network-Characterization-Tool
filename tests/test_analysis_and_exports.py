@@ -8,6 +8,7 @@ from app.network_map import (
     add_analysis_hosts,
     add_edge,
     add_membership_edges,
+    add_point_to_point_edges,
     annotate_subnet_scan_observations,
     apply_saved_network_names,
     apply_subnet_zone,
@@ -398,6 +399,44 @@ def test_lldp_neighbor_becomes_confirmed_device_to_device_map_link():
     assert edge["relation"] == "topology_neighbor"
     assert edge["confidence"] == "confirmed"
     assert edge["interface_label"] is True
+
+
+def test_two_confirmed_device_interfaces_create_one_point_to_point_link():
+    nodes, edges, warnings = {}, {}, []
+    source = {"kind": "configuration", "label": "device configs", "timestamp": None}
+    left = ensure_ip_node(nodes, "192.0.2.1", hostname="edge-a", role="router", source=source)
+    right = ensure_ip_node(nodes, "192.0.2.2", hostname="edge-b", role="router", source=source)
+    subnet = ensure_subnet_node(nodes, "10.0.0.0/31", source)
+    left_interface = ensure_interface_node(nodes, left, "eth0", "10.0.0.0/31", source)
+    right_interface = ensure_interface_node(nodes, right, "eth0", "10.0.0.1/31", source)
+    add_edge(edges, left_interface["id"], subnet["id"], "directly_connected", "eth0", "confirmed")
+    add_edge(edges, right_interface["id"], subnet["id"], "directly_connected", "eth0", "confirmed")
+
+    add_point_to_point_edges(nodes, edges, warnings)
+
+    transit = [edge for edge in edges.values() if edge["relation"] == "transit_segment"]
+    assert len(transit) == 1
+    assert transit[0]["source"] == left["id"]
+    assert transit[0]["target"] == right["id"]
+    assert transit[0]["network"] == "10.0.0.0/31"
+    assert transit[0]["source_interface_address"] == "10.0.0.0"
+    assert transit[0]["target_interface_address"] == "10.0.0.1"
+    assert warnings == []
+
+
+def test_static_route_next_hop_does_not_create_a_point_to_point_link():
+    nodes, edges, warnings = {}, {}, []
+    source = {"kind": "configuration", "label": "device config", "timestamp": None}
+    router = ensure_ip_node(nodes, "192.0.2.1", hostname="edge-a", role="router", source=source)
+    gateway = ensure_ip_node(nodes, "192.0.2.2", hostname="edge-b", role="router", source=source)
+    add_edge(
+        edges, router["id"], gateway["id"], "next_hop",
+        "10.20.0.0/16 via 192.0.2.2", "confirmed",
+    )
+
+    add_point_to_point_edges(nodes, edges, warnings)
+
+    assert not any(edge["relation"] == "transit_segment" for edge in edges.values())
 
 
 def test_collected_configuration_adds_lldp_link_to_complete_topology(tmp_path, monkeypatch):

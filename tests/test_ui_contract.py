@@ -815,11 +815,15 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert 'id="wanBoundaryInterface"' in html
     assert "wanBoundaryRail.id='wanBoundaryRail'" in html
     assert "function updateWanBoundaryMarker" in html
-    assert "active=Boolean(wanAnchor&&!hiddenNodeIds.has(wanAnchor.nodeId)&&!parkedNodeIds.has(wanAnchor.nodeId))" in html
+    assert "externalOrb=Boolean(wanAnchor&&externalWanGatewayId===wanAnchor.nodeId)" in html
+    assert "active=Boolean(wanAnchor&&!externalOrb&&!hiddenNodeIds.has(wanAnchor.nodeId)" in html
     assert "function updateWanUplinkGeometry" in html
     assert "function externalWanAttachmentId" in html
     assert "function wanUplinkSourceId" in html
-    assert ").filter(node=>node.id!==externalWanGatewayId)" in html
+    assert "function wanGatewayIdsForView" in html
+    assert "function applyExternalGatewaySemantics" in html
+    assert "externalWanGatewayIds=new Set()" in html
+    assert "Use as secondary External WAN gateway" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
     assert "idealScreenX=originX+sourceX*zoomLevel" in html
@@ -834,6 +838,13 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function setExternalWanGateway" in html
     assert "function clearExternalWanGateway" in html
     assert "externalWanGatewayId" in html
+    assert "function appendExternalWanOrb" in html
+    assert "class:'external-wan-ring'" in html
+    assert "class:'external-wan-device-core'" in html
+    assert "svgEl('textPath'" in html
+    assert "external-wan-top-${safeId}" in html
+    assert "external-wan-bottom-${safeId}" in html
+    assert "externalWanGatewayId!==wanAnchor.nodeId" in html
     assert 'id="hideSelection"' in html
     assert 'id="hiddenObjectsPanel"' in html
     assert 'id="hiddenObjectsList"' in html
@@ -865,8 +876,9 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function publishSelectedLayout" in html
     assert 'id="overlayMode"' in html
     assert 'id="transitVisibility"' in html
-    assert "/30 transit links: Hidden" in html
-    assert "pointToPoint30&&!showPointToPointTransit" in html
+    assert "/30 and /31 labels: Hidden" in html
+    assert "hide_label:!showPointToPointTransit" in html
+    assert "&& !edge.hide_label".replace(" ", "") in html.replace(" ", "")
     assert 'id="overlayLegend"' in html
     assert "function overlayClass" in html
     assert "function updateOverlayLegend" in html

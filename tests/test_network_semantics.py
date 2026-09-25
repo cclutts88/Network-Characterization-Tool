@@ -4,6 +4,7 @@ from app.network_semantics import (
     apply_external_gateway_role,
     clear_external_wan_gateway,
     get_external_wan_gateway,
+    get_external_wan_gateways,
     set_external_wan_gateway,
 )
 
@@ -60,3 +61,48 @@ def test_external_gateway_does_not_mark_a_different_device(tmp_path):
 
     assert "external_wan_gateway" not in result[0]
     assert "role" not in result[0]["interfaces"][0]
+
+
+def test_primary_and_secondary_wan_gateways_coexist_without_changing_legacy_primary(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    primary = set_external_wan_gateway(
+        db_path,
+        node_id="ip:10.0.0.1",
+        device_name="edge-a",
+        device_address="10.0.0.1",
+        interface_name="outside",
+        changed_by="operator",
+    )
+    secondary = set_external_wan_gateway(
+        db_path,
+        node_id="ip:10.0.0.2",
+        device_name="edge-b",
+        device_address="10.0.0.2",
+        interface_name="outside",
+        changed_by="operator",
+        slot="secondary",
+    )
+
+    assert get_external_wan_gateway(db_path) == primary
+    assert secondary["slot"] == "secondary"
+    assert [item["node_id"] for item in get_external_wan_gateways(db_path)] == [
+        "ip:10.0.0.1", "ip:10.0.0.2",
+    ]
+    assert clear_external_wan_gateway(db_path, slot="secondary")["cleared"] is True
+    assert get_external_wan_gateway(db_path) == primary
+
+
+def test_same_device_cannot_fill_both_wan_gateway_slots(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    values = {
+        "node_id": "ip:10.0.0.1",
+        "device_name": "edge-a",
+        "device_address": "10.0.0.1",
+        "interface_name": "outside",
+        "changed_by": "operator",
+    }
+    set_external_wan_gateway(db_path, **values)
+    set_external_wan_gateway(db_path, **values, slot="secondary")
+
+    assert get_external_wan_gateway(db_path) is None
+    assert [item["slot"] for item in get_external_wan_gateways(db_path)] == ["secondary"]

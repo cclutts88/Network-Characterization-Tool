@@ -40,6 +40,7 @@ from app.network_semantics import (
     apply_external_gateway_role,
     clear_external_wan_gateway,
     get_external_wan_gateway,
+    get_external_wan_gateways,
     init_network_semantics_storage,
     set_external_wan_gateway,
 )
@@ -234,6 +235,7 @@ class ExternalWanGatewayRequest(BaseModel):
     device_name: str = Field(default="", max_length=255)
     device_address: str = Field(default="", max_length=255)
     interface_name: str = Field(default="", max_length=255)
+    slot: Literal["primary", "secondary"] = "primary"
 
 
 class HostnameSelectionRequest(BaseModel):
@@ -2346,6 +2348,7 @@ def external_wan_gateway_semantic() -> dict:
     return {
         "status": "network_semantics_complete",
         "gateway": get_external_wan_gateway(DB_PATH),
+        "gateways": get_external_wan_gateways(DB_PATH),
     }
 
 
@@ -2362,14 +2365,18 @@ def update_external_wan_gateway_semantic(
             **payload.model_dump(),
             changed_by=changed_by,
         ),
+        "gateways": get_external_wan_gateways(DB_PATH),
     }
 
 
 @app.delete("/api/network-semantics/external-wan-gateway")
-def delete_external_wan_gateway_semantic() -> dict:
+def delete_external_wan_gateway_semantic(
+    slot: Literal["primary", "secondary"] = "primary",
+) -> dict:
     return {
         "status": "external_wan_gateway_cleared",
-        **clear_external_wan_gateway(DB_PATH),
+        **clear_external_wan_gateway(DB_PATH, slot=slot),
+        "gateways": get_external_wan_gateways(DB_PATH),
     }
 
 
