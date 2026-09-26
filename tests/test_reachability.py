@@ -1147,7 +1147,7 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
     monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_KEY", None)
     monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_VALUE", [])
 
-    monkeypatch.setattr(main, "get_external_wan_gateway", lambda db_path: None)
+    monkeypatch.setattr(main, "get_external_wan_gateways", lambda db_path: [])
     result = main._latest_device_reachability_evidence()
     cached = main._latest_device_reachability_evidence()
 
@@ -1198,6 +1198,131 @@ def test_reach_follows_each_retained_next_hop_without_inventing_devices():
     ]
     assert result["outcome"] == "Routed"
     assert not any("Path is partial" in item for item in result["caveats"])
+
+
+def test_external_reach_does_not_guess_between_multiple_site_edges():
+    mako = {
+        "run_id": "mako",
+        "device": {
+            "name": "MAKO-ENG-EDGE-RTR", "address": "175.0.92.22", "type": "router",
+        },
+        "interfaces": [{"name": "uplink", "network": "175.0.92.20/30"}],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "175.0.92.21"},
+            {"network": "0.0.0.0/0", "via": "175.0.92.21", "interface": "uplink"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    other_site = {
+        "run_id": "other",
+        "device": {"name": "NY-FW", "address": "125.64.15.50", "type": "firewall"},
+        "interfaces": [{"name": "outside", "network": "125.64.15.48/30"}],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "via": "125.64.15.49", "interface": "outside"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="33.107.4.2",
+        device_analyses=[mako, other_site],
+    )
+
+    assert result["outcome"] == "Unknown"
+    assert result["retained_objects"]["routes"] == []
+    assert result["retained_objects"]["selected_path_routes"] == []
+    assert "MAKO-ENG-EDGE-RTR" not in [
+        item["label"] for item in result["path"] if item["kind"] == "device"
+    ]
+    assert any("External WAN gateway" in item for item in result["caveats"])
+
+
+def test_external_reach_starts_only_at_designated_wan_gateway():
+    mako = {
+        "run_id": "mako",
+        "device": {
+            "name": "MAKO-ENG-EDGE-RTR", "address": "175.0.92.22", "type": "router",
+        },
+        "interfaces": [{"name": "uplink", "network": "175.0.92.20/30"}],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "175.0.92.21"},
+            {"network": "0.0.0.0/0", "via": "175.0.92.21", "interface": "uplink"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    afb_gateway = {
+        "run_id": "na",
+        "device": {"name": "NA-RTR", "address": "97.98.208.2", "type": "router"},
+        "external_wan_gateway": {"node_id": "ip:97.98.208.2"},
+        "interfaces": [
+            {"name": "wan", "network": "97.98.208.0/30", "role": "external"},
+            {"name": "afb", "network": "33.107.244.0/30"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "33.107.244.1", "interface": "afb"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    afb_edge = {
+        "run_id": "afb",
+        "device": {"name": "AFB-EDGE-RTR", "address": "33.107.244.1", "type": "router"},
+        "interfaces": [
+            {"name": "upstream", "network": "33.107.244.0/30", "address": "33.107.244.1"},
+            {"name": "inside", "network": "33.107.4.0/24"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "interface": "inside", "direct": True},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="33.107.4.2",
+        device_analyses=[mako, afb_gateway, afb_edge],
+    )
+
+    devices = [item["label"] for item in result["path"] if item["kind"] == "device"]
+    assert devices == ["NA-RTR", "AFB-EDGE-RTR"]
+    assert "MAKO-ENG-EDGE-RTR" not in devices
+
+
+def test_external_reach_uses_a_single_internet_labeled_interface():
+    na_gateway = {
+        "run_id": "na",
+        "device": {"name": "NA-RTR", "address": "97.98.208.2", "type": "router"},
+        "interfaces": [
+            {
+                "name": "eth0", "network": "97.98.208.0/30",
+                "zone": "Inet to NA rtr",
+            },
+            {"name": "eth1", "network": "33.107.244.0/30"},
+        ],
+        "route_analysis": {"routes": [{
+            "network": "33.107.4.0/24", "via": "33.107.244.1", "interface": "eth1",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+    mako = {
+        "run_id": "mako",
+        "device": {
+            "name": "MAKO-ENG-EDGE-RTR", "address": "175.0.92.22", "type": "router",
+        },
+        "interfaces": [{"name": "uplink", "network": "175.0.92.20/30"}],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "175.0.92.21"},
+            {"network": "0.0.0.0/0", "via": "175.0.92.21", "interface": "uplink"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="33.107.4.2",
+        device_analyses=[mako, na_gateway],
+    )
+
+    devices = [item["label"] for item in result["path"] if item["kind"] == "device"]
+    assert devices == ["NA-RTR"]
+    assert "MAKO-ENG-EDGE-RTR" not in devices
 
 
 def test_reach_uses_a_matching_route_after_the_legacy_500_route_boundary():

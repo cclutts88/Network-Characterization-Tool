@@ -2364,7 +2364,7 @@ def _latest_device_reachability_evidence() -> list[dict]:
             continue
         selected_records.append(record)
         seen_devices.add(device_key)
-    gateway = get_external_wan_gateway(DB_PATH)
+    gateways = get_external_wan_gateways(DB_PATH)
     cache_key = (
         id(device_collection_history),
         id(analyze_device_collection),
@@ -2376,7 +2376,7 @@ def _latest_device_reachability_evidence() -> list[dict]:
             )
             for record in selected_records
         ),
-        json.dumps(gateway, sort_keys=True, default=str) if gateway else "",
+        json.dumps(gateways, sort_keys=True, default=str) if gateways else "",
     )
     with _DEVICE_EVIDENCE_CACHE_LOCK:
         if cache_key == _DEVICE_EVIDENCE_CACHE_KEY:
@@ -2389,7 +2389,9 @@ def _latest_device_reachability_evidence() -> list[dict]:
         except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
             continue
         analyses.append(analysis)
-    result = apply_external_gateway_role(analyses, gateway)
+    result = analyses
+    for gateway in gateways:
+        result = apply_external_gateway_role(result, gateway)
     with _DEVICE_EVIDENCE_CACHE_LOCK:
         _DEVICE_EVIDENCE_CACHE_KEY = cache_key
         _DEVICE_EVIDENCE_CACHE_VALUE = result

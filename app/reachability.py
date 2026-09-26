@@ -138,6 +138,83 @@ def _default_route_interface(analysis: dict) -> str | None:
     return None
 
 
+def _external_ingress_analyses(
+    device_analyses: list[dict],
+) -> tuple[list[dict], bool]:
+    """Choose outside ingress only when retained evidence makes it unambiguous."""
+    transit = [item for item in device_analyses if _is_transit_device(item)]
+    designated = [item for item in transit if item.get("external_wan_gateway")]
+    if designated:
+        return designated, False
+
+    internet_labeled = []
+    for analysis in transit:
+        for interface in analysis.get("interfaces") or []:
+            label = " ".join(
+                str(interface.get(field) or "")
+                for field in ("zone", "description", "label")
+            )
+            if re.search(r"\b(?:internet|inet)\b", label, re.I):
+                internet_labeled.append(analysis)
+                break
+    if len(internet_labeled) == 1:
+        return internet_labeled, False
+    if len(internet_labeled) > 1:
+        return [], True
+
+    outside_role = [
+        item for item in transit
+        if any(
+            str(interface.get("role") or "").casefold() == "external"
+            for interface in item.get("interfaces") or []
+        )
+    ]
+    boundary_role = []
+    for analysis in outside_role:
+        others = [item for item in transit if item is not analysis]
+        for interface in analysis.get("interfaces") or []:
+            if str(interface.get("role") or "").casefold() != "external":
+                continue
+            try:
+                network = ipaddress.ip_network(
+                    str(interface.get("network") or ""), strict=False
+                )
+            except ValueError:
+                continue
+            attached_elsewhere = False
+            for other in others:
+                for other_interface in other.get("interfaces") or []:
+                    try:
+                        other_network = ipaddress.ip_network(
+                            str(other_interface.get("network") or ""), strict=False
+                        )
+                    except ValueError:
+                        continue
+                    if network.overlaps(other_network):
+                        attached_elsewhere = True
+                        break
+                if attached_elsewhere:
+                    break
+            if not attached_elsewhere:
+                boundary_role.append(analysis)
+                break
+    if len(boundary_role) == 1:
+        return boundary_role, False
+    if len(boundary_role) > 1:
+        return [], True
+    if len(outside_role) == 1:
+        return outside_role, False
+    if len(outside_role) > 1:
+        return [], True
+
+    default_route = [item for item in transit if _default_route_interface(item)]
+    if len(default_route) == 1:
+        return default_route, False
+    if len(default_route) > 1:
+        return [], True
+    return [], False
+
+
 def _source_attached(source: Endpoint, analysis: dict) -> bool:
     interfaces = analysis.get("interfaces") or []
     if _is_external_endpoint(source):
@@ -228,7 +305,10 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
     candidates = []
     excluded = []
     seen = set()
-    for analysis in device_analyses:
+    route_analyses = device_analyses
+    if _is_external_endpoint(source):
+        route_analyses, _ = _external_ingress_analyses(device_analyses)
+    for analysis in route_analyses:
         device = analysis.get("device") or {}
         for route in (analysis.get("route_analysis") or {}).get("routes") or []:
             network = str(route.get("network") or "")
@@ -255,7 +335,7 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                     "reason": "Switch management routes are not transit-path evidence unless Layer-3 forwarding is explicitly established.",
                 })
                 continue
-            if not _source_attached(source, analysis):
+            if not _is_external_endpoint(source) and not _source_attached(source, analysis):
                 continue
             key = (
                 str(device.get("address") or device.get("name") or ""),
@@ -286,12 +366,6 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                     analysis.get("external_wan_gateway")
                 ),
             })
-    if _is_external_endpoint(source) and any(
-        item.get("analyst_external_gateway") for item in candidates
-    ):
-        candidates = [
-            item for item in candidates if item.get("analyst_external_gateway")
-        ]
     return _rank_route_candidates(candidates), excluded
 
 
@@ -952,6 +1026,17 @@ def evaluate_reachability(
             value=source.value,
             external=True,
         )
+    external_ingress_ambiguous = False
+    ingress_analyses: list[dict] = []
+    if _is_external_endpoint(source):
+        ingress_analyses, external_ingress_ambiguous = _external_ingress_analyses(
+            transit_analyses
+        )
+        if external_ingress_ambiguous:
+            # A default route points out of a device; it does not prove that an
+            # unsolicited outside flow enters through that device. In a
+            # multi-edge network, do not apply unrelated site NAT or policy.
+            transit_analyses = []
     (
         destination_translations,
         destination_nat_unresolved,
@@ -976,7 +1061,8 @@ def evaluate_reachability(
         source_nat_unresolved,
         source_translation_conflict,
     ) = _source_nat_translations(
-        source, effective_destination, protocol, effective_port, transit_analyses
+        source, effective_destination, protocol, effective_port,
+        ingress_analyses if _is_external_endpoint(source) else transit_analyses,
     )
     translations = [*destination_translations, *source_translations]
     nat_unresolved = [*destination_nat_unresolved, *source_nat_unresolved]
@@ -998,6 +1084,17 @@ def evaluate_reachability(
     selected_path_routes, partial_path_caveat = _selected_route_chain(
         source, effective_destination, device_analyses, routes
     )
+    path_run_ids = {
+        str(item.get("run_id") or "") for item in selected_path_routes
+        if item.get("run_id")
+    }
+    policy_analyses = (
+        [
+            item for item in transit_analyses
+            if str(item.get("run_id") or "") in path_run_ids
+        ]
+        if path_run_ids else transit_analyses
+    )
     same_saved_network = bool(
         source_network and destination_network
         and source_network.get("saved_network_id") == destination_network.get("saved_network_id")
@@ -1010,11 +1107,17 @@ def evaluate_reachability(
         policy, policy_unresolved = [], []
     else:
         policy, policy_unresolved = _policy_decisions(
-            source, effective_destination, protocol, effective_port, transit_analyses,
+            source, effective_destination, protocol, effective_port, policy_analyses,
             flow_state,
         )
     evidence = []
     caveats = []
+    if external_ingress_ambiguous:
+        caveats.append(
+            "More than one retained router or firewall could be mistaken for the "
+            "outside entry point. Mark the actual External WAN gateway on the map "
+            "before NCT selects an Internet-origin path."
+        )
     if partial_path_caveat:
         caveats.append(partial_path_caveat)
     if source_external_inferred:
@@ -1258,7 +1361,13 @@ def evaluate_reachability(
     confidence = "low"
     explanation = "Retained evidence does not establish an end-to-end decision."
     actions = {item["action"] for item in policy}
-    if nat_unresolved or translation_conflict or source_translation_conflict or redirect_present:
+    if external_ingress_ambiguous:
+        outcome, confidence = "Unknown", "low"
+        explanation = (
+            "The outside entry point is ambiguous, so NCT did not guess an "
+            "Internet-origin path."
+        )
+    elif nat_unresolved or translation_conflict or source_translation_conflict or redirect_present:
         outcome, confidence = "Unknown", "low"
         explanation = "NAT changes or may change the selected flow before forwarded policy is evaluated."
     elif len(actions) > 1:
