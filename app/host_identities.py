@@ -8,6 +8,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.database import connect_database
+
 
 _HOSTNAME = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?$")
 _IP_HEADERS = {"ip", "ip_address", "ip address", "address", "host_ip"}
@@ -20,7 +22,7 @@ def _now() -> str:
 
 def init_host_identity_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_host_identities (
                    ip TEXT PRIMARY KEY,
@@ -143,7 +145,7 @@ def import_host_identities(
     init_host_identity_storage(db_path)
     imported_at = _now()
     created = updated = unchanged = 0
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         for identity in parsed["identities"]:
             row = db.execute(
                 """SELECT hostname, source_filename, imported_by, selection_source
@@ -191,7 +193,7 @@ def import_host_identities(
 
 def list_host_identities(db_path: Path) -> list[dict]:
     init_host_identity_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         rows = db.execute(
             "SELECT * FROM analyst_host_identities ORDER BY length(ip), ip"
@@ -217,7 +219,7 @@ def select_host_identity(
     observed_at = _now()
     source_filename = f"Hostname workspace · {source.replace('_', ' ').title()}"
     init_host_identity_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         current = db.execute(
             """SELECT hostname, selection_source, source_filename, imported_by, version
                FROM analyst_host_identities WHERE ip = ?""",
@@ -282,7 +284,7 @@ def select_host_identities(
         })
     init_host_identity_storage(db_path)
     saved = []
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         for item in prepared:
             current = db.execute(
                 "SELECT hostname, selection_source, version FROM analyst_host_identities WHERE ip = ?",

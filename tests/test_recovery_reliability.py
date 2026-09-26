@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import sqlite3
 import threading
@@ -91,6 +92,53 @@ def test_write_waits_for_short_lock_then_succeeds(tmp_path):
     thread.join(2)
     with connect_database(path) as db:
         assert db.execute('SELECT value FROM sample').fetchone() == (1,)
+
+
+def test_concurrent_writes_finish_without_lock_errors_or_lost_rows(tmp_path):
+    path = tmp_path/'test.db'
+    configure_database(path)
+    with connect_database(path) as db:
+        db.execute(
+            'CREATE TABLE stress_events '
+            '(worker INTEGER, sequence INTEGER, PRIMARY KEY (worker, sequence))'
+        )
+
+    worker_count = 10
+    writes_per_worker = 30
+    start = threading.Barrier(worker_count)
+
+    def write_events(worker: int) -> None:
+        start.wait(timeout=5)
+        for sequence in range(writes_per_worker):
+            with connect_database(path) as db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute(
+                    'INSERT INTO stress_events VALUES (?, ?)',
+                    (worker, sequence),
+                )
+                time.sleep(.001)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = [pool.submit(write_events, worker) for worker in range(worker_count)]
+        for future in futures:
+            future.result(timeout=20)
+
+    with connect_database(path) as db:
+        assert db.execute('SELECT COUNT(*) FROM stress_events').fetchone()[0] == 300
+        assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+        assert db.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+        assert db.execute('PRAGMA busy_timeout').fetchone()[0] == 30_000
+
+
+def test_application_database_calls_use_shared_lock_policy():
+    app_dir = Path(__file__).parents[1]/'app'
+    offenders = []
+    for path in app_dir.glob('*.py'):
+        if path.name == 'database.py':
+            continue
+        if 'sqlite3.connect(' in path.read_text(encoding='utf-8'):
+            offenders.append(path.name)
+    assert offenders == []
 
 
 def test_device_cache_reuses_and_invalidates_evidence_and_version(tmp_path, monkeypatch):

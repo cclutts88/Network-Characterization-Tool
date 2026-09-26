@@ -4,6 +4,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.database import connect_database
+
 
 EXTERNAL_WAN_ROLES = {
     "primary": "external_wan_gateway",
@@ -17,7 +19,7 @@ def utc_now() -> str:
 
 def init_network_semantics_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS network_semantics (
@@ -35,7 +37,7 @@ def init_network_semantics_storage(db_path: Path) -> None:
 
 def get_external_wan_gateway(db_path: Path) -> dict | None:
     init_network_semantics_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             """SELECT node_id, device_name, device_address, interface_name,
                       changed_at, changed_by
@@ -61,7 +63,7 @@ def get_external_wan_gateways(db_path: Path) -> list[dict]:
     if primary:
         gateways.append({**primary, "slot": "primary"})
     init_network_semantics_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             """SELECT node_id, device_name, device_address, interface_name,
                       changed_at, changed_by
@@ -97,7 +99,7 @@ def set_external_wan_gateway(
     role = EXTERNAL_WAN_ROLES[slot]
     changed_at = utc_now()
     init_network_semantics_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO network_semantics (
@@ -137,7 +139,7 @@ def clear_external_wan_gateway(db_path: Path, slot: str = "primary") -> dict:
         raise ValueError("WAN gateway slot must be primary or secondary")
     role = EXTERNAL_WAN_ROLES[slot]
     init_network_semantics_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         removed = db.execute(
             "DELETE FROM network_semantics WHERE role = ?", (role,)
         ).rowcount

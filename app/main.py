@@ -377,7 +377,7 @@ def init_storage() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     IMPORT_DIR.mkdir(parents=True, exist_ok=True)
     PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as db:
+    with connect_database(DB_PATH) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS imports (
                 sha256 TEXT PRIMARY KEY,
@@ -1668,7 +1668,7 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
         "source_filename": original_name,
         "coverage": analysis.get("coverage", {}),
     }
-    with sqlite3.connect(DB_PATH) as db:
+    with connect_database(DB_PATH) as db:
         db.execute(
             """
             INSERT OR IGNORE INTO imports (
@@ -2865,7 +2865,7 @@ def compare_scan_run_to_previous_scope(run_id: str) -> dict:
 
 @app.get("/api/imports/{sha256}/raw")
 def download_imported_xml(sha256: str) -> FileResponse:
-    with sqlite3.connect(DB_PATH) as db:
+    with connect_database(DB_PATH) as db:
         row = db.execute(
             "SELECT filename, stored_path FROM imports WHERE sha256 = ?", (sha256,)
         ).fetchone()

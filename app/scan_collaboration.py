@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+from app.database import connect_database
+
 
 class DraftConflict(RuntimeError):
     pass
@@ -17,7 +19,7 @@ def utc_now() -> str:
 
 def init_scan_collaboration_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_scan_drafts (
                 owner TEXT PRIMARY KEY,
@@ -43,7 +45,7 @@ def init_scan_collaboration_storage(db_path: Path) -> None:
 
 def get_scan_draft(db_path: Path, owner: str) -> dict | None:
     init_scan_collaboration_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT snapshot_json, version, updated_at FROM analyst_scan_drafts WHERE owner = ?",
             (owner,),
@@ -68,7 +70,7 @@ def save_scan_draft(
     init_scan_collaboration_storage(db_path)
     changed_at = utc_now()
     payload = json.dumps(snapshot, sort_keys=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT version FROM analyst_scan_drafts WHERE owner = ?", (owner,)
         ).fetchone()
@@ -99,7 +101,7 @@ def save_scan_draft(
 
 def delete_scan_draft(db_path: Path, owner: str) -> bool:
     init_scan_collaboration_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         removed = db.execute(
             "DELETE FROM analyst_scan_drafts WHERE owner = ?", (owner,)
         ).rowcount
@@ -120,7 +122,7 @@ def append_scan_audit(
     actor = str(actor or "system").strip()[:100] or "system"
     event = str(event or "update").strip()[:64] or "update"
     details = str(details or "").strip()[:500]
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         cursor = db.execute(
             "INSERT INTO scan_run_audit (run_id, event, actor, changed_at, details) VALUES (?, ?, ?, ?, ?)",
             (run_id, event, actor, changed_at, details),
@@ -138,7 +140,7 @@ def append_scan_audit(
 def scan_audit_history(db_path: Path, run_id: str, limit: int = 200) -> list[dict]:
     init_scan_collaboration_storage(db_path)
     limit = max(1, min(int(limit), 1000))
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         return [
             dict(row)

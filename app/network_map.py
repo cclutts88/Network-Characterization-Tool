@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from app.database import connect_database
 from app.device_configs import CONFIG_DIR, active_configuration_text
 from app.mac_enrichment import (
     lookup_oui_vendor,
@@ -590,18 +591,14 @@ def add_analysis_hosts(
 
 
 def imported_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
-    db = None
     try:
-        db = sqlite3.connect(DB_PATH)
-        rows = db.execute(
-            "SELECT sha256, filename, imported_at, analysis_json FROM imports "
-            "ORDER BY imported_at DESC LIMIT 200"
-        ).fetchall()
+        with connect_database(DB_PATH) as db:
+            rows = db.execute(
+                "SELECT sha256, filename, imported_at, analysis_json FROM imports "
+                "ORDER BY imported_at DESC LIMIT 200"
+            ).fetchall()
     except sqlite3.Error:
         return 0
-    finally:
-        if db is not None:
-            db.close()
     count = 0
     for sha256, filename, imported_at, analysis_json in rows:
         try:
@@ -682,17 +679,13 @@ def parse_nmap_xml(path: Path) -> list[dict]:
 
 
 def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
-    db = None
     try:
-        db = sqlite3.connect(DB_PATH)
-        rows = db.execute(
-            "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
-        ).fetchall()
+        with connect_database(DB_PATH) as db:
+            rows = db.execute(
+                "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
+            ).fetchall()
     except sqlite3.Error:
         return 0
-    finally:
-        if db is not None:
-            db.close()
     count = 0
     for (manifest_json,) in rows:
         try:

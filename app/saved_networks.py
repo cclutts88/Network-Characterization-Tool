@@ -9,6 +9,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.database import connect_database
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -114,7 +116,7 @@ class SavedNetworkArchive(BaseModel):
 
 def init_saved_network_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             CREATE TABLE IF NOT EXISTS saved_networks (
@@ -175,7 +177,7 @@ def _select_sql() -> str:
 
 def get_saved_network(saved_network_id: str, db_path: Path) -> dict | None:
     init_saved_network_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             f"{_select_sql()} WHERE saved_network_id = ?", (saved_network_id,)
         ).fetchone()
@@ -184,7 +186,7 @@ def get_saved_network(saved_network_id: str, db_path: Path) -> dict | None:
 
 def _overlap_warnings(cidr: str, saved_network_id: str | None, db_path: Path) -> list[dict]:
     candidate = ipaddress.ip_network(cidr)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute(
             "SELECT saved_network_id, name, cidr FROM saved_networks WHERE active = 1"
         ).fetchall()
@@ -221,7 +223,7 @@ def _with_warnings(record: dict, db_path: Path, *, normalized_from: str | None =
 def list_saved_networks(db_path: Path, *, include_archived: bool = False) -> list[dict]:
     init_saved_network_storage(db_path)
     where = "" if include_archived else " WHERE active = 1"
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute(
             f"{_select_sql()}{where} ORDER BY active DESC, lower(name)"
         ).fetchall()
@@ -241,7 +243,7 @@ def create_saved_network(request: SavedNetworkCreate, db_path: Path) -> dict:
     timestamp = utc_now()
     saved_network_id = uuid.uuid4().hex
     try:
-        with sqlite3.connect(db_path) as db:
+        with connect_database(db_path) as db:
             db.execute(
                 """
                 INSERT INTO saved_networks (
@@ -290,7 +292,7 @@ def update_saved_network(
     updated["tags"] = _clean_tags(updated.get("tags") or [])
     timestamp = utc_now()
     try:
-        with sqlite3.connect(db_path) as db:
+        with connect_database(db_path) as db:
             db.execute(
                 """
                 UPDATE saved_networks
@@ -325,7 +327,7 @@ def archive_saved_network(
     if current is None:
         raise KeyError("Saved Network not found")
     timestamp = utc_now()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE saved_networks

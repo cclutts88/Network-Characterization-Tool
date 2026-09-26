@@ -10,6 +10,8 @@ import re
 import secrets
 import sqlite3
 
+from app.database import connect_database
+
 
 SESSION_COOKIE = "nct_session"
 PASSWORD_ROUNDS = 600_000
@@ -52,7 +54,7 @@ def _password_hash(password: str, salt: bytes | None = None) -> tuple[str, str]:
 
 
 def init_auth_storage(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_users (
                 username TEXT PRIMARY KEY,
@@ -93,7 +95,7 @@ def init_auth_storage(db_path: Path) -> None:
             bootstrap_password = Path(password_file).read_text(encoding="utf-8").rstrip("\r\n")
         except OSError as exc:
             raise RuntimeError("NCT_BOOTSTRAP_PASSWORD_FILE is not readable") from exc
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         count = int(db.execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
     if count == 0:
         if not bootstrap_user or not bootstrap_password:
@@ -130,7 +132,7 @@ def create_user(
     actor = str(created_by or "").strip()[:100] or "system"
     salt, digest = _password_hash(password)
     changed_at = utc_now().isoformat()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         try:
             db.execute(
                 """INSERT INTO analyst_users (
@@ -153,7 +155,7 @@ def verify_credentials(db_path: Path, username: object, password: str) -> dict |
         username = normalize_username(username)
     except ValueError:
         return None
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT * FROM analyst_users WHERE username = ?", (username,)).fetchone()
     if row is None or row["disabled"]:
@@ -178,7 +180,7 @@ def create_session(db_path: Path, username: str) -> tuple[str, str]:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     created = utc_now()
     expires = created + timedelta(hours=session_hours())
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             "INSERT INTO analyst_sessions (token_hash, username, created_at, expires_at) VALUES (?, ?, ?, ?)",
             (token_hash, username, created.isoformat(), expires.isoformat()),
@@ -192,7 +194,7 @@ def session_identity(db_path: Path, token: str | None) -> dict | None:
         return None
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = utc_now().isoformat()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             """SELECT u.username, u.display_name, u.role, s.expires_at
@@ -206,7 +208,7 @@ def session_identity(db_path: Path, token: str | None) -> dict | None:
 def end_session(db_path: Path, token: str | None) -> None:
     if not token:
         return
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             "DELETE FROM analyst_sessions WHERE token_hash = ?",
             (hashlib.sha256(token.encode()).hexdigest(),),
@@ -214,7 +216,7 @@ def end_session(db_path: Path, token: str | None) -> None:
 
 
 def list_users(db_path: Path) -> list[dict]:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
             "SELECT username, display_name, role, disabled, created_at, created_by FROM analyst_users ORDER BY username"
@@ -227,7 +229,7 @@ def set_user_disabled(
     username = normalize_username(username)
     actor_name = str(actor or "").strip()[:100] or "system"
     changed_at = utc_now().isoformat()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT username, display_name, role, disabled FROM analyst_users WHERE username = ?",
@@ -268,7 +270,7 @@ def reset_user_password(
     actor_name = str(actor or "").strip()[:100] or "system"
     salt, digest = _password_hash(password)
     changed_at = utc_now().isoformat()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         exists = db.execute(
             "SELECT 1 FROM analyst_users WHERE username = ?", (username,)
         ).fetchone()
@@ -288,7 +290,7 @@ def reset_user_password(
 
 def auth_audit_history(db_path: Path, limit: int = 200) -> list[dict]:
     limit = max(1, min(int(limit), 1000))
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         return [
             dict(row)

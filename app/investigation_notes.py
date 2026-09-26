@@ -6,6 +6,8 @@ from pathlib import Path
 import sqlite3
 import uuid
 
+from app.database import connect_database
+
 
 class NoteConflict(ValueError):
     pass
@@ -17,7 +19,7 @@ def utc_now() -> str:
 
 def init_note_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_investigation_notes (
                 note_id TEXT PRIMARY KEY,
@@ -75,7 +77,7 @@ def _decode(row: sqlite3.Row) -> dict:
 
 def list_notes(db_path: Path, owner: str, page: str | None = None) -> list[dict]:
     init_note_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         rows = db.execute(
             """SELECT * FROM analyst_investigation_notes
@@ -148,7 +150,7 @@ def save_note(
         raise ValueError("Note context is too large")
     changed_at = utc_now()
     init_note_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         _validate_parent(db, owner=owner, parent_id=parent_id, note_id=note_id)
         if note_id:
@@ -223,7 +225,7 @@ def delete_note(
     db_path: Path, *, owner: str, note_id: str, expected_version: int
 ) -> dict:
     init_note_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
@@ -275,7 +277,7 @@ def share_note(
     page: str | None = None,
 ) -> dict:
     init_note_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
