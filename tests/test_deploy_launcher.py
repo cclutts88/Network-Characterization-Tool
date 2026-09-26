@@ -22,6 +22,7 @@ def run_launcher_preflight(
     overlap: bool = False,
     thread_probe: str = "pass",
     firewall: str = "none",
+    elevated: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -113,6 +114,14 @@ esac
         encoding="utf-8",
     )
     fake_ss.chmod(0o755)
+    fake_id = fake_bin / "id"
+    fake_id.write_text(
+        "#!/bin/sh\n"
+        "if [ \"${1:-}\" = \"-u\" ]; then printf '%s\\n' \"${FAKE_USER_ID:-0}\"; exit 0; fi\n"
+        "PATH=/usr/bin:/bin id \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
     if firewall.startswith("firewalld"):
         fake_firewalld = fake_bin / "firewall-cmd"
         fake_firewalld.write_text(
@@ -150,6 +159,7 @@ esac
     environment["FAKE_THREAD_PROBE"] = thread_probe
     environment["FAKE_FIREWALL_STATE"] = "inactive" if firewall.endswith("inactive") else "active"
     environment["FAKE_FIREWALL_RULE"] = "present" if firewall.endswith("present") else "missing"
+    environment["FAKE_USER_ID"] = "0" if elevated else "1000"
     if compose_mode == "plugin":
         environment["FAKE_COMPOSE_PLUGIN"] = "yes"
     return subprocess.run(
@@ -590,6 +600,27 @@ def test_firewall_preflight_detects_an_existing_range_rule_without_duplication(t
     log_text = next((tmp_path / "firewall-present" / "state" / "logs").glob("deploy-*.log")).read_text()
     assert "firewall_rule_status=present" in log_text
     assert "firewall_changed=no" in log_text
+
+
+def test_firewall_change_requires_an_elevated_shell(tmp_path):
+    completed = run_launcher_preflight(
+        tmp_path / "firewall-not-elevated",
+        "--profile",
+        "test",
+        "--access",
+        "lan",
+        "--bind",
+        "10.20.30.40",
+        "--source-cidr",
+        "10.20.30.0/24",
+        "--configure-firewall",
+        "--image",
+        "nct:0.14.0-test",
+        firewall="firewalld-present",
+        elevated=False,
+    )
+    assert completed.returncode == 1
+    assert "requires an elevated/root shell" in completed.stderr
 
 
 def test_firewall_preflight_reports_missing_and_inactive_managers(tmp_path):
