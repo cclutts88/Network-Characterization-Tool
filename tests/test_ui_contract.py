@@ -694,6 +694,9 @@ def test_reachability_paths_have_color_key_and_visibility_toggles():
     assert ".role-blocked" in reach_html
     assert 'id="reachPathKey"' in map_html
     assert "function visibleReachPathOptions" in map_html
+    assert "Array.isArray(configured)?configured:[]" in map_html
+    assert "if(!Array.isArray(configured)&&active)saved.add(active)" in map_html
+    assert "||!reachFocus.visible_path_ids.length" not in map_html
     assert "reachPathColors" in map_html
     assert "reach-path-toggle" in map_html
     assert "Show all paths" in map_html
@@ -888,7 +891,8 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "lockedNodeIds=new Set()" in html
     assert "lockedNodeIds.has(node.id)" in html
     assert "knownNodeIds:[...topologyParkingUnitIds()]" in html
-    assert "snapshot.knownNodeIds||[...(snapshot.manualPositions||[]).map(entry=>entry[0])" in html
+    assert "fallbackPositions=[...(snapshot.savedLayoutPositions||[]),...(snapshot.manualPositions||[])]" in html
+    assert "snapshot.knownNodeIds||[...fallbackPositions.map(entry=>entry[0])" in html
     assert "function protectLockedLayoutFromNewObjects" in html
     assert "moved to the parking lot to protect the locked layout" in html
     assert "function clearUnlockedManualPositions" in html
@@ -928,8 +932,22 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "Mark as External WAN gateway" in html
     assert "function setExternalWanGateway" in html
     assert "function clearExternalWanGateway" in html
+    assert "function resolveExternalGatewayNodeId" in html
+    assert "function selectedGatewayInterfaceNames" in html
+    assert "external_wan_gateways:externalWanGateways.map" in html
+    assert "interface_names:selectedGatewayInterfaceNames(gateway)" in html
+    assert "seenGatewayIds=new Set()" in html
+    assert "seenGatewayIds.has(gateway.node_id)" in html
+    assert "interface_names:interfaceNames" in html
+    assert "Confirmed WAN interfaces" in html
+    assert "No parsed address" in html
     assert "externalWanGatewayId" in html
     assert "function appendExternalWanOrb" in html
+    assert "function externalWanInterfaceDetails" in html
+    assert "externalWanGateways.find(item=>item.node_id===node.id)" in html
+    assert "'SECONDARY EXTERNAL WAN':'PRIMARY EXTERNAL WAN'" in html
+    assert "if(isExternalWan)appendExternalWanOrb" in html
+    assert "secondary-wan-orb" in html
     assert "class:'external-wan-ring'" in html
     assert "class:'external-wan-device-core'" in html
     assert "svgEl('textPath'" in html
@@ -958,9 +976,14 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function initializeNamedLayouts" in html
     assert "function setSelectedLayoutDefault" in html
     assert "defaultLayoutStorageKey='nct-map-default-layout-v1'" in html
-    assert "if(editMode)for(const [id,box] of currentPositions)" in html
-    assert "manual.x+size.w+30" in html
-    assert "manual.y+size.h+30" in html
+    assert "if(editMode)for(const [id,box] of currentPositions)" not in html
+    assert "capturePresentation(includeGeneratedPositions=false)" in html
+    assert "if(includeGeneratedPositions)for(const [id,value] of currentPositions)" in html
+    assert "const snapshot=capturePresentation(true)" in html
+    assert "function finalizeWebLayout" in html
+    assert "new Set([...model.infrastructureIds,...manualPositions.keys()])" in html
+    assert "saved.x+size.w+30" in html
+    assert "saved.y+size.h+30" in html
     assert "'/api/workspaces/layouts'" in html
     assert "serverWorkspaceAnalyst" in html
     assert "expected_version" in html
@@ -1206,6 +1229,125 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "Confirmed identity" in html
     assert "LLDP/CDP identity" in html
     assert "edge.relation==='topology_neighbor'" in html
+
+
+def test_network_map_auto_layouts_keep_the_routing_core_separate_from_endpoint_branches():
+    html = network_map_page().body.decode()
+    web_layout = html.split("function webLayout", 1)[1].split(
+        "function applyManualLayoutPositions", 1
+    )[0]
+    hierarchy_layout = html.split("function hierarchyLayout", 1)[1].split(
+        "function layoutForView", 1
+    )[0]
+
+    assert "function buildTopologyLayoutModel" in html
+    assert "function isEndpointHost" in html
+    assert "topology.nodes.filter(isEndpointHost)" in html
+    assert "!isEndpointHost(node)&&node.kind!=='interface'" in html
+    assert "node.kind==='gateway'||externalWanGatewayIds.has(node.id)" in html
+    assert "if(externalWanGatewayIds.has(node.id))return{w:238,h:238" in html
+    assert "infrastructure=graph.ordered.filter(isLayoutInfrastructure)" in html
+    assert "endpointRootsByOwner" in html
+    assert "isLargeLayoutBranch" in html
+    assert "rootCenters.set(roots[0],center)" in web_layout
+    assert "if(!roots.length){const orphanRoots=" in web_layout
+    assert "placeWebEndpointBranch(model,positions,orphanRoots[0],center,0,0" in web_layout
+    assert "large?['left','right']:['top','bottom','left','right']" in web_layout
+    assert "sideLoad[value]<sideLoad[best]" in web_layout
+    assert "fixedIds=new Set(roots)" in web_layout
+    assert "fixedIds.add(id)" not in web_layout
+    assert "for(let step=0;step<220;step++)" not in web_layout
+    assert "hierarchyPlaceInfrastructureRows" in hierarchy_layout
+    assert "sideLoad.left<=sideLoad.right?'left':'right'" in hierarchy_layout
+    assert "smallRoots.push({root,owner:owner.id})" in hierarchy_layout
+    assert "const levels=new Map()" not in hierarchy_layout
+    assert "totalWidth=items.reduce" not in hierarchy_layout
+    assert "layoutPositionExtent(positions,width,height)" in html
+    assert "finalizeWebLayout" in web_layout
+    assert "applyManualLayoutPositions" in hierarchy_layout
+    assert "function resolvePostCompoundOverlaps" in html
+    renderer = html.split("function renderMap", 1)[1].split(
+        "function formatSource", 1
+    )[0]
+    assert renderer.index("applyGatewayCompoundLayout") < renderer.index(
+        "resolvePostCompoundOverlaps"
+    )
+    assert renderer.index("resolvePostCompoundOverlaps") < renderer.index(
+        "layoutPositionExtent"
+    )
+    assert "...manualPositions.keys(),...lockedNodeIds,...externalWanGatewayIds" in renderer
+
+
+def test_network_map_labels_an_inferred_gateway_layout_as_provisional():
+    html = network_map_page().body.decode()
+    model = html.split("function buildTopologyLayoutModel", 1)[1].split(
+        "function setLayoutCenter", 1
+    )[0]
+    warning = html.split("function updateProvisionalLayoutWarning", 1)[1].split(
+        "async function setExternalWanGateway", 1
+    )[0]
+    renderer = html.split("function renderMap", 1)[1].split(
+        "function formatSource", 1
+    )[0]
+
+    assert 'id="provisionalLayoutWarning"' in html
+    assert "Provisional automatic layout." in html
+    assert "before treating this layout as authoritative" in html
+    assert (
+        "primaryRootVisible=Boolean(externalWanGatewayId&&wanRoots.includes(externalWanGatewayId))"
+        in model
+    )
+    assert "provisionalLayoutRootId=primaryRootVisible||!preferredRoots.length?null:preferredRoots[0]" in model
+    assert "root=provisionalLayoutRootId" in warning
+    assert "No usable primary External WAN gateway is present in this map" in warning
+    assert "banner.hidden=true;banner.textContent=''" in warning
+    assert "Use as primary External WAN gateway" in warning
+    assert "updateProvisionalLayoutWarning(view)" in renderer
+    assert "provisionalLayoutRootId=null;updateProvisionalLayoutWarning(null)" in renderer
+
+
+def test_network_map_distinguishes_gateway_locks_from_explicit_layout_locks():
+    html = network_map_page().body.decode()
+    semantics = html.split("function applyExternalGatewaySemantics", 1)[1].split(
+        "function updateProvisionalLayoutWarning", 1
+    )[0]
+    restore = html.split("function restorePresentation", 1)[1].split(
+        "function undoPresentation", 1
+    )[0]
+
+    assert "semanticGatewayLockedNodeIds=new Set()" in html
+    assert "explicitLockedNodeIds=new Set()" in html
+    assert "previousSemanticLocks=new Set(semanticGatewayLockedNodeIds)" in semantics
+    assert "!nextGatewayIds.has(id)&&!explicitLockedNodeIds.has(id)" in semantics
+    assert "lockedNodeIds.delete(id)" in semantics
+    assert "semanticGatewayLockedNodeIds.add(gateway.node_id)" in semantics
+    assert "explicitLockedNodeIds:[...explicitLockedNodeIds]" in html
+    assert "restoredExplicitLocks=snapshot.explicitLockedNodeIds||" in restore
+    assert "for(const id of semanticGatewayLockedNodeIds)lockedNodeIds.add(id)" in restore
+    assert "hiddenNodeIds.delete(id);parkedNodeIds.delete(id)" in restore
+
+
+def test_saved_map_layout_restores_the_saved_workspace_size():
+    html = network_map_page().body.decode()
+    capture = html.split("function capturePresentation", 1)[1].split(
+        "function updateHistoryButtons", 1
+    )[0]
+    restore = html.split("function restorePresentation", 1)[1].split(
+        "function undoPresentation", 1
+    )[0]
+
+    assert "workspaceAreaScale" in capture
+    assert "workspaceAreaScale=Math.max(1,Number(snapshot.workspaceAreaScale)||4)" in restore
+    assert "$('workspaceSize').value=String(workspaceAreaScale)" in restore
+    assert "workspaceAreaScale=4" not in restore
+    assert "manualPositions.has(id)||externalWanGatewayIds.has(id)" in html
+    assert "savedLayoutPositions=new Map()" in html
+    assert "savedLayoutPositions:[...savedPositions]" in capture
+    assert "manualPositions:[...manualPositions]" in capture
+    assert "replaceMapContents(savedLayoutPositions,snapshot.savedLayoutPositions)" in restore
+    assert "const snapshot=capturePresentation(true)" in html
+    assert "...manualPositions.keys()" in html
+    assert "...savedLayoutPositions.keys()" not in html
 
 
 def test_automated_and_imported_results_share_the_same_renderer():
