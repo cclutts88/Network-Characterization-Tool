@@ -35,6 +35,7 @@ from app.reachability import (
     build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
+    evaluate_reachability_range,
     policy_rule_context,
     simulate_proposed_policy_control,
     simulate_proposed_route_control,
@@ -2520,17 +2521,23 @@ def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict
 @app.post("/api/reachability/evaluate")
 def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
     try:
-        return evaluate_reachability(
-            source_text=query.source,
-            destination_text=query.destination,
-            protocol=query.protocol,
-            port=query.port,
-            flow_state=query.flow_state,
-            source_external=query.source_external,
-            hunting=analyze_hunting_network(),
-            saved_networks=list_saved_networks(DB_PATH),
-            device_analyses=_latest_device_reachability_evidence(),
-        )
+        values = {
+            "source_text": query.source,
+            "destination_text": query.destination,
+            "protocol": query.protocol,
+            "port": query.port,
+            "flow_state": query.flow_state,
+            "source_external": query.source_external,
+            "hunting": analyze_hunting_network(),
+            "saved_networks": list_saved_networks(DB_PATH),
+            "device_analyses": _latest_device_reachability_evidence(),
+        }
+        destination = query.destination.strip()
+        if "/" in destination:
+            parsed = ipaddress.ip_network(destination, strict=False)
+            if parsed.version == 4 and parsed.num_addresses > 1:
+                return evaluate_reachability_range(**values)
+        return evaluate_reachability(**values)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 

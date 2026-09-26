@@ -91,6 +91,40 @@ def test_reachability_api_returns_json_for_explicit_external_address(monkeypatch
     assert response.json()["query"]["source_external"] is True
 
 
+def test_reachability_api_dispatches_destination_cidr_to_evidence_backed_range(monkeypatch):
+    devices = [{
+        "run_id": "f" * 32,
+        "device": {"name": "Edge", "address": "198.51.100.1", "type": "router"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "inside", "network": "10.20.0.0/16", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "10.20.0.0/16", "interface": "inside", "direct": True, "protocol": "connected"},
+            {"network": "10.30.0.0/16", "via": "198.51.100.2", "protocol": "static"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }]
+    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: {"hosts": [], "findings": []})
+    monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
+    monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: devices)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/reachability/evaluate",
+            json={
+                "source": "Internet", "destination": "10.0.0.0/8",
+                "protocol": "tcp", "port": 22,
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "reachability_range_analysis_complete"
+    assert result["grouping_prefix"] == 16
+    assert [item["network"] for item in result["candidates"]] == ["10.20.0.0/16"]
+
+
 def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
     hunting = {"hosts": [], "findings": []}
     saved = [{"saved_network_id": "one", "name": "One", "cidr": "10.0.0.0/24"}]

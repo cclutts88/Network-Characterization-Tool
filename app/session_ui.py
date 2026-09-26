@@ -26,11 +26,11 @@ SESSION_SCRIPT = r"""
     if (!document.getElementById('nct-clearable-style')) {
       const style = document.createElement('style');
       style.id = 'nct-clearable-style';
-      style.textContent = '.nct-clearable-wrap{position:relative;display:block;min-width:0}.nct-clearable-wrap>input{width:100%!important;padding-right:36px!important}.nct-input-clear{position:absolute!important;top:50%!important;right:6px!important;width:25px!important;height:25px!important;min-width:25px!important;margin:0!important;padding:0!important;border:0!important;border-radius:50%!important;background:transparent!important;color:#9eb0b8!important;font:700 18px/25px system-ui!important;transform:translateY(-50%)!important;cursor:pointer!important}.nct-input-clear:hover,.nct-input-clear:focus-visible{background:#1d3946!important;color:#edf6fb!important;outline:1px solid #57d6bf!important}.nct-input-clear[hidden]{display:none!important}.map-toolbar>.nct-clearable-wrap{flex:1 1 240px}.map-toolbar>.nct-clearable-wrap input{flex:none!important}';
+      style.textContent = '.nct-clearable-wrap{position:relative;display:block;min-width:0}.nct-clearable-wrap>input{width:100%!important;padding-right:36px!important}.nct-clearable-wrap>input[type="search"]::-webkit-search-cancel-button,.nct-clearable-wrap>input[type="search"]::-webkit-search-decoration{display:none!important;-webkit-appearance:none!important;appearance:none!important}.nct-input-clear{position:absolute!important;top:50%!important;right:6px!important;width:25px!important;height:25px!important;min-width:25px!important;margin:0!important;padding:0!important;border:0!important;border-radius:50%!important;background:transparent!important;color:#9eb0b8!important;font:700 18px/25px system-ui!important;transform:translateY(-50%)!important;cursor:pointer!important}.nct-input-clear:hover,.nct-input-clear:focus-visible{background:#1d3946!important;color:#edf6fb!important;outline:1px solid #57d6bf!important}.nct-input-clear[hidden]{display:none!important}.map-toolbar>.nct-clearable-wrap{flex:1 1 240px}.map-toolbar>.nct-clearable-wrap input{flex:none!important}';
       document.head.append(style);
     }
     const enhance = input => {
-      if (!(input instanceof HTMLInputElement) || input.closest('.clearable,.nct-clearable-wrap') || input.classList.contains('nct-note-search')) return;
+      if (!(input instanceof HTMLInputElement) || input.closest('.clearable,.nct-clearable-wrap,.network-search-control') || input.classList.contains('nct-note-search')) return;
       const parent = input.parentNode;
       if (!parent) return;
       const wrapper = document.createElement('span');

@@ -1288,6 +1288,12 @@ def evaluate_reachability(
     elif same_saved_network:
         outcome, confidence = "Local", "medium"
         explanation = "Source and destination are within the same Saved Network. Host firewall and local segmentation may still affect access."
+    elif partial_path_caveat:
+        outcome, confidence = "Unknown", "low"
+        explanation = (
+            "Retained routing evidence establishes only a partial path; the next "
+            "forwarding device could not be proven."
+        )
     elif routes:
         outcome, confidence = "Routed", "medium"
         explanation = "A retained route covers the destination, but no exact allow or deny policy was established."
@@ -1391,6 +1397,444 @@ def evaluate_reachability(
             "coverage_proofs": 1 if service["state"] == "not_exposed" else 0,
             "evidence": len(evidence),
         },
+    }
+
+
+def _range_group_prefix(network: ipaddress.IPv4Network) -> int:
+    """Use the next octet boundary so a broad query stays bounded to 256 rows."""
+    if network.prefixlen >= 24:
+        return 32
+    return min(24, ((network.prefixlen // 8) + 1) * 8)
+
+
+def _overlap_network(
+    candidate: ipaddress.IPv4Network, target: ipaddress.IPv4Network
+) -> ipaddress.IPv4Network | None:
+    if not candidate.overlaps(target):
+        return None
+    return candidate if candidate.subnet_of(target) else target
+
+
+def _ipv4_network(value: object) -> ipaddress.IPv4Network | None:
+    try:
+        network = ipaddress.ip_network(str(value or "").strip(), strict=False)
+    except ValueError:
+        return None
+    return network if network.version == 4 else None
+
+
+def _range_port_matches(specification: object, port: int) -> bool:
+    text = str(specification or "").strip()
+    if not text:
+        return True
+    understood = False
+    for raw in text.split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        if value.isdigit():
+            understood = True
+            if int(value) == port:
+                return True
+            continue
+        match = re.fullmatch(r"(\d+)[:\-](\d+)", value)
+        if match:
+            understood = True
+            if int(match.group(1)) <= port <= int(match.group(2)):
+                return True
+    # Unknown named or object-based service criteria remain relevant so the
+    # coverage view never hides a possible policy boundary.
+    return not understood
+
+
+def _range_rule_service_relevant(rule: dict, protocol: str, port: int) -> bool:
+    rule_protocol = str(rule.get("protocol") or "").strip().lower()
+    if rule_protocol and rule_protocol not in {"ip", "any", "all", "tcp_udp"}:
+        if rule_protocol != protocol:
+            return False
+    if rule.get("destination_port") is not None:
+        try:
+            if int(rule["destination_port"]) != port:
+                return False
+        except (TypeError, ValueError):
+            pass
+    if rule.get("destination_ports") and not _range_port_matches(
+        rule.get("destination_ports"), port
+    ):
+        return False
+    return True
+
+
+def _range_object_networks(
+    objects: dict[str, dict], name: str, stack: tuple[str, ...] = ()
+) -> list[ipaddress.IPv4Network]:
+    if name in stack or len(stack) >= 20:
+        return []
+    item = objects.get(name) or {}
+    networks = []
+    for member in item.get("members") or []:
+        if member.get("ref"):
+            networks.extend(_range_object_networks(
+                objects, str(member["ref"]), stack + (name,)
+            ))
+            continue
+        if member.get("value"):
+            network = _ipv4_network(member["value"])
+            if network:
+                networks.append(network)
+            continue
+        if member.get("range"):
+            try:
+                start, end = (
+                    ipaddress.ip_address(value) for value in member["range"]
+                )
+            except (TypeError, ValueError):
+                continue
+            if start.version == 4 and end.version == 4 and start <= end:
+                networks.extend(ipaddress.summarize_address_range(start, end))
+    return networks
+
+
+def _range_policy_networks(
+    source: Endpoint,
+    target: ipaddress.IPv4Network,
+    protocol: str,
+    port: int,
+    device_analyses: list[dict],
+) -> list[ipaddress.IPv4Network]:
+    """Return retained destination boundaries that may change this service result."""
+    found: set[ipaddress.IPv4Network] = set()
+
+    def add(network: ipaddress.IPv4Network | None) -> None:
+        if network and (overlap := _overlap_network(network, target)):
+            found.add(overlap)
+
+    for analysis in device_analyses:
+        if not _is_transit_device(analysis) or not _source_attached(source, analysis):
+            continue
+        policy = analysis.get("policy") or {}
+        iptables = policy.get("iptables") or {}
+        ipsets = {
+            str(item.get("name") or ""): item
+            for item in iptables.get("ipsets") or [] if item.get("name")
+        }
+        for rule in [
+            *(iptables.get("rules") or []),
+            *(iptables.get("nat_rules") or []),
+        ]:
+            if not _range_rule_service_relevant(rule, protocol, port):
+                continue
+            add(_ipv4_network(rule.get("destination")))
+            for match in rule.get("set_matches") or []:
+                if "dst" not in (match.get("directions") or []):
+                    continue
+                for network in _range_object_networks(
+                    ipsets, str(match.get("name") or "")
+                ):
+                    add(network)
+
+        applied = policy.get("applied") or {}
+        address_objects = dict(applied.get("address_objects") or {})
+        for book in (applied.get("address_books") or {}).values():
+            for name, item in (book or {}).items():
+                address_objects.setdefault(name, item)
+        for rule in [
+            *(applied.get("rules") or []),
+            *(applied.get("nat_rules") or []),
+        ]:
+            if not _range_rule_service_relevant(rule, protocol, port):
+                continue
+            destinations = rule.get("destinations") or [rule.get("destination")]
+            for value in destinations:
+                text = str(value or "").strip()
+                if not text or text.lower() in {"any", "any-ipv4", "any-ipv6"}:
+                    continue
+                if text.startswith("@"):
+                    for network in _range_object_networks(address_objects, text[1:]):
+                        add(network)
+                    continue
+                network = _ipv4_network(text)
+                if network:
+                    add(network)
+                elif text in address_objects:
+                    for network in _range_object_networks(address_objects, text):
+                        add(network)
+    return sorted(found, key=lambda item: (int(item.network_address), item.prefixlen))
+
+
+def _range_scoped_analyses(
+    target: ipaddress.IPv4Network, device_analyses: list[dict]
+) -> list[dict]:
+    """Keep only routes that can affect the selected range or a default fallback."""
+    scoped = []
+    for analysis in device_analyses:
+        route_analysis = analysis.get("route_analysis") or {}
+        routes = []
+        for route in route_analysis.get("routes") or []:
+            network = _ipv4_network(route.get("network"))
+            if network and (network.prefixlen == 0 or network.overlaps(target)):
+                routes.append(route)
+        scoped.append({
+            **analysis,
+            "route_analysis": {**route_analysis, "routes": routes},
+        })
+    return scoped
+
+
+def _range_route_is_connected(route: dict) -> bool:
+    return bool(
+        route.get("direct") is True
+        or str(route.get("route_type") or "").strip().lower() == "connected"
+        or str(route.get("protocol") or "").strip().lower() in {"connected", "local"}
+    )
+
+
+def evaluate_reachability_range(
+    *,
+    source_text: str,
+    destination_text: str,
+    protocol: str,
+    port: int,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+    flow_state: str = "new",
+    source_external: bool = False,
+) -> dict:
+    """Summarize only evidence-backed targets inside a broad destination range."""
+    source = parse_endpoint(source_text, external=source_external)
+    destination = parse_endpoint(destination_text)
+    if destination.kind != "network" or not isinstance(
+        destination.value, ipaddress.IPv4Network
+    ):
+        raise ValueError("Range coverage requires an IPv4 destination CIDR")
+    protocol = protocol.strip().lower()
+    if protocol not in {"tcp", "udp"}:
+        raise ValueError("Protocol must be TCP or UDP")
+    if not 1 <= port <= 65535:
+        raise ValueError("Port must be between 1 and 65535")
+    flow_state = str(flow_state or "new").strip().lower()
+    if flow_state not in {"new", "established"}:
+        raise ValueError("Flow state must be new or established")
+
+    target = destination.value
+    grouping_prefix = _range_group_prefix(target)
+    if (
+        not _is_external_endpoint(source)
+        and not _endpoint_has_retained_internal_context(
+            source,
+            hunting=hunting,
+            saved_networks=saved_networks,
+            device_analyses=device_analyses,
+        )
+    ):
+        source = Endpoint(
+            entered=source.entered, kind=source.kind, value=source.value, external=True
+        )
+
+    entries: list[dict] = []
+
+    def add(kind: str, network: ipaddress.IPv4Network | None, **details: object) -> None:
+        if network and (overlap := _overlap_network(network, target)):
+            entries.append({"kind": kind, "network": overlap, **details})
+
+    for saved in saved_networks:
+        add(
+            "saved_network", _ipv4_network(saved.get("cidr")),
+            label=saved.get("name") or saved.get("cidr"),
+        )
+    for analysis in device_analyses:
+        device = analysis.get("device") or {}
+        for interface in analysis.get("interfaces") or []:
+            add(
+                "interface", _ipv4_network(interface.get("network")),
+                label=f"{device.get('name') or device.get('address') or 'Device'} · {interface.get('name') or 'interface'}",
+            )
+        if not _is_transit_device(analysis):
+            continue
+        for route in (analysis.get("route_analysis") or {}).get("routes") or []:
+            network = _ipv4_network(route.get("network"))
+            if network and network.prefixlen:
+                add(
+                    "connected_route" if _range_route_is_connected(route) else "route",
+                    network,
+                    label=device.get("name") or device.get("address") or "Network device",
+                    line=route.get("line"),
+                )
+    observed = {}
+    for host in [*(hunting.get("hosts") or []), *(hunting.get("findings") or [])]:
+        network = _ipv4_network(host.get("ip"))
+        if not network or network.prefixlen != 32 or not network.subnet_of(target):
+            continue
+        observed[str(network.network_address)] = host
+    for address, host in observed.items():
+        add(
+            "observed_host", _ipv4_network(address),
+            label=host.get("hostname") or address,
+        )
+
+    # Only specific evidence creates candidate rows. Summary/default routes and
+    # non-connected routes still participate in each candidate's evaluation but
+    # do not manufacture target subnets from the routing table alone.
+    discovery_entries = [
+        item for item in entries
+        if item["kind"] != "route"
+        and item["network"].prefixlen >= grouping_prefix
+    ]
+    buckets: dict[str, ipaddress.IPv4Network] = {}
+    for item in discovery_entries:
+        network = item["network"]
+        bucket = (
+            network
+            if network.prefixlen == grouping_prefix
+            else network.supernet(new_prefix=grouping_prefix)
+        )
+        buckets[str(bucket)] = bucket
+
+    policy_networks = _range_policy_networks(
+        source, target, protocol, port, device_analyses
+    )
+    scoped_analyses = _range_scoped_analyses(target, device_analyses)
+    rows = []
+    for bucket in sorted(buckets.values(), key=lambda item: int(item.network_address)):
+        bucket_entries = [item for item in entries if item["network"].overlaps(bucket)]
+        specific_entries = [
+            item for item in discovery_entries if item["network"].overlaps(bucket)
+        ]
+        covered = list(ipaddress.collapse_addresses(
+            item["network"] for item in specific_entries
+        ))
+        identified_addresses = sum(int(item.num_addresses) for item in covered)
+        source_counts = {
+            kind: sum(item["kind"] == kind for item in bucket_entries)
+            for kind in (
+                "saved_network", "interface", "connected_route", "route", "observed_host"
+            )
+        }
+        route_networks = sorted({
+            item["network"] for item in bucket_entries
+            if item["kind"] in {"connected_route", "route"}
+        }, key=lambda item: (int(item.network_address), item.prefixlen))
+        route_coverage = list(ipaddress.collapse_addresses(
+            network if network.subnet_of(bucket) else bucket
+            for network in route_networks if network.overlaps(bucket)
+        ))
+        routed_addresses = sum(int(item.num_addresses) for item in route_coverage)
+        policy_boundaries = [
+            network for network in policy_networks
+            if network.overlaps(bucket)
+        ]
+        has_more_specific_route = any(
+            network.subnet_of(bucket) and network.prefixlen > bucket.prefixlen
+            for network in route_networks
+        )
+        has_more_specific_policy = any(
+            network.subnet_of(bucket) and network.prefixlen > bucket.prefixlen
+            for network in policy_boundaries
+        )
+        full_identification = identified_addresses == int(bucket.num_addresses)
+        mixed = (
+            not full_identification
+            or has_more_specific_route
+            or has_more_specific_policy
+        )
+        exact_result = None
+        if not mixed:
+            exact_result = evaluate_reachability(
+                source_text=source_text,
+                destination_text=str(bucket),
+                protocol=protocol,
+                port=port,
+                flow_state=flow_state,
+                source_external=source_external,
+                # Host-level scan results cannot safely represent a whole range.
+                hunting={"hosts": [], "findings": []},
+                saved_networks=saved_networks,
+                device_analyses=scoped_analyses,
+            )
+        if mixed:
+            outcome, confidence = "Mixed", "low"
+            explanation = (
+                "Retained evidence identifies targets inside this segment, but "
+                "more-specific route, policy, or host evidence differs within it."
+            )
+        else:
+            outcome = str(exact_result.get("outcome") or "Unknown")
+            confidence = str(exact_result.get("confidence") or "low")
+            explanation = str(exact_result.get("explanation") or "")
+            if (
+                outcome == "Unknown"
+                and not (exact_result.get("retained_objects") or {}).get("routes")
+            ):
+                outcome = "No Route"
+                explanation = "No retained route from the selected source covers this target segment."
+        rows.append({
+            "network": str(bucket),
+            "address_count": int(bucket.num_addresses),
+            "identified_address_count": identified_addresses,
+            "identified_percent": round(
+                identified_addresses * 100 / int(bucket.num_addresses), 4
+            ),
+            "routed_address_count": routed_addresses,
+            "routed_percent": round(
+                routed_addresses * 100 / int(bucket.num_addresses), 4
+            ),
+            "outcome": outcome,
+            "confidence": confidence,
+            "explanation": explanation,
+            "evidence_counts": source_counts,
+            "route_prefix_count": len(route_networks),
+            "policy_boundary_count": len(policy_boundaries),
+            "drill_down": bucket.prefixlen < 32,
+            "detail_target": str(bucket) if bucket.prefixlen < 32 else None,
+            "path": (exact_result or {}).get("path") or [],
+            "caveats": (exact_result or {}).get("caveats") or [],
+        })
+
+    outcome_counts = {}
+    for row in rows:
+        outcome_counts[row["outcome"]] = outcome_counts.get(row["outcome"], 0) + 1
+    broad_counts = {
+        kind: sum(
+            item["kind"] == kind and item["network"].prefixlen < grouping_prefix
+            for item in entries
+        )
+        for kind in ("saved_network", "interface", "connected_route", "route")
+    }
+    evidence_counts = {
+        kind: sum(item["kind"] == kind for item in entries)
+        for kind in (
+            "saved_network", "interface", "connected_route", "observed_host", "route"
+        )
+    }
+    return {
+        "status": "reachability_range_analysis_complete",
+        "query": {
+            "source": source_text,
+            "destination": str(target),
+            "protocol": protocol,
+            "port": port,
+            "flow_state": flow_state,
+            "source_external": _is_external_endpoint(source),
+        },
+        "destination_network": str(target),
+        "grouping_prefix": grouping_prefix,
+        "candidate_count": len(rows),
+        "candidates": rows,
+        "outcome_counts": outcome_counts,
+        "evidence_counts": evidence_counts,
+        "broad_evidence_counts": broad_counts,
+        "observed_host_count": len(observed),
+        "explanation": (
+            f"NCT identified {len(rows)} evidence-backed /{grouping_prefix} target "
+            f"segment{'s' if len(rows) != 1 else ''} inside {target}."
+        ),
+        "caveats": [
+            "Only target segments supported by retained connected networks, Saved Networks, or observed hosts are shown; unobserved theoretical addresses are omitted.",
+            "Static, dynamic, summary, and default routes help evaluate identified targets but do not create target segments by themselves.",
+            "Range results use routing and policy evidence. Host-level Nmap service observations are used to identify targets but are not generalized to an entire subnet.",
+            "Open any /16 or /24 row to evaluate the next level. NCT continues to show only evidence-backed targets rather than expanding every possible address.",
+        ],
     }
 
 

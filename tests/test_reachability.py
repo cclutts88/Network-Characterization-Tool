@@ -9,6 +9,7 @@ from app.reachability import (
     build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
+    evaluate_reachability_range,
     parse_endpoint,
     policy_rule_context,
     simulate_proposed_policy_control,
@@ -81,6 +82,122 @@ def assess(**overrides):
     }
     values.update(overrides)
     return evaluate_reachability(**values)
+
+
+def range_device(*, policy=None, connected="10.20.0.0/16", extra_routes=None):
+    return {
+        "run_id": "f" * 32,
+        "device": {"name": "Range edge", "address": "198.51.100.1", "type": "firewall"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "inside", "network": connected, "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": connected, "interface": "inside", "direct": True, "protocol": "connected"},
+            {"network": "0.0.0.0/0", "interface": "outside", "via": "198.51.100.254"},
+            *(extra_routes or []),
+        ]},
+        "policy": policy or {"firewall_acl": []},
+    }
+
+
+def range_assess(**overrides):
+    values = {
+        "source_text": "Internet",
+        "destination_text": "10.0.0.0/8",
+        "protocol": "tcp",
+        "port": 22,
+        "hunting": {"hosts": [], "findings": []},
+        "saved_networks": [],
+        "device_analyses": [range_device()],
+    }
+    values.update(overrides)
+    return evaluate_reachability_range(**values)
+
+
+def test_range_coverage_uses_connected_networks_not_static_routes_to_create_targets():
+    result = range_assess(device_analyses=[range_device(extra_routes=[{
+        "network": "10.30.0.0/16", "via": "198.51.100.2", "protocol": "static",
+    }])])
+
+    assert result["status"] == "reachability_range_analysis_complete"
+    assert result["grouping_prefix"] == 16
+    assert [item["network"] for item in result["candidates"]] == ["10.20.0.0/16"]
+    assert result["candidates"][0]["evidence_counts"]["interface"] == 1
+    assert result["evidence_counts"]["interface"] == 1
+    assert result["evidence_counts"]["connected_route"] == 1
+    assert all(item["network"] != "10.30.0.0/16" for item in result["candidates"])
+
+
+def test_range_coverage_drills_from_a_16_to_only_identified_24s():
+    device = range_device(connected="10.20.1.0/24", extra_routes=[{
+        "network": "10.20.3.0/24", "via": "198.51.100.2", "protocol": "static",
+    }])
+    hunting = {
+        "hosts": [{"ip": "10.20.2.5", "hostname": "observed-host"}],
+        "findings": [],
+    }
+    result = range_assess(
+        destination_text="10.20.0.0/16", hunting=hunting, device_analyses=[device]
+    )
+
+    assert result["grouping_prefix"] == 24
+    assert [item["network"] for item in result["candidates"]] == [
+        "10.20.1.0/24", "10.20.2.0/24",
+    ]
+    assert result["candidates"][0]["outcome"] == "Routed"
+    assert result["candidates"][0]["drill_down"] is True
+    assert result["candidates"][0]["detail_target"] == "10.20.1.0/24"
+    assert result["candidates"][1]["outcome"] == "Mixed"
+    assert result["candidates"][1]["evidence_counts"]["observed_host"] == 1
+
+
+def test_range_coverage_allows_a_uniform_24_to_open_observed_hosts():
+    hunting = {
+        "hosts": [{"ip": "10.20.4.9", "hostname": "observed-host"}],
+        "findings": [],
+    }
+    parent = range_assess(
+        destination_text="10.20.4.0/24",
+        hunting=hunting,
+        device_analyses=[range_device(connected="10.20.4.0/24")],
+    )
+
+    row = parent["candidates"][0]
+    assert row["network"] == "10.20.4.9/32"
+    assert row["drill_down"] is False
+
+
+def test_range_coverage_applies_uniform_ssh_block_to_connected_segment():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i outside -o inside -p tcp -d 10.20.0.0/16 --dport 22 -j DROP
+COMMIT
+""")
+    result = range_assess(device_analyses=[range_device(policy={
+        "firewall_acl": [], "iptables": policy,
+    })])
+
+    assert result["candidate_count"] == 1
+    assert result["candidates"][0]["outcome"] == "Expected Blocked"
+    assert result["candidates"][0]["policy_boundary_count"] == 1
+
+
+def test_range_coverage_marks_more_specific_policy_difference_for_drilldown():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i outside -o inside -p tcp -d 10.20.8.0/24 --dport 22 -j DROP
+COMMIT
+""")
+    result = range_assess(device_analyses=[range_device(policy={
+        "firewall_acl": [], "iptables": policy,
+    })])
+
+    row = result["candidates"][0]
+    assert row["outcome"] == "Mixed"
+    assert row["drill_down"] is True
+    assert row["detail_target"] == "10.20.0.0/16"
+    assert row["policy_boundary_count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -480,11 +597,11 @@ def test_same_saved_network_is_local_without_claiming_policy_decision():
     assert result["confidence"] == "medium"
 
 
-def test_route_without_exact_policy_is_routed_not_allowed():
+def test_partial_route_without_exact_policy_is_unknown():
     device = {**DEVICE, "policy": {"firewall_acl": []}}
     result = assess(device_analyses=[device])
-    assert result["outcome"] == "Routed"
-    assert result["confidence"] == "medium"
+    assert result["outcome"] == "Unknown"
+    assert result["confidence"] == "low"
 
 
 def test_switch_management_default_route_is_not_transit_evidence():
@@ -592,14 +709,15 @@ def test_explicit_deny_remains_expected_blocked_when_service_is_not_exposed():
     )
 
 
-def test_external_destination_uses_default_route():
+def test_external_destination_with_unresolved_next_hop_is_unknown():
     device = {
         **DEVICE,
         "route_analysis": {"routes": [{"network": "0.0.0.0/0", "via": "192.0.2.1"}]},
         "policy": {"firewall_acl": []},
     }
     result = assess(destination_text="Internet", device_analyses=[device])
-    assert result["outcome"] == "Routed"
+    assert result["outcome"] == "Unknown"
+    assert any("Path is partial" in item for item in result["caveats"])
 
 
 def test_ordered_iptables_sets_drive_expected_allowed_decision():
@@ -664,7 +782,7 @@ COMMIT
     assert any("does not prove" in caveat for caveat in result["caveats"])
 
 
-def test_ordered_iptables_unsupported_match_remains_routed_with_caveat():
+def test_ordered_iptables_unsupported_match_with_partial_path_remains_unknown():
     policy = parse_iptables_policy("""*filter
 :FORWARD ACCEPT [0:0]
 -A FORWARD -m dpi32 --cat-app 4,112 -j DROP
@@ -674,7 +792,7 @@ COMMIT
 
     result = assess(device_analyses=[device])
 
-    assert result["outcome"] == "Routed"
+    assert result["outcome"] == "Unknown"
     assert result["counts"]["policy_decisions"] == 0
     assert result["counts"]["policy_unresolved"] == 1
     assert any("unresolved match criteria" in item for item in result["caveats"])
@@ -1004,7 +1122,7 @@ interface inside
 
     unbound = {**device, "policy": {**device["policy"], "applied": parse_vendor_policy(text.replace(" ip access-group USERS_TO_SERVERS in", ""))}}
     result = assess(device_analyses=[unbound])
-    assert result["outcome"] == "Routed"
+    assert result["outcome"] == "Unknown"
 
 
 def test_invalid_endpoint_is_rejected():
@@ -1078,6 +1196,7 @@ def test_reach_follows_each_retained_next_hop_without_inventing_devices():
     assert [item["label"] for item in result["path"] if item["kind"] == "device"] == [
         "edge-wan-rtr", "distribution-rtr",
     ]
+    assert result["outcome"] == "Routed"
     assert not any("Path is partial" in item for item in result["caveats"])
 
 
@@ -1115,10 +1234,14 @@ def test_reach_reports_a_partial_path_when_next_hop_evidence_is_missing():
         "device": {"name": "edge-wan-rtr", "address": "10.0.0.1", "type": "router"},
         "interfaces": [{"name": "outside", "network": "198.51.100.0/24", "role": "external"}],
         "external_wan_gateway": {"node_id": "ip:10.0.0.1"},
+        "policy": {"firewall_acl": []},
     }
 
     result = assess(source_text="Internet", device_analyses=[edge])
 
+    assert result["outcome"] == "Unknown"
+    assert result["confidence"] == "low"
+    assert "only a partial path" in result["explanation"]
     assert any("Path is partial" in item for item in result["caveats"])
 
 

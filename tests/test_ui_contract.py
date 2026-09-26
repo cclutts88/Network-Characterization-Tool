@@ -501,6 +501,20 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "Open source in Analyze ↗" in html
     assert 'target="_blank" rel="noopener"' in html
     assert ".evidence.policy.deny" in html
+    assert 'id="rangeCoverage"' in html
+    assert "function renderRange(data)" in html
+    assert "Evidence-backed target discovery" in html
+    assert "Unique retained evidence in this selected range" in html
+    assert "Broad and default routes were not expanded into theoretical targets" in html
+    assert 'class="secondary range-drill"' in html
+    assert 'class="secondary range-map"' in html
+    assert "function rangeHostResult(data,row)" in html
+    assert "network.endsWith('/32')?network.slice(0,-3):network" in html
+    assert "function rangeRowAction(row,index,hostLevel)" in html
+    assert "View ${hops.length} hop" in html
+    assert "Host path" in html
+    assert "Known targets inside a broad range have different route or policy results" in html
+    assert "The target is known to exist, but no retained route" in html
 
 
 def test_reachability_query_fields_have_clear_buttons():
@@ -537,6 +551,8 @@ def test_search_fields_receive_consistent_clear_controls():
     assert "function installClearableInputs()" in SESSION_SCRIPT
     assert 'input[type="search"],input[data-nct-clearable="true"]' in SESSION_SCRIPT
     assert "nct-input-clear" in SESSION_SCRIPT
+    assert "::-webkit-search-cancel-button" in SESSION_SCRIPT
+    assert ".network-search-control" in SESSION_SCRIPT
     assert "new MutationObserver" in SESSION_SCRIPT
     assert "input.dispatchEvent(new Event('input'" in SESSION_SCRIPT
 
