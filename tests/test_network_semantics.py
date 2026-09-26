@@ -8,8 +8,10 @@ from app.main import _wan_gateway_suggestions, app
 from app.network_semantics import (
     apply_external_gateway_role,
     clear_external_wan_gateway,
+    get_air_gapped_designation,
     get_external_wan_gateway,
     get_external_wan_gateways,
+    set_air_gapped_designation,
     set_external_wan_gateway,
 )
 
@@ -45,6 +47,41 @@ def test_external_wan_gateway_round_trip_and_role_application(tmp_path):
     assert result[0]["external_wan_gateway"]["interface_matched"] is True
     assert clear_external_wan_gateway(db_path)["cleared"] is True
     assert get_external_wan_gateway(db_path) is None
+
+
+def test_shared_air_gapped_designation_round_trip(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+
+    assert get_air_gapped_designation(db_path)["air_gapped"] is False
+    enabled = set_air_gapped_designation(
+        db_path, air_gapped=True, changed_by="operator"
+    )
+    disabled = set_air_gapped_designation(
+        db_path, air_gapped=False, changed_by="second-operator"
+    )
+
+    assert enabled["air_gapped"] is True
+    assert enabled["changed_by"] == "operator"
+    assert disabled["air_gapped"] is False
+    assert disabled["changed_by"] == "second-operator"
+
+
+def test_shared_air_gapped_designation_api_is_returned_with_wan_semantics(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+
+    with TestClient(app) as client:
+        saved = client.put(
+            "/api/network-semantics/air-gapped", json={"air_gapped": True}
+        )
+        loaded = client.get("/api/network-semantics/external-wan-gateway")
+
+    assert saved.status_code == 200
+    assert saved.json()["air_gapped"] is True
+    assert loaded.status_code == 200
+    assert loaded.json()["air_gapped"] is True
 
 
 def test_external_gateway_does_not_mark_a_different_device(tmp_path):

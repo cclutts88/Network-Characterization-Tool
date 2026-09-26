@@ -3,7 +3,15 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from app.auth import create_user, init_auth_storage, verify_credentials
+from app.achievements import list_achievements, unlock_achievement
 from app.main import app
+from app.shell_preferences import (
+    delete_shared_theme,
+    get_shell_preference,
+    list_shared_themes,
+    publish_shared_theme,
+    save_shell_preference,
+)
 from app.workspaces import (
     WorkspaceConflict,
     delete_layout,
@@ -94,6 +102,77 @@ def test_each_analyst_has_at_most_one_visible_default_layout(tmp_path):
     assert not any(item["is_default"] for item in list_layouts(db_path, "alpha"))
 
 
+def test_shell_preferences_are_private_to_each_analyst(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    saved = save_shell_preference(
+        db_path,
+        owner="alpha",
+        snapshot={
+            "appearance": {"preset": "current", "colors": {}},
+            "guide_enabled": True,
+            "guide_dock": "bottom",
+            "sidebar_closed": False,
+        },
+    )
+
+    assert saved["version"] == 1
+    assert get_shell_preference(db_path, owner="alpha")["snapshot"]["guide_dock"] == "bottom"
+    assert get_shell_preference(db_path, owner="bravo") is None
+
+
+def test_shared_themes_are_copied_and_visible_to_other_analysts(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    shared = publish_shared_theme(
+        db_path,
+        owner="alpha",
+        source_theme_id="personal-1",
+        name="Night watch",
+        snapshot={"preset": "graphite_soc", "colors": {}, "options": {}},
+    )
+    assert shared["owner"] == "alpha"
+    assert list_shared_themes(db_path)[0]["name"] == "Night watch"
+
+    updated = publish_shared_theme(
+        db_path,
+        owner="alpha",
+        source_theme_id="personal-1",
+        name="Night watch revised",
+        snapshot={"preset": "current", "colors": {}, "options": {}},
+    )
+    assert updated["theme_id"] == shared["theme_id"]
+    assert updated["version"] == 2
+    assert not delete_shared_theme(
+        db_path, owner="bravo", theme_id=shared["theme_id"]
+    )
+    assert delete_shared_theme(
+        db_path, owner="alpha", theme_id=shared["theme_id"]
+    )
+    assert list_shared_themes(db_path) == []
+
+
+def test_achievements_are_private_and_unlock_only_once(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    achievement, newly_unlocked = unlock_achievement(
+        db_path,
+        owner="alpha",
+        achievement_id="first_scan",
+        context={"page": "/scans"},
+    )
+    assert newly_unlocked is True
+    assert achievement["title"] == "First Contact"
+    assert achievement["context"] == {"page": "/scans"}
+
+    same_achievement, newly_unlocked = unlock_achievement(
+        db_path,
+        owner="alpha",
+        achievement_id="first_scan",
+        context={"page": "/analysis"},
+    )
+    assert newly_unlocked is False
+    assert same_achievement["unlocked_at"] == achievement["unlocked_at"]
+    assert [item for item in list_achievements(db_path, owner="bravo") if item["unlocked"]] == []
+
+
 def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
     monkeypatch, tmp_path
 ):
@@ -116,6 +195,94 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "Analyst accounts" in admin.get("/admin/users").text
         account_script = admin.get("/assets/nct-session.js")
         assert account_script.status_code == 200
+        assert "Account &amp; settings" in account_script.text
+        assert "Graphite SOC" in account_script.text
+        assert "Theme Workshop" in account_script.text
+        assert "Sage Operations" in account_script.text
+        assert "Matrix Rain" in account_script.text
+        assert "System AI" in account_script.text
+        assert "dcc_mordecai" in account_script.text
+        assert "dcc_odette" in account_script.text
+        assert "dcc_zev" in account_script.text
+        assert "`${helper} · Operator Guide`" in account_script.text
+        assert "preset==='dcc_mordecai'?'Odette':'Mordecai'" in account_script.text
+        assert "button.dataset.guideIdentity=identity" in account_script.text
+        assert "#nct-operator-guide[data-guide-identity=odette]" in account_script.text
+        assert "applyDccGuideIdentity" in account_script.text
+        assert 'html[data-nct-theme^="dcc_"] #nct-operator-guide' in account_script.text
+        assert 'html[data-nct-theme="dcc_donut"] body{text-transform:uppercase}' in account_script.text
+        assert "Dungeon Anarchist’s Cookbook" in account_script.text
+        assert "applyCookbookIdentity" in account_script.text
+        assert "NEW CODEX ENTRY: Shared by Crawler" in account_script.text
+        assert 'html[data-nct-theme^="dcc_"] .nct-note-panel' in account_script.text
+        assert "Network Crawler Terminal" in account_script.text
+        assert "applyThemeIdentity" in account_script.text
+        assert "nct-system-ai-unlocked-v1" in account_script.text
+        assert "Unauthorized curiosity detected" in account_script.text
+        assert "Jamal" in account_script.text
+        assert "NEW ACHIEVEMENT!" in account_script.text
+        assert "Holidays" in account_script.text
+        assert "Christmas / Winter Holiday" in account_script.text
+        assert "Halloween" in account_script.text
+        assert "Thanksgiving" in account_script.text
+        assert "Independence Day" in account_script.text
+        assert "holiday_christmas" in account_script.text
+        assert "holiday_halloween" in account_script.text
+        assert "holiday_thanksgiving" in account_script.text
+        assert "Midnight fireworks ready" in account_script.text
+        assert "one imaginary Platinum Loot Box" in account_script.text
+        assert "It was meant to be" in account_script.text
+        assert "The System accepts your apology" in account_script.text
+        assert "pattern-recognition score" in account_script.text
+        assert "nct-effect-glow" in account_script.text
+        assert "nct-effect-transparency" in account_script.text
+        assert "nct-effect-scanlines" in account_script.text
+        assert "nct-effect-background" in account_script.text
+        assert "nct-effect-motion" in account_script.text
+        assert "Motion amount" in account_script.text
+        assert "Settings > Accessibility > Visual effects > Animation effects" in account_script.text
+        assert "Enable Performance Mode" in account_script.text
+        assert "Personal themes" in account_script.text
+        assert "Your Themes" in account_script.text
+        assert "Shared Themes" in account_script.text
+        assert "/api/workspaces/shared-themes" in account_script.text
+        assert "Achievements" in account_script.text
+        assert "/api/workspaces/achievements" in account_script.text
+        assert "nct-achievement-dialog" in account_script.text
+        assert "applyAchievementVisibility" in account_script.text
+        assert "startsWith('dcc_')" in account_script.text
+        assert "prefers-reduced-motion" in account_script.text
+        assert "Appearance never changes evidence meaning" in account_script.text
+        assert "nct-sidebar-edge" in account_script.text
+        assert "Device collections" in account_script.text
+        assert "New collection" in account_script.text
+        assert "No-Strike exclusions" in account_script.text
+        assert "Active scans" in account_script.text
+        assert "Active scans & queue" not in account_script.text
+        assert "support:{queuePanel:['currentRunPanel']}" in account_script.text
+        assert "support:{scanBuilder:" not in account_script.text
+        assert account_script.text.index("Saved Networks") < account_script.text.index("New scan")
+        assert "Interfaces and routes" in account_script.text
+        assert "Exposure reports" in account_script.text
+        assert "nct-task-focused" in account_script.text
+        assert "Enable Operator Guide" in account_script.text
+        assert "nct-operator-guide-enabled-v1" in account_script.text
+        assert "taskGuidance" in account_script.text
+        assert "#nct-guide-toggle[aria-expanded=true]" in account_script.text
+        assert "z-index:280" in account_script.text
+        assert 'id="nct-guide-close"' not in account_script.text
+        assert "Close the contextual Operator Guide" in account_script.text
+        assert "height:min(46vh,420px)" in account_script.text
+        assert "nct-operator-guide-dock-v1" in account_script.text
+        assert "#nct-operator-guide[data-dock=bottom]" in account_script.text
+        assert 'id="nct-guide-dock"' in account_script.text
+        assert "nct-guide-dock-glyph" in account_script.text
+        assert 'data-target="bottom"' in account_script.text
+        assert "function syncGuideToggleAttachment()" in account_script.text
+        assert "guideToggle.dataset.guideAttachment" in account_script.text
+        assert "guideDock.textContent" not in account_script.text
+        assert "/api/workspaces/shell-preferences" in account_script.text
+        assert "saved to your analyst account" in account_script.text
         assert "Sign out" in account_script.text
         assert "Accounts" in account_script.text
         assert "Personal notes" in account_script.text
@@ -124,6 +291,39 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "shared notes" in account_script.text
         assert ".nct-note-panel.personal" in account_script.text
         assert ".nct-note-panel.shared" in account_script.text
+        shell_preference = admin.put(
+            "/api/workspaces/shell-preferences",
+            json={
+                "snapshot": {
+                    "appearance": {"preset": "current", "colors": {}},
+                    "guide_enabled": True,
+                    "guide_dock": "bottom",
+                    "sidebar_closed": False,
+                }
+            },
+        )
+        assert shell_preference.status_code == 200
+        assert admin.get("/api/workspaces/shell-preferences").json()["preference"][
+            "snapshot"
+        ]["guide_dock"] == "bottom"
+        achievements = admin.get("/api/workspaces/achievements")
+        assert achievements.status_code == 200
+        assert achievements.json()["server_persistence"] is True
+        assert not any(
+            item["unlocked"] for item in achievements.json()["achievements"]
+        )
+        unlocked = admin.post(
+            "/api/workspaces/achievements/first_scan/unlock",
+            json={"context": {"page": "/scans"}},
+        )
+        assert unlocked.status_code == 200
+        assert unlocked.json()["newly_unlocked"] is True
+        repeated = admin.post(
+            "/api/workspaces/achievements/first_scan/unlock",
+            json={"context": {"page": "/analysis"}},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["newly_unlocked"] is False
         assert admin.post(
             "/api/auth/users",
             json={
@@ -300,3 +500,53 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
             json={"name": "Viewer edit", "snapshot": {}},
         ).status_code == 403
         assert viewer.get("/admin/users").status_code == 403
+
+
+def test_local_operator_notes_are_persistent_without_account_sign_in(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("NCT_AUTH_MODE", "disabled")
+    monkeypatch.setattr("app.main.DB_PATH", tmp_path / "analyzer.db")
+
+    with TestClient(app) as client:
+        identity = client.get("/api/auth/me").json()
+        assert identity == {"authentication_enabled": False, "analyst": None}
+        created = client.post(
+            "/api/workspaces/notes",
+            json={"title": "Local field note", "kind": "note", "content": "Observed."},
+        )
+        assert created.status_code == 200
+        assert created.json()["owner"] == "local-operator"
+        listing = client.get("/api/workspaces/notes?page=reach").json()
+        assert listing["server_persistence"] is True
+        assert listing["analyst"]["display_name"] == "Local operator"
+        assert [item["title"] for item in listing["notes"]] == ["Local field note"]
+        shared = client.post(
+            f"/api/workspaces/notes/{created.json()['note_id']}/share",
+            json={"shared": True, "page": "reach", "expected_version": 1},
+        )
+        assert shared.status_code == 200
+        assert shared.json()["shared_page"] == "reach"
+
+
+def test_local_operator_scan_draft_is_persistent_without_account_sign_in(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("NCT_AUTH_MODE", "disabled")
+    monkeypatch.setattr("app.main.DB_PATH", tmp_path / "analyzer.db")
+
+    with TestClient(app) as client:
+        initial = client.get("/api/workspaces/scan-draft")
+        assert initial.status_code == 200
+        assert initial.json() == {"server_persistence": True, "draft": None}
+        saved = client.put(
+            "/api/workspaces/scan-draft",
+            json={"snapshot": {"scanName": "Local draft"}, "expected_version": None},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["owner"] == "local-operator"
+        restored = client.get("/api/workspaces/scan-draft").json()["draft"]
+        assert restored["snapshot"]["scanName"] == "Local draft"
+        removed = client.delete("/api/workspaces/scan-draft")
+        assert removed.status_code == 200
+        assert removed.json() == {"owner": "local-operator", "deleted": True}

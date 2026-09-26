@@ -1,3 +1,4 @@
+from app.shell_ui import SHELL_SCRIPT
 from fastapi.responses import HTMLResponse, Response
 
 
@@ -64,43 +65,48 @@ SESSION_SCRIPT = r"""
   }
 
   async function installAccountControls() {
-    const header = document.querySelector('body > header');
-    if (!header || header.querySelector('.nct-account')) return;
+    const menu = document.getElementById('nct-account-menu');
+    if (!menu || menu.dataset.ready === 'true') return;
+    menu.dataset.ready = 'true';
+    const status = document.getElementById('nct-account-status');
+    const signIn = document.getElementById('nct-account-link');
+    const accounts = document.getElementById('nct-accounts-link');
+    const logout = document.getElementById('nct-sign-out');
     try {
       const response = await fetch('/api/auth/me', {credentials: 'same-origin'});
-      if (!response.ok) return;
-      const data = await response.json();
-      if (!data.authentication_enabled || !data.analyst) return;
-      const analyst = data.analyst;
-      const controls = document.createElement('div');
-      controls.className = 'nct-account';
-      const identity = document.createElement('span');
-      identity.className = 'nct-account-identity';
-      identity.textContent = `${analyst.display_name || analyst.username} · ${analyst.role}`;
-      identity.title = `Signed in as ${analyst.username}`;
-      controls.append(identity);
-      if (analyst.role === 'admin') {
-        const admin = document.createElement('a');
-        admin.href = '/admin/users';
-        admin.textContent = 'Accounts';
-        controls.append(admin);
+      if (!response.ok) {
+        status.textContent = 'Not signed in';
+        signIn.hidden = false;
+        signIn.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
+        return;
       }
-      const logout = document.createElement('button');
-      logout.type = 'button';
-      logout.textContent = 'Sign out';
+      const data = await response.json();
+      if (!data.authentication_enabled) {
+        status.textContent = 'Local operator mode · accounts are disabled';
+        installNotePanels({
+          username: 'local-operator',
+          display_name: 'Local operator',
+          role: 'admin',
+        });
+        return;
+      }
+      if (!data.analyst) {
+        status.textContent = 'Not signed in';
+        return;
+      }
+      const analyst = data.analyst;
+      status.textContent = `${analyst.display_name || analyst.username} · ${analyst.role}`;
+      status.title = `Signed in as ${analyst.username}`;
+      accounts.hidden = analyst.role !== 'admin';
+      logout.hidden = false;
       logout.onclick = async () => {
         logout.disabled = true;
         await fetch('/api/auth/logout', {method: 'POST', credentials: 'same-origin'});
         location.href = '/login';
       };
-      controls.append(logout);
-      const style = document.createElement('style');
-      style.textContent = '.nct-account{position:absolute;right:18px;top:14px;display:flex;align-items:center;gap:8px;color:#a9c3cf;font:650 12px system-ui;z-index:110}.nct-account a,.nct-account button{width:auto;margin:0;padding:5px 8px;border:1px solid #315367;border-radius:6px;background:#0d2633;color:#dcecf2;font:inherit;text-decoration:none;cursor:pointer}.nct-account button:disabled{opacity:.55;cursor:wait}@media(max-width:850px){.nct-account{position:static;justify-content:center;margin:7px auto 0;flex-wrap:wrap}}';
-      document.head.append(style);
-      header.append(controls);
       installNotePanels(analyst);
     } catch (_) {
-      // Authentication is intentionally optional in the local Test workflow.
+      status.textContent = 'Account status is temporarily unavailable';
     }
   }
 
@@ -122,14 +128,20 @@ SESSION_SCRIPT = r"""
     const style = document.createElement('style');
     style.textContent = `
       .nct-note-tab{position:fixed;top:48%;z-index:145;width:auto!important;margin:0!important;padding:10px 7px!important;border:1px solid #3c6072!important;background:#102b38!important;color:#eaf4f8!important;font:800 11px system-ui!important;letter-spacing:.04em;cursor:pointer;writing-mode:vertical-rl}
-      .nct-note-tab.personal{left:0;border-radius:0 8px 8px 0!important}.nct-note-tab.shared{right:0;border-radius:8px 0 0 8px!important}
+      .nct-note-tab.personal{left:var(--nct-sidebar-width,278px);border-radius:0 8px 8px 0!important}.nct-note-tab.shared{right:0;border-radius:8px 0 0 8px!important}
       .nct-note-tab .count{margin-top:5px;color:#57d6bf}.nct-note-panel{position:fixed;top:118px;bottom:10px;z-index:144;display:flex;width:min(420px,calc(100vw - 24px));flex-direction:column;border:1px solid #315367;background:#081720f7;color:#eaf4f8;box-shadow:0 18px 55px #000b;font:13px system-ui;transition:transform .18s ease}
-      .nct-note-panel.personal{left:0;border-radius:0 12px 12px 0;transform:translateX(-102%)}.nct-note-panel.shared{right:0;border-radius:12px 0 0 12px;transform:translateX(102%)}.nct-note-panel.open{transform:none}
+      .nct-note-panel.personal{left:var(--nct-sidebar-width,278px);border-radius:0 12px 12px 0;transform:translateX(-102%)}.nct-note-panel.shared{right:0;border-radius:12px 0 0 12px;transform:translateX(102%)}.nct-note-panel.open{transform:none}
       .nct-note-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:13px 14px;border-bottom:1px solid #315367;background:#0d2633}.nct-note-head strong{display:block;font-size:15px}.nct-note-head small{display:block;margin-top:2px;color:#a9c3cf}.nct-note-head button{width:auto!important;margin:0!important;padding:4px 8px!important;background:#091722!important;color:#dcecf2!important;border:1px solid #3c6072!important}
       .nct-note-search{margin:10px 12px 6px!important;width:calc(100% - 24px)!important;padding:8px!important;border:1px solid #315367!important;border-radius:6px!important;background:#07121a!important;color:#eaf4f8!important;font:13px system-ui!important}.nct-note-tools{display:flex;gap:6px;padding:0 12px 9px}.nct-note-tools button,.nct-note-actions button{width:auto!important;margin:0!important;padding:6px 8px!important;border:1px solid #3c6072!important;border-radius:6px!important;background:#102b38!important;color:#eaf4f8!important;font:750 11px system-ui!important;cursor:pointer}.nct-note-tools button:disabled,.nct-note-actions button:disabled{opacity:.45;cursor:not-allowed}
       .nct-note-tree{flex:0 0 34%;min-height:105px;overflow:auto;padding:4px 8px 9px;border-top:1px solid #1d3542;border-bottom:1px solid #315367}.nct-note-row{display:flex;align-items:center;gap:4px;width:100%;min-height:28px;border-radius:5px;color:#cce0e7}.nct-note-row.selected{background:#174052;color:#fff}.nct-note-row.shared-item{border-left:2px solid #b88ae6}.nct-note-fold{flex:0 0 20px;width:20px!important;margin:0!important;padding:2px!important;border:0!important;background:transparent!important;color:#9eb7c2!important}.nct-note-select{min-width:0;flex:1;width:auto!important;margin:0!important;padding:5px 4px!important;border:0!important;background:transparent!important;color:inherit!important;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:650 12px system-ui!important}.nct-note-owner{padding-right:5px;color:#b88ae6;font-size:9px}.nct-note-empty{padding:18px 10px;color:#8eaab6;text-align:center}
       .nct-note-editor{display:flex;min-height:0;flex:1;flex-direction:column;gap:8px;padding:11px 12px;overflow:auto}.nct-note-editor[hidden]{display:none}.nct-note-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:#9eb7c2;font-size:10px}.nct-note-badge{padding:2px 6px;border:1px solid #315367;border-radius:999px}.nct-note-badge.shared{border-color:#9a70c0;color:#d7b8f4}.nct-note-editor label{display:grid;gap:4px;color:#b9d5df;font-size:11px;font-weight:750}.nct-note-editor input,.nct-note-editor select,.nct-note-editor textarea{width:100%!important;margin:0!important;padding:8px!important;border:1px solid #315367!important;border-radius:6px!important;background:#07121a!important;color:#eaf4f8!important;font:13px system-ui!important}.nct-note-editor textarea{min-height:170px;flex:1;resize:vertical;font-family:ui-monospace,SFMono-Regular,Consolas,monospace!important;line-height:1.45}.nct-note-context{padding:7px;border:1px dashed #315367;border-radius:6px;color:#9eb7c2;font-size:11px}.nct-note-actions{display:flex;gap:6px;flex-wrap:wrap}.nct-note-actions .primary{background:#57d6bf!important;color:#06201d!important}.nct-note-actions .danger{border-color:#8e4a55!important;color:#ffb0b9!important}.nct-note-status{min-height:17px;color:#9eb7c2;font-size:11px}.nct-note-status.bad{color:#ff9f9f}.nct-note-status.good{color:#77e3b5}
-      @media(max-width:700px){.nct-note-panel{top:102px;bottom:4px}.nct-note-tab{top:auto;bottom:12px;writing-mode:horizontal-tb}.nct-note-tab.personal{left:8px;border-radius:7px!important}.nct-note-tab.shared{right:8px;border-radius:7px!important}}
+      html[data-nct-theme^="dcc_"] .nct-note-panel{border:2px solid #8a7046!important;background:linear-gradient(100deg,#0c1215 0 18px,#172226 19px 22px,#11191c 23px 100%)!important;box-shadow:0 20px 60px #000d,inset 5px 0 #c7a45b22!important}
+      html[data-nct-theme^="dcc_"] .nct-note-head{position:relative;padding-bottom:30px;border-bottom:1px solid #8a7046!important;background:linear-gradient(90deg,#19282b,#10191c)!important;color:#ead9ad!important}
+      html[data-nct-theme^="dcc_"] .nct-note-head::before{content:"FIELD EDITION";position:absolute;left:14px;bottom:9px;color:#c7a45b;font:800 8px/1 ui-monospace,monospace;letter-spacing:.18em}
+      html[data-nct-theme^="dcc_"] .nct-note-tab{border-color:#8a7046!important;background:#172226!important;color:#ead9ad!important;box-shadow:0 0 16px #c7a45b22!important}
+      html[data-nct-theme^="dcc_"] .nct-note-editor textarea{background:repeating-linear-gradient(180deg,#0d1518 0 27px,#8a704629 28px)!important;color:#f3e6c2!important;border-color:#8a7046!important;line-height:28px!important}
+      html[data-nct-theme^="dcc_"] .nct-note-tree{border-color:#8a7046!important}html[data-nct-theme^="dcc_"] .nct-note-row.selected{background:#8a704633!important;color:#f3e6c2!important}
+      @media(max-width:700px){.nct-note-panel{top:102px;bottom:4px}.nct-note-tab{top:auto;bottom:12px;writing-mode:horizontal-tb}.nct-note-tab.personal,body.nct-nav-closed .nct-note-tab.personal{left:8px;border-radius:7px!important}.nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}.nct-note-tab.shared{right:8px;border-radius:7px!important}}
     `;
     document.head.append(style);
 
@@ -145,7 +157,7 @@ SESSION_SCRIPT = r"""
     function makeSide(side) {
       const tab = document.createElement('button');
       tab.type='button';tab.className=`nct-note-tab ${side}`;
-      tab.innerHTML=`${side==='personal'?'Personal notes':`${pageLabel} shared`} <span class="count"></span>`;
+      tab.innerHTML=`<span class="nct-note-tab-label">${side==='personal'?'Personal notes':`${pageLabel} shared`}</span> <span class="count"></span>`;
       const panel=document.createElement('aside');panel.className=`nct-note-panel ${side}`;panel.setAttribute('aria-label',side==='personal'?'Personal investigation notes':`${pageLabel} shared investigation notes`);panel.innerHTML=panelMarkup(side);
       document.body.append(tab,panel);
       tab.onclick=()=>togglePanel(side,!panel.classList.contains('open'));
@@ -159,9 +171,17 @@ SESSION_SCRIPT = r"""
       return {tab,panel};
     }
     const personalSide=makeSide('personal'),sharedSide=makeSide('shared');
+    function applyCookbookIdentity(preset=document.documentElement.dataset.nctTheme||''){const enabled=String(preset).startsWith('dcc_'),personalTitle=personalSide.panel.querySelector('.nct-note-head strong'),personalSub=personalSide.panel.querySelector('.nct-note-head small'),sharedTitle=sharedSide.panel.querySelector('.nct-note-head strong'),sharedSub=sharedSide.panel.querySelector('.nct-note-head small'),personalSearch=personalSide.panel.querySelector('.nct-note-search'),sharedSearch=sharedSide.panel.querySelector('.nct-note-search');personalSide.tab.querySelector('.nct-note-tab-label').textContent=enabled?'Cookbook':'Personal notes';sharedSide.tab.querySelector('.nct-note-tab-label').textContent=enabled?`${pageLabel} cookbook`:`${pageLabel} shared`;personalTitle.textContent=enabled?"Dungeon Anarchist’s Cookbook":'Personal notes';personalSub.textContent=enabled?'Private field entries for this crawler':'Private to your analyst account';sharedTitle.textContent=enabled?`${pageLabel} shared cookbook`:`${pageLabel} shared notes`;sharedSub.textContent=enabled?`Team field entries published to ${pageLabel}`:`Team notes published to ${pageLabel}`;personalSearch.placeholder=enabled?'Search my cookbook':'Search my notes';sharedSearch.placeholder=enabled?'Search shared cookbook':'Search shared notes';personalSide.panel.setAttribute('aria-label',enabled?"Personal Dungeon Anarchist’s Cookbook":'Personal investigation notes');sharedSide.panel.setAttribute('aria-label',enabled?`${pageLabel} shared cookbook`:`${pageLabel} shared investigation notes`);const addNote=personalSide.panel.querySelector('[data-new-note]'),addFolder=personalSide.panel.querySelector('[data-new-folder]');if(addNote)addNote.textContent=enabled?'+ Entry':'+ Note';if(addFolder)addFolder.textContent=enabled?'+ Chapter':'+ Folder';}
+    applyCookbookIdentity();window.addEventListener('nct-theme-change',event=>applyCookbookIdentity(event.detail?.preset));
 
     function togglePanel(side,open){
       const target=side==='personal'?personalSide:sharedSide;
+      const other=side==='personal'?sharedSide:personalSide;
+      if(open){
+        other.panel.classList.remove('open');
+        other.tab.setAttribute('aria-expanded','false');
+        localStorage.setItem(`nct-${side==='personal'?'shared':'personal'}-notes-open`,'0');
+      }
       target.panel.classList.toggle('open',open);target.tab.setAttribute('aria-expanded',String(open));
       localStorage.setItem(`nct-${side}-notes-open`,open?'1':'0');
       if(open&&side==='shared'&&page==='map'){
@@ -191,13 +211,13 @@ SESSION_SCRIPT = r"""
     function contextText(item){const context=item.context||{};return context.source_url?`Linked to ${context.source_label||context.source_page||'NCT'} · ${context.source_url}`:'Not linked to a specific record or view.'}
     function selectItem(side,id){if(side==='personal')personalSelected=id;else sharedSelected=id;renderTree(side);renderEditor(side,itemById(id))}
     function renderEditor(side,item){const editor=(side==='personal'?personalSide:sharedSide).panel.querySelector('.nct-note-editor');if(!item){editor.hidden=true;editor.replaceChildren();return}editor.hidden=false;const writable=side==='personal'&&item.writable&&canWrite;
-      if(!writable){editor.innerHTML=`<div class="nct-note-meta"><span class="nct-note-badge shared">Shared by ${escapeHtml(item.owner)}</span><span>Updated ${escapeHtml(item.updated_at)}</span></div><label>Title<input data-title readonly></label>${item.kind==='note'?'<label style="flex:1">Note<textarea data-content readonly></textarea></label>':''}<div class="nct-note-context"></div><div class="nct-note-actions"><button type="button" data-export>Download Markdown</button></div>`;editor.querySelector('[data-title]').value=item.title;if(item.kind==='note')editor.querySelector('[data-content]').value=item.content||'';editor.querySelector('.nct-note-context').textContent=contextText(item);editor.querySelector('[data-export]').onclick=()=>exportItem(item);return}
+      if(!writable){const sharedBy=document.documentElement.dataset.nctTheme?.startsWith('dcc_')?`NEW CODEX ENTRY: Shared by Crawler ${escapeHtml(item.owner)}`:`Shared by ${escapeHtml(item.owner)}`;editor.innerHTML=`<div class="nct-note-meta"><span class="nct-note-badge shared">${sharedBy}</span><span>Updated ${escapeHtml(item.updated_at)}</span></div><label>Title<input data-title readonly></label>${item.kind==='note'?'<label style="flex:1">Note<textarea data-content readonly></textarea></label>':''}<div class="nct-note-context"></div><div class="nct-note-actions"><button type="button" data-export>Download Markdown</button></div>`;editor.querySelector('[data-title]').value=item.title;if(item.kind==='note')editor.querySelector('[data-content]').value=item.content||'';editor.querySelector('.nct-note-context').textContent=contextText(item);editor.querySelector('[data-export]').onclick=()=>exportItem(item);return}
       const folders=ownNotes().filter(folder=>folder.kind==='folder'&&folder.note_id!==item.note_id&&!descendants(item.note_id).has(folder.note_id));
       editor.innerHTML=`<div class="nct-note-meta"><span class="nct-note-badge ${item.visibility==='shared'?'shared':''}">${item.visibility==='shared'?`Shared on ${pageName(item.shared_page)}`:'Personal'}</span><span>Version ${item.version}</span></div><label>Title<input data-title maxlength="140"></label><label>Location<select data-parent><option value="">Top level</option>${folders.map(folder=>`<option value="${escapeHtml(folder.note_id)}">${escapeHtml(folder.title)}</option>`).join('')}</select></label>${item.kind==='note'?'<label style="flex:1">Note<textarea data-content maxlength="250000" placeholder="Record observations, leads, questions, and conclusions…"></textarea></label>':''}<div class="nct-note-context"></div><div class="nct-note-actions"><button class="primary" type="button" data-save>Save</button><button type="button" data-link>Link current view</button><button type="button" data-export>Download Markdown</button><button type="button" data-share>${item.visibility==='shared'&&item.shared_page===page?'Unshare':`Share on ${pageLabel}`}</button><button class="danger" type="button" data-delete>Delete</button></div><div class="nct-note-status" role="status"></div>`;
       editor.querySelector('[data-title]').value=item.title;editor.querySelector('[data-parent]').value=item.parent_id||'';if(item.kind==='note')editor.querySelector('[data-content]').value=item.content||'';editor.querySelector('.nct-note-context').textContent=contextText(item);
       editor.querySelector('[data-save]').onclick=()=>saveItem(item);editor.querySelector('[data-link]').onclick=()=>linkItem(item);editor.querySelector('[data-export]').onclick=()=>exportItem(item);editor.querySelector('[data-share]').onclick=()=>toggleShare(item);editor.querySelector('[data-delete]').onclick=()=>deleteItem(item);
     }
-    function pageName(value){return {device:'Device',nmap:'Nmap',analyze:'Analyze',hunt:'Hunt',map:'Map'}[value]||value||'NCT'}
+    function pageName(value){return {device:'Device',nmap:'Nmap',analyze:'Analyze',hunt:'Hunt',reach:'Reach',map:'Map'}[value]||value||'NCT'}
     function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}
     async function api(url,options){const response=await fetch(url,{credentials:'same-origin',...options}),data=await response.json();if(!response.ok)throw new Error(data.detail||'The note change could not be completed');return data}
     function status(message,kind=''){const node=personalSide.panel.querySelector('.nct-note-status');if(node){node.textContent=message;node.className=`nct-note-status ${kind}`}}
@@ -223,7 +243,7 @@ SESSION_SCRIPT = r"""
 
 def session_script() -> Response:
     return Response(
-        SESSION_SCRIPT,
+        SHELL_SCRIPT + "\n" + SESSION_SCRIPT,
         media_type="application/javascript",
         headers={"Cache-Control": "no-store"},
     )
@@ -232,8 +252,8 @@ def session_script() -> Response:
 def analyst_admin_page() -> HTMLResponse:
     return HTMLResponse(
         r'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NCT · Analyst accounts</title>
-<style>:root{color-scheme:dark;--bg:#07121a;--panel:#0d1c26;--line:#315367;--text:#eaf4f8;--muted:#a9c3cf;--accent:#57d6bf}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px system-ui}header{position:sticky;top:0;z-index:100;padding:10px 24px;border-bottom:1px solid var(--line);background:#07121af5}.sr-only{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)}.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;line-height:1}.nct-brand>strong{padding-left:.24em;font-size:40px;letter-spacing:.24em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:650;letter-spacing:.09em;text-transform:uppercase}.nct-brand span b{color:var(--accent)}.nav{display:flex;justify-content:center;gap:10px;margin-top:8px}.nav a{padding:6px 12px;border:1px solid var(--line);border-radius:7px;background:#102b38;color:var(--text);font-weight:750;text-decoration:none}.nav a.active{background:var(--accent);color:#06201d}main{width:min(1120px,calc(100% - 32px));margin:22px auto}.panel{padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}h2{margin-top:0}.hint,.status{color:var(--muted)}form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}label{display:grid;gap:6px;font-weight:750}input,select,button{padding:11px;border:1px solid #3c6072;border-radius:7px;background:#091722;color:inherit;font:inherit}button{align-self:end;background:var(--accent);color:#06201d;font-weight:850;cursor:pointer}.wide{grid-column:1/-1}.table-wrap{margin-top:20px;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #263f4d;text-align:left}th{color:#b9d5df}.bad{color:#ff9f9f}.good{color:#77e3b5}.account-actions{display:flex;gap:6px;flex-wrap:wrap}.account-actions button{padding:6px 8px;background:#102b38;color:var(--text);font-size:12px}.account-actions .danger{border-color:#8e4a55;color:#ffb0b9}.disabled-account{opacity:.58}details{margin-top:22px}dialog{width:min(480px,calc(100% - 32px));padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#000b}dialog form{grid-template-columns:1fr}.dialog-actions{display:flex;gap:8px;justify-content:flex-end}.dialog-actions button{width:auto}@media(max-width:760px){form{grid-template-columns:1fr}.wide{grid-column:auto}}</style><script src="/assets/nct-session.js" defer></script></head><body>
-<header><h1 class="sr-only">Analyst accounts</h1><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div><nav class="nav" aria-label="Primary"><a href="/device-config">Device</a><a href="/scans">Nmap</a><a href="/hostnames">Hostnames</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/reachability">Reach</a><a href="/network-map">Map</a><a class="active" href="/admin/users" aria-current="page">Accounts</a></nav></header>
+<style>:root{color-scheme:dark;--bg:#07121a;--panel:#0d1c26;--line:#315367;--text:#eaf4f8;--muted:#a9c3cf;--accent:#57d6bf}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px system-ui}header{position:sticky;top:0;z-index:100;padding:10px 24px;border-bottom:1px solid var(--line);background:#07121af5}.sr-only{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)}.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;line-height:1}.nct-brand>strong{padding-left:.24em;font-size:40px;letter-spacing:.24em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:650;letter-spacing:.09em;text-transform:uppercase}.nct-brand span b{color:var(--accent)}.nav{display:flex;justify-content:center;gap:10px;margin-top:8px}.nav a{padding:6px 12px;border:1px solid var(--line);border-radius:7px;background:#102b38;color:var(--text);font-weight:750;text-decoration:none}.nav a.active{background:var(--accent);color:#06201d}main{width:min(1120px,calc(100% - 32px));margin:22px auto}.panel{padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}h2{margin-top:0}.hint,.status{color:var(--muted)}form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}label{display:grid;gap:6px;font-weight:750}input,select,button{padding:11px;border:1px solid #3c6072;border-radius:7px;background:#091722;color:inherit;font:inherit}button{align-self:end;background:var(--accent);color:#06201d;font-weight:850;cursor:pointer}.wide{grid-column:1/-1}.table-wrap{margin-top:20px;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #263f4d;text-align:left}th{color:#b9d5df}.bad{color:#ff9f9f}.good{color:#77e3b5}.account-actions{display:flex;gap:6px;flex-wrap:wrap}.account-actions button{padding:6px 8px;background:#102b38;color:var(--text);font-size:12px}.account-actions .danger{border-color:#8e4a55;color:#ffb0b9}.disabled-account{opacity:.58}details{margin-top:22px}dialog{width:min(480px,calc(100% - 32px));padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#000b}dialog form{grid-template-columns:1fr}.dialog-actions{display:flex;gap:8px;justify-content:flex-end}.dialog-actions button{width:auto}@media(max-width:760px){form{grid-template-columns:1fr}.wide{grid-column:auto}}</style><script src="/assets/nct-session.js"></script></head><body>
+<header><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div></header>
 <main><section class="panel"><h2>Analyst accounts</h2><p class="hint">Administrators create named accounts here. Passwords are stored as hardened hashes and are never displayed again.</p>
 <form id="createUser"><label>Username<input id="username" required minlength="2" maxlength="64" autocomplete="off"></label><label>Display name<input id="displayName" required maxlength="100" autocomplete="off"></label><label>Role<select id="role"><option value="analyst">Analyst</option><option value="viewer">Viewer</option><option value="admin">Administrator</option></select></label><label>Initial password<input id="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"></label><button class="wide" type="submit">Create account</button></form><p id="status" class="status" role="status"></p>
 <div class="table-wrap"><table><thead><tr><th>Account</th><th>Display name</th><th>Role</th><th>Status</th><th>Created</th><th>Created by</th><th>Actions</th></tr></thead><tbody id="accounts"></tbody></table></div>

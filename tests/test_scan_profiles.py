@@ -12,7 +12,12 @@ from app.poc import (
     build_nmap_execution_argv,
     merge_nmap_xml,
 )
-from app.scan_profiles import build_nmap_flags, build_phase_nmap_flags, scan_display_name
+from app.scan_profiles import (
+    build_nmap_flags,
+    build_phase_nmap_flags,
+    normalize_scan_options,
+    scan_display_name,
+)
 
 
 @pytest.mark.parametrize(
@@ -87,10 +92,20 @@ def test_fping_and_traceroute_options_are_retained_without_losing_required_n():
 
 
 def test_combined_top_port_counts_are_rejected_instead_of_misrepresented():
-    with pytest.raises(ValueError, match="independently"):
+    with pytest.raises(ValueError, match="separate TCP and UDP phases"):
         build_nmap_flags(
             {"protocol": "tcp_udp", "tcp_scope": "top_1000", "udp_scope": "top_100"}
         )
+
+
+def test_combined_top_port_counts_can_be_saved_for_split_execution():
+    settings = normalize_scan_options(
+        {"protocol": "tcp_udp", "tcp_scope": "top_1000", "udp_scope": "top_100"}
+    )
+
+    assert settings["protocol"] == "tcp_udp"
+    assert settings["tcp_scope"] == "top_1000"
+    assert settings["udp_scope"] == "top_100"
 
 
 def test_split_protocol_phases_allow_independent_top_port_counts_and_bound_udp():

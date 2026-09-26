@@ -300,7 +300,7 @@ def share_note(
         placeholders = ",".join("?" for _ in ids)
         visibility = "shared" if shared else "personal"
         page = str(page or "").strip().lower() or None
-        if shared and page not in {"device", "nmap", "analyze", "hunt", "map"}:
+        if shared and page not in {"device", "nmap", "analyze", "hunt", "reach", "map"}:
             raise ValueError("Choose the NCT page where this note should be shared")
         changed_at = utc_now()
         db.execute(

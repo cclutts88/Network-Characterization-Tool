@@ -35,6 +35,7 @@ from app.scan_profiles import (
     build_nmap_flags,
     build_phase_nmap_flags,
     normalize_scan_options,
+    requires_split_protocol_phases,
     scan_coverage,
     scan_display_name,
 )
@@ -727,13 +728,27 @@ def target_address_count(targets: list[str]) -> int:
 
 def apply_fping_fallback(manifest: dict) -> None:
     """Retarget Nmap when ICMP-only discovery cannot see approved hosts."""
-    manifest["command_argv"] = build_nmap_argv(
-        manifest["profile"],
+    phases = build_execution_phases(
         manifest["interface"],
+        manifest["profile_settings"],
         include_no_strike=bool(manifest.get("no_strike")),
-        scan_options=manifest["profile_settings"],
         target_file="targets.txt",
+        pre_discovered=False,
     )
+    if requires_split_protocol_phases(manifest["profile_settings"]):
+        manifest["command_argv"] = list(phases[0]["command_argv"])
+        manifest["command_note"] = (
+            "Compatibility field shows the TCP phase; execution_phases contains "
+            "the complete TCP and UDP workflow."
+        )
+    else:
+        manifest["command_argv"] = build_nmap_argv(
+            manifest["profile"],
+            manifest["interface"],
+            include_no_strike=bool(manifest.get("no_strike")),
+            scan_options=manifest["profile_settings"],
+            target_file="targets.txt",
+        )
     manifest["exact_command"] = shlex.join(manifest["command_argv"])
     manifest["execution_command_argv"] = build_nmap_execution_argv(
         manifest["command_argv"]
@@ -741,13 +756,7 @@ def apply_fping_fallback(manifest: dict) -> None:
     manifest["exact_execution_command"] = shlex.join(
         manifest["execution_command_argv"]
     )
-    manifest["execution_phases"] = build_execution_phases(
-        manifest["interface"],
-        manifest["profile_settings"],
-        include_no_strike=bool(manifest.get("no_strike")),
-        target_file="targets.txt",
-        pre_discovered=False,
-    )
+    manifest["execution_phases"] = phases
     manifest["discovery_fallback_used"] = True
 
 
@@ -784,13 +793,28 @@ def build_scan_run_manifest(
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
     use_fping = settings.get("discovery_mode") == "fping"
-    nmap_argv = build_nmap_argv(
-        profile_record["name"],
+    execution_phases = build_execution_phases(
         plan.interface,
+        settings,
         include_no_strike=bool(no_strike),
-        scan_options=settings,
-        target_file="fping-alive.txt" if use_fping else "targets.txt",
+        target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
+        pre_discovered=True,
     )
+    command_note = None
+    if requires_split_protocol_phases(settings):
+        nmap_argv = list(execution_phases[0]["command_argv"])
+        command_note = (
+            "Compatibility field shows the TCP phase; execution_phases contains "
+            "the complete TCP and UDP workflow."
+        )
+    else:
+        nmap_argv = build_nmap_argv(
+            profile_record["name"],
+            plan.interface,
+            include_no_strike=bool(no_strike),
+            scan_options=settings,
+            target_file="fping-alive.txt" if use_fping else "targets.txt",
+        )
     execution_argv = build_nmap_execution_argv(nmap_argv)
     discovery_argv = (
         build_fping_argv(plan.interface)
@@ -803,13 +827,6 @@ def build_scan_run_manifest(
         discovery_argv
         if use_fping
         else build_nmap_execution_argv(discovery_argv)
-    )
-    execution_phases = build_execution_phases(
-        plan.interface,
-        settings,
-        include_no_strike=bool(no_strike),
-        target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
-        pre_discovered=True,
     )
     capture_argv = build_tcpdump_argv(plan.interface) if capture else None
     created_at = utc_now()
@@ -897,6 +914,7 @@ def build_scan_run_manifest(
         "exact_command": shlex.join(nmap_argv),
         "execution_command_argv": execution_argv,
         "exact_execution_command": shlex.join(execution_argv),
+        "command_note": command_note,
         "execution_phases": execution_phases,
         "workflow": ["discovery", *[item["name"] for item in execution_phases], "merge", "analysis"],
         "capture_command_argv": capture_argv,

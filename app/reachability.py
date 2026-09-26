@@ -3224,6 +3224,247 @@ def simulate_proposed_route_control(
     }
 
 
+def _apply_validated_route_proposal(
+    device_analyses: list[dict], proposal: dict,
+) -> list[dict]:
+    """Apply an already validated route proposal to an isolated evidence copy."""
+    projected = deepcopy(device_analyses)
+    device_key = str(proposal.get("device_address") or proposal.get("device") or "")
+    selected = next((
+        item for item in projected
+        if device_key in {
+            str((item.get("device") or {}).get("address") or ""),
+            str((item.get("device") or {}).get("name") or ""),
+        }
+    ), None)
+    if selected is None:
+        raise ValueError("The retained device for the proposed route is no longer available")
+    routes = list(selected.setdefault("route_analysis", {}).get("routes") or [])
+    action = str(proposal.get("action") or "")
+    network = ipaddress.ip_network(str(proposal.get("network") or ""), strict=False)
+    route_interface = str(proposal.get("interface") or "").strip() or None
+    next_hop = str(proposal.get("next_hop") or "").strip() or None
+    if action == "add":
+        routes.append({
+            "network": str(network),
+            "interface": route_interface,
+            "via": next_hop,
+            "protocol": "proposed",
+            "direct": not next_hop,
+            "line": (
+                f"PROPOSED ROUTE {network} via {next_hop or 'direct'} "
+                f"interface {route_interface}"
+            ),
+            "simulated": True,
+        })
+    else:
+        match_index = next((
+            index for index, item in enumerate(routes)
+            if str(item.get("network") or "") == str(network)
+            and (not route_interface or str(item.get("interface") or "") == route_interface)
+            and (not next_hop or str(item.get("via") or "") == next_hop)
+        ), None)
+        if match_index is None:
+            raise ValueError("The retained route selected by the proposal is no longer available")
+        if action == "remove":
+            routes.pop(match_index)
+        else:
+            priority_kind = str(proposal.get("priority_kind") or "")
+            priority_value = proposal.get("priority_value")
+            routes[match_index] = {
+                **routes[match_index],
+                priority_kind: priority_value,
+                "simulated": True,
+                "line": (
+                    f"PROPOSED {priority_kind.upper()} {priority_value} for "
+                    f"{network} via {routes[match_index].get('via') or 'direct'} "
+                    f"interface {routes[match_index].get('interface') or 'unspecified'}"
+                ),
+            }
+    selected["route_analysis"]["routes"] = routes
+    return projected
+
+
+def _result_traverses_device(result: dict, *, name: str, address: str | None) -> bool:
+    expected_name = str(name or "").casefold()
+    expected_address = str(address or "").casefold()
+    return any(
+        item.get("kind") == "device" and (
+            str(item.get("label") or "").casefold() == expected_name
+            or (
+                expected_address
+                and str(item.get("detail") or "").casefold() == expected_address
+            )
+        )
+        for item in result.get("path") or []
+    )
+
+
+def simulate_proposed_change_scenario(
+    *, source_text: str, destination_text: str, protocol: str, port: int,
+    hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
+    route: dict, policy: dict, flow_state: str = "new",
+    source_external: bool = False,
+) -> dict:
+    """Project a route change followed by a policy change as one scenario."""
+    route_result = simulate_proposed_route_control(
+        source_text=source_text,
+        destination_text=destination_text,
+        protocol=protocol,
+        port=port,
+        hunting=hunting,
+        saved_networks=saved_networks,
+        device_analyses=device_analyses,
+        flow_state=flow_state,
+        source_external=source_external,
+        action=route.get("action"),
+        device_key=route.get("device_key"),
+        route_network=route.get("route_network"),
+        route_interface=route.get("route_interface"),
+        next_hop=route.get("next_hop"),
+        priority_kind=route.get("priority_kind"),
+        priority_value=route.get("priority_value"),
+    )
+    route_projected_analyses = _apply_validated_route_proposal(
+        device_analyses, route_result["proposal"]
+    )
+    policy_result = simulate_proposed_policy_control(
+        source_text=source_text,
+        destination_text=destination_text,
+        protocol=protocol,
+        port=port,
+        hunting=hunting,
+        saved_networks=saved_networks,
+        device_analyses=route_projected_analyses,
+        flow_state=flow_state,
+        source_external=source_external,
+        action=policy.get("action"),
+        device_key=policy.get("device_key"),
+        interface_name=policy.get("interface_name"),
+        insertion_index=policy.get("insertion_index", 0),
+        vendor_rule=policy.get("vendor_rule"),
+        template_id=policy.get("template_id", "exact-service"),
+    )
+    projected = deepcopy(policy_result["projected"])
+    policy_proposal = policy_result["proposal"]
+    policy_comparison = policy_result["comparison"]
+    policy_on_projected_path = _result_traverses_device(
+        policy_result["baseline"],
+        name=policy_proposal.get("device"),
+        address=policy_proposal.get("device_address"),
+    )
+    if not policy_on_projected_path:
+        projected["outcome"] = "Unknown"
+        projected["confidence"] = "low"
+        projected["explanation"] = (
+            "The proposed route does not place the selected policy device on the "
+            "projected path, so NCT cannot claim that the proposed rule controls this flow."
+        )
+        projected["caveats"] = list(dict.fromkeys([
+            "The policy device must appear on the projected route before its rule can be treated as effective.",
+            *(projected.get("caveats") or []),
+        ]))
+    route_proposals = [
+        item for item in route_result["projected"].get("evidence") or []
+        if item.get("kind") == "proposal"
+    ]
+    projected["evidence"] = [*route_proposals, *(projected.get("evidence") or [])]
+    route_path_proposals = [
+        item for item in route_result["projected"].get("path") or []
+        if item.get("kind") == "proposal"
+    ]
+    for item in reversed(route_path_proposals):
+        projected["path"].insert(max(1, len(projected["path"]) - 1), item)
+    projected["caveats"] = list(dict.fromkeys([
+        *(route_result["projected"].get("caveats") or []),
+        *(projected.get("caveats") or []),
+    ]))
+    desired_outcome = (
+        "Expected Blocked" if policy_proposal.get("action") == "deny"
+        else "Expected Allowed"
+    )
+    policy_effective = bool(policy_comparison.get("proposal_effective"))
+    intent_achieved = (
+        policy_on_projected_path
+        and policy_effective
+        and projected.get("outcome") == desired_outcome
+    )
+    validation = [
+        {
+            "id": "route_projection",
+            "label": "Route change applied",
+            "status": "pass",
+            "detail": "The route change was applied to an isolated copy of retained evidence.",
+        },
+        {
+            "id": "policy_rule",
+            "label": "Written policy rule",
+            "status": "pass" if policy_proposal.get("validation", {}).get("valid") else "fail",
+            "detail": policy_proposal.get("validation", {}).get("message") or "The written rule could not be validated.",
+        },
+        {
+            "id": "policy_path",
+            "label": "Policy device on projected path",
+            "status": "pass" if policy_on_projected_path else "uncertain",
+            "detail": (
+                "The projected route traverses the selected policy device."
+                if policy_on_projected_path
+                else "The selected policy device is not present on the projected route."
+            ),
+        },
+        {
+            "id": "policy_order",
+            "label": "Rule order is effective",
+            "status": "pass" if policy_effective else "fail",
+            "detail": (
+                "The proposal is evaluated before the retained rule that currently decides this flow."
+                if policy_effective
+                else "An earlier retained rule decides this flow before the proposal is reached."
+            ),
+        },
+        {
+            "id": "intent",
+            "label": "Intended result",
+            "status": "pass" if intent_achieved else (
+                "uncertain" if projected.get("outcome") == "Unknown" else "fail"
+            ),
+            "detail": (
+                f"The combined scenario changes the final result to {desired_outcome}."
+                if intent_achieved
+                else f"The combined scenario does not establish {desired_outcome}."
+            ),
+        },
+    ]
+    return {
+        "status": "reachability_change_scenario_complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "route_proposal": route_result["proposal"],
+        "policy_proposal": policy_proposal,
+        "baseline": route_result["baseline"],
+        "route_projected": policy_result["baseline"],
+        "projected": projected,
+        "comparison": {
+            "before": route_result["baseline"].get("outcome"),
+            "after_route": policy_result["baseline"].get("outcome"),
+            "after": projected.get("outcome"),
+            "outcome_changed": route_result["baseline"].get("outcome") != projected.get("outcome"),
+            "route_path_changed": route_result["comparison"].get("path_changed"),
+            "policy_on_projected_path": policy_on_projected_path,
+            "policy_effective": policy_effective,
+            "intent_achieved": intent_achieved,
+            "scope": policy_comparison.get("scope") or {},
+            "collateral_impact": policy_comparison.get("collateral_impact") or {},
+            "selected_route_before": route_result["comparison"].get("selected_route_before"),
+            "selected_route_after": route_result["comparison"].get("selected_route_after"),
+        },
+        "validation": validation,
+        "disclaimer": (
+            "Read-only combined route and policy projection from retained evidence. "
+            "It sends no network traffic and changes no device configuration."
+        ),
+    }
+
+
 def _compact_exposure_result(source: dict, result: dict) -> dict:
     return {
         "source": source,

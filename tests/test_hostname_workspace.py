@@ -18,6 +18,7 @@ from app.hostname_imports import (
     store_hostname_evidence,
 )
 from app.hostname_ui import hostname_page
+from app.shell_ui import SHELL_SCRIPT
 from app.main import app
 
 
@@ -132,10 +133,11 @@ def test_hostname_selection_keeps_source_and_version_history(tmp_path):
 def test_hostname_page_moves_import_and_explains_zero_touch_refresh():
     html = hostname_page().body.decode()
 
-    assert 'href="/hostnames" aria-current="page"' in html
-    assert html.index('>Nmap</a>') < html.index('>Hostnames</a>') < html.index('>Analyze</a>')
+    assert '<nav class="nav"' not in html
+    assert 'aria-label="Primary"' not in html
+    assert SHELL_SCRIPT.index("title:'Nmap scans'") < SHELL_SCRIPT.index("title:'Hostname evidence'") < SHELL_SCRIPT.index("title:'Current network'")
     assert "No network contact" in html
-    assert "Import operator hostname lists" in html
+    assert "Hostname Upload" in html
     assert 'id="identityFile"' in html
     assert "/api/hostnames/import" in html
     assert "/api/hostnames/select" in html

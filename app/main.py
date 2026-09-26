@@ -37,6 +37,7 @@ from app.reachability import (
     evaluate_reachability,
     evaluate_reachability_range,
     policy_rule_context,
+    simulate_proposed_change_scenario,
     simulate_proposed_policy_control,
     simulate_proposed_route_control,
 )
@@ -45,9 +46,11 @@ from app.saved_networks import list_saved_networks
 from app.network_semantics import (
     apply_external_gateway_role,
     clear_external_wan_gateway,
+    get_air_gapped_designation,
     get_external_wan_gateway,
     get_external_wan_gateways,
     init_network_semantics_storage,
+    set_air_gapped_designation,
     set_external_wan_gateway,
 )
 from app.host_identities import (
@@ -88,7 +91,13 @@ from app.identity_overrides import (
     set_os_override,
 )
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
-from app.scan_profiles import build_nmap_flags, scan_coverage, scan_display_name
+from app.scan_profiles import (
+    build_nmap_flags,
+    build_phase_nmap_flags,
+    requires_split_protocol_phases,
+    scan_coverage,
+    scan_display_name,
+)
 from app.comparison import (
     compare_analyses,
     coverage_warnings,
@@ -123,6 +132,7 @@ from app.auth import (
     set_user_disabled,
     verify_credentials,
 )
+from app.achievements import list_achievements, unlock_achievement
 from app.workspaces import (
     WorkspaceConflict,
     delete_layout,
@@ -155,6 +165,14 @@ from app.view_preferences import (
     init_view_preference_storage,
     save_filter_preset,
     save_view_preference,
+)
+from app.shell_preferences import (
+    delete_shared_theme,
+    get_shell_preference,
+    init_shell_preference_storage,
+    list_shared_themes,
+    publish_shared_theme,
+    save_shell_preference,
 )
 import hashlib
 import io
@@ -236,6 +254,30 @@ class ReachabilityRouteSimulationQuery(ReachabilityQuery):
     priority_value: int | None = Field(default=None, ge=0, le=4_294_967_295)
 
 
+class ReachabilityScenarioPolicy(BaseModel):
+    action: Literal["permit", "deny"]
+    device_key: str = Field(min_length=1, max_length=160)
+    interface_name: str | None = Field(default=None, max_length=160)
+    insertion_index: int = Field(default=0, ge=0, le=100_000)
+    vendor_rule: str | None = Field(default=None, max_length=20_000)
+    template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+
+
+class ReachabilityScenarioRoute(BaseModel):
+    action: Literal["add", "remove", "set_priority"]
+    device_key: str = Field(min_length=1, max_length=160)
+    route_network: str = Field(min_length=1, max_length=64)
+    route_interface: str | None = Field(default=None, max_length=160)
+    next_hop: str | None = Field(default=None, max_length=64)
+    priority_kind: Literal["metric", "preference"] | None = None
+    priority_value: int | None = Field(default=None, ge=0, le=4_294_967_295)
+
+
+class ReachabilityChangeScenarioQuery(ReachabilityQuery):
+    route: ReachabilityScenarioRoute
+    policy: ReachabilityScenarioPolicy
+
+
 class ExternalWanGatewayRequest(BaseModel):
     node_id: str = Field(min_length=1, max_length=255)
     device_name: str = Field(default="", max_length=255)
@@ -255,6 +297,10 @@ class ExternalWanGatewayRequest(BaseModel):
             if name not in cleaned:
                 cleaned.append(name)
         return cleaned
+
+
+class NetworkAirGapRequest(BaseModel):
+    air_gapped: bool
 
 
 class HostnameSelectionRequest(BaseModel):
@@ -362,12 +408,26 @@ class InvestigationNoteRequest(BaseModel):
 class InvestigationNoteShareRequest(BaseModel):
     shared: bool
     expected_version: int = Field(ge=1)
-    page: Literal["device", "nmap", "analyze", "hunt", "map"] | None = None
+    page: Literal["device", "nmap", "analyze", "hunt", "reach", "map"] | None = None
 
 
 class AnalystViewPreferenceRequest(BaseModel):
     snapshot: dict
     expected_version: int | None = Field(default=None, ge=0)
+
+
+class AnalystShellPreferenceRequest(BaseModel):
+    snapshot: dict
+
+
+class AnalystSharedThemeRequest(BaseModel):
+    source_theme_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=48)
+    snapshot: dict
+
+
+class AchievementUnlockRequest(BaseModel):
+    context: dict = Field(default_factory=dict)
 
 
 class AnalystFilterPresetRequest(BaseModel):
@@ -523,8 +583,23 @@ def campaign_chunking_enabled(spec: CampaignSpec) -> bool:
 def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict]]:
     no_strike, segments = validate_campaign(spec)
     profile = resolve_campaign_profile(spec)
-    flags = build_nmap_flags(profile["settings"])
-    use_fping = profile["settings"].get("discovery_mode") == "fping"
+    settings = profile["settings"]
+    use_fping = settings.get("discovery_mode") == "fping"
+    split_protocols = requires_split_protocol_phases(settings)
+    if split_protocols:
+        flags: list[str] = []
+        phase_flags = [
+            {
+                "protocol": protocol,
+                "flags": build_phase_nmap_flags(
+                    settings, protocol, pre_discovered=use_fping
+                ),
+            }
+            for protocol in ("tcp", "udp")
+        ]
+    else:
+        flags = build_nmap_flags(settings)
+        phase_flags = [{"protocol": str(settings.get("protocol") or "tcp"), "flags": flags}]
     chunks: list[dict] = []
     chunk_number = 0
     chunking_enabled = campaign_chunking_enabled(spec)
@@ -535,16 +610,31 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
             chunk_addresses = addresses[start:start + addresses_per_scan]
             stem = f"{chunk_number:03d}-{segment_name}"
             target_path = f"targets/{stem}.txt"
-            output_path = f"results/{stem}.xml"
             alive_path = f"results/{stem}-fping-alive.txt"
             fping_log_path = f"results/{stem}-fping-stderr.txt"
             nmap_target_path = alive_path if use_fping else target_path
-            common = (
-                f"{' '.join(flags)} -iL {nmap_target_path} "
-                f"--excludefile no-strike.txt -oX {output_path}"
-            )
-            linux_nmap = f"sudo nmap {common}"
-            windows_nmap = f"nmap {common}"
+            nmap_phases = []
+            for phase in phase_flags:
+                protocol = phase["protocol"]
+                output_path = (
+                    f"results/{stem}-{protocol}.xml"
+                    if split_protocols
+                    else f"results/{stem}.xml"
+                )
+                common = (
+                    f"{' '.join(phase['flags'])} -iL {nmap_target_path} "
+                    f"--excludefile no-strike.txt -oX {output_path}"
+                )
+                nmap_phases.append({
+                    "protocol": protocol,
+                    "flags": list(phase["flags"]),
+                    "output_file": output_path,
+                    "linux_command": f"sudo nmap {common}",
+                    "windows_command": f"nmap {common}",
+                })
+            output_files = [phase["output_file"] for phase in nmap_phases]
+            linux_nmap = "; ".join(phase["linux_command"] for phase in nmap_phases)
+            windows_nmap = " & ".join(phase["windows_command"] for phase in nmap_phases)
             if use_fping:
                 linux_command = (
                     f"fping -a -f {target_path} > {alive_path} 2> {fping_log_path} || [ $? -eq 1 ]; "
@@ -552,7 +642,7 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
                 )
                 windows_command = (
                     f"fping -a -f {target_path} > {alive_path} 2> {fping_log_path} & "
-                    f"for %%A in ({alive_path}) do if %%~zA GTR 0 {windows_nmap}"
+                    f"for %%A in ({alive_path}) do if %%~zA GTR 0 ({windows_nmap})"
                 )
             else:
                 linux_command = linux_nmap
@@ -562,7 +652,9 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
                 "terrain_segment": segment_name,
                 "stem": stem,
                 "target_file": target_path,
-                "output_file": output_path,
+                "output_file": output_files[0],
+                "output_files": output_files,
+                "nmap_phases": nmap_phases,
                 "addresses": chunk_addresses,
                 "linux_command": linux_command,
                 "windows_command": windows_command,
@@ -600,6 +692,15 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
             "terrain_segment": chunk["terrain_segment"],
             "target_file": chunk["target_file"],
             "output_file": chunk["output_file"],
+            "output_files": chunk["output_files"],
+            "nmap_phases": [
+                {
+                    "protocol": phase["protocol"],
+                    "flags": phase["flags"],
+                    "output_file": phase["output_file"],
+                }
+                for phase in chunk["nmap_phases"]
+            ],
             "address_count": len(chunk["addresses"]),
             "target_sha256": sha256_bytes(target_content),
         })
@@ -626,6 +727,15 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
         "profile_version": profile["version"],
         "profile_settings": profile["settings"],
         "nmap_flags": flags,
+        "execution_mode": (
+            "split_protocol_phases"
+            if requires_split_protocol_phases(profile["settings"])
+            else "single_command"
+        ),
+        "nmap_phase_flags": [
+            {"protocol": phase["protocol"], "flags": phase["flags"]}
+            for phase in (scan_plan[0]["nmap_phases"] if scan_plan else [])
+        ],
         "discovery_mode": profile["settings"].get("discovery_mode", "nmap"),
         "traceroute": bool(profile["settings"].get("traceroute", False)),
         "dns_resolution_disabled": True,
@@ -661,6 +771,7 @@ Chunks: {len(chunks)}
 - Nmap traceroute collection: `{'enabled' if profile['settings'].get('traceroute') else 'disabled'}`.
 - Every target file has had the certified no-strike addresses removed.
 - Every command also uses `--excludefile no-strike.txt` as a second safeguard.
+- TCP + UDP top-port scopes run as independent TCP and UDP phases so each selected count is preserved.
 - Chunks never mix terrain segments.
 - This application generated these commands; it did not execute Nmap.
 
@@ -1041,6 +1152,7 @@ async def lifespan(_: FastAPI):
     init_scan_collaboration_storage(DB_PATH)
     init_note_storage(DB_PATH)
     init_view_preference_storage(DB_PATH)
+    init_shell_preference_storage(DB_PATH)
     init_network_semantics_storage(DB_PATH)
     init_host_identity_storage(DB_PATH)
     recover_scheduler_state()
@@ -1351,6 +1463,106 @@ def analyst_view_workspace(request: Request, page: Literal["hunt", "analyze"]) -
     return result
 
 
+@app.get("/api/workspaces/shell-preferences")
+def analyst_shell_preference(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"server_persistence": False, "preference": None}
+    return {
+        "server_persistence": True,
+        "preference": get_shell_preference(
+            DB_PATH, owner=request.state.analyst["username"]
+        ),
+    }
+
+
+@app.put("/api/workspaces/shell-preferences")
+def store_analyst_shell_preference(
+    request: Request, preference: AnalystShellPreferenceRequest
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(
+            status_code=409, detail="Personal interface preferences require authenticated mode"
+        )
+    try:
+        return save_shell_preference(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            snapshot=preference.snapshot,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/shared-themes")
+def shared_analyst_themes(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"sharing_enabled": False, "themes": []}
+    return {"sharing_enabled": True, "themes": list_shared_themes(DB_PATH)}
+
+
+@app.post("/api/workspaces/shared-themes")
+def share_analyst_theme(request: Request, theme: AnalystSharedThemeRequest) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(
+            status_code=409, detail="Theme sharing requires authenticated mode"
+        )
+    try:
+        return publish_shared_theme(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            **theme.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/workspaces/shared-themes/{theme_id}")
+def unshare_analyst_theme(request: Request, theme_id: str) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(
+            status_code=409, detail="Theme sharing requires authenticated mode"
+        )
+    if not delete_shared_theme(
+        DB_PATH, owner=request.state.analyst["username"], theme_id=theme_id
+    ):
+        raise HTTPException(status_code=404, detail="Shared theme not found")
+    return {"deleted": True}
+
+
+@app.get("/api/workspaces/achievements")
+def analyst_achievements(request: Request) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        return {"server_persistence": False, "achievements": []}
+    return {
+        "server_persistence": True,
+        "achievements": list_achievements(
+            DB_PATH, owner=request.state.analyst["username"]
+        ),
+    }
+
+
+@app.post("/api/workspaces/achievements/{achievement_id}/unlock")
+def record_analyst_achievement(
+    request: Request, achievement_id: str, payload: AchievementUnlockRequest
+) -> dict:
+    if not auth_enabled() or request.state.analyst is None:
+        raise HTTPException(
+            status_code=409, detail="Achievement profiles require authenticated mode"
+        )
+    try:
+        achievement, newly_unlocked = unlock_achievement(
+            DB_PATH,
+            owner=request.state.analyst["username"],
+            achievement_id=achievement_id,
+            context=payload.context,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown achievement") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"achievement": achievement, "newly_unlocked": newly_unlocked}
+
+
 @app.put("/api/workspaces/views/{page}")
 def store_analyst_view_preference(
     request: Request,
@@ -1420,22 +1632,28 @@ def remove_analyst_filter_preset(
 
 @app.get("/api/workspaces/scan-draft")
 def personal_scan_draft(request: Request) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = request.state.analyst
+    if not auth_enabled():
+        analyst = {"username": "local-operator"}
+    if analyst is None:
         return {"server_persistence": False, "draft": None}
     return {
         "server_persistence": True,
-        "draft": get_scan_draft(DB_PATH, request.state.analyst["username"]),
+        "draft": get_scan_draft(DB_PATH, analyst["username"]),
     }
 
 
 @app.put("/api/workspaces/scan-draft")
 def store_personal_scan_draft(request: Request, draft: ScanDraftRequest) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = request.state.analyst
+    if not auth_enabled():
+        analyst = {"username": "local-operator"}
+    if analyst is None:
         raise HTTPException(status_code=409, detail="Personal drafts require authenticated mode")
     try:
         return save_scan_draft(
             DB_PATH,
-            owner=request.state.analyst["username"],
+            owner=analyst["username"],
             snapshot=draft.snapshot,
             expected_version=draft.expected_version,
         )
@@ -1445,22 +1663,36 @@ def store_personal_scan_draft(request: Request, draft: ScanDraftRequest) -> dict
 
 @app.delete("/api/workspaces/scan-draft")
 def remove_personal_scan_draft(request: Request) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = request.state.analyst
+    if not auth_enabled():
+        analyst = {"username": "local-operator"}
+    if analyst is None:
         raise HTTPException(status_code=409, detail="Personal drafts require authenticated mode")
     return {
-        "owner": request.state.analyst["username"],
-        "deleted": delete_scan_draft(DB_PATH, request.state.analyst["username"]),
+        "owner": analyst["username"],
+        "deleted": delete_scan_draft(DB_PATH, analyst["username"]),
     }
+
+
+def investigation_notes_analyst(request: Request) -> dict | None:
+    if not auth_enabled():
+        return {
+            "username": "local-operator",
+            "display_name": "Local operator",
+            "role": "admin",
+        }
+    return request.state.analyst
 
 
 @app.get("/api/workspaces/notes")
 def investigation_notes(request: Request, page: str | None = None) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = investigation_notes_analyst(request)
+    if analyst is None:
         return {"server_persistence": False, "notes": []}
     return {
         "server_persistence": True,
-        "analyst": request.state.analyst,
-        "notes": list_notes(DB_PATH, request.state.analyst["username"], page),
+        "analyst": analyst,
+        "notes": list_notes(DB_PATH, analyst["username"], page),
     }
 
 
@@ -1468,12 +1700,13 @@ def investigation_notes(request: Request, page: str | None = None) -> dict:
 def store_investigation_note(
     request: Request, note: InvestigationNoteRequest
 ) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = investigation_notes_analyst(request)
+    if analyst is None:
         raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
     try:
         return save_note(
             DB_PATH,
-            owner=request.state.analyst["username"],
+            owner=analyst["username"],
             **note.model_dump(),
         )
     except NoteConflict as exc:
@@ -1488,12 +1721,13 @@ def store_investigation_note(
 def remove_investigation_note(
     request: Request, note_id: str, expected_version: int
 ) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = investigation_notes_analyst(request)
+    if analyst is None:
         raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
     try:
         return delete_note(
             DB_PATH,
-            owner=request.state.analyst["username"],
+            owner=analyst["username"],
             note_id=note_id,
             expected_version=expected_version,
         )
@@ -1507,12 +1741,13 @@ def remove_investigation_note(
 def change_investigation_note_sharing(
     request: Request, note_id: str, sharing: InvestigationNoteShareRequest
 ) -> dict:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = investigation_notes_analyst(request)
+    if analyst is None:
         raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
     try:
         return share_note(
             DB_PATH,
-            owner=request.state.analyst["username"],
+            owner=analyst["username"],
             note_id=note_id,
             expected_version=sharing.expected_version,
             shared=sharing.shared,
@@ -1530,12 +1765,13 @@ def change_investigation_note_sharing(
 def export_investigation_note(
     request: Request, note_id: str, page: str | None = None
 ) -> Response:
-    if not auth_enabled() or request.state.analyst is None:
+    analyst = investigation_notes_analyst(request)
+    if analyst is None:
         raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
     try:
         title, markdown = export_note_markdown(
             DB_PATH,
-            viewer=request.state.analyst["username"],
+            viewer=analyst["username"],
             note_id=note_id,
             page=page,
         )
@@ -1637,13 +1873,23 @@ def preview_commands(spec: CampaignSpec) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     commands = [chunk["linux_command"] for chunk in chunks]
+    phase_count = sum(len(chunk["nmap_phases"]) for chunk in chunks)
     return {
         "profile": profile["name"],
         "profile_id": profile["profile_id"],
         "profile_version": profile["version"],
         "coverage": scan_coverage(profile["settings"]),
         "nmap_flags": flags,
-        "command_count": len(commands),
+        "execution_mode": (
+            "split_protocol_phases"
+            if requires_split_protocol_phases(profile["settings"])
+            else "single_command"
+        ),
+        "nmap_phase_flags": [
+            {"protocol": phase["protocol"], "flags": phase["flags"]}
+            for phase in (chunks[0]["nmap_phases"] if chunks else [])
+        ],
+        "command_count": phase_count,
         "commands": commands,
         "copy_text": "\n".join(commands),
     }
@@ -2415,8 +2661,26 @@ def _latest_device_reachability_evidence() -> list[dict]:
 
 @app.get("/api/network-semantics/external-wan-gateway")
 def external_wan_gateway_semantic() -> dict:
+    environment = get_air_gapped_designation(DB_PATH)
     return {
         "status": "network_semantics_complete",
+        "gateway": get_external_wan_gateway(DB_PATH),
+        "gateways": get_external_wan_gateways(DB_PATH),
+        **environment,
+    }
+
+
+@app.put("/api/network-semantics/air-gapped")
+def update_air_gapped_network_semantic(
+    payload: NetworkAirGapRequest, request: Request
+) -> dict:
+    analyst = request.state.analyst
+    changed_by = analyst["username"] if analyst else "local-analyst"
+    return {
+        "status": "network_air_gap_designation_saved",
+        **set_air_gapped_designation(
+            DB_PATH, air_gapped=payload.air_gapped, changed_by=changed_by
+        ),
         "gateway": get_external_wan_gateway(DB_PATH),
         "gateways": get_external_wan_gateways(DB_PATH),
     }
@@ -2555,6 +2819,7 @@ def update_external_wan_gateway_semantic(
             changed_by=changed_by,
         ),
         "gateways": get_external_wan_gateways(DB_PATH),
+        **get_air_gapped_designation(DB_PATH),
     }
 
 
@@ -2566,6 +2831,7 @@ def delete_external_wan_gateway_semantic(
         "status": "external_wan_gateway_cleared",
         **clear_external_wan_gateway(DB_PATH, slot=slot),
         "gateways": get_external_wan_gateways(DB_PATH),
+        **get_air_gapped_designation(DB_PATH),
     }
 
 
@@ -2730,6 +2996,26 @@ def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> 
             next_hop=query.next_hop,
             priority_kind=query.priority_kind,
             priority_value=query.priority_value,
+            hunting=analyze_hunting_network(),
+            saved_networks=list_saved_networks(DB_PATH),
+            device_analyses=_latest_device_reachability_evidence(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@app.post("/api/reachability/simulate-change-scenario")
+def simulate_retained_change_scenario(query: ReachabilityChangeScenarioQuery) -> dict:
+    try:
+        return simulate_proposed_change_scenario(
+            source_text=query.source,
+            destination_text=query.destination,
+            protocol=query.protocol,
+            port=query.port,
+            flow_state=query.flow_state,
+            source_external=query.source_external,
+            route=query.route.model_dump(),
+            policy=query.policy.model_dump(),
             hunting=analyze_hunting_network(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),

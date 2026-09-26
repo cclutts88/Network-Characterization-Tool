@@ -186,6 +186,52 @@ def test_preview_and_package_use_the_same_udp_settings_and_required_n():
     assert "UDP_Baseline_" in package.headers["content-disposition"]
 
 
+def test_combined_top_scopes_generate_independent_tcp_and_udp_phases():
+    body = {
+        "name": "Combined Top Ports",
+        "created_by": "analyst01",
+        "profile": "Custom",
+        "scan_options": {
+            "protocol": "tcp_udp",
+            "tcp_scope": "top_1000",
+            "udp_scope": "top_100",
+            "discovery_mode": "nmap",
+            "timing": "fast",
+        },
+        "terrain": [{"name": "Test", "targets": ["192.0.2.0/30"]}],
+        "no_strike_mode": "none",
+        "no_strike": [],
+        "chunk_size": 16,
+    }
+
+    with TestClient(app) as client:
+        preview = client.post("/api/preview", json=body)
+        package = client.post("/api/packages", json=body)
+
+    assert preview.status_code == 200
+    preview_data = preview.json()
+    assert preview_data["execution_mode"] == "split_protocol_phases"
+    assert preview_data["command_count"] == 2
+    assert [item["protocol"] for item in preview_data["nmap_phase_flags"]] == ["tcp", "udp"]
+    tcp_flags, udp_flags = [item["flags"] for item in preview_data["nmap_phase_flags"]]
+    assert "-sS" in tcp_flags
+    assert tcp_flags[tcp_flags.index("--top-ports") + 1] == "1000"
+    assert "-sU" in udp_flags
+    assert udp_flags[udp_flags.index("--top-ports") + 1] == "100"
+    assert package.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+        linux_script = archive.read("run-linux.sh").decode()
+        manifest = json.loads(archive.read("manifest.json"))
+    assert "-sS" in linux_script and "--top-ports 1000" in linux_script
+    assert "-sU" in linux_script and "--top-ports 100" in linux_script
+    assert manifest["execution_mode"] == "split_protocol_phases"
+    assert [item["protocol"] for item in manifest["nmap_phase_flags"]] == ["tcp", "udp"]
+    assert manifest["chunks"][0]["output_files"] == [
+        "results/001-Test-tcp.xml",
+        "results/001-Test-udp.xml",
+    ]
+
+
 def test_unchunked_slash_16_builds_one_continuous_scan():
     spec = CampaignSpec(
         name="Unchunked Lab",

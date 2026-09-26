@@ -44,6 +44,16 @@ def init_network_semantics_storage(db_path: Path) -> None:
             )
             """
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS network_environment_settings (
+                setting TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                changed_at TEXT NOT NULL,
+                changed_by TEXT NOT NULL
+            )
+            """
+        )
         columns = {
             str(row[1])
             for row in db.execute("PRAGMA table_info(network_wan_interfaces)").fetchall()
@@ -158,6 +168,43 @@ def get_external_wan_gateways(db_path: Path) -> list[dict]:
             "changed_by": row[5],
         })
     return gateways
+
+
+def get_air_gapped_designation(db_path: Path) -> dict:
+    """Return the shared operator designation for an intentionally isolated network."""
+    init_network_semantics_storage(db_path)
+    with connect_database(db_path) as db:
+        row = db.execute(
+            """SELECT value, changed_at, changed_by
+               FROM network_environment_settings WHERE setting = 'air_gapped'"""
+        ).fetchone()
+    return {
+        "air_gapped": bool(row and str(row[0]).casefold() == "true"),
+        "changed_at": row[1] if row else None,
+        "changed_by": row[2] if row else None,
+    }
+
+
+def set_air_gapped_designation(
+    db_path: Path, *, air_gapped: bool, changed_by: str
+) -> dict:
+    """Persist a shared air-gap designation without changing retained evidence."""
+    changed_at = utc_now()
+    init_network_semantics_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO network_environment_settings (
+                setting, value, changed_at, changed_by
+            ) VALUES ('air_gapped', ?, ?, ?)
+            ON CONFLICT(setting) DO UPDATE SET
+                value = excluded.value,
+                changed_at = excluded.changed_at,
+                changed_by = excluded.changed_by
+            """,
+            ("true" if air_gapped else "false", changed_at, changed_by.strip()),
+        )
+    return get_air_gapped_designation(db_path)
 
 
 def set_external_wan_gateway(

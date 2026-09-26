@@ -12,6 +12,7 @@ from app.reachability import (
     evaluate_reachability_range,
     parse_endpoint,
     policy_rule_context,
+    simulate_proposed_change_scenario,
     simulate_proposed_policy_control,
     simulate_proposed_route_control,
     validate_vendor_policy_rule,
@@ -471,6 +472,87 @@ def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
     assert result["projected"]["simulated"] is True
     assert any(item["kind"] == "proposal" for item in result["projected"]["evidence"])
     assert "changes no device configuration" in result["disclaimer"]
+
+
+def test_combined_change_applies_route_before_policy_and_confirms_intent():
+    device = {**DEVICE, "route_analysis": {"routes": []}}
+
+    result = simulate_proposed_change_scenario(
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[device],
+        route={
+            "action": "add",
+            "device_key": "10.80.0.1",
+            "route_network": "10.90.0.0/24",
+            "route_interface": "inside",
+            "next_hop": "10.80.0.2",
+        },
+        policy={
+            "action": "deny",
+            "device_key": "10.80.0.1",
+            "interface_name": "inside",
+            "insertion_index": 0,
+        },
+    )
+
+    assert result["status"] == "reachability_change_scenario_complete"
+    assert result["comparison"]["after_route"] == "Expected Allowed"
+    assert result["comparison"]["after"] == "Expected Blocked"
+    assert result["comparison"]["policy_on_projected_path"] is True
+    assert result["comparison"]["intent_achieved"] is True
+    assert [item["status"] for item in result["validation"]] == [
+        "pass", "pass", "pass", "pass", "pass",
+    ]
+    assert sum(
+        item["kind"] == "proposal" for item in result["projected"]["evidence"]
+    ) == 2
+
+
+def test_combined_change_does_not_claim_policy_effect_when_route_bypasses_device():
+    router = {
+        "run_id": "b" * 32,
+        "device": {"name": "Route Edge", "address": "10.80.0.2", "type": "router"},
+        "interfaces": [{"name": "inside", "network": "10.80.0.0/24", "role": "internal"}],
+        "route_analysis": {"routes": []},
+        "policy": {"firewall_acl": []},
+    }
+    firewall = {**DEVICE, "route_analysis": {"routes": []}}
+
+    result = simulate_proposed_change_scenario(
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[router, firewall],
+        route={
+            "action": "add",
+            "device_key": "10.80.0.2",
+            "route_network": "10.90.0.0/24",
+            "route_interface": "inside",
+            "next_hop": "10.80.0.3",
+        },
+        policy={
+            "action": "deny",
+            "device_key": "10.80.0.1",
+            "interface_name": "inside",
+            "insertion_index": 0,
+        },
+    )
+
+    assert result["comparison"]["policy_on_projected_path"] is False
+    assert result["comparison"]["intent_achieved"] is False
+    assert result["comparison"]["after"] == "Unknown"
+    assert next(
+        item for item in result["validation"] if item["id"] == "policy_path"
+    )["status"] == "uncertain"
+    assert "does not place" in result["projected"]["explanation"]
 
 
 def test_proposed_route_removal_preserves_a_broader_retained_fallback():
