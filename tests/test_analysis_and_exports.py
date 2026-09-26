@@ -692,3 +692,41 @@ ip route 0.0.0.0/0 192.0.2.254
     )
     remaining = configuration_network_candidates(config_dir=config_dir, db_path=db_path)
     assert [item["cidr"] for item in remaining] == ["10.50.0.0/24"]
+
+
+def test_config_identified_subnets_exclude_startup_and_history_sections(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("c" * 32)
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "c" * 32,
+                "status": "uploaded",
+                "device_name": "Recovery Router",
+                "device_address": "192.0.2.1",
+                "vendor": "cisco",
+            }
+        )
+    )
+    (run_dir / "uploaded-config.txt").write_text(
+        """===== show history =====
+ip route 10.60.0.0 255.255.255.0 192.0.2.2
+===== show running-config =====
+interface GigabitEthernet0/1
+ ip address 10.40.0.1 255.255.255.0
+ip route 10.50.0.0 255.255.255.0 192.0.2.2
+===== show startup-config =====
+ip route 10.70.0.0 255.255.255.0 192.0.2.2
+"""
+    )
+
+    candidates = configuration_network_candidates(
+        config_dir=config_dir, db_path=db_path
+    )
+
+    assert [item["cidr"] for item in candidates] == [
+        "10.40.0.0/24",
+        "10.50.0.0/24",
+    ]

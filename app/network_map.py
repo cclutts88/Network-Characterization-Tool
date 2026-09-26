@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from app.device_configs import CONFIG_DIR
+from app.device_configs import CONFIG_DIR, active_configuration_text
 from app.mac_enrichment import (
     lookup_oui_vendor,
     normalize_mac,
@@ -1198,7 +1198,7 @@ def configuration_network_candidates(
             text = "\n".join(path.read_text(errors="replace") for path in artifacts)
         except OSError:
             continue
-        interfaces, routes = parse_config_text(text)
+        interfaces, routes = parse_config_text(active_configuration_text(text))
         device_name = manifest.get("device_name") or manifest.get("device_address")
         common = {
             "run_id": manifest.get("run_id") or run_dir.name,

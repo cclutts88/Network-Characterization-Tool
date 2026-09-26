@@ -1949,6 +1949,20 @@ SWITCHING_PATTERNS = (
 )
 
 
+def active_configuration_text(configuration_text: str) -> str:
+    """Exclude saved startup state and command history from live-state parsers."""
+    excluded_commands = {"show startup-config", *COMMAND_HISTORY_COMMANDS.values()}
+    current_command = None
+    active_lines = []
+    for line in configuration_text.splitlines():
+        marker = re.fullmatch(r"===== (.+?) =====", line.strip())
+        if marker:
+            current_command = marker.group(1).strip()
+        if current_command not in excluded_commands:
+            active_lines.append(line)
+    return "\n".join(active_lines)
+
+
 def device_collection_summary(run_id: str, config_dir: Path | None = None) -> dict:
     """Create a bounded, review-oriented summary from retained device evidence."""
     run_dir = device_collection_directory(run_id, config_dir)
@@ -1991,16 +2005,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
 
     # History and saved startup state are evidence for separate review, never
     # input to the current forwarding/policy parsers.
-    excluded_commands = {"show startup-config", *COMMAND_HISTORY_COMMANDS.values()}
-    current_command = None
-    active_lines = []
-    for line in configuration_text.splitlines():
-        marker = re.fullmatch(r"===== (.+?) =====", line.strip())
-        if marker:
-            current_command = marker.group(1).strip()
-        if current_command not in excluded_commands:
-            active_lines.append(line)
-    configuration_text = "\n".join(active_lines)
+    configuration_text = active_configuration_text(configuration_text)
 
     from app.mac_enrichment import parse_neighbor_text
     from app.iptables_policy import parse_iptables_policy
