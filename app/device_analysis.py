@@ -20,7 +20,9 @@ from app.saved_networks import list_saved_networks
 
 router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
 
-DEVICE_SUMMARY_VERSION = 1
+# Increment whenever retained device evidence parsing changes so previously
+# completed pulls are re-analyzed without requiring another network collection.
+DEVICE_SUMMARY_VERSION = 2
 _DEVICE_STORAGE_READY: set[str] = set()
 _DEVICE_STORAGE_LOCK = threading.RLock()
 

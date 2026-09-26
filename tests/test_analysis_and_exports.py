@@ -315,6 +315,30 @@ default via 192.0.2.254 dev eth8 proto static
     assert by_network["0.0.0.0/0"]["interface"] == "eth8"
 
 
+def test_configuration_parser_reads_pfsense_netstat_static_routes():
+    _, routes = parse_config_text(
+        """
+Routing tables
+
+Internet:
+Destination        Gateway            Flags     Netif Expire
+default            33.107.55.37       UGS        vmx0
+33.107.4.0/24      33.107.80.146      UGS        vmx2
+33.107.80.144/30   link#3             U          vmx2
+"""
+    )
+
+    by_network = {item["network"]: item for item in routes}
+    assert by_network["0.0.0.0/0"]["via"] == "33.107.55.37"
+    assert by_network["0.0.0.0/0"]["interface"] == "vmx0"
+    assert by_network["33.107.4.0/24"]["via"] == "33.107.80.146"
+    assert by_network["33.107.4.0/24"]["interface"] == "vmx2"
+    assert by_network["33.107.4.0/24"]["direct"] is False
+    assert by_network["33.107.80.144/30"]["via"] is None
+    assert by_network["33.107.80.144/30"]["interface"] == "vmx2"
+    assert by_network["33.107.80.144/30"]["direct"] is True
+
+
 def test_configuration_routes_have_stable_numeric_longest_prefix_order():
     _, routes = parse_config_text(
         """

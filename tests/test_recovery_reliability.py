@@ -111,7 +111,11 @@ def test_device_cache_reuses_and_invalidates_evidence_and_version(tmp_path, monk
     third = device_analysis._cached_device_summary(run_id, root, db_path)
     assert third['command_history']['entries'][-1]['command'] == 'reload'
     assert len(calls) == 2
-    monkeypatch.setattr(device_analysis, 'DEVICE_SUMMARY_VERSION', 2)
+    monkeypatch.setattr(
+        device_analysis,
+        'DEVICE_SUMMARY_VERSION',
+        device_analysis.DEVICE_SUMMARY_VERSION + 1,
+    )
     device_analysis._cached_device_summary(run_id, root, db_path)
     assert len(calls) == 3
     device_analysis.delete_device_analysis_storage(run_id, db_path)

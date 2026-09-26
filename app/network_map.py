@@ -983,6 +983,62 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
 
         route_parts = line.strip(" ;").split()
         lower_route_parts = [value.lower() for value in route_parts]
+
+        # FreeBSD/pfSense ``netstat -rn`` rows use positional columns rather
+        # than the ``via``/``dev`` words emitted by Linux and Cisco devices:
+        #
+        #   Destination       Gateway          Flags  Netif
+        #   33.107.4.0/24     33.107.80.146    UGS    vmx2
+        #   33.107.80.144/30  link#3           U      vmx2
+        #
+        # Parse these rows before the generic route handling so both static
+        # and connected routes retain their actual egress interface.
+        if (
+            len(route_parts) >= 4
+            and re.fullmatch(r"[A-Z0-9]+", route_parts[2], re.I)
+            and "u" in lower_route_parts[2]
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:/-]*", route_parts[3])
+        ):
+            destination = route_parts[0]
+            if destination.lower() == "default":
+                bsd_network = "0.0.0.0/0"
+            elif "/" in destination:
+                bsd_network = valid_network(destination)
+            else:
+                destination_ip = valid_ip(destination)
+                bsd_network = (
+                    valid_network(f"{destination_ip}/32")
+                    if destination_ip
+                    else None
+                )
+            if bsd_network:
+                try:
+                    is_ipv4 = ipaddress.ip_network(bsd_network).version == 4
+                except ValueError:
+                    is_ipv4 = False
+                gateway = valid_ip(route_parts[1])
+                direct = lower_route_parts[1].startswith("link#")
+                route_interface = route_parts[3]
+                if is_ipv4 and (gateway or direct):
+                    route_key = (
+                        bsd_network,
+                        gateway,
+                        route_interface,
+                        direct,
+                    )
+                    if route_key not in seen_routes:
+                        routes.append(
+                            {
+                                "network": bsd_network,
+                                "via": gateway,
+                                "interface": route_interface,
+                                "direct": direct,
+                                "line": line[:500],
+                            }
+                        )
+                        seen_routes.add(route_key)
+                    continue
+
         explicit_route: tuple[str, str | None, str | None] | None = None
         if len(route_parts) >= 4 and lower_route_parts[:2] == ["ip", "route"]:
             destination = route_parts[2]
