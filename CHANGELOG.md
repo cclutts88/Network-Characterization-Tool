@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.0 — Multi-path reachability and map investigation
+
+- Added concurrent path evaluation for primary, failover, equal-cost, standby,
+  fallback, alternate, and blocked routes using retained routing evidence.
+- Added dual-WAN path roles and explicit spanning-tree blocking awareness when
+  the retained evidence supports it.
+- Added color-coded path controls to Reach and Map, including one-click
+  **Show all paths** and **Active only** views plus individual path toggles.
+- Kept detailed hop breakdowns and Map investigation available after broad
+  target ranges are narrowed to an individual /24 result.
+
 ## 0.15.9 — DHCP and DNS server evidence collection
 
 - Added copyable collection instructions for modern and legacy Windows DHCP/DNS

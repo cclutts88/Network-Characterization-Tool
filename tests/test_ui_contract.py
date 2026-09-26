@@ -628,6 +628,33 @@ def test_reachability_results_can_open_a_temporary_map_focus():
     assert "Bounded collateral scope" in map_html
 
 
+def test_reachability_paths_have_color_key_and_visibility_toggles():
+    reach_html = reachability_page().body.decode()
+    map_html = network_map_page().body.decode()
+
+    assert 'id="pathOptions"' in reach_html
+    assert "function renderPathOptions" in reach_html
+    assert "Only the active path is shown by default" in reach_html
+    assert "Selections carry to Map" in reach_html
+    assert "Show all paths" in reach_html
+    assert "Active only" in reach_html
+    assert "data-path-action" in reach_html
+    assert "Show only this path on Map" not in reach_html
+    assert "visible_path_ids" in reach_html
+    assert ".role-equal_cost" in reach_html
+    assert ".role-standby" in reach_html
+    assert ".role-blocked" in reach_html
+    assert 'id="reachPathKey"' in map_html
+    assert "function visibleReachPathOptions" in map_html
+    assert "reachPathColors" in map_html
+    assert "reach-path-toggle" in map_html
+    assert "Show all paths" in map_html
+    assert "Active only" in map_html
+    assert "function setReachPathVisibility" in map_html
+    assert "--reach-focus-color" in map_html
+    assert "reachFocusPathNodeIds" in map_html
+
+
 def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():
     expected = [">Device</a>", ">Nmap</a>", ">Analyze</a>", ">Hunt</a>", ">Map</a>"]
     for page in (operator_page(), analysis_page(), device_config_page(), hunting_page(), network_map_page()):

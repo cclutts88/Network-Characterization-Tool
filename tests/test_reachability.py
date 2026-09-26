@@ -1370,6 +1370,126 @@ def test_reach_reports_a_partial_path_when_next_hop_evidence_is_missing():
     assert any("Path is partial" in item for item in result["caveats"])
 
 
+def test_reach_keeps_equal_cost_paths_separate():
+    edge = {
+        "run_id": "edge",
+        "device": {"name": "edge-rtr", "address": "10.80.0.1", "type": "router"},
+        "interfaces": [{"name": "users", "network": "10.80.0.0/24"}],
+        "route_analysis": {"routes": [
+            {
+                "network": "10.90.0.0/24", "via": "10.0.12.2",
+                "interface": "path-a", "metric": 10,
+            },
+            {
+                "network": "10.90.0.0/24", "via": "10.0.13.2",
+                "interface": "path-b", "metric": 10,
+            },
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    path_a = {
+        "run_id": "path-a",
+        "device": {"name": "path-a-rtr", "address": "10.0.12.2", "type": "router"},
+        "interfaces": [{"name": "servers", "address": "10.0.12.2", "network": "10.0.12.0/30"}],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "servers"}]},
+        "policy": {"firewall_acl": []},
+    }
+    path_b = {
+        "run_id": "path-b",
+        "device": {"name": "path-b-rtr", "address": "10.0.13.2", "type": "router"},
+        "interfaces": [{"name": "servers", "address": "10.0.13.2", "network": "10.0.13.0/30"}],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "servers"}]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(device_analyses=[edge, path_a, path_b])
+
+    assert [item["role"] for item in result["path_options"]] == ["active", "equal_cost"]
+    assert [
+        item["label"] for item in result["path_options"][0]["path"]
+        if item["kind"] == "device"
+    ] == ["edge-rtr", "path-a-rtr"]
+    assert [
+        item["label"] for item in result["path_options"][1]["path"]
+        if item["kind"] == "device"
+    ] == ["edge-rtr", "path-b-rtr"]
+
+
+def test_reach_marks_higher_metric_path_as_standby():
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "interface": "primary", "metric": 10},
+            {"network": "10.90.0.0/24", "interface": "backup", "metric": 50},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert [item["role"] for item in result["path_options"]] == ["active", "standby"]
+    assert "less-preferred" in result["path_options"][1]["reason"]
+
+
+def test_reach_uses_secondary_wan_when_primary_path_is_incomplete():
+    primary = {
+        "run_id": "primary",
+        "device": {"name": "primary-wan", "address": "198.51.100.1", "type": "router"},
+        "external_wan_gateway": {"slot": "primary", "node_id": "ip:198.51.100.1"},
+        "interfaces": [{"name": "wan", "network": "198.51.100.0/30", "role": "external"}],
+        "route_analysis": {"routes": [{
+            "network": "10.90.0.0/24", "via": "10.0.12.2", "interface": "inside",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+    secondary = {
+        "run_id": "secondary",
+        "device": {"name": "secondary-wan", "address": "203.0.113.1", "type": "router"},
+        "external_wan_gateway": {"slot": "secondary", "node_id": "ip:203.0.113.1"},
+        "interfaces": [
+            {"name": "wan", "network": "203.0.113.0/30", "role": "external"},
+            {"name": "inside", "network": "10.90.0.0/24"},
+        ],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "inside"}]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(source_text="Internet", device_analyses=[primary, secondary])
+
+    assert result["routing_path"]["status"] == "complete"
+    assert result["retained_objects"]["selected_path_routes"][0]["device"] == "secondary-wan"
+    roles = {(item["gateway_slot"], item["role"]) for item in result["path_options"]}
+    assert ("primary", "unavailable") in roles
+    assert ("secondary", "active_failover") in roles
+
+
+def test_reach_fails_over_when_spanning_tree_blocks_selected_interface():
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "interface": "path-a", "metric": 10},
+            {"network": "10.90.0.0/24", "interface": "path-b", "metric": 20},
+        ]},
+        "switch_detail": {"spanning_tree": [{
+            "interface": "path-a", "state": "blocking",
+            "evidence": "Gi0/1 Altn BLK",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert result["routing_path"]["status"] == "complete"
+    assert result["retained_objects"]["selected_path_routes"][0]["interface"] == "path-b"
+    assert [item["role"] for item in result["path_options"]] == [
+        "active_failover", "blocked",
+    ]
+    assert any(
+        item["kind"] == "switching"
+        for item in result["path_options"][1]["evidence"]
+    )
+
+
 def test_reach_infers_unmapped_source_as_external_but_keeps_known_source_internal():
     edge = {
         "run_id": "edge",

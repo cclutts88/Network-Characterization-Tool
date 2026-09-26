@@ -6,7 +6,7 @@ PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
 DATA_DIR="$PERSIST_ROOT/data"
 SOURCE_VOLUME="${NCT_SOURCE_VOLUME:-nct-data}"
 CONTAINER="${NCT_CONTAINER:-nct}"
-IMAGE="network-characterization-tool:0.15.9-range-20260924"
+IMAGE="network-characterization-tool:0.16.0-range-20260926"
 ARCHIVE="$WORKDIR/offline-images/nct-range-images.tar"
 CHECKSUM="$WORKDIR/offline-images/nct-range-images.tar.sha256"
 
