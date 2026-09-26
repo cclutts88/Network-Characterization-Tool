@@ -5,7 +5,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.device_analysis import analyze_device_collection, compare_device_analyses
+from app.device_analysis import (
+    _wan_interface_candidates,
+    analyze_device_collection,
+    compare_device_analyses,
+)
 from app.main import app
 from app.poc import RUNS_DIR_NAME, insert_scan_run_manifest
 from app.saved_networks import SavedNetworkCreate, create_saved_network
@@ -122,6 +126,120 @@ def test_device_analysis_summarizes_and_correlates_retained_evidence(tmp_path):
     assert host["policy_evidence"]
     assert result["counts"]["network_objects"] == 2
     assert result["evidence"][-1]["filename"] == "manifest.json"
+    suggested = result["wan_candidates"][0]
+    assert suggested["name"] == "GigabitEthernet0/0"
+    assert suggested["recommended"] is True
+    assert suggested["confidence"] == "high"
+    assert any("default route" in reason for reason in suggested["reasons"])
+    assert any("NAT evidence" in reason for reason in suggested["reasons"])
+    assert suggested["evidence"]
+
+
+def test_reach_analysis_can_skip_presentation_correlations_without_losing_routes(
+    tmp_path, monkeypatch
+):
+    config_dir = tmp_path / "device-configs"
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "nct.db"
+    run_id = "e" * 32
+    make_collection(config_dir, run_id, CURRENT_CONFIG)
+
+    def unexpected_correlation(*args, **kwargs):
+        raise AssertionError("presentation correlations should be skipped")
+
+    monkeypatch.setattr(
+        "app.device_analysis._saved_network_correlations", unexpected_correlation
+    )
+    monkeypatch.setattr(
+        "app.device_analysis._nmap_correlations", unexpected_correlation
+    )
+
+    result = analyze_device_collection(
+        run_id,
+        config_dir=config_dir,
+        db_path=db_path,
+        data_dir=data_dir,
+        include_correlations=False,
+    )
+
+    assert result["counts"]["routes"] == 3
+    assert result["route_analysis"]["routes"]
+    assert result["policy"]["firewall_acl"]
+    assert result["saved_network_correlations"] == []
+    assert result["nmap_host_correlations"] == []
+
+
+def test_wan_inference_recommends_each_interface_with_a_default_route(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "nct.db"
+    run_id = "f" * 32
+    make_collection(
+        config_dir,
+        run_id,
+        """interface GigabitEthernet0/0
+ description ISP_A
+ ip address 192.0.2.2 255.255.255.252
+interface GigabitEthernet0/1
+ description ISP_B
+ ip address 198.51.100.2 255.255.255.252
+ip route 0.0.0.0 0.0.0.0 GigabitEthernet0/0 192.0.2.1
+ip route 0.0.0.0 0.0.0.0 GigabitEthernet0/1 198.51.100.1
+""",
+    )
+
+    result = analyze_device_collection(
+        run_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    )
+
+    recommended = {
+        item["name"] for item in result["wan_candidates"] if item["recommended"]
+    }
+    assert recommended == {"GigabitEthernet0/0", "GigabitEthernet0/1"}
+    assert all(
+        item["confidence"] == "high"
+        for item in result["wan_candidates"] if item["recommended"]
+    )
+
+
+def test_wan_inference_keeps_route_only_interface_and_uses_token_nat_matching():
+    candidates = _wan_interface_candidates(
+        [{
+            "name": "in", "address": "10.0.0.1/24",
+            "network": "10.0.0.0/24", "role": "unclassified",
+        }],
+        [{
+            "network": "0.0.0.0/0", "via": "203.0.113.1",
+            "interface": "pppoe0", "route_type": "default",
+            "line": "default via 203.0.113.1 dev pppoe0",
+        }],
+        [{"evidence": "ip nat inside source list 1 interface pppoe0 overload"}],
+    )
+
+    pppoe = next(item for item in candidates if item["name"] == "pppoe0")
+    internal = next(item for item in candidates if item["name"] == "in")
+    assert pppoe["addresses"] == []
+    assert pppoe["recommended"] is True
+    assert pppoe["confidence"] == "high"
+    assert internal["score"] == 0
+    assert not any("NAT evidence" in reason for reason in internal["reasons"])
+
+
+def test_wan_inference_caps_displayed_supporting_lines():
+    candidates = _wan_interface_candidates(
+        [{
+            "name": "eth0", "address": "192.0.2.2/30",
+            "network": "192.0.2.0/30", "role": "external",
+        }],
+        [],
+        [
+            {"evidence": f"iptables -t nat -A POSTROUTING -o eth0 -m comment --comment rule-{index}"}
+            for index in range(20)
+        ],
+    )
+
+    assert candidates[0]["evidence_count"] == 20
+    assert len(candidates[0]["evidence"]) == 12
 
 
 def test_device_collection_comparison_covers_interface_route_and_policy_changes(tmp_path):

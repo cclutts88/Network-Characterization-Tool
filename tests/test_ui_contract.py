@@ -158,6 +158,14 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert r".join('\n')" in html
 
 
+def test_scan_queue_polling_stops_when_the_session_is_rejected():
+    html = operator_page().body.decode()
+
+    assert "response.status===401||response.status===403" in html
+    assert "queueTimer=keepPolling?setTimeout(loadQueue,2000):null" in html
+    assert "Sign in again to resume queue updates." in html
+
+
 def test_navigation_is_sticky_on_every_primary_page():
     pages = [operator_page(), analysis_page(), device_analysis_page(), hunting_page(), device_config_page(), network_map_page()]
     for page in pages:
@@ -214,6 +222,35 @@ def test_device_configs_offer_reviewed_network_candidates():
     assert "/api/saved-networks" in html
     assert "removed from this pending list" in html
     assert "does not start a scan" in html
+
+
+def test_device_configs_offer_explainable_multi_interface_wan_designation():
+    html = device_config_page().body.decode()
+    assert "WAN interface designation" in html
+    assert "Analyze saved configs" in html
+    assert "does not reprocess large configurations automatically" in html
+    assert 'id="wanDeviceCollection"' in html
+    assert 'id="wanGatewaySlot"' in html
+    assert 'name="wanInterface"' in html
+    assert "Save selected WAN interfaces" in html
+    assert "Review WAN interfaces" in html
+    assert "wan_candidates" in html
+    assert "candidate.reasons" in html
+    assert "candidate.evidence" in html
+    assert "networkDemoted" in html
+    assert "Likely upstream transit" in html
+    assert "View ${candidate.evidence.length} of ${count}" in html
+    assert "include_correlations=false" in html
+    assert "function wanSemanticNodeId" in html
+    assert "interface_names:names" in html
+    assert "wanNetworkSuggestionsStarted" in html
+    history_loader = html.split("async function loadHistory", 1)[1].split("function discoveredHostName", 1)[0]
+    assert "loadNetworkWanSuggestions" not in history_loader
+    assert "/api/network-semantics/external-wan-gateway" in html
+    assert "/api/network-semantics/wan-candidates" in html
+    assert "strongest retained-evidence lead" in html
+    assert "does not contact the device" in html
+    assert "Primary and Secondary are reserved for separate gateway devices" in html
 
 
 def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
@@ -515,6 +552,17 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "Host path" in html
     assert "Known targets inside a broad range have different route or policy results" in html
     assert "The target is known to exist, but no retained route" in html
+
+
+def test_range_results_explain_evidence_coverage_once():
+    html = reachability_page().body.decode()
+
+    assert "Evidence coverage" in html
+    assert "share of addresses in each CIDR backed by retained evidence" in html
+    assert "It is not a reachability success rate" in html
+    assert "row.identified_percent" in html
+    assert "row.routed_percent" not in html
+    assert "row.routed_address_count" not in html
 
 
 def test_reachability_query_fields_have_clear_buttons():

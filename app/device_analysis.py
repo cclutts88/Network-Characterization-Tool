@@ -254,6 +254,166 @@ def _interface_network(interface: dict) -> ipaddress.IPv4Network | None:
     return parsed.network if parsed.version == 4 else None
 
 
+def _wan_interface_candidates(
+    interfaces: list[dict], routes: list[dict], nat_items: list[dict]
+) -> list[dict]:
+    """Rank explainable WAN candidates without turning an inference into a fact."""
+    grouped: dict[str, dict] = {}
+    for interface in interfaces:
+        name = str(interface.get("name") or "").strip()
+        if not name:
+            continue
+        candidate = grouped.setdefault(
+            name,
+            {
+                "name": name,
+                "addresses": [],
+                "networks": [],
+                "role": str(interface.get("role") or "unclassified"),
+                "zone": str(interface.get("zone") or ""),
+            },
+        )
+        address = str(interface.get("address") or "").strip()
+        network = str(interface.get("network") or "").strip()
+        if address and address not in candidate["addresses"]:
+            candidate["addresses"].append(address)
+        if network and network not in candidate["networks"]:
+            candidate["networks"].append(network)
+        if candidate["role"] == "unclassified" and interface.get("role"):
+            candidate["role"] = str(interface["role"])
+        if not candidate["zone"] and interface.get("zone"):
+            candidate["zone"] = str(interface["zone"])
+
+    # Some valid uplinks (DHCP, PPPoE, unnumbered, or route-only interfaces)
+    # have no retained address/MAC record. An explicitly named default-route
+    # interface is still useful evidence and must remain available for review.
+    for route in routes:
+        if not (
+            route.get("route_type") == "default"
+            or route.get("network") in {"0.0.0.0/0", "::/0"}
+        ):
+            continue
+        name = str(route.get("interface") or "").strip()
+        if name and name not in grouped:
+            grouped[name] = {
+                "name": name,
+                "addresses": [],
+                "networks": [],
+                "role": _interface_role({"name": name}),
+                "zone": "",
+            }
+
+    default_routes = [
+        route for route in routes
+        if route.get("route_type") == "default"
+        or route.get("network") in {"0.0.0.0/0", "::/0"}
+    ]
+    strong_names: set[str] = set()
+    candidates: list[dict] = []
+    for name, candidate in grouped.items():
+        score = 0
+        reasons: list[str] = []
+        evidence: list[str] = []
+        parsed_networks = []
+        for value in candidate["addresses"]:
+            try:
+                parsed_networks.append(ipaddress.ip_interface(value).network)
+            except ValueError:
+                continue
+
+        explicit_defaults = [
+            route for route in default_routes
+            if str(route.get("interface") or "").casefold() == name.casefold()
+        ]
+        next_hop_defaults = []
+        for route in default_routes:
+            via = str(route.get("via") or "")
+            try:
+                address = ipaddress.ip_address(via)
+            except ValueError:
+                continue
+            if any(address in network for network in parsed_networks):
+                next_hop_defaults.append(route)
+        matched_defaults = explicit_defaults or next_hop_defaults
+        if explicit_defaults:
+            score += 100
+            reasons.append("A retained default route explicitly exits this interface.")
+        elif next_hop_defaults:
+            score += 90
+            reasons.append("A retained default route's next hop is on this interface network.")
+        if matched_defaults:
+            strong_names.add(name)
+            evidence.extend(
+                str(route.get("line") or "") for route in matched_defaults
+                if route.get("line")
+            )
+
+        if candidate["role"] == "external":
+            score += 45
+            reasons.append("Its name or description identifies it as WAN, outside, or Internet-facing.")
+
+        interface_pattern = re.compile(
+            rf"(?<![A-Za-z0-9_.:/-]){re.escape(name)}(?![A-Za-z0-9_.:/-])",
+            re.I,
+        )
+        matching_nat = [
+            item for item in nat_items
+            if interface_pattern.search(
+                str(item.get("evidence") or item.get("line") or "")
+            )
+        ]
+        if matching_nat:
+            score += 35
+            reasons.append("Retained NAT evidence names this interface.")
+            evidence.extend(
+                str(item.get("evidence") or item.get("line") or "")
+                for item in matching_nat
+            )
+
+        parsed_addresses = []
+        for value in candidate["addresses"]:
+            try:
+                parsed_addresses.append(ipaddress.ip_interface(value))
+            except ValueError:
+                continue
+        if any(item.ip.is_global for item in parsed_addresses):
+            score += 15
+            reasons.append("It has a globally routable address.")
+        if any(
+            (item.version == 4 and item.network.prefixlen >= 30)
+            or (item.version == 6 and item.network.prefixlen >= 126)
+            for item in parsed_addresses
+        ):
+            score += 10
+            reasons.append("Its small point-to-point network is consistent with an uplink.")
+
+        unique_evidence = list(dict.fromkeys(value[:500] for value in evidence if value))
+        candidate.update(
+            {
+                "score": score,
+                "confidence": "high" if score >= 80 else "medium" if score >= 45 else "low",
+                "reasons": reasons or ["No strong WAN indicators were found in the retained evidence."],
+                "evidence": unique_evidence[:12],
+                "evidence_count": len(unique_evidence),
+            }
+        )
+        candidates.append(candidate)
+
+    highest_score = max((item["score"] for item in candidates), default=0)
+    for candidate in candidates:
+        candidate["recommended"] = (
+            candidate["name"] in strong_names
+            if strong_names
+            else highest_score >= 45 and candidate["score"] == highest_score
+        )
+    return sorted(
+        candidates,
+        key=lambda item: (
+            not item["recommended"], -item["score"], item["name"].casefold()
+        ),
+    )
+
+
 def _evidence_networks(items: list[dict]) -> list[tuple[ipaddress.IPv4Network, dict]]:
     """Return IPv4 hosts/networks explicitly present in retained evidence lines."""
     found: list[tuple[ipaddress.IPv4Network, dict]] = []
@@ -390,6 +550,7 @@ def analyze_device_collection(
     config_dir: Path | None = None,
     db_path: Path | None = None,
     data_dir: Path | None = None,
+    include_correlations: bool = True,
 ) -> dict:
     config_dir = CONFIG_DIR if config_dir is None else config_dir
     db_path = DB_PATH if db_path is None else db_path
@@ -432,6 +593,9 @@ def analyze_device_collection(
     interface_networks = [network for item in interfaces if (network := _interface_network(item))]
     review_items = []
     default_routes = [item for item in routes if item.get("route_type") == "default"]
+    wan_candidates = _wan_interface_candidates(
+        interfaces, routes, summary.get("nat", [])
+    )
     if not default_routes:
         review_items.append({
             "severity": "warning", "category": "routing",
@@ -548,10 +712,20 @@ def analyze_device_collection(
         *summary.get("nat", []),
         *summary.get("network_objects", []),
     ]
-    saved_matches = _saved_network_correlations(interfaces, routes, policy_items, db_path)
-    nmap_matches = _nmap_correlations(
-        interfaces, policy_items, db_path=db_path, data_dir=data_dir
-    )
+    # Reach consumes the complete route and policy evidence below, but it does
+    # not use the Device Analysis presentation correlations. Let that caller
+    # skip the expensive all-routes-by-Saved-Network pass and repeated Nmap XML
+    # parsing while preserving the full Device Analysis response by default.
+    if include_correlations:
+        saved_matches = _saved_network_correlations(
+            interfaces, routes, policy_items, db_path
+        )
+        nmap_matches = _nmap_correlations(
+            interfaces, policy_items, db_path=db_path, data_dir=data_dir
+        )
+    else:
+        saved_matches = []
+        nmap_matches = []
     evidence = []
     for filename, label in (
         (summary.get("source_filename"), "Configuration evidence"),
@@ -604,6 +778,7 @@ def analyze_device_collection(
             "review_items": len(review_items),
         },
         "interfaces": interfaces,
+        "wan_candidates": wan_candidates,
         "route_analysis": {
             "routes": routes,
             "default_routes": default_routes,
@@ -735,8 +910,10 @@ def compare_device_collections(before: str, after: str) -> dict:
 
 
 @router.get("/{run_id}")
-def device_analysis(run_id: str) -> dict:
+def device_analysis(run_id: str, include_correlations: bool = True) -> dict:
     try:
-        return analyze_device_collection(run_id)
+        return analyze_device_collection(
+            run_id, include_correlations=include_correlations
+        )
     except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
         raise HTTPException(status_code=404, detail="Device collection was not found") from None

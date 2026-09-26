@@ -1379,6 +1379,58 @@ def config_result_text(run_dir: Path, manifest: dict) -> tuple[str, str | None]:
     return "", None
 
 
+def configuration_identity_node(nodes: dict[str, dict], *values: object) -> dict | None:
+    """Return one unambiguous existing IP node identified by a saved device name."""
+    expected = {
+        str(value).strip().rstrip(".").casefold()
+        for value in values
+        if value is not None and str(value).strip()
+    }
+    if not expected:
+        return None
+    matches: list[dict] = []
+    for node in nodes.values():
+        if node.get("kind") not in {"host", "device", "gateway"}:
+            continue
+        if not valid_ip(node.get("ip")):
+            continue
+        observed = {
+            str(value).strip().rstrip(".").casefold()
+            for value in (node.get("label"), node.get("hostname"))
+            if value is not None and str(value).strip()
+        }
+        if expected & observed:
+            matches.append(node)
+    return matches[0] if len(matches) == 1 else None
+
+
+def map_configuration_details(text: str, commands: list[str] | None) -> tuple[list[dict], list[dict], dict]:
+    """Parse the configuration once for both device identity and map details."""
+    interfaces, routes = parse_config_text(text)
+    switch_detail = parse_switch_evidence(text, commands or [])
+    interfaces = merge_switch_interfaces(interfaces, switch_detail)
+    interfaces = [
+        item
+        for item in interfaces
+        if not item.get("name", "").lower().startswith("lo")
+        and not (
+            valid_network(item.get("address"))
+            and ipaddress.ip_network(valid_network(item.get("address"))).is_loopback
+        )
+    ]
+    return interfaces, routes, switch_detail
+
+
+def configuration_interface_ips(interfaces: list[dict]) -> list[str]:
+    """Return stable, unique IPv4 interface addresses suitable for node identity."""
+    addresses = {
+        str(ipaddress.ip_interface(address).ip)
+        for interface in interfaces
+        if (address := valid_interface_address(interface.get("address")))
+    }
+    return sorted(addresses, key=lambda value: int(ipaddress.ip_address(value)))
+
+
 def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, str], dict],
                           warnings: list[str]) -> int:
     if not CONFIG_DIR.exists():
@@ -1400,9 +1452,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             "configuration_pull", "interactive_configuration_pull", "manual_upload",
         } and not legacy_pull:
             continue
-        ip = valid_ip(manifest.get("device_address"))
-        if not ip:
-            continue
+        device_address = str(manifest.get("device_address") or "").strip()
+        ip = valid_ip(device_address)
         run_id = manifest.get("run_id") or path.parent.name
         source = source_record(
             "device_configuration",
@@ -1410,10 +1461,17 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             manifest.get("completed_at") or manifest.get("created_at"),
             f"/api/device-configs/{run_id}/files/manifest.json",
         )
-        if ip in aliases and aliases[ip] in nodes:
+        text: str | None = None
+        filename: str | None = None
+        interfaces: list[dict] | None = None
+        routes: list[dict] | None = None
+        switch_detail: dict | None = None
+        identity_hostname = manifest.get("device_name") or (device_address if not ip else None)
+        node: dict | None = None
+        if ip and ip in aliases and aliases[ip] in nodes:
             node = nodes[aliases[ip]]
             add_source(node, source)
-        else:
+        elif ip:
             node = ensure_ip_node(
                 nodes,
                 ip,
@@ -1424,19 +1482,67 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 source=source,
             )
             aliases[ip] = node["id"]
+        else:
+            node = configuration_identity_node(
+                nodes,
+                manifest.get("device_name"),
+                device_address,
+            )
+            if node is None:
+                text, filename = config_result_text(path.parent, manifest)
+                if text:
+                    interfaces, routes, switch_detail = map_configuration_details(
+                        text, manifest.get("commands")
+                    )
+                interface_ips = configuration_interface_ips(interfaces or [])
+                for interface_ip in interface_ips:
+                    alias_id = aliases.get(interface_ip)
+                    candidate = nodes.get(alias_id) if alias_id else nodes.get(f"ip:{interface_ip}")
+                    if candidate and candidate.get("kind") in {"host", "device", "gateway"}:
+                        node = candidate
+                        break
+                if node is None and interface_ips:
+                    node = ensure_ip_node(
+                        nodes,
+                        interface_ips[0],
+                        hostname=identity_hostname,
+                        role=manifest.get("device_type"),
+                        vendor=manifest.get("vendor"),
+                        state=manifest.get("status"),
+                        source=source,
+                    )
+            if node is None:
+                continue
+            node_ip = valid_ip(node.get("ip"))
+            if not node_ip:
+                continue
+            node = ensure_ip_node(
+                nodes,
+                node_ip,
+                hostname=identity_hostname,
+                role=manifest.get("device_type"),
+                vendor=manifest.get("vendor"),
+                state=manifest.get("status"),
+                source=source,
+            )
+            aliases[node_ip] = node["id"]
         if manifest.get("device_name") and not node.get("hostname"):
             node["hostname"] = manifest["device_name"]
             node["label"] = manifest["device_name"]
         count += 1
         if node["id"] in parsed_devices:
             continue
-        text, filename = config_result_text(path.parent, manifest)
+        if text is None:
+            text, filename = config_result_text(path.parent, manifest)
         if not text:
             continue
         if manifest.get("status") == "failed" and node.get("state") in {None, "failed"}:
             node["state"] = "partial"
         parsed_devices.add(node["id"])
-        interfaces, routes = parse_config_text(text)
+        if interfaces is None or routes is None or switch_detail is None:
+            interfaces, routes, switch_detail = map_configuration_details(
+                text, manifest.get("commands")
+            )
         declared_roles = {
             str(item).lower()
             for item in (manifest.get("device_types") or [manifest.get("device_type")])
@@ -1455,19 +1561,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
         node["role_label"] = " + ".join(role.title() for role in node["roles"])
         if {"router", "firewall"}.issubset(analyzed_roles):
             node["role"] = "firewall"
-        switch_detail = parse_switch_evidence(text, manifest.get("commands", []))
-        interfaces = merge_switch_interfaces(interfaces, switch_detail)
         neighbors = parse_neighbor_text(text)
         topology_neighbors = parse_topology_neighbors(text)
-        interfaces = [
-            item
-            for item in interfaces
-            if not item.get("name", "").lower().startswith("lo")
-            and not (
-                valid_network(item.get("address"))
-                and ipaddress.ip_network(valid_network(item.get("address"))).is_loopback
-            )
-        ]
         node["interfaces"] = interfaces
         # Routes are consumed below to build topology relationships, but the
         # full list can contain tens of thousands of entries and is not useful

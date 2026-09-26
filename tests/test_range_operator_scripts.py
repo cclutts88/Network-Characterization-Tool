@@ -97,8 +97,26 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert 'sha256sum "$backup"' in content
     assert "nct-upgrade-rollback-$timestamp" in content
     assert "Stored record count decreased" in content
-    assert 'sh "$start_script" "$RANGE_IP"' in content
+    assert 'NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
+    assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
+    assert 'snapshot "$before" container' in content
+    assert 'snapshot "$after" container' in content
+    assert '("-wal", "-shm", "-journal")' in content
+    assert content.index("trap restore_original EXIT") < content.index(
+        'original_stopped=yes\n    docker stop "$CONTAINER"'
+    )
     assert 'api_at_least "$server_api" 1.41' in content
     assert 'api_at_least "$server_api" 1.39' in content
     assert 'docker volume rm' not in content
     assert 'rm -rf' not in content
+
+
+def test_start_scripts_accept_verified_upgrade_account_count():
+    for name in ("nct-start-compose.sh", "nct-start-docker.sh", "nct-start-legacy.sh"):
+        content = (SCRIPTS / name).read_text(encoding="utf-8")
+        assert 'account_count="${NCT_UPGRADE_ACCOUNT_COUNT:-}"' in content
+        assert 'if [ ! -f "$DATA_DIR/analyzer.db" ]' in content
+        assert ':ro,z' in content
+        assert '?mode=ro' in content
+        assert 'case "$account_count" in' in content
+        assert 'The NCT account count is invalid.' in content

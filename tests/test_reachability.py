@@ -1139,8 +1139,8 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
     monkeypatch.setattr(main, "device_collection_history", lambda limit: records)
     analyzed = []
 
-    def analyze(run_id):
-        analyzed.append(run_id)
+    def analyze(run_id, *, include_correlations=True):
+        analyzed.append((run_id, include_correlations))
         return {"run_id": run_id}
 
     monkeypatch.setattr(main, "analyze_device_collection", analyze)
@@ -1153,7 +1153,7 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
 
     assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
     assert cached is result
-    assert analyzed == ["usable", "upload"]
+    assert analyzed == [("usable", False), ("upload", False)]
 
 
 def test_reach_follows_each_retained_next_hop_without_inventing_devices():

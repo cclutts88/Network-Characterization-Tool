@@ -60,11 +60,19 @@ elif [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] || [ ! -f "$TLS_ROOT/tls/nct-server
     die "TLS material is incomplete under $TLS_ROOT; restore the missing file before continuing."
 fi
 
-account_count=$(docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c '
+account_count="${NCT_UPGRADE_ACCOUNT_COUNT:-}"
+if [ -z "$account_count" ]; then
+    if [ ! -f "$DATA_DIR/analyzer.db" ]; then
+        account_count=0
+    else
+        account_count=$(docker run --rm -v "$DATA_DIR:/data:ro,z" "$IMAGE" python -c '
 import pathlib, sqlite3
 p = pathlib.Path("/data/analyzer.db")
-print(0 if not p.exists() else sqlite3.connect(p).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
+print(sqlite3.connect(f"file:{p}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
 ') || die "Existing NCT accounts could not be inspected under $DATA_DIR."
+    fi
+fi
+case "$account_count" in ''|*[!0-9]*) die "The NCT account count is invalid." ;; esac
 if [ "$account_count" -eq 0 ]; then
     if [ -z "$ADMIN_USER" ]; then
         [ -t 0 ] || die "A new installation requires ADMIN_USERNAME when running non-interactively."

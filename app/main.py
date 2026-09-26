@@ -241,7 +241,20 @@ class ExternalWanGatewayRequest(BaseModel):
     device_name: str = Field(default="", max_length=255)
     device_address: str = Field(default="", max_length=255)
     interface_name: str = Field(default="", max_length=255)
+    interface_names: list[str] = Field(default_factory=list, max_length=32)
     slot: Literal["primary", "secondary"] = "primary"
+
+    @field_validator("interface_names")
+    @classmethod
+    def validate_interface_names(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            name = str(value).strip()
+            if not name or len(name) > 255:
+                raise ValueError("WAN interface names must be between 1 and 255 characters")
+            if name not in cleaned:
+                cleaned.append(name)
+        return cleaned
 
 
 class HostnameSelectionRequest(BaseModel):
@@ -2385,7 +2398,9 @@ def _latest_device_reachability_evidence() -> list[dict]:
     analyses = []
     for record in selected_records:
         try:
-            analysis = analyze_device_collection(record["run_id"])
+            analysis = analyze_device_collection(
+                record["run_id"], include_correlations=False
+            )
         except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
             continue
         analyses.append(analysis)
@@ -2407,17 +2422,136 @@ def external_wan_gateway_semantic() -> dict:
     }
 
 
+def _wan_gateway_suggestions(device_analyses: list[dict]) -> list[dict]:
+    """Rank retained config leads while keeping analyst confirmation mandatory."""
+    interface_owners: dict[str, list[dict]] = {}
+    for analysis in device_analyses:
+        for interface in analysis.get("interfaces") or []:
+            try:
+                address = str(ipaddress.ip_interface(str(interface.get("address") or "")).ip)
+            except ValueError:
+                continue
+            interface_owners.setdefault(address, []).append(analysis)
+
+    suggestions: list[dict] = []
+    for analysis in device_analyses:
+        device = analysis.get("device") or {}
+        roles = set(device.get("roles") or []) | {str(device.get("type") or "").lower()}
+        if not roles.intersection({"router", "firewall"}):
+            continue
+        defaults = (analysis.get("route_analysis") or {}).get("default_routes") or []
+        for candidate in analysis.get("wan_candidates") or []:
+            if int(candidate.get("score") or 0) <= 0:
+                continue
+            name = str(candidate.get("name") or "")
+            networks = []
+            for value in candidate.get("addresses") or []:
+                try:
+                    networks.append(ipaddress.ip_interface(str(value)).network)
+                except ValueError:
+                    continue
+            matching_defaults = []
+            for route in defaults:
+                if str(route.get("interface") or "").casefold() == name.casefold():
+                    matching_defaults.append(route)
+                    continue
+                try:
+                    next_hop = ipaddress.ip_address(str(route.get("via") or ""))
+                except ValueError:
+                    continue
+                if any(next_hop in network for network in networks):
+                    matching_defaults.append(route)
+            upstreams: list[str] = []
+            exits_known_devices = False
+            for route in matching_defaults:
+                via = str(route.get("via") or "")
+                if not via:
+                    continue
+                owners = [
+                    item for item in interface_owners.get(via, [])
+                    if item.get("run_id") != analysis.get("run_id")
+                ]
+                if owners:
+                    upstreams.extend(
+                        str((item.get("device") or {}).get("name") or (item.get("device") or {}).get("address") or "known routing device")
+                        for item in owners
+                    )
+                else:
+                    exits_known_devices = True
+            score = int(candidate.get("score") or 0)
+            reasons = list(candidate.get("reasons") or [])
+            if exits_known_devices:
+                score += 25
+                reasons.append("Its default next hop leaves the set of pulled network devices.")
+            if upstreams and not exits_known_devices:
+                score -= 45
+                reasons.append(
+                    "Its default route points to another pulled device: "
+                    + ", ".join(dict.fromkeys(upstreams))
+                    + ". That device may be closer to the WAN boundary."
+                )
+            suggestions.append({
+                "run_id": analysis.get("run_id"),
+                "device_name": device.get("name"),
+                "device_address": device.get("address"),
+                "vendor": device.get("vendor"),
+                "interface_name": name,
+                "addresses": candidate.get("addresses") or [],
+                "score": score,
+                "confidence": "high" if score >= 80 else "medium" if score >= 45 else "low",
+                "recommended": bool(candidate.get("recommended")) and not (
+                    upstreams and not exits_known_devices
+                ),
+                "reasons": reasons,
+                "evidence": candidate.get("evidence") or [],
+            })
+    return sorted(
+        suggestions,
+        key=lambda item: (
+            not item["recommended"], -item["score"],
+            str(item.get("device_name") or item.get("device_address") or "").casefold(),
+            str(item.get("interface_name") or "").casefold(),
+        ),
+    )[:100]
+
+
+@app.get("/api/network-semantics/wan-candidates")
+def external_wan_gateway_candidates() -> dict:
+    suggestions = _wan_gateway_suggestions(_latest_device_reachability_evidence())
+    return {
+        "status": "wan_gateway_candidates_complete",
+        "suggestions": suggestions,
+        "disclaimer": (
+            "These are explainable leads from retained evidence, not confirmed WAN gateways. "
+            "An operator must review and save the designation."
+        ),
+    }
+
+
 @app.put("/api/network-semantics/external-wan-gateway")
 def update_external_wan_gateway_semantic(
     payload: ExternalWanGatewayRequest, request: Request
 ) -> dict:
     analyst = request.state.analyst
     changed_by = analyst["username"] if analyst else "local-analyst"
+    values = payload.model_dump()
+    raw_address = str(values.get("device_address") or "").strip()
+    try:
+        canonical_address = str(ipaddress.ip_address(raw_address))
+    except ValueError:
+        canonical_address = raw_address
+        if str(values.get("node_id") or "").startswith("ip:"):
+            identity = str(values.get("device_name") or raw_address or "network-device")
+            identity = re.sub(r"[^a-z0-9_.:-]+", "-", identity.casefold()).strip("-")
+            values["node_id"] = f"device:{identity or 'network-device'}"
+    else:
+        values["device_address"] = canonical_address
+        values["node_id"] = f"ip:{canonical_address}"
     return {
         "status": "external_wan_gateway_saved",
         "gateway": set_external_wan_gateway(
             DB_PATH,
-            **payload.model_dump(),
+            **values,
             changed_by=changed_by,
         ),
         "gateways": get_external_wan_gateways(DB_PATH),
