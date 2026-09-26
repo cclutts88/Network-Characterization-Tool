@@ -1,21 +1,209 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import re
 import sqlite3
+import threading
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from app.device_configs import CONFIG_DIR, device_collection_directory, device_collection_summary
+from app.database import configure_database, connect_database
 from app.network_map import parse_nmap_xml
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.saved_networks import list_saved_networks
 
 
 router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
+
+DEVICE_SUMMARY_VERSION = 1
+_DEVICE_STORAGE_READY: set[str] = set()
+_DEVICE_STORAGE_LOCK = threading.RLock()
+
+
+def init_device_analysis_storage(db_path: Path = DB_PATH) -> None:
+    storage_key = str(db_path.resolve())
+    if storage_key in _DEVICE_STORAGE_READY and db_path.is_file():
+        return
+    with _DEVICE_STORAGE_LOCK:
+        if storage_key in _DEVICE_STORAGE_READY and db_path.is_file():
+            return
+        configure_database(db_path)
+        with connect_database(db_path) as db:
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_collections (
+                    run_id TEXT PRIMARY KEY,
+                    created_at TEXT,
+                    completed_at TEXT,
+                    device_address TEXT,
+                    device_name TEXT,
+                    vendor TEXT,
+                    device_type TEXT,
+                    status TEXT,
+                    evidence_fingerprint TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_analysis_cache (
+                    run_id TEXT PRIMARY KEY,
+                    analysis_version INTEGER NOT NULL,
+                    evidence_fingerprint TEXT NOT NULL,
+                    summary_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES device_collections(run_id) ON DELETE CASCADE
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_command_observations (
+                    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    line_number INTEGER,
+                    command TEXT NOT NULL,
+                    classification TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    UNIQUE(run_id, position),
+                    FOREIGN KEY (run_id) REFERENCES device_collections(run_id) ON DELETE CASCADE
+                )
+                """
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS device_collections_address_created "
+                "ON device_collections(device_address, created_at DESC)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS device_commands_run_classification "
+                "ON device_command_observations(run_id, classification, position)"
+            )
+            command_columns = {
+                row[1]
+                for row in db.execute(
+                    "PRAGMA table_info(device_command_observations)"
+                ).fetchall()
+            }
+            if "line_number" not in command_columns:
+                db.execute(
+                    "ALTER TABLE device_command_observations "
+                    "ADD COLUMN line_number INTEGER"
+                )
+        _DEVICE_STORAGE_READY.add(storage_key)
+
+
+def delete_device_analysis_storage(run_id: str, db_path: Path = DB_PATH) -> None:
+    init_device_analysis_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("DELETE FROM device_collections WHERE run_id = ?", (run_id,))
+
+
+def _device_evidence_fingerprint(run_dir: Path) -> str:
+    records = []
+    for path in sorted(item for item in run_dir.iterdir() if item.is_file()):
+        if path.name == "accountability.pcap":
+            continue
+        stat = path.stat()
+        records.append((path.name, stat.st_size, stat.st_mtime_ns))
+    return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest()
+
+
+def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
+    init_device_analysis_storage(db_path)
+    run_dir = device_collection_directory(run_id, config_dir)
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    fingerprint = _device_evidence_fingerprint(run_dir)
+    with connect_database(db_path) as db:
+        row = db.execute(
+            """
+            SELECT summary_json FROM device_analysis_cache
+            WHERE run_id = ? AND analysis_version = ? AND evidence_fingerprint = ?
+            """,
+            (run_id, DEVICE_SUMMARY_VERSION, fingerprint),
+        ).fetchone()
+        if row:
+            summary = json.loads(row[0])
+            observations = db.execute(
+                """
+                SELECT position, line_number, command, classification, label
+                FROM device_command_observations
+                WHERE run_id = ? ORDER BY position
+                """,
+                (run_id,),
+            ).fetchall()
+            summary.setdefault("command_history", {})["entries"] = [
+                {
+                    "position": item[0], "line_number": item[1],
+                    "command": item[2], "classification": item[3],
+                    "label": item[4],
+                }
+                for item in observations
+            ]
+            return summary
+    summary = device_collection_summary(run_id, config_dir=config_dir)
+    cached = json.loads(json.dumps(summary))
+    cached.pop("configuration_text", None)
+    cached.pop("raw_output", None)
+    observations = list((cached.get("command_history") or {}).pop("entries", []))
+    with connect_database(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO device_collections (
+                run_id, created_at, completed_at, device_address, device_name,
+                vendor, device_type, status, evidence_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                completed_at = excluded.completed_at,
+                device_address = excluded.device_address,
+                device_name = excluded.device_name,
+                vendor = excluded.vendor,
+                device_type = excluded.device_type,
+                status = excluded.status,
+                evidence_fingerprint = excluded.evidence_fingerprint
+            """,
+            (
+                run_id, manifest.get("created_at"), manifest.get("completed_at"),
+                manifest.get("device_address"), manifest.get("device_name"),
+                manifest.get("vendor"), manifest.get("device_type"),
+                manifest.get("status"), fingerprint,
+            ),
+        )
+        db.execute("DELETE FROM device_command_observations WHERE run_id = ?", (run_id,))
+        db.executemany(
+            """
+            INSERT INTO device_command_observations (
+                run_id, position, line_number, command, classification, label
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_id, item["position"], item.get("line_number"), item["command"],
+                    item["classification"], item["label"],
+                )
+                for item in observations
+            ],
+        )
+        db.execute(
+            """
+            INSERT INTO device_analysis_cache (
+                run_id, analysis_version, evidence_fingerprint, summary_json, updated_at
+            ) VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(run_id) DO UPDATE SET
+                analysis_version = excluded.analysis_version,
+                evidence_fingerprint = excluded.evidence_fingerprint,
+                summary_json = excluded.summary_json,
+                updated_at = excluded.updated_at
+            """,
+            (run_id, DEVICE_SUMMARY_VERSION, fingerprint, json.dumps(cached, separators=(",", ":"))),
+        )
+    cached.setdefault("command_history", {})["entries"] = observations
+    return cached
 
 
 def _route_protocol(route: dict) -> str:
@@ -136,7 +324,7 @@ def _nmap_correlations(
     if not networks or not db_path.is_file():
         return []
     try:
-        with sqlite3.connect(db_path) as db:
+        with connect_database(db_path) as db:
             rows = db.execute(
                 "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
             ).fetchall()
@@ -204,7 +392,7 @@ def analyze_device_collection(
     config_dir = CONFIG_DIR if config_dir is None else config_dir
     db_path = DB_PATH if db_path is None else db_path
     data_dir = DATA_DIR if data_dir is None else data_dir
-    summary = device_collection_summary(run_id, config_dir=config_dir)
+    summary = _cached_device_summary(run_id, config_dir, db_path)
     run_dir = device_collection_directory(run_id, config_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     manifest.pop("key_path", None)
@@ -329,6 +517,30 @@ def analyze_device_collection(
             "title": "No structured switch forwarding evidence was parsed",
             "detail": "No usable port, learned-MAC, aggregation, or spanning-tree records were found. Confirm the vendor profile and rerun with the current guarded switch commands.",
         })
+    command_history = summary.get("command_history") or {}
+    if command_history.get("attempted") and command_history.get("status") != "captured":
+        review_items.append({
+            "severity": "warning", "category": "command history",
+            "title": "Command history was not available",
+            "detail": "NCT attempted the history command before the configuration pull, but the device returned no usable entries. Review platform history settings and centralized AAA accounting.",
+        })
+    elif command_history.get("other_command_count"):
+        review_items.append({
+            "severity": "info", "category": "command history",
+            "title": f"{command_history['other_command_count']} non-NCT command(s) retained",
+            "detail": "Review the highlighted operator or other activity. Known NCT collection commands are labeled separately so they can be ignored during triage.",
+        })
+    volatile_configuration = summary.get("volatile_configuration") or {}
+    if volatile_configuration.get("status") == "different":
+        review_items.append({
+            "severity": "warning", "category": "volatile configuration",
+            "title": "Running configuration differs from startup configuration",
+            "detail": volatile_configuration.get("detail"),
+            "evidence": (
+                f"{volatile_configuration.get('running_only_count', 0)} running-only line(s); "
+                f"{volatile_configuration.get('startup_only_count', 0)} startup-only line(s)"
+            ),
+        })
     policy_items = [
         *summary.get("firewall_acl", []),
         *summary.get("nat", []),
@@ -354,6 +566,12 @@ def analyze_device_collection(
         "filename": "manifest.json",
         "url": f"/api/device-configs/{run_id}/files/manifest.json",
     })
+    if (run_dir / "command-history.txt").is_file():
+        evidence.append({
+            "label": "Command history",
+            "filename": "command-history.txt",
+            "url": f"/api/device-configs/{run_id}/files/command-history.txt",
+        })
     return {
         "run_id": run_id,
         "status": "analysis_complete",
@@ -406,6 +624,8 @@ def analyze_device_collection(
         "switching": summary.get("switching", []),
         "switch_detail": switch_detail,
         "command_results": summary.get("command_results", []),
+        "command_history": command_history,
+        "volatile_configuration": volatile_configuration,
         "saved_network_correlations": saved_matches,
         "nmap_host_correlations": nmap_matches,
         "review_items": review_items,

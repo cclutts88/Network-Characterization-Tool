@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.comparison import compare_analyses, coverage_warnings
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.database import configure_database, connect_database
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
     BUILTIN_PROFILES,
@@ -94,6 +95,9 @@ ARTIFACT_FILES = {
 }
 
 router = APIRouter(prefix="/api", tags=["poc"])
+
+_POC_STORAGE_READY: set[str] = set()
+_POC_STORAGE_LOCK = threading.RLock()
 
 
 def utc_now() -> str:
@@ -426,7 +430,7 @@ def normalize_ipv4_networks(entries: list[str], label: str) -> list[str]:
 def get_global_no_strike(db_path: Path = DB_PATH) -> dict:
     """Return the excluded no-strike list that applies to every scan path."""
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT value_json, updated_at, updated_by FROM app_settings WHERE key = ?",
             ("global_no_strike",),
@@ -446,7 +450,7 @@ def _store_global_no_strike(
     normalized = normalize_ipv4_networks(entries, "no-strike") if entries else []
     updated_at = utc_now()
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO app_settings (key, value_json, updated_at, updated_by)
@@ -903,110 +907,144 @@ def build_scan_run_manifest(
 
 
 def init_poc_storage(db_path: Path = DB_PATH) -> None:
-    init_saved_network_storage(db_path)
-    init_scan_collaboration_storage(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scan_runs (
-                run_id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                operator_name TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                originating_host TEXT NOT NULL,
-                interface_name TEXT NOT NULL,
-                profile TEXT NOT NULL,
-                manifest_json TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scan_profiles (
-                profile_id TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL,
-                built_in INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                source_profile_id TEXT,
-                source_profile_version INTEGER,
-                settings_json TEXT NOT NULL,
-                PRIMARY KEY (profile_id, version)
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scan_schedules (
-                schedule_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                profile_id TEXT NOT NULL,
-                profile_version INTEGER NOT NULL,
-                definition_json TEXT NOT NULL,
-                FOREIGN KEY (profile_id, profile_version)
-                    REFERENCES scan_profiles(profile_id, version)
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_by TEXT NOT NULL
-            )
-            """
-        )
-        for profile in BUILTIN_PROFILES:
-            # Retain the original Nmap-discovery version for schedules already
-            # pinned to it, then publish FPING-first behavior as the new latest
-            # built-in version for new scans and schedules.
+    storage_key = str(db_path.resolve())
+    if storage_key in _POC_STORAGE_READY and db_path.is_file():
+        return
+    with _POC_STORAGE_LOCK:
+        if storage_key in _POC_STORAGE_READY and db_path.is_file():
+            return
+        configure_database(db_path)
+        init_saved_network_storage(db_path)
+        init_scan_collaboration_storage(db_path)
+        with connect_database(db_path) as db:
             db.execute(
                 """
-                INSERT OR IGNORE INTO scan_profiles (
-                    profile_id, version, name, description, built_in,
-                    created_at, created_by, source_profile_id,
-                    source_profile_version, settings_json
-                ) VALUES (?, 1, ?, ?, 1, ?, 'system', NULL, NULL, ?)
-                """,
-                (
-                    profile["profile_id"],
-                    profile["name"],
-                    profile["description"],
-                    utc_now(),
-                    json.dumps(
-                        normalize_scan_options(
-                            {**profile["settings"], "discovery_mode": "nmap"}
+                CREATE TABLE IF NOT EXISTS scan_runs (
+                    run_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    operator_name TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    originating_host TEXT NOT NULL,
+                    interface_name TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_profiles (
+                    profile_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    built_in INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    source_profile_id TEXT,
+                    source_profile_version INTEGER,
+                    settings_json TEXT NOT NULL,
+                    PRIMARY KEY (profile_id, version)
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_schedules (
+                    schedule_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    profile_version INTEGER NOT NULL,
+                    definition_json TEXT NOT NULL,
+                    FOREIGN KEY (profile_id, profile_version)
+                        REFERENCES scan_profiles(profile_id, version)
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_analysis_cache (
+                    run_id TEXT PRIMARY KEY,
+                    analysis_version INTEGER NOT NULL,
+                    evidence_size INTEGER NOT NULL,
+                    evidence_modified_ns INTEGER NOT NULL,
+                    analysis_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES scan_runs(run_id) ON DELETE CASCADE
+                )
+                """
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_runs_status_created "
+                "ON scan_runs(status, created_at)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_runs_created "
+                "ON scan_runs(created_at DESC)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_schedules_profile "
+                "ON scan_schedules(profile_id, profile_version)"
+            )
+            for profile in BUILTIN_PROFILES:
+                # Retain the original Nmap-discovery version for schedules already
+                # pinned to it, then publish FPING-first behavior as the new latest
+                # built-in version for new scans and schedules.
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO scan_profiles (
+                        profile_id, version, name, description, built_in,
+                        created_at, created_by, source_profile_id,
+                        source_profile_version, settings_json
+                    ) VALUES (?, 1, ?, ?, 1, ?, 'system', NULL, NULL, ?)
+                    """,
+                    (
+                        profile["profile_id"],
+                        profile["name"],
+                        profile["description"],
+                        utc_now(),
+                        json.dumps(
+                            normalize_scan_options(
+                                {**profile["settings"], "discovery_mode": "nmap"}
+                            ),
+                            sort_keys=True,
                         ),
-                        sort_keys=True,
                     ),
-                ),
-            )
-            db.execute(
-                """
-                INSERT OR IGNORE INTO scan_profiles (
-                    profile_id, version, name, description, built_in,
-                    created_at, created_by, source_profile_id,
-                    source_profile_version, settings_json
-                ) VALUES (?, ?, ?, ?, 1, ?, 'system', ?, 1, ?)
-                """,
-                (
-                    profile["profile_id"],
-                    BUILTIN_PROFILE_VERSION,
-                    profile["name"],
-                    profile["description"],
-                    utc_now(),
-                    profile["profile_id"],
-                    json.dumps(normalize_scan_options(profile["settings"]), sort_keys=True),
-                ),
-            )
+                )
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO scan_profiles (
+                        profile_id, version, name, description, built_in,
+                        created_at, created_by, source_profile_id,
+                        source_profile_version, settings_json
+                    ) VALUES (?, ?, ?, ?, 1, ?, 'system', ?, 1, ?)
+                    """,
+                    (
+                        profile["profile_id"],
+                        BUILTIN_PROFILE_VERSION,
+                        profile["name"],
+                        profile["description"],
+                        utc_now(),
+                        profile["profile_id"],
+                        json.dumps(
+                            normalize_scan_options(profile["settings"]), sort_keys=True
+                        ),
+                    ),
+                )
+        _POC_STORAGE_READY.add(storage_key)
 
 
 def _profile_record(row: tuple | None) -> dict | None:
@@ -1032,7 +1070,7 @@ def get_scan_profile(
     db_path: Path = DB_PATH,
 ) -> dict | None:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         if version is None:
             row = db.execute(
                 """
@@ -1060,7 +1098,7 @@ def get_scan_profile(
 def list_scan_profiles(db_path: Path = DB_PATH, *, all_versions: bool = False) -> list[dict]:
     init_poc_storage(db_path)
     where = "" if all_versions else "WHERE p.version = (SELECT MAX(v.version) FROM scan_profiles v WHERE v.profile_id = p.profile_id)"
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute(
             f"""
             SELECT p.profile_id, p.version, p.name, p.description, p.built_in,
@@ -1078,7 +1116,7 @@ def create_scan_profile(request: ScanProfileCreate, db_path: Path = DB_PATH) -> 
     profile_id = uuid.uuid4().hex
     created_at = utc_now()
     settings = request.settings.normalized()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_profiles (
@@ -1107,7 +1145,7 @@ def create_scan_profile_version(
     if current["built_in"]:
         raise ValueError("Built-in profiles are protected; clone one before editing it")
     version = int(current["version"]) + 1
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_profiles (
@@ -1141,7 +1179,7 @@ def clone_scan_profile(
         settings=ScanOptions(**source["settings"]),
     )
     clone = create_scan_profile(clone_request, db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE scan_profiles
@@ -1215,7 +1253,7 @@ def get_scan_schedule(schedule_id: str, db_path: Path = DB_PATH) -> dict | None:
     if not RUN_ID_RE.fullmatch(schedule_id):
         return None
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
             (schedule_id,),
@@ -1248,7 +1286,7 @@ def _append_schedule_history(
 
 def _store_scan_schedule(schedule: dict, db_path: Path = DB_PATH) -> dict:
     schedule["updated_at"] = utc_now()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE scan_schedules
@@ -1344,7 +1382,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "recovery_count": 0,
         "implementation_status": "active_scheduler",
     }
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_schedules (
@@ -1363,7 +1401,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
 
 def list_scan_schedules(db_path: Path = DB_PATH) -> list[dict]:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute(
             "SELECT definition_json FROM scan_schedules ORDER BY created_at DESC"
         ).fetchall()
@@ -1464,7 +1502,7 @@ def change_scan_schedule_profile(
 
 def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_runs (
@@ -1482,7 +1520,7 @@ def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
 
 
 def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE scan_runs SET status = ?, manifest_json = ? WHERE run_id = ?
@@ -1497,7 +1535,7 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
 
 def _queued_run_ids(db_path: Path = DB_PATH) -> list[str]:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         return [
             row[0]
             for row in db.execute(
@@ -1554,13 +1592,17 @@ def prepare_scan_run(
     return manifest
 
 
-def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
+def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int = 0, metadata_only: bool = False) -> list[dict]:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
+        # Lightweight history never opens scan XML or enumerates artifacts.
+        expression = "json_remove(manifest_json, '$.artifacts', '$.commands', '$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', '$.command', '$.exact_execution_command')" if metadata_only else "manifest_json"
         rows = db.execute(
-            "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            f"SELECT {expression} FROM scan_runs ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            (limit, offset),
         ).fetchall()
+    if metadata_only:
+        return [json.loads(row[0]) for row in rows]
     queued_ids = _queued_run_ids(db_path)
     return [
         with_queue_state(with_host_count(json.loads(row[0])), db_path, queued_ids)
@@ -1672,7 +1714,7 @@ def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
     if not RUN_ID_RE.fullmatch(run_id):
         return None
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
@@ -1945,7 +1987,7 @@ def delete_scan_profile(
         raise KeyError("Scan profile not found")
     if profile["built_in"]:
         raise PermissionError("Built-in profiles are protected and cannot be deleted")
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         pinned = db.execute(
             "SELECT COUNT(*) FROM scan_schedules WHERE profile_id = ?", (profile_id,)
         ).fetchone()[0]
@@ -1955,7 +1997,7 @@ def delete_scan_profile(
         )
     if not consume_delete_challenge("profile", profile_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         removed = db.execute(
             "DELETE FROM scan_profiles WHERE profile_id = ?", (profile_id,)
         ).rowcount
@@ -1974,7 +2016,7 @@ def delete_scan_schedule(
             )
     if not consume_delete_challenge("schedule", schedule_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute("DELETE FROM scan_schedules WHERE schedule_id = ?", (schedule_id,))
     return {"deleted": True, "schedule_id": schedule_id}
 
@@ -1998,7 +2040,7 @@ def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
     run_dir = run_directory(run_id, data_dir)
     if run_dir.exists():
         shutil.rmtree(run_dir)
-    db = sqlite3.connect(db_path)
+    db = connect_database(db_path)
     try:
         db.execute("DELETE FROM scan_runs WHERE run_id = ?", (run_id,))
         db.commit()
@@ -2028,7 +2070,7 @@ def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
             if child.is_file():
                 child.unlink()
                 removed_imports += 1
-    db = sqlite3.connect(db_path)
+    db = connect_database(db_path)
     try:
         db.execute("DELETE FROM scan_runs")
         try:
@@ -2084,7 +2126,7 @@ def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
                 if child.is_file() and (child.name == "manifest.json" or child.name.startswith("uploaded-") or child.name in {"stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt"}):
                     location["files"].append(_stored_file_record(child, f"/api/device-configs/{run_dir.name}/files/{child.name}"))
             locations.append(location)
-    db = sqlite3.connect(db_path)
+    db = connect_database(db_path)
     try:
         rows = db.execute("SELECT sha256, filename, imported_at FROM imports ORDER BY imported_at DESC LIMIT ?", (limit,)).fetchall()
     except sqlite3.Error:
@@ -3010,7 +3052,7 @@ def recover_scheduler_state(
     """Close orphaned work, preserve manual queue entries, and recover scheduled batches."""
     init_poc_storage(db_path)
     recovered_at = utc_now()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute("SELECT manifest_json FROM scan_runs").fetchall()
     manifests = [json.loads(row[0]) for row in rows]
     orphaned = []
@@ -3177,7 +3219,7 @@ def schedule_worker(stop_event: threading.Event, interval_seconds: float = 15.0)
 
 
 def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(imports)").fetchall()}
         metadata_expression = "metadata_json" if "metadata_json" in columns else "'{}'"
         rows = db.execute(
@@ -3214,7 +3256,7 @@ def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
 def get_import_history_item(sha256: str, db_path: Path = DB_PATH) -> dict | None:
     if not IMPORT_KEY_RE.fullmatch(sha256):
         return None
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         columns = {item[1] for item in db.execute("PRAGMA table_info(imports)").fetchall()}
         metadata_expression = "metadata_json" if "metadata_json" in columns else "'{}'"
         row = db.execute(
@@ -3638,7 +3680,7 @@ def change_scan_run_owner(
     if manifest.get("status") != "queued":
         raise HTTPException(status_code=409, detail="Only queued scans can be reassigned")
     if actor is not None:
-        with sqlite3.connect(DB_PATH) as db:
+        with connect_database(DB_PATH) as db:
             row = db.execute(
                 "SELECT role, disabled FROM analyst_users WHERE username = ?",
                 (change.owner,),
@@ -3764,9 +3806,27 @@ def scan_run_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]
 
 @router.get("/scan-runs-grouped")
 def grouped_scan_run_history(
-    limit: int = Query(default=200, ge=1, le=200),
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = 0,
 ) -> list[dict]:
-    return group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit))
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="History offset must not be negative")
+    groups = group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit, offset=offset, metadata_only=True))
+    fields = {
+        "run_id", "status", "partial_results", "execution_note", "display_name",
+        "name", "created_at", "completed_at", "profile", "profile_id",
+        "profile_version", "profile_settings", "saved_network_ids",
+        "saved_networks", "target_selection", "manual_targets", "targets",
+        "host_count", "interface", "created_by", "operator", "scheduled_by",
+        "executed_by", "execution_method", "coverage", "scheduled",
+        "timeout_seconds", "progress",
+    }
+    for group in groups:
+        group["runs"] = [
+            {key: value for key, value in run.items() if key in fields}
+            for run in group.get("runs", [])
+        ]
+    return groups
 
 
 @router.get("/scan-runs/{run_id}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.database import configure_database, connect_database
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
@@ -15,7 +16,11 @@ from app.poc import (
     schedule_worker,
 )
 from app.device_configs import history as device_collection_history, router as device_config_router
-from app.device_analysis import analyze_device_collection, router as device_analysis_router
+from app.device_analysis import (
+    analyze_device_collection,
+    init_device_analysis_storage,
+    router as device_analysis_router,
+)
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting import (
@@ -1013,8 +1018,10 @@ def parse_xml(content: bytes) -> dict:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    configure_database(DB_PATH)
     init_storage()
     init_poc_storage()
+    init_device_analysis_storage(DB_PATH)
     init_auth_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
     init_scan_collaboration_storage(DB_PATH)
@@ -1042,6 +1049,16 @@ app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifes
 app.include_router(poc_router)
 app.include_router(device_config_router)
 app.include_router(device_analysis_router)
+
+
+@app.exception_handler(sqlite3.OperationalError)
+async def database_error_response(request: Request, exc: sqlite3.OperationalError):
+    if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+        raise exc
+    return JSONResponse(
+        {"detail": "The database is busy with another operation. Please retry shortly."},
+        status_code=503, headers={"Retry-After": "2"},
+    )
 
 
 @app.middleware("http")
@@ -1723,12 +1740,47 @@ def analyze_scan_run(run_id: str) -> dict:
 
 
 def _run_group_analysis(manifests: list[dict]) -> dict:
+    init_poc_storage(DB_PATH)
     analyses = []
     for manifest in manifests:
         xml_path = run_directory(manifest["run_id"]) / "scan.xml"
         if not xml_path.is_file():
             raise FileNotFoundError(manifest["run_id"])
-        analyses.append(parse_xml(xml_path.read_bytes()))
+        stat = xml_path.stat()
+        with connect_database(DB_PATH) as db:
+            row = db.execute(
+                """
+                SELECT analysis_json FROM scan_analysis_cache
+                WHERE run_id = ? AND analysis_version = 1
+                  AND evidence_size = ? AND evidence_modified_ns = ?
+                """,
+                (manifest["run_id"], stat.st_size, stat.st_mtime_ns),
+            ).fetchone()
+        if row:
+            analyses.append(json.loads(row[0]))
+            continue
+        parsed = parse_xml(xml_path.read_bytes())
+        with connect_database(DB_PATH) as db:
+            db.execute(
+                """
+                INSERT INTO scan_analysis_cache (
+                    run_id, analysis_version, evidence_size,
+                    evidence_modified_ns, analysis_json, updated_at
+                ) SELECT ?, 1, ?, ?, ?, ?
+                WHERE EXISTS (SELECT 1 FROM scan_runs WHERE run_id = ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    analysis_version = excluded.analysis_version,
+                    evidence_size = excluded.evidence_size,
+                    evidence_modified_ns = excluded.evidence_modified_ns,
+                    analysis_json = excluded.analysis_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    manifest["run_id"], stat.st_size, stat.st_mtime_ns,
+                    json.dumps(parsed, separators=(",", ":")), utc_now(), manifest["run_id"],
+                ),
+            )
+        analyses.append(parsed)
     merged = merge_analyses(analyses)
     partial_notes = [
         str(manifest.get("execution_note") or "A scan phase did not complete.")

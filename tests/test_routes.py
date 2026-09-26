@@ -441,6 +441,7 @@ def test_vyos_password_preview_lists_the_real_temporary_file_workflow_in_order()
         "Start accountability capture",
         "Open one-time SSH session",
         "Verify authenticated SSH session",
+        "Capture command history",
         "Run read-only device collection",
         "Copy temporary output to NCT",
         "Normalize retained output",
@@ -594,6 +595,7 @@ def test_key_preview_never_claims_a_remote_temporary_file_workflow():
     assert phases == [
         "Validate local SSH key",
         "Start accountability capture",
+        "Capture command history",
         "Run read-only device collection",
         "Retain streamed output",
     ]

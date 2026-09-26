@@ -345,7 +345,12 @@ def apply_analysis_host_identities(analysis: dict, db_path: Path) -> dict:
             *(host.get("hostname_aliases") or []), identity["hostname"]
         ]))
         host["hostname_aliases"] = aliases
-        if not observed:
+        selected = identity.get("selection_source") not in {None, "", "operator_import"}
+        if selected and observed and observed.casefold() != identity["hostname"].casefold():
+            host.setdefault("observed_hostname", observed)
+            host["hostname_conflict"] = True
+            host["hostname_aliases"] = list(dict.fromkeys([*aliases, observed]))
+        if not observed or selected:
             host["hostname"] = identity["hostname"]
             host["hostname_origin"] = "analyst_import"
         elif observed.casefold() != identity["hostname"].casefold():
@@ -365,10 +370,15 @@ def apply_topology_host_identities(nodes: dict[str, dict], db_path: Path) -> Non
         node["hostname_aliases"] = list(dict.fromkeys([
             *(node.get("hostname_aliases") or []), identity["hostname"]
         ]))
-        if not observed:
+        selected = identity.get("selection_source") not in {None, "", "operator_import"}
+        if selected and observed and observed.casefold() != identity["hostname"].casefold():
+            node.setdefault("observed_hostname", observed)
+            node["hostname_conflict"] = True
+            node["hostname_aliases"] = list(dict.fromkeys([*node["hostname_aliases"], observed]))
+        if not observed or selected:
             node["hostname"] = identity["hostname"]
             node["hostname_origin"] = "analyst_import"
-            if node.get("kind") == "host" and str(node.get("label") or "") == ip:
+            if node.get("kind") == "host" and str(node.get("label") or "") in {ip, observed}:
                 node["label"] = identity["hostname"]
         elif observed.casefold() != identity["hostname"].casefold():
             node["hostname_conflict"] = True

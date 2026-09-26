@@ -145,9 +145,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
-    assert "/api/scan-runs-grouped?limit=200" in html
+    assert "/api/scan-runs-grouped?limit=25&offset=" in html
     assert 'class="history-group"' in html
-    assert "localeCompare(NCTScanReference.humanize(right.name||'')" in html
+    assert "localeCompare(NCTScanReference.humanize(b.name||'')" in html
     assert "function newestFirst(runs)" in html
     assert 'data-compare="' in html
     assert "candidateSavedName" in html
@@ -266,8 +266,8 @@ def test_device_evidence_downloads_use_authenticated_page_fetch():
     assert "function artifactLink(artifact)" in html
     assert "event.preventDefault();saveArtifact(artifact,link)" in html
     assert 'id="deleteCollectionDialog"' in html
-    assert "status, commands, and saved evidence files" in html
-    assert "interpreted interfaces, routes, neighbors, VLANs, policy, and comparisons" in html
+    assert "Load commands and evidence files" in html
+    assert "History starts with lightweight metadata only" in html
     assert 'id="completionActions"' in html
     assert 'id="analyzeCollection"' in html
     assert 'id="continueCandidateToNmap"' in html

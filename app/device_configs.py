@@ -13,10 +13,11 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Iterable, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -33,7 +34,14 @@ KEY_RE = re.compile(r"^/keys/[A-Za-z0-9._/-]{1,180}$")
 INTERFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
 CUSTOM_COMMAND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/,=|?*+-]{0,199}$")
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-ARTIFACT_NAMES = ("manifest.json", "stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt")
+ARTIFACT_NAMES = (
+    "manifest.json",
+    "stdout.txt",
+    "stderr.txt",
+    "command-history.txt",
+    "accountability.pcap",
+    "capture-stderr.txt",
+)
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
 MAX_SUMMARY_ITEMS = 500
@@ -56,6 +64,14 @@ READ_ONLY_FILTER_PREFIXES = {
 
 VENDORS = ("vyos", "cisco", "juniper", "pfsense", "unifi")
 DEVICE_TYPES = ("router", "firewall", "switch")
+
+COMMAND_HISTORY_COMMANDS = {
+    "vyos": "show history",
+    "cisco": "show history",
+    "juniper": "show cli history | no-more",
+    "pfsense": "cat ~/.history",
+    "unifi": "cat ~/.bash_history ~/.ash_history ~/.history 2>/dev/null",
+}
 
 TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
     "vyos": {
@@ -87,6 +103,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "terminal length 0",
             "show version",
             "show running-config",
+            "show startup-config",
             "show ip interface brief",
             "show interfaces",
             "show ip route",
@@ -102,6 +119,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "terminal pager 0",
             "show version",
             "show running-config",
+            "show startup-config",
             "show interface ip brief",
             "show interface",
             "show route",
@@ -117,6 +135,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...]]] = {
             "terminal length 0",
             "show version",
             "show running-config",
+            "show startup-config",
             "show ip interface brief",
             "show interfaces status",
             "show interfaces description",
@@ -470,6 +489,25 @@ def _interactive_collection_command(
     return None, "; ".join(commands)
 
 
+def _history_remote_command(plan: DeviceConfigPlan) -> tuple[str | None, str]:
+    command = COMMAND_HISTORY_COMMANDS[plan.vendor]
+    if plan.vendor == "vyos":
+        return (
+            "\n".join(
+                [
+                    "source /opt/vyatta/etc/functions/script-template",
+                    f"run {command}",
+                    "exit",
+                ]
+            )
+            + "\n",
+            "vbash -s",
+        )
+    if plan.vendor in {"pfsense", "unifi"}:
+        return None, f"sh -c {shlex.quote(command)}"
+    return None, command
+
+
 def build_plan(plan: DeviceConfigPlan) -> dict:
     selected_device_types = plan.device_types or [plan.device_type]
     template_commands = list(dict.fromkeys(
@@ -478,7 +516,11 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         for command in TEMPLATES[plan.vendor][device_type]
     ))
     additional_commands = list(plan.additional_commands)
-    commands = template_commands + additional_commands
+    history_command = COMMAND_HISTORY_COMMANDS[plan.vendor]
+    collection_commands = template_commands + additional_commands
+    commands = [history_command] + [
+        command for command in collection_commands if command != history_command
+    ]
     run_id = uuid.uuid4().hex
     name = safe_name(plan.device_name or plan.device_address)
     target = f"{plan.username}@{plan.device_address}"
@@ -492,6 +534,9 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
     ]
     if plan.key_path:
         ssh_args += ["-o", "IdentitiesOnly=yes", "-i", plan.key_path]
+    ssh_base_args = list(ssh_args)
+    history_input, history_remote_command = _history_remote_command(plan)
+    history_ssh_args = ssh_base_args + [target, history_remote_command]
     if interactive:
         remote_input = None
         ssh_args += [target]
@@ -500,19 +545,19 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         remote = "vbash -s"
         remote_input = "\n".join(
             ["source /opt/vyatta/etc/functions/script-template"]
-            + [f"run {command}" for command in commands]
+            + [f"run {command}" for command in collection_commands]
             + ["exit"]
         ) + "\n"
         ssh_args += [target, remote]
         script_lines = remote_input.rstrip("\n").splitlines()
         ssh_command = f"printf '%s\\n' {shlex.join(script_lines)} | {shlex.join(ssh_args)}"
     elif plan.vendor == "unifi":
-        remote_input, remote = _interactive_collection_command(plan, commands, None)
+        remote_input, remote = _interactive_collection_command(plan, collection_commands, None)
         ssh_args += [target, remote]
         ssh_command = shlex.join(ssh_args)
     else:
         remote_input = None
-        ssh_args += [target, "; ".join(commands)]
+        ssh_args += [target, "; ".join(collection_commands)]
         ssh_command = shlex.join(ssh_args)
     run_dir = CONFIG_DIR / run_id
     local_file = f"{name}-{run_id[:12]}-config.txt"
@@ -572,12 +617,21 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
             shlex.join(control_args[:-1] + ["-O", "check", control_args[-1]]),
             "Checks the private control session after immediate authentication or again after the one-time password prompt succeeds.",
         )
-        remote_input, remote_command = _interactive_collection_command(plan, commands, remote_output)
+        remote_input, remote_command = _interactive_collection_command(
+            plan, collection_commands, remote_output
+        )
         collection_args = control_args + [remote_command]
         collection_command = shlex.join(collection_args)
         if remote_input:
             script_lines = remote_input.rstrip("\n").splitlines()
             collection_command = f"printf '%s\\n' {shlex.join(script_lines)} | {collection_command}"
+        add_step(
+            "Capture command history",
+            "Network device over SSH",
+            "device command",
+            history_command,
+            "Runs before configuration and state collection. NCT retains the result separately and labels known NCT collection commands during analysis.",
+        )
         add_step(
             "Run read-only device collection",
             "Network device over SSH",
@@ -635,6 +689,13 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         )
     else:
         add_step(
+            "Capture command history",
+            "Network device over SSH",
+            "device command",
+            history_command,
+            "Runs before configuration and state collection. NCT retains the result separately and labels known NCT collection commands during analysis.",
+        )
+        add_step(
             "Run read-only device collection",
             "Network device over SSH",
             "device command",
@@ -666,6 +727,10 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "template_commands": template_commands,
         "additional_commands": additional_commands,
         "commands": commands,
+        "history_command": history_command,
+        "collection_commands": collection_commands,
+        "history_input": history_input,
+        "history_ssh_args": history_ssh_args,
         "ssh_command": ssh_command,
         "ssh_args": ssh_args,
         "remote_input": remote_input,
@@ -710,6 +775,7 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "template_commands": preview["template_commands"],
         "additional_commands": preview["additional_commands"],
         "commands": preview["commands"],
+        "history_command": preview["history_command"],
         "ssh_command": preview["ssh_command"],
         "scp_command": preview["scp_command"],
         "transfer_method": preview["transfer_method"],
@@ -1055,6 +1121,46 @@ def _useful_device_output(value: str) -> bool:
     return len("\n".join(meaningful)) >= 20
 
 
+def _extract_command_section(path: Path, command: str) -> str:
+    """Read one early labeled command section without loading a large collection."""
+    if not path.is_file():
+        return ""
+    prefix = _read_text_prefix(path, min(MAX_RESPONSE_OUTPUT_CHARS, 512_000))
+    marker = f"===== {command} ====="
+    start = prefix.find(marker)
+    if start < 0:
+        return ""
+    body = prefix[start + len(marker):].lstrip("\r\n")
+    next_marker = body.find("\n===== ")
+    return (body[:next_marker] if next_marker >= 0 else body).strip()
+
+
+def _capture_history_to_file(
+    ssh_args: list[str],
+    history_input: str | None,
+    output_path: Path,
+) -> tuple[str, str, bool]:
+    """Capture history first; preserve an explicit unavailable record on failure."""
+    try:
+        completed, truncated = _stream_command_to_file(
+            ssh_args,
+            input_text=history_input,
+            output_path=output_path,
+            timeout=45,
+        )
+        value = _read_text_prefix(output_path, MAX_RESPONSE_OUTPUT_CHARS).strip()
+        if completed.returncode == 0 and value:
+            return "captured", completed.stderr[:4000], truncated
+        detail = completed.stderr.strip() or "The device returned no command-history entries."
+        output_path.write_text(f"[NCT] Command history unavailable: {detail}\n")
+        return "unavailable", detail[:4000], truncated
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        detail = "Command-history capture timed out." if isinstance(exc, subprocess.TimeoutExpired) else str(exc)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(f"[NCT] Command history unavailable: {detail}\n")
+        return "unavailable", detail[:4000], False
+
+
 def _normalized_cisco_shell_line(raw_line: str) -> str:
     """Remove terminal control sequences while retaining readable evidence."""
     value = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw_line or "")
@@ -1147,7 +1253,14 @@ def _collect_cisco_command_outputs(
     pager_commands = {"terminal length 0", "terminal pager 0"}
     pager_command = next((command for command in commands if command in pager_commands), None)
     requested_commands = [command for command in commands if command not in pager_commands]
-    send_commands = ([pager_command] if pager_command else []) + requested_commands
+    history_command = next(
+        (command for command in requested_commands if command == "show history"), None
+    )
+    send_commands = (
+        ([history_command] if history_command else [])
+        + ([pager_command] if pager_command else [])
+        + [command for command in requested_commands if command != history_command]
+    )
     shell_args = ssh_prefix[:-1] + ["-tt", ssh_prefix[-1]]
     master_fd, slave_fd = pty.openpty()
     process: subprocess.Popen[bytes] | None = None
@@ -1322,12 +1435,24 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     cleanup_status = "not_required"
     remote_created = False
     output_truncated = False
+    history_path = session.run_dir / "command-history.txt"
+    history_status = "unavailable"
+    history_truncated = False
     try:
+        if plan.vendor != "cisco":
+            history_input, history_remote = _history_remote_command(plan)
+            history_status, history_error, history_truncated = _capture_history_to_file(
+                _control_ssh_args(session) + [history_remote],
+                history_input,
+                history_path,
+            )
+            if history_error:
+                stderr_parts.append(f"Command history: {history_error}")
         if plan.vendor in {"vyos", "pfsense"}:
             transfer_method = "scp_control_session"
             remote_created = True
             remote_input, remote_command = _interactive_collection_command(
-                plan, preview["commands"], remote_output
+                plan, preview["collection_commands"], remote_output
             )
             collected = subprocess.run(
                 _control_ssh_args(session) + [remote_command],
@@ -1370,11 +1495,21 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                     "Some Cisco commands returned no usable evidence: "
                     + ", ".join(failed_commands)
                 )
+            history_value = _extract_command_section(
+                local_output, preview["history_command"]
+            )
+            if history_value:
+                history_path.write_text(history_value.rstrip() + "\n")
+                history_status = "captured"
+            else:
+                history_path.write_text(
+                    "[NCT] Command history unavailable: the device returned no history section.\n"
+                )
             if collection_error:
                 raise RuntimeError(collection_error)
         else:
             remote_input, remote_command = _interactive_collection_command(
-                plan, preview["commands"], None
+                plan, preview["collection_commands"], None
             )
             collected, output_truncated = _stream_command_to_file(
                 _control_ssh_args(session) + [remote_command],
@@ -1437,6 +1572,9 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             "output_complete": status == "completed" and not output_truncated,
             "retained_output_bytes": local_output.stat().st_size if local_output.is_file() else 0,
             "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
+            "command_history_status": history_status,
+            "command_history_truncated": history_truncated,
+            "command_history_artifact": "command-history.txt",
         },
     )
 
@@ -1498,6 +1636,184 @@ def _configuration_source_names(run_dir: Path) -> list[str]:
         if path.is_file() and COLLECTION_ARTIFACT_RE.fullmatch(path.name)
     ]
     return list(dict.fromkeys(uploaded + collected + ["stdout.txt"]))
+
+
+def _labeled_command_sections(text: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw_line in text.splitlines():
+        match = re.fullmatch(r"===== (.+?) =====", raw_line.strip())
+        if match:
+            current = match.group(1).strip()
+            sections.setdefault(current, [])
+        elif current is not None:
+            sections[current].append(raw_line)
+    return {command: "\n".join(lines).strip() for command, lines in sections.items()}
+
+
+def _known_nct_device_commands() -> set[str]:
+    values = set(COMMAND_HISTORY_COMMANDS.values())
+    for templates in TEMPLATES.values():
+        for commands in templates.values():
+            values.update(commands)
+    return {" ".join(value.lower().split()) for value in values}
+
+
+def _history_command_value(raw_line: str) -> str:
+    value = raw_line.strip()
+    if not value or value.startswith("[NCT]") or re.fullmatch(r"#\d{9,}", value):
+        return ""
+    value = re.sub(r"^\s*\d+\s+", "", value)
+    value = re.sub(r"^[^\s]{1,80}[>#]\s*", "", value)
+    return value.strip()
+
+
+def parse_command_history(
+    raw_history: str,
+    attempted: bool,
+    nct_commands: Iterable[str] | None = None,
+) -> dict:
+    known = _known_nct_device_commands()
+    known.update(
+        " ".join(str(command).lower().split())
+        for command in (nct_commands or [])
+        if str(command).strip()
+    )
+    if re.search(r"(?im)^\s*(?:%|\[NCT\]|.*(?:permission denied|command not found|no such file|syntax error|unknown command))", raw_history):
+        raw_history = ""
+    entries = []
+    for line_number, raw_line in enumerate(raw_history.splitlines(), start=1):
+        command = _history_command_value(raw_line)
+        if not command:
+            continue
+        normalized = " ".join(command.lower().split())
+        classification = "nct_collection" if normalized in known else "other"
+        entries.append(
+            {
+                "position": len(entries) + 1,
+                "line_number": line_number,
+                "command": command[:1000],
+                "classification": classification,
+                "label": (
+                    "Matches NCT collection command (origin unverified)"
+                    if classification == "nct_collection"
+                    else "Operator or other activity"
+                ),
+            }
+        )
+        if len(entries) >= MAX_SUMMARY_ITEMS:
+            break
+    status = "captured" if entries else "unavailable" if attempted else "not_collected"
+    return {
+        "status": status,
+        "attempted": attempted,
+        "entries": entries,
+        "nct_command_count": sum(
+            item["classification"] == "nct_collection" for item in entries
+        ),
+        "other_command_count": sum(item["classification"] == "other" for item in entries),
+        "scope_note": (
+            "Command text alone cannot establish who ran it. Device command-history buffers vary by platform and account. Cisco and Junos history is normally limited to the current CLI session; this evidence is not a replacement for centralized AAA command accounting."
+        ),
+    }
+
+
+def _normalized_cisco_config_lines(value: str) -> list[str]:
+    ignored = (
+        "building configuration",
+        "current configuration :",
+        "using ",
+        "last configuration change",
+        "nvram config last updated",
+    )
+    result = []
+    for raw_line in value.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped == "!" or stripped.lower().startswith(ignored):
+            continue
+        result.append(line)
+    return result
+
+
+def assess_volatile_configuration(configuration_text: str, vendor: str) -> dict:
+    if vendor != "cisco":
+        return {
+            "status": "not_supported",
+            "comparable": False,
+            "detail": "This platform does not expose a directly comparable Cisco-style startup and running configuration through the current guarded profile.",
+            "running_only": [],
+            "startup_only": [],
+        }
+    sections = _labeled_command_sections(configuration_text)
+    for command in ("show running-config", "show startup-config"):
+        value = sections.get(command, "")
+        if re.search(r"(?im)^\s*(?:%|\[NCT\]|.*(?:permission denied|not present|not found|invalid input))", value):
+            sections[command] = ""
+    running = _normalized_cisco_config_lines(sections.get("show running-config", ""))
+    startup = _normalized_cisco_config_lines(sections.get("show startup-config", ""))
+    if not running or not startup:
+        return {
+            "status": "unavailable",
+            "comparable": False,
+            "detail": "Both running and startup configuration evidence are required for the volatile-memory comparison.",
+            "running_only": [],
+            "startup_only": [],
+        }
+    # Compare commands in their parent section so moving an identical line
+    # to another interface/ACL remains visible.
+    def contextual(lines):
+        parent = ""
+        result = []
+        for line in lines:
+            if not line[:1].isspace():
+                parent = line
+                result.append(line)
+            else:
+                result.append(f"{parent} -> {line.strip()}")
+        return result
+    running = contextual(running)
+    startup = contextual(startup)
+    running_counts = Counter(running)
+    startup_counts = Counter(startup)
+
+    def ordered_difference(lines: list[str], counts: Counter) -> list[str]:
+        remaining = counts.copy()
+        values = []
+        for line in lines:
+            if remaining[line] <= 0:
+                continue
+            values.append(line)
+            remaining[line] -= 1
+            if len(values) >= MAX_SUMMARY_ITEMS:
+                break
+        return values
+
+    running_counts_only = running_counts - startup_counts
+    startup_counts_only = startup_counts - running_counts
+    running_only = ordered_difference(running, running_counts_only)
+    startup_only = ordered_difference(startup, startup_counts_only)
+    order_changed = running != startup and running_counts == startup_counts
+    different = bool(running_only or startup_only or order_changed)
+    return {
+        "status": "different" if different else "matching",
+        "comparable": True,
+        "detail": (
+            "The live running configuration differs from the saved startup configuration. "
+            + ("Command order differs; review the full configurations. " if order_changed else "")
+            + "Validate authorized unsaved work before treating this as adversary activity. This comparison does not detect memory-only code."
+            if different
+            else "The retained running and startup configurations match after removing volatile headers."
+        ),
+        "running_only": running_only,
+        "startup_only": startup_only,
+        "running_only_count": sum(running_counts_only.values()),
+        "startup_only_count": sum(startup_counts_only.values()),
+        "truncated": (
+            sum(running_counts_only.values()) > len(running_only)
+            or sum(startup_counts_only.values()) > len(startup_only)
+        ),
+    }
 
 
 def _evidence_lines(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[dict]:
@@ -1646,6 +1962,45 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     raw_output, raw_filename, raw_truncated = _read_summary_text(
         run_dir, ["stdout.txt"] + _configuration_source_names(run_dir)
     )
+    history_path = run_dir / "command-history.txt"
+    history_text = (
+        _read_text_prefix(history_path, MAX_RESPONSE_OUTPUT_CHARS)
+        if history_path.is_file()
+        else _labeled_command_sections(configuration_text).get(
+            str(manifest.get("history_command") or "show history"), ""
+        )
+    )
+    command_history = parse_command_history(
+        history_text,
+        attempted=(
+            history_path.is_file()
+            or bool(manifest.get("command_history_status"))
+            or bool(manifest.get("history_command"))
+        ),
+        nct_commands=manifest.get("commands") or [],
+    )
+    volatile_configuration = assess_volatile_configuration(
+        configuration_text, str(manifest.get("vendor") or "").lower()
+    )
+    if configuration_truncated or manifest.get("output_complete") is False:
+        volatile_configuration = {
+            "status": "unavailable", "comparable": False,
+            "detail": "The retained configuration is incomplete; collect complete running and startup evidence before comparing them.",
+            "running_only": [], "startup_only": [],
+        }
+
+    # History and saved startup state are evidence for separate review, never
+    # input to the current forwarding/policy parsers.
+    excluded_commands = {"show startup-config", *COMMAND_HISTORY_COMMANDS.values()}
+    current_command = None
+    active_lines = []
+    for line in configuration_text.splitlines():
+        marker = re.fullmatch(r"===== (.+?) =====", line.strip())
+        if marker:
+            current_command = marker.group(1).strip()
+        if current_command not in excluded_commands:
+            active_lines.append(line)
+    configuration_text = "\n".join(active_lines)
 
     from app.mac_enrichment import parse_neighbor_text
     from app.iptables_policy import parse_iptables_policy
@@ -1726,6 +2081,10 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "spanning_tree": len(switch_detail["spanning_tree"]),
             "command_results": len(switch_detail["command_results"]),
             "commands": len(commands),
+            "command_history": len(command_history["entries"]),
+            "non_nct_commands": command_history["other_command_count"],
+            "running_only_config": volatile_configuration.get("running_only_count", 0),
+            "startup_only_config": volatile_configuration.get("startup_only_count", 0),
             "lines": len(configuration_text.splitlines()),
         },
         "interfaces": interfaces[:MAX_SUMMARY_ITEMS],
@@ -1742,6 +2101,8 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         "switch_detail": switch_detail,
         "command_results": switch_detail["command_results"],
         "commands": commands,
+        "command_history": command_history,
+        "volatile_configuration": volatile_configuration,
         "configuration_text": configuration_text,
         "raw_output": raw_output,
     }
@@ -1762,6 +2123,9 @@ def delete_device_collection(
 
     if not consume_delete_challenge("device-collection", run_id, confirmation):
         raise PermissionError("The confirmation code is invalid or expired")
+    from app.device_analysis import delete_device_analysis_storage
+    from app.poc import DB_PATH
+    delete_device_analysis_storage(run_id, DB_PATH)
     shutil.rmtree(run_dir)
     return {"deleted": True, "run_id": run_id}
 
@@ -2059,6 +2423,9 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     output_truncated = False
     process = None
     capture_stderr = None
+    history_path = run_dir / "command-history.txt"
+    history_status = "not_collected"
+    history_truncated = False
     if key["status"] in {"missing", "unreadable", "invalid"}:
         stderr = key["message"]
         failure_class = "local_key_problem"
@@ -2083,14 +2450,32 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
                     )
                 if collection_error:
                     stderr = (stderr + "\n" if stderr else "") + collection_error
+                history_value = _extract_command_section(
+                    local_output, preview_data["history_command"]
+                )
+                if history_value:
+                    history_path.write_text(history_value.rstrip() + "\n")
+                    history_status = "captured"
+                else:
+                    history_path.write_text(
+                        "[NCT] Command history unavailable: the device returned no history section.\n"
+                    )
             else:
+                history_status, history_error, history_truncated = _capture_history_to_file(
+                    preview_data["history_ssh_args"],
+                    preview_data["history_input"],
+                    history_path,
+                )
+                if history_error:
+                    stderr = f"Command history: {history_error}"
                 completed, output_truncated = _stream_command_to_file(
                     preview_data["ssh_args"],
                     input_text=preview_data["remote_input"],
                     output_path=local_output,
                     timeout=120,
                 )
-                stderr = completed.stderr[:50_000]
+                collection_stderr = completed.stderr[:50_000]
+                stderr = (stderr + "\n" if stderr and collection_stderr else stderr) + collection_stderr
                 exit_code = completed.returncode
                 status = "completed" if completed.returncode == 0 else "failed"
                 failure_class = None if completed.returncode == 0 else classify_ssh_failure(stderr, key["status"])
@@ -2134,6 +2519,9 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         "retained_output_bytes": local_output.stat().st_size if local_output.is_file() else 0,
         "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
         "local_output_name": preview_data["local_output_name"],
+        "command_history_status": history_status,
+        "command_history_truncated": history_truncated,
+        "command_history_artifact": "command-history.txt",
     })
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return {
@@ -2245,18 +2633,34 @@ async def upload_result(
 
 
 @router.get("")
-def history(limit: int = Query(default=30, ge=1, le=100)) -> list[dict]:
+def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> list[dict]:
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="History offset must not be negative")
     if not CONFIG_DIR.exists():
         return []
     records: list[dict] = []
+    skipped = 0
     for path in sorted(CONFIG_DIR.glob("*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             value = json.loads(path.read_text())
             if value.get("operation") == "ssh_preflight":
                 continue
+            if skipped < offset:
+                skipped += 1
+                continue
             value.pop("key_path", None)
-            value["artifacts"] = artifact_records(value["run_id"], path.parent)
-            records.append(value)
+            records.append({
+                key: value.get(key)
+                for key in (
+                    "run_id", "created_at", "completed_at", "status", "operation",
+                    "vendor", "device_type", "device_types", "device_role_label",
+                    "device_address", "device_name", "username", "ssh_port",
+                    "authentication_mode", "accountability_interface", "operator",
+                    "originating_host", "reason", "exit_code", "failure_class",
+                    "source_filename", "additional_commands", "remote_temp_created",
+                    "remote_cleanup_status", "command_history_status",
+                )
+            })
         except (OSError, ValueError):
             continue
         if len(records) >= limit:
@@ -2327,3 +2731,22 @@ def download_artifact(run_id: str, filename: str) -> FileResponse:
     else:
         media_type = "text/plain"
     return FileResponse(path, media_type=media_type, filename=f"{run_id}-{filename}")
+
+
+@router.get("/{run_id}")
+def collection_detail(run_id: str) -> dict:
+    """Load one full manifest and its evidence-file metadata on demand."""
+    try:
+        run_dir = device_collection_directory(run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="Device collection was not found")
+    try:
+        value = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(status_code=422, detail="The retained collection manifest is unreadable") from None
+    value.pop("key_path", None)
+    value["artifacts"] = artifact_records(run_id, run_dir)
+    return value
