@@ -146,7 +146,7 @@ def test_group_description_exposes_human_reference_context():
 def test_chunked_analysis_retains_full_summary_and_merged_coverage():
     first = {
         "scanner": "nmap", "started": "start-1", "finished": "finish-1",
-        "reported_total": 1, "warnings": [],
+        "reported_total": 1, "reported_up_count": 1, "assumed_up_count": 0, "warnings": [],
         "coverage": {
             "protocols": ["TCP"], "scan_types": [], "target_arguments": ["10.0.0.1"],
             "command": "nmap -n 10.0.0.1", "dns_resolution_disabled": True,
@@ -160,6 +160,7 @@ def test_chunked_analysis_retains_full_summary_and_merged_coverage():
     }
     second = {
         **first, "started": "start-2", "finished": "finish-2",
+        "reported_up_count": 2, "assumed_up_count": 1,
         "coverage": {**first["coverage"], "target_arguments": ["10.0.0.2"], "command": "nmap -n 10.0.0.2"},
         "hosts": [{
             "ip": "10.0.0.2", "state": "up", "os_group": "Linux Server", "mac": "00:11:22:33:44:55",
@@ -172,6 +173,8 @@ def test_chunked_analysis_retains_full_summary_and_merged_coverage():
 
     assert merged["host_count"] == 2
     assert merged["up_count"] == 2
+    assert merged["reported_up_count"] == 3
+    assert merged["assumed_up_count"] == 1
     assert merged["mac_count"] == 1
     assert merged["started"] == "start-1"
     assert merged["finished"] == "finish-2"

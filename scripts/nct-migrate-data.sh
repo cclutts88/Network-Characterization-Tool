@@ -12,6 +12,11 @@ CHECKSUM="$WORKDIR/offline-images/nct-range-images.tar.sha256"
 
 say() { printf '%s\n' "[NCT data migration] $*"; }
 die() { printf '%s\n' "[NCT data migration] ERROR: $*" >&2; exit 1; }
+verify_archive_checksum() {
+    expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$CHECKSUM")
+    actual_checksum=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+    [ -n "$expected_checksum" ] && [ "$actual_checksum" = "$expected_checksum" ]
+}
 
 [ "$(id -u)" -eq 0 ] || die "Run this script as root."
 for command_name in docker sha256sum; do
@@ -29,8 +34,7 @@ esac
 
 [ -f "$ARCHIVE" ] || die "Missing $ARCHIVE"
 [ -f "$CHECKSUM" ] || die "Missing $CHECKSUM"
-(cd "$WORKDIR/offline-images" && sha256sum -c "$(basename "$CHECKSUM")" >/dev/null) ||
-    die "The offline image archive checksum does not match."
+verify_archive_checksum || die "The offline image archive checksum does not match."
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     say "Loading the verified NCT image needed for the migration checks..."
     docker load -i "$ARCHIVE"

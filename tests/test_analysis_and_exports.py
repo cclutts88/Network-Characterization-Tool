@@ -90,6 +90,58 @@ def test_parser_does_not_warn_for_a_small_directly_observed_scan():
     assert not any("Scan-quality warning" in warning for warning in analysis["warnings"])
 
 
+def test_parser_does_not_treat_pn_assumptions_as_confirmed_live_hosts():
+    hosts = "".join(
+        f'''<host><status state="up" reason="user-set"/>
+        <address addr="192.0.2.{index}" addrtype="ipv4"/>
+        <ports><extraports state="filtered" count="1000"><extrareasons reason="no-response" count="1000"/></extraports></ports>
+        </host>'''
+        for index in range(256)
+    )
+    xml = f'''<?xml version="1.0"?>
+    <nmaprun scanner="nmap" version="7.95" args="nmap -Pn 192.0.2.0/24">
+      {hosts}
+      <runstats><finished timestr="done"/><hosts up="256" down="0" total="256"/></runstats>
+    </nmaprun>'''.encode()
+
+    analysis = parse_xml(xml)
+
+    assert analysis["reported_total"] == 256
+    assert analysis["reported_up_count"] == 256
+    assert analysis["assumed_up_count"] == 256
+    assert analysis["host_count"] == 0
+    assert analysis["up_count"] == 0
+    assert analysis["hosts"] == []
+    assert any(
+        "assumed 256 targets up" in warning
+        and "Only 0 targets returned direct response evidence" in warning
+        for warning in analysis["warnings"]
+    )
+
+
+def test_parser_confirms_a_pn_target_when_a_port_directly_responds():
+    xml = b'''<?xml version="1.0"?>
+    <nmaprun scanner="nmap" version="7.95" args="nmap -Pn -p 22,23 192.0.2.10">
+      <host><status state="up" reason="user-set"/>
+        <address addr="192.0.2.10" addrtype="ipv4"/>
+        <ports>
+          <port protocol="tcp" portid="22"><state state="open" reason="syn-ack"/></port>
+          <port protocol="tcp" portid="23"><state state="filtered" reason="no-response"/></port>
+        </ports>
+      </host>
+      <runstats><finished timestr="done"/><hosts up="1" down="0" total="1"/></runstats>
+    </nmaprun>'''
+
+    analysis = parse_xml(xml)
+
+    assert analysis["reported_up_count"] == 1
+    assert analysis["assumed_up_count"] == 0
+    assert analysis["host_count"] == 1
+    assert analysis["up_count"] == 1
+    assert analysis["hosts"][0]["presence_status"] == "confirmed"
+    assert "port response" in analysis["hosts"][0]["presence_detail"]
+
+
 def test_parser_retains_non_open_port_observations_for_comparison():
     xml = SAMPLE_XML.replace(
         b'<state state="open" reason="syn-ack"/>',

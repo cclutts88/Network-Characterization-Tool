@@ -197,6 +197,59 @@ end
 ''', 'cisco')
     assert result['status'] == 'different'
     assert result['running_only_count'] == 2
+    assert result['line_change_count'] == 4
+    assert {item['change'] for item in result['line_changes']} == {
+        'running_only', 'startup_only',
+    }
+
+
+def test_configuration_comparison_retains_aligned_line_numbers():
+    result = device_configs.assess_volatile_configuration('''===== show running-config =====
+hostname router
+interface GigabitEthernet0/1
+ description live-uplink
+end
+===== show startup-config =====
+hostname router
+interface GigabitEthernet0/1
+ description saved-uplink
+end
+''', 'cisco')
+
+    assert result['line_change_count'] == 1
+    assert result['line_changes'] == [{
+        'change': 'changed',
+        'startup_line': 3,
+        'startup_text': ' description saved-uplink',
+        'running_line': 3,
+        'running_text': ' description live-uplink',
+    }]
+    assert result['line_changes_truncated'] is False
+
+
+def test_activity_hunt_does_not_stop_at_five_hundred_lines():
+    running = '\n'.join(
+        f'interface Loopback{index}\n description running-{index}'
+        for index in range(600)
+    )
+    startup = '\n'.join(
+        f'interface Loopback{index}\n description startup-{index}'
+        for index in range(600)
+    )
+    result = device_configs.assess_volatile_configuration(
+        '===== show running-config =====\n' + running
+        + '\n===== show startup-config =====\n' + startup,
+        'cisco',
+    )
+    history = device_configs.parse_command_history(
+        '\n'.join(f'{index + 1} operator-command-{index}' for index in range(600)),
+        True,
+    )
+
+    assert result['line_change_count'] == 600
+    assert len(result['line_changes']) == 600
+    assert result['line_changes_truncated'] is False
+    assert len(history['entries']) == 600
 
 
 @pytest.mark.parametrize('error', ['% Invalid input detected', '[NCT] Command unavailable', 'startup-config is not present'])
@@ -212,6 +265,7 @@ def test_history_command_match_does_not_claim_attribution():
     assert result['entries'][0]['classification'] == 'nct_collection'
     assert 'unverified' in result['entries'][0]['label']
     assert result['entries'][1]['classification'] == 'other'
+    assert result['entries'][1]['label'] == 'Not matched to an NCT collection command'
     assert device_configs.parse_command_history('% Invalid input detected', True)['status'] == 'unavailable'
 
 
@@ -306,6 +360,53 @@ def test_scan_history_does_not_parse_xml_and_pages_beyond_old_limit(tmp_path, mo
     result = poc.list_scan_run_plans(path, limit=25, offset=200, metadata_only=True)
     assert len(result) == 5
     assert all('commands' not in row and 'artifacts' not in row for row in result)
+
+
+def test_scan_analysis_cache_reparses_results_after_presence_logic_changes(tmp_path, monkeypatch):
+    path = tmp_path / 'test.db'
+    poc.init_poc_storage(path)
+    run_id = 'a' * 32
+    folder = tmp_path / 'scan-runs' / run_id
+    folder.mkdir(parents=True)
+    xml_path = folder / 'scan.xml'
+    xml_path.write_text('''<?xml version="1.0"?>
+<nmaprun scanner="nmap" args="nmap -Pn 192.0.2.10">
+  <host><status state="up" reason="user-set"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><extraports state="filtered" count="1000"><extrareasons reason="no-response" count="1000"/></extraports></ports>
+  </host>
+  <runstats><finished timestr="done"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>''')
+    stat = xml_path.stat()
+    record = {
+        'run_id': run_id,
+        'created_at': '2026-09-27T00:00:00Z',
+        'status': 'completed',
+    }
+    with connect_database(path) as db:
+        db.execute(
+            'INSERT INTO scan_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (run_id, record['created_at'], 'completed', 'operator', '', 'test', 'eth0', 'profile', json.dumps(record)),
+        )
+        db.execute(
+            '''INSERT INTO scan_analysis_cache
+               (run_id, analysis_version, evidence_size, evidence_modified_ns, analysis_json, updated_at)
+               VALUES (?, 1, ?, ?, ?, ?)''',
+            (run_id, stat.st_size, stat.st_mtime_ns, json.dumps({'host_count': 1, 'hosts': [{'ip': '192.0.2.10'}]}), 'old'),
+        )
+    monkeypatch.setattr(main, 'DB_PATH', path)
+    monkeypatch.setattr(main, 'run_directory', lambda _run_id: folder)
+
+    analysis = main._run_group_analysis([record])
+
+    assert analysis['host_count'] == 0
+    assert analysis['assumed_up_count'] == 1
+    with connect_database(path) as db:
+        row = db.execute(
+            'SELECT analysis_version FROM scan_analysis_cache WHERE run_id = ?',
+            (run_id,),
+        ).fetchone()
+    assert row == (main.SCAN_ANALYSIS_VERSION,)
 
 
 def test_sqlite_lock_error_returns_retryable_json(monkeypatch):

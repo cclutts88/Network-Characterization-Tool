@@ -18,6 +18,8 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert "?'shared':'personal'}-notes-open`,'0'" in SESSION_SCRIPT
     assert ".nct-note-panel.personal{left:var(--nct-sidebar-width,278px)" in SESSION_SCRIPT
     assert ".nct-note-tab.personal{left:var(--nct-sidebar-width,278px)" in SESSION_SCRIPT
+    assert ".nct-note-tab-content" in SESSION_SCRIPT
+    assert "transform:translate(-50%,-50%) rotate(90deg)" in SESSION_SCRIPT
     assert ".nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}" in SESSION_SCRIPT
 
 
@@ -25,6 +27,45 @@ def test_theme_cards_and_navigation_icons_match_their_actions():
     assert "dialog.addEventListener('click',event=>{const card=event.target.closest?.('.nct-theme-card[data-preset]')" in SHELL_SCRIPT
     assert "compare:'M12 7v5l3 2 M4 5v5h5" in SHELL_SCRIPT
     assert "reach:'M4 7h13 M14 4l3 3-3 3 M20 17H7" in SHELL_SCRIPT
+
+
+def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
+    assert "--nct-surface-subtle:color-mix(" in SHELL_SCRIPT
+    for selector in (
+        ".finding-summary-row td",
+        ".lfa-threshold-control",
+        ".progress-track",
+        ".os-review-state",
+        ".change-card",
+        ".category-card",
+        ".reach-path-toggle",
+        ".map-layout-completeness",
+        ".delete-dialog",
+        ".network-dialog",
+    ):
+        assert selector in SHELL_SCRIPT
+    assert ":is(.finding-summary-row td,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
+    assert ":is(.nav a,.source-links a,.reach-shortcut){background:var(--nct-control)!important" in SHELL_SCRIPT
+
+
+def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
+    html = hunting_page().body.decode()
+    assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
+    assert ".finding-summary-row td{background:#0c1922}" not in html
+    assert ".table-wrap thead th{position:sticky;top:var(--hunt-result-offset,420px);z-index:70;background:var(--panel)" in html
+
+
+def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
+    analyze = analysis_page().body.decode()
+    scans = operator_page().body.decode()
+
+    assert "confirmed responsive" in analyze
+    assert "targets attempted" in analyze
+    assert "assumed by -Pn" in analyze
+    assert "No target returned direct response evidence in this scan." in analyze
+    assert "confirmed responsive hosts" in scans
+    assert "run.nmap_assumed_host_count" in scans
+    assert "Open Analyze to verify direct responses" in scans
 
 
 def test_operator_guide_describes_current_button_behavior_and_side_effects():
@@ -42,6 +83,10 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "This is destructive" in SHELL_SCRIPT
     assert "The action is not complete until the page reports success" in SHELL_SCRIPT
     assert "A portable run becomes retained NCT evidence only after its completed XML files" in SHELL_SCRIPT
+    assert "choose Active Scans, and review the held run" in SHELL_SCRIPT
+    assert "approve the Nmap fallback, finish without Nmap, or cancel the run" in SHELL_SCRIPT
+    assert "reports assumed targets separately from confirmed responsive hosts" in SHELL_SCRIPT
+    assert "A held run also prevents maintenance or an upgrade from starting" in SHELL_SCRIPT
 
 
 def test_air_gapped_designation_uses_active_theme_palette():
@@ -92,13 +137,22 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Collect traceroute paths" in html
     assert "normalizeCombinedScopes" not in html
     assert 'id="fallbackApproval"' in html
-    assert html.index("<h2>Profile behavior</h2>") < html.index('id="fallbackApproval"')
+    assert html.index('id="currentRunPanel"') < html.index('id="fallbackApproval"')
+    assert html.index('id="fallbackApproval"') < html.index("<h2>Profile behavior</h2>")
+    assert 'id="fallbackReason"' in html
+    assert "run.fallback_reason" in html
+    assert "openScanTask('#queuePanel')" in html
     assert "Full Nmap fallback requires approval" in html
     assert "Authorize full Nmap fallback" in html
     assert "Finish without Nmap" in html
     assert "fallback-decision" in html
     assert "awaiting_fallback_approval" in html
     assert "exact_fallback_command" in html
+    assert 'id="fallbackNote" maxlength="500" required' in html
+    assert 'id="fallbackDecisionStatus" class="status" role="status" aria-live="assertive"' in html
+    assert "Enter the required approval or mission-constraint note before choosing either action." in html
+    assert "note.focus();note.reportValidity()" in html
+    assert "Recording approval and preparing the full Nmap fallback" in html
     assert "Delete profile" in html
     assert "Scheduled scans" in html
     assert "Use selected profile" in html
@@ -131,7 +185,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "if(!currentLive)loadActiveRun()" in html
     assert "$('currentRunPanel').classList.add('hidden')" in html
     assert 'role="progressbar"' in html
-    assert 'id="currentHostsLabel">Nmap-reported hosts' in html
+    assert 'id="currentHostsLabel">confirmed responsive hosts' in html
     assert "addresses in scope" in html
     assert "scan targets completed" in html
     assert "targets currently being scanned" in html
@@ -429,6 +483,24 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "confidence" in html
     assert "Interfaces changed" in html
     assert "Firewall / ACL added" in html
+    assert "Configuration Activity Hunt" in html
+    assert "Running and startup line comparison" in html
+    assert "Startup line" in html
+    assert "Running line" in html
+    assert "Source line" in html
+    assert "CONFIG_DIFF_BATCH=200" in html
+    assert 'id="loadMoreConfigDiff"' in html
+
+
+def test_configuration_activity_is_hunt_while_collection_comparison_stays_compare():
+    analyze_group = SHELL_SCRIPT.split("{label:'Analyze'", 1)[1].split("{label:'Compare'", 1)[0]
+    compare_group = SHELL_SCRIPT.split("{label:'Compare'", 1)[1].split("{label:'Investigate'", 1)[0]
+    hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
+
+    assert "href:'/device-analysis#activityEvidenceSection'" not in analyze_group
+    assert "href:'/device-analysis#activityEvidenceSection',title:'Configuration activity'" in hunt_group
+    assert "href:'/device-analysis#comparisonPanel',title:'Device configurations'" in compare_group
+    assert "body[data-nct-task=\"activityEvidenceSection\"] #baselineEvidenceControl" in device_analysis_page().body.decode()
 
 
 def test_network_device_analysis_bounds_large_route_tables_and_adds_filters():
@@ -832,7 +904,8 @@ def test_scan_history_keeps_run_actions_on_one_line():
     assert '<div class="history-run-actions"><button class="secondary" data-preset=' in html
     assert '>Use preset</button><button class="secondary" data-network=' in html
     assert 'data-hunt="${esc(run.run_id)}">Hunt</button>' in html
-    assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}' in html
+    assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}#huntOverview' in html
+    assert '#scanFocus' not in html
 
 
 def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
@@ -872,6 +945,10 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "target_interface_address" in html
     assert "edge-endpoint-label" in html
     assert "function positionEndpointLabel" in html
+    assert "function resolveEndpointLabelCollisions" in html
+    assert "function endpointLabelBounds" in html
+    assert "function edgeMidpointLabelBounds" in html
+    assert "label.dataset.labelOffset" in html
     assert "Interface IP addresses" in html
     assert "composite-annotation-fill" in html
     assert "annotationUnionFill" in html

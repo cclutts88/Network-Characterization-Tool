@@ -16,6 +16,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable, Literal
 
@@ -1674,11 +1675,12 @@ def parse_command_history(
     nct_commands: Iterable[str] | None = None,
 ) -> dict:
     known = _known_nct_device_commands()
-    known.update(
+    planned = {
         " ".join(str(command).lower().split())
         for command in (nct_commands or [])
         if str(command).strip()
-    )
+    }
+    known.update(planned)
     if re.search(r"(?im)^\s*(?:%|\[NCT\]|.*(?:permission denied|command not found|no such file|syntax error|unknown command))", raw_history):
         raw_history = ""
     entries = []
@@ -1695,14 +1697,14 @@ def parse_command_history(
                 "command": command[:1000],
                 "classification": classification,
                 "label": (
-                    "Matches NCT collection command (origin unverified)"
+                    "Matches this NCT collection plan (origin unverified)"
+                    if normalized in planned
+                    else "Matches a known NCT collection command (origin unverified)"
                     if classification == "nct_collection"
-                    else "Operator or other activity"
+                    else "Not matched to an NCT collection command"
                 ),
             }
         )
-        if len(entries) >= MAX_SUMMARY_ITEMS:
-            break
     status = "captured" if entries else "unavailable" if attempted else "not_collected"
     return {
         "status": status,
@@ -1713,7 +1715,7 @@ def parse_command_history(
         ),
         "other_command_count": sum(item["classification"] == "other" for item in entries),
         "scope_note": (
-            "Command text alone cannot establish who ran it. Device command-history buffers vary by platform and account. Cisco and Junos history is normally limited to the current CLI session; this evidence is not a replacement for centralized AAA command accounting."
+            "NCT labels exact command-text matches to the retained collection plan or known collection commands, but command text alone cannot establish who ran it. Unmatched entries are investigation leads, not proof of operator or adversary activity. Device history varies by platform and account and is not a replacement for centralized AAA command accounting."
         ),
     }
 
@@ -1744,6 +1746,9 @@ def assess_volatile_configuration(configuration_text: str, vendor: str) -> dict:
             "detail": "This platform does not expose a directly comparable Cisco-style startup and running configuration through the current guarded profile.",
             "running_only": [],
             "startup_only": [],
+            "line_changes": [],
+            "line_change_count": 0,
+            "line_changes_truncated": False,
         }
     sections = _labeled_command_sections(configuration_text)
     for command in ("show running-config", "show startup-config"):
@@ -1759,6 +1764,9 @@ def assess_volatile_configuration(configuration_text: str, vendor: str) -> dict:
             "detail": "Both running and startup configuration evidence are required for the volatile-memory comparison.",
             "running_only": [],
             "startup_only": [],
+            "line_changes": [],
+            "line_change_count": 0,
+            "line_changes_truncated": False,
         }
     # Compare commands in their parent section so moving an identical line
     # to another interface/ACL remains visible.
@@ -1772,8 +1780,10 @@ def assess_volatile_configuration(configuration_text: str, vendor: str) -> dict:
             else:
                 result.append(f"{parent} -> {line.strip()}")
         return result
-    running = contextual(running)
-    startup = contextual(startup)
+    running_lines = list(running)
+    startup_lines = list(startup)
+    running = contextual(running_lines)
+    startup = contextual(startup_lines)
     running_counts = Counter(running)
     startup_counts = Counter(startup)
 
@@ -1795,6 +1805,37 @@ def assess_volatile_configuration(configuration_text: str, vendor: str) -> dict:
     startup_only = ordered_difference(startup, startup_counts_only)
     order_changed = running != startup and running_counts == startup_counts
     different = bool(running_only or startup_only or order_changed)
+
+    # Preserve an aligned, line-by-line view for operator review. Startup is
+    # the saved baseline and running is the live configuration observed during
+    # the collection. Equal blocks are omitted so the UI can stay focused on
+    # actual differences while retaining source-line positions on both sides.
+    line_changes = []
+    total_line_changes = 0
+    matcher = SequenceMatcher(a=startup_lines, b=running_lines, autojunk=True)
+    for operation, startup_start, startup_end, running_start, running_end in matcher.get_opcodes():
+        if operation == "equal":
+            continue
+        block_size = max(startup_end - startup_start, running_end - running_start)
+        total_line_changes += block_size
+        for offset in range(block_size):
+            startup_index = startup_start + offset
+            running_index = running_start + offset
+            has_startup = startup_index < startup_end
+            has_running = running_index < running_end
+            line_changes.append(
+                {
+                    "change": (
+                        "changed" if has_startup and has_running
+                        else "startup_only" if has_startup
+                        else "running_only"
+                    ),
+                    "startup_line": startup_index + 1 if has_startup else None,
+                    "startup_text": startup_lines[startup_index] if has_startup else "",
+                    "running_line": running_index + 1 if has_running else None,
+                    "running_text": running_lines[running_index] if has_running else "",
+                }
+            )
     return {
         "status": "different" if different else "matching",
         "comparable": True,
@@ -1809,6 +1850,9 @@ def assess_volatile_configuration(configuration_text: str, vendor: str) -> dict:
         "startup_only": startup_only,
         "running_only_count": sum(running_counts_only.values()),
         "startup_only_count": sum(startup_counts_only.values()),
+        "line_changes": line_changes,
+        "line_change_count": total_line_changes,
+        "line_changes_truncated": False,
         "truncated": (
             sum(running_counts_only.values()) > len(running_only)
             or sum(startup_counts_only.values()) > len(startup_only)
@@ -2001,6 +2045,8 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             "status": "unavailable", "comparable": False,
             "detail": "The retained configuration is incomplete; collect complete running and startup evidence before comparing them.",
             "running_only": [], "startup_only": [],
+            "line_changes": [], "line_change_count": 0,
+            "line_changes_truncated": False,
         }
 
     # History and saved startup state are evidence for separate review, never

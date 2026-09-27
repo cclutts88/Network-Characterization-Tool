@@ -199,6 +199,10 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "Graphite SOC" in account_script.text
         assert "Theme Workshop" in account_script.text
         assert "Sage Operations" in account_script.text
+        assert "Air Force Multicam" in account_script.text
+        assert "air_force_multicam" in account_script.text
+        assert "Perfect for hunting APTs in the forest." in account_script.text
+        assert "Field-ready palette" in account_script.text
         assert "Matrix Rain" in account_script.text
         assert "System AI" in account_script.text
         assert "dcc_mordecai" in account_script.text
@@ -209,6 +213,7 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "button.dataset.guideIdentity=identity" in account_script.text
         assert "#nct-operator-guide[data-guide-identity=odette]" in account_script.text
         assert "applyDccGuideIdentity" in account_script.text
+        assert "nct-guide-toggle-label" in account_script.text
         assert 'html[data-nct-theme^="dcc_"] #nct-operator-guide' in account_script.text
         assert 'html[data-nct-theme="dcc_donut"] body{text-transform:uppercase}' in account_script.text
         assert "Dungeon Anarchist’s Cookbook" in account_script.text
@@ -264,6 +269,11 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert account_script.text.index("Saved Networks") < account_script.text.index("New scan")
         assert "Interfaces and routes" in account_script.text
         assert "Exposure reports" in account_script.text
+        assert "Offline exploit matches" in account_script.text
+        assert "Scan focus" not in account_script.text
+        assert "title:'Filters'" not in account_script.text
+        assert "searchsploitPanel:['huntOverview','networkFiltersPanel']" in account_script.text
+        assert "systemsPanel:['huntOverview','networkFiltersPanel']" in account_script.text
         assert "nct-task-focused" in account_script.text
         assert "Enable Operator Guide" in account_script.text
         assert "nct-operator-guide-enabled-v1" in account_script.text
@@ -286,6 +296,7 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "Sign out" in account_script.text
         assert "Accounts" in account_script.text
         assert "Personal notes" in account_script.text
+        assert "nct-note-tab-content" in account_script.text
         assert "'/reachability': 'reach'" in account_script.text
         assert "reach:'Reach'" in account_script.text
         assert "shared notes" in account_script.text

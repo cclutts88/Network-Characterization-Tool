@@ -127,9 +127,10 @@ SESSION_SCRIPT = r"""
 
     const style = document.createElement('style');
     style.textContent = `
-      .nct-note-tab{position:fixed;top:48%;z-index:145;width:auto!important;margin:0!important;padding:10px 7px!important;border:1px solid #3c6072!important;background:#102b38!important;color:#eaf4f8!important;font:800 11px system-ui!important;letter-spacing:.04em;cursor:pointer;writing-mode:vertical-rl}
+      .nct-note-tab{position:fixed;top:48%;z-index:145;display:grid!important;width:38px!important;min-width:38px!important;max-width:38px!important;height:148px!important;margin:0!important;padding:0!important;place-items:center;overflow:hidden;border:1px solid #3c6072!important;background:#102b38!important;color:#eaf4f8!important;font:800 11px system-ui!important;letter-spacing:.04em;cursor:pointer;writing-mode:horizontal-tb!important;text-orientation:mixed!important}
+      .nct-note-tab-content{position:absolute;left:50%;top:50%;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;transform:translate(-50%,-50%) rotate(90deg);transform-origin:center}.nct-note-tab .count{margin:0;color:#57d6bf}
       .nct-note-tab.personal{left:var(--nct-sidebar-width,278px);border-radius:0 8px 8px 0!important}.nct-note-tab.shared{right:0;border-radius:8px 0 0 8px!important}
-      .nct-note-tab .count{margin-top:5px;color:#57d6bf}.nct-note-panel{position:fixed;top:118px;bottom:10px;z-index:144;display:flex;width:min(420px,calc(100vw - 24px));flex-direction:column;border:1px solid #315367;background:#081720f7;color:#eaf4f8;box-shadow:0 18px 55px #000b;font:13px system-ui;transition:transform .18s ease}
+      .nct-note-panel{position:fixed;top:118px;bottom:10px;z-index:144;display:flex;width:min(420px,calc(100vw - 24px));flex-direction:column;border:1px solid #315367;background:#081720f7;color:#eaf4f8;box-shadow:0 18px 55px #000b;font:13px system-ui;transition:transform .18s ease}
       .nct-note-panel.personal{left:var(--nct-sidebar-width,278px);border-radius:0 12px 12px 0;transform:translateX(-102%)}.nct-note-panel.shared{right:0;border-radius:12px 0 0 12px;transform:translateX(102%)}.nct-note-panel.open{transform:none}
       .nct-note-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:13px 14px;border-bottom:1px solid #315367;background:#0d2633}.nct-note-head strong{display:block;font-size:15px}.nct-note-head small{display:block;margin-top:2px;color:#a9c3cf}.nct-note-head button{width:auto!important;margin:0!important;padding:4px 8px!important;background:#091722!important;color:#dcecf2!important;border:1px solid #3c6072!important}
       .nct-note-search{margin:10px 12px 6px!important;width:calc(100% - 24px)!important;padding:8px!important;border:1px solid #315367!important;border-radius:6px!important;background:#07121a!important;color:#eaf4f8!important;font:13px system-ui!important}.nct-note-tools{display:flex;gap:6px;padding:0 12px 9px}.nct-note-tools button,.nct-note-actions button{width:auto!important;margin:0!important;padding:6px 8px!important;border:1px solid #3c6072!important;border-radius:6px!important;background:#102b38!important;color:#eaf4f8!important;font:750 11px system-ui!important;cursor:pointer}.nct-note-tools button:disabled,.nct-note-actions button:disabled{opacity:.45;cursor:not-allowed}
@@ -141,7 +142,7 @@ SESSION_SCRIPT = r"""
       html[data-nct-theme^="dcc_"] .nct-note-tab{border-color:#8a7046!important;background:#172226!important;color:#ead9ad!important;box-shadow:0 0 16px #c7a45b22!important}
       html[data-nct-theme^="dcc_"] .nct-note-editor textarea{background:repeating-linear-gradient(180deg,#0d1518 0 27px,#8a704629 28px)!important;color:#f3e6c2!important;border-color:#8a7046!important;line-height:28px!important}
       html[data-nct-theme^="dcc_"] .nct-note-tree{border-color:#8a7046!important}html[data-nct-theme^="dcc_"] .nct-note-row.selected{background:#8a704633!important;color:#f3e6c2!important}
-      @media(max-width:700px){.nct-note-panel{top:102px;bottom:4px}.nct-note-tab{top:auto;bottom:12px;writing-mode:horizontal-tb}.nct-note-tab.personal,body.nct-nav-closed .nct-note-tab.personal{left:8px;border-radius:7px!important}.nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}.nct-note-tab.shared{right:8px;border-radius:7px!important}}
+      @media(max-width:700px){.nct-note-panel{top:102px;bottom:4px}.nct-note-tab{top:42%;bottom:auto}.nct-note-tab.personal,body.nct-nav-closed .nct-note-tab.personal{left:0;border-radius:0 7px 7px 0!important}.nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}.nct-note-tab.shared{right:0;border-radius:7px 0 0 7px!important}}
     `;
     document.head.append(style);
 
@@ -157,7 +158,7 @@ SESSION_SCRIPT = r"""
     function makeSide(side) {
       const tab = document.createElement('button');
       tab.type='button';tab.className=`nct-note-tab ${side}`;
-      tab.innerHTML=`<span class="nct-note-tab-label">${side==='personal'?'Personal notes':`${pageLabel} shared`}</span> <span class="count"></span>`;
+      tab.innerHTML=`<span class="nct-note-tab-content"><span class="nct-note-tab-label">${side==='personal'?'Personal notes':`${pageLabel} shared`}</span><span class="count"></span></span>`;
       const panel=document.createElement('aside');panel.className=`nct-note-panel ${side}`;panel.setAttribute('aria-label',side==='personal'?'Personal investigation notes':`${pageLabel} shared investigation notes`);panel.innerHTML=panelMarkup(side);
       document.body.append(tab,panel);
       tab.onclick=()=>togglePanel(side,!panel.classList.contains('open'));

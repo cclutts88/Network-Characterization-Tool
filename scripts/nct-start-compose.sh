@@ -20,6 +20,11 @@ BOOTSTRAP_DIR="$STATE_DIR/bootstrap"
 BOOTSTRAP_PASSWORD="$BOOTSTRAP_DIR/initial-password.txt"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
+verify_archive_checksum() {
+    expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$CHECKSUM")
+    actual_checksum=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+    [ -n "$expected_checksum" ] && [ "$actual_checksum" = "$expected_checksum" ]
+}
 wait_for_health() {
     attempt=0
     until curl -kfsS "https://$RANGE_IP:$HOST_PORT/health" >/dev/null 2>&1; do
@@ -42,8 +47,7 @@ docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not 
 [ -f "$COMPOSE_FILE" ] || die "Missing $COMPOSE_FILE"
 [ -f "$WORKDIR/scripts/setup-lab-https.sh" ] || die "Missing the TLS setup helper."
 [ -f "$WORKDIR/scripts/nct-set-admin.sh" ] || die "Missing the Administrator setup helper."
-(cd "$WORKDIR/offline-images" && sha256sum -c "$(basename "$CHECKSUM")" >/dev/null) ||
-    die "The offline image archive checksum does not match."
+verify_archive_checksum || die "The offline image archive checksum does not match."
 docker inspect "$CONTAINER" >/dev/null 2>&1 &&
     die "A container named $CONTAINER already exists. This script will not replace it."
 if ss -ltn | awk -v p="$HOST_PORT" 'NR > 1 && $4 ~ (":" p "$") { found=1 } END { exit(found ? 0 : 1) }'; then

@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
 
 # Increment whenever retained device evidence parsing changes so previously
 # completed pulls are re-analyzed without requiring another network collection.
-DEVICE_SUMMARY_VERSION = 2
+DEVICE_SUMMARY_VERSION = 3
 _DEVICE_STORAGE_READY: set[str] = set()
 _DEVICE_STORAGE_LOCK = threading.RLock()
 
@@ -693,8 +693,8 @@ def analyze_device_collection(
     elif command_history.get("other_command_count"):
         review_items.append({
             "severity": "info", "category": "command history",
-            "title": f"{command_history['other_command_count']} non-NCT command(s) retained",
-            "detail": "Review the highlighted operator or other activity. Known NCT collection commands are labeled separately so they can be ignored during triage.",
+            "title": f"{command_history['other_command_count']} command(s) not matched to NCT collection activity",
+            "detail": "Review the highlighted unmatched commands as leads. Exact matches to the retained NCT collection plan or known collection commands are labeled separately, but command text alone does not prove who ran it.",
         })
     volatile_configuration = summary.get("volatile_configuration") or {}
     if volatile_configuration.get("status") == "different":

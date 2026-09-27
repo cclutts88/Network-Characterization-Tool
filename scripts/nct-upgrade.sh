@@ -15,6 +15,11 @@ BACKUP_DIR="$STATE_DIR/backups"
 
 say() { printf '%s\n' "[NCT upgrade] $*"; }
 die() { printf '%s\n' "[NCT upgrade] ERROR: $*" >&2; exit 1; }
+verify_archive_checksum() {
+    expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$CHECKSUM")
+    actual_checksum=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+    [ -n "$expected_checksum" ] && [ "$actual_checksum" = "$expected_checksum" ]
+}
 api_at_least() {
     awk -v have="$1" -v need="$2" 'BEGIN {
         split(have, h, "."); split(need, n, ".")
@@ -32,8 +37,7 @@ done
 docker info >/dev/null 2>&1 || die "Docker is not reachable."
 [ -f "$ARCHIVE" ] || die "Missing $ARCHIVE"
 [ -f "$CHECKSUM" ] || die "Missing $CHECKSUM"
-(cd "$WORKDIR/offline-images" && sha256sum -c "$(basename "$CHECKSUM")" >/dev/null) ||
-    die "The offline image archive checksum does not match."
+verify_archive_checksum || die "The offline image archive checksum does not match."
 docker inspect "$CONTAINER" >/dev/null 2>&1 ||
     die "Container $CONTAINER was not found. Use a start script for a new installation."
 

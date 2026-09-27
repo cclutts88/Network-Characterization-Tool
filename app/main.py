@@ -91,6 +91,7 @@ from app.identity_overrides import (
     set_os_override,
 )
 from app.exports import HOST_SUMMARY_FIELDS, PORT_LEVEL_FIELDS, host_summary_rows, port_level_rows, rows_to_csv
+from app.nmap_presence import nmap_host_presence
 from app.scan_profiles import (
     build_nmap_flags,
     build_phase_nmap_flags,
@@ -204,6 +205,7 @@ PACKAGE_DIR = DATA_DIR / "packages"
 DB_PATH = DATA_DIR / "analyzer.db"
 MAX_EXPANDED_ADDRESSES = 65536
 MAX_HOSTNAME_EVIDENCE_BYTES = 50 * 1024 * 1024
+SCAN_ANALYSIS_VERSION = 2
 _DEVICE_EVIDENCE_CACHE_LOCK = threading.Lock()
 _DEVICE_EVIDENCE_CACHE_KEY: tuple | None = None
 _DEVICE_EVIDENCE_CACHE_VALUE: list[dict] = []
@@ -924,6 +926,8 @@ def parse_xml(content: bytes) -> dict:
 
     coverage = nmap_xml_coverage(root)
     hosts: list[dict] = []
+    reported_up_hosts: list[dict] = []
+    assumed_up_count = 0
     port_frequency: Counter[tuple[str, int]] = Counter()
     peer_groups: defaultdict[str, list[str]] = defaultdict(list)
     for host in root.findall("host"):
@@ -983,12 +987,13 @@ def parse_xml(content: bytes) -> dict:
             open_port_ids.append(port_id)
             port_frequency[(port.get("protocol", ""), port_id)] += 1
 
+        presence_status, presence_detail = nmap_host_presence(host)
         signature = ",".join(
             f"{port['port']}/{port['protocol']}" for port in sorted(
                 ports, key=lambda item: (item["port"], item["protocol"])
             )
         ) or "no-open-ports"
-        if ipv4:
+        if ipv4 and presence_status == "confirmed":
             peer_groups[signature].append(ipv4)
         family, role, classification_basis = classify_os_group(
             os_name, os_vendor, os_family, device_type, ports
@@ -1017,6 +1022,8 @@ def parse_xml(content: bytes) -> dict:
             "state": state,
             "state_reason": state_reason,
             "state_reason_ttl": state_reason_ttl,
+            "presence_status": presence_status,
+            "presence_detail": presence_detail,
             "mac": mac,
             "vendor": vendor,
             "os": os_name,
@@ -1034,13 +1041,18 @@ def parse_xml(content: bytes) -> dict:
             "trace": trace,
         }
         host_record["os_inference"] = infer_os_identity(host_record)
-        hosts.append(host_record)
+        if state == "up":
+            reported_up_hosts.append(host_record)
+        if presence_status == "confirmed":
+            hosts.append(host_record)
+        elif presence_status == "assumed":
+            assumed_up_count += 1
 
     hosts.sort(key=lambda item: ip_sort_key(item.get("ip") or item.get("hostname")))
     up_hosts = [host for host in hosts if host["state"] == "up"]
     reported_total = int(hosts_stats.get("total", "0")) if hosts_stats is not None else len(hosts)
     discovery_reason_counts = Counter(
-        host["state_reason"] for host in up_hosts if host.get("state_reason")
+        host["state_reason"] for host in reported_up_hosts if host.get("state_reason")
     )
     reset_discovered = sum(
         count
@@ -1050,11 +1062,11 @@ def parse_xml(content: bytes) -> dict:
     mac_count = sum(1 for host in hosts if host["mac"])
     nearly_every_target_up = (
         reported_total >= 64
-        and len(up_hosts) >= math.ceil(reported_total * 0.95)
+        and len(reported_up_hosts) >= math.ceil(reported_total * 0.95)
     )
     reset_dominated = (
         reset_discovered >= 16
-        and reset_discovered >= math.ceil(max(1, len(up_hosts)) * 0.50)
+        and reset_discovered >= math.ceil(max(1, len(reported_up_hosts)) * 0.50)
     )
     if nearly_every_target_up and mac_count == 0 and reset_dominated:
         warnings.append(
@@ -1063,6 +1075,14 @@ def parse_xml(content: bytes) -> dict:
             "responses. A translated or proxying path such as Docker Desktop NAT may be "
             "creating false-positive host discovery. Prefer FPING pre-scan or a directly "
             "attached Linux analyzer."
+        )
+    if assumed_up_count:
+        warnings.append(
+            f"Nmap -Pn assumed {assumed_up_count} target"
+            f"{'s' if assumed_up_count != 1 else ''} up so it could attempt the scan. "
+            f"Only {len(up_hosts)} target{'s' if len(up_hosts) != 1 else ''} returned "
+            "direct response evidence. Silent targets are retained in the original XML "
+            "but are not counted as confirmed live hosts."
         )
     grouped_hosts: defaultdict[str, list[dict]] = defaultdict(list)
     for host in up_hosts:
@@ -1125,6 +1145,8 @@ def parse_xml(content: bytes) -> dict:
         "started": root.get("startstr", ""),
         "finished": finished.get("timestr", "") if finished is not None else "",
         "reported_total": reported_total,
+        "reported_up_count": len(reported_up_hosts),
+        "assumed_up_count": assumed_up_count,
         "host_count": len(hosts),
         "up_count": len(up_hosts),
         "mac_count": mac_count,
@@ -2011,10 +2033,13 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
             row = db.execute(
                 """
                 SELECT analysis_json FROM scan_analysis_cache
-                WHERE run_id = ? AND analysis_version = 1
+                WHERE run_id = ? AND analysis_version = ?
                   AND evidence_size = ? AND evidence_modified_ns = ?
                 """,
-                (manifest["run_id"], stat.st_size, stat.st_mtime_ns),
+                (
+                    manifest["run_id"], SCAN_ANALYSIS_VERSION,
+                    stat.st_size, stat.st_mtime_ns,
+                ),
             ).fetchone()
         if row:
             analyses.append(json.loads(row[0]))
@@ -2026,7 +2051,7 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
                 INSERT INTO scan_analysis_cache (
                     run_id, analysis_version, evidence_size,
                     evidence_modified_ns, analysis_json, updated_at
-                ) SELECT ?, 1, ?, ?, ?, ?
+                ) SELECT ?, ?, ?, ?, ?, ?
                 WHERE EXISTS (SELECT 1 FROM scan_runs WHERE run_id = ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     analysis_version = excluded.analysis_version,
@@ -2036,7 +2061,8 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    manifest["run_id"], stat.st_size, stat.st_mtime_ns,
+                    manifest["run_id"], SCAN_ANALYSIS_VERSION,
+                    stat.st_size, stat.st_mtime_ns,
                     json.dumps(parsed, separators=(",", ":")), utc_now(), manifest["run_id"],
                 ),
             )

@@ -40,6 +40,7 @@ from app.scan_profiles import (
     scan_display_name,
 )
 from app.scan_progress import latest_nmap_status, new_scan_progress, update_scan_progress
+from app.nmap_presence import nmap_presence_counts
 from app.saved_networks import (
     SavedNetworkArchive,
     SavedNetworkCreate,
@@ -1837,19 +1838,21 @@ def attribute_scan_run_networks(
     return with_queue_state(with_host_count(manifest), db_path)
 
 
-def nmap_host_count(xml_path: Path) -> int | None:
-    """Return the number of hosts Nmap identified as up, if XML is available."""
+def nmap_host_presence_counts(xml_path: Path) -> dict[str, int] | None:
+    """Return reported, confirmed, and assumed host counts from Nmap XML."""
     if not xml_path.is_file():
         return None
     try:
         root = ET.parse(xml_path).getroot()
     except (ET.ParseError, OSError):
         return None
-    return sum(
-        1
-        for host in root.findall("host")
-        if (host.find("status") is None or host.find("status").get("state") == "up")
-    )
+    return nmap_presence_counts(root)
+
+
+def nmap_host_count(xml_path: Path) -> int | None:
+    """Return the number of targets with direct response evidence."""
+    counts = nmap_host_presence_counts(xml_path)
+    return counts["confirmed"] if counts is not None else None
 
 
 def nmap_up_addresses(xml_path: Path) -> list[str]:
@@ -1950,10 +1953,17 @@ def merge_nmap_xml(source_paths: list[Path], destination: Path) -> int:
 
 
 def with_host_count(manifest: dict, data_dir: Path = DATA_DIR) -> dict:
-    if manifest.get("host_count") is None:
-        manifest["host_count"] = nmap_host_count(
-            run_directory(manifest["run_id"], data_dir) / "scan.xml"
-        )
+    xml_path = run_directory(manifest["run_id"], data_dir) / "scan.xml"
+    if (
+        manifest.get("host_count") is None
+        or "nmap_reported_host_count" not in manifest
+        or "nmap_assumed_host_count" not in manifest
+    ):
+        counts = nmap_host_presence_counts(xml_path)
+        if counts is not None:
+            manifest["host_count"] = counts["confirmed"]
+            manifest["nmap_reported_host_count"] = counts["reported_up"]
+            manifest["nmap_assumed_host_count"] = counts["assumed"]
     return manifest
 
 
@@ -2402,15 +2412,23 @@ def execute_scan_run(
             run_phases = True
             alive_hosts: list[str] = []
             if manifest.get("discovery_mode") == "fping":
-                discovery_status, discovery_exit = watch_process(
-                    manifest["discovery_command_argv"],
-                    run_dir / "fping-alive.txt",
-                    run_dir / "fping-stderr.txt",
-                    phase="discovery", process_attr="discovery_process",
-                    allowed_exit_codes={0, 1}, track_nmap=False,
-                )
+                fping_start_error = ""
+                try:
+                    discovery_status, discovery_exit = watch_process(
+                        manifest["discovery_command_argv"],
+                        run_dir / "fping-alive.txt",
+                        run_dir / "fping-stderr.txt",
+                        phase="discovery", process_attr="discovery_process",
+                        allowed_exit_codes={0, 1}, track_nmap=False,
+                    )
+                except OSError as exc:
+                    discovery_status, discovery_exit = "failed", None
+                    fping_start_error = f"{type(exc).__name__}: {exc}"
+                    (run_dir / "fping-stderr.txt").write_text(
+                        fping_start_error + "\n", encoding="utf-8"
+                    )
                 exit_code = discovery_exit
-                if discovery_status != "completed":
+                if discovery_status in {"cancelled", "timed_out"}:
                     manifest["status"] = discovery_status
                     run_phases = False
                 alive_hosts = [
@@ -2421,7 +2439,38 @@ def execute_scan_run(
                     if line.strip()
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
-                if run_phases and not alive_hosts:
+                fping_failed = discovery_status == "failed"
+                if fping_failed:
+                    retained_error = (run_dir / "fping-stderr.txt").read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip()
+                    manifest["discovery_error"] = (
+                        retained_error[-1000:]
+                        or fping_start_error
+                        or "FPING ended unsuccessfully without error text."
+                    )
+                if run_phases and (fping_failed or not alive_hosts):
+                    if fping_failed:
+                        failure_status = (
+                            f"exit status {discovery_exit}"
+                            if discovery_exit is not None
+                            else "a startup error"
+                        )
+                        fallback_reason = (
+                            f"FPING failed with {failure_status}, so host discovery is incomplete. "
+                            "No full-target Nmap fallback will start until an operator or mission "
+                            "partner explicitly authorizes it."
+                        )
+                        fallback_trigger = "fping_failed"
+                    else:
+                        fallback_reason = (
+                            "FPING completed but found no responsive hosts. No full-target Nmap "
+                            "fallback will start until an operator or mission partner explicitly "
+                            "authorizes it."
+                        )
+                        fallback_trigger = "no_responsive_hosts"
+                    manifest["fallback_reason"] = fallback_reason
+                    manifest["fallback_trigger"] = fallback_trigger
                     terminate_process(control.capture_process)
                     control.capture_process = None
                     fallback_argv = build_nmap_argv(
@@ -2438,19 +2487,16 @@ def execute_scan_run(
                             "fallback_approval_required": False,
                             "fallback_decision": "policy_stop",
                             "fallback_decided_at": utc_now(),
-                            "discovery_note": (
-                                "FPING found no responsive hosts. The pinned scheduled-scan "
-                                "policy finished without starting the full Nmap fallback."
+                            "discovery_note": fallback_reason + (
+                                " The pinned scheduled-scan policy finished without starting "
+                                "the full Nmap fallback."
                             ),
                         })
                         exit_code, run_phases = 0, False
                     else:
                         manifest["status"] = "awaiting_fallback_approval"
                         manifest["fallback_approval_required"] = True
-                        manifest["discovery_note"] = (
-                            "FPING found no responsive hosts. Full Nmap fallback is paused "
-                            "pending explicit operator or mission-partner approval."
-                        )
+                        manifest["discovery_note"] = fallback_reason
                         collect_artifacts(manifest, data_dir)
                         persist_scan_progress(
                             manifest, phase="awaiting_approval",
@@ -2471,9 +2517,9 @@ def execute_scan_run(
                             if control.fallback_decision == "approve":
                                 apply_fping_fallback(manifest)
                                 manifest["status"] = "running"
-                                manifest["discovery_note"] = (
-                                    "FPING found no responsive hosts. Full Nmap fallback "
-                                    f"approved by {control.fallback_decided_by}: "
+                                manifest["fallback_approval_required"] = False
+                                manifest["discovery_note"] = fallback_reason + (
+                                    f" Full Nmap fallback approved by {control.fallback_decided_by}: "
                                     f"{control.fallback_authorization_note}"
                                 )
                                 started = time.monotonic()
@@ -2481,9 +2527,9 @@ def execute_scan_run(
                                 start_capture("the approved fallback")
                             else:
                                 manifest["status"] = "completed_without_nmap"
-                                manifest["discovery_note"] = (
-                                    "FPING found no responsive hosts. "
-                                    f"{control.fallback_decided_by} chose to finish without "
+                                manifest["fallback_approval_required"] = False
+                                manifest["discovery_note"] = fallback_reason + (
+                                    f" {control.fallback_decided_by} chose to finish without "
                                     f"Nmap fallback: {control.fallback_authorization_note}"
                                 )
                                 exit_code, run_phases = 0, False
@@ -2612,7 +2658,26 @@ def execute_scan_run(
         manifest["completed_at"] = utc_now()
         manifest["exit_code"] = exit_code
         manifest["success"] = manifest["status"] in {"completed", "completed_without_nmap"}
-        manifest["host_count"] = nmap_host_count(run_dir / "scan.xml")
+        presence_counts = nmap_host_presence_counts(run_dir / "scan.xml")
+        manifest["host_count"] = (
+            presence_counts["confirmed"] if presence_counts is not None else None
+        )
+        manifest["nmap_reported_host_count"] = (
+            presence_counts["reported_up"] if presence_counts is not None else None
+        )
+        manifest["nmap_assumed_host_count"] = (
+            presence_counts["assumed"] if presence_counts is not None else 0
+        )
+        if presence_counts and presence_counts["assumed"]:
+            quality_note = (
+                f"Nmap -Pn assumed {presence_counts['assumed']} target"
+                f"{'s' if presence_counts['assumed'] != 1 else ''} up; "
+                f"{presence_counts['confirmed']} returned direct response evidence. "
+                "Assumed targets are not counted as confirmed live hosts."
+            )
+            manifest["execution_note"] = " ".join(
+                value for value in (manifest.get("execution_note"), quality_note) if value
+            )
         progress = manifest["progress"]
         if manifest["status"] == "completed":
             update_scan_progress(
@@ -3261,6 +3326,10 @@ def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
                 "summary": {
                     "host_count": len(analysis.get("hosts", [])),
                     "up_count": analysis.get("up_count", 0),
+                    "reported_up_count": analysis.get(
+                        "reported_up_count", analysis.get("up_count", 0)
+                    ),
+                    "assumed_up_count": analysis.get("assumed_up_count", 0),
                     "mac_count": analysis.get("mac_count", 0),
                     "os_group_count": len(analysis.get("os_groups", [])),
                     "coverage": analysis.get("coverage", {}),
@@ -3837,7 +3906,8 @@ def grouped_scan_run_history(
         "saved_networks", "target_selection", "manual_targets", "targets",
         "host_count", "interface", "created_by", "operator", "scheduled_by",
         "executed_by", "execution_method", "coverage", "scheduled",
-        "timeout_seconds", "progress",
+        "timeout_seconds", "progress", "discovery_mode", "fallback_decision",
+        "nmap_reported_host_count", "nmap_assumed_host_count",
     }
     for group in groups:
         group["runs"] = [
