@@ -6,6 +6,7 @@ from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
 from app.hostname_ui import hostname_page
 from app.network_map_ui import network_map_page
+from app.network_scope_ui import network_scope_page
 from app.reachability_ui import reachability_page
 from app.session_ui import SESSION_SCRIPT
 from app.shell_ui import SHELL_SCRIPT
@@ -116,6 +117,41 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "A route normally selects a path by destination" in SHELL_SCRIPT
     assert "Earlier matching rules can change the result" in SHELL_SCRIPT
     assert "Validation uses the written rule" in SHELL_SCRIPT
+    assert 'id="nct-guide-pin"' in SHELL_SCRIPT
+    assert "guidePinned||guide.contains(event.target)" in SHELL_SCRIPT
+    assert "guidePinned?'Follow hover · Alt+P':'Pin · Alt+P'" in SHELL_SCRIPT
+    assert "if(!guidePinned)guideContextTarget=null" in SHELL_SCRIPT
+    assert "if(!guidePinned){guideContextTarget=null;showTask(currentTask());}" in SHELL_SCRIPT
+    assert "storedGuidePreference===null||storedGuidePreference==='1'" in SHELL_SCRIPT
+    assert "hasOwnProperty.call(snapshot,'guide_enabled'))setGuideEnabled" in SHELL_SCRIPT
+    assert '<summary>Using this guide</summary>' in SHELL_SCRIPT
+    assert 'Enable Operator Guide or Disable Operator Guide' in SHELL_SCRIPT
+    assert 'The Guide tab stays halfway down the right edge' in SHELL_SCRIPT
+    assert 'Hold Shift for larger keyboard steps' in SHELL_SCRIPT
+    assert 'use the scroll bar inside this pane' in SHELL_SCRIPT
+    assert 'aria-keyshortcuts="Alt+P"' in SHELL_SCRIPT
+    assert "event.key.toLowerCase()!=='p'" in SHELL_SCRIPT
+    assert 'id="nct-guide-shortcut"' in SHELL_SCRIPT
+    assert "getAttribute?.('aria-keyshortcuts')" in SHELL_SCRIPT
+    assert "showGuideShortcut(control)" in SHELL_SCRIPT
+    assert ".nct-guide-pinned-target{outline:3px solid" in SHELL_SCRIPT
+    assert "pinnedGuideTarget.classList.add('nct-guide-pinned-target')" in SHELL_SCRIPT
+    assert "guide.classList.toggle('nct-guide-pinned',guidePinned)" in SHELL_SCRIPT
+
+
+def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
+    html = network_scope_page().body.decode()
+    assert "guest and office networks, lab and production" in html
+    assert "A new scan by itself does not require a new scope" in html
+    assert "assignment to scans and other evidence is not enabled yet" in html
+    assert "cannot currently be undone" in html
+    assert "[hidden]{display:none!important}" in html
+    assert "$('save').disabled=false" in html
+    assert "if(!selected){reset();return}" in html
+    assert "'Reason for change'" in SHELL_SCRIPT
+    assert "'Show archived scopes'" in SHELL_SCRIPT
+    assert "'Manage network scope'" in SHELL_SCRIPT
+    assert "Evidence assignment is not enabled in this foundation step" in SHELL_SCRIPT
 
 
 def test_air_gapped_designation_uses_active_theme_palette():

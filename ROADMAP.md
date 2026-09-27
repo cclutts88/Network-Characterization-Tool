@@ -643,6 +643,27 @@ foundational changes.
    preserve the original and link a replacement rather than moving evidence in place.
    **QUALITY GATE: CLEAR**; full Docker suite **601 passed**, independent focused
    suite **45 passed**. See [network scope contract](docs/NETWORK_SCOPES.md).
+   2026-09-27 operator-workflow start: expose the registry through an
+   administrator-only Settings page and API so operators can create, describe,
+   rename, inspect and archive scopes before evidence assignment is enabled.
+   The page must state that it does not scan, contact devices, change Saved
+   Networks or assign evidence; every mutation must keep version and audit checks.
+   Operator-workflow completion: the administrator Settings page and same-origin
+   API now support create, edit, inspect, archive and complete ordered history while
+   retaining version checks, operator attribution and immutable scope identity.
+   Local single-operator deployments retain access without weakening authenticated
+   roles. Novice testing exposed missing create/reuse guidance, assignment limits and
+   guide discoverability; the page now explains those decisions before the form and
+   the Operator Guide opens by default for a first-time browser while respecting an
+   explicit disable preference. Contextual help covers every scope control and the
+   guide itself. Alt+P pins the active explanation without leaving its field; clear
+   borders identify both the locked guide and exact field, and controls with declared
+   shortcuts show them in the guide. The reviewer halted earlier revisions for stale
+   archived editor state and an authenticated first-run preference gap; both were
+   corrected and independently rechecked. **QUALITY GATE: CLEAR**; full Docker suite
+   **609 passed**, final independent focused suite **96 passed**, and live browser
+   create/edit/archive, pin/follow, border, resize/dock/scroll and shortcut behavior
+   passed. Evidence assignment and correction remain the next separate foundation step.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.

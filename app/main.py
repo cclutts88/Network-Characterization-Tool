@@ -5,6 +5,15 @@ from app.artifacts import get_artifact, init_artifact_storage, register_artifact
 from app.nmap_evidence import nmap_xml_coverage
 from app.storage_health import storage_status, start_storage_job
 from app.storage_ui import storage_page
+from app.network_scope_ui import network_scope_page
+from app.network_scopes import (
+    NetworkScopeConflict,
+    archive_network_scope,
+    create_network_scope,
+    list_network_scope_history,
+    list_network_scopes,
+    update_network_scope,
+)
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
@@ -375,6 +384,24 @@ class OsInferenceReviewRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
+
+
+class NetworkScopeCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    reason: str = Field(default="Scope created", min_length=1, max_length=500)
+
+
+class NetworkScopeUpdateRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    label: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class NetworkScopeArchiveRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class AnalystUserRequest(BaseModel):
@@ -1225,6 +1252,85 @@ def system_storage_start(mode: str, request: Request) -> dict:
         return start_storage_job(DB_PATH, mode)
     except ValueError as exc:
         raise HTTPException(status_code=409 if "already running" in str(exc) else 400, detail=str(exc)) from exc
+
+
+def require_network_scope_admin(request: Request) -> str:
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
+            raise HTTPException(status_code=403, detail="Cross-origin changes are not allowed")
+    if auth_enabled():
+        return require_admin(request)["username"]
+    return signed_in_username(request) or "local-operator"
+
+
+def _network_scope_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    if isinstance(exc, NetworkScopeConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    message = str(exc)
+    status = 409 if "already" in message.lower() or "archived" in message.lower() else 422
+    return HTTPException(status_code=status, detail=message)
+
+
+@app.get("/settings/network-scopes", response_class=HTMLResponse)
+def network_scopes_page(request: Request) -> HTMLResponse:
+    require_network_scope_admin(request)
+    return network_scope_page()
+
+
+@app.get("/api/network-scopes")
+def network_scopes_list(request: Request, include_archived: bool = False) -> list[dict]:
+    require_network_scope_admin(request)
+    return list_network_scopes(DB_PATH, include_archived=include_archived)
+
+
+@app.post("/api/network-scopes", status_code=201)
+def network_scope_create(request: Request, payload: NetworkScopeCreateRequest) -> dict:
+    actor = require_network_scope_admin(request)
+    try:
+        return create_network_scope(DB_PATH, label=payload.label,
+                                    description=payload.description,
+                                    created_by=actor, reason=payload.reason)
+    except ValueError as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.patch("/api/network-scopes/{scope_id}")
+def network_scope_update(scope_id: str, request: Request,
+                         payload: NetworkScopeUpdateRequest) -> dict:
+    actor = require_network_scope_admin(request)
+    try:
+        return update_network_scope(
+            DB_PATH, scope_id, expected_version=payload.expected_version,
+            updated_by=actor, reason=payload.reason, label=payload.label,
+            description=payload.description,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.post("/api/network-scopes/{scope_id}/archive")
+def network_scope_archive(scope_id: str, request: Request,
+                          payload: NetworkScopeArchiveRequest) -> dict:
+    actor = require_network_scope_admin(request)
+    try:
+        return archive_network_scope(
+            DB_PATH, scope_id, expected_version=payload.expected_version,
+            archived_by=actor, reason=payload.reason,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get("/api/network-scopes/{scope_id}/history")
+def network_scope_history(scope_id: str, request: Request) -> list[dict]:
+    require_network_scope_admin(request)
+    if not any(item["scope_id"] == scope_id
+               for item in list_network_scopes(DB_PATH, include_archived=True)):
+        raise HTTPException(status_code=404, detail="Network scope not found")
+    return list_network_scope_history(DB_PATH, scope_id)
 
 
 @app.get("/health")

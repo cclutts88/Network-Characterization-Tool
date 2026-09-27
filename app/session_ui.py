@@ -71,6 +71,7 @@ SESSION_SCRIPT = r"""
     const status = document.getElementById('nct-account-status');
     const signIn = document.getElementById('nct-account-link');
     const accounts = document.getElementById('nct-accounts-link');
+    const scopes = document.getElementById('nct-scopes-link');
     const logout = document.getElementById('nct-sign-out');
     try {
       const response = await fetch('/api/auth/me', {credentials: 'same-origin'});
@@ -83,6 +84,7 @@ SESSION_SCRIPT = r"""
       const data = await response.json();
       if (!data.authentication_enabled) {
         status.textContent = 'Local operator mode · accounts are disabled';
+        if (scopes) scopes.hidden = false;
         installNotePanels({
           username: 'local-operator',
           display_name: 'Local operator',
@@ -98,6 +100,7 @@ SESSION_SCRIPT = r"""
       status.textContent = `${analyst.display_name || analyst.username} · ${analyst.role}`;
       status.title = `Signed in as ${analyst.username}`;
       accounts.hidden = analyst.role !== 'admin';
+      if (scopes) scopes.hidden = analyst.role !== 'admin';
       logout.hidden = false;
       logout.onclick = async () => {
         logout.disabled = true;
