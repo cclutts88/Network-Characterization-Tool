@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import threading
 import uuid
 
@@ -102,11 +103,12 @@ def _register_record(
     actor: str | None,
     metadata: dict | None,
     observed_at: str | None,
+    observation_key: str | None = None,
 ) -> dict:
     init_artifact_storage(db_path, artifact_root)
     observed_at = observed_at or utc_now()
     canonical_path = canonical_artifact_path(artifact_root, digest)
-    observation_id = uuid.uuid4().hex
+    observation_id = hashlib.sha256(f"{observation_key}:{digest}".encode()).hexdigest() if observation_key else uuid.uuid4().hex
     with connect_database(db_path) as db:
         inserted = db.execute(
             """
@@ -125,25 +127,20 @@ def _register_record(
             ),
         ).rowcount
         duplicate = not bool(inserted)
-        existing = db.execute(
-            "SELECT first_seen_at FROM artifact_registry WHERE sha256 = ?",
-            (digest,),
-        ).fetchone()
-        first_seen_at = existing[0] if existing else observed_at
         db.execute(
             """
             UPDATE artifact_registry
-            SET last_seen_at = ?,
+            SET first_seen_at = MIN(first_seen_at, ?), last_seen_at = MAX(last_seen_at, ?),
                 media_type = CASE
                     WHEN media_type = 'application/octet-stream' AND ? != ''
                     THEN ? ELSE media_type END
             WHERE sha256 = ?
             """,
-            (observed_at, media_type or "", media_type or "", digest),
+            (observed_at, observed_at, media_type or "", media_type or "", digest),
         )
         db.execute(
             """
-            INSERT INTO artifact_observations (
+            INSERT OR IGNORE INTO artifact_observations (
                 observation_id, sha256, source_kind, source_ref, observed_at,
                 original_filename, actor, metadata_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -159,6 +156,9 @@ def _register_record(
                 json.dumps(metadata or {}, sort_keys=True),
             ),
         )
+        first_seen_at, last_seen_at = db.execute(
+            "SELECT first_seen_at, last_seen_at FROM artifact_registry WHERE sha256 = ?", (digest,)
+        ).fetchone()
     return {
         "sha256": digest,
         "size_bytes": int(size_bytes),
@@ -166,7 +166,7 @@ def _register_record(
         "canonical_path": str(canonical_path),
         "duplicate": duplicate,
         "first_seen_at": first_seen_at,
-        "last_seen_at": observed_at,
+        "last_seen_at": last_seen_at,
         "observation_id": observation_id,
         "source_kind": source_kind,
         "source_ref": source_ref,
@@ -197,6 +197,8 @@ def register_artifact_bytes(
             os.replace(temporary, canonical_path)
         finally:
             temporary.unlink(missing_ok=True)
+    if sha256_file(canonical_path) != (digest, len(content)):
+        raise ValueError("Canonical artifact failed content verification")
     record = _register_record(
         db_path=db_path,
         artifact_root=artifact_root,
@@ -226,21 +228,30 @@ def register_artifact_file(
     metadata: dict | None = None,
     observed_at: str | None = None,
     artifact_root: Path | None = None,
+    observation_key: str | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
+    before = source_path.stat()
     digest, size_bytes = sha256_file(source_path)
     canonical_path = canonical_artifact_path(artifact_root, digest)
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     physical_created = False
     if not canonical_path.exists():
         temporary = canonical_path.with_name(f".{digest}.{uuid.uuid4().hex}.tmp")
-        with source_path.open("rb") as source, temporary.open("wb") as target:
-            shutil.copyfileobj(source, target, COPY_CHUNK_BYTES)
         try:
+            with source_path.open("rb") as source, temporary.open("wb") as target:
+                shutil.copyfileobj(source, target, COPY_CHUNK_BYTES)
+            if sha256_file(temporary) != (digest, size_bytes):
+                raise ValueError("Evidence changed while being registered")
             os.replace(temporary, canonical_path)
             physical_created = True
         finally:
             temporary.unlink(missing_ok=True)
+    if sha256_file(canonical_path) != (digest, size_bytes):
+        raise ValueError("Canonical artifact failed content verification")
+    after = source_path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise ValueError("Evidence changed while being registered")
     record = _register_record(
         db_path=db_path,
         artifact_root=artifact_root,
@@ -253,6 +264,7 @@ def register_artifact_file(
         actor=actor,
         metadata=metadata,
         observed_at=observed_at,
+        observation_key=observation_key,
     )
     record["physical_created"] = physical_created
     return record
@@ -262,13 +274,46 @@ def link_artifact(record: dict, destination: Path) -> str:
     """Materialize one retained run-local reference without duplicating blocks when possible."""
     source = Path(record["canonical_path"])
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.unlink(missing_ok=True)
+    if source.resolve() == destination.resolve():
+        return "canonical"
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
     try:
-        os.link(source, destination)
-        return "hardlink"
-    except OSError:
-        shutil.copyfile(source, destination)
-        return "copy"
+        try:
+            os.link(source, temporary)
+            mode = "hardlink"
+        except OSError:
+            shutil.copyfile(source, temporary)
+            mode = "copy"
+        os.replace(temporary, destination)
+        return mode
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
+                             source_kind: str, filenames) -> None:
+    """Called after writers close, never from history/read endpoints."""
+    records, errors = [], []
+    for filename in dict.fromkeys(filenames):
+        path = run_dir / filename
+        if filename == "manifest.json" or not path.is_file() or path.is_symlink():
+            continue
+        try:
+            record = register_artifact_file(
+                db_path=db_path, source_path=path, source_kind=source_kind,
+                source_ref=manifest["run_id"], original_filename=filename,
+                actor=manifest.get("owner") or manifest.get("operator"),
+                observed_at=manifest.get("completed_at") or manifest.get("created_at"),
+                observation_key=f"{source_kind}:{manifest['run_id']}:{filename}",
+                metadata={"relative_path": str(path.relative_to(db_path.parent))},
+            )
+            record["storage_mode"] = link_artifact(record, path)
+            records.append({"filename": filename, "sha256": record["sha256"],
+                            "storage_mode": record["storage_mode"]})
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            errors.append({"filename": filename, "error": str(exc)})
+    manifest["artifact_registry"] = {"files": records, "errors": errors,
+                                     "status": "partial" if errors else "complete"}
 
 
 def get_artifact(db_path: Path, digest: str) -> dict | None:

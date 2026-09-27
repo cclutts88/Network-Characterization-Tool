@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from app.database import configure_database, connect_database
 from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
+from app.storage_health import storage_status, start_storage_job
+from app.storage_ui import storage_page
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
@@ -1253,6 +1255,32 @@ async def local_authentication_guard(request: Request, call_next):
         ):
             return JSONResponse({"detail": "Viewer accounts cannot make changes"}, status_code=403)
     return await call_next(request)
+
+
+def require_storage_admin(request: Request) -> None:
+    if auth_enabled():
+        require_admin(request)
+
+
+@app.get("/settings/system-health", response_class=HTMLResponse)
+def system_health_page(request: Request) -> HTMLResponse:
+    require_storage_admin(request)
+    return storage_page()
+
+
+@app.get("/api/system/storage")
+def system_storage_status(request: Request) -> dict:
+    require_storage_admin(request)
+    return storage_status(DB_PATH)
+
+
+@app.post("/api/system/storage/{mode}", status_code=202)
+def system_storage_start(mode: str, request: Request) -> dict:
+    require_storage_admin(request)
+    try:
+        return start_storage_job(DB_PATH, mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "already running" in str(exc) else 400, detail=str(exc)) from exc
 
 
 @app.get("/health")

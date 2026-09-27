@@ -24,7 +24,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
-from app.artifacts import link_artifact, register_artifact_file
+from app.artifacts import link_artifact, register_artifact_file, register_finalized_files
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
@@ -1035,6 +1035,8 @@ def _finish_interactive_session(
     session.manifest["output_complete"] = (
         status == "completed" and not bool(session.manifest.get("output_truncated"))
     )
+    register_finalized_files(DB_PATH, session.run_dir, session.manifest, "device_collection",
+                             [item["name"] for item in artifact_records(session.preview["run_id"], session.run_dir)])
     (session.run_dir / "manifest.json").write_text(json.dumps(session.manifest, indent=2) + "\n")
     stdout = stdout_path.read_text(errors="replace")[:200_000]
     return {
@@ -2337,6 +2339,8 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
         )
         (run_dir / "stderr.txt").write_text(str(exc)[:50_000])
         (run_dir / "stdout.txt").write_text("")
+        register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
+                                 [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         raise HTTPException(status_code=502, detail="The interactive SSH session could not be started") from exc
 
@@ -2449,6 +2453,8 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
         "exit_code": exit_code,
         "failure_class": result.get("failure_class"),
     })
+    register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
+                             [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     result["accountability_run_id"] = preview_data["run_id"]
     result["accountability_artifacts"] = artifact_records(preview_data["run_id"], run_dir)
@@ -2485,6 +2491,8 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         (run_dir / "stdout.txt").write_text("")
         (run_dir / "stderr.txt").write_text(stderr)
         manifest.update({"status": status, "completed_at": utc_now(), "exit_code": exit_code, "failure_class": failure_class})
+        register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
+                                 [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
         (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return {**manifest, "stdout": stdout, "stderr": stderr, "scp_command": preview_data["scp_command"], "artifacts": artifact_records(preview_data["run_id"], run_dir)}
     try:
@@ -2576,6 +2584,8 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         "command_history_truncated": history_truncated,
         "command_history_artifact": "command-history.txt",
     })
+    register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
+                             [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
     (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return {
         **manifest,

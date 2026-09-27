@@ -79,6 +79,9 @@ A roadmap item should only be marked complete when:
 | 2026-09-27 | Phase 1 | Nmap imports remain readable through the existing `/data/imports` path model while Artifact Registry is introduced | New imports are stored in the canonical content-addressed artifact store; the raw-download guard was revised to trust either a verified legacy import path or the exact path registered for that SHA-256 | CI exposed that the legacy download endpoint intentionally rejected paths outside `/data/imports` | Preserves existing download behavior while enabling deduplicated storage; legacy imports remain supported during migration |
 
 | 2026-09-27 | Phase 1 | Introduce Artifact Registry without changing existing import behavior | Artifact Registry integration initially caused the existing raw Nmap download test to reject canonical artifact paths; compatibility validation was updated and the subsequent full CI run passed | Legacy endpoint assumed all imported XML lived directly under `/data/imports` | Treat legacy file-layout assumptions as migration compatibility requirements; no Phase 1 item marked complete until green CI |
+| 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
+| 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
+| 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
 ---
 
 # 1. Mission
@@ -524,16 +527,33 @@ foundational changes.
    - [x] Nmap manual imports routed through canonical artifact storage.
    - [x] Manual device-config uploads registered and deduplicated.
    - [x] Legacy raw-import download compatibility preserved.
-   - [ ] Register automated Nmap run artifacts.
-   - [ ] Register collected device artifacts beyond manual uploads.
-   - [ ] Existing-data backfill.
-   - [ ] Dry-run duplicate/storage analysis.
-   - [ ] Reference verification.
+   - [x] Register automated Nmap run artifacts after execution writers close.
+   - [x] Register collected device artifacts beyond manual uploads, including completed/failed SSH, preflight, command history and accountability files.
+   - [x] Existing-data backfill for retained imports and finalized scan/device evidence.
+   - [x] Dry-run duplicate/storage analysis and Settings / System Health storage view.
+   - [x] Dry-run verification of known historical paths and registered content hashes; block reclaim estimates on missing/corrupt/unsafe evidence or active collections.
    - [ ] Optional exact-content compaction.
-   - [ ] Restart-safe/resumable migration state.
+   - [x] Restart-safe/resumable backfill checkpoints and persistent storage-job reports.
 
-   Artifact Registry core and new-ingest integration are implemented and passing CI;
-   historical backfill/compaction is not yet implemented.
+   2026-09-27 start: extend registration to finalized collection evidence; add
+   explicit read-only storage inspection and resumable, non-destructive backfill.
+   Report physical duplicate bytes separately from already-shared hard links.
+   Preserve run-local paths and all existing history. Compaction execution stays
+   disabled until a separate deletion/rollback acceptance gate is implemented.
+
+   2026-09-27 completion: registry coverage, non-destructive backfill and the
+   administrator Settings / System Health page are implemented. Ordinary status
+   reads load the last report, while explicit dry-run/backfill actions run in the
+   background. Used space counts file lengths once per device/inode; it excludes
+   filesystem overhead/compression. Duplicate/reclaimable bytes exclude already
+   shared hard links. Unsupported passive telemetry/pin accounting is labelled
+   not implemented rather than reported as zero. Automatic pruning is disabled.
+
+   Validation: full Docker regression suite (519 tests), focused registration and
+   safety checks, and browser dry-run/backfill/repeat-run checks with duplicate
+   sample evidence. Production mission data was not migrated. Optional compaction,
+   pin/retention enforcement, cross-process jobs and formal scale benchmarks remain
+   future gates; this does not mark Phase 1 as a whole complete.
 2. Canonical host/service/network/device entities.
 3. Separate observations from entities.
 4. Delta detection:

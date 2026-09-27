@@ -129,6 +129,8 @@ def test_udp_failure_preserves_tcp_xml_as_analyzable_partial_result(tmp_path):
 
     completed = get_scan_run_plan(manifest["run_id"], db_path)
     assert completed["status"] == "completed"
+    assert completed["artifact_registry"]["status"] == "complete"
+    assert any(item["filename"] == "scan.xml" for item in completed["artifact_registry"]["files"])
     assert completed["partial_results"] is True
     assert completed["success"] is True
     assert completed["coverage"]["actual_protocols"] == ["TCP"]

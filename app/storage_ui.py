@@ -1,0 +1,44 @@
+from fastapi.responses import HTMLResponse
+
+
+def storage_page() -> HTMLResponse:
+    return HTMLResponse(r'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NCT · System Health</title>
+<style>
+:root{color-scheme:dark;--bg:#09131c;--panel:#112330;--line:#304955;--text:#e8f2f6;--muted:#abc0cb;--accent:#62d9ba}
+#nct-page-context{display:none!important}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui}header{padding:20px 4vw;border-bottom:1px solid var(--line)}main{max-width:1180px;margin:auto;padding:30px 24px}h1{font-size:30px;margin:0}h2{font-size:19px;margin:0 0 12px}p{color:var(--muted)}.panel,.metric{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:18px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.metric strong{display:block;font-size:29px;margin-top:12px}.metric span{color:var(--muted)}.actions{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}button{font:inherit;font-weight:650;border:1px solid var(--line);border-radius:8px;padding:11px 16px;background:#193445;color:var(--text);cursor:pointer}button.primary{background:var(--accent);color:#09251d}button:disabled{opacity:.5;cursor:wait}dl{display:grid;grid-template-columns:1fr 1fr;gap:10px}dd{margin:0;text-align:right}dt{color:var(--muted)}.badge{display:inline-block;border:1px solid var(--accent);color:var(--accent);border-radius:30px;padding:4px 12px}#issues{overflow-wrap:anywhere}a{color:var(--accent)}@media(max-width:800px){.metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:450px){.metrics{grid-template-columns:1fr}main{padding:20px 14px}}
+</style><script src="/assets/nct-session.js"></script></head><body>
+<header><strong>NCT</strong> · Network Correlation &amp; Triage</header><main>
+<p>Settings / System Health</p><h1>Evidence storage</h1>
+<p>Inspect retained evidence and duplicate copies before planning a cleanup. Scan and collection history stay intact.</p>
+<div class="actions"><button class="primary" id="inspect">Run storage dry run</button><button id="backfill">Backfill existing evidence</button></div>
+<p>Backfill registers historical evidence without removing originals. It may temporarily increase used space until a future verified compaction step is available.</p>
+<p id="status" role="status" aria-live="polite">Loading storage status…</p>
+<div class="metrics">
+<div class="metric"><span>Used space</span><strong id="used">—</strong><small>Retained data folder</small></div>
+<div class="metric"><span>Unique evidence</span><strong id="unique">—</strong><small id="uniqueCount">Awaiting inspection</small></div>
+<div class="metric"><span>Duplicate copies</span><strong id="duplicate">—</strong><small>Already-shared files excluded</small></div>
+<div class="metric"><span>Potentially reclaimable</span><strong id="reclaimable">—</strong><small>Verified canonical copies only</small></div>
+</div>
+<section class="panel"><h2>Compaction safety</h2><span class="badge" id="compaction">Not inspected</span>
+<p id="detail">Dry run only. No evidence is deleted. Backfill registers historical files and may temporarily increase storage while keeping every original file.</p>
+<dl><dt>Files inspected</dt><dd id="files">—</dd><dt>Verified evidence references</dt><dd id="references">—</dd><dt>Active collections skipped</dt><dd id="active">—</dd></dl>
+<ul id="issues"></ul><p id="backfillResult"></p></section>
+<section class="panel"><h2>Retention and coverage</h2><p>Automatic artifact pruning is disabled. All evidence is retained.</p>
+<dl><dt>Passive telemetry storage</dt><dd>Not implemented</dd><dt>Pinned evidence accounting</dt><dd>Not implemented</dd></dl>
+<p id="measurement">Figures are snapshots of file sizes. Filesystem overhead and compression are excluded.</p><p id="timestamp">No completed inspection yet.</p></section>
+<a href="/">Return to workspace</a></main>
+<script>
+const byId=id=>document.getElementById(id);
+function bytes(value){if(value==null)return '—';const units=['B','KiB','MiB','GiB','TiB'];let i=0;while(value>=1024&&i<4){value/=1024;i++;}return value.toFixed(i?1:0)+' '+units[i];}
+let timer;
+function render(data){const running=data.status==='running';byId('inspect').disabled=running;byId('backfill').disabled=running;
+byId('status').textContent=({not_run:'Run a dry run to inspect storage.',running:'Inspecting storage in the background. You can leave this page and return.',complete:'Storage inspection complete. No evidence was removed.',interrupted:'The previous operation was interrupted. Backfill can resume from its checkpoints.',failed:data.error||'Inspection failed. Retry when storage is available.'})[data.status]||data.status;
+const r=data.report;if(r){byId('used').textContent=bytes(r.used_bytes);byId('unique').textContent=bytes(r.unique_artifact_bytes);byId('uniqueCount').textContent=r.unique_artifact_count+' distinct artifacts';byId('duplicate').textContent=bytes(r.duplicate_bytes);byId('reclaimable').textContent=bytes(r.reclaimable_bytes);byId('compaction').textContent=r.compaction.status==='blocked'?'Blocked — review required':'Dry run only — deletion disabled';byId('detail').textContent=r.compaction.detail;byId('files').textContent=r.files_inspected;byId('references').textContent=r.verified_references;byId('active').textContent=r.active_collections_skipped;byId('measurement').textContent=r.measurement;byId('timestamp').textContent='Snapshot: '+new Date(r.generated_at).toLocaleString();byId('issues').replaceChildren();for(const issue of r.issues){const li=document.createElement('li');li.textContent=issue;byId('issues').append(li);}if(r.issue_count>r.issues.length){const li=document.createElement('li');li.textContent=(r.issue_count-r.issues.length)+' additional issues';byId('issues').append(li);}}
+if(data.backfill){const b=data.backfill;byId('backfillResult').textContent='Backfill: '+b.completed+' registered; '+b.resumed_unchanged+' unchanged checkpoints reused; '+b.issue_count+' issues. Originals retained.';}
+clearTimeout(timer);if(running)timer=setTimeout(refresh,1500);}
+async function refresh(){try{const response=await fetch('/api/system/storage');const data=await response.json();if(!response.ok)throw Error(data.detail||'Unable to load storage status');render(data);}catch(error){byId('status').textContent=error.message;byId('inspect').disabled=false;byId('backfill').disabled=false;}}
+async function start(mode){byId('inspect').disabled=true;byId('backfill').disabled=true;try{const response=await fetch('/api/system/storage/'+mode,{method:'POST'});const data=await response.json();if(!response.ok)throw Error(data.detail||'Unable to start storage operation');render(data);}catch(error){byId('status').textContent=error.message;byId('inspect').disabled=false;byId('backfill').disabled=false;}}
+byId('inspect').onclick=()=>start('dry-run');byId('backfill').onclick=()=>start('backfill');refresh();
+</script></body></html>''')

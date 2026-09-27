@@ -15,10 +15,11 @@ class DatabaseConnection(sqlite3.Connection):
             self.close()
 
 
-def connect_database(db_path: Path) -> sqlite3.Connection:
+def connect_database(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     """Open an application connection with consistent lock handling."""
     connection = sqlite3.connect(
-        db_path,
+        db_path.resolve().as_uri() + "?mode=ro" if read_only else db_path,
+        uri=read_only,
         timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
         factory=DatabaseConnection,
     )

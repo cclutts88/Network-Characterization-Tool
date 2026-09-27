@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.comparison import compare_analyses, coverage_warnings
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import configure_database, connect_database
+from app.artifacts import register_finalized_files
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
     BUILTIN_PROFILES,
@@ -2705,6 +2706,8 @@ def execute_scan_run(
             update_scan_progress(
                 progress, phase=manifest["status"], updated_at=utc_now()
             )
+        register_finalized_files(db_path, run_dir, manifest, "nmap_scan",
+                                 [item[0] for item in ARTIFACT_FILES.values()])
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
         append_scan_audit(
