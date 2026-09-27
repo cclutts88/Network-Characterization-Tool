@@ -46,8 +46,21 @@ no latest/current-state selection or Last Seen calculation in this layer.
 
 ## Remaining gates
 
-- Verified source adapters, including safe Nmap time/coverage extraction.
-- Explicit scope assignment for new and legacy evidence; no automatic cross-network merge.
+- The first verified Nmap XML adapter is implemented internally. It rereads the
+  canonical bytes, verifies size and SHA-256, rejects unsafe XML, retains scan and
+  host epoch values with their validity, preserves every reported TCP/UDP/SCTP
+  state, and records `-Pn` assumed presence without upgrading it to confirmation.
+  It requires an explicit scope for the entire artifact and is not called by routes.
+  Reversed time windows and host times outside a valid scan window retain their raw
+  text but have no validated UTC value. Missing host status remains unknown. Because
+  Nmap's flattened command string does not identify which options consume values,
+  targets are retained only for commands with unambiguous positional arguments;
+  otherwise the raw command is kept and target arguments are explicitly unknown.
+- Operator scope creation/assignment, including mixed-scope artifact handling. The
+  adapter never infers scope from Saved Networks, CIDRs, targets or filenames.
+- Production scan integration must prefer original protocol-phase XML when timing
+  precision matters. NCT's combined `scan.xml` keeps the last phase's scan-finished
+  time but does not attach a phase timestamp to each merged port observation.
 - Physical Host/Device reconciliation and normalized network/interface entities.
 - Typed evidence read models, evidence locators and lifecycle calculations.
 - Parser-result caching, processing jobs, failure status and source-change validation.

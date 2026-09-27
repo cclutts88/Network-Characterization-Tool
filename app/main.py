@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.database import configure_database, connect_database
 from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
+from app.nmap_evidence import nmap_xml_coverage
 from app.storage_health import storage_status, start_storage_job
 from app.storage_ui import storage_page
 from app.poc import (
@@ -193,7 +194,6 @@ import json
 import math
 import os
 import re
-import shlex
 import sqlite3
 import threading
 import uuid
@@ -863,63 +863,6 @@ def classify_os_group(
     else:
         role, basis = "Unclassified", "Insufficient OS evidence"
     return family, role, basis
-
-
-def nmap_xml_coverage(root: ET.Element) -> dict:
-    arguments = root.get("args", "")
-    try:
-        argument_tokens = shlex.split(arguments)
-    except ValueError:
-        argument_tokens = arguments.split()
-    scan_types = []
-    protocols: list[str] = []
-    for info in root.findall("scaninfo"):
-        protocol = (info.get("protocol") or "").upper()
-        if protocol and protocol not in protocols:
-            protocols.append(protocol)
-        scan_types.append(
-            {
-                "type": info.get("type", ""),
-                "protocol": protocol,
-                "services": info.get("services", ""),
-                "service_count": int(info.get("numservices", "0") or 0),
-            }
-        )
-    if not protocols:
-        if "-sU" in argument_tokens:
-            protocols.append("UDP")
-        if any(flag in argument_tokens for flag in ("-sS", "-sT", "-sA")):
-            protocols.append("TCP")
-    options_with_values = {
-        "-p", "--top-ports", "-e", "--exclude", "--excludefile", "-iL",
-        "-oA", "-oG", "-oN", "-oS", "-oX", "--script", "--script-args",
-        "--source-port", "-g", "--max-rate", "--min-rate", "--host-timeout",
-    }
-    target_arguments: list[str] = []
-    skip_next = False
-    for index, token in enumerate(argument_tokens):
-        if index == 0 and token.lower().endswith("nmap"):
-            continue
-        if skip_next:
-            skip_next = False
-            continue
-        if token in options_with_values:
-            skip_next = True
-            continue
-        if token.startswith("-"):
-            continue
-        target_arguments.append(token)
-    timing = next((token for token in argument_tokens if re.fullmatch(r"-T[0-5]", token)), None)
-    return {
-        "source": "nmap_xml",
-        "protocols": protocols,
-        "scan_types": scan_types,
-        "command": arguments,
-        "timing": timing,
-        "dns_resolution_disabled": "-n" in argument_tokens,
-        "traceroute": "--traceroute" in argument_tokens,
-        "target_arguments": sorted(target_arguments),
-    }
 
 
 def parse_xml(content: bytes) -> dict:

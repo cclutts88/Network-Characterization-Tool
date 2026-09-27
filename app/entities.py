@@ -88,7 +88,7 @@ def init_entity_storage(db_path: Path) -> None:
 def record_assessment(
     db_path: Path, *, scope_id: str, artifact_observation_id: str,
     parser_version: str, assessed_at: str | None, hosts: list[dict],
-    time_basis: str | None = None,
+    time_basis: str | None = None, assessment_facts: dict | None = None,
 ) -> str:
     """Atomically retain normalized source facts, including closed/unknown states.
 
@@ -105,6 +105,10 @@ def record_assessment(
         time_basis = _text(time_basis, "time_basis")
     elif time_basis is not None:
         raise ValueError("Unknown assessment time must have no time_basis")
+    if assessment_facts is None:
+        assessment_facts = {}
+    if not isinstance(assessment_facts, dict):
+        raise ValueError("Assessment facts must be an object")
     normalized = []
     addresses = set()
     for source in hosts:
@@ -136,7 +140,8 @@ def record_assessment(
         normalized.append({"address": address, "facts": facts,
                            "services": sorted(services, key=lambda s: (s["protocol"], s["port"]))})
     normalized.sort(key=lambda h: h["address"])
-    payload = _json({"assessed_at": assessed_at, "time_basis": time_basis, "hosts": normalized})
+    payload = _json({"assessed_at": assessed_at, "time_basis": time_basis,
+                     "facts": assessment_facts, "hosts": normalized})
     # Freeze caller-owned dictionaries before opening a transaction. Receipt facts
     # must be exactly the snapshot used for replay conflict detection.
     normalized = json.loads(payload)["hosts"]

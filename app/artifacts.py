@@ -367,6 +367,33 @@ def get_artifact(db_path: Path, digest: str) -> dict | None:
     }
 
 
+def get_artifact_observation(db_path: Path, observation_id: str) -> dict | None:
+    """Return one source encounter together with its canonical artifact record."""
+    init_artifact_storage(db_path)
+    with connect_database(db_path) as db:
+        row = db.execute(
+            """
+            SELECT o.observation_id, o.sha256, o.source_kind, o.source_ref,
+                   o.observed_at, o.original_filename, o.actor, o.metadata_json,
+                   a.size_bytes, a.media_type, a.canonical_path,
+                   a.first_seen_at, a.last_seen_at
+            FROM artifact_observations o
+            JOIN artifact_registry a ON a.sha256 = o.sha256
+            WHERE o.observation_id = ?
+            """,
+            (observation_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "observation_id": row[0], "sha256": row[1], "source_kind": row[2],
+        "source_ref": row[3], "observed_at": row[4], "original_filename": row[5],
+        "actor": row[6], "metadata": json.loads(row[7] or "{}"),
+        "size_bytes": int(row[8]), "media_type": row[9], "canonical_path": row[10],
+        "first_seen_at": row[11], "last_seen_at": row[12],
+    }
+
+
 def artifact_storage_summary(db_path: Path) -> dict:
     init_artifact_storage(db_path)
     with connect_database(db_path) as db:

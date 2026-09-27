@@ -614,6 +614,21 @@ foundational changes.
    Deviation: this slice models address/transport endpoints rather than claiming
    physical Host/Device reconciliation. Existing Saved Networks are editable target
    selections, so automatic scope inference and production ingestion remain deferred.
+   2026-09-27 adapter start: add verified Nmap XML translation behind an explicit,
+   whole-artifact `scope_id`. The adapter must validate canonical bytes, preserve
+   all reported transport states and source timing/coverage, and remain off request
+   paths until operator scope assignment is designed and reviewed.
+   Adapter completion: canonical path, actual size and SHA-256 are verified with a
+   bounded read before parsing; unsafe XML is rejected. Source scan/host epochs,
+   coverage, extraction locators, `-Pn` presence and every TCP/UDP/SCTP state are
+   retained. Reversed/out-of-window times, ambiguous command targets and missing
+   host status remain unknown instead of being promoted. Identical bytes retain
+   distinct encounter receipts without advancing source time. The initial review
+   halted on time conflicts, unsafe target inference and missing-status promotion;
+   re-review halted on an unbounded corrupted-file read. All findings were corrected.
+   **QUALITY GATE: CLEAR**; full Docker suite **589 passed**, independent focused
+   suite **81 passed**. Adapter remains internal/unwired; operator scopes, mixed-scope
+   artifacts, original phase-file selection and production migration remain open.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.
