@@ -13,7 +13,7 @@ import uuid
 from app.database import configure_database, connect_database
 
 
-_ARTIFACT_STORAGE_READY: set[tuple[str, str]] = set()
+_ARTIFACT_STORAGE_READY: set[tuple[str, str, int, int]] = set()
 _ARTIFACT_STORAGE_LOCK = threading.RLock()
 COPY_CHUNK_BYTES = 1024 * 1024
 
@@ -42,11 +42,17 @@ def sha256_file(path: Path) -> tuple[str, int]:
 
 def init_artifact_storage(db_path: Path, artifact_root: Path | None = None) -> None:
     artifact_root = artifact_root or artifact_root_for(db_path)
-    storage_key = (str(db_path.resolve()), str(artifact_root.resolve()))
-    if storage_key in _ARTIFACT_STORAGE_READY and db_path.is_file():
+    def storage_key():
+        try:
+            info = db_path.stat()
+        except FileNotFoundError:
+            return None
+        return (str(db_path.resolve()), str(artifact_root.resolve()), info.st_dev, info.st_ino)
+
+    if storage_key() in _ARTIFACT_STORAGE_READY:
         return
     with _ARTIFACT_STORAGE_LOCK:
-        if storage_key in _ARTIFACT_STORAGE_READY and db_path.is_file():
+        if storage_key() in _ARTIFACT_STORAGE_READY:
             return
         configure_database(db_path)
         artifact_root.mkdir(parents=True, exist_ok=True)
@@ -87,7 +93,7 @@ def init_artifact_storage(db_path: Path, artifact_root: Path | None = None) -> N
                 "CREATE INDEX IF NOT EXISTS artifact_observations_source "
                 "ON artifact_observations(source_kind, source_ref)"
             )
-        _ARTIFACT_STORAGE_READY.add(storage_key)
+        _ARTIFACT_STORAGE_READY.add(storage_key())
 
 
 def _register_record(

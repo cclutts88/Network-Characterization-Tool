@@ -599,8 +599,24 @@ foundational changes.
    sample evidence. Production mission data was not migrated. Optional compaction,
    pin/retention enforcement, cross-process jobs and formal scale benchmarks remain
    future gates; this does not mark Phase 1 as a whole complete.
-2. Canonical host/service/network/device entities.
-3. Separate observations from entities.
+2. [~] Canonical host/service/network/device entities.
+   2026-09-27 start: implement the internal host/service storage contract with
+   explicit network scope and immutable artifact-backed receipts. Address endpoints
+   are not physical-device identity; overlapping networks must remain separate.
+   Production ingestion, network/device normalization and presentation remain open.
+   Internal storage slice completed: scope-separated IPv4/IPv6 address endpoints,
+   TCP/UDP/SCTP endpoints and atomic immutable assessments linked to Artifact Registry
+   observations. Replay conflicts are rejected; source time stays separate from
+   processing time; missing evidence does not delete history. Reviewer CLEAR —
+   DOCUMENTED DEVIATION; full Docker suite **570 passed**. Review also corrected
+   Artifact Registry initialization after database-file replacement and froze caller
+   facts before writes. See [storage contract](docs/ENTITY_FOUNDATION.md).
+   Deviation: this slice models address/transport endpoints rather than claiming
+   physical Host/Device reconciliation. Existing Saved Networks are editable target
+   selections, so automatic scope inference and production ingestion remain deferred.
+3. [~] Separate observations from entities.
+   First slice retains source observation, parser version and source-assessment time
+   separately from import encounter time; no inferred current state or disappearance.
 4. Delta detection:
    - new
    - changed
