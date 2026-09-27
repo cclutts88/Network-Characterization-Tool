@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.database import configure_database, connect_database
-from app.artifacts import init_artifact_storage, register_artifact_bytes
+from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
@@ -3458,7 +3458,15 @@ def download_imported_xml(sha256: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Import not found")
     path = Path(row[1]).resolve()
     import_root = IMPORT_DIR.resolve()
-    if path.parent != import_root or not path.is_file():
+    artifact = get_artifact(DB_PATH, sha256)
+    registered_path = (
+        Path(artifact["canonical_path"]).resolve()
+        if artifact is not None
+        else None
+    )
+    legacy_import = path.parent == import_root
+    registered_import = registered_path is not None and path == registered_path
+    if not path.is_file() or not (legacy_import or registered_import):
         raise HTTPException(status_code=404, detail="Imported XML is not available")
     return FileResponse(path, media_type="application/xml", filename=row[0])
 
