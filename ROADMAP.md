@@ -610,7 +610,13 @@ foundational changes.
    - [x] Confirmed 30-second SQLite busy timeout.
    - [x] Removed repeated Saved Network schema/index DDL from normal access.
    - [x] Removed repeated scan-collaboration schema DDL from normal access.
-   - [ ] Audit remaining storage modules for request-path initialization/DDL.
+   - [~] Audit remaining storage modules for request-path initialization/DDL.
+     [x] Workspace layouts now initialize once per database file rather than on
+     every list/save/default operation. Reviewer CLEAR; 533 full Linux tests passed.
+     Independently verified concurrent writer/read, simultaneous initialization,
+     replacement database, and initialization retry. Remaining candidates:
+     achievements, exposure reports, host identities, OS overrides, investigation
+     notes, network semantics, and preference storage (audit not complete).
    - [ ] Review long write transactions and high-contention write paths.
 
    WAL and a 30-second busy timeout were already present before this redesign; the

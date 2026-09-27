@@ -4,9 +4,22 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
+import threading
 import uuid
 
 from app.database import connect_database
+
+
+_STORAGE_READY: set[tuple[str, int, int]] = set()
+_STORAGE_LOCK = threading.RLock()
+
+
+def _storage_identity(db_path: Path) -> tuple[str, int, int] | None:
+    try:
+        info = db_path.stat()
+        return str(db_path.resolve()), info.st_dev, info.st_ino
+    except FileNotFoundError:
+        return None
 
 
 class WorkspaceConflict(ValueError):
@@ -18,6 +31,18 @@ def utc_now() -> str:
 
 
 def init_workspace_storage(db_path: Path) -> None:
+    if _storage_identity(db_path) in _STORAGE_READY:
+        return
+    with _STORAGE_LOCK:
+        if _storage_identity(db_path) in _STORAGE_READY:
+            return
+        _create_workspace_schema(db_path)
+        identity = _storage_identity(db_path)
+        if identity is not None:
+            _STORAGE_READY.add(identity)
+
+
+def _create_workspace_schema(db_path: Path) -> None:
     with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_workspace_layouts (
