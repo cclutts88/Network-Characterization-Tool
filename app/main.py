@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.database import configure_database, connect_database
+from app.artifacts import init_artifact_storage, register_artifact_bytes
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
@@ -460,6 +461,7 @@ def init_storage() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     IMPORT_DIR.mkdir(parents=True, exist_ok=True)
     PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
+    init_artifact_storage(DB_PATH)
     with connect_database(DB_PATH) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS imports (
@@ -1942,49 +1944,83 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
         raise HTTPException(status_code=422, detail="The uploaded file is empty")
     if len(content) > 100 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="The XML file exceeds the 100 MB import limit")
-    try:
-        analysis = parse_xml(content)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     digest = sha256_bytes(content)
     original_name = safe_name(file.filename or "scan.xml", "scan.xml")
-    stored_name = f"{digest[:12]}-{original_name}"
-    stored_path = IMPORT_DIR / stored_name
-    duplicate = stored_path.exists()
-    if not duplicate:
-        stored_path.write_bytes(content)
-    imported_at = utc_now()
-    imported_moment = datetime.fromisoformat(imported_at)
-    metadata = {
-        "display_name": scan_display_name(Path(original_name).stem, when=imported_moment),
-        "created_at": imported_at,
-        "created_by": "imported file",
-        "scheduled": False,
-        "scheduled_by": None,
-        "executed_by": None,
-        "execution_method": "imported",
-        "source_filename": original_name,
-        "coverage": analysis.get("coverage", {}),
-    }
+    observed_at = utc_now()
+
     with connect_database(DB_PATH) as db:
-        db.execute(
+        existing = db.execute(
             """
-            INSERT OR IGNORE INTO imports (
-                sha256, filename, stored_path, imported_at, analysis_json, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            SELECT filename, stored_path, imported_at, analysis_json, metadata_json
+            FROM imports WHERE sha256 = ?
             """,
-            (
-                digest, original_name, str(stored_path), imported_at,
-                json.dumps(analysis), json.dumps(metadata),
-            ),
-        )
-        row = db.execute(
-            "SELECT imported_at, metadata_json FROM imports WHERE sha256 = ?", (digest,)
+            (digest,),
         ).fetchone()
-    if row:
-        imported_at = row[0]
-        metadata = json.loads(row[1] or "{}")
+
+    if existing is not None:
+        try:
+            analysis = json.loads(existing[3])
+            metadata = json.loads(existing[4] or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="The retained analysis for this artifact is unreadable",
+            ) from exc
+        imported_at = existing[2]
+    else:
+        try:
+            analysis = parse_xml(content)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        imported_at = observed_at
+        imported_moment = datetime.fromisoformat(imported_at)
+        metadata = {
+            "display_name": scan_display_name(Path(original_name).stem, when=imported_moment),
+            "created_at": imported_at,
+            "created_by": "imported file",
+            "scheduled": False,
+            "scheduled_by": None,
+            "executed_by": None,
+            "execution_method": "imported",
+            "source_filename": original_name,
+            "coverage": analysis.get("coverage", {}),
+        }
+
+    artifact = register_artifact_bytes(
+        db_path=DB_PATH,
+        content=content,
+        source_kind="nmap_import",
+        source_ref=f"upload:{uuid.uuid4().hex}",
+        original_filename=original_name,
+        media_type=file.content_type or "application/xml",
+        actor="imported file",
+        metadata={
+            "import_sha256": digest,
+            "duplicate_import": existing is not None,
+        },
+        observed_at=observed_at,
+    )
+    stored_path = Path(artifact["canonical_path"])
+
+    if existing is None:
+        with connect_database(DB_PATH) as db:
+            db.execute(
+                """
+                INSERT INTO imports (
+                    sha256, filename, stored_path, imported_at, analysis_json, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    digest,
+                    original_name,
+                    str(stored_path),
+                    imported_at,
+                    json.dumps(analysis),
+                    json.dumps(metadata),
+                ),
+            )
+
     from app.network_map import build_topology
     response_analysis = enrich_analysis_macs(
         analysis,
@@ -1996,13 +2032,14 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
     apply_analysis_host_identities(response_analysis, DB_PATH)
     return {
         "sha256": digest,
-        "duplicate": duplicate,
+        "duplicate": existing is not None,
+        "artifact_duplicate": artifact["duplicate"],
+        "artifact_observation_id": artifact["observation_id"],
         "original_preserved": True,
         "imported_at": imported_at,
         "metadata": metadata,
         "analysis": response_analysis,
     }
-
 
 @app.get("/api/scan-runs/{run_id}/analysis")
 def analyze_scan_run(run_id: str) -> dict:
