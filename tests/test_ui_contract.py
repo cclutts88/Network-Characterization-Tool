@@ -890,6 +890,8 @@ def test_primary_navigation_follows_the_operator_workflow():
     positions = [SHELL_SCRIPT.index(label) for label in expected]
     assert positions == sorted(positions)
     assert "href:'/network-map#mapFilesPanel',title:'Files & export'" in SHELL_SCRIPT
+    assert "href:'/device-config#wanDesignationPanel',title:'WAN designation'" in SHELL_SCRIPT
+    assert "title:'WAN gateway evidence'" not in SHELL_SCRIPT
     assert "href:'/network-map#mapFaqPanel'" not in SHELL_SCRIPT
     assert "mapWorkspace:['mapSummary','mapLayoutPanel']" in SHELL_SCRIPT
     nmap_group = SHELL_SCRIPT.split("{title:'Nmap scans'", 1)[1].split("{label:'Identify'", 1)[0]

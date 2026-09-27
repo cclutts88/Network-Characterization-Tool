@@ -340,8 +340,7 @@ SHELL_SCRIPT = r"""
         ]},
         {title:'Map',icon:'map',children:[
           {href:'/network-map#mapWorkspace',title:'Network map',description:'Visualize the topology supported by retained device, route, interface, hostname, and scan evidence.'},
-          {href:'/network-map#mapFilesPanel',title:'Files & export',description:'Browse the retained files behind the map or export the current map presentation without covering the workspace.'},
-          {href:'/device-config#wanDesignationPanel',title:'WAN gateway evidence',description:'Review and confirm the WAN evidence used to orient the network map.'}
+          {href:'/network-map#mapFilesPanel',title:'Files & export',description:'Browse the retained files behind the map or export the current map presentation without covering the workspace.'}
         ]}
       ]}
     ];
