@@ -28,6 +28,7 @@ def test_primary_pages_and_profiles_are_available():
         reachability_page = client.get("/reachability")
         profiles = client.get("/api/scan-profiles")
         scan_references = client.get("/assets/nct-scan-references.js")
+        arkime_owl = client.get("/assets/arkime-betrayed-owl.png")
 
     assert device_page.status_code == 200
     assert "Build a collection plan" in device_page.text
@@ -36,6 +37,9 @@ def test_primary_pages_and_profiles_are_available():
     assert analysis_page.status_code == 200
     assert scan_references.status_code == 200
     assert "window.NCTScanReference" in scan_references.text
+    assert arkime_owl.status_code == 200
+    assert arkime_owl.headers["content-type"] == "image/png"
+    assert len(arkime_owl.content) > 100_000
     assert "Compare scans" in analysis_page.text
     assert "Previous scans" not in analysis_page.text
     assert reachability_page.status_code == 200

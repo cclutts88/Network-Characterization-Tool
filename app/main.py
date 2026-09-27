@@ -43,6 +43,14 @@ from app.reachability import (
 )
 from app.reachability_ui import reachability_page
 from app.saved_networks import list_saved_networks
+from app.exposure_reports import (
+    exposure_port_snapshot,
+    exposure_report_status,
+    get_exposure_report,
+    init_exposure_report_storage,
+    list_exposure_report_summaries,
+    save_exposure_report,
+)
 from app.network_semantics import (
     apply_external_gateway_role,
     clear_external_wan_gateway,
@@ -1177,6 +1185,7 @@ async def lifespan(_: FastAPI):
     init_shell_preference_storage(DB_PATH)
     init_network_semantics_storage(DB_PATH)
     init_host_identity_storage(DB_PATH)
+    init_exposure_report_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1311,6 +1320,15 @@ def scan_reference_controls_script() -> Response:
 @app.get("/assets/nct-view-preferences.js")
 def analyst_view_preferences_script() -> Response:
     return view_preferences_script()
+
+
+@app.get("/assets/arkime-betrayed-owl.png", include_in_schema=False)
+def arkime_betrayed_owl() -> FileResponse:
+    return FileResponse(
+        Path(__file__).with_name("assets") / "arkime-betrayed-owl.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @app.get("/admin/users", response_class=HTMLResponse)
@@ -2224,16 +2242,31 @@ def _latest_network_evidence() -> dict:
     for group in groups:
         description = describe_run_group(group)
         evidence = _comparison_evidence(group, description)
+        scope_subnets = _hunting_subnets(group)
         source = {
             **description,
             "comparison_name": _comparison_name(group, description),
             "evidence": evidence,
         }
-        analyses.append(build_hunting_analysis(
+        analysis = build_hunting_analysis(
             _run_group_analysis_with_overrides(group),
             evidence=source,
-            subnets=_hunting_subnets(group),
-        ))
+            subnets=scope_subnets,
+        )
+        scope_name = (
+            description.get("name")
+            or description.get("display_name")
+            or "Retained Nmap scan"
+        )
+        scope_label = (
+            f"{scope_name} ({', '.join(scope_subnets)})"
+            if scope_subnets else str(scope_name)
+        )
+        analysis["warnings"] = [
+            f"{scope_label}: {warning}"
+            for warning in analysis.get("warnings") or []
+        ]
+        analyses.append(analysis)
         sources.extend(evidence.get("sources") or [])
         scope_summaries.append({
             "name": description.get("name"),
@@ -2244,7 +2277,7 @@ def _latest_network_evidence() -> dict:
             "saved_networks": description.get("saved_networks") or [],
             "manual_targets": description.get("manual_targets") or [],
             "scope": description.get("scope") or {},
-            "subnets": _hunting_subnets(group),
+            "subnets": scope_subnets,
             "run_ids": description.get("run_ids") or [],
         })
     result = correlate_hunting_identity(merge_hunting_analyses(
@@ -2979,6 +3012,75 @@ def generate_source_exposure_report() -> dict:
         device_analyses=_latest_device_reachability_evidence(),
         searchsploit=enrich_hunting_with_searchsploit(hunting),
     )
+
+
+def _saved_network_for_report(saved_network_id: str) -> tuple[dict, list[dict]]:
+    networks = list_saved_networks(DB_PATH)
+    network = next(
+        (item for item in networks if item.get("saved_network_id") == saved_network_id),
+        None,
+    )
+    if network is None:
+        raise HTTPException(status_code=404, detail="Saved Network was not found")
+    return network, networks
+
+
+@app.get("/api/reachability/exposure-reports")
+def list_retained_exposure_reports() -> dict:
+    hunting = analyze_hunting_network()
+    networks = list_saved_networks(DB_PATH)
+    return {
+        "status": "exposure_report_catalog_complete",
+        "reports": list_exposure_report_summaries(DB_PATH, networks, hunting),
+        "disclaimer": "Freshness compares retained observed ports and sends no network traffic.",
+    }
+
+
+@app.get("/api/reachability/exposure-reports/{saved_network_id}")
+def get_retained_exposure_report(saved_network_id: str) -> dict:
+    network, _ = _saved_network_for_report(saved_network_id)
+    record = get_exposure_report(DB_PATH, saved_network_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="No exposure report has been generated for this Saved Network")
+    current = exposure_port_snapshot(analyze_hunting_network(), network["cidr"])
+    return {
+        "status": "retained_exposure_report_complete",
+        "summary": exposure_report_status(record, current),
+        "report": record["report"],
+    }
+
+
+@app.post("/api/reachability/exposure-reports/{saved_network_id}")
+def generate_retained_exposure_report(saved_network_id: str, request: Request) -> dict:
+    target, networks = _saved_network_for_report(saved_network_id)
+    hunting = analyze_hunting_network()
+    try:
+        report = build_source_exposure_report(
+            hunting=hunting,
+            saved_networks=networks,
+            device_analyses=_latest_device_reachability_evidence(),
+            searchsploit=enrich_hunting_with_searchsploit(hunting),
+            target_network=target,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    analyst = request.state.analyst
+    generated_by = analyst["username"] if analyst else "local operator"
+    save_exposure_report(
+        DB_PATH,
+        saved_network=target,
+        generated_by=generated_by,
+        port_snapshot=exposure_port_snapshot(hunting, target["cidr"]),
+        report=report,
+    )
+    return {
+        "status": "retained_exposure_report_generated",
+        "summary": exposure_report_status(
+            get_exposure_report(DB_PATH, saved_network_id),
+            exposure_port_snapshot(hunting, target["cidr"]),
+        ),
+        "report": report,
+    }
 
 
 @app.post("/api/reachability/simulate-policy")

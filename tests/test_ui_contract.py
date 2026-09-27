@@ -21,12 +21,34 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert ".nct-note-tab-content" in SESSION_SCRIPT
     assert "transform:translate(-50%,-50%) rotate(90deg)" in SESSION_SCRIPT
     assert ".nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}" in SESSION_SCRIPT
+    assert "body.nct-notes-personal-open>main" in SESSION_SCRIPT
+    assert "body.nct-notes-shared-open>main" in SESSION_SCRIPT
+    assert "document.body.classList.toggle(side==='personal'?'nct-notes-personal-open':'nct-notes-shared-open',open)" in SESSION_SCRIPT
 
 
 def test_theme_cards_and_navigation_icons_match_their_actions():
     assert "dialog.addEventListener('click',event=>{const card=event.target.closest?.('.nct-theme-card[data-preset]')" in SHELL_SCRIPT
     assert "compare:'M12 7v5l3 2 M4 5v5h5" in SHELL_SCRIPT
     assert "reach:'M4 7h13 M14 4l3 3-3 3 M20 17H7" in SHELL_SCRIPT
+
+
+def test_fun_theme_catalog_includes_distinct_cthulhu_and_arkime_presets():
+    assert "cthulhu_depths:{label:'Cthulhu',category:'Fun'" in SHELL_SCRIPT
+    assert "arkime_sessions:{label:'Arkime',category:'Fun'" in SHELL_SCRIPT
+    assert "html[data-nct-theme=cthulhu_depths] body.nct-shell>header" in SHELL_SCRIPT
+    assert "html[data-nct-theme=arkime_sessions] body.nct-shell>header" in SHELL_SCRIPT
+    assert 'html[data-nct-theme=arkime_sessions] body.nct-shell>header::after' in SHELL_SCRIPT
+    assert "url('/assets/arkime-betrayed-owl.png') center/cover no-repeat" in SHELL_SCRIPT
+    assert "Oh. So this is where you've been spending your packets." in SHELL_SCRIPT
+    assert "input:-webkit-autofill" in SHELL_SCRIPT
+    assert "-webkit-text-fill-color:var(--nct-text)" in SHELL_SCRIPT
+
+
+def test_active_task_workspace_cannot_be_collapsed_from_its_page_header():
+    assert "details.nct-active-task-panel>summary::-webkit-details-marker" in SHELL_SCRIPT
+    assert "function setActiveTaskPanel(target)" in SHELL_SCRIPT
+    assert "event.preventDefault();panel.open=true" in SHELL_SCRIPT
+    assert "setActiveTaskPanel(target)" in SHELL_SCRIPT
 
 
 def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
@@ -46,6 +68,9 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
         assert selector in SHELL_SCRIPT
     assert ":is(.finding-summary-row td,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
     assert ":is(.nav a,.source-links a,.reach-shortcut){background:var(--nct-control)!important" in SHELL_SCRIPT
+    assert ":is(input,select,textarea,option,th){background:var(--nct-background)!important" in SHELL_SCRIPT
+    assert ":is(input[type=checkbox],input[type=radio],input[type=range]){accent-color:var(--nct-accent)}" in SHELL_SCRIPT
+    assert ":is(fieldset,.scenario-stage,.scenario-flow-context,.scenario-check,.ordered-rules){border-color:var(--nct-line)!important" in SHELL_SCRIPT
 
 
 def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
@@ -87,6 +112,10 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "approve the Nmap fallback, finish without Nmap, or cancel the run" in SHELL_SCRIPT
     assert "reports assumed targets separately from confirmed responsive hosts" in SHELL_SCRIPT
     assert "A held run also prevents maintenance or an upgrade from starting" in SHELL_SCRIPT
+    assert "Step 1 defines the exact source, destination, protocol, port" in SHELL_SCRIPT
+    assert "A route normally selects a path by destination" in SHELL_SCRIPT
+    assert "Earlier matching rules can change the result" in SHELL_SCRIPT
+    assert "Validation uses the written rule" in SHELL_SCRIPT
 
 
 def test_air_gapped_designation_uses_active_theme_palette():
@@ -438,6 +467,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
 
 def test_device_collection_keeps_raw_collection_work_separate_from_analysis():
     html = device_config_page().body.decode()
+    assert 'id="deviceHistory"' in html
     assert 'id="historySearch"' in html
     assert "Configuration result file (maximum 100 MB)" in html
     assert 'id="routeFilter"' not in html
@@ -466,6 +496,15 @@ def test_device_evidence_downloads_use_authenticated_page_fetch():
     assert "/device-analysis?run=" in html
     assert "const orderedGroups=[...groups.entries()].sort" in html
     assert "for(const runs of groups.values()) runs.sort" in html
+
+
+def test_history_loaders_support_older_range_browsers():
+    scan_html = operator_page().body.decode()
+    device_html = device_config_page().body.decode()
+    for html in (scan_html, device_html):
+        assert "AbortSignal.timeout" not in html
+        assert "typeof AbortController==='function'" in html
+        assert "timeoutError.name='TimeoutError'" in html
 
 
 def test_network_device_analysis_has_unified_evidence_and_comparison_views():
@@ -501,6 +540,30 @@ def test_configuration_activity_is_hunt_while_collection_comparison_stays_compar
     assert "href:'/device-analysis#activityEvidenceSection',title:'Configuration activity'" in hunt_group
     assert "href:'/device-analysis#comparisonPanel',title:'Device configurations'" in compare_group
     assert "body[data-nct-task=\"activityEvidenceSection\"] #baselineEvidenceControl" in device_analysis_page().body.decode()
+
+
+def test_planned_arkime_upload_and_hunt_timeline_are_visible_but_not_actionable():
+    collect_group = SHELL_SCRIPT.split("{label:'Collect'", 1)[1].split("{label:'Identify'", 1)[0]
+    hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
+
+    assert "{title:'Arkime',icon:'arkime',planned:true" in collect_group
+    assert "{title:'Observed Activity Upload',planned:true" in collect_group
+    assert "{title:'Timeline',planned:true" in hunt_group
+    assert "if(task.planned)" in SHELL_SCRIPT
+    assert "row.setAttribute('aria-disabled','true')" in SHELL_SCRIPT
+    assert "huntTimelinePlanned.hidden=task?.parent!=='Hunt'" in SHELL_SCRIPT
+    assert "A planned time-sliced view will connect retained scans" in SHELL_SCRIPT
+
+
+def test_device_collections_uses_combined_router_firewall_icon():
+    assert "device:'M7 7a5 5 0 1 0 0 10" in SHELL_SCRIPT
+    assert "M13 6h8v12h-8z" in SHELL_SCRIPT
+
+
+def test_arkime_navigation_uses_owl_icon():
+    assert "arkime:'M3 3l5 3a7 7 0 0 1 8 0l5-3" in SHELL_SCRIPT
+    assert "nct-nav-icon-filled" in SHELL_SCRIPT
+    assert "path.setAttribute('fill-rule','evenodd')" in SHELL_SCRIPT
 
 
 def test_network_device_analysis_bounds_large_route_tables_and_adds_filters():
@@ -663,6 +726,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
 
 def test_reachability_view_has_grouped_source_exposure_reports():
     html = reachability_page().body.decode()
+    assert '<button id="evaluate">Assess Path</button>' in html
     assert 'id="sourceExternal"' in html
     assert "External address / range" in html
     assert "source_external:$('sourceExternal').checked" in html
@@ -670,6 +734,23 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="useAssessmentInScenario"' in html
     assert "Use In Proposed Changes" in html
     assert 'id="scenarioFlowContext"' in html
+    assert 'id="scenarioSource"' in html
+    assert 'id="scenarioSourceExternal"' in html
+    assert 'id="scenarioDestination"' in html
+    assert 'id="scenarioProtocol"' in html
+    assert 'id="scenarioPort"' in html
+    assert 'id="scenarioFlowState"' in html
+    assert 'id="copyAssessmentToScenario"' in html
+    assert 'id="scenarioDeviceScope"' in html
+    assert 'id="showAllScenarioDevices"' in html
+    assert "function assessmentPathDevices" in html
+    assert "scopeScenarioDevicesToAssessment(latestReachResult)" in html
+    assert "Choose a device identified on this path" in html
+    assert "nct-reach-latest-assessment-v1" in html
+    assert "function restoreLatestAssessment" in html
+    assert "source:$('scenarioSource').value.trim()" in html
+    assert "destination:$('scenarioDestination').value.trim()" in html
+    assert "port:Number($('scenarioPort').value)" in html
     assert "function useAssessmentInScenario" in html
     assert "routeSimulationNetwork').value=routeNetwork" in html
     assert 'id="simulationDevice"' in html
@@ -689,11 +770,16 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "/api/reachability/policy-context/" in html
     assert "/api/reachability/policy-template" in html
     assert "changes no device configuration" in html
+    assert "background:var(--nct-surface-subtle,var(--panel))" in html
+    assert "background:var(--nct-control,#0b1520)" in html
     assert 'id="routeSimulationDevice"' in html
     assert 'id="routeSimulationNetwork"' in html
     assert 'id="routeSimulationInterface"' in html
     assert 'id="routeSimulationPriorityKind"' in html
     assert 'id="routeSimulationPriorityValue"' in html
+    assert 'id="routePriorityKindControl" class="hidden"' in html
+    assert "Route priority values are not needed for this action" in html
+    assert "classList.toggle('hidden',!priority)" in html
     assert 'value="set_priority"' in html
     assert 'id="simulateScenario"' in html
     assert "NCT_Proposed_Change_" in html
@@ -701,9 +787,18 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "showSimulationOnMap" in html
     assert "version:2" in html
     assert 'id="exposureReportPanel"' in html
-    assert 'id="generateReport"' in html
+    assert 'id="reportCatalog"' in html
+    assert 'id="reportLoading"' in html
+    assert 'role="progressbar"' in html
+    assert "Loading Saved Networks and checking report freshness" in html
+    assert "Building this subnet report from retained evidence" in html
+    assert "prefers-reduced-motion:reduce" in html
+    assert 'class="generate-network-report"' in html
+    assert 'id="regenerateReport"' in html
     assert 'id="exportReport"' in html
-    assert "/api/reachability/exposure-report" in html
+    assert "/api/reachability/exposure-reports" in html
+    assert "No report yet" in html
+    assert "out of date" in html
     assert "Retained route, policy, and NAT objects" in html
     assert "function evidenceCard(item)" in html
     assert "View supporting evidence" in html
@@ -748,7 +843,7 @@ def test_reachability_query_fields_have_clear_buttons():
     assert "bindClearButton('destination','clearDestination')" in html
     assert "function applyIncomingContext()" in html
     assert "params.get('destination')" in html
-    assert "Choose a Source, then evaluate." in html
+    assert "Choose a Source, then select Assess Path." in html
 
 
 def test_async_evidence_pages_show_explicit_loading_states():
@@ -900,11 +995,15 @@ def test_primary_navigation_follows_the_operator_workflow():
     assert "href:'/analysis#xmlImport'" not in current_network_group
 
 
-def test_scan_history_keeps_run_actions_on_one_line():
+def test_scan_history_uses_open_details_for_retained_evidence_files():
     html = operator_page().body.decode()
     assert ".history-run-actions{display:flex;flex-wrap:nowrap" in html
     assert '<div class="history-run-actions"><button class="secondary" data-preset=' in html
     assert '>Use preset</button><button class="secondary" data-network=' in html
+    assert 'title="Open run details and retained evidence files">Open details</button>' in html
+    assert "Load evidence files" not in html
+    assert "data-evidence=" not in html
+    assert "async function loadScanEvidence" not in html
     assert 'data-hunt="${esc(run.run_id)}">Hunt</button>' in html
     assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}#huntOverview' in html
     assert '#scanFocus' not in html
@@ -1582,6 +1681,25 @@ def test_expandable_sections_share_one_left_chevron_language():
     assert ".report-source>summary::before,.report-result>summary::before" in pages["reach"]
     assert ".hidden-objects>summary::before" in pages["map"]
     assert ".evidence-files-drawer>summary::before" in pages["map"]
+
+
+def test_collapsible_workspaces_shrink_to_the_available_width():
+    nmap = operator_page().body.decode()
+    device = device_config_page().body.decode()
+    analyze = analysis_page().body.decode()
+
+    assert 'id="responsive-collapsible-workspaces"' in nmap
+    assert ".history-groups{grid-template-columns:minmax(0,1fr)}" in nmap
+    assert ".history-body .table-wrap{min-width:0;max-width:100%;overflow-x:auto" in nmap
+    assert ".history-table thead th{position:static}" in nmap
+    assert ".history-run-actions{flex-wrap:wrap;white-space:normal}" in nmap
+    assert 'id="responsive-collapsible-workspaces"' in device
+    assert ".history-list,.run-list,.structured-results{grid-template-columns:minmax(0,1fr)}" in device
+    assert "details.device-history,details.run-card,.result-section,.run-body{overflow:hidden}" in device
+    assert 'id="responsive-collapsible-workspaces"' in analyze
+    assert ".comparison-body-panel .table-wrap,.comparison-body .table-wrap{min-width:0;max-width:100%;overflow-x:auto" in analyze
+    assert "body.nct-shell>main,body.nct-shell>main>*{min-width:0;max-width:100%}" in SHELL_SCRIPT
+    assert "body.nct-shell main details>summary{box-sizing:border-box;min-width:0;max-width:100%;overflow-wrap:anywhere}" in SHELL_SCRIPT
 
 
 def test_nmap_advanced_operations_are_collapsed_without_removing_capability():

@@ -3766,10 +3766,32 @@ def build_source_exposure_report(
     saved_networks: list[dict],
     device_analyses: list[dict],
     searchsploit: dict | None = None,
+    target_network: dict | None = None,
 ) -> dict:
-    """Evaluate retained observed services from Internet and each Saved Network."""
+    """Evaluate retained observed services for one Saved Network target."""
     searchsploit = searchsploit or {"status": "not_requested", "matches": []}
     services = _exposure_report_services(hunting, searchsploit)
+    target = None
+    target_cidr = ""
+    target_saved_network_id = ""
+    if target_network:
+        target_cidr = str(target_network.get("cidr") or "").strip()
+        try:
+            parsed_target = ipaddress.ip_network(target_cidr, strict=False)
+        except ValueError as exc:
+            raise ValueError("The selected Saved Network has an invalid CIDR") from exc
+        if parsed_target.version != 4:
+            raise ValueError("Exposure reports currently support IPv4 Saved Networks only")
+        services = [
+            service for service in services
+            if ipaddress.ip_address(service["ip"]) in parsed_target
+        ]
+        target_saved_network_id = str(target_network.get("saved_network_id") or "")
+        target = {
+            "saved_network_id": target_saved_network_id,
+            "name": target_network.get("name") or target_cidr,
+            "cidr": str(parsed_target),
+        }
     sources = [{
         "source_id": "external:internet",
         "kind": "external",
@@ -3781,6 +3803,11 @@ def build_source_exposure_report(
     for network in saved_networks:
         cidr = str(network.get("cidr") or "").strip()
         if not cidr or cidr in seen_networks:
+            continue
+        if target_network and (
+            str(network.get("saved_network_id") or "") == target_saved_network_id
+            or cidr == target_cidr
+        ):
             continue
         try:
             parsed = ipaddress.ip_network(cidr, strict=False)
@@ -3874,10 +3901,12 @@ def build_source_exposure_report(
             "warnings": list(searchsploit.get("warnings") or []),
             "disclaimer": searchsploit.get("disclaimer"),
         },
+        "target": target,
         "services": services,
         "sources": grouped_sources,
         "disclaimer": (
-            "This report evaluates retained evidence only and sends no network traffic. "
+            "This report evaluates retained evidence for the selected Saved Network only "
+            "and sends no network traffic. The target network is excluded as a source. "
             "Expected reachability does not prove that a SearchSploit candidate is exploitable."
         ),
     }

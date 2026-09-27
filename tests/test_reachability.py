@@ -1733,3 +1733,35 @@ def test_source_exposure_report_groups_unique_services_and_preserves_evidence_ob
     assert users_path["retained_objects"]["routes"]
     assert users_path["retained_objects"]["policy"]
     assert "sends no network traffic" in result["disclaimer"]
+
+
+def test_source_exposure_report_limits_services_to_selected_saved_network():
+    hunting = {
+        "hosts": [
+            {"ip": "10.90.0.10", "hostname": "server"},
+            {"ip": "10.80.0.20", "hostname": "user"},
+        ],
+        "findings": [
+            {"ip": "10.90.0.10", "protocol": "tcp", "port": 443, "state": "open"},
+            {"ip": "10.80.0.20", "protocol": "tcp", "port": 22, "state": "open"},
+        ],
+    }
+
+    result = build_source_exposure_report(
+        hunting=hunting,
+        saved_networks=SAVED,
+        device_analyses=[],
+        target_network=SAVED[1],
+    )
+
+    assert result["target"] == {
+        "saved_network_id": "servers",
+        "name": "Servers",
+        "cidr": "10.90.0.0/24",
+    }
+    assert [(item["ip"], item["port"]) for item in result["services"]] == [
+        ("10.90.0.10", 443)
+    ]
+    assert {item["name"] for item in result["sources"]} == {"Internet", "Users"}
+    assert result["evaluated_path_count"] == 2
+    assert "selected Saved Network only" in result["disclaimer"]

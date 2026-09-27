@@ -2,6 +2,16 @@
 
 ## 0.16.0 — Multi-path reachability and map investigation
 
+- Reorganized the interface around the operator workflow, with a persistent
+  enterprise navigation shell, theme-aware controls, and an optional guided
+  operator walkthrough that follows the active task without covering the work.
+- Rebuilt scan and device history as compact, responsive summaries that open
+  retained evidence only when the operator requests it.
+- Added retained Exposure Reports for individual Saved Networks. Reports are
+  cached, reopen with their original evidence, and clearly warn only when a
+  newer scan changes the observed port snapshot.
+- Added a visible progress indicator while Exposure Reports are listed,
+  generated, or opened, including reduced-motion support for accessibility.
 - Added concurrent path evaluation for primary, failover, equal-cost, standby,
   fallback, alternate, and blocked routes using retained routing evidence.
 - Added dual-WAN path roles and explicit spanning-tree blocking awareness when
