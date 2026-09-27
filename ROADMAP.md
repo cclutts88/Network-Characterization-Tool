@@ -629,6 +629,20 @@ foundational changes.
    **QUALITY GATE: CLEAR**; full Docker suite **589 passed**, independent focused
    suite **81 passed**. Adapter remains internal/unwired; operator scopes, mixed-scope
    artifacts, original phase-file selection and production migration remain open.
+   2026-09-27 scope-registry start: add stable operator-created network contexts
+   with editable labels, optimistic versioning, immutable audit history and archive
+   semantics. Scope identity must not be derived from Saved Networks, CIDRs or names;
+   no ingestion route will be enabled until assignment/correction semantics are reviewed.
+   Scope-registry completion: generated opaque IDs, Unicode-safe active-label
+   uniqueness, transactional version checks, complete ordered audit snapshots and
+   archive-only retention are implemented. Database triggers block scope deletion,
+   ID/scope mutation, audit mutation and evidence inserts for missing/archived scopes.
+   Exact archived replays remain idempotent; new work is rejected. Pre-registry IDs
+   migrate byte-for-byte as inactive legacy contexts without rebuilding entity or
+   receipt tables. Reassignment remains explicitly deferred: future correction must
+   preserve the original and link a replacement rather than moving evidence in place.
+   **QUALITY GATE: CLEAR**; full Docker suite **601 passed**, independent focused
+   suite **45 passed**. See [network scope contract](docs/NETWORK_SCOPES.md).
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.

@@ -12,6 +12,7 @@ from app.nmap_evidence import (
     NMAP_ENDPOINT_PARSER,
     ingest_nmap_observation,
 )
+from app.network_scopes import create_network_scope
 
 
 XML = b'''<?xml version="1.0"?>
@@ -43,6 +44,10 @@ def register(db: Path, content: bytes = XML, *, source_ref: str = "upload:one",
     )
 
 
+def scope(db: Path, label: str = "Test network") -> str:
+    return create_network_scope(db, label=label, created_by="tester")["scope_id"]
+
+
 def table_count(db: Path, table: str) -> int:
     with connect_database(db) as connection:
         return connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -57,12 +62,13 @@ def assessments(db: Path) -> list[dict]:
 def test_verified_nmap_adapter_preserves_scope_times_presence_and_all_states(tmp_path):
     db = tmp_path / "nct.db"
     artifact = register(db)
+    scope_id = scope(db)
     result = ingest_nmap_observation(db, observation_id=artifact["observation_id"],
-                                     scope_id="routing-domain-a")
+                                     scope_id=scope_id)
 
     assert result == {
         "assessment_id": result["assessment_id"],
-        "scope_id": "routing-domain-a",
+        "scope_id": scope_id,
         "artifact_observation_id": artifact["observation_id"],
         "parser_version": NMAP_ENDPOINT_PARSER,
         "address_count": 3,
@@ -88,22 +94,26 @@ def test_verified_nmap_adapter_preserves_scope_times_presence_and_all_states(tmp
 def test_explicit_scopes_separate_same_addresses_and_replay_is_idempotent(tmp_path):
     db = tmp_path / "nct.db"
     artifact = register(db)
-    first = ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
-    assert ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a") == first
-    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="b")
+    first_scope, second_scope = scope(db, "First"), scope(db, "Second")
+    first = ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=first_scope)
+    assert ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=first_scope) == first
+    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=second_scope)
     assert table_count(db, "entity_assessments") == 2
     assert table_count(db, "endpoint_entities") == 6
     with connect_database(db) as connection:
-        assert connection.execute("SELECT DISTINCT scope_id FROM endpoint_entities ORDER BY scope_id").fetchall() == [
-            ("a",), ("b",)]
+        expected_scopes = [(value,) for value in sorted([first_scope, second_scope])]
+        assert connection.execute(
+            "SELECT DISTINCT scope_id FROM endpoint_entities ORDER BY scope_id"
+        ).fetchall() == expected_scopes
 
 
 def test_duplicate_bytes_keep_encounters_but_do_not_advance_source_time(tmp_path):
     db = tmp_path / "nct.db"
     first = register(db, source_ref="upload:first", observed_at="2030-01-01T00:00:00+00:00")
     second = register(db, source_ref="upload:second", observed_at="2040-01-01T00:00:00+00:00")
-    ingest_nmap_observation(db, observation_id=first["observation_id"], scope_id="a")
-    ingest_nmap_observation(db, observation_id=second["observation_id"], scope_id="a")
+    scope_id = scope(db)
+    ingest_nmap_observation(db, observation_id=first["observation_id"], scope_id=scope_id)
+    ingest_nmap_observation(db, observation_id=second["observation_id"], scope_id=scope_id)
     assert table_count(db, "entity_assessments") == 2
     assert table_count(db, "endpoint_entities") == 3
     with connect_database(db) as connection:
@@ -117,7 +127,7 @@ def test_missing_or_invalid_source_time_stays_unknown(tmp_path, finished):
     db = tmp_path / "nct.db"
     content = f'''<nmaprun start="bad"><host><status state="up" reason="user-set"/><address addr="192.0.2.1" addrtype="ipv4"/></host><runstats><finished{finished}/></runstats></nmaprun>'''.encode()
     artifact = register(db, content, observed_at="2099-12-31T23:59:59+00:00")
-    result = ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+    result = ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope(db))
     assert result["assessed_at"] is None
     payload = assessments(db)[0]
     assert payload["assessed_at"] is None
@@ -129,7 +139,7 @@ def test_conflicting_source_times_are_retained_raw_but_never_promoted(tmp_path):
     db = tmp_path / "nct.db"
     content = b'''<nmaprun start="200"><host starttime="180" endtime="170"><status state="up"/><address addr="192.0.2.1" addrtype="ipv4"/></host><runstats><finished time="100"/></runstats></nmaprun>'''
     artifact = register(db, content)
-    result = ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+    result = ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope(db))
     assert result["assessed_at"] is None
     payload = assessments(db)[0]
     scan = payload["facts"]
@@ -144,7 +154,7 @@ def test_host_times_outside_scan_window_are_not_validated(tmp_path):
     db = tmp_path / "nct.db"
     content = b'''<nmaprun start="100"><host starttime="90" endtime="210"><status state="up"/><address addr="192.0.2.1" addrtype="ipv4"/></host><runstats><finished time="200"/></runstats></nmaprun>'''
     artifact = register(db, content)
-    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope(db))
     evidence_time = assessments(db)[0]["hosts"][0]["facts"]["evidence_time"]
     assert evidence_time["host_start"]["raw"] == "90"
     assert evidence_time["host_start"]["utc"] is None
@@ -156,7 +166,7 @@ def test_option_values_are_not_claimed_as_scan_targets(tmp_path):
     db = tmp_path / "nct.db"
     content = b'''<nmaprun args="nmap --dns-servers 8.8.8.8 --data-length 32 192.0.2.0/24"><runstats><finished time="100"/></runstats></nmaprun>'''
     artifact = register(db, content)
-    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope(db))
     coverage = assessments(db)[0]["facts"]["coverage"]
     assert coverage["target_arguments"] is None
     assert coverage["target_arguments_basis"].startswith("unknown")
@@ -167,7 +177,7 @@ def test_command_without_options_retains_unambiguous_targets(tmp_path):
     db = tmp_path / "nct.db"
     content = b'''<nmaprun args="nmap 192.0.2.0/24 example.test"><runstats><finished time="100"/></runstats></nmaprun>'''
     artifact = register(db, content)
-    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope(db))
     assert assessments(db)[0]["facts"]["coverage"]["target_arguments"] == [
         "192.0.2.0/24", "example.test"]
 
@@ -176,7 +186,7 @@ def test_missing_host_status_remains_unknown(tmp_path):
     db = tmp_path / "nct.db"
     content = b'''<nmaprun><host><address addr="192.0.2.1" addrtype="ipv4"/></host></nmaprun>'''
     artifact = register(db, content)
-    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+    ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope(db))
     presence = assessments(db)[0]["hosts"][0]["facts"]["presence"]
     assert presence == {"classification": "unknown", "detail": "Nmap host status is missing"}
 
@@ -184,9 +194,10 @@ def test_missing_host_status_remains_unknown(tmp_path):
 def test_canonical_tamper_blocks_ingestion_without_partial_assessment(tmp_path):
     db = tmp_path / "nct.db"
     artifact = register(db)
+    scope_id = scope(db)
     Path(artifact["canonical_path"]).write_bytes(b"changed")
     with pytest.raises(ValueError, match="content verification"):
-        ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+        ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope_id)
     with connect_database(db) as connection:
         assert not connection.execute(
             "SELECT name FROM sqlite_master WHERE name='entity_assessments'").fetchall()
@@ -195,11 +206,12 @@ def test_canonical_tamper_blocks_ingestion_without_partial_assessment(tmp_path):
 def test_oversized_corrupted_canonical_file_is_rejected_before_read(tmp_path):
     db = tmp_path / "nct.db"
     artifact = register(db)
+    scope_id = scope(db)
     canonical = Path(artifact["canonical_path"])
     with canonical.open("r+b") as evidence:
         evidence.truncate(MAX_NMAP_XML_BYTES + 1)
     with pytest.raises(ValueError, match="size limit"):
-        ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+        ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope_id)
     with connect_database(db) as connection:
         assert not connection.execute(
             "SELECT name FROM sqlite_master WHERE name='entity_assessments'").fetchall()
@@ -214,8 +226,9 @@ def test_oversized_corrupted_canonical_file_is_rejected_before_read(tmp_path):
 def test_invalid_evidence_publishes_no_partial_entities(tmp_path, content, error):
     db = tmp_path / "nct.db"
     artifact = register(db, content)
+    scope_id = scope(db)
     with pytest.raises(ValueError, match=error):
-        ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id="a")
+        ingest_nmap_observation(db, observation_id=artifact["observation_id"], scope_id=scope_id)
     with connect_database(db) as connection:
         assert not connection.execute(
             "SELECT name FROM sqlite_master WHERE name='entity_assessments'").fetchall()

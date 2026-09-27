@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.artifacts import init_artifact_storage, utc_now
 from app.database import connect_database, initialize_once_per_database
+from app.network_scopes import init_network_scope_storage
 
 
 def _json(value) -> str:
@@ -42,6 +43,7 @@ def _time(value: str | None) -> str | None:
 @initialize_once_per_database
 def init_entity_storage(db_path: Path) -> None:
     init_artifact_storage(db_path)
+    init_network_scope_storage(db_path)
     with connect_database(db_path) as db:
         db.executescript("""
             CREATE TABLE IF NOT EXISTS endpoint_entities (
@@ -82,6 +84,26 @@ def init_entity_storage(db_path: Path) -> None:
             );
             CREATE INDEX IF NOT EXISTS endpoint_receipts_host ON endpoint_receipts(host_id);
             CREATE INDEX IF NOT EXISTS service_receipts_service ON service_receipts(service_id);
+            CREATE TRIGGER IF NOT EXISTS entity_assessments_active_scope
+                BEFORE INSERT ON entity_assessments
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM network_scopes
+                    WHERE scope_id = NEW.scope_id AND active = 1
+                )
+                BEGIN SELECT RAISE(ABORT, 'network scope is missing or archived'); END;
+            CREATE TRIGGER IF NOT EXISTS entity_assessments_scope_immutable
+                BEFORE UPDATE OF scope_id ON entity_assessments
+                BEGIN SELECT RAISE(ABORT, 'assessment scope is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS endpoint_entities_scope_immutable
+                BEFORE UPDATE OF scope_id ON endpoint_entities
+                BEGIN SELECT RAISE(ABORT, 'endpoint scope is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS endpoint_entities_active_scope
+                BEFORE INSERT ON endpoint_entities
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM network_scopes
+                    WHERE scope_id = NEW.scope_id AND active = 1
+                )
+                BEGIN SELECT RAISE(ABORT, 'network scope is missing or archived'); END;
         """)
 
 
@@ -155,6 +177,13 @@ def record_assessment(
             if prior[0] != payload:
                 raise ValueError("Assessment already exists with different facts; use a new parser version")
             return assessment_id
+        scope = db.execute(
+            "SELECT active FROM network_scopes WHERE scope_id = ?", (scope_id,)
+        ).fetchone()
+        if scope is None:
+            raise ValueError("Network scope does not exist")
+        if not bool(scope[0]):
+            raise ValueError("Network scope is archived")
         db.execute("INSERT INTO entity_assessments VALUES (?, ?, ?, ?, ?, ?, ?)",
                    (assessment_id, scope_id, artifact_observation_id, parser_version,
                     assessed_at, utc_now(), payload))
