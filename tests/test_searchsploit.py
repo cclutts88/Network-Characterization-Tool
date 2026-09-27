@@ -101,6 +101,58 @@ def test_searchsploit_enrichment_sanitizes_queries_and_returns_candidates(monkey
     }]
 
 
+def test_searchsploit_enrichment_reuses_persistent_cache_until_database_changes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ANALYZER_DATA_DIR", str(tmp_path / "data"))
+    provider = {
+        "available": True,
+        "command_path": "/opt/exploit-database/searchsploit",
+        "message": "ready",
+        "active_version": "db-v1",
+        "archive_sha256": "a" * 64,
+        "database_updated_epoch": 1000,
+        "database_path": "/opt/exploit-database",
+    }
+    monkeypatch.setattr("app.searchsploit.searchsploit_status", lambda: dict(provider))
+    searches = []
+
+    def fake_search(command_path: str, query: str):
+        searches.append((command_path, query))
+        return [{
+            "edb_id": "12345",
+            "title": "Cached candidate",
+            "platform": "linux",
+            "type": "remote",
+            "codes": "CVE-2026-1234",
+            "cves": ["CVE-2026-1234"],
+            "verified": True,
+            "date_published": "2026-01-01",
+            "path": "/opt/exploit-database/exploits/12345.py",
+            "url": "https://www.exploit-db.com/exploits/12345",
+        }], None
+
+    monkeypatch.setattr("app.searchsploit._search", fake_search)
+    hunting = {"findings": [finding("nginx", "1.24")]}
+
+    first = enrich_hunting_with_searchsploit(hunting)
+    second = enrich_hunting_with_searchsploit(hunting)
+
+    assert len(searches) == 1
+    assert first["cache_hit_count"] == 0
+    assert first["cache_miss_count"] == 1
+    assert second["cache_hit_count"] == 1
+    assert second["cache_miss_count"] == 0
+    assert second["matches"][0]["candidates"][0]["title"] == "Cached candidate"
+
+    provider["active_version"] = "db-v2"
+    third = enrich_hunting_with_searchsploit(hunting)
+
+    assert len(searches) == 2
+    assert third["cache_hit_count"] == 0
+    assert third["cache_miss_count"] == 1
+
+
 def test_searchsploit_reports_when_no_product_fingerprints_are_searchable(monkeypatch):
     monkeypatch.setattr("app.searchsploit.searchsploit_status", lambda: {
         "available": True,
