@@ -1,831 +1,1519 @@
-# Network Characterization Tool — Revised Release Roadmap
+# NCT — Network Correlation & Triage
+## Foundational Redesign and Governing Roadmap
 
-The application direction is:
+**Roadmap status:** Approved governing direction  
+**Working product expansion:** **NCT = Network Correlation & Triage**  
+**Foundation branch:** `foundation/evidence-engine-v2`  
+**Stable baseline:** `main` remains the known-working baseline until phased acceptance gates are met.
 
-**Device → Nmap → Analyze → Hunt → Map → Reachability / Hardening**
+> This roadmap governs future NCT development. Completed legacy release history is preserved in
+> [docs/ROADMAP_LEGACY_PRE_EVIDENCE_ENGINE.md](docs/ROADMAP_LEGACY_PRE_EVIDENCE_ENGINE.md).
 
-Device configuration establishes the network core and candidate subnets before
-Nmap scanning. Analyze interprets retained scan and device evidence, Hunt focuses
-analyst attention, Map visualizes selected results, and Reachability evaluates
-possible communication paths. Hardening Validation is an optional future mode
-within Reachability.
+---
 
-## Release status
+# 1. Mission
 
-### Release 1 — Saved Network / Target Foundation — Complete
+NCT began as a network characterization platform. Its next generation expands that
+mission into a persistent CPT-oriented network evidence, correlation, investigation,
+triage, hardening, and reporting platform.
 
-- [x] Persistent Saved Networks with standardized name, CIDR, description,
-  category, and tags.
-- [x] Saved-only, manual-only, and combined scan scopes.
-- [x] Multiple Saved Networks in a combined scan.
-- [x] Copy a manual target into the Saved Networks editor.
-- [x] Add reviewed subnet candidates derived from device configurations.
-- [x] Reject invalid or duplicate names and CIDRs; warn on overlaps and normalize
-  host-bit CIDRs.
-- [x] Retain an immutable Saved Network snapshot with scan history.
-- [x] Preserve existing data across the local Docker development workflow.
+NCT should help an analyst answer:
 
-### Release 2 — Subnet-Grouped Scan History — Complete
+- What exists?
+- What is reachable?
+- What is configured?
+- What is actually communicating?
+- What changed?
+- What stopped being observed?
+- What does not match expectations?
+- What evidence supports the conclusion?
+- Where should the analyst pivot next?
+- What blind spots remain?
+- What hardening action should be considered?
+- What should be elevated to the Crew Lead or leadership?
 
-- [x] Group runs by their retained Saved Network snapshot.
-- [x] Keep multi-network runs in a distinct group without duplicating scans.
-- [x] Keep scans without a Saved Network snapshot under Ad Hoc / Manual Scans.
-- [x] Show scan count, latest scan, latest run time, and latest host count.
-- [x] Nest status, date, profile, actual targets, host count, ownership, evidence,
-  Analyze, Compare, and Delete actions under collapsible groups.
-- [x] Complete browser validation against migrated scan history and package the
-  release for rollback-safe deployment.
+NCT is **not** intended to replace Arkime, Kibana/Elastic, Nmap, packet capture,
+SIEM, IDS/IPS, or device-management platforms.
 
-### Release 3 — Global No-Strike Redesign — Complete, absorbed early
+Its role is:
 
-- [x] Store a persistent global exclusion list.
-- [x] Apply global and scan-specific exclusions before FPING and Nmap.
-- [x] Keep the editor in a compact collapsible panel.
-- [x] Require confirmation before removing excluded entries.
-- [x] Preserve No-Strike settings after restart through persistent storage.
-- [x] Add a concise pre-launch breakdown of requested addresses, global
-  exclusions, scan-specific exclusions, and effective addresses.
-- [x] Expand regression coverage for overlapping global and scan-specific ranges.
+> **Collect useful facts, normalize them, correlate them once, retain what has
+> already been learned, identify what changed, expose uncertainty and blind spots,
+> and make that knowledge immediately usable across the analyst workflow.**
 
-### Release 4 — Network Device Collection Usability — Complete
+---
 
-- [x] Group collection history by device.
-- [x] Keep collection runs and raw evidence collapsible.
-- [x] Derive review-only Saved Network candidates from collected configurations.
-- [x] Add confirmed deletion of individual device collection results.
-- [x] Add structured collapsible summaries for interfaces, routes, neighbors,
-    VLANs, firewall/ACL, NAT, commands, configuration, and raw output.
-- [x] Add route counts, search, filtering, and large-table handling.
+# 2. Foundational Design Principles
 
-### Release 5 — Scan Execution Engine Upgrade — Complete
-
-- [x] FPING pre-discovery with retained evidence and explicit fallback approval.
-- [x] Live Nmap percentage, elapsed time, ETA, heartbeat, and host completion when
-  Nmap provides reliable values.
-- [x] Chunk and scheduled-batch progress.
-- [x] Split combined work into Discovery → TCP → UDP → Merge → Analysis.
-- [x] Preserve successful TCP results when UDP fails or times out.
-- [x] Tune UDP ports, retries, timing, service detection, host timeouts, and
-  recovery behavior.
-
-### Release 6 — Unified Analysis Framework — Complete
-
-- [x] Nmap host, port, service, OS, coverage, outlier, and change analysis.
-- [x] Retained evidence and scan-quality warnings.
-- [x] Initial device interface, route, neighbor, MAC, LLDP/CDP, and topology
-  parsing.
-- [x] Add a dedicated Network Device Analysis view.
-- [x] Add route protocol/default/next-hop/multipath summaries and review items.
-- [x] Add device collection comparison for routes, interfaces, firewall/ACL,
-  NAT, and network objects.
-- [x] Correlate Saved Networks, Nmap hosts, device interfaces, routes, and policy
-  with confidence and provenance.
-
-### Release 7 — Dedicated Hunting View — Complete
-
-- [x] Service-aware categories such as Remote Access, File Transfer, File
-  Sharing, Web, Identity, Databases, Email, and Network Management.
-- [x] Support nonstandard ports and multiple categories per host.
-- [x] Distinguish exposed, inferred, observed, and correlated capability.
-- [x] Add combined filters and scan-to-scan hunting changes.
-
-### Release 8 — SearchSploit Enrichment — Complete
-
-- [x] Normalize product/version evidence and query a staged local Exploit-DB
-  dataset.
-- [x] Show candidate references, match counts, platform, and type.
-- [x] Clearly label results as potential matches requiring analyst validation.
-- [x] Do not execute exploit code.
-- [x] Package and validate the official offline Exploit-DB archive against an
-  empty persistent NCT data volume, including restart persistence, a second
-  staged version, and rollback to the prior version.
-- [x] Add a connected **Update from internet** workflow that stages, validates,
-  and atomically activates official Exploit-DB data.
-- [x] Add an air-gapped **Upload offline update** workflow with archive safety
-  checks, database validation, atomic replacement, and rollback retention.
-- [x] Display database source, version/update time, and previous-version rollback
-  controls in the NCT interface.
-- [x] Complete the pre-map interface cleanup with a shared centered NCT brand,
-  emphasized acronym letters, compact navigation, and active-button page identity.
-- [x] Show the automatic NCT host in a slim sticky origin banner on pages that
-  can initiate scans, device collection, or connected database updates.
-
-### Release 9 — Network Map Core Redesign — Complete
-
-- [x] Pan-and-zoom canvas with cursor-centered zoom, node drag, selection, and
-  Fit.
-- [x] Saved-network grouping and collapsible subnet groups.
-- [x] Compact nodes with full detail in a sticky side panel.
-- [x] Consolidate router/firewall interfaces into one device identity while
-  retaining their addresses and evidence in device details.
-
-### Release 10 — Advanced Map Usability — In progress
-
-- [x] Reorder the primary workflow as Device, Nmap, Analyze, Hunt, and Map and
-  make Device the default NCT landing page so subnet evidence can guide scans.
-- [x] Compact the Map inventory counts, remove Relationships and Evidence
-  records from the visual summary, and make the complete summary collapsible.
-- [x] Move Expand workspace into a sticky top-center control that remains in the
-  same predictable position for entering and exiting the mission workspace.
-- [x] Make Analyze open directly on the selected scan results without jumping
-  into comparison output; replace the large Previous scans panel with a compact
-  top comparison selector that stays collapsed until requested.
-- [x] Present original operator scan scopes and exclusion counts in Analyze
-  instead of exposing fragmented post-exclusion CIDRs as the main title.
-- [x] Standardize human-readable retained scan references across Nmap, Analyze,
-  and Hunt. Show the logical scan name, Saved Network or concise scope, friendly
-  local time, Manual/Scheduled context, and a Latest marker in selectors while
-  preserving exact artifact names, UTC timestamps, full targets, and stable IDs
-  in detail text without migrating historical evidence.
-- [x] Replace Device's disconnected command blocks with one ordered,
-  vendor-specific execution plan that distinguishes NCT host commands, device
-  commands, and local evidence writes; show SCP, remote-file creation, and
-  cleanup only for the VyOS and pfSense password workflows that actually use
-  them, while identifying Cisco, Juniper, and key-based collection as direct
-  SSH streaming.
-- [x] Add UniFi OS gateways as Router and Firewall collection targets using a
-  guarded read-only Linux evidence set for platform, interfaces, routes,
-  neighbors, VLANs, listening services, firewall rules, and LLDP. Stream results
-  directly through SSH, tolerate unavailable version-specific utilities while
-  retaining their status, parse Linux interface and route evidence into Device
-  Analysis and Map, and keep EdgeRouter on the existing VyOS path.
-- [x] Add **Switch** as a first-class Device collection type instead of relying
-  on router profiles. Provide vendor/platform capability choices so unsupported
-  combinations are disabled rather than sending inappropriate commands.
-- [x] Add guarded read-only switch profiles for Cisco IOS / IOS-XE / NX-OS,
-  Juniper EX, and UniFi switches. Collect version and configuration plus VLANs,
-  access/trunk mode, interface status and descriptions, MAC address tables,
-  spanning tree, link aggregation, PoE status where supported, and LLDP/CDP.
-- [x] Parse switch evidence into Device Analysis and Map so learned MACs,
-  VLAN membership, uplinks, port channels, and neighbor relationships can refine
-  endpoint placement. Retain per-command success/failure because model and
-  software-version command support varies.
-- [x] Search by IP, hostname, MAC, OS, service, port, and Saved Network.
-- [x] Highlight search results, step forward and backward through matches, fit
-  the active match, and optionally isolate matching topology branches.
-- [x] Keep the fixed-height map as the default workspace, with an operator option
-  to expand it into a full-width workspace and show or hide a floating details
-  panel anchored inside the map canvas border.
-- [x] Let the expanded map use its complete visible width for node placement and
-  keep the details toggle with the map controls instead of the page toolbar.
-- [x] Reclaim the details area whenever no map object is selected, open details
-  automatically on selection, and let the analyst suppress the pane without
-  clearing that selection in either the standard or expanded workspace.
-- [x] Size the expanded canvas from the actual remaining vertical space so its
-  full width and height remain usable across browser window sizes.
-- [x] Expand the SVG coordinate boundary with the visible canvas so every part of
-  the expanded workspace supports node placement, dragging, and panning.
-- [x] Treat expanded Map as the canonical 1:1 topology workspace and preserve its
-  layout as a scaled overview when returning to the smaller standard viewport.
-- [x] Offer a four-times-area large-network workspace for missions requiring more
-  topology construction room while preserving 100% scale and pan navigation.
-- [x] Fit the viewport to the actual device and subnet boundary instead of empty
-  mission-workspace borders when the topology is sparse.
-- [x] Auto-pan the mission workspace when an analyst drags a node near any edge.
-- [x] Add Shift-click multi-object selection and group dragging that preserves
-  relative placement, updates relationship lines, and supports edge auto-pan.
-- [x] In an expanded Individual endpoint view, let Shift-clicking the parent
-  subnet select or deselect the subnet and all of its dependent host nodes as
-  one movable branch.
-- [x] Add zoom-dependent detail levels that move automatically between overview,
-  summary, full, and evidence views while showing the active level.
-- [x] Add a live minimap in the expanded workspace with selected-node markers, a
-  viewport frame, and click-drag navigation across large mission areas.
-- [x] Add Small, Medium, Large, and hidden minimap presentation controls.
-- [x] Add a reversible 50-step map-presentation history with toolbar and
-  keyboard Undo / Redo controls.
-- [x] Let analysts lock selected objects against accidental dragging or group
-  layout changes while retaining them in the visible selection.
-- [x] Add a selection action bar for fit, lock, row/column alignment,
-  distribution, and compact arrangement.
-- [x] Add drag-box selection, contextual right-click actions, keyboard fit,
-  lock, box-select, zoom, row/column alignment, Escape, and precise/coarse
-  arrow-key movement.
-- [x] Add Spider web, Hierarchy, and Grid layout presets while continuing to
-  honor explicitly positioned objects.
-- [x] Let an analyst choose a device interface as the WAN / outside path, place
-  that device at the top center, and lock and label it as the visual topology
-  anchor. Suggest explicitly named WAN, outside, internet, uplink, or external
-  interfaces while allowing a manual choice when the source is ambiguous. Show
-  the selected path as a WAN marker outside the map border with a visible uplink
-  to the anchored device. Keep the marker aligned with that uplink during device
-  movement, zoom, and pan, and hide the WAN presentation when its device is not
-  visible.
-- [x] Let an analyst designate a discovered device or host as the External WAN
-  gateway, promote it into a single top-boundary WAN object instead of leaving
-  a duplicate node on the canvas, connect that boundary to the nearest visible
-  internal device, and retain the private presentation choice with saved
-  layouts.
-- [x] Let analysts hide one or several Map objects without deleting evidence,
-  list them in a collapsible Hidden objects section, and restore objects
-  individually or all at once.
-- [x] Present interface connection details as stacked, zoom-aware labels with a
-  concise interface and IP summary plus the complete relationship and evidence
-  in hover text.
-- [x] Add per-subnet endpoint display modes: collapsed by default, individual
-  endpoint lines, or an organized endpoint-group box.
-- [x] In the grouped endpoint view, let the analyst sort and divide hosts by IP
-  address, hostname, or operating system, with useful counts and breakdowns for
-  the selected investigation view; IP is one sorted pool, while subgroup
-  headings appear only for actual hostname or OS differences.
-- [x] Use numeric IP-address ordering across scan analysis, Hunt, comparisons,
-  device candidates, and Map host collections instead of lexical text order.
-- [x] Let analysts resize grouped endpoint boxes and reflow their host pools
-  across the available columns without changing shared evidence.
-- [x] Put grouped-versus-individual and expand-versus-collapse toggles on each
-  subnet box, with map-wide Expand all and Collapse all controls.
-- [x] Color-code grouped host rows by observed operating-system family while
-  retaining exact OS text and an Unknown OS treatment.
-- [x] Add optional OS-family, service-exposure, and identity-gap analytical
-  overlays with an explicit map legend and neutral default view.
-- [x] Distinguish routers, firewalls, switches, wireless devices, and unknown
-  infrastructure with compact network-diagram symbols, including a clearly
-  separated crossed-arrow router mark. Keep analytical color available for
-  overlays and use solid versus dashed borders for confirmed versus inferred
-  device identity.
-- [x] Add named private layouts that persist in the current analyst's browser,
-  restore the complete presentation, and can be replaced or deleted.
-- [x] Save every visible object's coordinates in a named layout and stabilize
-  all visible objects on entering Edit mode so an untouched auto-layout node
-  cannot reflow independently while the analyst is building the map. Expand
-  the logical map boundary to contain saved edge positions instead of clamping
-  an outlying object into a new location during redraw.
-- [x] Let each analyst mark exactly one personal or shared layout as the default
-  with a hollow/filled star; automatically open that layout on future Map visits.
-- [x] Add Direct and Right-angle trunks connection styles so analysts can switch
-  between compact web lines and conventional vertical-drop/horizontal-backbone
-  diagram presentation without changing topology evidence.
-- [x] Add a Hybrid backbone default that keeps infrastructure links structured
-  and endpoint membership direct, plus per-connection style and direction
-  overrides with draggable, grid-aware bend handles.
-- [x] Add optional 20- and 40-pixel object grids and visual line magnets for
-  aligning compatible nearby trunks without creating or merging topology
-  evidence.
-- [x] Add an analyst-local Map markup layer with colored rectangles and ellipses
-  that can contain text, be moved, resized, edited, deleted from their controls
-  or the keyboard, and be retained in private layouts.
-- [x] Add an optional joined gateway presentation that visually groups a routed
-  next-hop device with the subnet containing its address, moves both parts as
-  one, and keeps their separate evidence records and outgoing routes intact.
-- [x] Add an explicit Map Edit mode and keep line routing, object movement,
-  layout construction, alignment, locking, markup, and destructive presentation
-  controls out of the normal investigation view.
-- [x] Add a type-organized Map parking lot for blank-slate construction. Keep
-  endpoints bundled inside subnet objects, preserve all topology evidence while
-  objects are parked, restore lines automatically when both ends are placed, and
-  queue parked upstream, downstream, and peer dependencies for the active item.
-- [x] Preserve parked objects in private named layouts and let analysts park or
-  place joined gateway/subnet pairs as one visual construction unit.
-- [x] Exclude the Docker runtime's private bridge gateway from mission topology
-  and layout calculations while retaining it as tool-local raw traceroute path
-  evidence. Fit the standard viewer to placed content instead of empty expanded
-  workspace borders so locked objects do not appear to jump toward the corner.
-- [x] Keep viewport navigation separate from object geometry so navigating never
-  rewrites or snaps object and line coordinates. Use click-and-drag to pan and
-  ordinary wheel movement for pointer-centered zoom.
-- [x] Preserve each subnet's Grouped or Individual endpoint presentation while
-  entering Edit mode. Show individual host objects when their subnet is placed,
-  and keep those dependent hosts off-canvas while the subnet is parked.
-- [x] Prefer analyst-assigned Saved Network names for matching subnet titles on
-  the Map while retaining each CIDR as the stable technical identifier.
-- [x] Add authenticated deliberately shared layouts with owner protection,
-  explicit Administrator publishing, and analyst-local default selection.
-
-### Future release — Rapid Deployment and Upgrade Automation
-
-- [x] Provide an operator-friendly rapid deployment launcher that performs a
-  complete preflight, deployment or upgrade, health check, and final access
-  handoff without requiring the operator to assemble Docker commands manually.
-  - [x] Add a guided Test/Range installer with built-in prompts, a final review,
-    a non-mutating plan mode, automatic preflight before deployment, private-lab
-    TLS generation, initial Administrator setup, and a reusable non-sensitive
-    Range preset for frequently reset VMs.
-  - [x] Add a repeat-reset preset path that skips repeated non-sensitive setup
-    questions while retaining the full review, safe preflight, final approval,
-    and visible deployment-stage progress.
-- [x] Give the launcher explicit **Test**, **Range**, and **Mission** deployment
-  profiles with different acceptance rules rather than treating every host as
-  equivalent:
-  - **Test** keeps the current developer workflow local, permits alternate
-    ports, and prioritizes fast rebuild, reset, and rollback.
-  - **Range** assumes older or inconsistent host software, limited or absent
-    internet access, occupied ports, and disposable training infrastructure. It
-    prioritizes compatibility and useful diagnostics without silently upgrading
-    or reconfiguring the range host.
-  - **Mission** requires the supported modern Docker baseline, stable hostname
-    and ports, trusted HTTPS, authenticated access, backups, monitoring, and a
-    fail-closed readiness check. Required prerequisites may be installed only
-    through an explicitly approved and logged administrator workflow.
-- [x] Use one immutable, versioned, checksummed NCT application image across all
-  three profiles. Keep configuration, credentials, ports, certificates, and
-  data volumes environment-specific, and never promote test or range data into
-  a mission environment implicitly.
-- [x] Define promotion gates from local testing to range evaluation and then to
-  mission readiness. Preserve the exact NCT image digest, build version,
-  deployment profile, test results, compatibility findings, known limitations,
-  and rollback proof so a successful lab launch alone cannot be reported as
-  mission-ready.
-  - [x] Record the content-addressed local image ID, registry digest when
-    available, declared version/build, and exact running build in every Test or
-    Range deployment receipt; reject `:latest` and missing build identity for
-    Range.
-- [x] Detect whether Docker Engine or Docker Desktop is installed, running, and
-  reachable; compare its server/API version with NCT's documented minimum and
-  tested versions, and explain the exact supported workaround when the local
-  version is too old or exposes an incompatible API.
-- [x] Detect and validate both the modern `docker compose` plugin and legacy
-  `docker-compose`. Prefer the supported Compose path, fall back to a compatible
-  direct-Docker deployment when Compose is absent or too old, and stop with a
-  clear corrective action only when no safe path is available.
-- [x] Implement a documented Range compatibility ladder: modern Compose v2,
-  legacy `docker-compose`, direct Docker Engine, and finally a self-contained
-  offline NCT VM/appliance when the installed Docker API, kernel, image format,
-  networking, or security model is too old to support safely. Do not disguise
-  an unsupported Docker host with fragile command-line workarounds.
-- [ ] Package the range fallback so it can be transferred without internet
-  access and booted with a known-compatible runtime while still requiring the
-  operator to choose its network attachment, address, ports, and authorized
-  target ranges. Treat the VM/appliance as a separately versioned artifact with
-  its own checksum, resource minimums, upgrade path, and rollback instructions.
-- [ ] Maintain a repeatable Range compatibility test matrix covering Compose v2,
-  legacy Compose v1, Docker Engine without Compose, the oldest supported Docker
-  API and Linux kernel, supported CPU architectures, offline image loading,
-  occupied ports and container names, bridge/VPN subnet overlap, existing older
-  NCT deployments, preserved data, `NET_RAW`, packet capture, and scan
-  reachability. Record pass, degraded, workaround, and unsupported outcomes.
-  - [x] Add an executable non-destructive baseline covering Compose v2, legacy
-    Compose, direct Engine, API/architecture rejection, verified offline
-    archives, occupied ports, existing/active NCT instances, data-volume
-    retention, and promotion receipt identity. Emit a timestamped report and
-    optionally include the real host/image `--check-only` result.
-  - [x] Add Docker bridge overlap cases for host LAN/VPN routes and retained
-    Saved Networks, with a Test warning and a Range/Mission hard stop.
-  - [x] Convert the previously successful recurring Range VM recovery into a
-    sanitized API 1.39 fixture and an explicit Range-only compatibility path.
-    Bypass incompatible Compose, probe Python 3.12 threading, scope the seccomp
-    workaround to the analyzer only when proven necessary, force the stable
-    asyncio/h11 transport, and prevent Mission promotion of the workaround.
-  - [ ] Capture reports on representative older Range hosts before closing the
-    matrix.
-- [ ] Make the launcher idempotent: identify an existing NCT container, image,
-  persistent data volume, configured ports, and running version before making
-  changes. Distinguish an upgrade from a new installation, preserve evidence
-  and databases, run migration checks, keep the previous container/image as a
-  rollback target, and avoid creating duplicate active instances.
-  - [x] Treat an already-running healthy direct deployment with the exact image
-    ID, bind address, port, and data volume as already current without taking a
-    backup or replacing its container.
-- [ ] Detect host-port conflicts before startup, including conflicts caused by
-  an older NCT instance versus an unrelated application. Reuse the existing NCT
-  ports during an upgrade when safe; otherwise choose or request available HTTP,
-  HTTPS, and application ports without stopping or reconfiguring unrelated
-  services. Test and Range modes may retain an approved alternate port; Mission
-  mode must preserve its declared stable URL or stop for an explicit operator
-  decision. Save the selected ports so restarts use the same addresses.
-  - [x] Detect other Docker publishers plus host listeners reported by `ss` or
-    `netstat`, reuse a recognized existing NCT binding, and atomically retain
-    successful Test/Range port selections for the next launcher run.
-- [x] Make access mode explicit before deployment: **Local only** binds to
-  loopback, while **LAN accessible** binds only to the operator-selected host
-  interface or approved addresses. Never advertise a LAN URL when Docker is
-  listening only on `127.0.0.1`, and never expose NCT on every interface merely
-  because a port is available.
-- [ ] Include a firewall preflight for the selected address and port. On Windows,
-  distinguish Domain, Private, and Public profiles; detect an existing matching
-  rule; and explain why traffic is blocked. Offer to create a narrowly named NCT
-  inbound rule only with explicit operator approval and required elevation,
-  defaulting to Domain/Private and approved source subnets rather than Public or
-  Any. Record rules created by NCT and remove or restore them during rollback.
-  - [x] On Linux Range hosts, distinguish active firewalld/UFW from installed
-    but inactive or unmanaged state, detect and reuse a matching rule, require
-    an approved source CIDR for changes, verify a newly created rule, and remove
-    only the NCT-created rule during rollback. Windows profile-aware handling
-    remains open.
-- [ ] Validate the complete HTTPS path, not just the container port: reverse
-  proxy health, certificate/key availability, certificate expiration and host/IP
-  names, system time, and client trust requirements. Connected and air-gapped
-  deployments must each have a documented certificate path, and failed TLS
-  validation must not be reported as a successful LAN deployment.
-- [ ] Check that Docker is using Linux containers on a supported CPU architecture
-  and that virtualization/WSL prerequisites, daemon context, disk space, memory,
-  persistent-volume permissions, and host-path sharing are usable before pulling,
-  importing, or replacing an image.
-- [ ] Detect Docker bridge-subnet overlap with the mission LAN, VPN, and Saved
-  Networks before creating the deployment network. Choose a non-conflicting
-  private bridge range and verify container DNS, gateway reachability, and the
-  operator-selected host interface without modifying the host's routes or VPN.
-  - [x] Inventory existing Docker CIDRs, non-Docker host IPv4 routes, and active
-    Saved Networks before deployment; warn in Test and stop Range/Mission when
-    any retained scope overlaps.
-- [ ] Verify NCT's required container capabilities and runtime behavior,
-  including `NET_RAW`, Nmap, FPING, tcpdump, SSH, the accountability capture
-  interface, outbound target reachability, and the host IP that devices will
-  actually observe. A web health check alone is not sufficient proof that scan
-  and capture workflows can operate.
-  - [x] Before reporting success, verify Nmap, FPING, tcpdump, SSH,
-    packet-capture interface enumeration, the `NET_RAW` grant, and raw-socket
-    creation inside the deployed application container.
-- [ ] Refuse an upgrade while a scan, scheduled batch, device collection,
-  database update, or schema migration is active unless the operator explicitly
-  stops or defers it. Use a deployment lock so two launcher instances cannot
-  change containers or ports concurrently.
-- [ ] Validate free space and create a restorable data/database backup before a
-  schema-changing upgrade. Check forward and rollback schema compatibility,
-  preserve file ownership and permissions, and never treat an older image as a
-  valid rollback target when it cannot safely read the upgraded data.
-- [ ] Handle cancellation, terminal closure, reboot, or power loss at every
-  transition. Use staged files and atomic state changes, label temporary and
-  rollback resources, resume or clean up an incomplete attempt on the next run,
-  and leave the last known-good NCT instance available whenever possible.
-- [ ] Account for connected-environment DNS, proxy, and `NO_PROXY` settings while
-  keeping air-gapped mode free of mandatory network calls. Verify downloaded or
-  imported checksums and available disk space before unpacking large images or
-  offline SearchSploit data.
-- [ ] After deployment, test local access and, when LAN mode was selected, test
-  the bound LAN address separately. Recheck after a container restart, report
-  whether automatic restart is enabled, and provide a diagnostic summary when
-  Docker, firewall, TLS, routing, or application readiness fails.
-- [x] Support connected and air-gapped deployment packages. Use a validated
-  local NCT image/archive when supplied, pull only when permitted and necessary,
-  and verify the image version and integrity before the final swap.
-- [x] Perform the container swap only after preflight succeeds, retain the
-  existing data volume, wait for the NCT health endpoint, verify the reported
-  build/version, and automatically restore the prior known-good container when
-  startup or migration validation fails.
-- [ ] Discover the actual bound host address and selected HTTPS port after a
-  successful health check. Print a copyable final message such as
-  `NCT is available at https://x.x.x.x:443`; when several addresses are valid,
-  clearly distinguish local-only and LAN-accessible URLs rather than guessing.
-- [x] Write a concise deployment log containing the preflight decisions,
-  versions, selected ports, upgrade/rollback outcome, and final URL without
-  recording credentials or sensitive application evidence.
-- [x] Show a concise, terminal-safe NCT success summary only after the deployed
-  health check passes, followed by the verified access URL and build details.
+## 2.1 Ingest once, enrich once, correlate once, query many times
 
 ```text
-NCT - Network Characterization Tool
-Deployment verified.
-Available at https://x.x.x.x:443
+Collect
+  ↓
+Normalize
+  ↓
+Enrich
+  ↓
+Correlate
+  ↓
+Persist
+  ↓
+Query repeatedly
 ```
 
-### Operator workflow assessment — 2026-09-13
+Expensive work happens because evidence is new or changed—not because an analyst
+opened another page.
 
-- [x] Review the complete authenticated operator path through Device, Nmap,
-  Analyze, Hunt, Reach, and Map without starting scans or changing retained
-  evidence. Keep the detailed findings in
-  [`docs/OPERATOR_WORKFLOW_ASSESSMENT.md`](docs/OPERATOR_WORKFLOW_ASSESSMENT.md).
-- [x] Standardize expandable sections on a left-side accent chevron across all
-  seven operator views while preserving each section's default state, summary,
-  and native keyboard behavior.
-- [x] Remove mandatory reason/authorization notes before Nmap runs and device
-  collections. Retain a neutral system context for scans, allow an optional
-  Device collection note, and continue requiring a note only when an operator
-  makes an explicit fallback authorization decision.
-- [x] Remove manual creator/operator identity fields from Nmap, Saved Networks,
-  No-Strikes, fallback approval, and Device collection. Attribute new actions
-  automatically to the signed-in account while retaining historical audit
-  fields and a neutral identity in authentication-disabled Test mode.
-- [x] Add a contextual Hunt-to-Reach handoff that carries the selected host,
-  protocol, and port while leaving source context under operator control.
-- [x] Give the Analyze landing page a concise newest-result or retained-result
-  picker without duplicating the full Nmap Scan History.
-- [x] Add explicit Device completion handoffs to Nmap and Network Device
-  Analysis. Keep collection status, commands, and saved files on Device, and
-  move interpreted interfaces, routes, neighbors, VLANs, policy, and
-  comparisons to Network Device Analysis.
-- [x] Hide Hunt's reset action while the network-wide view is already active,
-  move Nmap profile lifecycle and scheduling into collapsed advanced sections,
-  and move Map file browsing into a collapsed Evidence Files drawer without
-  removing capability or changing scan behavior.
-- [x] Give Reach personal notes plus its own page-specific shared-note space.
-  Keep Network Device Analysis within the Device shared-note scope.
-- [x] Deep-link Reach evidence to the exact retained Nmap host or relevant
-  device routing/policy/NAT section, expand the destination, and preserve the
-  originating page state in its existing browser tab.
-- [x] Standardize evidence-page loading states so a requested retained result
-  never briefly appears to be an empty completed view.
-- [x] Add one-click clear controls to current and dynamically rendered search
-  fields. Keep the control hidden on empty fields and re-run the field's normal
-  filtering behavior when cleared.
-- [x] Treat export as a first-class operator action at every workflow stage.
-  Preserve existing Nmap artifacts, Device files, and Analyze CSV exports; add
-  Hunt JSON/visible-findings CSV, Device Analysis JSON, primary Reach result
-  JSON, Nmap-analysis HTML, and Map SVG plus topology/layout JSON. Exports must
-  remain local and must not trigger network activity or alter retained evidence.
+## 2.2 Pages do not own analysis
 
-### Export Studio — presentation workflow candidate
+Analyze, Hunt, Reach, Map, Dashboard, Harden, and Report Composer should read shared
+persistent results. They should not independently reparse source artifacts or rerun
+the same enrichment.
 
-- [ ] Add a consistent **Quick export** and **Customize export** entry on every
-  evidence page without making routine downloads slower.
-- [ ] Let the analyst choose the complete dataset or the currently filtered /
-  selected records, then choose CSV, plain text, Markdown, self-contained HTML,
-  or PDF. Keep raw evidence exports distinct from presentation reports.
-- [ ] Provide a preview-first report composer with selectable and reorderable
-  columns, sort order, grouping and breakdown fields, section order, headings,
-  analyst notes, and optional summary counts. Never alter retained evidence.
-- [ ] Preserve an export manifest in every format: NCT build, export time,
-  source scans/device collections, evidence timestamps, active filters,
-  selected fields, and warnings about inference or incomplete coverage.
-- [ ] Support reusable personal export templates and explicitly published team
-  templates with version/conflict handling; never include credentials or
-  secrets. Keep the generated files local unless the analyst separately moves
-  them.
-- [ ] Render PDF and HTML fully offline from bundled, pinned dependencies and
-  validate large tables for page breaks, repeated headers, readable maps, and
-  Windows-safe filenames before Range promotion.
+## 2.3 New evidence creates a delta, not a rebuild
 
-### Analyze current-evidence workspace — design candidate
+New or changed facts proceed downstream. Unchanged facts reuse existing results.
 
-- [x] Use the initial Analyze page as a current-evidence workspace built from
-  the newest retained Nmap evidence for every network scope plus the newest
-  usable network-device collections. Keep provenance and collection time on
-  every normalized record so older evidence is never presented as current.
-- [x] Present one combined host/device inventory row per correlated identity,
-  keeping IP, hostname, MAC, OS, device role, latest observation,
-  ports/services, concise capability badges, evidence origin, and source links
-  visible without duplicating the identity across separate flat tables.
-- [x] Expand a current-evidence identity in place for capability match basis,
-  configuration provenance, retained sources, scan coverage, and observation
-  history.
-- [ ] Attach SearchSploit candidates to the identity expansion after the
-  retained-enrichment cache has a stable invalidation contract.
-- [x] Let the operator reorganize the same current evidence by IP address, port,
-  service, MAC address, hostname, OS, or last-observed time. Keep all services
-  consolidated under one identity and provide search, subnet filtering, and
-  bounded client-side paging for large inventories.
-- [x] Recalculate uncommon-port findings across the current network by OS peer
-  group, with the view automatically narrowing when the operator selects one
-  subnet and with a minimum two-host evidence threshold.
-- [x] Add a route and policy view that keeps network routing distinct from
-  authorization: routes describe source/destination reachability, while
-  firewall, ACL, and NAT evidence describes protocol/port decisions. Keep exact
-  flow conclusions in Reach and link to it from the retained evidence view.
-- [x] Preserve focused analysis of one retained scan and comparison of two
-  selected scans as explicit modes, including a compact retained-scan picker.
-- [x] Add a network-change mode that compares the newest two complete Nmap
-  observations for every exact retained network scope and groups changes by
-  subnet, host, port/service, identity, and collected scan path.
-- [ ] Extend the bulk change view with the newest two comparable device
-  collections per device for route, firewall/ACL, NAT, and switching changes.
-- [ ] Before implementation, define identity correlation, newest-usable
-  evidence selection, stale/conflicting evidence display, scale limits, and
-  partial-coverage warnings so the landing view cannot imply certainty that
-  the retained evidence does not support.
+## 2.4 Evidence sources are peers
 
-### Future extension — Analyst Identity Overrides
+Nmap is important but not required. NCT must support characterization from any
+combination of:
 
-- [x] Allow an analyst to append or correct a host operating system when it is
-  known from trusted local knowledge.
-- [x] Preserve the scanner-detected OS beside the analyst value instead of
-  overwriting evidence.
-- [x] Record who made the change, when it changed, and the reason, and flag a
-  later scan when its fingerprint disagrees with the analyst override.
+- Active scan evidence
+- Arkime passive traffic evidence
+- Kibana/Elastic evidence
+- Network-device configuration evidence
+- Routing/policy evidence
+- Analyst-supplied/manual evidence
+- Historical retained evidence
 
-### Future extension — Evidence-Based OS Inference
+## 2.5 Absence is not the same as negative evidence
 
-- [x] Infer possible Windows, Linux, network-appliance, and other operating
-  system families from service fingerprints, banners, protocols, and retained
-  device evidence when an authoritative OS identification is unavailable.
-- [x] Mark inferred operating systems with distinct text styling, an explicit
-  `inferred` label, confidence, and the evidence that contributed to the result.
-- [x] Keep Nmap-detected operating systems authoritative; inferred values never
-  silently overwrite direct scanner evidence.
-- [x] When analyst identity overrides are implemented, keep analyst-confirmed
-  operating systems authoritative over inferred values as well.
-- [x] Let analysts confirm, dismiss, or investigate an inference while retaining
-  its original evidence and audit history.
+The system must distinguish:
 
-### Future foundation — Multi-Analyst Workspaces — In progress
+- **Current / confirmed**
+- **Not observed**
+- **Closed**
+- **Filtered**
+- **Historical**
+- **Not assessed**
+- **Unavailable**
+- **Prohibited**
+- **Analyst asserted**
+- **Stale / insufficient coverage**
 
-- [x] Add authenticated analyst identities and role-based permissions for shared
-  collection, safety, evidence, and administrative actions.
-  - [x] Add opt-in local analyst authentication with PBKDF2 password hashes,
-    expiring HttpOnly sessions, same-origin mutation checks, fail-closed first
-    startup, and Admin / Analyst / Viewer enforcement. Keep authentication
-    disabled by default while this remains a single-user Test build.
-  - [x] Bind authenticated OS corrections and inference reviews to the signed-in
-    server session instead of trusting a client-supplied analyst label.
-  - [x] Show the signed-in identity and role on every primary page, provide
-    sign-out, and give Administrators a focused account creation/listing screen.
-  - [x] Bind authenticated scan, profile, schedule, safety, Saved Network, and
-    device-collection actor fields to the server session; remove manual actor
-    entry and use a neutral local identity when authentication is disabled.
-  - [x] Add Administrator account enable/disable and password reset with session
-    revocation, last-active-Administrator protection, and visible account audit
-    history.
-  - [x] Add deployment-aware first-run Administrator creation with no fixed
-    credentials, one-time read-only secret mounting and removal, existing-account
-    preservation, and an admin-only host recovery path with backup and session
-    revocation.
-- [x] Give each analyst a persistent personal workspace for saved map layouts,
-  filters, investigation notes, scan drafts, and interface preferences.
-  - [x] Move named Map layouts to owner-scoped server storage when authentication
-    is enabled, while retaining browser-local layouts in disabled Test mode.
-    Reject stale replacements and prevent one analyst from deleting another's
-    personal layout.
-  - [x] Store one default Map layout preference per analyst, permit either a
-    personal or currently shared layout, and expose it as a hollow/filled star.
-  - [x] Autosave one owner-scoped Nmap builder draft per analyst, including the
-    selected interface, scope, profile, timeout, and scan options. Reject stale
-    browser writes instead of silently replacing a newer draft.
-  - [x] Preserve each analyst's Hunt and Analyze filters, collapsible-card state,
-    natural IP/hostname sorting, and paginated row preference on
-    the server. Keep the working view isolated by account and reject stale writes.
-  - [x] Add private named Hunt and Analyze filter presets that analysts can load,
-    update, and delete without affecting another operator's view.
-- [ ] Add optional per-analyst themes for visual individuality. Themes must remain
-  presentation-only and must not change evidence meaning, shared data, exports,
-  or the visibility of warnings and status indicators.
-- [ ] Keep shared evidence authoritative while requiring an explicit publish or
-  share action to move personal layouts and investigations into a team workspace.
-  - [x] Allow only an Administrator to deliberately publish or unpublish a
-    versioned personal Map layout; other analysts can load shared layouts but do
-    not overwrite the owner's copy.
-  - [x] Add a CherryTree-style investigation notebook with personal notes on the
-    left, page-specific shared notes on the right, nested folders, retained page
-    context, version-conflict protection, owner-controlled branch sharing, and
-    portable Markdown export.
-- [x] Add version checks, conflict handling, scan ownership and queuing, live
-  status updates, and an audit trail for every shared change.
-  - [x] Replace concurrent-scan rejection with a persistent first-in/first-out
-    analyzer queue. Show the active owner and waiting positions, automatically
-    dispatch the next run, preserve unstarted manual requests across restart,
-    let owners cancel their runs, and let Administrators reassign queued work.
-  - [x] Retain and display queued, started, reassigned, cancellation, fallback,
-    interruption, and terminal events with the responsible server identity.
+## 2.6 Preserve provenance
 
-### Future major capability — Reachability Analysis
+Every important conclusion must be traceable to its source, collection time,
+analysis version, confidence, and analyst additions.
 
-- [ ] Evaluate source, destination, and service using open ports, routes,
-  interfaces, firewall/ACL policy, NAT, Saved Networks, and device identity.
-  - [x] Add the first read-only Reach page and API using the current
-    network-wide host/service inventory, Saved Networks, newest per-device
-    collections, retained routes, and narrowly supported explicit ACL evidence.
-  - [x] Build the likely path only from source-attached router/firewall evidence,
-    show that path visually, and exclude ordinary switch management default
-    routes unless Layer-3 forwarding is explicitly established.
-  - [x] Select the newest completed or uploaded collection per device for Reach;
-    failed newer attempts no longer displace the last usable retained evidence.
-  - [x] Parse retained UniFi `iptables-save` filter and NAT tables by table,
-    chain, rule order, action, protocol, and basic address/port selectors instead
-    of discarding bare saved-rule lines.
-  - [x] Collect and retain UniFi `ipset` definitions for future address-group
-    resolution. Existing collections remain useful but require a new pull to add
-    object membership that was not captured previously.
-  - [x] Parse complete retained UniFi IP-set definitions and memberships into
-    compact policy objects, report the full evidence count beside a bounded UI
-    preview, and resolve IP/network/port sets while walking ordered `FORWARD` and
-    user chains. Stop at Unknown for unsupported DPI, GeoIP, missing membership,
-    or truncated policy evidence rather than inferring a verdict.
-    - [x] Match host and subnet Reach inputs against retained network objects,
-      select a usable WAN route when metadata-only defaults have no interface,
-      and carry drop-or-continue prechecks forward when every possible branch
-      converges on the same explicit deny. Unsupported criteria remain Unknown
-      whenever they could change the final verdict.
-  - [x] Walk retained UniFi NAT `PREROUTING` and nested chains before firewall
-    evaluation. Resolve supported DNAT address/port changes and local redirects,
-    show the original and effective destination in Reach, and use the translated
-    target for route, service, and ordered `FORWARD` evidence.
-  - [x] Add attachment-aware ordered policy evaluation for Cisco IOS/IOS-XE/ASA
-    ACLs, VyOS interface policies, active pfSense `pfctl` rules, and Juniper
-    zone policies with directly resolvable addresses and built-in applications.
-    A rule that is merely present but not demonstrably applied is not treated as
-    an allow or deny decision.
-  - [x] Expand vendor-aware ordered policy, object, zone, NAT, and stateful-flow
-    evaluation before treating complex configurations as allow or deny evidence.
-    - [x] Resolve static Cisco address and service objects/groups, VyOS address,
-      network, port, and interface groups, pfSense static and nested aliases,
-      and Juniper zone address books/sets and custom applications/application
-      sets. Expose the retained object inventory in Device views and keep
-      missing, incomplete, cyclic, or unsupported definitions at Unknown.
-    - [x] Walk supported Linux/UniFi `POSTROUTING` chains and nested chains for
-      exact source NAT and masquerade. Show the original and effective source,
-      outgoing interface, retained rule, and chain path in Reach; keep address
-      ranges and conflicting multi-device translations at Unknown.
-    - [x] Resolve dynamic and DNS-backed objects, vendor policy-based NAT,
-      established-flow state, and multi-device translation paths; keep
-      unsupported criteria at Unknown.
-      - [x] Let analysts evaluate either a new connection or an
-        established/related flow. Match retained iptables and VyOS state rules
-        against the selected state, include that basis in the evidence, and
-        warn that configuration evidence does not prove a live state-table
-        entry exists.
-      - [x] Capture pfSense runtime alias tables and use their retained IPv4
-        membership to resolve DNS-backed aliases at the collection timestamp.
-        Identify dynamic Cisco, VyOS, pfSense, and Juniper objects in the
-        object inventory, and keep them unresolved when no retained runtime
-        membership is available.
-      - [x] Normalize and evaluate exact Cisco static and object NAT, VyOS
-        source/destination NAT, and retained active pfSense `rdr`/NAT rules.
-        Keep policy/route-map NAT and unresolved translations at Unknown.
-      - [x] Carry unique source and destination translations sequentially
-        across multiple retained devices, preserve every device and evidence
-        step in the Reach path, and stop at ambiguous or looping paths.
-- [x] Support host, subnet, WAN/Internet, external IP, and external CIDR sources.
-  - [x] Accept IPv4 hosts, IPv4 CIDRs, and WAN/Internet as either endpoint.
-  - [x] Let an analyst explicitly designate an exact source IPv4 host or CIDR as
-    external. Preserve the address for rule matching while binding the path to
-    the retained WAN-facing interface; never guess external status from an
-    unsaved address alone.
-- [ ] Report Local, Routed, Expected Allowed, Expected Blocked, Unknown, and Not
-  Exposed without claiming unsupported certainty.
-  - [x] Report Local, Routed, exact-policy Expected Allowed/Blocked, and Unknown
-    with confidence, evidence, and prominent caveats.
-  - [x] Report Not Exposed only when retained scan coverage proves that the
-    requested service was actually assessed and not exposed.
-  - [x] Lead Reach evidence cards with an explicit effect statement identifying
-    whether the matched firewall rule or ACL is expected to allow/block the
-    selected flow, whether scan coverage found the port exposed, or whether a
-    route only supplies a possible path. Collapse raw rules and commands under
-    supporting evidence and link retained sources into Analyze in a new tab.
-  - [x] Keep internal-path conclusions separate from external exposure checks.
-    An internal result can evaluate the same destination, protocol, port, and
-    flow state from Internet without replacing the original result; only that
-    external result emphasizes WAN when opened on Map. Label broader routes as
-    unused fallbacks and exclude loopback metadata without a forwarding
-    interface from usable route evidence.
-  - [x] Correlate Hunt SearchSploit candidates with retained Reach evidence.
-    Show and filter conservative external, internal-only, local-segment,
-    externally-blocked, not-exposed, and unknown classifications per matched
-    service while keeping exploitability explicitly unconfirmed.
-- [x] Group on-demand source-exposure reports by Internet and Saved Network,
-  deduplicate Hunt dataset rows into unique observed services, preserve complete
-  route, ordered-policy, and NAT objects plus rendered evidence, correlate local
-  SearchSploit candidates, filter by source/outcome/candidate presence, and
-  export the complete evidence report as JSON without generating network traffic.
-- [x] Send individual Reach evaluations and source-exposure report paths to a
-  temporary Map investigation overlay that highlights mapped endpoints and
-  retained transit evidence, dims unrelated topology, fits the focused path,
-  preserves saved layouts, and provides an explicit exit back to the normal map.
+## 2.7 Constrained-resource operation is a requirement
 
-### Device-role and switch evidence follow-up
+NCT must remain usable on limited range hardware. Avoid architecture that requires
+Kubernetes, Elasticsearch, Redis, or an external database cluster just to use core
+features.
 
-- [x] Allow Router and Firewall to be selected together in one device collection,
-  merge their read-only templates without duplicate commands, retain both roles,
-  and label the analyzed device and map object as `Router + Firewall` when the
-  collected evidence supports both functions.
-- [x] Run UniFi command sets through the guarded per-command wrapper so one
-  unavailable command no longer discards usable output from the rest of a pull.
-- [x] Add guarded UniFi switch fallbacks for platform, switch-control, forwarding,
-  VLAN, and spanning-tree evidence on firmware where standard Linux utilities are
-  absent.
-- [x] Parse retained UniFi `swctrl` physical-port state and learned MAC/VLAN
-  tables into structured switch ports, forwarding state, VLAN observations, and
-  endpoint-to-port evidence.
-- [x] Raise the bounded streamed configuration retention limit to 5 MB, report
-  truncation explicitly, and collect firewall tables before large address sets
-  so missing late evidence cannot masquerade as an empty policy.
-- [x] Mark failed device pulls as partial evidence in Device Analysis and warn
-  separately when a switch pull contains no structured port, learned-MAC,
-  aggregation, or spanning-tree records.
-- [x] Deduplicate repeated config-derived Saved Network suggestions by current
-  device/interface path while retaining the newest supporting source.
-- [ ] Rerun the revised profile against representative UniFi switch models and add
-  parser fixtures for their actual retained `mca-cli-op`, `swctrl`, and `stp`
-  formats. Do not infer missing Layer-2 relationships from the older partial pulls.
+---
 
-### Future extension — Hardening Validation
+# 3. Performance Budgets
 
-- [x] Simulate proposed firewall, ACL, or routing controls without changing
-  production devices.
-  - [x] Add a read-only exact-flow policy projection for retained routers and
-    firewalls. Compare the current outcome with a proposed permit or deny on a
-    selected device, show source attachment and address-pair scope, preserve
-    evidence and caveats, and export the complete comparison as JSON.
-  - [x] Add proposed route insertion, removal, and metric/preference changes.
-    - [x] Add read-only retained-device route insertion/removal comparison with
-      exact destination coverage, retained-interface validation, broader-route
-      fallback visibility, evidence/caveats, and JSON export.
-    - [x] Add metric/preference changes and vendor-neutral path-choice modeling
-      for equally specific routes with complete comparable retained values.
-- [x] Compare current and proposed paths, retained alternate routes, and bounded
-  collateral scope. State when only one representative flow was evaluated and
-  never extrapolate a route prefix into untested service/policy conclusions.
-- [x] Export evidence-backed hardening reports and open current-to-projected
-  results as temporary Map focus comparisons. Keep the overlay browser-local
-  and leave saved map layouts unchanged.
+Interactive responsiveness is a design gate, not an afterthought.
 
-### End-of-roadmap fringe-vendor validation
+| Operation | Target |
+|---|---:|
+| Normal page load | < 500 ms |
+| Cached Analyze results | < 1 sec |
+| Normal filter/pivot | < 1 sec |
+| Dashboard cross-filter | < 2 sec |
+| Timeline filter | < 2 sec |
+| Complex telemetry query | < 3–5 sec |
+| Opening previously processed evidence | Near-immediate |
 
-- [ ] Return to Juniper only after the primary mission vendor work and all other
-  planned capabilities are complete. Validate zone-default policy, collection,
-  parsing, and Reach behavior against representative retained Juniper evidence;
-  do not let this fringe case block UniFi, Cisco, VyOS, or pfSense delivery.
+Long-running ingestion/enrichment may exceed these limits, but existing completed
+analysis must remain usable while background work continues.
 
-## Release discipline
+---
 
-Every release should be built and tested locally, checked against existing and
-new data, packaged with offline dependencies where required, deployed by a short
-final swap, smoke-tested, and kept independently rollbackable. Scan-engine,
-device-analysis, map, and reachability redesigns must remain separate releases.
+# 4. Entity Lifecycle and “Going Dark”
 
-Local completion means development-ready only. Range-ready requires the pinned
-artifact to pass the documented compatibility matrix on representative older
-hosts and real network equipment, with limitations and workarounds recorded.
-Mission-ready requires that same artifact to pass the modern server baseline,
-security, authentication, TLS, backup/restore, monitoring, restart, and rollback
-gates; no successful local or range run may waive those controls.
+Hosts, ports, services, routes, and communication relationships are **not deleted**
+simply because they are no longer seen.
 
-Regression checks include scan creation, Saved Networks, manual targets,
-No-Strike behavior, FPING, TCP, UDP, storage, history, analysis, deletion, device
-collection/history, migration, and map loading.
+Each entity should retain:
+
+- First seen
+- Last seen
+- Last actively assessed
+- Last passively observed
+- Last positively confirmed state
+- Current evidence state
+- Historical states
+- Evidence sources
+- Confidence
+- Link to supporting evidence
+
+Example:
+
+```text
+10.20.4.17 TCP/8443
+
+First seen:            18 Sep 2026 14:12
+Last seen:             27 Sep 2026 09:42
+Last active scan:      26 Sep 2026 08:31
+Last passive evidence: 27 Sep 2026 09:42
+
+Active state:          Not assessed since 26 Sep
+Passive state:         Not observed after 09:42
+Overall:               Historical / previously observed
+
+[ View Last Evidence ]
+```
+
+## 4.1 Last Seen must always lead to evidence
+
+A Last Seen timestamp should link to the evidence record that established it.
+
+If detailed telemetry has expired under retention policy, NCT retains a lightweight
+**evidence receipt** with:
+
+- Entity/relationship
+- Timestamp/window
+- Evidence source
+- Import ID
+- Count represented
+- Original artifact provenance
+- Retention status
+
+Pinned evidence attached to an Investigation Lens, Finding, Recommendation, or
+Report is protected from automatic pruning.
+
+---
+
+# 5. Core Data Architecture
+
+NCT will separate data into four layers.
+
+## 5.1 Source Artifacts
+
+Examples:
+
+- Nmap XML
+- Arkime exports
+- Kibana/Elastic exports
+- Router/firewall/switch configuration
+- CLI command output
+- Analyst imports
+
+Each artifact receives:
+
+- Artifact ID
+- Cryptographic content hash
+- Source type
+- Owner/analyst
+- First imported
+- Last encountered
+- Parser version
+- Processing status
+
+Identical artifacts are not fully reprocessed.
+
+## 5.2 Normalized Facts
+
+Canonical entities include:
+
+- Host
+- IP
+- MAC
+- Subnet
+- Port
+- Protocol
+- Service
+- Device
+- Interface
+- Route
+- Policy
+- NAT relationship
+- Communication relationship
+- Observation
+
+The application works from normalized facts rather than reparsing source files.
+
+## 5.3 Derived Knowledge
+
+Persist results such as:
+
+- Searchsploit enrichment
+- Service identity
+- Scan comparison
+- Active/passive correlation
+- Reachability
+- Network paths
+- Timeline events
+- Findings
+- Hardening recommendations
+- Coverage/blind-spot assessments
+
+Each result records its inputs, dependencies, analysis version, generation time,
+and current/stale state.
+
+## 5.4 Analyst-Ready Read Models
+
+Prepared views should support fast reads for:
+
+- Current hosts
+- Current services
+- Current routes
+- Current findings
+- Current passive relationships
+- Active/passive mismatches
+- Historical changes
+- Timeline events
+- Evidence coverage
+- Crew Lead summaries
+
+---
+
+# 6. Storage Strategy
+
+## 6.1 SQLite
+
+Continue using SQLite for structured application state:
+
+- Users/roles
+- Settings
+- Saved networks
+- Artifacts
+- Hosts/services
+- Devices/routes
+- Findings/recommendations
+- Enrichment cache
+- Jobs
+- Lenses
+- Dashboards
+- Tasks
+- Comments
+- Report definitions
+- Audit/provenance
+
+Required reliability work:
+
+- WAL mode
+- Busy timeout
+- Short transactions
+- Controlled write paths
+- Reduced repeated initialization
+- Removal of unnecessary storage initialization from normal read/API paths
+
+## 6.2 Parquet for higher-volume telemetry
+
+Arkime/session-style telemetry may be stored in columnar files rather than inflated
+SQLite tables.
+
+## 6.3 DuckDB evaluation
+
+Evaluate embedded DuckDB queries over Parquet for fast local analytics without
+adding another server.
+
+No core requirement for PostgreSQL, Elasticsearch, Redis, or Kubernetes.
+
+---
+
+# 7. Searchsploit and Enrichment Strategy
+
+Searchsploit must not rerun per host when the same service fingerprint repeats.
+
+Example:
+
+```text
+143 hosts → OpenSSH 9.2 → one enrichment record
+ 78 hosts → nginx 1.24   → one enrichment record
+```
+
+Enrichment keys should use normalized service fingerprints such as product,
+version, CPE, and relevant protocol identity.
+
+Re-enrich only when:
+
+- Fingerprint changes
+- Searchsploit dataset changes
+- Enrichment logic version changes
+- Analyst explicitly requests refresh
+
+Previously valid results remain available while an update is processing.
+
+---
+
+# 8. Processing and Dependency Model
+
+## 8.1 Persistent jobs
+
+Long-running work uses a persistent job model:
+
+- Queued
+- Processing
+- Complete
+- Partial
+- Failed
+- Cancelled
+
+One failed item should not invalidate all useful completed work.
+
+## 8.2 Worker model
+
+Conceptually:
+
+```text
+Web/API
+  ├─ Read persisted results
+  └─ Queue work
+        ↓
+      Worker
+        ↓
+     Persist
+```
+
+Keep implementation lightweight.
+
+## 8.3 Dirty-state tracking
+
+Example:
+
+```text
+Service analysis      CURRENT
+Searchsploit           CURRENT
+Arkime correlation     STALE
+Route analysis         CURRENT
+Hardening              STALE
+```
+
+Only stale dependent analysis reruns.
+
+## 8.4 Analysis versioning
+
+Persist parser/engine versions so an upgrade only invalidates results affected by
+changed logic.
+
+---
+
+# PHASE 0 — Protect, Inventory, and Benchmark
+
+**Purpose:** Preserve the stable system and establish objective baselines before
+foundational changes.
+
+## Steps
+
+1. Keep `main` untouched as the stable baseline.
+2. Perform foundational development on `foundation/evidence-engine-v2`.
+3. Inventory current:
+   - schema
+   - data locations
+   - scan pipeline
+   - Searchsploit pipeline
+   - Analyze/Hunt/Reach/Map behavior
+   - device parsing
+   - exports
+   - background work
+4. Build repeatable test datasets:
+   - small network
+   - medium network
+   - large/range network
+   - TCP
+   - UDP
+   - combined
+   - historical scans
+   - device configurations
+   - enrichment-heavy cases
+5. Record baseline:
+   - CPU
+   - RAM
+   - disk
+   - DB size
+   - page load
+   - query duration
+   - enrichment duration
+6. Preserve old-range Docker compatibility and offline operation.
+
+## Exit criteria
+
+- Stable rollback exists.
+- Baseline metrics exist.
+- Representative regression datasets exist.
+- Current architecture is documented.
+
+---
+
+# PHASE 1 — Persistent Data & Analysis Engine v2
+
+**Purpose:** Stop repeated analysis and create the foundation for all later features.
+
+## Steps
+
+1. Artifact hashing and deduplication.
+2. Canonical host/service/network/device entities.
+3. Separate observations from entities.
+4. Delta detection:
+   - new
+   - changed
+   - unchanged
+   - no longer observed
+   - not assessed
+5. Searchsploit cache redesign.
+6. Persistent derived results.
+7. Dirty-state tracking.
+8. Dependency graph.
+9. Analysis versioning.
+10. Persistent jobs and partial failure.
+11. Lightweight worker.
+12. SQLite WAL/busy-timeout/transaction remediation.
+13. Current-state read models.
+14. Last Seen + evidence receipt model.
+15. Benchmark against Phase 0 datasets.
+
+## Exit criteria
+
+- Reopening a page does not recreate expensive analysis.
+- Duplicate imports do not reproduce work.
+- Duplicate service fingerprints do not reproduce enrichment.
+- Failed enrichment does not destroy previous valid analysis.
+- Last Seen remains traceable.
+
+---
+
+# PHASE 2 — Existing Characterization Refactor
+
+**Purpose:** Move current capabilities onto the persistent engine before adding
+high-volume passive evidence.
+
+## Steps
+
+1. Preserve and improve Saved Networks.
+2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
+3. Saved scan profiles:
+   - TCP
+   - UDP
+   - TCP + UDP
+   - FPING
+   - Traceroute
+   - ICS-oriented
+   - Custom
+4. Retain scan creator/callsign, profile, target, protocol, scheduling context.
+5. Improve progress and bounded ETA.
+6. Resolve combined TCP/UDP reliability issues.
+7. Make historical Analyze reopen full persisted analysis.
+8. Expand scan comparison:
+   - hosts
+   - ports
+   - protocols
+   - services
+   - versions
+   - OS
+   - MAC
+   - identity
+9. Device-config persistence/comparison/deletion.
+10. Collapsible/filterable route/config displays.
+11. Consolidate TXT/IP-by-OS and related exports into Export Manager.
+
+---
+
+# PHASE 3 — Mission Environment, Tool Access, and Blind Spots
+
+**Purpose:** Teach NCT what collection tools exist, what is authorized, and what
+cannot be seen.
+
+## 3.1 Mission Environment settings
+
+Under the settings/hamburger menu, define the hunt environment:
+
+- Arkime version
+- Kibana/Elastic version
+- Nmap availability/version
+- Device-config availability
+- Access method
+- Network scope
+- Authorization constraints
+
+## 3.2 Authorization scope
+
+Examples:
+
+```text
+10.10.0.0/16 — Nmap authorized
+10.20.0.0/16 — Nmap prohibited
+10.30.0.0/16 — authorization unknown
+```
+
+NCT must never equate tool availability with authorization.
+
+## 3.3 Device evidence availability
+
+Examples:
+
+- Full configuration
+- Partial configuration
+- Command output only
+- Analyst-known/manual
+- Unavailable
+
+## 3.4 Coverage matrix
+
+Show per-network evidence availability:
+
+| Network | Nmap | Arkime | Kibana | Config |
+|---|---|---|---|---|
+| Engineering | Available | Available | Available | Partial |
+| DMZ | Prohibited | Available | Available | Available |
+| Management | Available | None | Available | Partial |
+
+## 3.5 Blind spots
+
+Explicitly model:
+
+- No passive coverage
+- Active scan prohibited
+- Missing configuration
+- Unknown NAT
+- Partial route knowledge
+- Telemetry gap
+- Stale evidence
+- Unsupported parser/field mapping
+
+## 3.6 Adaptive UI
+
+Only show relevant pivots for the configured environment.
+
+If the team has Arkime + Kibana only, do not produce filters for 15 unrelated
+products.
+
+---
+
+# PHASE 4 — Manual and Partial Evidence Intake
+
+**Purpose:** Allow analysts to partially fill gaps without pretending the evidence
+was machine-collected.
+
+## Intake modes
+
+- Paste configuration
+- Paste CLI output
+- Structured device form
+- Manual interface
+- Manual route
+- Manual ACL/policy
+- Manual NAT relationship
+- Manual service
+- Manual host relationship
+- Analyst observation
+
+## Provenance
+
+Manual evidence records:
+
+- Analyst
+- Callsign
+- Time
+- Source description
+- Confidence
+- Notes
+
+Manual evidence can participate in Map/Reach/Hunt/etc., but remains visually
+distinct from collected evidence.
+
+---
+
+# PHASE 5 — Universal Query and Pivot Engine
+
+**Purpose:** Make every meaningful object a launch point for deeper investigation.
+
+## Common context
+
+- Host
+- IP
+- Subnet
+- Port
+- Protocol
+- Service
+- Source
+- Destination
+- Time range
+- Evidence source
+
+## Contextual actions
+
+- Analyze
+- Hunt
+- Timeline
+- Reach
+- Map
+- Generate Arkime filter
+- Generate Kibana filter
+- Add to Lens
+- Add to Dashboard
+- Pin to Report
+- Create Finding
+- Create Recommendation
+
+## Filter generation
+
+Provide:
+
+- **Minimal** — shortest useful filter
+- **Narrow** — additional context
+- **Exact** — isolate specific evidence when practical
+
+Always include the required timeframe when known.
+
+## Kibana profiles
+
+Map logical fields to the environment's actual schema.
+
+---
+
+# PHASE 6 — Arkime and Passive Characterization
+
+**Purpose:** Make passive traffic capable of standing on its own when Nmap is
+unavailable or prohibited.
+
+Arkime support must be **tiered**.
+
+## 6.1 Tier A — Summary export
+
+Lowest-cost/manual option.
+
+Support exports such as:
+
+- Destination IP
+- Destination port
+- Counts
+- Source/destination relationship summaries
+
+## 6.2 Tier B — Connections export
+
+Import aggregated connection relationships when available.
+
+## 6.3 Tier C — Sessions CSV
+
+Import selected session metadata such as:
+
+- First packet
+- Last packet
+- Source IP
+- Source port
+- Destination IP
+- Destination port
+- Transport
+- Detected protocol/application
+- Packets
+- Bytes
+- Session/reference ID
+
+## 6.4 Tier D — Sessions JSON / structured export
+
+Use machine-readable structured exports where available.
+
+## 6.5 Tier E — Read-only API
+
+Optional. NCT requests only the fields and time windows needed for
+characterization.
+
+NCT does **not** ingest full PCAP as part of normal characterization.
+
+## 6.6 Guided access and export instructions
+
+Mission Environment must provide per-method instructions for:
+
+- What Arkime access/role is required
+- How to request access from the environment administrator
+- Which page/API to use
+- Exact filter NCT recommends
+- Required timeframe
+- Required fields
+- Export steps
+- Import steps
+
+Manual/offline export remains supported even when API integration exists.
+
+## 6.7 Coverage tracking
+
+Track:
+
+- Coverage start/end
+- Gaps
+- Network scope
+- Collection method
+- Source/import ID
+
+## 6.8 Recommended collection window
+
+Generate the smallest useful next window with a configurable overlap buffer to
+avoid gaps. NCT deduplicates overlap.
+
+## 6.9 Passive-only characterization
+
+A host/port relationship can exist based solely on passive evidence.
+
+Label clearly:
+
+- **Passively observed**
+- **Not actively validated**
+
+Do not claim a listener is open unless evidence supports that conclusion.
+
+## 6.10 Communication aggregation
+
+Collapse repetitive sessions into durable summaries:
+
+```text
+10.20.1.17 → 10.20.4.22 TCP/443
+First seen
+Last seen
+Session count
+Packet count
+Byte count
+Detected protocol
+Evidence source(s)
+```
+
+## 6.11 Active/passive correlation
+
+Support:
+
+- Open + observed
+- Open + not passively observed
+- Closed/filtered + observed
+- Not scanned + observed
+- Service identity mismatch
+- Historical state change
+
+Use neutral terminology such as **Observed / Scan Mismatch**.
+
+---
+
+# PHASE 7 — Hunt Timeline and Investigation Lenses
+
+## 7.1 Hunt Timeline
+
+Timeline lanes may include:
+
+- Nmap
+- Arkime
+- Kibana
+- Device configuration
+- Routes
+- Policies
+- Findings
+- Recommendations
+- Analyst notes
+
+Selecting a time range filters Hunt evidence.
+
+## 7.2 Hunt categories
+
+Retain and improve groupings such as:
+
+- SSH
+- RDP
+- FTP
+- SFTP
+- SMB
+- Remote Access
+- File Transfer
+- Web
+- Identity
+- Databases
+- Network Management
+
+## 7.3 Investigation Lens
+
+A Lens stores:
+
+- Entities
+- Networks
+- Ports
+- Protocols
+- Services
+- Time range
+- Evidence sources
+- Filters
+- Notes
+- Pinned evidence
+
+## 7.4 Lens lifecycle
+
+```text
+PRIVATE DRAFT
+    ↓
+SHARED INVESTIGATION
+    ↓
+FINDING
+    ↓
+RECOMMENDATION / REPORT
+```
+
+A private investigation does not automatically expose all analyst scratch work.
+
+## 7.5 Sharing
+
+Support:
+
+- Private
+- Selected analysts
+- Crew
+- Crew Lead
+
+Pinned evidence is protected from automatic retention cleanup.
+
+---
+
+# PHASE 8 — Crew Operations and Collaboration
+
+**Purpose:** Support CPT continuity and leadership oversight without building a
+general-purpose chat platform.
+
+## 8.1 Roles
+
+Separate:
+
+- Analyst
+- Crew Lead
+- Administrator
+
+One account may hold multiple roles.
+
+## 8.2 Callsigns
+
+Accounts may have:
+
+- Canonical/professional identity
+- Optional callsign/display alias
+
+UI may show the callsign while provenance/audit retains canonical identity.
+
+## 8.3 Crew Lead View
+
+Provide a consolidated view of:
+
+- Analysts
+- Areas of responsibility
+- Active investigations
+- Shared Lenses
+- Findings
+- Tasks
+- Scans
+- Uploads
+- Imported artifacts
+- Recommendations
+- Recent activity
+- Evidence freshness
+
+Do **not** create opaque productivity scores.
+
+## 8.4 Investigation continuity
+
+Crew Lead can open a shared investigation and understand:
+
+- Scope
+- Evidence
+- Notes
+- Filters
+- Uploads
+- Findings
+- Outstanding tasks
+- Last activity
+
+This supports continuity when an analyst is absent or leaves.
+
+## 8.5 Tasking
+
+Replace the current lightweight note concept with structured tasks:
+
+- Rescan network
+- Investigate host
+- Validate service
+- Collect Arkime data
+- Collect Kibana data
+- Obtain configuration
+- Validate route
+- Review finding
+- Review recommendation
+- Custom
+
+Tasks may link directly to evidence and, when authorized, provide an action such
+as **Run Scan**.
+
+Task states:
+
+- Assigned
+- In Progress
+- Blocked
+- Complete
+- Cancelled
+
+## 8.6 Context comments/mentions
+
+Allow comments tied to a Task, Lens, Finding, or Recommendation.
+
+Do not expand into full instant messaging, channels, calls, or Teams-like features.
+
+---
+
+# PHASE 9 — Reach and Map Evolution
+
+## 9.1 Reach
+
+Reach must reflect selected source, destination, and protocol, and distinguish:
+
+- Route evidence
+- Policy evidence
+- NAT evidence
+- Unknown segments
+- Manual evidence
+
+Unknown portions of the path must remain visibly unknown.
+
+## 9.2 Dynamic map workspace
+
+The map should behave like an unbounded camera over a sane graph coordinate space,
+not like a fixed sheet of paper.
+
+## 9.3 Initial map behavior
+
+On page entry:
+
+```text
+Load graph
+  ↓
+Complete layout
+  ↓
+Calculate bounds
+  ↓
+Fit to viewport with padding
+```
+
+## 9.4 Separate camera from node geometry
+
+Panning and zooming move the camera. They must **never** directly alter node
+coordinates or inject node velocity.
+
+## 9.5 Runaway-node protection
+
+Current observed defect: objects may dislodge during scroll/pan and shoot toward
+the workspace boundary.
+
+Before expanding the map model, implement:
+
+- Maximum frame displacement
+- Maximum node velocity
+- Last stable coordinate
+- Invalid-coordinate detection
+- Automatic rollback to last stable position
+- Outlier rejection before Fit bounds calculation
+- Reset Layout control
+
+An unbounded camera must not turn a runaway-node bug into infinite graph expansion.
+
+## 9.6 Freeze physics
+
+Recommended behavior:
+
+```text
+Load
+  ↓
+Run layout
+  ↓
+Stabilize
+  ↓
+Freeze node positions
+  ↓
+Fit
+```
+
+Do not keep global force simulation running indefinitely.
+
+New objects should use local/relevant layout where practical.
+
+## 9.7 Layout lock
+
+Default to a stable/locked layout for investigation.
+
+Explicit Edit/Unlock mode enables node movement.
+
+Persist stable coordinates.
+
+## 9.8 Large-map controls
+
+Support:
+
+- Pan
+- Zoom
+- Fit
+- Center selection
+- Focus subnet
+- Reset layout
+- Clustering/grouping
+- Progressive detail
+- Reduced labels at low zoom
+
+---
+
+# PHASE 10 — Hardening Recommendation Workflow
+
+## 10.1 Automated recommendations
+
+Start with explainable deterministic rules.
+
+Categories may include:
+
+- Exposure
+- Segmentation
+- Legacy/Insecure Services
+- Management Plane
+- Routing
+- ACL/Firewall/NAT
+- Unexpected Communications
+- Service Mismatch
+- Configuration Hygiene
+- Observability Gaps
+
+## 10.2 Recommendation template
+
+Analyst-generated recommendation fields:
+
+- Title
+- Category
+- Affected entities
+- Observation
+- Security concern
+- Supporting evidence
+- Proposed action
+- Expected effect
+- Validation method
+- Known limitations
+- Analyst notes
+
+## 10.3 Approval workflow
+
+```text
+DRAFT
+  ↓
+SUBMITTED
+  ↓
+CREW LEAD REVIEW
+  ├─ Return for revision
+  ├─ Reject
+  └─ Approve
+       ↓
+APPROVED RECOMMENDATIONS
+```
+
+## 10.4 Evidence linking
+
+Recommendations may link to:
+
+- Scan evidence
+- Arkime evidence
+- Kibana evidence
+- Configurations
+- Routes
+- Maps
+- Timeline events
+- Manual evidence
+- Analyst observations
+
+## 10.5 Deduplication
+
+Repeated detection updates:
+
+- First seen
+- Last seen
+- Occurrence count
+- Current status
+
+Do not create endless duplicate findings.
+
+## 10.6 Hardening simulation
+
+Simulate proposed controls without modifying production devices.
+
+Retain:
+
+- Before state
+- Proposed state
+- Predicted affected paths
+- Potentially impacted hosts/services
+- Unknown impacts
+
+Simulation results may be attached to recommendations and leadership reports.
+
+---
+
+# PHASE 11 — Analyst Dashboard
+
+**Purpose:** Build a focused investigation workspace after the evidence engine is
+mature enough to support it efficiently.
+
+## 11.1 Lens-driven dashboard
+
+Every dashboard uses a shared investigation context.
+
+## 11.2 Initial widgets
+
+Candidate widgets:
+
+- Hunt Timeline
+- Hosts observed over time
+- Services observed over time
+- Active vs passive port/service state
+- Nmap/Arkime mismatches
+- New services
+- Lost services
+- Communication pairs
+- Traffic volume
+- Protocol distribution
+- Subnet-to-subnet communication
+- External communication
+- Host/service matrix
+- Reachability summary
+- Exposure by subnet
+- Changes from baseline
+- Findings
+- Hardening recommendations
+- Evidence table
+- Mini topology
+
+## 11.3 Cross filtering
+
+Selecting a host, service, port, subnet, or time range should update compatible
+widgets.
+
+## 11.4 Saved/shared dashboards
+
+Support:
+
+- Private dashboards
+- Shared dashboards
+- Crew templates
+
+## 11.5 Pin to Report
+
+Allow entire dashboards or individual widgets to be pinned into Report Composer.
+
+---
+
+# CROSS-CUTTING WORKSTREAM A — Report Composer / Export Manager
+
+This remains a **key leadership-facing capability** and must be developed
+throughout the roadmap rather than treated as an afterthought.
+
+## A.1 Goal
+
+Leadership should be able to receive exactly the evidence and visualizations the
+team intends to present, in the order and format required.
+
+## A.2 Pin from anywhere
+
+Any relevant object should support **Pin to Report**, including:
+
+- Dashboard
+- Dashboard widget
+- Graph
+- Timeline
+- Map
+- Table
+- Scan comparison
+- Hunt evidence
+- Reach result
+- Route
+- Finding
+- Recommendation
+- Hardening simulation
+- Analyst note
+
+## A.3 Report workspace
+
+Allow:
+
+- Add/remove sections
+- Drag/reorder
+- Section headings
+- Analyst-entered narrative
+- Snapshot timestamps
+- Source/provenance references
+
+Example sections:
+
+- Executive Summary
+- Mission Coverage
+- Network Overview
+- Investigation Timeline
+- Key Findings
+- Approved Hardening Recommendations
+- Simulation Results
+- Appendices
+
+## A.4 Snapshot semantics
+
+Pinned material stores:
+
+- Capture time
+- Lens/filter state
+- Evidence version
+- Underlying provenance
+
+Reports should not silently change when new evidence arrives.
+
+Optionally allow **Refresh to Current** with a visible indication of what changed.
+
+## A.5 Export formats
+
+Support where appropriate:
+
+- TXT
+- CSV
+- JSON
+- Markdown
+- HTML
+- PDF
+
+---
+
+# CROSS-CUTTING WORKSTREAM B — Retention and Compaction
+
+## B.1 Retention classes
+
+### Source artifacts
+Unique artifacts retained according to mission policy and compressed where practical.
+
+### Detailed passive telemetry
+Configurable retention:
+- 7 days
+- 14 days
+- 30 days
+- Mission duration
+- Custom
+
+### Aggregated relationships
+Retain long-term because they are relatively inexpensive.
+
+### Findings/recommendations
+Retain until intentionally removed.
+
+### Pinned evidence
+Protect from automatic pruning.
+
+## B.2 Compaction
+
+Detailed telemetry may compact into durable relationship summaries after the
+retention threshold.
+
+## B.3 Storage visibility
+
+Show:
+
+- SQLite size
+- Artifact size
+- Passive telemetry size
+- Pinned evidence size
+- Retention estimate
+
+---
+
+# CROSS-CUTTING WORKSTREAM C — Investigation Notebook / Obsidian Compatibility
+
+Do **not** make Obsidian a runtime dependency.
+
+Instead support export of a structured Markdown investigation notebook, e.g.:
+
+```text
+Investigation.md
+Hosts/
+Devices/
+Findings/
+Recommendations/
+Evidence/
+Attachments/
+```
+
+Use normal Markdown links/backlinks so analysts may open the exported workspace in
+Obsidian or similar tools without adding runtime bloat to NCT.
+
+---
+
+# CROSS-CUTTING WORKSTREAM D — Deployment and Reliability
+
+Maintain:
+
+- Offline operation
+- Constrained-range compatibility
+- Older Docker path
+- Modern Docker/Compose path
+- Default port 8445
+- Port-availability checks
+- Simple username/password utilities
+- Health diagnostics
+- Recovery procedures
+- Rollback
+
+Health should expose:
+
+- Database state
+- Worker state
+- Queue
+- Failed jobs
+- Disk usage
+- Retention status
+- Analysis versions
+- Evidence coverage
+
+---
+
+# 12. Product Identity
+
+The working project name is:
+
+# **NCT — Network Correlation & Triage**
+
+This better represents the expanded mission than “Network Characterization Tool”
+while retaining the existing NCT identity.
+
+Characterization remains a core capability, but the platform now also encompasses:
+
+- Correlation
+- Passive characterization
+- Hunt/triage
+- Investigation
+- Reachability
+- Hardening
+- Crew workflow
+- Reporting
+
+The name may be revisited later, but **Network Correlation & Triage** is the
+working expansion and should be used in roadmap/design discussions moving forward.
+
+---
+
+# 13. Development Gates
+
+## Gate 1 — Persistence
+
+Do not begin high-volume passive integration until:
+
+- Deduplication works
+- Enrichment cache works
+- Persistent jobs work
+- Page navigation does not recreate analysis
+- SQLite reliability is improved
+- Delta processing works
+- Last Seen/evidence provenance works
+
+## Gate 2 — Passive Characterization
+
+Do not begin advanced timeline/dashboard work until:
+
+- Arkime works without Nmap
+- Passive evidence provenance is reliable
+- Aggregation works
+- Retention works
+- Coverage gaps are explicit
+- Summary and richer ingestion modes both work
+
+## Gate 3 — Collaboration
+
+Do not rely on Crew Lead workflow until:
+
+- Lens ownership exists
+- Sharing permissions exist
+- Canonical identity/provenance exists
+- Callsign and canonical identity are separated
+
+## Gate 4 — Dashboard
+
+Dashboard widgets must query normalized/prepared evidence. They may not reparse
+source artifacts as part of normal interaction.
+
+---
+
+# 14. Development Order
+
+```text
+PHASE 0  Protect + Benchmark
+   ↓
+PHASE 1  Persistent Data / Analysis Engine
+   ↓
+PHASE 2  Existing Characterization Refactor
+   ↓
+PHASE 3  Mission Environment + Blind Spots
+   ↓
+PHASE 4  Manual / Partial Evidence
+   ↓
+PHASE 5  Universal Query / Pivot Engine
+   ↓
+PHASE 6  Arkime + Passive Characterization
+   ↓
+PHASE 7  Hunt Timeline + Lenses
+   ↓
+PHASE 8  Crew Operations + Tasking
+   ↓
+PHASE 9  Reach + Map Evolution
+   ↓
+PHASE 10 Hardening + Simulation
+   ↓
+PHASE 11 Dashboard
+```
+
+The following run horizontally across phases:
+
+- Report Composer / Export Manager
+- Retention and compaction
+- Provenance
+- Deployment
+- Performance
+- Testing
+- Documentation
+
+---
+
+# 15. Immediate Next Implementation Target
+
+After this roadmap is accepted, the first implementation milestone is:
+
+## **Data & Analysis Engine v2**
+
+1. Inventory current schema and processing paths.
+2. Add artifact hashing/deduplication.
+3. Establish canonical host/service entities.
+4. Establish observation records.
+5. Implement delta detection.
+6. Redesign Searchsploit caching.
+7. Persist enrichment results.
+8. Add analysis versioning.
+9. Add dirty-state tracking.
+10. Implement persistent jobs.
+11. Move expensive operations out of request/page handling.
+12. Enable SQLite WAL/busy timeout and reduce contention.
+13. Build current-state read models.
+14. Implement Last Seen + evidence receipt behavior.
+15. Benchmark against Phase 0 datasets.
+
+Only after this foundation behaves reliably should NCT begin high-volume passive
+evidence ingestion.
+
+---
+
+# 16. Definition of Success
+
+The redesign succeeds when:
+
+1. An analyst ingests evidence once and can immediately reuse its conclusions
+   throughout NCT.
+2. NCT remains useful when Nmap is unavailable or prohibited.
+3. The system knows the difference between **not present** and **not visible**.
+4. Hosts/services can go dark without losing historical truth.
+5. Every Last Seen state can lead back to evidence or an evidence receipt.
+6. Analysts can leave and return without losing processing or context.
+7. Crew Leads can understand team activity and continue another analyst's work.
+8. Findings and recommendations retain defensible provenance.
+9. Hardening changes can be simulated before recommendation approval.
+10. Leadership can compose exact reports from selected evidence and dashboards.
+11. More retained knowledge does not automatically mean slower interactive use.
+12. NCT becomes progressively more knowledgeable through **incremental learning**,
+    not progressively slower through repeated full re-analysis.
