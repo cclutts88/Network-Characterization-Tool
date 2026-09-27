@@ -665,6 +665,27 @@ foundational changes.
    **609 passed**, final independent focused suite **96 passed**, and live browser
    create/edit/archive, pin/follow, border, resize/dock/scroll and shortcut behavior
    passed. Evidence assignment and correction remain the next separate foundation step.
+   2026-09-27 assignment-contract start: add a storage-first, observation-level
+   whole-artifact assignment chain before any route or production-ingestion wiring.
+   Corrections must append an immutable successor, retain the original assessment and
+   link replacement assessments without changing scope in place. No CIDR, Saved
+   Network, target, filename or content-hash scope inference is allowed. Database
+   immutability for endpoint entities, assessments and receipts is a prerequisite;
+   route/UI and adapter wiring remain halted until those invariants pass review.
+   Assignment-contract completion: one append-only whole-artifact assignment chain
+   now attaches each decision to an Artifact Registry observation rather than shared
+   bytes. Corrections require the exact current assignment, append one successor and
+   preserve the prior scope and evidence. Immutable many-to-many assessment links
+   support multiple parser versions and safe future reuse. Database constraints block
+   duplicate roots, branches, cross-observation and same-scope successors, archived
+   destinations, legacy-assessment bypass, mismatched links, malformed provenance and
+   all entity/receipt/assessment/assignment/link mutation or deletion. The first review
+   halted on a direct legacy-root bypass and incomplete audit fields; both were fixed
+   and adversarially rechecked. **QUALITY GATE: CLEAR**; full Docker suite **617 passed**
+   and independent focused suite **53 passed**. Route/UI and Nmap adapter wiring remain
+   deliberately disabled until current-assignment recheck, assessment/receipt creation
+   and assignment linking can commit atomically. See
+   [assignment contract](docs/EVIDENCE_SCOPE_ASSIGNMENTS.md).
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.

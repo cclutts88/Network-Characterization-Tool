@@ -104,6 +104,36 @@ def init_entity_storage(db_path: Path) -> None:
                     WHERE scope_id = NEW.scope_id AND active = 1
                 )
                 BEGIN SELECT RAISE(ABORT, 'network scope is missing or archived'); END;
+            CREATE TRIGGER IF NOT EXISTS endpoint_entities_no_update
+                BEFORE UPDATE ON endpoint_entities
+                BEGIN SELECT RAISE(ABORT, 'endpoint entities are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS endpoint_entities_no_delete
+                BEFORE DELETE ON endpoint_entities
+                BEGIN SELECT RAISE(ABORT, 'endpoint entities are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS service_entities_no_update
+                BEFORE UPDATE ON service_entities
+                BEGIN SELECT RAISE(ABORT, 'service entities are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS service_entities_no_delete
+                BEFORE DELETE ON service_entities
+                BEGIN SELECT RAISE(ABORT, 'service entities are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS entity_assessments_no_update
+                BEFORE UPDATE ON entity_assessments
+                BEGIN SELECT RAISE(ABORT, 'entity assessments are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS entity_assessments_no_delete
+                BEFORE DELETE ON entity_assessments
+                BEGIN SELECT RAISE(ABORT, 'entity assessments are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS endpoint_receipts_no_update
+                BEFORE UPDATE ON endpoint_receipts
+                BEGIN SELECT RAISE(ABORT, 'endpoint receipts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS endpoint_receipts_no_delete
+                BEFORE DELETE ON endpoint_receipts
+                BEGIN SELECT RAISE(ABORT, 'endpoint receipts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS service_receipts_no_update
+                BEFORE UPDATE ON service_receipts
+                BEGIN SELECT RAISE(ABORT, 'service receipts are immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS service_receipts_no_delete
+                BEFORE DELETE ON service_receipts
+                BEGIN SELECT RAISE(ABORT, 'service receipts are immutable'); END;
         """)
 
 

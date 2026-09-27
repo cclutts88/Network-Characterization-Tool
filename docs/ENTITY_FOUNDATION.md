@@ -57,8 +57,11 @@ no latest/current-state selection or Last Seen calculation in this layer.
   Nmap's flattened command string does not identify which options consume values,
   targets are retained only for commands with unambiguous positional arguments;
   otherwise the raw command is kept and target arguments are explicitly unknown.
-- Operator scope creation/assignment, including mixed-scope artifact handling. The
-  adapter never infers scope from Saved Networks, CIDRs, targets or filenames.
+- Operator scope creation is available. Internal whole-artifact observation assignment
+  and immutable correction storage are implemented, but routes and adapter wiring stay
+  disabled until the assessment, receipts and assignment link can commit atomically.
+  Mixed-scope handling remains blocked. The adapter never infers scope from Saved
+  Networks, CIDRs, targets or filenames.
 - Production scan integration must prefer original protocol-phase XML when timing
   precision matters. NCT's combined `scan.xml` keeps the last phase's scan-finished
   time but does not attach a phase timestamp to each merged port observation.

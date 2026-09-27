@@ -1,7 +1,8 @@
 # Network scope registry
 
-The internal network scope registry provides stable context for address and service
-identity. It is foundation storage only and is not exposed through NCT routes or UI.
+The network scope registry provides stable context for address and service identity.
+Its reviewed administrator Settings page and API support scope creation, metadata,
+history and archive; they do not assign evidence or run ingestion.
 
 ## Identity and lifecycle
 
@@ -36,11 +37,15 @@ Pre-registry scope IDs are retained byte-for-byte as inactive legacy records wit
 immutable migration event. The migration does not rebuild or modify entity/receipt
 tables and is idempotent. Legacy scopes cannot silently accept new evidence.
 
-This slice deliberately omits evidence reassignment. A later correction model must
-retain the original assessment, create or reuse evidence under the active destination
-scope, and link both through an immutable correction/supersession event with actor,
-reason and time. Mixed-scope artifacts require a separately reviewed partition model;
-host-by-host scope must never be inferred from CIDRs or Saved Networks.
+The internal [evidence assignment contract](EVIDENCE_SCOPE_ASSIGNMENTS.md) now records
+whole-artifact observation assignments and immutable correction chains. It retains
+the original assignment and provides immutable links for original and replacement
+assessments. Route and ingestion wiring remain disabled until assessment, receipt and
+assignment-link creation can commit atomically under a rechecked current assignment.
+Mixed-scope artifacts still require a separately reviewed partition model; host-by-host
+scope must never be inferred from CIDRs or Saved Networks.
 
-Remaining work includes operator routes/UI, role authorization, scope assignment,
-correction/supersession, mixed-scope partitioning, read models and production migration.
+Remaining work includes assignment/correction routes and UI with their own reviewed
+role authorization, atomic ingestion linking, mixed-scope partitioning, read models
+and production migration. Existing scope-management routes already enforce the
+reviewed administrator/local-operator policy.
