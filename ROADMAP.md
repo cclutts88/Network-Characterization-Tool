@@ -619,13 +619,22 @@ foundational changes.
    - [x] Confirmed 30-second SQLite busy timeout.
    - [x] Removed repeated Saved Network schema/index DDL from normal access.
    - [x] Removed repeated scan-collaboration schema DDL from normal access.
-   - [~] Audit remaining storage modules for request-path initialization/DDL.
+   - [x] Audit remaining storage modules for repeated request-path initialization/DDL.
      [x] Workspace layouts now initialize once per database file rather than on
      every list/save/default operation. Reviewer CLEAR; 533 full Linux tests passed.
      Independently verified concurrent writer/read, simultaneous initialization,
-     replacement database, and initialization retry. Remaining candidates:
+     replacement database, and initialization retry. Additional corrected modules:
      achievements, exposure reports, host identities, OS overrides, investigation
-     notes, network semantics, and preference storage (audit not complete).
+     notes, network semantics, and preference storage.
+     [x] Shared once-per-database initialization completed for those eight modules.
+     Existing migrations and compatibility triggers remain intact; failed setup
+     retries, file replacement invalidates the cache, and startup runs migrations.
+     In-place database restoration requires an application restart.
+     Achievements now initializes at startup; lazy initialization remains supported
+     for standalone module callers. Reviewer CLEAR; 551 full Linux tests and 40
+     final startup/route tests passed. Auth/import schema setup is startup-only;
+     existing collection/cache guards remain; backfill setup occurs only on explicit
+     jobs. This does not claim all concurrent-write hazards or lock contention solved.
    - [ ] Review long write transactions and high-contention write paths.
 
    WAL and a 30-second busy timeout were already present before this redesign; the

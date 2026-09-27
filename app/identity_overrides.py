@@ -8,7 +8,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from app.database import connect_database
+from app.database import connect_database, initialize_once_per_database
 
 
 UNKNOWN_OS = {"", "unknown", "unknown os", "unclassified", "none", "n/a"}
@@ -42,6 +42,7 @@ def identity_key(ip: object = None, mac: object = None) -> str:
     raise ValueError("A valid host IP or MAC address is required")
 
 
+@initialize_once_per_database
 def init_os_override_storage(db_path: Path) -> None:
     with connect_database(db_path) as db:
         db.execute(

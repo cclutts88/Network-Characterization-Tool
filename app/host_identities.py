@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.database import connect_database
+from app.database import connect_database, initialize_once_per_database
 
 
 _HOSTNAME = re.compile(r"^[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_])?\.?$")
@@ -20,6 +20,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+@initialize_once_per_database
 def init_host_identity_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with connect_database(db_path) as db:

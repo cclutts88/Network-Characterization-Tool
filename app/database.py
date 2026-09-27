@@ -1,10 +1,45 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+from functools import wraps
 from pathlib import Path
 
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
+
+
+def initialize_once_per_database(initialize):
+    """Run a module's schema setup once per database file in this process.
+
+    A failed setup is retried. Replacing the database file invalidates the cache;
+    in-place restores or schema changes require an application restart.
+    """
+    ready = {}
+    lock = threading.RLock()
+
+    def identity(path):
+        try:
+            info = path.stat()
+            return info.st_dev, info.st_ino
+        except FileNotFoundError:
+            return None
+
+    @wraps(initialize)
+    def ensure(db_path: Path):
+        path = Path(db_path).resolve()
+        current = identity(path)
+        if current is not None and ready.get(path) == current:
+            return
+        with lock:
+            current = identity(path)
+            if current is not None and ready.get(path) == current:
+                return
+            initialize(path)
+            current = identity(path)
+            if current is not None:
+                ready[path] = current
+    return ensure
 
 
 class DatabaseConnection(sqlite3.Connection):

@@ -144,7 +144,7 @@ from app.auth import (
     set_user_disabled,
     verify_credentials,
 )
-from app.achievements import list_achievements, unlock_achievement
+from app.achievements import init_achievement_storage, list_achievements, unlock_achievement
 from app.workspaces import (
     WorkspaceConflict,
     delete_layout,
@@ -1182,6 +1182,7 @@ async def lifespan(_: FastAPI):
     init_poc_storage()
     init_device_analysis_storage(DB_PATH)
     init_auth_storage(DB_PATH)
+    init_achievement_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
     init_scan_collaboration_storage(DB_PATH)
     init_note_storage(DB_PATH)

@@ -4,9 +4,10 @@ import ipaddress
 import json
 from pathlib import Path
 
-from app.database import connect_database
+from app.database import connect_database, initialize_once_per_database
 
 
+@initialize_once_per_database
 def init_exposure_report_storage(db_path: Path) -> None:
     with connect_database(db_path) as db:
         db.execute(

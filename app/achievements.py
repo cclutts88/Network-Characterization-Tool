@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from app.database import connect_database
+from app.database import connect_database, initialize_once_per_database
 
 
 ACHIEVEMENTS = {
@@ -64,6 +64,7 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+@initialize_once_per_database
 def init_achievement_storage(db_path: Path) -> None:
     with connect_database(db_path) as db:
         db.execute(
