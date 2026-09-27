@@ -950,6 +950,11 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function resolveEndpointLabelCollisions" in html
     assert "function endpointLabelBounds" in html
     assert "function edgeMidpointLabelBounds" in html
+    assert "function suppressRedundantTransitDecorations" in html
+    assert "suppress_endpoint_labels:true" in html
+    assert "showEndpointLabels=!edge.suppress_endpoint_labels" in html
+    assert "function interfaceAddressIdentity" in html
+    assert "!endpointAddresses.has(interfaceAddressIdentity(address))" in html
     assert "label.dataset.labelOffset" in html
     assert "Interface IP addresses" in html
     assert "composite-annotation-fill" in html
