@@ -95,8 +95,11 @@ A roadmap item should only be marked complete when:
 - Recovery limitation: if an observation row itself was lost, backfill recreates a
   deterministic replacement ID. A legacy manifest's old ID is not rewritten; current
   evidence downloads use retained file paths. Existing observation IDs are preserved.
-- [~] Storage category presentation started: expose database size and evidence-folder
-  usage from the existing read-only inventory. No new background inventory work.
+- [x] Storage category presentation completed: database size and evidence-folder
+  usage exposed from the existing read-only inventory. Reviewer CLEAR; 57 focused
+  route/storage tests passed. Browser dry run, backfill, repeated backfill and report
+  persistence after preview restart verified; no browser console warnings/errors.
+- Preview acceptance checklist: [docs/STORAGE_PREVIEW_CHECKLIST.md](docs/STORAGE_PREVIEW_CHECKLIST.md).
 - User acceptance: provide a disposable running preview with scenarios and expected
   results; development verification does not imply user, Range, or main acceptance.
 
@@ -559,9 +562,9 @@ foundational changes.
    - [x] Legacy raw-import download compatibility preserved.
    - [x] Register automated Nmap run artifacts after execution writers close.
    - [x] Register collected device artifacts beyond manual uploads, including completed/failed SSH, preflight, command history and accountability files.
-   - [~] Existing-data backfill for retained imports and finalized scan/device evidence (manual-upload provenance review reopened).
+   - [x] Existing-data backfill for retained imports and finalized scan/device evidence (upload provenance corrected; independently reviewed; 530 Linux tests passing).
    - [x] Dry-run duplicate/storage analysis and Settings / System Health storage view.
-   - [~] Dry-run verification of known historical paths and registered content hashes (manual-upload integrity gap under independent review).
+   - [x] Dry-run verification of known historical paths and registered content hashes (upload integrity and observation-backed references corrected and independently reviewed).
    - [ ] Optional exact-content compaction.
    - [x] Restart-safe/resumable backfill checkpoints and persistent storage-job reports.
 
