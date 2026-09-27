@@ -154,12 +154,16 @@ def normalize_scan_options(value: Mapping[str, object] | None = None) -> dict:
         normalized["tcp_ports"] = normalize_port_expression(normalized["tcp_ports"], "TCP")
     if udp_scope == "custom":
         normalized["udp_ports"] = normalize_port_expression(normalized["udp_ports"], "UDP")
-    if protocol == "tcp_udp" and (tcp_scope.startswith("top_") or udp_scope.startswith("top_")):
-        raise ValueError(
-            "TCP + UDP requires independently defined Common, ICS, Custom, or All port scopes; "
-            "Nmap top-port counts cannot be set independently in one combined command"
-        )
     return normalized
+
+
+def requires_split_protocol_phases(value: Mapping[str, object] | None = None) -> bool:
+    """Return whether one Nmap command cannot represent the requested scopes."""
+    options = {**DEFAULT_SCAN_OPTIONS, **dict(value or {})}
+    return str(options.get("protocol")) == "tcp_udp" and (
+        str(options.get("tcp_scope", "")).startswith("top_")
+        or str(options.get("udp_scope", "")).startswith("top_")
+    )
 
 
 def _ports_for_scope(scope: str, custom: str, protocol: str) -> tuple[str | None, int | None]:
@@ -176,6 +180,10 @@ def _ports_for_scope(scope: str, custom: str, protocol: str) -> tuple[str | None
 
 def build_nmap_flags(value: Mapping[str, object] | None = None) -> list[str]:
     options = normalize_scan_options(value)
+    if requires_split_protocol_phases(options):
+        raise ValueError(
+            "TCP + UDP top-port scopes must run as separate TCP and UDP phases"
+        )
     protocol = options["protocol"]
     flags = ["-n"]
     if protocol in {"tcp", "tcp_udp"}:

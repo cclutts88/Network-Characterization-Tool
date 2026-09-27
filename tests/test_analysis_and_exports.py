@@ -90,6 +90,58 @@ def test_parser_does_not_warn_for_a_small_directly_observed_scan():
     assert not any("Scan-quality warning" in warning for warning in analysis["warnings"])
 
 
+def test_parser_does_not_treat_pn_assumptions_as_confirmed_live_hosts():
+    hosts = "".join(
+        f'''<host><status state="up" reason="user-set"/>
+        <address addr="192.0.2.{index}" addrtype="ipv4"/>
+        <ports><extraports state="filtered" count="1000"><extrareasons reason="no-response" count="1000"/></extraports></ports>
+        </host>'''
+        for index in range(256)
+    )
+    xml = f'''<?xml version="1.0"?>
+    <nmaprun scanner="nmap" version="7.95" args="nmap -Pn 192.0.2.0/24">
+      {hosts}
+      <runstats><finished timestr="done"/><hosts up="256" down="0" total="256"/></runstats>
+    </nmaprun>'''.encode()
+
+    analysis = parse_xml(xml)
+
+    assert analysis["reported_total"] == 256
+    assert analysis["reported_up_count"] == 256
+    assert analysis["assumed_up_count"] == 256
+    assert analysis["host_count"] == 0
+    assert analysis["up_count"] == 0
+    assert analysis["hosts"] == []
+    assert any(
+        "assumed 256 targets up" in warning
+        and "Only 0 targets returned direct response evidence" in warning
+        for warning in analysis["warnings"]
+    )
+
+
+def test_parser_confirms_a_pn_target_when_a_port_directly_responds():
+    xml = b'''<?xml version="1.0"?>
+    <nmaprun scanner="nmap" version="7.95" args="nmap -Pn -p 22,23 192.0.2.10">
+      <host><status state="up" reason="user-set"/>
+        <address addr="192.0.2.10" addrtype="ipv4"/>
+        <ports>
+          <port protocol="tcp" portid="22"><state state="open" reason="syn-ack"/></port>
+          <port protocol="tcp" portid="23"><state state="filtered" reason="no-response"/></port>
+        </ports>
+      </host>
+      <runstats><finished timestr="done"/><hosts up="1" down="0" total="1"/></runstats>
+    </nmaprun>'''
+
+    analysis = parse_xml(xml)
+
+    assert analysis["reported_up_count"] == 1
+    assert analysis["assumed_up_count"] == 0
+    assert analysis["host_count"] == 1
+    assert analysis["up_count"] == 1
+    assert analysis["hosts"][0]["presence_status"] == "confirmed"
+    assert "port response" in analysis["hosts"][0]["presence_detail"]
+
+
 def test_parser_retains_non_open_port_observations_for_comparison():
     xml = SAMPLE_XML.replace(
         b'<state state="open" reason="syn-ack"/>',
@@ -315,6 +367,30 @@ default via 192.0.2.254 dev eth8 proto static
     assert by_network["0.0.0.0/0"]["interface"] == "eth8"
 
 
+def test_configuration_parser_reads_pfsense_netstat_static_routes():
+    _, routes = parse_config_text(
+        """
+Routing tables
+
+Internet:
+Destination        Gateway            Flags     Netif Expire
+default            33.107.55.37       UGS        vmx0
+33.107.4.0/24      33.107.80.146      UGS        vmx2
+33.107.80.144/30   link#3             U          vmx2
+"""
+    )
+
+    by_network = {item["network"]: item for item in routes}
+    assert by_network["0.0.0.0/0"]["via"] == "33.107.55.37"
+    assert by_network["0.0.0.0/0"]["interface"] == "vmx0"
+    assert by_network["33.107.4.0/24"]["via"] == "33.107.80.146"
+    assert by_network["33.107.4.0/24"]["interface"] == "vmx2"
+    assert by_network["33.107.4.0/24"]["direct"] is False
+    assert by_network["33.107.80.144/30"]["via"] is None
+    assert by_network["33.107.80.144/30"]["interface"] == "vmx2"
+    assert by_network["33.107.80.144/30"]["direct"] is True
+
+
 def test_configuration_routes_have_stable_numeric_longest_prefix_order():
     _, routes = parse_config_text(
         """
@@ -484,6 +560,170 @@ System Capabilities: Bridge Router
     assert len(links) == 1
     assert links[0]["label"] == "GigabitEthernet0/1 ↔ GigabitEthernet1/0/24 (LLDP)"
     assert links[0]["evidence"].startswith("Local interface: GigabitEthernet0/1")
+
+
+def test_hostname_configuration_prefers_unique_existing_name_identity(tmp_path, monkeypatch):
+    run_dir = tmp_path / ("1" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "1" * 32,
+        "operation": "interactive_configuration_pull",
+        "device_address": "edge-router.example.test",
+        "device_name": "Edge Router",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": "completed",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        "interface GigabitEthernet0/1\n ip address 10.80.0.1 255.255.255.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+    named = ensure_ip_node(nodes, "192.0.2.50", hostname="Edge Router")
+    ensure_ip_node(nodes, "10.80.0.1", hostname="interface-only-match")
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    assert named["id"] == "ip:192.0.2.50"
+    assert nodes[named["id"]]["kind"] == "device"
+    assert set(nodes[named["id"]]["addresses"]) == {"192.0.2.50", "10.80.0.1"}
+    assert "ip:10.80.0.1" not in nodes
+
+
+def test_hostname_configuration_reuses_an_existing_interface_ip_identity(tmp_path, monkeypatch):
+    run_dir = tmp_path / ("2" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "2" * 32,
+        "operation": "configuration_pull",
+        "device_address": "router-login.example.test",
+        "vendor": "vyos",
+        "device_type": "router",
+        "status": "completed",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        "set interfaces ethernet eth0 address '10.90.0.1/24'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+    existing = ensure_ip_node(nodes, "10.90.0.1", hostname="observed-by-nmap")
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    assert list(node_id for node_id in nodes if node_id.startswith("ip:")) == [existing["id"]]
+    assert nodes[existing["id"]]["kind"] == "device"
+    assert nodes[existing["id"]]["interfaces"] == [
+        {"name": "eth0", "address": "10.90.0.1/24"}
+    ]
+
+
+def test_hostname_configuration_uses_interface_ip_when_name_is_ambiguous(tmp_path, monkeypatch):
+    run_dir = tmp_path / ("6" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "6" * 32,
+        "operation": "configuration_pull",
+        "device_address": "shared-login.example.test",
+        "device_name": "Duplicate Router",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": "completed",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        "interface GigabitEthernet0/1\n ip address 192.0.2.22 255.255.255.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+    first = ensure_ip_node(nodes, "192.0.2.11", hostname="Duplicate Router")
+    second = ensure_ip_node(nodes, "192.0.2.22", hostname="Duplicate Router")
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    assert nodes[first["id"]]["kind"] == "host"
+    assert nodes[second["id"]]["kind"] == "device"
+    assert nodes[second["id"]]["interfaces"][0]["address"] == "192.0.2.22/24"
+
+
+def test_hostname_configuration_uses_stable_parsed_interface_ip_when_new(tmp_path, monkeypatch):
+    run_dir = tmp_path / ("3" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "3" * 32,
+        "operation": "manual_upload",
+        "device_address": "new-router.example.test",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": "uploaded",
+    }), encoding="utf-8")
+    (run_dir / "uploaded-router.txt").write_text(
+        "interface GigabitEthernet0/2\n"
+        " ip address 10.20.0.5 255.255.255.0\n"
+        "interface GigabitEthernet0/1\n"
+        " ip address 10.10.0.5 255.255.255.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+
+    device = nodes["ip:10.10.0.5"]
+    assert device["hostname"] == "new-router.example.test"
+    assert set(device["addresses"]) == {"10.10.0.5", "10.20.0.5"}
+    assert "ip:10.20.0.5" not in nodes
+
+
+def test_hostname_configuration_without_identity_or_interface_ip_is_not_invented(tmp_path, monkeypatch):
+    run_dir = tmp_path / ("4" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "4" * 32,
+        "operation": "configuration_pull",
+        "device_address": "unknown-router.example.test",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": "completed",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        "hostname unknown-router\nip access-list standard EXAMPLE\n permit any\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 0
+    assert nodes == {}
+    assert edges == {}
+
+
+def test_hostname_configuration_can_attach_to_unique_name_without_interface_ip(tmp_path, monkeypatch):
+    run_dir = tmp_path / ("5" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "5" * 32,
+        "operation": "configuration_pull",
+        "device_address": "known-router.example.test",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": "completed",
+    }), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text(
+        "hostname known-router\nip access-list standard EXAMPLE\n permit any\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+    existing = ensure_ip_node(nodes, "192.0.2.77", hostname="known-router.example.test")
+
+    assert configuration_devices(nodes, edges, warnings) == 1
+    assert nodes[existing["id"]]["kind"] == "device"
+    assert any(
+        source["kind"] == "device_configuration"
+        for source in nodes[existing["id"]]["sources"]
+    )
 
 
 def test_large_uploaded_configuration_still_supplies_map_interface_ip(tmp_path, monkeypatch):
@@ -692,3 +932,41 @@ ip route 0.0.0.0/0 192.0.2.254
     )
     remaining = configuration_network_candidates(config_dir=config_dir, db_path=db_path)
     assert [item["cidr"] for item in remaining] == ["10.50.0.0/24"]
+
+
+def test_config_identified_subnets_exclude_startup_and_history_sections(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("c" * 32)
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "c" * 32,
+                "status": "uploaded",
+                "device_name": "Recovery Router",
+                "device_address": "192.0.2.1",
+                "vendor": "cisco",
+            }
+        )
+    )
+    (run_dir / "uploaded-config.txt").write_text(
+        """===== show history =====
+ip route 10.60.0.0 255.255.255.0 192.0.2.2
+===== show running-config =====
+interface GigabitEthernet0/1
+ ip address 10.40.0.1 255.255.255.0
+ip route 10.50.0.0 255.255.255.0 192.0.2.2
+===== show startup-config =====
+ip route 10.70.0.0 255.255.255.0 192.0.2.2
+"""
+    )
+
+    candidates = configuration_network_candidates(
+        config_dir=config_dir, db_path=db_path
+    )
+
+    assert [item["cidr"] for item in candidates] == [
+        "10.40.0.0/24",
+        "10.50.0.0/24",
+    ]

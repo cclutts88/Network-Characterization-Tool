@@ -24,6 +24,9 @@ def test_range_start_scripts_share_the_operator_facing_defaults():
         assert 'sh "$WORKDIR/scripts/nct-set-admin.sh" "$ADMIN_USER"' in content
         assert 'rm -f "$BOOTSTRAP_PASSWORD"' in content
         assert "Preserving $account_count existing NCT account(s)" in content
+        assert "verify_archive_checksum" in content
+        assert "expected_checksum" in content
+        assert "actual_checksum" in content
 
 
 def test_legacy_workaround_is_not_applied_to_the_modern_docker_path():
@@ -97,8 +100,41 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert 'sha256sum "$backup"' in content
     assert "nct-upgrade-rollback-$timestamp" in content
     assert "Stored record count decreased" in content
-    assert 'sh "$start_script" "$RANGE_IP"' in content
+    assert 'NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
+    assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
+    assert 'snapshot "$before" container' in content
+    assert 'snapshot "$after" container' in content
+    assert '("-wal", "-shm", "-journal")' in content
+    assert content.index("trap restore_original EXIT") < content.index(
+        'original_stopped=yes\n    docker stop "$CONTAINER"'
+    )
     assert 'api_at_least "$server_api" 1.41' in content
     assert 'api_at_least "$server_api" 1.39' in content
     assert 'docker volume rm' not in content
     assert 'rm -rf' not in content
+    assert "verify_archive_checksum" in content
+    assert "expected_checksum" in content
+    assert "actual_checksum" in content
+
+
+def test_all_range_paths_ignore_checksum_file_line_endings():
+    scripts = (*START_SCRIPTS, SCRIPTS / "nct-upgrade.sh", SCRIPTS / "nct-migrate-data.sh")
+    for script in scripts:
+        content = script.read_text(encoding="utf-8")
+        assert "awk 'NR == 1 { print $1; exit }'" in content
+        assert 'sha256sum "$ARCHIVE"' in content
+
+    direct = (SCRIPTS / "nct-range-direct-deploy.sh").read_text(encoding="utf-8")
+    assert "awk 'NR == 1 { print $1; exit }'" in direct
+    assert 'sha256sum "$archive"' in direct
+
+
+def test_start_scripts_accept_verified_upgrade_account_count():
+    for name in ("nct-start-compose.sh", "nct-start-docker.sh", "nct-start-legacy.sh"):
+        content = (SCRIPTS / name).read_text(encoding="utf-8")
+        assert 'account_count="${NCT_UPGRADE_ACCOUNT_COUNT:-}"' in content
+        assert 'if [ ! -f "$DATA_DIR/analyzer.db" ]' in content
+        assert ':ro,z' in content
+        assert '?mode=ro' in content
+        assert 'case "$account_count" in' in content
+        assert 'The NCT account count is invalid.' in content

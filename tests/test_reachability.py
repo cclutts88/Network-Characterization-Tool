@@ -9,8 +9,10 @@ from app.reachability import (
     build_source_exposure_report,
     classify_searchsploit_exposure,
     evaluate_reachability,
+    evaluate_reachability_range,
     parse_endpoint,
     policy_rule_context,
+    simulate_proposed_change_scenario,
     simulate_proposed_policy_control,
     simulate_proposed_route_control,
     validate_vendor_policy_rule,
@@ -81,6 +83,122 @@ def assess(**overrides):
     }
     values.update(overrides)
     return evaluate_reachability(**values)
+
+
+def range_device(*, policy=None, connected="10.20.0.0/16", extra_routes=None):
+    return {
+        "run_id": "f" * 32,
+        "device": {"name": "Range edge", "address": "198.51.100.1", "type": "firewall"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "inside", "network": connected, "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": connected, "interface": "inside", "direct": True, "protocol": "connected"},
+            {"network": "0.0.0.0/0", "interface": "outside", "via": "198.51.100.254"},
+            *(extra_routes or []),
+        ]},
+        "policy": policy or {"firewall_acl": []},
+    }
+
+
+def range_assess(**overrides):
+    values = {
+        "source_text": "Internet",
+        "destination_text": "10.0.0.0/8",
+        "protocol": "tcp",
+        "port": 22,
+        "hunting": {"hosts": [], "findings": []},
+        "saved_networks": [],
+        "device_analyses": [range_device()],
+    }
+    values.update(overrides)
+    return evaluate_reachability_range(**values)
+
+
+def test_range_coverage_uses_connected_networks_not_static_routes_to_create_targets():
+    result = range_assess(device_analyses=[range_device(extra_routes=[{
+        "network": "10.30.0.0/16", "via": "198.51.100.2", "protocol": "static",
+    }])])
+
+    assert result["status"] == "reachability_range_analysis_complete"
+    assert result["grouping_prefix"] == 16
+    assert [item["network"] for item in result["candidates"]] == ["10.20.0.0/16"]
+    assert result["candidates"][0]["evidence_counts"]["interface"] == 1
+    assert result["evidence_counts"]["interface"] == 1
+    assert result["evidence_counts"]["connected_route"] == 1
+    assert all(item["network"] != "10.30.0.0/16" for item in result["candidates"])
+
+
+def test_range_coverage_drills_from_a_16_to_only_identified_24s():
+    device = range_device(connected="10.20.1.0/24", extra_routes=[{
+        "network": "10.20.3.0/24", "via": "198.51.100.2", "protocol": "static",
+    }])
+    hunting = {
+        "hosts": [{"ip": "10.20.2.5", "hostname": "observed-host"}],
+        "findings": [],
+    }
+    result = range_assess(
+        destination_text="10.20.0.0/16", hunting=hunting, device_analyses=[device]
+    )
+
+    assert result["grouping_prefix"] == 24
+    assert [item["network"] for item in result["candidates"]] == [
+        "10.20.1.0/24", "10.20.2.0/24",
+    ]
+    assert result["candidates"][0]["outcome"] == "Routed"
+    assert result["candidates"][0]["drill_down"] is True
+    assert result["candidates"][0]["detail_target"] == "10.20.1.0/24"
+    assert result["candidates"][1]["outcome"] == "Mixed"
+    assert result["candidates"][1]["evidence_counts"]["observed_host"] == 1
+
+
+def test_range_coverage_allows_a_uniform_24_to_open_observed_hosts():
+    hunting = {
+        "hosts": [{"ip": "10.20.4.9", "hostname": "observed-host"}],
+        "findings": [],
+    }
+    parent = range_assess(
+        destination_text="10.20.4.0/24",
+        hunting=hunting,
+        device_analyses=[range_device(connected="10.20.4.0/24")],
+    )
+
+    row = parent["candidates"][0]
+    assert row["network"] == "10.20.4.9/32"
+    assert row["drill_down"] is False
+
+
+def test_range_coverage_applies_uniform_ssh_block_to_connected_segment():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i outside -o inside -p tcp -d 10.20.0.0/16 --dport 22 -j DROP
+COMMIT
+""")
+    result = range_assess(device_analyses=[range_device(policy={
+        "firewall_acl": [], "iptables": policy,
+    })])
+
+    assert result["candidate_count"] == 1
+    assert result["candidates"][0]["outcome"] == "Expected Blocked"
+    assert result["candidates"][0]["policy_boundary_count"] == 1
+
+
+def test_range_coverage_marks_more_specific_policy_difference_for_drilldown():
+    policy = parse_iptables_policy("""*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -i outside -o inside -p tcp -d 10.20.8.0/24 --dport 22 -j DROP
+COMMIT
+""")
+    result = range_assess(device_analyses=[range_device(policy={
+        "firewall_acl": [], "iptables": policy,
+    })])
+
+    row = result["candidates"][0]
+    assert row["outcome"] == "Mixed"
+    assert row["drill_down"] is True
+    assert row["detail_target"] == "10.20.0.0/16"
+    assert row["policy_boundary_count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -356,6 +474,87 @@ def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
     assert "changes no device configuration" in result["disclaimer"]
 
 
+def test_combined_change_applies_route_before_policy_and_confirms_intent():
+    device = {**DEVICE, "route_analysis": {"routes": []}}
+
+    result = simulate_proposed_change_scenario(
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[device],
+        route={
+            "action": "add",
+            "device_key": "10.80.0.1",
+            "route_network": "10.90.0.0/24",
+            "route_interface": "inside",
+            "next_hop": "10.80.0.2",
+        },
+        policy={
+            "action": "deny",
+            "device_key": "10.80.0.1",
+            "interface_name": "inside",
+            "insertion_index": 0,
+        },
+    )
+
+    assert result["status"] == "reachability_change_scenario_complete"
+    assert result["comparison"]["after_route"] == "Expected Allowed"
+    assert result["comparison"]["after"] == "Expected Blocked"
+    assert result["comparison"]["policy_on_projected_path"] is True
+    assert result["comparison"]["intent_achieved"] is True
+    assert [item["status"] for item in result["validation"]] == [
+        "pass", "pass", "pass", "pass", "pass",
+    ]
+    assert sum(
+        item["kind"] == "proposal" for item in result["projected"]["evidence"]
+    ) == 2
+
+
+def test_combined_change_does_not_claim_policy_effect_when_route_bypasses_device():
+    router = {
+        "run_id": "b" * 32,
+        "device": {"name": "Route Edge", "address": "10.80.0.2", "type": "router"},
+        "interfaces": [{"name": "inside", "network": "10.80.0.0/24", "role": "internal"}],
+        "route_analysis": {"routes": []},
+        "policy": {"firewall_acl": []},
+    }
+    firewall = {**DEVICE, "route_analysis": {"routes": []}}
+
+    result = simulate_proposed_change_scenario(
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[router, firewall],
+        route={
+            "action": "add",
+            "device_key": "10.80.0.2",
+            "route_network": "10.90.0.0/24",
+            "route_interface": "inside",
+            "next_hop": "10.80.0.3",
+        },
+        policy={
+            "action": "deny",
+            "device_key": "10.80.0.1",
+            "interface_name": "inside",
+            "insertion_index": 0,
+        },
+    )
+
+    assert result["comparison"]["policy_on_projected_path"] is False
+    assert result["comparison"]["intent_achieved"] is False
+    assert result["comparison"]["after"] == "Unknown"
+    assert next(
+        item for item in result["validation"] if item["id"] == "policy_path"
+    )["status"] == "uncertain"
+    assert "does not place" in result["projected"]["explanation"]
+
+
 def test_proposed_route_removal_preserves_a_broader_retained_fallback():
     device = {
         **DEVICE,
@@ -480,11 +679,11 @@ def test_same_saved_network_is_local_without_claiming_policy_decision():
     assert result["confidence"] == "medium"
 
 
-def test_route_without_exact_policy_is_routed_not_allowed():
+def test_partial_route_without_exact_policy_is_unknown():
     device = {**DEVICE, "policy": {"firewall_acl": []}}
     result = assess(device_analyses=[device])
-    assert result["outcome"] == "Routed"
-    assert result["confidence"] == "medium"
+    assert result["outcome"] == "Unknown"
+    assert result["confidence"] == "low"
 
 
 def test_switch_management_default_route_is_not_transit_evidence():
@@ -592,14 +791,15 @@ def test_explicit_deny_remains_expected_blocked_when_service_is_not_exposed():
     )
 
 
-def test_external_destination_uses_default_route():
+def test_external_destination_with_unresolved_next_hop_is_unknown():
     device = {
         **DEVICE,
         "route_analysis": {"routes": [{"network": "0.0.0.0/0", "via": "192.0.2.1"}]},
         "policy": {"firewall_acl": []},
     }
     result = assess(destination_text="Internet", device_analyses=[device])
-    assert result["outcome"] == "Routed"
+    assert result["outcome"] == "Unknown"
+    assert any("Path is partial" in item for item in result["caveats"])
 
 
 def test_ordered_iptables_sets_drive_expected_allowed_decision():
@@ -664,7 +864,7 @@ COMMIT
     assert any("does not prove" in caveat for caveat in result["caveats"])
 
 
-def test_ordered_iptables_unsupported_match_remains_routed_with_caveat():
+def test_ordered_iptables_unsupported_match_with_partial_path_remains_unknown():
     policy = parse_iptables_policy("""*filter
 :FORWARD ACCEPT [0:0]
 -A FORWARD -m dpi32 --cat-app 4,112 -j DROP
@@ -674,7 +874,7 @@ COMMIT
 
     result = assess(device_analyses=[device])
 
-    assert result["outcome"] == "Routed"
+    assert result["outcome"] == "Unknown"
     assert result["counts"]["policy_decisions"] == 0
     assert result["counts"]["policy_unresolved"] == 1
     assert any("unresolved match criteria" in item for item in result["caveats"])
@@ -1004,7 +1204,7 @@ interface inside
 
     unbound = {**device, "policy": {**device["policy"], "applied": parse_vendor_policy(text.replace(" ip access-group USERS_TO_SERVERS in", ""))}}
     result = assess(device_analyses=[unbound])
-    assert result["outcome"] == "Routed"
+    assert result["outcome"] == "Unknown"
 
 
 def test_invalid_endpoint_is_rejected():
@@ -1021,21 +1221,21 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
     monkeypatch.setattr(main, "device_collection_history", lambda limit: records)
     analyzed = []
 
-    def analyze(run_id):
-        analyzed.append(run_id)
+    def analyze(run_id, *, include_correlations=True):
+        analyzed.append((run_id, include_correlations))
         return {"run_id": run_id}
 
     monkeypatch.setattr(main, "analyze_device_collection", analyze)
     monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_KEY", None)
     monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_VALUE", [])
 
-    monkeypatch.setattr(main, "get_external_wan_gateway", lambda db_path: None)
+    monkeypatch.setattr(main, "get_external_wan_gateways", lambda db_path: [])
     result = main._latest_device_reachability_evidence()
     cached = main._latest_device_reachability_evidence()
 
     assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
     assert cached is result
-    assert analyzed == ["usable", "upload"]
+    assert analyzed == [("usable", False), ("upload", False)]
 
 
 def test_reach_follows_each_retained_next_hop_without_inventing_devices():
@@ -1078,7 +1278,133 @@ def test_reach_follows_each_retained_next_hop_without_inventing_devices():
     assert [item["label"] for item in result["path"] if item["kind"] == "device"] == [
         "edge-wan-rtr", "distribution-rtr",
     ]
+    assert result["outcome"] == "Routed"
     assert not any("Path is partial" in item for item in result["caveats"])
+
+
+def test_external_reach_does_not_guess_between_multiple_site_edges():
+    mako = {
+        "run_id": "mako",
+        "device": {
+            "name": "MAKO-ENG-EDGE-RTR", "address": "175.0.92.22", "type": "router",
+        },
+        "interfaces": [{"name": "uplink", "network": "175.0.92.20/30"}],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "175.0.92.21"},
+            {"network": "0.0.0.0/0", "via": "175.0.92.21", "interface": "uplink"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    other_site = {
+        "run_id": "other",
+        "device": {"name": "NY-FW", "address": "125.64.15.50", "type": "firewall"},
+        "interfaces": [{"name": "outside", "network": "125.64.15.48/30"}],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "via": "125.64.15.49", "interface": "outside"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="33.107.4.2",
+        device_analyses=[mako, other_site],
+    )
+
+    assert result["outcome"] == "Unknown"
+    assert result["retained_objects"]["routes"] == []
+    assert result["retained_objects"]["selected_path_routes"] == []
+    assert "MAKO-ENG-EDGE-RTR" not in [
+        item["label"] for item in result["path"] if item["kind"] == "device"
+    ]
+    assert any("External WAN gateway" in item for item in result["caveats"])
+
+
+def test_external_reach_starts_only_at_designated_wan_gateway():
+    mako = {
+        "run_id": "mako",
+        "device": {
+            "name": "MAKO-ENG-EDGE-RTR", "address": "175.0.92.22", "type": "router",
+        },
+        "interfaces": [{"name": "uplink", "network": "175.0.92.20/30"}],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "175.0.92.21"},
+            {"network": "0.0.0.0/0", "via": "175.0.92.21", "interface": "uplink"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    afb_gateway = {
+        "run_id": "na",
+        "device": {"name": "NA-RTR", "address": "97.98.208.2", "type": "router"},
+        "external_wan_gateway": {"node_id": "ip:97.98.208.2"},
+        "interfaces": [
+            {"name": "wan", "network": "97.98.208.0/30", "role": "external"},
+            {"name": "afb", "network": "33.107.244.0/30"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "33.107.244.1", "interface": "afb"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    afb_edge = {
+        "run_id": "afb",
+        "device": {"name": "AFB-EDGE-RTR", "address": "33.107.244.1", "type": "router"},
+        "interfaces": [
+            {"name": "upstream", "network": "33.107.244.0/30", "address": "33.107.244.1"},
+            {"name": "inside", "network": "33.107.4.0/24"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "interface": "inside", "direct": True},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="33.107.4.2",
+        device_analyses=[mako, afb_gateway, afb_edge],
+    )
+
+    devices = [item["label"] for item in result["path"] if item["kind"] == "device"]
+    assert devices == ["NA-RTR", "AFB-EDGE-RTR"]
+    assert "MAKO-ENG-EDGE-RTR" not in devices
+
+
+def test_external_reach_uses_a_single_internet_labeled_interface():
+    na_gateway = {
+        "run_id": "na",
+        "device": {"name": "NA-RTR", "address": "97.98.208.2", "type": "router"},
+        "interfaces": [
+            {
+                "name": "eth0", "network": "97.98.208.0/30",
+                "zone": "Inet to NA rtr",
+            },
+            {"name": "eth1", "network": "33.107.244.0/30"},
+        ],
+        "route_analysis": {"routes": [{
+            "network": "33.107.4.0/24", "via": "33.107.244.1", "interface": "eth1",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+    mako = {
+        "run_id": "mako",
+        "device": {
+            "name": "MAKO-ENG-EDGE-RTR", "address": "175.0.92.22", "type": "router",
+        },
+        "interfaces": [{"name": "uplink", "network": "175.0.92.20/30"}],
+        "route_analysis": {"routes": [
+            {"network": "33.107.4.0/24", "via": "175.0.92.21"},
+            {"network": "0.0.0.0/0", "via": "175.0.92.21", "interface": "uplink"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(
+        source_text="Internet", destination_text="33.107.4.2",
+        device_analyses=[mako, na_gateway],
+    )
+
+    devices = [item["label"] for item in result["path"] if item["kind"] == "device"]
+    assert devices == ["NA-RTR"]
+    assert "MAKO-ENG-EDGE-RTR" not in devices
 
 
 def test_reach_uses_a_matching_route_after_the_legacy_500_route_boundary():
@@ -1115,11 +1441,135 @@ def test_reach_reports_a_partial_path_when_next_hop_evidence_is_missing():
         "device": {"name": "edge-wan-rtr", "address": "10.0.0.1", "type": "router"},
         "interfaces": [{"name": "outside", "network": "198.51.100.0/24", "role": "external"}],
         "external_wan_gateway": {"node_id": "ip:10.0.0.1"},
+        "policy": {"firewall_acl": []},
     }
 
     result = assess(source_text="Internet", device_analyses=[edge])
 
+    assert result["outcome"] == "Unknown"
+    assert result["confidence"] == "low"
+    assert "only a partial path" in result["explanation"]
     assert any("Path is partial" in item for item in result["caveats"])
+
+
+def test_reach_keeps_equal_cost_paths_separate():
+    edge = {
+        "run_id": "edge",
+        "device": {"name": "edge-rtr", "address": "10.80.0.1", "type": "router"},
+        "interfaces": [{"name": "users", "network": "10.80.0.0/24"}],
+        "route_analysis": {"routes": [
+            {
+                "network": "10.90.0.0/24", "via": "10.0.12.2",
+                "interface": "path-a", "metric": 10,
+            },
+            {
+                "network": "10.90.0.0/24", "via": "10.0.13.2",
+                "interface": "path-b", "metric": 10,
+            },
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+    path_a = {
+        "run_id": "path-a",
+        "device": {"name": "path-a-rtr", "address": "10.0.12.2", "type": "router"},
+        "interfaces": [{"name": "servers", "address": "10.0.12.2", "network": "10.0.12.0/30"}],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "servers"}]},
+        "policy": {"firewall_acl": []},
+    }
+    path_b = {
+        "run_id": "path-b",
+        "device": {"name": "path-b-rtr", "address": "10.0.13.2", "type": "router"},
+        "interfaces": [{"name": "servers", "address": "10.0.13.2", "network": "10.0.13.0/30"}],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "servers"}]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(device_analyses=[edge, path_a, path_b])
+
+    assert [item["role"] for item in result["path_options"]] == ["active", "equal_cost"]
+    assert [
+        item["label"] for item in result["path_options"][0]["path"]
+        if item["kind"] == "device"
+    ] == ["edge-rtr", "path-a-rtr"]
+    assert [
+        item["label"] for item in result["path_options"][1]["path"]
+        if item["kind"] == "device"
+    ] == ["edge-rtr", "path-b-rtr"]
+
+
+def test_reach_marks_higher_metric_path_as_standby():
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "interface": "primary", "metric": 10},
+            {"network": "10.90.0.0/24", "interface": "backup", "metric": 50},
+        ]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert [item["role"] for item in result["path_options"]] == ["active", "standby"]
+    assert "less-preferred" in result["path_options"][1]["reason"]
+
+
+def test_reach_uses_secondary_wan_when_primary_path_is_incomplete():
+    primary = {
+        "run_id": "primary",
+        "device": {"name": "primary-wan", "address": "198.51.100.1", "type": "router"},
+        "external_wan_gateway": {"slot": "primary", "node_id": "ip:198.51.100.1"},
+        "interfaces": [{"name": "wan", "network": "198.51.100.0/30", "role": "external"}],
+        "route_analysis": {"routes": [{
+            "network": "10.90.0.0/24", "via": "10.0.12.2", "interface": "inside",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+    secondary = {
+        "run_id": "secondary",
+        "device": {"name": "secondary-wan", "address": "203.0.113.1", "type": "router"},
+        "external_wan_gateway": {"slot": "secondary", "node_id": "ip:203.0.113.1"},
+        "interfaces": [
+            {"name": "wan", "network": "203.0.113.0/30", "role": "external"},
+            {"name": "inside", "network": "10.90.0.0/24"},
+        ],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "inside"}]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(source_text="Internet", device_analyses=[primary, secondary])
+
+    assert result["routing_path"]["status"] == "complete"
+    assert result["retained_objects"]["selected_path_routes"][0]["device"] == "secondary-wan"
+    roles = {(item["gateway_slot"], item["role"]) for item in result["path_options"]}
+    assert ("primary", "unavailable") in roles
+    assert ("secondary", "active_failover") in roles
+
+
+def test_reach_fails_over_when_spanning_tree_blocks_selected_interface():
+    device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            {"network": "10.90.0.0/24", "interface": "path-a", "metric": 10},
+            {"network": "10.90.0.0/24", "interface": "path-b", "metric": 20},
+        ]},
+        "switch_detail": {"spanning_tree": [{
+            "interface": "path-a", "state": "blocking",
+            "evidence": "Gi0/1 Altn BLK",
+        }]},
+        "policy": {"firewall_acl": []},
+    }
+
+    result = assess(device_analyses=[device])
+
+    assert result["routing_path"]["status"] == "complete"
+    assert result["retained_objects"]["selected_path_routes"][0]["interface"] == "path-b"
+    assert [item["role"] for item in result["path_options"]] == [
+        "active_failover", "blocked",
+    ]
+    assert any(
+        item["kind"] == "switching"
+        for item in result["path_options"][1]["evidence"]
+    )
 
 
 def test_reach_infers_unmapped_source_as_external_but_keeps_known_source_internal():
@@ -1283,3 +1733,35 @@ def test_source_exposure_report_groups_unique_services_and_preserves_evidence_ob
     assert users_path["retained_objects"]["routes"]
     assert users_path["retained_objects"]["policy"]
     assert "sends no network traffic" in result["disclaimer"]
+
+
+def test_source_exposure_report_limits_services_to_selected_saved_network():
+    hunting = {
+        "hosts": [
+            {"ip": "10.90.0.10", "hostname": "server"},
+            {"ip": "10.80.0.20", "hostname": "user"},
+        ],
+        "findings": [
+            {"ip": "10.90.0.10", "protocol": "tcp", "port": 443, "state": "open"},
+            {"ip": "10.80.0.20", "protocol": "tcp", "port": 22, "state": "open"},
+        ],
+    }
+
+    result = build_source_exposure_report(
+        hunting=hunting,
+        saved_networks=SAVED,
+        device_analyses=[],
+        target_network=SAVED[1],
+    )
+
+    assert result["target"] == {
+        "saved_network_id": "servers",
+        "name": "Servers",
+        "cidr": "10.90.0.0/24",
+    }
+    assert [(item["ip"], item["port"]) for item in result["services"]] == [
+        ("10.90.0.10", 443)
+    ]
+    assert {item["name"] for item in result["sources"]} == {"Internet", "Users"}
+    assert result["evaluated_path_count"] == 2
+    assert "selected Saved Network only" in result["disclaimer"]

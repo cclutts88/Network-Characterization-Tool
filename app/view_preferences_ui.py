@@ -48,7 +48,7 @@ VIEW_PREFERENCES_SCRIPT = r"""
       <label>Table sorting<select data-sort><option value="ip-asc">IP · low to high</option><option value="ip-desc">IP · high to low</option><option value="hostname">Hostname</option></select></label>
       `;
     const main = document.querySelector('main');
-    const anchor = page === 'analyze' ? main.querySelector('.analysis-tabs') : main.firstElementChild;
+    const anchor = main.querySelector('#nct-page-context') || main.firstElementChild;
     if (anchor) anchor.insertAdjacentElement('afterend', toolbar); else main.prepend(toolbar);
     for (const selector of ['[data-page-size]','[data-sort]']) toolbar.querySelector(selector).onchange = () => { pageIndexes.clear(); applyPresentation(readPresentation()); };
   }

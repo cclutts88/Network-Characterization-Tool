@@ -27,6 +27,7 @@
 /.venv/
 /.pytest_cache/
 /.coverage
+/.tmp-*/
 __pycache__/
 *.py[cod]
 .DS_Store

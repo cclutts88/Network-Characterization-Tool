@@ -4,15 +4,134 @@ from app.analysis_ui import analysis_page
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
+from app.hostname_ui import hostname_page
 from app.network_map_ui import network_map_page
 from app.reachability_ui import reachability_page
 from app.session_ui import SESSION_SCRIPT
+from app.shell_ui import SHELL_SCRIPT
 from app.ui import operator_page
+
+
+def test_personal_and_shared_note_panels_are_mutually_exclusive():
+    assert "other.panel.classList.remove('open')" in SESSION_SCRIPT
+    assert "other.tab.setAttribute('aria-expanded','false')" in SESSION_SCRIPT
+    assert "?'shared':'personal'}-notes-open`,'0'" in SESSION_SCRIPT
+    assert ".nct-note-panel.personal{left:var(--nct-sidebar-width,278px)" in SESSION_SCRIPT
+    assert ".nct-note-tab.personal{left:var(--nct-sidebar-width,278px)" in SESSION_SCRIPT
+    assert ".nct-note-tab-content" in SESSION_SCRIPT
+    assert "transform:translate(-50%,-50%) rotate(90deg)" in SESSION_SCRIPT
+    assert ".nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}" in SESSION_SCRIPT
+    assert "body.nct-notes-personal-open>main" in SESSION_SCRIPT
+    assert "body.nct-notes-shared-open>main" in SESSION_SCRIPT
+    assert "document.body.classList.toggle(side==='personal'?'nct-notes-personal-open':'nct-notes-shared-open',open)" in SESSION_SCRIPT
+
+
+def test_theme_cards_and_navigation_icons_match_their_actions():
+    assert "dialog.addEventListener('click',event=>{const card=event.target.closest?.('.nct-theme-card[data-preset]')" in SHELL_SCRIPT
+    assert "compare:'M12 7v5l3 2 M4 5v5h5" in SHELL_SCRIPT
+    assert "reach:'M4 7h13 M14 4l3 3-3 3 M20 17H7" in SHELL_SCRIPT
+
+
+def test_fun_theme_catalog_includes_distinct_cthulhu_and_arkime_presets():
+    assert "cthulhu_depths:{label:'Cthulhu',category:'Fun'" in SHELL_SCRIPT
+    assert "arkime_sessions:{label:'Arkime',category:'Fun'" in SHELL_SCRIPT
+    assert "html[data-nct-theme=cthulhu_depths] body.nct-shell>header" in SHELL_SCRIPT
+    assert "html[data-nct-theme=arkime_sessions] body.nct-shell>header" in SHELL_SCRIPT
+    assert 'html[data-nct-theme=arkime_sessions] body.nct-shell>header::after' in SHELL_SCRIPT
+    assert "url('/assets/arkime-betrayed-owl.png') center/cover no-repeat" in SHELL_SCRIPT
+    assert "Oh. So this is where you've been spending your packets." in SHELL_SCRIPT
+    assert "input:-webkit-autofill" in SHELL_SCRIPT
+    assert "-webkit-text-fill-color:var(--nct-text)" in SHELL_SCRIPT
+
+
+def test_active_task_workspace_cannot_be_collapsed_from_its_page_header():
+    assert "details.nct-active-task-panel>summary::-webkit-details-marker" in SHELL_SCRIPT
+    assert "function setActiveTaskPanel(target)" in SHELL_SCRIPT
+    assert "event.preventDefault();panel.open=true" in SHELL_SCRIPT
+    assert "setActiveTaskPanel(target)" in SHELL_SCRIPT
+
+
+def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
+    assert "--nct-surface-subtle:color-mix(" in SHELL_SCRIPT
+    for selector in (
+        ".finding-summary-row td",
+        ".lfa-threshold-control",
+        ".progress-track",
+        ".os-review-state",
+        ".change-card",
+        ".category-card",
+        ".reach-path-toggle",
+        ".map-layout-completeness",
+        ".delete-dialog",
+        ".network-dialog",
+    ):
+        assert selector in SHELL_SCRIPT
+    assert ":is(.finding-summary-row td,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
+    assert ":is(.nav a,.source-links a,.reach-shortcut){background:var(--nct-control)!important" in SHELL_SCRIPT
+    assert ":is(input,select,textarea,option,th){background:var(--nct-background)!important" in SHELL_SCRIPT
+    assert ":is(input[type=checkbox],input[type=radio],input[type=range]){accent-color:var(--nct-accent)}" in SHELL_SCRIPT
+    assert ":is(fieldset,.scenario-stage,.scenario-flow-context,.scenario-check,.ordered-rules){border-color:var(--nct-line)!important" in SHELL_SCRIPT
+
+
+def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
+    html = hunting_page().body.decode()
+    assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
+    assert ".finding-summary-row td{background:#0c1922}" not in html
+    assert ".table-wrap thead th{position:sticky;top:var(--hunt-result-offset,420px);z-index:70;background:var(--panel)" in html
+
+
+def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
+    analyze = analysis_page().body.decode()
+    scans = operator_page().body.decode()
+
+    assert "confirmed responsive" in analyze
+    assert "targets attempted" in analyze
+    assert "assumed by -Pn" in analyze
+    assert "No target returned direct response evidence in this scan." in analyze
+    assert "confirmed responsive hosts" in scans
+    assert "run.nmap_assumed_host_count" in scans
+    assert "Open Analyze to verify direct responses" in scans
+
+
+def test_operator_guide_describes_current_button_behavior_and_side_effects():
+    assert "const actionGuideHints=" in SHELL_SCRIPT
+    assert "function actionGuideFor(control)" in SHELL_SCRIPT
+    assert "Builds and downloads a certified ZIP" in SHELL_SCRIPT
+    assert "It does not run Nmap or add evidence to NCT" in SHELL_SCRIPT
+    assert "import the completed XML files" in SHELL_SCRIPT
+    assert "submits the scan to the local analyzer queue" in SHELL_SCRIPT
+    assert "This resumes network activity" in SHELL_SCRIPT
+    assert "Starts the accountability capture, connects to the selected device" in SHELL_SCRIPT
+    assert "It does not contact the device or start an accountability capture" in SHELL_SCRIPT
+    assert "It sends no packets and changes no device" in SHELL_SCRIPT
+    assert "It changes no device and sends no traffic" in SHELL_SCRIPT
+    assert "This is destructive" in SHELL_SCRIPT
+    assert "The action is not complete until the page reports success" in SHELL_SCRIPT
+    assert "A portable run becomes retained NCT evidence only after its completed XML files" in SHELL_SCRIPT
+    assert "choose Active Scans, and review the held run" in SHELL_SCRIPT
+    assert "approve the Nmap fallback, finish without Nmap, or cancel the run" in SHELL_SCRIPT
+    assert "reports assumed targets separately from confirmed responsive hosts" in SHELL_SCRIPT
+    assert "A held run also prevents maintenance or an upgrade from starting" in SHELL_SCRIPT
+    assert "Step 1 defines the exact source, destination, protocol, port" in SHELL_SCRIPT
+    assert "A route normally selects a path by destination" in SHELL_SCRIPT
+    assert "Earlier matching rules can change the result" in SHELL_SCRIPT
+    assert "Validation uses the written rule" in SHELL_SCRIPT
+
+
+def test_air_gapped_designation_uses_active_theme_palette():
+    html = device_config_page().body.decode()
+    assert ".air-gap-designation{display:grid" in html
+    assert "border:1px solid var(--line)" in html
+    assert "background:color-mix(in srgb,var(--panel) 84%,var(--bg) 16%)" in html
+    assert ".air-gap-designation:has(input:checked){border-color:var(--accent)" in html
+    assert "box-shadow:inset 3px 0 var(--accent)" in html
 
 
 def test_scan_builder_is_one_page_with_requested_actions():
     html = operator_page().body.decode()
-    assert '<h1 class="sr-only">Nmap</h1>' in html
+    assert '<nav class="nav"' not in html
+    assert 'aria-label="Primary"' not in html
+    assert '<script src="/assets/nct-session.js"></script>' in html
     assert "All scan activity originates from the NCT analyzer host" not in html
     assert 'id="trafficOriginValue"' not in html
     assert "updateTrafficOrigin" not in html
@@ -45,15 +164,24 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="fpingNote" class="hint"' in html
     assert "$('fpingNote').classList.toggle('hidden',!useFping)" in html
     assert "Collect traceroute paths" in html
-    assert "normalizeCombinedScopes" in html
+    assert "normalizeCombinedScopes" not in html
     assert 'id="fallbackApproval"' in html
-    assert html.index("<h2>Profile behavior</h2>") < html.index('id="fallbackApproval"')
+    assert html.index('id="currentRunPanel"') < html.index('id="fallbackApproval"')
+    assert html.index('id="fallbackApproval"') < html.index("<h2>Profile behavior</h2>")
+    assert 'id="fallbackReason"' in html
+    assert "run.fallback_reason" in html
+    assert "openScanTask('#queuePanel')" in html
     assert "Full Nmap fallback requires approval" in html
     assert "Authorize full Nmap fallback" in html
     assert "Finish without Nmap" in html
     assert "fallback-decision" in html
     assert "awaiting_fallback_approval" in html
     assert "exact_fallback_command" in html
+    assert 'id="fallbackNote" maxlength="500" required' in html
+    assert 'id="fallbackDecisionStatus" class="status" role="status" aria-live="assertive"' in html
+    assert "Enter the required approval or mission-constraint note before choosing either action." in html
+    assert "note.focus();note.reportValidity()" in html
+    assert "Recording approval and preparing the full Nmap fallback" in html
     assert "Delete profile" in html
     assert "Scheduled scans" in html
     assert "Use selected profile" in html
@@ -86,7 +214,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "if(!currentLive)loadActiveRun()" in html
     assert "$('currentRunPanel').classList.add('hidden')" in html
     assert 'role="progressbar"' in html
-    assert 'id="currentHostsLabel">Nmap-reported hosts' in html
+    assert 'id="currentHostsLabel">confirmed responsive hosts' in html
     assert "addresses in scope" in html
     assert "scan targets completed" in html
     assert "targets currently being scanned" in html
@@ -145,9 +273,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
-    assert "/api/scan-runs-grouped?limit=200" in html
+    assert "/api/scan-runs-grouped?limit=25&offset=" in html
     assert 'class="history-group"' in html
-    assert "localeCompare(NCTScanReference.humanize(right.name||'')" in html
+    assert "localeCompare(NCTScanReference.humanize(b.name||'')" in html
     assert "function newestFirst(runs)" in html
     assert 'data-compare="' in html
     assert "candidateSavedName" in html
@@ -158,17 +286,75 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert r".join('\n')" in html
 
 
-def test_navigation_is_sticky_on_every_primary_page():
-    pages = [operator_page(), analysis_page(), device_analysis_page(), hunting_page(), device_config_page(), network_map_page()]
+def test_scan_queue_polling_stops_when_the_session_is_rejected():
+    html = operator_page().body.decode()
+
+    assert "response.status===401||response.status===403" in html
+    assert "queueTimer=keepPolling?setTimeout(loadQueue,2000):null" in html
+    assert "Sign in again to resume queue updates." in html
+
+
+def test_enterprise_shell_replaces_legacy_navigation_on_every_primary_page():
+    pages = [operator_page(), analysis_page(), device_analysis_page(), hunting_page(), device_config_page(), hostname_page(), reachability_page(), network_map_page()]
     for page in pages:
         html = page.body.decode()
-        assert "position:sticky" in html
-        assert "aria-label=\"Primary\"" in html
         assert '<div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div>' in html
-        assert "border-top:1px solid var(--accent)" in html
-        assert "font-size:40px" in html
-        assert "padding-top:6px!important" in html
-        assert '<script src="/assets/nct-session.js" defer></script>' in html
+        assert '<script src="/assets/nct-session.js"></script>' in html
+        assert '<nav class="nav"' not in html
+        assert 'aria-label="Primary"' not in html
+        assert 'class="analysis-tabs"' not in html
+
+    assert "#nct-sidebar{position:fixed" in SHELL_SCRIPT
+    assert "#nct-sidebar .nct-nav-group>summary::before{content:none!important;display:none!important}" in SHELL_SCRIPT
+    assert "#nct-sidebar .nct-nav-group>summary::after{content:'›'" in SHELL_SCRIPT
+    assert "body.nct-shell #nct-sidebar{background-color:var(--nct-sidebar)!important;background-image:none!important" in SHELL_SCRIPT
+    assert "backdrop-filter:none!important;border-image:none!important" in SHELL_SCRIPT
+    assert "#nct-sidebar-edge{position:fixed;left:var(--nct-sidebar-width);top:var(--nct-header-height);width:32px;height:58px" in SHELL_SCRIPT
+    assert "#nct-sidebar-edge button{position:absolute;top:10px" in SHELL_SCRIPT
+    assert "opacity:1;transform:none" in SHELL_SCRIPT
+    assert "{label:'Workspace'" not in SHELL_SCRIPT
+    assert "href:'#nct-personal-notes'" not in SHELL_SCRIPT
+    assert "html[data-nct-scanlines=on] body.nct-shell::after{position:fixed;inset:0 0 0 var(--nct-sidebar-width)" in SHELL_SCRIPT
+    assert "window.NCTOpenTask=openTask" in SHELL_SCRIPT
+    assert 'padding-bottom:30px' in SESSION_SCRIPT
+    assert 'bottom:9px' in SESSION_SCRIPT
+
+
+def test_cross_task_actions_reveal_their_destination_in_the_new_shell():
+    scan_html = operator_page().body.decode()
+    device_html = device_config_page().body.decode()
+    analysis_html = analysis_page().body.decode()
+    reach_html = reachability_page().body.decode()
+
+    assert "openScanTask('#queuePanel')" in scan_html
+    assert "openScanTask('#scanBuilder')" in scan_html
+    assert "openScanTask('#savedNetworkPanel')" in scan_html
+    assert "window.NCTOpenTask('#wanDesignationPanel')" in device_html
+    assert "window.NCTOpenTask('#networkChangesPanel')" in analysis_html
+    assert "window.NCTOpenTask('#changeScenarioPanel')" in reach_html
+    assert "networkOverview:['analysisPanel'],xmlImport:['analysisPanel']" in SHELL_SCRIPT
+    assert 'id="deviceOverviewSection"' in device_analysis_page().body.decode()
+    assert "deviceEvidencePicker:['deviceOverviewSection']" in SHELL_SCRIPT
+
+
+def test_enterprise_shell_hides_legacy_layout_before_first_paint():
+    pages = [
+        operator_page(),
+        device_config_page(),
+        hostname_page(),
+        analysis_page(),
+        device_analysis_page(),
+        hunting_page(),
+        reachability_page(),
+        network_map_page(),
+    ]
+
+    for page in pages:
+        html = page.body.decode()
+        assert '<html class="nct-shell-loading" lang="en">' in html
+        assert 'id="nct-shell-bootstrap"' in html
+        assert "html.nct-shell-loading body{visibility:hidden}" in html
+        assert html.index('id="nct-shell-bootstrap"') < html.index('<script src="/assets/nct-session.js"')
 
 
 def test_scan_workflow_pages_share_human_readable_scan_references():
@@ -216,6 +402,38 @@ def test_device_configs_offer_reviewed_network_candidates():
     assert "does not start a scan" in html
 
 
+def test_device_configs_offer_explainable_multi_interface_wan_designation():
+    html = device_config_page().body.decode()
+    assert "WAN interface designation" in html
+    assert "Analyze saved configs" in html
+    assert "does not reprocess large configurations automatically" in html
+    assert 'id="wanDeviceCollection"' in html
+    assert 'id="wanGatewaySlot"' in html
+    assert 'name="wanInterface"' in html
+    assert "Save selected WAN interfaces" in html
+    assert "Review WAN interfaces" in html
+    assert 'id="airGappedNetwork"' in html
+    assert "/api/network-semantics/air-gapped" in html
+    assert "shared designation tells every operator" in html
+    assert "wan_candidates" in html
+    assert "candidate.reasons" in html
+    assert "candidate.evidence" in html
+    assert "networkDemoted" in html
+    assert "Likely upstream transit" in html
+    assert "View ${candidate.evidence.length} of ${count}" in html
+    assert "include_correlations=false" in html
+    assert "function wanSemanticNodeId" in html
+    assert "interface_names:names" in html
+    assert "wanNetworkSuggestionsStarted" in html
+    history_loader = html.split("async function loadHistory", 1)[1].split("function discoveredHostName", 1)[0]
+    assert "loadNetworkWanSuggestions" not in history_loader
+    assert "/api/network-semantics/external-wan-gateway" in html
+    assert "/api/network-semantics/wan-candidates" in html
+    assert "strongest retained-evidence lead" in html
+    assert "does not contact the device" in html
+    assert "Primary and Secondary are reserved for separate gateway devices" in html
+
+
 def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     html = device_config_page().body.decode()
     assert "Collection note (optional)" in html
@@ -249,6 +467,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
 
 def test_device_collection_keeps_raw_collection_work_separate_from_analysis():
     html = device_config_page().body.decode()
+    assert 'id="deviceHistory"' in html
     assert 'id="historySearch"' in html
     assert "Configuration result file (maximum 100 MB)" in html
     assert 'id="routeFilter"' not in html
@@ -266,8 +485,8 @@ def test_device_evidence_downloads_use_authenticated_page_fetch():
     assert "function artifactLink(artifact)" in html
     assert "event.preventDefault();saveArtifact(artifact,link)" in html
     assert 'id="deleteCollectionDialog"' in html
-    assert "status, commands, and saved evidence files" in html
-    assert "interpreted interfaces, routes, neighbors, VLANs, policy, and comparisons" in html
+    assert "Load commands and evidence files" in html
+    assert "History starts with lightweight metadata only" in html
     assert 'id="completionActions"' in html
     assert 'id="analyzeCollection"' in html
     assert 'id="continueCandidateToNmap"' in html
@@ -279,10 +498,19 @@ def test_device_evidence_downloads_use_authenticated_page_fetch():
     assert "for(const runs of groups.values()) runs.sort" in html
 
 
+def test_history_loaders_support_older_range_browsers():
+    scan_html = operator_page().body.decode()
+    device_html = device_config_page().body.decode()
+    for html in (scan_html, device_html):
+        assert "AbortSignal.timeout" not in html
+        assert "typeof AbortController==='function'" in html
+        assert "timeoutError.name='TimeoutError'" in html
+
+
 def test_network_device_analysis_has_unified_evidence_and_comparison_views():
-    nmap_html = analysis_page().body.decode()
     html = device_analysis_page().body.decode()
-    assert "Network Device Analysis" in nmap_html
+    assert "title:'Network devices'" in SHELL_SCRIPT
+    assert "title:'Device configurations'" in SHELL_SCRIPT
     assert 'id="currentRun"' in html
     assert 'id="baselineRun"' in html
     assert "/api/device-analysis/compare" in html
@@ -294,6 +522,48 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "confidence" in html
     assert "Interfaces changed" in html
     assert "Firewall / ACL added" in html
+    assert "Configuration Activity Hunt" in html
+    assert "Running and startup line comparison" in html
+    assert "Startup line" in html
+    assert "Running line" in html
+    assert "Source line" in html
+    assert "CONFIG_DIFF_BATCH=200" in html
+    assert 'id="loadMoreConfigDiff"' in html
+
+
+def test_configuration_activity_is_hunt_while_collection_comparison_stays_compare():
+    analyze_group = SHELL_SCRIPT.split("{label:'Analyze'", 1)[1].split("{label:'Compare'", 1)[0]
+    compare_group = SHELL_SCRIPT.split("{label:'Compare'", 1)[1].split("{label:'Investigate'", 1)[0]
+    hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
+
+    assert "href:'/device-analysis#activityEvidenceSection'" not in analyze_group
+    assert "href:'/device-analysis#activityEvidenceSection',title:'Configuration activity'" in hunt_group
+    assert "href:'/device-analysis#comparisonPanel',title:'Device configurations'" in compare_group
+    assert "body[data-nct-task=\"activityEvidenceSection\"] #baselineEvidenceControl" in device_analysis_page().body.decode()
+
+
+def test_planned_arkime_upload_and_hunt_timeline_are_visible_but_not_actionable():
+    collect_group = SHELL_SCRIPT.split("{label:'Collect'", 1)[1].split("{label:'Identify'", 1)[0]
+    hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
+
+    assert "{title:'Arkime',icon:'arkime',planned:true" in collect_group
+    assert "{title:'Observed Activity Upload',planned:true" in collect_group
+    assert "{title:'Timeline',planned:true" in hunt_group
+    assert "if(task.planned)" in SHELL_SCRIPT
+    assert "row.setAttribute('aria-disabled','true')" in SHELL_SCRIPT
+    assert "huntTimelinePlanned.hidden=task?.parent!=='Hunt'" in SHELL_SCRIPT
+    assert "A planned time-sliced view will connect retained scans" in SHELL_SCRIPT
+
+
+def test_device_collections_uses_combined_router_firewall_icon():
+    assert "device:'M7 7a5 5 0 1 0 0 10" in SHELL_SCRIPT
+    assert "M13 6h8v12h-8z" in SHELL_SCRIPT
+
+
+def test_arkime_navigation_uses_owl_icon():
+    assert "arkime:'M3 3l5 3a7 7 0 0 1 8 0l5-3" in SHELL_SCRIPT
+    assert "nct-nav-icon-filled" in SHELL_SCRIPT
+    assert "path.setAttribute('fill-rule','evenodd')" in SHELL_SCRIPT
 
 
 def test_network_device_analysis_bounds_large_route_tables_and_adds_filters():
@@ -323,8 +593,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     analysis_html = analysis_page().body.decode()
     device_html = device_analysis_page().body.decode()
     html = hunting_page().body.decode()
-    assert '<a href="/hunting">Hunt</a>' in analysis_html
-    assert '<a href="/hunting">Hunt</a>' in device_html
+    assert '<a href="/hunting">Hunt</a>' not in analysis_html
+    assert '<a href="/hunting">Hunt</a>' not in device_html
+    assert "title:'Hunt',icon:'hunt'" in SHELL_SCRIPT
     assert 'id="currentRun"' in html
     assert 'id="baselineRun"' in html
     assert 'id="search"' in html
@@ -455,10 +726,33 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
 
 def test_reachability_view_has_grouped_source_exposure_reports():
     html = reachability_page().body.decode()
+    assert '<button id="evaluate">Assess Path</button>' in html
     assert 'id="sourceExternal"' in html
     assert "External address / range" in html
     assert "source_external:$('sourceExternal').checked" in html
-    assert 'id="policySimulationPanel"' in html
+    assert 'id="changeScenarioPanel"' in html
+    assert 'id="useAssessmentInScenario"' in html
+    assert "Use In Proposed Changes" in html
+    assert 'id="scenarioFlowContext"' in html
+    assert 'id="scenarioSource"' in html
+    assert 'id="scenarioSourceExternal"' in html
+    assert 'id="scenarioDestination"' in html
+    assert 'id="scenarioProtocol"' in html
+    assert 'id="scenarioPort"' in html
+    assert 'id="scenarioFlowState"' in html
+    assert 'id="copyAssessmentToScenario"' in html
+    assert 'id="scenarioDeviceScope"' in html
+    assert 'id="showAllScenarioDevices"' in html
+    assert "function assessmentPathDevices" in html
+    assert "scopeScenarioDevicesToAssessment(latestReachResult)" in html
+    assert "Choose a device identified on this path" in html
+    assert "nct-reach-latest-assessment-v1" in html
+    assert "function restoreLatestAssessment" in html
+    assert "source:$('scenarioSource').value.trim()" in html
+    assert "destination:$('scenarioDestination').value.trim()" in html
+    assert "port:Number($('scenarioPort').value)" in html
+    assert "function useAssessmentInScenario" in html
+    assert "routeSimulationNetwork').value=routeNetwork" in html
     assert 'id="simulationDevice"' in html
     assert 'id="simulationInterface"' in html
     assert 'id="simulationAction"' in html
@@ -467,40 +761,75 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="simulationRule"' in html
     assert 'id="simulationExistingRules"' in html
     assert 'id="generatePolicyRule"' in html
-    assert 'id="simulationPath"' in html
-    assert 'id="simulationImpact"' in html
-    assert 'id="exportSimulation"' in html
-    assert 'id="showPolicySimulationOnMap"' in html
-    assert "/api/reachability/simulate-policy" in html
+    assert 'id="scenarioPath"' in html
+    assert 'id="scenarioImpact"' in html
+    assert 'id="scenarioValidation"' in html
+    assert 'id="exportScenario"' in html
+    assert 'id="showScenarioOnMap"' in html
+    assert "/api/reachability/simulate-change-scenario" in html
     assert "/api/reachability/policy-context/" in html
     assert "/api/reachability/policy-template" in html
     assert "changes no device configuration" in html
-    assert 'id="routeSimulationPanel"' in html
+    assert "background:var(--nct-surface-subtle,var(--panel))" in html
+    assert "background:var(--nct-control,#0b1520)" in html
     assert 'id="routeSimulationDevice"' in html
     assert 'id="routeSimulationNetwork"' in html
     assert 'id="routeSimulationInterface"' in html
     assert 'id="routeSimulationPriorityKind"' in html
     assert 'id="routeSimulationPriorityValue"' in html
-    assert 'id="routeSimulationPath"' in html
-    assert 'id="routeSimulationAlternates"' in html
-    assert 'id="routeSimulationImpact"' in html
+    assert 'id="routePriorityKindControl" class="hidden"' in html
+    assert "Route priority values are not needed for this action" in html
+    assert "classList.toggle('hidden',!priority)" in html
     assert 'value="set_priority"' in html
-    assert 'id="exportRouteSimulation"' in html
-    assert 'id="showRouteSimulationOnMap"' in html
-    assert "/api/reachability/simulate-route" in html
-    assert "NCT_RouteWhatIf_" in html
+    assert 'id="simulateScenario"' in html
+    assert "NCT_Proposed_Change_" in html
+    assert "policy device on projected path" in html
     assert "showSimulationOnMap" in html
     assert "version:2" in html
     assert 'id="exposureReportPanel"' in html
-    assert 'id="generateReport"' in html
+    assert 'id="reportCatalog"' in html
+    assert 'id="reportLoading"' in html
+    assert 'role="progressbar"' in html
+    assert "Loading Saved Networks and checking report freshness" in html
+    assert "Building this subnet report from retained evidence" in html
+    assert "prefers-reduced-motion:reduce" in html
+    assert 'class="generate-network-report"' in html
+    assert 'id="regenerateReport"' in html
     assert 'id="exportReport"' in html
-    assert "/api/reachability/exposure-report" in html
+    assert "/api/reachability/exposure-reports" in html
+    assert "No report yet" in html
+    assert "out of date" in html
     assert "Retained route, policy, and NAT objects" in html
     assert "function evidenceCard(item)" in html
     assert "View supporting evidence" in html
     assert "Open source in Analyze ↗" in html
     assert 'target="_blank" rel="noopener"' in html
     assert ".evidence.policy.deny" in html
+    assert 'id="rangeCoverage"' in html
+    assert "function renderRange(data)" in html
+    assert "Evidence-backed target discovery" in html
+    assert "Unique retained evidence in this selected range" in html
+    assert "Broad and default routes were not expanded into theoretical targets" in html
+    assert 'class="secondary range-drill"' in html
+    assert 'class="secondary range-map"' in html
+    assert "function rangeHostResult(data,row)" in html
+    assert "network.endsWith('/32')?network.slice(0,-3):network" in html
+    assert "function rangeRowAction(row,index,hostLevel)" in html
+    assert "View ${hops.length} hop" in html
+    assert "Host path" in html
+    assert "Known targets inside a broad range have different route or policy results" in html
+    assert "The target is known to exist, but no retained route" in html
+
+
+def test_range_results_explain_evidence_coverage_once():
+    html = reachability_page().body.decode()
+
+    assert "Evidence coverage" in html
+    assert "share of addresses in each CIDR backed by retained evidence" in html
+    assert "It is not a reachability success rate" in html
+    assert "row.identified_percent" in html
+    assert "row.routed_percent" not in html
+    assert "row.routed_address_count" not in html
 
 
 def test_reachability_query_fields_have_clear_buttons():
@@ -514,7 +843,7 @@ def test_reachability_query_fields_have_clear_buttons():
     assert "bindClearButton('destination','clearDestination')" in html
     assert "function applyIncomingContext()" in html
     assert "params.get('destination')" in html
-    assert "Choose a Source, then evaluate." in html
+    assert "Choose a Source, then select Assess Path." in html
 
 
 def test_async_evidence_pages_show_explicit_loading_states():
@@ -537,6 +866,8 @@ def test_search_fields_receive_consistent_clear_controls():
     assert "function installClearableInputs()" in SESSION_SCRIPT
     assert 'input[type="search"],input[data-nct-clearable="true"]' in SESSION_SCRIPT
     assert "nct-input-clear" in SESSION_SCRIPT
+    assert "::-webkit-search-cancel-button" in SESSION_SCRIPT
+    assert ".network-search-control" in SESSION_SCRIPT
     assert "new MutationObserver" in SESSION_SCRIPT
     assert "input.dispatchEvent(new Event('input'" in SESSION_SCRIPT
 
@@ -612,21 +943,70 @@ def test_reachability_results_can_open_a_temporary_map_focus():
     assert "Bounded collateral scope" in map_html
 
 
-def test_primary_navigation_orders_device_nmap_analyze_hunt_and_map():
-    expected = [">Device</a>", ">Nmap</a>", ">Analyze</a>", ">Hunt</a>", ">Map</a>"]
-    for page in (operator_page(), analysis_page(), device_config_page(), hunting_page(), network_map_page()):
-        html = page.body.decode()
-        positions = [html.index(label) for label in expected]
-        assert positions == sorted(positions)
+def test_reachability_paths_have_color_key_and_visibility_toggles():
+    reach_html = reachability_page().body.decode()
+    map_html = network_map_page().body.decode()
+
+    assert 'id="pathOptions"' in reach_html
+    assert "function renderPathOptions" in reach_html
+    assert "Only the active path is shown by default" in reach_html
+    assert "Selections carry to Map" in reach_html
+    assert "Show all paths" in reach_html
+    assert "Active only" in reach_html
+    assert "data-path-action" in reach_html
+    assert "Show only this path on Map" not in reach_html
+    assert "visible_path_ids" in reach_html
+    assert ".role-equal_cost" in reach_html
+    assert ".role-standby" in reach_html
+    assert ".role-blocked" in reach_html
+    assert 'id="reachPathKey"' in map_html
+    assert "function visibleReachPathOptions" in map_html
+    assert "reachPathColors" in map_html
+    assert "reach-path-toggle" in map_html
+    assert "Show all paths" in map_html
+    assert "Active only" in map_html
+    assert "function setReachPathVisibility" in map_html
+    assert "--reach-focus-color" in map_html
+    assert "reachFocusPathNodeIds" in map_html
 
 
-def test_scan_history_keeps_run_actions_on_one_line():
+def test_primary_navigation_follows_the_operator_workflow():
+    expected = [
+        "title:'Device collections'",
+        "title:'Nmap scans'",
+        "title:'Hostname evidence'",
+        "title:'Current network'",
+        "title:'Network devices'",
+        "title:'Changes over time'",
+        "title:'Hunt',icon:'hunt'",
+        "title:'Reach',icon:'reach'",
+        "title:'Map',icon:'map'",
+    ]
+    positions = [SHELL_SCRIPT.index(label) for label in expected]
+    assert positions == sorted(positions)
+    assert "href:'/network-map#mapFilesPanel',title:'Files & export'" in SHELL_SCRIPT
+    assert "href:'/device-config#wanDesignationPanel',title:'WAN designation'" in SHELL_SCRIPT
+    assert "title:'WAN gateway evidence'" not in SHELL_SCRIPT
+    assert "href:'/network-map#mapFaqPanel'" not in SHELL_SCRIPT
+    assert "mapWorkspace:['mapSummary','mapLayoutPanel']" in SHELL_SCRIPT
+    nmap_group = SHELL_SCRIPT.split("{title:'Nmap scans'", 1)[1].split("{label:'Identify'", 1)[0]
+    current_network_group = SHELL_SCRIPT.split("{title:'Current network'", 1)[1].split("{title:'Network devices'", 1)[0]
+    assert "href:'/analysis#xmlImport',title:'Import Nmap evidence'" in nmap_group
+    assert "href:'/analysis#xmlImport'" not in current_network_group
+
+
+def test_scan_history_uses_open_details_for_retained_evidence_files():
     html = operator_page().body.decode()
     assert ".history-run-actions{display:flex;flex-wrap:nowrap" in html
     assert '<div class="history-run-actions"><button class="secondary" data-preset=' in html
     assert '>Use preset</button><button class="secondary" data-network=' in html
+    assert 'title="Open run details and retained evidence files">Open details</button>' in html
+    assert "Load evidence files" not in html
+    assert "data-evidence=" not in html
+    assert "async function loadScanEvidence" not in html
     assert 'data-hunt="${esc(run.run_id)}">Hunt</button>' in html
-    assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}' in html
+    assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}#huntOverview' in html
+    assert '#scanFocus' not in html
 
 
 def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
@@ -666,6 +1046,15 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "target_interface_address" in html
     assert "edge-endpoint-label" in html
     assert "function positionEndpointLabel" in html
+    assert "function resolveEndpointLabelCollisions" in html
+    assert "function endpointLabelBounds" in html
+    assert "function edgeMidpointLabelBounds" in html
+    assert "function suppressRedundantTransitDecorations" in html
+    assert "suppress_endpoint_labels:true" in html
+    assert "showEndpointLabels=!edge.suppress_endpoint_labels" in html
+    assert "function interfaceAddressIdentity" in html
+    assert "!endpointAddresses.has(interfaceAddressIdentity(address))" in html
+    assert "label.dataset.labelOffset" in html
     assert "Interface IP addresses" in html
     assert "composite-annotation-fill" in html
     assert "annotationUnionFill" in html
@@ -735,6 +1124,10 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function mergeOverlappingAnnotations" in html
     assert "Group touching shapes" in html
     assert "function annotationGroupEntries" in html
+    assert "function annotationFollowersForNodeMove" in html
+    assert "contained.filter(id=>moving.has(id)).length<=contained.length/2" in html
+    assert "function nearestShapeForLabel" in html
+    assert "const attached of attachedLabelsForShapes(ids)" in html
     assert "function rotateAnnotationEntries" in html
     assert "function renderCompositeAnnotationOutlines" in html
     assert "feMorphology" in html
@@ -745,8 +1138,10 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function updateMapControlsCanvasBounds" in html
     assert "nct-map-controls-corner-v1" in html
     assert "Map controls · drag to move" in html
-    assert 'id="mapFilesButton"' in html
-    assert 'id="mapFilesDialog"' in html
+    assert 'id="mapFilesPanel"' in html
+    assert 'id="exportControlGrid"' in html
+    assert 'id="mapFilesButton"' not in html
+    assert 'id="mapFilesDialog"' not in html
     assert ".map-annotation.region .annotation-text{display:none}" in html
     assert 'id="gatewayGrouping"' in html
     assert "Gateway groups: Joined" in html
@@ -760,9 +1155,8 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert 'id="toggleMapControls"' in html
     assert 'id="mapLegendOverlay"' in html
     assert 'id="toggleLegend"' in html
-    assert 'id="mapFaqButton"' in html
-    assert 'id="mapFaqDialog"' in html
-    assert "Why did new scan results go to the parking lot?" in html
+    assert 'id="mapFaqPanel"' not in html
+    assert "Map Controls explains and manages point-to-point labels" in SHELL_SCRIPT
     assert 'id="connectionQueue"' in html
     assert 'id="parkSelection"' in html
     assert "Start with blank canvas" in html
@@ -815,14 +1209,18 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert 'id="wanBoundaryInterface"' in html
     assert "wanBoundaryRail.id='wanBoundaryRail'" in html
     assert "function updateWanBoundaryMarker" in html
-    assert "externalOrb=Boolean(wanAnchor&&externalWanGatewayId===wanAnchor.nodeId)" in html
-    assert "active=Boolean(wanAnchor&&!externalOrb&&!hiddenNodeIds.has(wanAnchor.nodeId)" in html
+    assert "externalPortal=Boolean(wanAnchor&&externalWanGatewayId===wanAnchor.nodeId&&wanGatewayPresentation==='portal')" in html
+    assert "active=Boolean(wanAnchor&&!externalPortal&&!hiddenNodeIds.has(wanAnchor.nodeId)" in html
     assert "function updateWanUplinkGeometry" in html
     assert "function externalWanAttachmentId" in html
     assert "function wanUplinkSourceId" in html
     assert "function wanGatewayIdsForView" in html
     assert "function applyExternalGatewaySemantics" in html
     assert "externalWanGatewayIds=new Set()" in html
+    assert 'id="wanReadinessNotice"' in html
+    assert "WAN gateway not identified" in html
+    assert 'href="/device-config#wanDesignationPanel"' in html
+    assert "gateways.length||semantic?.air_gapped" in html
     assert "Use as secondary External WAN gateway" in html
     assert "class:'wan-uplink'" in html
     assert "WAN through ${wanAnchor.label}" in html
@@ -917,6 +1315,7 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function nodeZoomDetail" in html
     assert "class:'node-zoom-detail'" in html
     assert 'id="miniMap"' in html
+    assert 'class="minimap-title"' not in html
     assert "id:'miniViewport'" in html
     assert "function renderMinimap" in html
     assert "function navigateFromMinimap" in html
@@ -996,18 +1395,45 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "function nodeDimensions" in html
     assert "w:250,h:68" in html
     assert "interfaceCount" in html
-    assert 'id="mapSummary" open' in html
+    assert 'class="map-inventory-bar" id="mapSummary"' in html
     assert 'id="summaryCompact"' in html
-    assert '.summary-panel>summary::before' in html
-    assert '.summary-panel[open]>summary::before' in html
+    assert '.map-inventory-bar{position:sticky;top:calc(var(--nct-header-height,64px) + 8px)' in html
+    assert '<summary>Network inventory' not in html
     assert 'id="edgeCount"' not in html
     assert 'id="sourceCount"' not in html
     assert ".workspace>aside { display:none; }" in html
     assert ".workspace.map-expanded .map-shell>#details { display:block;" in html
     assert 'id="toggleWorkspace"' in html
-    assert 'class="workspace-toggle-dock"' in html
-    assert '.workspace-toggle-dock{position:sticky;top:126px' in html
-    assert 'body.map-expanded .workspace-toggle-dock{position:fixed;top:14px;left:50%' in html
+    assert '.zoom-controls #toggleWorkspace{margin-left:auto}' in html
+    assert 'id="mapLayoutPanel"' in html
+    assert 'id="layoutControlGrid" class="map-layout-grid"' in html
+    assert "map-layout-field-action new-layout-group" in html
+    assert "newLayoutGroup.append($('layoutName'),$('saveLayout'))" in html
+    assert "savedLayoutGroup.append($('savedLayouts'),$('loadLayout'),$('setDefaultLayout'))" in html
+    assert 'id="currentLayoutName">Unsaved working layout' in html
+    assert 'id="mapMissingCount">0' in html
+    assert 'id="parkingCountCompact">0' in html
+    assert 'id="hiddenCountCompact">0' in html
+    assert "function updateLayoutWorkspaceStatus()" in html
+    assert '<h2>Layout</h2>' not in html
+    assert 'class="workspace-toggle-dock"' not in html
+    assert 'id="expandedWorkspaceControls" class="expanded-workspace-controls"' in html
+    assert "expandedControls.append(fitButton,mapControlsButton,button)" in html
+    assert "scaleControls.insertBefore(editButton,$('detailLevel'))" in html
+    assert "layoutGrid.insertBefore(editButton,$('layoutPreset'))" in html
+    assert "scaleControls.insertBefore(fitButton,$('gridSnap'))" in html
+    assert "scaleControls.insertBefore(mapControlsButton,$('toggleLegend'))" in html
+    assert "#detailLevel,#overlayLegend{display:none!important}" in html
+    assert "--expanded-safe-top" in html
+    assert "function expandedControlSafeTop" in html
+    assert "controlsRect.bottom-shellRect.top+8" in html
+    assert ".workspace.map-expanded .zoom-controls #toggleEditMode" in html
+    assert "button.textContent='↙'" in html
+    assert ".workspace.map-expanded #zoomFit{border-color:var(--accent);background:var(--accent)" in html
+    assert "scaleControls.append(button)" in html
+    assert "workspaceExpandButton.textContent='↗'" in html
+    assert ".map-layout-actions:empty{display:none}" in html
+    assert "body[data-nct-task=mapWorkspace] #nct-page-context{display:none}" in SHELL_SCRIPT
     assert 'id="toggleDetails"' in html
     assert 'class="details-control"' in html
     assert ".details-control{display:none}.workspace.map-expanded .details-control{display:flex}" in html
@@ -1015,6 +1441,15 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "Large network · 4× area" in html
     assert ".workspace.map-expanded .details-control" in html
     assert ".workspace.map-expanded .map-shell { display:flex; flex:1 1 auto" in html
+    assert ".workspace.map-expanded{inset:0}" in html
+    assert ".workspace.map-expanded>.map-panel>:not(.map-shell){display:none!important}" in html
+    assert ".workspace.map-expanded .canvas{border:0;border-radius:0}" in html
+    assert 'id="wanGatewayPresentation"' in html
+    assert "WAN gateway: Portal" in html
+    assert "WAN gateway: Top anchor" in html
+    assert "wanGatewayPresentation==='top'" in html
+    assert "wanGatewayPresentation==='portal'" in html
+    assert "wanGatewayPresentation," in html
     assert ".workspace.map-expanded .canvas { flex:1 1 auto; height:auto; min-height:0" in html
     assert "workspace.map-expanded" in html
     assert "workspace.map-expanded.details-collapsed" in html
@@ -1186,8 +1621,13 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="retainedScanSelect"' in html
     assert "currentNetwork.hosts" in html
     assert 'id="networkOutliersPanel"' in html
-    assert "Uncommon ports by OS" in html
+    assert "Least Frequency Analysis (LFA)" in html
     assert "The Subnet filter above recalculates this view" in html
+    assert 'id="lfaThreshold"' in html
+    assert 'min="1" max="50" step="1" value="20"' in html
+    assert 'id="lfaThresholdValue"' in html
+    assert "members.length*(threshold/100)" in html
+    assert "$('lfaThreshold').oninput=updateLfaThreshold" in html
     assert "renderNetworkOutliers" in html
     assert 'id="networkChangesPanel"' in html
     assert 'id="loadNetworkChanges"' in html
@@ -1199,24 +1639,20 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="comparisonCurrent"' in html
 
 
-def test_hunt_and_analyze_include_simple_table_controls_without_personal_presets():
+def test_hunt_and_analyze_use_their_built_in_controls_without_global_table_toolbar():
     hunt_html = hunting_page().body.decode()
     analyze_html = analysis_page().body.decode()
     for html in (hunt_html, analyze_html):
-        assert '/assets/nct-view-preferences.js' in html
+        assert '/assets/nct-view-preferences.js' not in html
         assert 'data-workspace-card=' in html
     assert 'data-workspace-card="network-filters"' in hunt_html
     assert 'data-workspace-card="network-changes"' in analyze_html
     assert 'id="analysisHostRows"' in analyze_html
-    from app.view_preferences_ui import VIEW_PREFERENCES_SCRIPT
-
-    assert "pageNode.textContent!==pageLabel" in VIEW_PREFERENCES_SCRIPT
-    assert "if(pagerOnly)return" in VIEW_PREFERENCES_SCRIPT
-    assert "Table density" not in VIEW_PREFERENCES_SCRIPT
-    assert '<span class="nct-view-status">Table display</span>' in VIEW_PREFERENCES_SCRIPT
-    assert '<option value="50" selected>50</option>' in VIEW_PREFERENCES_SCRIPT
-    assert '<label>Personal preset' not in VIEW_PREFERENCES_SCRIPT
-    assert 'data-preset-name' not in VIEW_PREFERENCES_SCRIPT.split('function captureFilters', 1)[0]
+    assert 'id="networkPageSize"' in analyze_html
+    assert 'id="networkFocus"' in analyze_html
+    assert 'id="networkSearch"' in analyze_html
+    assert "Table display" not in analyze_html
+    assert "Table display" not in hunt_html
 
 
 def test_expandable_sections_share_one_left_chevron_language():
@@ -1243,18 +1679,51 @@ def test_expandable_sections_share_one_left_chevron_language():
     assert "details>summary::before" in pages["device-analysis"]
     assert ".searchsploit-result>summary::before,.exposure-detail>summary::before" in pages["hunt"]
     assert ".report-source>summary::before,.report-result>summary::before" in pages["reach"]
-    assert ".summary-panel>summary::before,.hidden-objects>summary::before" in pages["map"]
+    assert ".hidden-objects>summary::before" in pages["map"]
     assert ".evidence-files-drawer>summary::before" in pages["map"]
+
+
+def test_collapsible_workspaces_shrink_to_the_available_width():
+    nmap = operator_page().body.decode()
+    device = device_config_page().body.decode()
+    analyze = analysis_page().body.decode()
+
+    assert 'id="responsive-collapsible-workspaces"' in nmap
+    assert ".history-groups{grid-template-columns:minmax(0,1fr)}" in nmap
+    assert ".history-body .table-wrap{min-width:0;max-width:100%;overflow-x:auto" in nmap
+    assert ".history-table thead th{position:static}" in nmap
+    assert ".history-run-actions{flex-wrap:wrap;white-space:normal}" in nmap
+    assert 'id="responsive-collapsible-workspaces"' in device
+    assert ".history-list,.run-list,.structured-results{grid-template-columns:minmax(0,1fr)}" in device
+    assert "details.device-history,details.run-card,.result-section,.run-body{overflow:hidden}" in device
+    assert 'id="responsive-collapsible-workspaces"' in analyze
+    assert ".comparison-body-panel .table-wrap,.comparison-body .table-wrap{min-width:0;max-width:100%;overflow-x:auto" in analyze
+    assert "body.nct-shell>main,body.nct-shell>main>*{min-width:0;max-width:100%}" in SHELL_SCRIPT
+    assert "body.nct-shell main details>summary{box-sizing:border-box;min-width:0;max-width:100%;overflow-wrap:anywhere}" in SHELL_SCRIPT
 
 
 def test_nmap_advanced_operations_are_collapsed_without_removing_capability():
     html = operator_page().body.decode()
 
+    assert 'id="scanPrerequisiteNotice"' in html
+    assert 'id="scanBasicFields"' in html
+    assert '<details id="availablePresetsPanel"' in html
+    assert 'id="availablePresets"' in html
+    assert '<details id="scanAdvancedOptions" class="advanced-drawer">' in html
+    assert '<summary>Advanced scan options and pre-launch safety check</summary>' in html
     assert '<details class="advanced-drawer" id="profileManagementPanel">' in html
-    assert '<summary>Advanced profile management</summary>' in html
+    assert '<summary>Scan profile management</summary>' in html
     assert '<details class="advanced-drawer" id="scheduledScansPanel">' in html
     assert '<summary>Scheduled scans</summary>' in html
     assert html.index('id="scheduledScansPanel"') < html.index('id="runNow"')
+
+
+def test_tcp_udp_top_scopes_are_allowed_and_split_by_the_backend():
+    html = operator_page().body.decode()
+
+    assert "normalizeCombinedScopes" not in html
+    assert "TCP + UDP needs independent" not in html
+    assert "$('protocol').addEventListener('change',()=>{showOptions();setDirty()})" in html
     assert html.index('id="runNow"') < html.index('id="profileManagementPanel"')
     for control_id in (
         "profileName",

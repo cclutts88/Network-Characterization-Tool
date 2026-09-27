@@ -8,6 +8,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from app.database import connect_database
+
 
 UNKNOWN_OS = {"", "unknown", "unknown os", "unclassified", "none", "n/a"}
 
@@ -41,7 +43,7 @@ def identity_key(ip: object = None, mac: object = None) -> str:
 
 
 def init_os_override_storage(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS host_os_overrides (
                 identity_key TEXT PRIMARY KEY,
@@ -128,7 +130,7 @@ def set_os_override(
     clean_scanner = str(scanner_os or "").strip()[:240] or None
     changed_at = utc_now()
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         existing = db.execute(
             "SELECT created_at FROM host_os_overrides WHERE identity_key = ?", (key,)
@@ -173,7 +175,7 @@ def delete_os_override(
     clean_analyst = _clean_required(analyst, "Analyst", 100)
     clean_reason = _clean_required(reason, "Reason", 500)
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         existing = db.execute(
             "SELECT * FROM host_os_overrides WHERE identity_key = ?", (key,)
@@ -198,7 +200,7 @@ def delete_os_override(
 
 def list_os_overrides(db_path: Path) -> list[dict]:
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
             "SELECT * FROM host_os_overrides ORDER BY updated_at DESC, identity_key"
@@ -207,7 +209,7 @@ def list_os_overrides(db_path: Path) -> list[dict]:
 
 def os_override_history(db_path: Path, key: str) -> list[dict]:
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
             """SELECT * FROM host_os_override_audit
@@ -251,7 +253,7 @@ def set_inference_review(
     retained_json = json.dumps(inference, sort_keys=True)
     changed_at = utc_now()
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         existing = db.execute(
             "SELECT created_at FROM host_os_inference_reviews WHERE identity_key = ?",
@@ -292,7 +294,7 @@ def set_inference_review(
 
 def inference_review_history(db_path: Path, key: str) -> list[dict]:
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
             """SELECT * FROM host_os_inference_review_audit
@@ -303,7 +305,7 @@ def inference_review_history(db_path: Path, key: str) -> list[dict]:
 
 def apply_inference_reviews(records: list[dict], db_path: Path) -> list[dict]:
     init_os_override_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         reviews = [dict(row) for row in db.execute(
             "SELECT * FROM host_os_inference_reviews"

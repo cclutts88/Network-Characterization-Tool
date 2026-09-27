@@ -6,6 +6,8 @@ from pathlib import Path
 import sqlite3
 import uuid
 
+from app.database import connect_database
+
 
 class WorkspaceConflict(ValueError):
     pass
@@ -16,7 +18,7 @@ def utc_now() -> str:
 
 
 def init_workspace_storage(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_workspace_layouts (
                 layout_id TEXT PRIMARY KEY,
@@ -58,7 +60,7 @@ def _layout(row: sqlite3.Row) -> dict:
 
 def list_layouts(db_path: Path, owner: str) -> list[dict]:
     init_workspace_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         rows = db.execute(
             """SELECT * FROM analyst_workspace_layouts
@@ -80,7 +82,7 @@ def list_layouts(db_path: Path, owner: str) -> list[dict]:
 def set_default_layout(db_path: Path, *, owner: str, layout_id: str | None) -> dict:
     init_workspace_storage(db_path)
     changed_at = utc_now()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         if layout_id is None:
             db.execute(
@@ -126,7 +128,7 @@ def save_layout(
         raise ValueError("Layout snapshot exceeds the 2 MB limit")
     changed_at = utc_now()
     init_workspace_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         if layout_id:
             existing = db.execute(
@@ -176,7 +178,7 @@ def delete_layout(
     db_path: Path, *, owner: str, layout_id: str, expected_version: int
 ) -> dict:
     init_workspace_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_workspace_layouts WHERE layout_id = ? AND owner = ?",
@@ -205,7 +207,7 @@ def publish_layout(
     db_path: Path, *, layout_id: str, actor: str, shared: bool
 ) -> dict:
     init_workspace_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_workspace_layouts WHERE layout_id = ?", (layout_id,)

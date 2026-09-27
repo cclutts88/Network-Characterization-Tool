@@ -327,6 +327,13 @@ def merge_analyses(analyses: Iterable[dict]) -> dict:
         "started": first.get("started") or "",
         "finished": last.get("finished") or "",
         "reported_total": sum(int(item.get("reported_total") or 0) for item in analysis_list),
+        "reported_up_count": sum(
+            int(item.get("reported_up_count", item.get("up_count", 0)) or 0)
+            for item in analysis_list
+        ),
+        "assumed_up_count": sum(
+            int(item.get("assumed_up_count") or 0) for item in analysis_list
+        ),
         "coverage": _merge_xml_coverage(analysis_list),
         "warnings": list(dict.fromkeys(
             warning

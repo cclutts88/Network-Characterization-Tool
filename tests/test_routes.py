@@ -28,6 +28,7 @@ def test_primary_pages_and_profiles_are_available():
         reachability_page = client.get("/reachability")
         profiles = client.get("/api/scan-profiles")
         scan_references = client.get("/assets/nct-scan-references.js")
+        arkime_owl = client.get("/assets/arkime-betrayed-owl.png")
 
     assert device_page.status_code == 200
     assert "Build a collection plan" in device_page.text
@@ -36,6 +37,9 @@ def test_primary_pages_and_profiles_are_available():
     assert analysis_page.status_code == 200
     assert scan_references.status_code == 200
     assert "window.NCTScanReference" in scan_references.text
+    assert arkime_owl.status_code == 200
+    assert arkime_owl.headers["content-type"] == "image/png"
+    assert len(arkime_owl.content) > 100_000
     assert "Compare scans" in analysis_page.text
     assert "Previous scans" not in analysis_page.text
     assert reachability_page.status_code == 200
@@ -89,6 +93,40 @@ def test_reachability_api_returns_json_for_explicit_external_address(monkeypatch
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     assert response.json()["query"]["source_external"] is True
+
+
+def test_reachability_api_dispatches_destination_cidr_to_evidence_backed_range(monkeypatch):
+    devices = [{
+        "run_id": "f" * 32,
+        "device": {"name": "Edge", "address": "198.51.100.1", "type": "router"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "inside", "network": "10.20.0.0/16", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "10.20.0.0/16", "interface": "inside", "direct": True, "protocol": "connected"},
+            {"network": "10.30.0.0/16", "via": "198.51.100.2", "protocol": "static"},
+        ]},
+        "policy": {"firewall_acl": []},
+    }]
+    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: {"hosts": [], "findings": []})
+    monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
+    monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: devices)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/reachability/evaluate",
+            json={
+                "source": "Internet", "destination": "10.0.0.0/8",
+                "protocol": "tcp", "port": 22,
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "reachability_range_analysis_complete"
+    assert result["grouping_prefix"] == 16
+    assert [item["network"] for item in result["candidates"]] == ["10.20.0.0/16"]
 
 
 def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
@@ -150,6 +188,52 @@ def test_preview_and_package_use_the_same_udp_settings_and_required_n():
     assert "53,161,47808" in preview.json()["copy_text"]
     assert package.status_code == 200
     assert "UDP_Baseline_" in package.headers["content-disposition"]
+
+
+def test_combined_top_scopes_generate_independent_tcp_and_udp_phases():
+    body = {
+        "name": "Combined Top Ports",
+        "created_by": "analyst01",
+        "profile": "Custom",
+        "scan_options": {
+            "protocol": "tcp_udp",
+            "tcp_scope": "top_1000",
+            "udp_scope": "top_100",
+            "discovery_mode": "nmap",
+            "timing": "fast",
+        },
+        "terrain": [{"name": "Test", "targets": ["192.0.2.0/30"]}],
+        "no_strike_mode": "none",
+        "no_strike": [],
+        "chunk_size": 16,
+    }
+
+    with TestClient(app) as client:
+        preview = client.post("/api/preview", json=body)
+        package = client.post("/api/packages", json=body)
+
+    assert preview.status_code == 200
+    preview_data = preview.json()
+    assert preview_data["execution_mode"] == "split_protocol_phases"
+    assert preview_data["command_count"] == 2
+    assert [item["protocol"] for item in preview_data["nmap_phase_flags"]] == ["tcp", "udp"]
+    tcp_flags, udp_flags = [item["flags"] for item in preview_data["nmap_phase_flags"]]
+    assert "-sS" in tcp_flags
+    assert tcp_flags[tcp_flags.index("--top-ports") + 1] == "1000"
+    assert "-sU" in udp_flags
+    assert udp_flags[udp_flags.index("--top-ports") + 1] == "100"
+    assert package.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+        linux_script = archive.read("run-linux.sh").decode()
+        manifest = json.loads(archive.read("manifest.json"))
+    assert "-sS" in linux_script and "--top-ports 1000" in linux_script
+    assert "-sU" in linux_script and "--top-ports 100" in linux_script
+    assert manifest["execution_mode"] == "split_protocol_phases"
+    assert [item["protocol"] for item in manifest["nmap_phase_flags"]] == ["tcp", "udp"]
+    assert manifest["chunks"][0]["output_files"] == [
+        "results/001-Test-tcp.xml",
+        "results/001-Test-udp.xml",
+    ]
 
 
 def test_unchunked_slash_16_builds_one_continuous_scan():
@@ -441,6 +525,7 @@ def test_vyos_password_preview_lists_the_real_temporary_file_workflow_in_order()
         "Start accountability capture",
         "Open one-time SSH session",
         "Verify authenticated SSH session",
+        "Capture command history",
         "Run read-only device collection",
         "Copy temporary output to NCT",
         "Normalize retained output",
@@ -594,6 +679,7 @@ def test_key_preview_never_claims_a_remote_temporary_file_workflow():
     assert phases == [
         "Validate local SSH key",
         "Start accountability capture",
+        "Capture command history",
         "Run read-only device collection",
         "Retain streamed output",
     ]

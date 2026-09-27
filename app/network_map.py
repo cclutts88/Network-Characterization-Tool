@@ -11,7 +11,8 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from app.device_configs import CONFIG_DIR
+from app.database import connect_database
+from app.device_configs import CONFIG_DIR, active_configuration_text
 from app.mac_enrichment import (
     lookup_oui_vendor,
     normalize_mac,
@@ -590,18 +591,14 @@ def add_analysis_hosts(
 
 
 def imported_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
-    db = None
     try:
-        db = sqlite3.connect(DB_PATH)
-        rows = db.execute(
-            "SELECT sha256, filename, imported_at, analysis_json FROM imports "
-            "ORDER BY imported_at DESC LIMIT 200"
-        ).fetchall()
+        with connect_database(DB_PATH) as db:
+            rows = db.execute(
+                "SELECT sha256, filename, imported_at, analysis_json FROM imports "
+                "ORDER BY imported_at DESC LIMIT 200"
+            ).fetchall()
     except sqlite3.Error:
         return 0
-    finally:
-        if db is not None:
-            db.close()
     count = 0
     for sha256, filename, imported_at, analysis_json in rows:
         try:
@@ -682,17 +679,13 @@ def parse_nmap_xml(path: Path) -> list[dict]:
 
 
 def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
-    db = None
     try:
-        db = sqlite3.connect(DB_PATH)
-        rows = db.execute(
-            "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
-        ).fetchall()
+        with connect_database(DB_PATH) as db:
+            rows = db.execute(
+                "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
+            ).fetchall()
     except sqlite3.Error:
         return 0
-    finally:
-        if db is not None:
-            db.close()
     count = 0
     for (manifest_json,) in rows:
         try:
@@ -983,6 +976,62 @@ def parse_config_text(text: str) -> tuple[list[dict], list[dict]]:
 
         route_parts = line.strip(" ;").split()
         lower_route_parts = [value.lower() for value in route_parts]
+
+        # FreeBSD/pfSense ``netstat -rn`` rows use positional columns rather
+        # than the ``via``/``dev`` words emitted by Linux and Cisco devices:
+        #
+        #   Destination       Gateway          Flags  Netif
+        #   33.107.4.0/24     33.107.80.146    UGS    vmx2
+        #   33.107.80.144/30  link#3           U      vmx2
+        #
+        # Parse these rows before the generic route handling so both static
+        # and connected routes retain their actual egress interface.
+        if (
+            len(route_parts) >= 4
+            and re.fullmatch(r"[A-Z0-9]+", route_parts[2], re.I)
+            and "u" in lower_route_parts[2]
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.:/-]*", route_parts[3])
+        ):
+            destination = route_parts[0]
+            if destination.lower() == "default":
+                bsd_network = "0.0.0.0/0"
+            elif "/" in destination:
+                bsd_network = valid_network(destination)
+            else:
+                destination_ip = valid_ip(destination)
+                bsd_network = (
+                    valid_network(f"{destination_ip}/32")
+                    if destination_ip
+                    else None
+                )
+            if bsd_network:
+                try:
+                    is_ipv4 = ipaddress.ip_network(bsd_network).version == 4
+                except ValueError:
+                    is_ipv4 = False
+                gateway = valid_ip(route_parts[1])
+                direct = lower_route_parts[1].startswith("link#")
+                route_interface = route_parts[3]
+                if is_ipv4 and (gateway or direct):
+                    route_key = (
+                        bsd_network,
+                        gateway,
+                        route_interface,
+                        direct,
+                    )
+                    if route_key not in seen_routes:
+                        routes.append(
+                            {
+                                "network": bsd_network,
+                                "via": gateway,
+                                "interface": route_interface,
+                                "direct": direct,
+                                "line": line[:500],
+                            }
+                        )
+                        seen_routes.add(route_key)
+                    continue
+
         explicit_route: tuple[str, str | None, str | None] | None = None
         if len(route_parts) >= 4 and lower_route_parts[:2] == ["ip", "route"]:
             destination = route_parts[2]
@@ -1198,7 +1247,7 @@ def configuration_network_candidates(
             text = "\n".join(path.read_text(errors="replace") for path in artifacts)
         except OSError:
             continue
-        interfaces, routes = parse_config_text(text)
+        interfaces, routes = parse_config_text(active_configuration_text(text))
         device_name = manifest.get("device_name") or manifest.get("device_address")
         common = {
             "run_id": manifest.get("run_id") or run_dir.name,
@@ -1330,6 +1379,58 @@ def config_result_text(run_dir: Path, manifest: dict) -> tuple[str, str | None]:
     return "", None
 
 
+def configuration_identity_node(nodes: dict[str, dict], *values: object) -> dict | None:
+    """Return one unambiguous existing IP node identified by a saved device name."""
+    expected = {
+        str(value).strip().rstrip(".").casefold()
+        for value in values
+        if value is not None and str(value).strip()
+    }
+    if not expected:
+        return None
+    matches: list[dict] = []
+    for node in nodes.values():
+        if node.get("kind") not in {"host", "device", "gateway"}:
+            continue
+        if not valid_ip(node.get("ip")):
+            continue
+        observed = {
+            str(value).strip().rstrip(".").casefold()
+            for value in (node.get("label"), node.get("hostname"))
+            if value is not None and str(value).strip()
+        }
+        if expected & observed:
+            matches.append(node)
+    return matches[0] if len(matches) == 1 else None
+
+
+def map_configuration_details(text: str, commands: list[str] | None) -> tuple[list[dict], list[dict], dict]:
+    """Parse the configuration once for both device identity and map details."""
+    interfaces, routes = parse_config_text(text)
+    switch_detail = parse_switch_evidence(text, commands or [])
+    interfaces = merge_switch_interfaces(interfaces, switch_detail)
+    interfaces = [
+        item
+        for item in interfaces
+        if not item.get("name", "").lower().startswith("lo")
+        and not (
+            valid_network(item.get("address"))
+            and ipaddress.ip_network(valid_network(item.get("address"))).is_loopback
+        )
+    ]
+    return interfaces, routes, switch_detail
+
+
+def configuration_interface_ips(interfaces: list[dict]) -> list[str]:
+    """Return stable, unique IPv4 interface addresses suitable for node identity."""
+    addresses = {
+        str(ipaddress.ip_interface(address).ip)
+        for interface in interfaces
+        if (address := valid_interface_address(interface.get("address")))
+    }
+    return sorted(addresses, key=lambda value: int(ipaddress.ip_address(value)))
+
+
 def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, str], dict],
                           warnings: list[str]) -> int:
     if not CONFIG_DIR.exists():
@@ -1351,9 +1452,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             "configuration_pull", "interactive_configuration_pull", "manual_upload",
         } and not legacy_pull:
             continue
-        ip = valid_ip(manifest.get("device_address"))
-        if not ip:
-            continue
+        device_address = str(manifest.get("device_address") or "").strip()
+        ip = valid_ip(device_address)
         run_id = manifest.get("run_id") or path.parent.name
         source = source_record(
             "device_configuration",
@@ -1361,10 +1461,17 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
             manifest.get("completed_at") or manifest.get("created_at"),
             f"/api/device-configs/{run_id}/files/manifest.json",
         )
-        if ip in aliases and aliases[ip] in nodes:
+        text: str | None = None
+        filename: str | None = None
+        interfaces: list[dict] | None = None
+        routes: list[dict] | None = None
+        switch_detail: dict | None = None
+        identity_hostname = manifest.get("device_name") or (device_address if not ip else None)
+        node: dict | None = None
+        if ip and ip in aliases and aliases[ip] in nodes:
             node = nodes[aliases[ip]]
             add_source(node, source)
-        else:
+        elif ip:
             node = ensure_ip_node(
                 nodes,
                 ip,
@@ -1375,19 +1482,67 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
                 source=source,
             )
             aliases[ip] = node["id"]
+        else:
+            node = configuration_identity_node(
+                nodes,
+                manifest.get("device_name"),
+                device_address,
+            )
+            if node is None:
+                text, filename = config_result_text(path.parent, manifest)
+                if text:
+                    interfaces, routes, switch_detail = map_configuration_details(
+                        text, manifest.get("commands")
+                    )
+                interface_ips = configuration_interface_ips(interfaces or [])
+                for interface_ip in interface_ips:
+                    alias_id = aliases.get(interface_ip)
+                    candidate = nodes.get(alias_id) if alias_id else nodes.get(f"ip:{interface_ip}")
+                    if candidate and candidate.get("kind") in {"host", "device", "gateway"}:
+                        node = candidate
+                        break
+                if node is None and interface_ips:
+                    node = ensure_ip_node(
+                        nodes,
+                        interface_ips[0],
+                        hostname=identity_hostname,
+                        role=manifest.get("device_type"),
+                        vendor=manifest.get("vendor"),
+                        state=manifest.get("status"),
+                        source=source,
+                    )
+            if node is None:
+                continue
+            node_ip = valid_ip(node.get("ip"))
+            if not node_ip:
+                continue
+            node = ensure_ip_node(
+                nodes,
+                node_ip,
+                hostname=identity_hostname,
+                role=manifest.get("device_type"),
+                vendor=manifest.get("vendor"),
+                state=manifest.get("status"),
+                source=source,
+            )
+            aliases[node_ip] = node["id"]
         if manifest.get("device_name") and not node.get("hostname"):
             node["hostname"] = manifest["device_name"]
             node["label"] = manifest["device_name"]
         count += 1
         if node["id"] in parsed_devices:
             continue
-        text, filename = config_result_text(path.parent, manifest)
+        if text is None:
+            text, filename = config_result_text(path.parent, manifest)
         if not text:
             continue
         if manifest.get("status") == "failed" and node.get("state") in {None, "failed"}:
             node["state"] = "partial"
         parsed_devices.add(node["id"])
-        interfaces, routes = parse_config_text(text)
+        if interfaces is None or routes is None or switch_detail is None:
+            interfaces, routes, switch_detail = map_configuration_details(
+                text, manifest.get("commands")
+            )
         declared_roles = {
             str(item).lower()
             for item in (manifest.get("device_types") or [manifest.get("device_type")])
@@ -1406,19 +1561,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
         node["role_label"] = " + ".join(role.title() for role in node["roles"])
         if {"router", "firewall"}.issubset(analyzed_roles):
             node["role"] = "firewall"
-        switch_detail = parse_switch_evidence(text, manifest.get("commands", []))
-        interfaces = merge_switch_interfaces(interfaces, switch_detail)
         neighbors = parse_neighbor_text(text)
         topology_neighbors = parse_topology_neighbors(text)
-        interfaces = [
-            item
-            for item in interfaces
-            if not item.get("name", "").lower().startswith("lo")
-            and not (
-                valid_network(item.get("address"))
-                and ipaddress.ip_network(valid_network(item.get("address"))).is_loopback
-            )
-        ]
         node["interfaces"] = interfaces
         # Routes are consumed below to build topology relationships, but the
         # full list can contain tens of thousands of entries and is not useful

@@ -451,7 +451,7 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
         run_dir = tmp_path / manifest["run_id"]
         run_dir.mkdir()
         (run_dir / "scan.xml").write_text(
-            f'<nmaprun args="nmap 10.0.0.10"><host><status state="up"/><address addr="10.0.0.10" addrtype="ipv4"/><ports>{ports}</ports></host><runstats><hosts up="1" down="0" total="1"/></runstats></nmaprun>',
+            f'<nmaprun args="nmap 10.0.0.10"><host><status state="up"/><address addr="10.0.0.10" addrtype="ipv4"/><ports>{ports}</ports></host><host><status state="up" reason="user-set"/><address addr="10.0.0.11" addrtype="ipv4"/></host><runstats><hosts up="2" down="0" total="2"/></runstats></nmaprun>',
             encoding="utf-8",
         )
     monkeypatch.setattr("app.main.list_scan_run_plans", lambda limit=5000: manifests)
@@ -486,6 +486,10 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     assert network.json()["status"] == "hunting_network_complete"
     assert network.json()["source"]["scan_count"] == 1
     assert network.json()["facets"]["subnets"][0]["name"] == "10.0.0.0/24"
+    assert any(
+        warning.startswith("Current hunt (10.0.0.0/24): Nmap -Pn assumed")
+        for warning in network.json()["warnings"]
+    )
     assert current_evidence.status_code == 200
     assert current_evidence.json()["status"] == "analysis_network_complete"
     assert current_evidence.json()["host_count"] == network.json()["host_count"]

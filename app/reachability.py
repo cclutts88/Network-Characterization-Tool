@@ -138,6 +138,83 @@ def _default_route_interface(analysis: dict) -> str | None:
     return None
 
 
+def _external_ingress_analyses(
+    device_analyses: list[dict],
+) -> tuple[list[dict], bool]:
+    """Choose outside ingress only when retained evidence makes it unambiguous."""
+    transit = [item for item in device_analyses if _is_transit_device(item)]
+    designated = [item for item in transit if item.get("external_wan_gateway")]
+    if designated:
+        return designated, False
+
+    internet_labeled = []
+    for analysis in transit:
+        for interface in analysis.get("interfaces") or []:
+            label = " ".join(
+                str(interface.get(field) or "")
+                for field in ("zone", "description", "label")
+            )
+            if re.search(r"\b(?:internet|inet)\b", label, re.I):
+                internet_labeled.append(analysis)
+                break
+    if len(internet_labeled) == 1:
+        return internet_labeled, False
+    if len(internet_labeled) > 1:
+        return [], True
+
+    outside_role = [
+        item for item in transit
+        if any(
+            str(interface.get("role") or "").casefold() == "external"
+            for interface in item.get("interfaces") or []
+        )
+    ]
+    boundary_role = []
+    for analysis in outside_role:
+        others = [item for item in transit if item is not analysis]
+        for interface in analysis.get("interfaces") or []:
+            if str(interface.get("role") or "").casefold() != "external":
+                continue
+            try:
+                network = ipaddress.ip_network(
+                    str(interface.get("network") or ""), strict=False
+                )
+            except ValueError:
+                continue
+            attached_elsewhere = False
+            for other in others:
+                for other_interface in other.get("interfaces") or []:
+                    try:
+                        other_network = ipaddress.ip_network(
+                            str(other_interface.get("network") or ""), strict=False
+                        )
+                    except ValueError:
+                        continue
+                    if network.overlaps(other_network):
+                        attached_elsewhere = True
+                        break
+                if attached_elsewhere:
+                    break
+            if not attached_elsewhere:
+                boundary_role.append(analysis)
+                break
+    if len(boundary_role) == 1:
+        return boundary_role, False
+    if len(boundary_role) > 1:
+        return [], True
+    if len(outside_role) == 1:
+        return outside_role, False
+    if len(outside_role) > 1:
+        return [], True
+
+    default_route = [item for item in transit if _default_route_interface(item)]
+    if len(default_route) == 1:
+        return default_route, False
+    if len(default_route) > 1:
+        return [], True
+    return [], False
+
+
 def _source_attached(source: Endpoint, analysis: dict) -> bool:
     interfaces = analysis.get("interfaces") or []
     if _is_external_endpoint(source):
@@ -228,7 +305,10 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
     candidates = []
     excluded = []
     seen = set()
-    for analysis in device_analyses:
+    route_analyses = device_analyses
+    if _is_external_endpoint(source):
+        route_analyses, _ = _external_ingress_analyses(device_analyses)
+    for analysis in route_analyses:
         device = analysis.get("device") or {}
         for route in (analysis.get("route_analysis") or {}).get("routes") or []:
             network = str(route.get("network") or "")
@@ -255,7 +335,7 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                     "reason": "Switch management routes are not transit-path evidence unless Layer-3 forwarding is explicitly established.",
                 })
                 continue
-            if not _source_attached(source, analysis):
+            if not _is_external_endpoint(source) and not _source_attached(source, analysis):
                 continue
             key = (
                 str(device.get("address") or device.get("name") or ""),
@@ -286,12 +366,6 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                     analysis.get("external_wan_gateway")
                 ),
             })
-    if _is_external_endpoint(source) and any(
-        item.get("analyst_external_gateway") for item in candidates
-    ):
-        candidates = [
-            item for item in candidates if item.get("analyst_external_gateway")
-        ]
     return _rank_route_candidates(candidates), excluded
 
 
@@ -338,6 +412,43 @@ def _analysis_for_next_hop(
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _route_identity(route: dict) -> tuple[str, str, str, str, str]:
+    return (
+        str(route.get("run_id") or ""),
+        str(route.get("device_address") or "").casefold(),
+        str(route.get("network") or ""),
+        str(route.get("via") or ""),
+        str(route.get("interface") or "").casefold(),
+    )
+
+
+def _route_spanning_tree_state(
+    route: dict, device_analyses: list[dict]
+) -> tuple[str | None, str | None]:
+    """Return retained STP state only when it applies to this routed interface."""
+    interface = str(route.get("interface") or "").casefold()
+    if not interface:
+        return None, None
+    run_id = str(route.get("run_id") or "")
+    device_address = str(route.get("device_address") or "").casefold()
+    for analysis in device_analyses:
+        device = analysis.get("device") or {}
+        if run_id and str(analysis.get("run_id") or "") != run_id:
+            continue
+        if not run_id and device_address and str(device.get("address") or "").casefold() != device_address:
+            continue
+        for observation in (analysis.get("switch_detail") or {}).get("spanning_tree") or []:
+            if str(observation.get("interface") or "").casefold() != interface:
+                continue
+            state = str(observation.get("state") or "").casefold()
+            evidence = str(observation.get("evidence") or "") or None
+            if state in {"blk", "blocking", "discarding", "dis", "disabled"}:
+                return "blocked", evidence
+            if state in {"fwd", "forwarding"}:
+                return "forwarding", evidence
+    return None, None
+
+
 def _selected_route_chain(
     source: Endpoint,
     destination: Endpoint,
@@ -356,6 +467,16 @@ def _selected_route_chain(
     }
     for _ in range(len(device_analyses)):
         selected = chain[-1]
+        spanning_tree_state, spanning_tree_evidence = _route_spanning_tree_state(
+            selected, device_analyses
+        )
+        if spanning_tree_state == "blocked":
+            interface = selected.get("interface") or "selected interface"
+            detail = f" Retained evidence: {spanning_tree_evidence}" if spanning_tree_evidence else ""
+            return chain, (
+                f"Spanning tree marks {interface} on {selected['device']} as blocking, "
+                f"so this candidate path is not forwarding.{detail}"
+            )
         next_hop_text = str(selected.get("via") or "").strip()
         if not next_hop_text:
             return chain, None
@@ -911,7 +1032,7 @@ def _policy_decisions(
     return decisions, unresolved
 
 
-def evaluate_reachability(
+def _evaluate_reachability_single(
     *,
     source_text: str,
     destination_text: str,
@@ -922,6 +1043,7 @@ def evaluate_reachability(
     device_analyses: list[dict],
     flow_state: str = "new",
     source_external: bool = False,
+    _forced_route_identity: tuple[str, str, str, str, str] | None = None,
 ) -> dict:
     source = parse_endpoint(source_text, external=source_external)
     destination = parse_endpoint(destination_text)
@@ -952,6 +1074,17 @@ def evaluate_reachability(
             value=source.value,
             external=True,
         )
+    external_ingress_ambiguous = False
+    ingress_analyses: list[dict] = []
+    if _is_external_endpoint(source):
+        ingress_analyses, external_ingress_ambiguous = _external_ingress_analyses(
+            transit_analyses
+        )
+        if external_ingress_ambiguous:
+            # A default route points out of a device; it does not prove that an
+            # unsolicited outside flow enters through that device. In a
+            # multi-edge network, do not apply unrelated site NAT or policy.
+            transit_analyses = []
     (
         destination_translations,
         destination_nat_unresolved,
@@ -976,7 +1109,8 @@ def evaluate_reachability(
         source_nat_unresolved,
         source_translation_conflict,
     ) = _source_nat_translations(
-        source, effective_destination, protocol, effective_port, transit_analyses
+        source, effective_destination, protocol, effective_port,
+        ingress_analyses if _is_external_endpoint(source) else transit_analyses,
     )
     translations = [*destination_translations, *source_translations]
     nat_unresolved = [*destination_nat_unresolved, *source_nat_unresolved]
@@ -995,8 +1129,26 @@ def evaluate_reachability(
         f"{protocol.upper()}/{effective_port}"
     )
     routes, excluded_routes = _matching_routes(source, effective_destination, device_analyses)
+    selected_initial_routes = routes
+    if _forced_route_identity is not None:
+        forced_route = next(
+            (item for item in routes if _route_identity(item) == _forced_route_identity),
+            None,
+        )
+        selected_initial_routes = [forced_route] if forced_route else []
     selected_path_routes, partial_path_caveat = _selected_route_chain(
-        source, effective_destination, device_analyses, routes
+        source, effective_destination, device_analyses, selected_initial_routes
+    )
+    path_run_ids = {
+        str(item.get("run_id") or "") for item in selected_path_routes
+        if item.get("run_id")
+    }
+    policy_analyses = (
+        [
+            item for item in transit_analyses
+            if str(item.get("run_id") or "") in path_run_ids
+        ]
+        if path_run_ids else transit_analyses
     )
     same_saved_network = bool(
         source_network and destination_network
@@ -1010,11 +1162,17 @@ def evaluate_reachability(
         policy, policy_unresolved = [], []
     else:
         policy, policy_unresolved = _policy_decisions(
-            source, effective_destination, protocol, effective_port, transit_analyses,
+            source, effective_destination, protocol, effective_port, policy_analyses,
             flow_state,
         )
     evidence = []
     caveats = []
+    if external_ingress_ambiguous:
+        caveats.append(
+            "More than one retained router or firewall could be mistaken for the "
+            "outside entry point. Mark the actual External WAN gateway on the map "
+            "before NCT selects an Internet-origin path."
+        )
     if partial_path_caveat:
         caveats.append(partial_path_caveat)
     if source_external_inferred:
@@ -1139,15 +1297,17 @@ def evaluate_reachability(
     elif service["state"] == "host_not_observed":
         caveats.append("The destination host is not present in the current retained network-wide scan evidence.")
 
-    selected_prefix = routes[0].get("prefix") if routes else None
-    for route_index, route in enumerate(routes[:5]):
+    selected_route = selected_path_routes[0] if selected_path_routes else None
+    selected_route_identity = _route_identity(selected_route) if selected_route else None
+    selected_prefix = selected_route.get("prefix") if selected_route else None
+    for route in routes[:5]:
         priority = ""
         if route.get("preference") is not None:
             priority += f" · preference {route['preference']}"
         if route.get("metric") is not None:
             priority += f" · metric {route['metric']}"
         route_role = (
-            "selected" if route_index == 0
+            "selected" if _route_identity(route) == selected_route_identity
             else "alternate" if route.get("prefix") == selected_prefix
             else "fallback"
         )
@@ -1204,14 +1364,41 @@ def evaluate_reachability(
                 if route.get("run_id") else None
             ),
         })
+    for route in selected_path_routes:
+        spanning_tree_state, spanning_tree_evidence = _route_spanning_tree_state(
+            route, device_analyses
+        )
+        if spanning_tree_state is None:
+            continue
+        interface = route.get("interface") or "selected interface"
+        evidence.append({
+            "kind": "switching",
+            "title": (
+                f"Spanning tree blocks {interface} on {route['device']}"
+                if spanning_tree_state == "blocked"
+                else f"Spanning tree forwards on {interface} on {route['device']}"
+            ),
+            "effect": (
+                "This retained Layer-2 state prevents this candidate route from forwarding."
+                if spanning_tree_state == "blocked"
+                else "This retained Layer-2 state supports the selected routed interface."
+            ),
+            "detail": spanning_tree_evidence or spanning_tree_state,
+            "raw": spanning_tree_evidence,
+            "run_id": route.get("run_id"),
+            "source_url": (
+                f"/device-analysis?run={route['run_id']}&focus=routing"
+                if route.get("run_id") else None
+            ),
+        })
     top_prefix_routes = [
         item for item in routes
-        if routes and item.get("prefix") == routes[0].get("prefix")
+        if selected_route and item.get("prefix") == selected_route.get("prefix")
     ]
     if len(top_prefix_routes) > 1:
         if all(item.get("priority_comparable") for item in top_prefix_routes):
             caveats.append(
-                f"Equally specific retained routes were ordered by {routes[0].get('selection_basis')}; live forwarding, health checks, and vendor-specific tie-breakers were not verified."
+                f"Equally specific retained routes were ordered by {selected_route.get('selection_basis')}; live forwarding, health checks, and vendor-specific tie-breakers were not verified."
             )
         else:
             caveats.append(
@@ -1258,9 +1445,25 @@ def evaluate_reachability(
     confidence = "low"
     explanation = "Retained evidence does not establish an end-to-end decision."
     actions = {item["action"] for item in policy}
-    if nat_unresolved or translation_conflict or source_translation_conflict or redirect_present:
+    spanning_tree_blocked = bool(
+        partial_path_caveat
+        and partial_path_caveat.startswith("Spanning tree marks ")
+    )
+    if external_ingress_ambiguous:
+        outcome, confidence = "Unknown", "low"
+        explanation = (
+            "The outside entry point is ambiguous, so NCT did not guess an "
+            "Internet-origin path."
+        )
+    elif nat_unresolved or translation_conflict or source_translation_conflict or redirect_present:
         outcome, confidence = "Unknown", "low"
         explanation = "NAT changes or may change the selected flow before forwarded policy is evaluated."
+    elif spanning_tree_blocked:
+        outcome, confidence = "Expected Blocked", "high"
+        explanation = (
+            "Retained spanning-tree evidence marks an interface in this candidate "
+            "path as blocking, so this path is not forwarding."
+        )
     elif len(actions) > 1:
         outcome, confidence = "Unknown", "low"
         explanation = "Retained policy sources produced conflicting ordered decisions."
@@ -1288,6 +1491,12 @@ def evaluate_reachability(
     elif same_saved_network:
         outcome, confidence = "Local", "medium"
         explanation = "Source and destination are within the same Saved Network. Host firewall and local segmentation may still affect access."
+    elif partial_path_caveat:
+        outcome, confidence = "Unknown", "low"
+        explanation = (
+            "Retained routing evidence establishes only a partial path; the next "
+            "forwarding device could not be proven."
+        )
     elif routes:
         outcome, confidence = "Routed", "medium"
         explanation = "A retained route covers the destination, but no exact allow or deny policy was established."
@@ -1370,6 +1579,15 @@ def evaluate_reachability(
         "source_network": source_network,
         "destination_network": destination_network,
         "service_observation": service["state"],
+        "routing_path": {
+            "status": (
+                "blocked" if spanning_tree_blocked else
+                "partial" if partial_path_caveat else
+                "complete" if selected_path_routes else "none"
+            ),
+            "detail": partial_path_caveat,
+            "selected_route": selected_route,
+        },
         "path": path,
         "evidence": evidence,
         "retained_objects": {
@@ -1391,6 +1609,445 @@ def evaluate_reachability(
             "coverage_proofs": 1 if service["state"] == "not_exposed" else 0,
             "evidence": len(evidence),
         },
+    }
+
+
+def _range_group_prefix(network: ipaddress.IPv4Network) -> int:
+    """Use the next octet boundary so a broad query stays bounded to 256 rows."""
+    if network.prefixlen >= 24:
+        return 32
+    return min(24, ((network.prefixlen // 8) + 1) * 8)
+
+
+def _overlap_network(
+    candidate: ipaddress.IPv4Network, target: ipaddress.IPv4Network
+) -> ipaddress.IPv4Network | None:
+    if not candidate.overlaps(target):
+        return None
+    return candidate if candidate.subnet_of(target) else target
+
+
+def _ipv4_network(value: object) -> ipaddress.IPv4Network | None:
+    try:
+        network = ipaddress.ip_network(str(value or "").strip(), strict=False)
+    except ValueError:
+        return None
+    return network if network.version == 4 else None
+
+
+def _range_port_matches(specification: object, port: int) -> bool:
+    text = str(specification or "").strip()
+    if not text:
+        return True
+    understood = False
+    for raw in text.split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        if value.isdigit():
+            understood = True
+            if int(value) == port:
+                return True
+            continue
+        match = re.fullmatch(r"(\d+)[:\-](\d+)", value)
+        if match:
+            understood = True
+            if int(match.group(1)) <= port <= int(match.group(2)):
+                return True
+    # Unknown named or object-based service criteria remain relevant so the
+    # coverage view never hides a possible policy boundary.
+    return not understood
+
+
+def _range_rule_service_relevant(rule: dict, protocol: str, port: int) -> bool:
+    rule_protocol = str(rule.get("protocol") or "").strip().lower()
+    if rule_protocol and rule_protocol not in {"ip", "any", "all", "tcp_udp"}:
+        if rule_protocol != protocol:
+            return False
+    if rule.get("destination_port") is not None:
+        try:
+            if int(rule["destination_port"]) != port:
+                return False
+        except (TypeError, ValueError):
+            pass
+    if rule.get("destination_ports") and not _range_port_matches(
+        rule.get("destination_ports"), port
+    ):
+        return False
+    return True
+
+
+def _range_object_networks(
+    objects: dict[str, dict], name: str, stack: tuple[str, ...] = ()
+) -> list[ipaddress.IPv4Network]:
+    if name in stack or len(stack) >= 20:
+        return []
+    item = objects.get(name) or {}
+    networks = []
+    for member in item.get("members") or []:
+        if member.get("ref"):
+            networks.extend(_range_object_networks(
+                objects, str(member["ref"]), stack + (name,)
+            ))
+            continue
+        if member.get("value"):
+            network = _ipv4_network(member["value"])
+            if network:
+                networks.append(network)
+            continue
+        if member.get("range"):
+            try:
+                start, end = (
+                    ipaddress.ip_address(value) for value in member["range"]
+                )
+            except (TypeError, ValueError):
+                continue
+            if start.version == 4 and end.version == 4 and start <= end:
+                networks.extend(ipaddress.summarize_address_range(start, end))
+    return networks
+
+
+def _range_policy_networks(
+    source: Endpoint,
+    target: ipaddress.IPv4Network,
+    protocol: str,
+    port: int,
+    device_analyses: list[dict],
+) -> list[ipaddress.IPv4Network]:
+    """Return retained destination boundaries that may change this service result."""
+    found: set[ipaddress.IPv4Network] = set()
+
+    def add(network: ipaddress.IPv4Network | None) -> None:
+        if network and (overlap := _overlap_network(network, target)):
+            found.add(overlap)
+
+    for analysis in device_analyses:
+        if not _is_transit_device(analysis) or not _source_attached(source, analysis):
+            continue
+        policy = analysis.get("policy") or {}
+        iptables = policy.get("iptables") or {}
+        ipsets = {
+            str(item.get("name") or ""): item
+            for item in iptables.get("ipsets") or [] if item.get("name")
+        }
+        for rule in [
+            *(iptables.get("rules") or []),
+            *(iptables.get("nat_rules") or []),
+        ]:
+            if not _range_rule_service_relevant(rule, protocol, port):
+                continue
+            add(_ipv4_network(rule.get("destination")))
+            for match in rule.get("set_matches") or []:
+                if "dst" not in (match.get("directions") or []):
+                    continue
+                for network in _range_object_networks(
+                    ipsets, str(match.get("name") or "")
+                ):
+                    add(network)
+
+        applied = policy.get("applied") or {}
+        address_objects = dict(applied.get("address_objects") or {})
+        for book in (applied.get("address_books") or {}).values():
+            for name, item in (book or {}).items():
+                address_objects.setdefault(name, item)
+        for rule in [
+            *(applied.get("rules") or []),
+            *(applied.get("nat_rules") or []),
+        ]:
+            if not _range_rule_service_relevant(rule, protocol, port):
+                continue
+            destinations = rule.get("destinations") or [rule.get("destination")]
+            for value in destinations:
+                text = str(value or "").strip()
+                if not text or text.lower() in {"any", "any-ipv4", "any-ipv6"}:
+                    continue
+                if text.startswith("@"):
+                    for network in _range_object_networks(address_objects, text[1:]):
+                        add(network)
+                    continue
+                network = _ipv4_network(text)
+                if network:
+                    add(network)
+                elif text in address_objects:
+                    for network in _range_object_networks(address_objects, text):
+                        add(network)
+    return sorted(found, key=lambda item: (int(item.network_address), item.prefixlen))
+
+
+def _range_scoped_analyses(
+    target: ipaddress.IPv4Network, device_analyses: list[dict]
+) -> list[dict]:
+    """Keep only routes that can affect the selected range or a default fallback."""
+    scoped = []
+    for analysis in device_analyses:
+        route_analysis = analysis.get("route_analysis") or {}
+        routes = []
+        for route in route_analysis.get("routes") or []:
+            network = _ipv4_network(route.get("network"))
+            if network and (network.prefixlen == 0 or network.overlaps(target)):
+                routes.append(route)
+        scoped.append({
+            **analysis,
+            "route_analysis": {**route_analysis, "routes": routes},
+        })
+    return scoped
+
+
+def _range_route_is_connected(route: dict) -> bool:
+    return bool(
+        route.get("direct") is True
+        or str(route.get("route_type") or "").strip().lower() == "connected"
+        or str(route.get("protocol") or "").strip().lower() in {"connected", "local"}
+    )
+
+
+def evaluate_reachability_range(
+    *,
+    source_text: str,
+    destination_text: str,
+    protocol: str,
+    port: int,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+    flow_state: str = "new",
+    source_external: bool = False,
+) -> dict:
+    """Summarize only evidence-backed targets inside a broad destination range."""
+    source = parse_endpoint(source_text, external=source_external)
+    destination = parse_endpoint(destination_text)
+    if destination.kind != "network" or not isinstance(
+        destination.value, ipaddress.IPv4Network
+    ):
+        raise ValueError("Range coverage requires an IPv4 destination CIDR")
+    protocol = protocol.strip().lower()
+    if protocol not in {"tcp", "udp"}:
+        raise ValueError("Protocol must be TCP or UDP")
+    if not 1 <= port <= 65535:
+        raise ValueError("Port must be between 1 and 65535")
+    flow_state = str(flow_state or "new").strip().lower()
+    if flow_state not in {"new", "established"}:
+        raise ValueError("Flow state must be new or established")
+
+    target = destination.value
+    grouping_prefix = _range_group_prefix(target)
+    if (
+        not _is_external_endpoint(source)
+        and not _endpoint_has_retained_internal_context(
+            source,
+            hunting=hunting,
+            saved_networks=saved_networks,
+            device_analyses=device_analyses,
+        )
+    ):
+        source = Endpoint(
+            entered=source.entered, kind=source.kind, value=source.value, external=True
+        )
+
+    entries: list[dict] = []
+
+    def add(kind: str, network: ipaddress.IPv4Network | None, **details: object) -> None:
+        if network and (overlap := _overlap_network(network, target)):
+            entries.append({"kind": kind, "network": overlap, **details})
+
+    for saved in saved_networks:
+        add(
+            "saved_network", _ipv4_network(saved.get("cidr")),
+            label=saved.get("name") or saved.get("cidr"),
+        )
+    for analysis in device_analyses:
+        device = analysis.get("device") or {}
+        for interface in analysis.get("interfaces") or []:
+            add(
+                "interface", _ipv4_network(interface.get("network")),
+                label=f"{device.get('name') or device.get('address') or 'Device'} · {interface.get('name') or 'interface'}",
+            )
+        if not _is_transit_device(analysis):
+            continue
+        for route in (analysis.get("route_analysis") or {}).get("routes") or []:
+            network = _ipv4_network(route.get("network"))
+            if network and network.prefixlen:
+                add(
+                    "connected_route" if _range_route_is_connected(route) else "route",
+                    network,
+                    label=device.get("name") or device.get("address") or "Network device",
+                    line=route.get("line"),
+                )
+    observed = {}
+    for host in [*(hunting.get("hosts") or []), *(hunting.get("findings") or [])]:
+        network = _ipv4_network(host.get("ip"))
+        if not network or network.prefixlen != 32 or not network.subnet_of(target):
+            continue
+        observed[str(network.network_address)] = host
+    for address, host in observed.items():
+        add(
+            "observed_host", _ipv4_network(address),
+            label=host.get("hostname") or address,
+        )
+
+    # Only specific evidence creates candidate rows. Summary/default routes and
+    # non-connected routes still participate in each candidate's evaluation but
+    # do not manufacture target subnets from the routing table alone.
+    discovery_entries = [
+        item for item in entries
+        if item["kind"] != "route"
+        and item["network"].prefixlen >= grouping_prefix
+    ]
+    buckets: dict[str, ipaddress.IPv4Network] = {}
+    for item in discovery_entries:
+        network = item["network"]
+        bucket = (
+            network
+            if network.prefixlen == grouping_prefix
+            else network.supernet(new_prefix=grouping_prefix)
+        )
+        buckets[str(bucket)] = bucket
+
+    policy_networks = _range_policy_networks(
+        source, target, protocol, port, device_analyses
+    )
+    scoped_analyses = _range_scoped_analyses(target, device_analyses)
+    rows = []
+    for bucket in sorted(buckets.values(), key=lambda item: int(item.network_address)):
+        bucket_entries = [item for item in entries if item["network"].overlaps(bucket)]
+        specific_entries = [
+            item for item in discovery_entries if item["network"].overlaps(bucket)
+        ]
+        covered = list(ipaddress.collapse_addresses(
+            item["network"] for item in specific_entries
+        ))
+        identified_addresses = sum(int(item.num_addresses) for item in covered)
+        source_counts = {
+            kind: sum(item["kind"] == kind for item in bucket_entries)
+            for kind in (
+                "saved_network", "interface", "connected_route", "route", "observed_host"
+            )
+        }
+        route_networks = sorted({
+            item["network"] for item in bucket_entries
+            if item["kind"] in {"connected_route", "route"}
+        }, key=lambda item: (int(item.network_address), item.prefixlen))
+        route_coverage = list(ipaddress.collapse_addresses(
+            network if network.subnet_of(bucket) else bucket
+            for network in route_networks if network.overlaps(bucket)
+        ))
+        routed_addresses = sum(int(item.num_addresses) for item in route_coverage)
+        policy_boundaries = [
+            network for network in policy_networks
+            if network.overlaps(bucket)
+        ]
+        has_more_specific_route = any(
+            network.subnet_of(bucket) and network.prefixlen > bucket.prefixlen
+            for network in route_networks
+        )
+        has_more_specific_policy = any(
+            network.subnet_of(bucket) and network.prefixlen > bucket.prefixlen
+            for network in policy_boundaries
+        )
+        full_identification = identified_addresses == int(bucket.num_addresses)
+        mixed = (
+            not full_identification
+            or has_more_specific_route
+            or has_more_specific_policy
+        )
+        exact_result = None
+        if not mixed:
+            exact_result = evaluate_reachability(
+                source_text=source_text,
+                destination_text=str(bucket),
+                protocol=protocol,
+                port=port,
+                flow_state=flow_state,
+                source_external=source_external,
+                # Host-level scan results cannot safely represent a whole range.
+                hunting={"hosts": [], "findings": []},
+                saved_networks=saved_networks,
+                device_analyses=scoped_analyses,
+                _include_path_options=False,
+            )
+        if mixed:
+            outcome, confidence = "Mixed", "low"
+            explanation = (
+                "Retained evidence identifies targets inside this segment, but "
+                "more-specific route, policy, or host evidence differs within it."
+            )
+        else:
+            outcome = str(exact_result.get("outcome") or "Unknown")
+            confidence = str(exact_result.get("confidence") or "low")
+            explanation = str(exact_result.get("explanation") or "")
+            if (
+                outcome == "Unknown"
+                and not (exact_result.get("retained_objects") or {}).get("routes")
+            ):
+                outcome = "No Route"
+                explanation = "No retained route from the selected source covers this target segment."
+        rows.append({
+            "network": str(bucket),
+            "address_count": int(bucket.num_addresses),
+            "identified_address_count": identified_addresses,
+            "identified_percent": round(
+                identified_addresses * 100 / int(bucket.num_addresses), 4
+            ),
+            "routed_address_count": routed_addresses,
+            "routed_percent": round(
+                routed_addresses * 100 / int(bucket.num_addresses), 4
+            ),
+            "outcome": outcome,
+            "confidence": confidence,
+            "explanation": explanation,
+            "evidence_counts": source_counts,
+            "route_prefix_count": len(route_networks),
+            "policy_boundary_count": len(policy_boundaries),
+            "drill_down": bucket.prefixlen < 32,
+            "detail_target": str(bucket) if bucket.prefixlen < 32 else None,
+            "path": (exact_result or {}).get("path") or [],
+            "caveats": (exact_result or {}).get("caveats") or [],
+        })
+
+    outcome_counts = {}
+    for row in rows:
+        outcome_counts[row["outcome"]] = outcome_counts.get(row["outcome"], 0) + 1
+    broad_counts = {
+        kind: sum(
+            item["kind"] == kind and item["network"].prefixlen < grouping_prefix
+            for item in entries
+        )
+        for kind in ("saved_network", "interface", "connected_route", "route")
+    }
+    evidence_counts = {
+        kind: sum(item["kind"] == kind for item in entries)
+        for kind in (
+            "saved_network", "interface", "connected_route", "observed_host", "route"
+        )
+    }
+    return {
+        "status": "reachability_range_analysis_complete",
+        "query": {
+            "source": source_text,
+            "destination": str(target),
+            "protocol": protocol,
+            "port": port,
+            "flow_state": flow_state,
+            "source_external": _is_external_endpoint(source),
+        },
+        "destination_network": str(target),
+        "grouping_prefix": grouping_prefix,
+        "candidate_count": len(rows),
+        "candidates": rows,
+        "outcome_counts": outcome_counts,
+        "evidence_counts": evidence_counts,
+        "broad_evidence_counts": broad_counts,
+        "observed_host_count": len(observed),
+        "explanation": (
+            f"NCT identified {len(rows)} evidence-backed /{grouping_prefix} target "
+            f"segment{'s' if len(rows) != 1 else ''} inside {target}."
+        ),
+        "caveats": [
+            "Only target segments supported by retained connected networks, Saved Networks, or observed hosts are shown; unobserved theoretical addresses are omitted.",
+            "Static, dynamic, summary, and default routes help evaluate identified targets but do not create target segments by themselves.",
+            "Range results use routing and policy evidence. Host-level Nmap service observations are used to identify targets but are not generalized to an entire subnet.",
+            "Open any /16 or /24 row to evaluate the next level. NCT continues to show only evidence-backed targets rather than expanding every possible address.",
+        ],
     }
 
 
@@ -1710,6 +2367,336 @@ def build_vendor_policy_rule(
             "protocol": protocol.lower(), "port": port,
         },
     }
+
+
+def _query_source_is_external(
+    *,
+    source_text: str,
+    source_external: bool,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+) -> bool:
+    source = parse_endpoint(source_text, external=source_external)
+    return bool(
+        _is_external_endpoint(source)
+        or not _endpoint_has_retained_internal_context(
+            source,
+            hunting=hunting,
+            saved_networks=saved_networks,
+            device_analyses=device_analyses,
+        )
+    )
+
+
+def _external_gateway_scopes(device_analyses: list[dict]) -> list[tuple[str, dict]]:
+    scopes = []
+    used_slots = set()
+    for analysis in device_analyses:
+        gateway = analysis.get("external_wan_gateway")
+        if not gateway or not _is_transit_device(analysis):
+            continue
+        slot = str(gateway.get("slot") or "").casefold()
+        if slot not in {"primary", "secondary"} or slot in used_slots:
+            slot = "primary" if "primary" not in used_slots else "secondary"
+        used_slots.add(slot)
+        scopes.append((slot, analysis))
+    return sorted(scopes, key=lambda item: 0 if item[0] == "primary" else 1)
+
+
+def _device_analyses_for_gateway(
+    device_analyses: list[dict], selected: dict
+) -> list[dict]:
+    selected_identity = _analysis_identity(selected)
+    scoped = []
+    for analysis in device_analyses:
+        copied = dict(analysis)
+        if _analysis_identity(analysis) != selected_identity:
+            copied.pop("external_wan_gateway", None)
+        scoped.append(copied)
+    return scoped
+
+
+def _routing_path_viable(result: dict) -> bool:
+    return str((result.get("routing_path") or {}).get("status") or "") == "complete"
+
+
+def _route_alternate_role(selected: dict, candidate: dict) -> tuple[str, str]:
+    selected_prefix = int(selected.get("prefix") or -1)
+    candidate_prefix = int(candidate.get("prefix") or -1)
+    if candidate_prefix < selected_prefix:
+        return (
+            "fallback",
+            "This broader retained route becomes relevant if the more-specific path is unavailable.",
+        )
+
+    selected_preference = selected.get("preference")
+    candidate_preference = candidate.get("preference")
+    selected_metric = selected.get("metric")
+    candidate_metric = candidate.get("metric")
+    comparable = False
+    equal = False
+    worse = False
+    if selected_preference is not None and candidate_preference is not None:
+        if int(candidate_preference) != int(selected_preference):
+            comparable = True
+            worse = int(candidate_preference) > int(selected_preference)
+        elif selected_metric is not None and candidate_metric is not None:
+            comparable = True
+            equal = int(candidate_metric) == int(selected_metric)
+            worse = int(candidate_metric) > int(selected_metric)
+    elif selected_metric is not None and candidate_metric is not None:
+        comparable = True
+        equal = int(candidate_metric) == int(selected_metric)
+        worse = int(candidate_metric) > int(selected_metric)
+    if comparable and equal:
+        return (
+            "equal_cost",
+            "The route has the same destination prefix and retained preference/metric as the active path.",
+        )
+    if comparable and worse:
+        return (
+            "standby",
+            "The route has the same destination prefix but a less-preferred retained preference or metric.",
+        )
+    return (
+        "possible_alternate",
+        "The route is equally specific, but retained preference/metric evidence is not sufficient to prove equal-cost forwarding or standby order.",
+    )
+
+
+def _compact_path_option(
+    result: dict,
+    *,
+    role: str,
+    reason: str,
+    gateway_slot: str | None = None,
+) -> dict:
+    retained = result.get("retained_objects") or {}
+    selected_routes = retained.get("selected_path_routes") or []
+    first_route = selected_routes[0] if selected_routes else {}
+    label = first_route.get("device") or (
+        f"{gateway_slot.title()} WAN path" if gateway_slot else "Candidate path"
+    )
+    identity = _route_identity(first_route)
+    path_id = "|".join(identity) if any(identity) else f"no-route:{role}"
+    if gateway_slot:
+        path_id = f"{gateway_slot}|{path_id}"
+    return {
+        "id": path_id,
+        "role": role,
+        "label": label,
+        "gateway_slot": gateway_slot,
+        "reason": reason,
+        "outcome": result.get("outcome"),
+        "confidence": result.get("confidence"),
+        "explanation": result.get("explanation"),
+        "query": result.get("query"),
+        "source_network": result.get("source_network"),
+        "destination_network": result.get("destination_network"),
+        "service_observation": result.get("service_observation"),
+        "routing_path": result.get("routing_path"),
+        "path": result.get("path") or [],
+        "evidence": result.get("evidence") or [],
+        "caveats": result.get("caveats") or [],
+        "retained_objects": {
+            "routes": selected_routes,
+            "selected_path_routes": selected_routes,
+            "policy": retained.get("policy") or [],
+            "nat": retained.get("nat") or [],
+        },
+    }
+
+
+def _evaluate_scoped_route_paths(values: dict) -> list[dict]:
+    base = _evaluate_reachability_single(**values)
+    retained = base.get("retained_objects") or {}
+    routes = retained.get("routes") or []
+    selected_routes = retained.get("selected_path_routes") or []
+    selected = selected_routes[0] if selected_routes else (routes[0] if routes else None)
+    evaluated = [{
+        "result": base,
+        "route_role": "active",
+        "reason": "This is the highest-ranked retained route for this entry point.",
+    }]
+    if not selected:
+        return evaluated
+
+    for candidate in routes:
+        if _route_identity(candidate) == _route_identity(selected):
+            continue
+        role, reason = _route_alternate_role(selected, candidate)
+        alternate = _evaluate_reachability_single(
+            **values,
+            _forced_route_identity=_route_identity(candidate),
+        )
+        status = str((alternate.get("routing_path") or {}).get("status") or "none")
+        if status == "blocked":
+            role = "blocked"
+            reason = (alternate.get("routing_path") or {}).get("detail") or reason
+        elif status != "complete":
+            role = "unavailable"
+            reason = (alternate.get("routing_path") or {}).get("detail") or (
+                "Retained evidence does not establish a complete forwarding path for this route."
+            )
+        evaluated.append({"result": alternate, "route_role": role, "reason": reason})
+        if len(evaluated) >= 8:
+            break
+
+    if not _routing_path_viable(evaluated[0]["result"]):
+        replacement = next(
+            (item for item in evaluated[1:] if _routing_path_viable(item["result"])),
+            None,
+        )
+        if replacement is not None:
+            evaluated[0]["route_role"] = (
+                "blocked"
+                if str((evaluated[0]["result"].get("routing_path") or {}).get("status")) == "blocked"
+                else "unavailable"
+            )
+            evaluated[0]["reason"] = (
+                (evaluated[0]["result"].get("routing_path") or {}).get("detail")
+                or "The highest-ranked retained route does not produce a complete path."
+            )
+            replacement["route_role"] = "active_failover"
+            replacement["reason"] = (
+                "This path becomes active because the higher-ranked retained path is not forwarding end to end."
+            )
+            evaluated.remove(replacement)
+            evaluated.insert(0, replacement)
+    return evaluated
+
+
+def evaluate_reachability(
+    *,
+    source_text: str,
+    destination_text: str,
+    protocol: str,
+    port: int,
+    hunting: dict,
+    saved_networks: list[dict],
+    device_analyses: list[dict],
+    flow_state: str = "new",
+    source_external: bool = False,
+    _include_path_options: bool = True,
+) -> dict:
+    values = {
+        "source_text": source_text,
+        "destination_text": destination_text,
+        "protocol": protocol,
+        "port": port,
+        "hunting": hunting,
+        "saved_networks": saved_networks,
+        "device_analyses": device_analyses,
+        "flow_state": flow_state,
+        "source_external": source_external,
+    }
+    if not _include_path_options:
+        return _evaluate_reachability_single(**values)
+    gateways = _external_gateway_scopes(device_analyses)
+    source_is_external = _query_source_is_external(
+        source_text=source_text,
+        source_external=source_external,
+        hunting=hunting,
+        saved_networks=saved_networks,
+        device_analyses=device_analyses,
+    )
+
+    if source_is_external and len(gateways) > 1:
+        gateway_paths = []
+        for slot, gateway_analysis in gateways:
+            scoped_values = {
+                **values,
+                "device_analyses": _device_analyses_for_gateway(
+                    device_analyses, gateway_analysis
+                ),
+            }
+            scoped_paths = _evaluate_scoped_route_paths(scoped_values)
+            best = scoped_paths[0]
+            gateway_paths.append({
+                **best, "gateway_slot": slot, "gateway_best": True,
+            })
+            for alternate in scoped_paths[1:]:
+                gateway_paths.append({
+                    **alternate, "gateway_slot": slot, "gateway_best": False,
+                })
+
+        primary = next(
+            (item for item in gateway_paths if item["gateway_slot"] == "primary"),
+            gateway_paths[0],
+        )
+        secondary = next(
+            (item for item in gateway_paths if item["gateway_slot"] == "secondary"),
+            None,
+        )
+        selected = primary
+        if not _routing_path_viable(primary["result"]) and secondary is not None and _routing_path_viable(secondary["result"]):
+            selected = secondary
+
+        options = []
+        for item in gateway_paths:
+            role = item["route_role"]
+            reason = item["reason"]
+            if item is selected:
+                role = "active" if item["gateway_slot"] == "primary" else "active_failover"
+                reason = (
+                    "The analyst-designated primary WAN entry has a complete retained path."
+                    if role == "active"
+                    else "The primary WAN entry does not have a complete retained path, so the secondary entry is the retained failover path."
+                )
+            elif (
+                item["gateway_slot"] == "secondary"
+                and item["gateway_best"]
+                and _routing_path_viable(item["result"])
+            ):
+                role = "standby"
+                reason = (
+                    "The analyst-designated secondary WAN entry has a complete retained path and remains separate from the active primary path."
+                )
+            elif not _routing_path_viable(item["result"]):
+                role = (
+                    "blocked"
+                    if str((item["result"].get("routing_path") or {}).get("status")) == "blocked"
+                    else "unavailable"
+                )
+                reason = (item["result"].get("routing_path") or {}).get("detail") or reason
+            options.append(_compact_path_option(
+                item["result"], role=role, reason=reason,
+                gateway_slot=item["gateway_slot"],
+            ))
+
+        chosen = selected["result"]
+        chosen["path_options"] = options
+        chosen["active_path_id"] = next(
+            item["id"] for item in options
+            if item["gateway_slot"] == selected["gateway_slot"]
+            and item["role"] in {"active", "active_failover"}
+        )
+        chosen["caveats"] = list(dict.fromkeys([
+            *(chosen.get("caveats") or []),
+            "Primary and secondary WAN paths were evaluated independently. Their configured slots do not prove live health-check state or automatic device failover behavior.",
+        ]))
+        chosen.setdefault("counts", {})["path_options"] = len(options)
+        return chosen
+
+    evaluated = _evaluate_scoped_route_paths(values)
+    selected = evaluated[0]
+    options = [
+        _compact_path_option(
+            item["result"], role=item["route_role"], reason=item["reason"]
+        )
+        for item in evaluated
+    ]
+    chosen = selected["result"]
+    chosen["path_options"] = options
+    chosen["active_path_id"] = options[0]["id"] if options else None
+    if len(options) > 1:
+        chosen["caveats"] = list(dict.fromkeys([
+            *(chosen.get("caveats") or []),
+            "Candidate paths were evaluated independently from retained routing, policy, NAT, and spanning-tree evidence. Live adjacency, device health, and traffic sharing were not tested.",
+        ]))
+    chosen.setdefault("counts", {})["path_options"] = len(options)
+    return chosen
 
 
 def validate_vendor_policy_rule(
@@ -2237,6 +3224,247 @@ def simulate_proposed_route_control(
     }
 
 
+def _apply_validated_route_proposal(
+    device_analyses: list[dict], proposal: dict,
+) -> list[dict]:
+    """Apply an already validated route proposal to an isolated evidence copy."""
+    projected = deepcopy(device_analyses)
+    device_key = str(proposal.get("device_address") or proposal.get("device") or "")
+    selected = next((
+        item for item in projected
+        if device_key in {
+            str((item.get("device") or {}).get("address") or ""),
+            str((item.get("device") or {}).get("name") or ""),
+        }
+    ), None)
+    if selected is None:
+        raise ValueError("The retained device for the proposed route is no longer available")
+    routes = list(selected.setdefault("route_analysis", {}).get("routes") or [])
+    action = str(proposal.get("action") or "")
+    network = ipaddress.ip_network(str(proposal.get("network") or ""), strict=False)
+    route_interface = str(proposal.get("interface") or "").strip() or None
+    next_hop = str(proposal.get("next_hop") or "").strip() or None
+    if action == "add":
+        routes.append({
+            "network": str(network),
+            "interface": route_interface,
+            "via": next_hop,
+            "protocol": "proposed",
+            "direct": not next_hop,
+            "line": (
+                f"PROPOSED ROUTE {network} via {next_hop or 'direct'} "
+                f"interface {route_interface}"
+            ),
+            "simulated": True,
+        })
+    else:
+        match_index = next((
+            index for index, item in enumerate(routes)
+            if str(item.get("network") or "") == str(network)
+            and (not route_interface or str(item.get("interface") or "") == route_interface)
+            and (not next_hop or str(item.get("via") or "") == next_hop)
+        ), None)
+        if match_index is None:
+            raise ValueError("The retained route selected by the proposal is no longer available")
+        if action == "remove":
+            routes.pop(match_index)
+        else:
+            priority_kind = str(proposal.get("priority_kind") or "")
+            priority_value = proposal.get("priority_value")
+            routes[match_index] = {
+                **routes[match_index],
+                priority_kind: priority_value,
+                "simulated": True,
+                "line": (
+                    f"PROPOSED {priority_kind.upper()} {priority_value} for "
+                    f"{network} via {routes[match_index].get('via') or 'direct'} "
+                    f"interface {routes[match_index].get('interface') or 'unspecified'}"
+                ),
+            }
+    selected["route_analysis"]["routes"] = routes
+    return projected
+
+
+def _result_traverses_device(result: dict, *, name: str, address: str | None) -> bool:
+    expected_name = str(name or "").casefold()
+    expected_address = str(address or "").casefold()
+    return any(
+        item.get("kind") == "device" and (
+            str(item.get("label") or "").casefold() == expected_name
+            or (
+                expected_address
+                and str(item.get("detail") or "").casefold() == expected_address
+            )
+        )
+        for item in result.get("path") or []
+    )
+
+
+def simulate_proposed_change_scenario(
+    *, source_text: str, destination_text: str, protocol: str, port: int,
+    hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
+    route: dict, policy: dict, flow_state: str = "new",
+    source_external: bool = False,
+) -> dict:
+    """Project a route change followed by a policy change as one scenario."""
+    route_result = simulate_proposed_route_control(
+        source_text=source_text,
+        destination_text=destination_text,
+        protocol=protocol,
+        port=port,
+        hunting=hunting,
+        saved_networks=saved_networks,
+        device_analyses=device_analyses,
+        flow_state=flow_state,
+        source_external=source_external,
+        action=route.get("action"),
+        device_key=route.get("device_key"),
+        route_network=route.get("route_network"),
+        route_interface=route.get("route_interface"),
+        next_hop=route.get("next_hop"),
+        priority_kind=route.get("priority_kind"),
+        priority_value=route.get("priority_value"),
+    )
+    route_projected_analyses = _apply_validated_route_proposal(
+        device_analyses, route_result["proposal"]
+    )
+    policy_result = simulate_proposed_policy_control(
+        source_text=source_text,
+        destination_text=destination_text,
+        protocol=protocol,
+        port=port,
+        hunting=hunting,
+        saved_networks=saved_networks,
+        device_analyses=route_projected_analyses,
+        flow_state=flow_state,
+        source_external=source_external,
+        action=policy.get("action"),
+        device_key=policy.get("device_key"),
+        interface_name=policy.get("interface_name"),
+        insertion_index=policy.get("insertion_index", 0),
+        vendor_rule=policy.get("vendor_rule"),
+        template_id=policy.get("template_id", "exact-service"),
+    )
+    projected = deepcopy(policy_result["projected"])
+    policy_proposal = policy_result["proposal"]
+    policy_comparison = policy_result["comparison"]
+    policy_on_projected_path = _result_traverses_device(
+        policy_result["baseline"],
+        name=policy_proposal.get("device"),
+        address=policy_proposal.get("device_address"),
+    )
+    if not policy_on_projected_path:
+        projected["outcome"] = "Unknown"
+        projected["confidence"] = "low"
+        projected["explanation"] = (
+            "The proposed route does not place the selected policy device on the "
+            "projected path, so NCT cannot claim that the proposed rule controls this flow."
+        )
+        projected["caveats"] = list(dict.fromkeys([
+            "The policy device must appear on the projected route before its rule can be treated as effective.",
+            *(projected.get("caveats") or []),
+        ]))
+    route_proposals = [
+        item for item in route_result["projected"].get("evidence") or []
+        if item.get("kind") == "proposal"
+    ]
+    projected["evidence"] = [*route_proposals, *(projected.get("evidence") or [])]
+    route_path_proposals = [
+        item for item in route_result["projected"].get("path") or []
+        if item.get("kind") == "proposal"
+    ]
+    for item in reversed(route_path_proposals):
+        projected["path"].insert(max(1, len(projected["path"]) - 1), item)
+    projected["caveats"] = list(dict.fromkeys([
+        *(route_result["projected"].get("caveats") or []),
+        *(projected.get("caveats") or []),
+    ]))
+    desired_outcome = (
+        "Expected Blocked" if policy_proposal.get("action") == "deny"
+        else "Expected Allowed"
+    )
+    policy_effective = bool(policy_comparison.get("proposal_effective"))
+    intent_achieved = (
+        policy_on_projected_path
+        and policy_effective
+        and projected.get("outcome") == desired_outcome
+    )
+    validation = [
+        {
+            "id": "route_projection",
+            "label": "Route change applied",
+            "status": "pass",
+            "detail": "The route change was applied to an isolated copy of retained evidence.",
+        },
+        {
+            "id": "policy_rule",
+            "label": "Written policy rule",
+            "status": "pass" if policy_proposal.get("validation", {}).get("valid") else "fail",
+            "detail": policy_proposal.get("validation", {}).get("message") or "The written rule could not be validated.",
+        },
+        {
+            "id": "policy_path",
+            "label": "Policy device on projected path",
+            "status": "pass" if policy_on_projected_path else "uncertain",
+            "detail": (
+                "The projected route traverses the selected policy device."
+                if policy_on_projected_path
+                else "The selected policy device is not present on the projected route."
+            ),
+        },
+        {
+            "id": "policy_order",
+            "label": "Rule order is effective",
+            "status": "pass" if policy_effective else "fail",
+            "detail": (
+                "The proposal is evaluated before the retained rule that currently decides this flow."
+                if policy_effective
+                else "An earlier retained rule decides this flow before the proposal is reached."
+            ),
+        },
+        {
+            "id": "intent",
+            "label": "Intended result",
+            "status": "pass" if intent_achieved else (
+                "uncertain" if projected.get("outcome") == "Unknown" else "fail"
+            ),
+            "detail": (
+                f"The combined scenario changes the final result to {desired_outcome}."
+                if intent_achieved
+                else f"The combined scenario does not establish {desired_outcome}."
+            ),
+        },
+    ]
+    return {
+        "status": "reachability_change_scenario_complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "route_proposal": route_result["proposal"],
+        "policy_proposal": policy_proposal,
+        "baseline": route_result["baseline"],
+        "route_projected": policy_result["baseline"],
+        "projected": projected,
+        "comparison": {
+            "before": route_result["baseline"].get("outcome"),
+            "after_route": policy_result["baseline"].get("outcome"),
+            "after": projected.get("outcome"),
+            "outcome_changed": route_result["baseline"].get("outcome") != projected.get("outcome"),
+            "route_path_changed": route_result["comparison"].get("path_changed"),
+            "policy_on_projected_path": policy_on_projected_path,
+            "policy_effective": policy_effective,
+            "intent_achieved": intent_achieved,
+            "scope": policy_comparison.get("scope") or {},
+            "collateral_impact": policy_comparison.get("collateral_impact") or {},
+            "selected_route_before": route_result["comparison"].get("selected_route_before"),
+            "selected_route_after": route_result["comparison"].get("selected_route_after"),
+        },
+        "validation": validation,
+        "disclaimer": (
+            "Read-only combined route and policy projection from retained evidence. "
+            "It sends no network traffic and changes no device configuration."
+        ),
+    }
+
+
 def _compact_exposure_result(source: dict, result: dict) -> dict:
     return {
         "source": source,
@@ -2370,6 +3598,7 @@ def classify_searchsploit_exposure(
                 hunting=hunting,
                 saved_networks=saved_networks,
                 device_analyses=device_analyses,
+                _include_path_options=False,
             )
             external = _compact_exposure_result(
                 {"kind": "external", "name": "Internet", "cidr": None},
@@ -2391,6 +3620,7 @@ def classify_searchsploit_exposure(
                         hunting=hunting,
                         saved_networks=saved_networks,
                         device_analyses=device_analyses,
+                        _include_path_options=False,
                     )
                 except ValueError:
                     continue
@@ -2536,10 +3766,32 @@ def build_source_exposure_report(
     saved_networks: list[dict],
     device_analyses: list[dict],
     searchsploit: dict | None = None,
+    target_network: dict | None = None,
 ) -> dict:
-    """Evaluate retained observed services from Internet and each Saved Network."""
+    """Evaluate retained observed services for one Saved Network target."""
     searchsploit = searchsploit or {"status": "not_requested", "matches": []}
     services = _exposure_report_services(hunting, searchsploit)
+    target = None
+    target_cidr = ""
+    target_saved_network_id = ""
+    if target_network:
+        target_cidr = str(target_network.get("cidr") or "").strip()
+        try:
+            parsed_target = ipaddress.ip_network(target_cidr, strict=False)
+        except ValueError as exc:
+            raise ValueError("The selected Saved Network has an invalid CIDR") from exc
+        if parsed_target.version != 4:
+            raise ValueError("Exposure reports currently support IPv4 Saved Networks only")
+        services = [
+            service for service in services
+            if ipaddress.ip_address(service["ip"]) in parsed_target
+        ]
+        target_saved_network_id = str(target_network.get("saved_network_id") or "")
+        target = {
+            "saved_network_id": target_saved_network_id,
+            "name": target_network.get("name") or target_cidr,
+            "cidr": str(parsed_target),
+        }
     sources = [{
         "source_id": "external:internet",
         "kind": "external",
@@ -2551,6 +3803,11 @@ def build_source_exposure_report(
     for network in saved_networks:
         cidr = str(network.get("cidr") or "").strip()
         if not cidr or cidr in seen_networks:
+            continue
+        if target_network and (
+            str(network.get("saved_network_id") or "") == target_saved_network_id
+            or cidr == target_cidr
+        ):
             continue
         try:
             parsed = ipaddress.ip_network(cidr, strict=False)
@@ -2584,6 +3841,7 @@ def build_source_exposure_report(
                     hunting=hunting,
                     saved_networks=saved_networks,
                     device_analyses=device_analyses,
+                    _include_path_options=False,
                 )
             except ValueError as exc:
                 evaluation = {
@@ -2643,10 +3901,12 @@ def build_source_exposure_report(
             "warnings": list(searchsploit.get("warnings") or []),
             "disclaimer": searchsploit.get("disclaimer"),
         },
+        "target": target,
         "services": services,
         "sources": grouped_sources,
         "disclaimer": (
-            "This report evaluates retained evidence only and sends no network traffic. "
+            "This report evaluates retained evidence for the selected Saved Network only "
+            "and sends no network traffic. The target network is excluded as a source. "
             "Expected reachability does not prove that a SearchSploit candidate is exploitable."
         ),
     }

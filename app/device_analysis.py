@@ -1,21 +1,211 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import re
 import sqlite3
+import threading
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from app.device_configs import CONFIG_DIR, device_collection_directory, device_collection_summary
+from app.database import configure_database, connect_database
 from app.network_map import parse_nmap_xml
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.saved_networks import list_saved_networks
 
 
 router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
+
+# Increment whenever retained device evidence parsing changes so previously
+# completed pulls are re-analyzed without requiring another network collection.
+DEVICE_SUMMARY_VERSION = 3
+_DEVICE_STORAGE_READY: set[str] = set()
+_DEVICE_STORAGE_LOCK = threading.RLock()
+
+
+def init_device_analysis_storage(db_path: Path = DB_PATH) -> None:
+    storage_key = str(db_path.resolve())
+    if storage_key in _DEVICE_STORAGE_READY and db_path.is_file():
+        return
+    with _DEVICE_STORAGE_LOCK:
+        if storage_key in _DEVICE_STORAGE_READY and db_path.is_file():
+            return
+        configure_database(db_path)
+        with connect_database(db_path) as db:
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_collections (
+                    run_id TEXT PRIMARY KEY,
+                    created_at TEXT,
+                    completed_at TEXT,
+                    device_address TEXT,
+                    device_name TEXT,
+                    vendor TEXT,
+                    device_type TEXT,
+                    status TEXT,
+                    evidence_fingerprint TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_analysis_cache (
+                    run_id TEXT PRIMARY KEY,
+                    analysis_version INTEGER NOT NULL,
+                    evidence_fingerprint TEXT NOT NULL,
+                    summary_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES device_collections(run_id) ON DELETE CASCADE
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS device_command_observations (
+                    observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    line_number INTEGER,
+                    command TEXT NOT NULL,
+                    classification TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    UNIQUE(run_id, position),
+                    FOREIGN KEY (run_id) REFERENCES device_collections(run_id) ON DELETE CASCADE
+                )
+                """
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS device_collections_address_created "
+                "ON device_collections(device_address, created_at DESC)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS device_commands_run_classification "
+                "ON device_command_observations(run_id, classification, position)"
+            )
+            command_columns = {
+                row[1]
+                for row in db.execute(
+                    "PRAGMA table_info(device_command_observations)"
+                ).fetchall()
+            }
+            if "line_number" not in command_columns:
+                db.execute(
+                    "ALTER TABLE device_command_observations "
+                    "ADD COLUMN line_number INTEGER"
+                )
+        _DEVICE_STORAGE_READY.add(storage_key)
+
+
+def delete_device_analysis_storage(run_id: str, db_path: Path = DB_PATH) -> None:
+    init_device_analysis_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("DELETE FROM device_collections WHERE run_id = ?", (run_id,))
+
+
+def _device_evidence_fingerprint(run_dir: Path) -> str:
+    records = []
+    for path in sorted(item for item in run_dir.iterdir() if item.is_file()):
+        if path.name == "accountability.pcap":
+            continue
+        stat = path.stat()
+        records.append((path.name, stat.st_size, stat.st_mtime_ns))
+    return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest()
+
+
+def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
+    init_device_analysis_storage(db_path)
+    run_dir = device_collection_directory(run_id, config_dir)
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    fingerprint = _device_evidence_fingerprint(run_dir)
+    with connect_database(db_path) as db:
+        row = db.execute(
+            """
+            SELECT summary_json FROM device_analysis_cache
+            WHERE run_id = ? AND analysis_version = ? AND evidence_fingerprint = ?
+            """,
+            (run_id, DEVICE_SUMMARY_VERSION, fingerprint),
+        ).fetchone()
+        if row:
+            summary = json.loads(row[0])
+            observations = db.execute(
+                """
+                SELECT position, line_number, command, classification, label
+                FROM device_command_observations
+                WHERE run_id = ? ORDER BY position
+                """,
+                (run_id,),
+            ).fetchall()
+            summary.setdefault("command_history", {})["entries"] = [
+                {
+                    "position": item[0], "line_number": item[1],
+                    "command": item[2], "classification": item[3],
+                    "label": item[4],
+                }
+                for item in observations
+            ]
+            return summary
+    summary = device_collection_summary(run_id, config_dir=config_dir)
+    cached = json.loads(json.dumps(summary))
+    cached.pop("configuration_text", None)
+    cached.pop("raw_output", None)
+    observations = list((cached.get("command_history") or {}).pop("entries", []))
+    with connect_database(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO device_collections (
+                run_id, created_at, completed_at, device_address, device_name,
+                vendor, device_type, status, evidence_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                completed_at = excluded.completed_at,
+                device_address = excluded.device_address,
+                device_name = excluded.device_name,
+                vendor = excluded.vendor,
+                device_type = excluded.device_type,
+                status = excluded.status,
+                evidence_fingerprint = excluded.evidence_fingerprint
+            """,
+            (
+                run_id, manifest.get("created_at"), manifest.get("completed_at"),
+                manifest.get("device_address"), manifest.get("device_name"),
+                manifest.get("vendor"), manifest.get("device_type"),
+                manifest.get("status"), fingerprint,
+            ),
+        )
+        db.execute("DELETE FROM device_command_observations WHERE run_id = ?", (run_id,))
+        db.executemany(
+            """
+            INSERT INTO device_command_observations (
+                run_id, position, line_number, command, classification, label
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_id, item["position"], item.get("line_number"), item["command"],
+                    item["classification"], item["label"],
+                )
+                for item in observations
+            ],
+        )
+        db.execute(
+            """
+            INSERT INTO device_analysis_cache (
+                run_id, analysis_version, evidence_fingerprint, summary_json, updated_at
+            ) VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(run_id) DO UPDATE SET
+                analysis_version = excluded.analysis_version,
+                evidence_fingerprint = excluded.evidence_fingerprint,
+                summary_json = excluded.summary_json,
+                updated_at = excluded.updated_at
+            """,
+            (run_id, DEVICE_SUMMARY_VERSION, fingerprint, json.dumps(cached, separators=(",", ":"))),
+        )
+    cached.setdefault("command_history", {})["entries"] = observations
+    return cached
 
 
 def _route_protocol(route: dict) -> str:
@@ -62,6 +252,166 @@ def _interface_network(interface: dict) -> ipaddress.IPv4Network | None:
     except ValueError:
         return None
     return parsed.network if parsed.version == 4 else None
+
+
+def _wan_interface_candidates(
+    interfaces: list[dict], routes: list[dict], nat_items: list[dict]
+) -> list[dict]:
+    """Rank explainable WAN candidates without turning an inference into a fact."""
+    grouped: dict[str, dict] = {}
+    for interface in interfaces:
+        name = str(interface.get("name") or "").strip()
+        if not name:
+            continue
+        candidate = grouped.setdefault(
+            name,
+            {
+                "name": name,
+                "addresses": [],
+                "networks": [],
+                "role": str(interface.get("role") or "unclassified"),
+                "zone": str(interface.get("zone") or ""),
+            },
+        )
+        address = str(interface.get("address") or "").strip()
+        network = str(interface.get("network") or "").strip()
+        if address and address not in candidate["addresses"]:
+            candidate["addresses"].append(address)
+        if network and network not in candidate["networks"]:
+            candidate["networks"].append(network)
+        if candidate["role"] == "unclassified" and interface.get("role"):
+            candidate["role"] = str(interface["role"])
+        if not candidate["zone"] and interface.get("zone"):
+            candidate["zone"] = str(interface["zone"])
+
+    # Some valid uplinks (DHCP, PPPoE, unnumbered, or route-only interfaces)
+    # have no retained address/MAC record. An explicitly named default-route
+    # interface is still useful evidence and must remain available for review.
+    for route in routes:
+        if not (
+            route.get("route_type") == "default"
+            or route.get("network") in {"0.0.0.0/0", "::/0"}
+        ):
+            continue
+        name = str(route.get("interface") or "").strip()
+        if name and name not in grouped:
+            grouped[name] = {
+                "name": name,
+                "addresses": [],
+                "networks": [],
+                "role": _interface_role({"name": name}),
+                "zone": "",
+            }
+
+    default_routes = [
+        route for route in routes
+        if route.get("route_type") == "default"
+        or route.get("network") in {"0.0.0.0/0", "::/0"}
+    ]
+    strong_names: set[str] = set()
+    candidates: list[dict] = []
+    for name, candidate in grouped.items():
+        score = 0
+        reasons: list[str] = []
+        evidence: list[str] = []
+        parsed_networks = []
+        for value in candidate["addresses"]:
+            try:
+                parsed_networks.append(ipaddress.ip_interface(value).network)
+            except ValueError:
+                continue
+
+        explicit_defaults = [
+            route for route in default_routes
+            if str(route.get("interface") or "").casefold() == name.casefold()
+        ]
+        next_hop_defaults = []
+        for route in default_routes:
+            via = str(route.get("via") or "")
+            try:
+                address = ipaddress.ip_address(via)
+            except ValueError:
+                continue
+            if any(address in network for network in parsed_networks):
+                next_hop_defaults.append(route)
+        matched_defaults = explicit_defaults or next_hop_defaults
+        if explicit_defaults:
+            score += 100
+            reasons.append("A retained default route explicitly exits this interface.")
+        elif next_hop_defaults:
+            score += 90
+            reasons.append("A retained default route's next hop is on this interface network.")
+        if matched_defaults:
+            strong_names.add(name)
+            evidence.extend(
+                str(route.get("line") or "") for route in matched_defaults
+                if route.get("line")
+            )
+
+        if candidate["role"] == "external":
+            score += 45
+            reasons.append("Its name or description identifies it as WAN, outside, or Internet-facing.")
+
+        interface_pattern = re.compile(
+            rf"(?<![A-Za-z0-9_.:/-]){re.escape(name)}(?![A-Za-z0-9_.:/-])",
+            re.I,
+        )
+        matching_nat = [
+            item for item in nat_items
+            if interface_pattern.search(
+                str(item.get("evidence") or item.get("line") or "")
+            )
+        ]
+        if matching_nat:
+            score += 35
+            reasons.append("Retained NAT evidence names this interface.")
+            evidence.extend(
+                str(item.get("evidence") or item.get("line") or "")
+                for item in matching_nat
+            )
+
+        parsed_addresses = []
+        for value in candidate["addresses"]:
+            try:
+                parsed_addresses.append(ipaddress.ip_interface(value))
+            except ValueError:
+                continue
+        if any(item.ip.is_global for item in parsed_addresses):
+            score += 15
+            reasons.append("It has a globally routable address.")
+        if any(
+            (item.version == 4 and item.network.prefixlen >= 30)
+            or (item.version == 6 and item.network.prefixlen >= 126)
+            for item in parsed_addresses
+        ):
+            score += 10
+            reasons.append("Its small point-to-point network is consistent with an uplink.")
+
+        unique_evidence = list(dict.fromkeys(value[:500] for value in evidence if value))
+        candidate.update(
+            {
+                "score": score,
+                "confidence": "high" if score >= 80 else "medium" if score >= 45 else "low",
+                "reasons": reasons or ["No strong WAN indicators were found in the retained evidence."],
+                "evidence": unique_evidence[:12],
+                "evidence_count": len(unique_evidence),
+            }
+        )
+        candidates.append(candidate)
+
+    highest_score = max((item["score"] for item in candidates), default=0)
+    for candidate in candidates:
+        candidate["recommended"] = (
+            candidate["name"] in strong_names
+            if strong_names
+            else highest_score >= 45 and candidate["score"] == highest_score
+        )
+    return sorted(
+        candidates,
+        key=lambda item: (
+            not item["recommended"], -item["score"], item["name"].casefold()
+        ),
+    )
 
 
 def _evidence_networks(items: list[dict]) -> list[tuple[ipaddress.IPv4Network, dict]]:
@@ -136,7 +486,7 @@ def _nmap_correlations(
     if not networks or not db_path.is_file():
         return []
     try:
-        with sqlite3.connect(db_path) as db:
+        with connect_database(db_path) as db:
             rows = db.execute(
                 "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
             ).fetchall()
@@ -200,11 +550,12 @@ def analyze_device_collection(
     config_dir: Path | None = None,
     db_path: Path | None = None,
     data_dir: Path | None = None,
+    include_correlations: bool = True,
 ) -> dict:
     config_dir = CONFIG_DIR if config_dir is None else config_dir
     db_path = DB_PATH if db_path is None else db_path
     data_dir = DATA_DIR if data_dir is None else data_dir
-    summary = device_collection_summary(run_id, config_dir=config_dir)
+    summary = _cached_device_summary(run_id, config_dir, db_path)
     run_dir = device_collection_directory(run_id, config_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     manifest.pop("key_path", None)
@@ -242,6 +593,9 @@ def analyze_device_collection(
     interface_networks = [network for item in interfaces if (network := _interface_network(item))]
     review_items = []
     default_routes = [item for item in routes if item.get("route_type") == "default"]
+    wan_candidates = _wan_interface_candidates(
+        interfaces, routes, summary.get("nat", [])
+    )
     if not default_routes:
         review_items.append({
             "severity": "warning", "category": "routing",
@@ -329,15 +683,49 @@ def analyze_device_collection(
             "title": "No structured switch forwarding evidence was parsed",
             "detail": "No usable port, learned-MAC, aggregation, or spanning-tree records were found. Confirm the vendor profile and rerun with the current guarded switch commands.",
         })
+    command_history = summary.get("command_history") or {}
+    if command_history.get("attempted") and command_history.get("status") != "captured":
+        review_items.append({
+            "severity": "warning", "category": "command history",
+            "title": "Command history was not available",
+            "detail": "NCT attempted the history command before the configuration pull, but the device returned no usable entries. Review platform history settings and centralized AAA accounting.",
+        })
+    elif command_history.get("other_command_count"):
+        review_items.append({
+            "severity": "info", "category": "command history",
+            "title": f"{command_history['other_command_count']} command(s) not matched to NCT collection activity",
+            "detail": "Review the highlighted unmatched commands as leads. Exact matches to the retained NCT collection plan or known collection commands are labeled separately, but command text alone does not prove who ran it.",
+        })
+    volatile_configuration = summary.get("volatile_configuration") or {}
+    if volatile_configuration.get("status") == "different":
+        review_items.append({
+            "severity": "warning", "category": "volatile configuration",
+            "title": "Running configuration differs from startup configuration",
+            "detail": volatile_configuration.get("detail"),
+            "evidence": (
+                f"{volatile_configuration.get('running_only_count', 0)} running-only line(s); "
+                f"{volatile_configuration.get('startup_only_count', 0)} startup-only line(s)"
+            ),
+        })
     policy_items = [
         *summary.get("firewall_acl", []),
         *summary.get("nat", []),
         *summary.get("network_objects", []),
     ]
-    saved_matches = _saved_network_correlations(interfaces, routes, policy_items, db_path)
-    nmap_matches = _nmap_correlations(
-        interfaces, policy_items, db_path=db_path, data_dir=data_dir
-    )
+    # Reach consumes the complete route and policy evidence below, but it does
+    # not use the Device Analysis presentation correlations. Let that caller
+    # skip the expensive all-routes-by-Saved-Network pass and repeated Nmap XML
+    # parsing while preserving the full Device Analysis response by default.
+    if include_correlations:
+        saved_matches = _saved_network_correlations(
+            interfaces, routes, policy_items, db_path
+        )
+        nmap_matches = _nmap_correlations(
+            interfaces, policy_items, db_path=db_path, data_dir=data_dir
+        )
+    else:
+        saved_matches = []
+        nmap_matches = []
     evidence = []
     for filename, label in (
         (summary.get("source_filename"), "Configuration evidence"),
@@ -354,6 +742,12 @@ def analyze_device_collection(
         "filename": "manifest.json",
         "url": f"/api/device-configs/{run_id}/files/manifest.json",
     })
+    if (run_dir / "command-history.txt").is_file():
+        evidence.append({
+            "label": "Command history",
+            "filename": "command-history.txt",
+            "url": f"/api/device-configs/{run_id}/files/command-history.txt",
+        })
     return {
         "run_id": run_id,
         "status": "analysis_complete",
@@ -384,6 +778,7 @@ def analyze_device_collection(
             "review_items": len(review_items),
         },
         "interfaces": interfaces,
+        "wan_candidates": wan_candidates,
         "route_analysis": {
             "routes": routes,
             "default_routes": default_routes,
@@ -406,6 +801,8 @@ def analyze_device_collection(
         "switching": summary.get("switching", []),
         "switch_detail": switch_detail,
         "command_results": summary.get("command_results", []),
+        "command_history": command_history,
+        "volatile_configuration": volatile_configuration,
         "saved_network_correlations": saved_matches,
         "nmap_host_correlations": nmap_matches,
         "review_items": review_items,
@@ -513,8 +910,10 @@ def compare_device_collections(before: str, after: str) -> dict:
 
 
 @router.get("/{run_id}")
-def device_analysis(run_id: str) -> dict:
+def device_analysis(run_id: str, include_correlations: bool = True) -> dict:
     try:
-        return analyze_device_collection(run_id)
+        return analyze_device_collection(
+            run_id, include_correlations=include_correlations
+        )
     except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
         raise HTTPException(status_code=404, detail="Device collection was not found") from None

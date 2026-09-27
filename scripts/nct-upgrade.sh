@@ -5,7 +5,7 @@ WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
 DATA_DIR="$PERSIST_ROOT/data"
 CONTAINER="${NCT_CONTAINER:-nct}"
-IMAGE="network-characterization-tool:0.15.9-range-20260924"
+IMAGE="network-characterization-tool:0.16.0-range-20260927-r1"
 RANGE_IP="${1:-}"
 MODE="${2:-auto}"
 ARCHIVE="$WORKDIR/offline-images/nct-range-images.tar"
@@ -15,6 +15,11 @@ BACKUP_DIR="$STATE_DIR/backups"
 
 say() { printf '%s\n' "[NCT upgrade] $*"; }
 die() { printf '%s\n' "[NCT upgrade] ERROR: $*" >&2; exit 1; }
+verify_archive_checksum() {
+    expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$CHECKSUM")
+    actual_checksum=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+    [ -n "$expected_checksum" ] && [ "$actual_checksum" = "$expected_checksum" ]
+}
 api_at_least() {
     awk -v have="$1" -v need="$2" 'BEGIN {
         split(have, h, "."); split(need, n, ".")
@@ -32,8 +37,7 @@ done
 docker info >/dev/null 2>&1 || die "Docker is not reachable."
 [ -f "$ARCHIVE" ] || die "Missing $ARCHIVE"
 [ -f "$CHECKSUM" ] || die "Missing $CHECKSUM"
-(cd "$WORKDIR/offline-images" && sha256sum -c "$(basename "$CHECKSUM")" >/dev/null) ||
-    die "The offline image archive checksum does not match."
+verify_archive_checksum || die "The offline image archive checksum does not match."
 docker inspect "$CONTAINER" >/dev/null 2>&1 ||
     die "Container $CONTAINER was not found. Use a start script for a new installation."
 
@@ -60,6 +64,13 @@ set -e
 [ "$active_rc" -ne 42 ] || die "NCT has active work. Finish or stop it before upgrading."
 [ "$active_rc" -eq 0 ] || die "Current NCT data could not be checked for active work."
 
+account_count=$(docker exec "$CONTAINER" python -c '
+import pathlib, sqlite3
+p = pathlib.Path("/data/analyzer.db")
+print(0 if not p.exists() else sqlite3.connect(f"file:{p}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
+') || die "Existing NCT accounts could not be inspected in the running container."
+case "$account_count" in ''|*[!0-9]*) die "The running container returned an invalid NCT account count." ;; esac
+
 say "Loading the verified release image..."
 docker load -i "$ARCHIVE" >/dev/null
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "The expected release image was not loaded."
@@ -71,9 +82,7 @@ before="$BACKUP_DIR/pre-upgrade-$timestamp.json"
 after="$BACKUP_DIR/post-upgrade-$timestamp.json"
 backup="$BACKUP_DIR/nct-data-$timestamp.tar.gz"
 
-snapshot() {
-    output=$1
-    docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c '
+snapshot_code='
 import json, pathlib, sqlite3, sys
 root = pathlib.Path("/data")
 tables = (
@@ -83,7 +92,10 @@ tables = (
     "host_os_overrides", "host_os_inference_reviews", "analyst_host_identities",
 )
 result = {
-    "file_count": sum(path.is_file() for path in root.rglob("*")),
+    "file_count": sum(
+        path.is_file() and not path.name.endswith(("-wal", "-shm", "-journal"))
+        for path in root.rglob("*")
+    ),
     "tables": {},
 }
 db_path = root / "analyzer.db"
@@ -94,13 +106,59 @@ if db_path.exists():
         if table in existing:
             result["tables"][table] = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 print(json.dumps(result, sort_keys=True))
-' > "$output"
+'
+
+snapshot() {
+    output=$1
+    source=${2:-sidecar}
+    if [ "$source" = "container" ]; then
+        docker exec "$CONTAINER" python -c "$snapshot_code" > "$output"
+    else
+        docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c "$snapshot_code" > "$output"
+    fi
     chmod 600 "$output"
 }
 
 was_running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER")
-[ "$was_running" != "true" ] || docker stop "$CONTAINER" >/dev/null
-snapshot "$before"
+rollback=""
+original_stopped=no
+upgrade_complete=no
+restore_original() {
+    status=$?
+    restored=no
+    if [ "$upgrade_complete" != "yes" ]; then
+        if [ -n "$rollback" ] && docker inspect "$rollback" >/dev/null 2>&1; then
+            if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+                docker stop "$CONTAINER" >/dev/null 2>&1 || true
+                docker rm "$CONTAINER" >/dev/null 2>&1 || true
+            fi
+            docker rename "$rollback" "$CONTAINER" >/dev/null 2>&1 || true
+            [ "$was_running" != "true" ] || docker start "$CONTAINER" >/dev/null 2>&1 || true
+            restored=yes
+        elif [ "$original_stopped" = "yes" ]; then
+            [ "$was_running" != "true" ] || docker start "$CONTAINER" >/dev/null 2>&1 || true
+            restored=yes
+        fi
+        if [ "$restored" = "yes" ]; then
+            if [ -f "$backup" ]; then
+                printf '%s\n' "[NCT upgrade] The original container was restored. Data backup: $backup" >&2
+            else
+                printf '%s\n' "[NCT upgrade] The original container was restored. No completed data backup was created." >&2
+            fi
+        fi
+    fi
+    exit "$status"
+}
+trap restore_original EXIT
+trap 'exit 130' HUP INT TERM
+
+if [ "$was_running" = "true" ]; then
+    snapshot "$before" container
+    original_stopped=yes
+    docker stop "$CONTAINER" >/dev/null
+else
+    snapshot "$before"
+fi
 tar -C "$PERSIST_ROOT" -czf "$backup" data
 chmod 600 "$backup"
 sha256sum "$backup" > "$backup.sha256"
@@ -108,24 +166,6 @@ chmod 600 "$backup.sha256"
 
 rollback="nct-upgrade-rollback-$timestamp"
 docker rename "$CONTAINER" "$rollback"
-upgrade_complete=no
-restore_original() {
-    status=$?
-    if [ "$upgrade_complete" != "yes" ]; then
-        if docker inspect "$CONTAINER" >/dev/null 2>&1; then
-            docker stop "$CONTAINER" >/dev/null 2>&1 || true
-            docker rm "$CONTAINER" >/dev/null 2>&1 || true
-        fi
-        if docker inspect "$rollback" >/dev/null 2>&1; then
-            docker rename "$rollback" "$CONTAINER" >/dev/null 2>&1 || true
-            [ "$was_running" != "true" ] || docker start "$CONTAINER" >/dev/null 2>&1 || true
-        fi
-        printf '%s\n' "[NCT upgrade] The original container was restored. Data backup: $backup" >&2
-    fi
-    exit "$status"
-}
-trap restore_original EXIT
-trap 'exit 130' HUP INT TERM
 
 if [ "$MODE" = "auto" ]; then
     server_api=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null || printf unknown)
@@ -141,8 +181,8 @@ fi
 start_script="$WORKDIR/scripts/nct-start-$MODE.sh"
 [ -f "$start_script" ] || die "Missing $start_script"
 say "Starting the release with the $MODE path..."
-sh "$start_script" "$RANGE_IP"
-snapshot "$after"
+NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"
+snapshot "$after" container
 
 docker run --rm -v "$BACKUP_DIR:/verification:ro,Z" "$IMAGE" python -c '
 import json, pathlib, sys

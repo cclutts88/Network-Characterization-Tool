@@ -7,7 +7,9 @@ import io
 HOST_SUMMARY_FIELDS = (
     "ip",
     "hostname",
+    "presence_status",
     "state",
+    "state_reason",
     "mac",
     "vendor",
     "os",
@@ -25,7 +27,9 @@ HOST_SUMMARY_FIELDS = (
 PORT_LEVEL_FIELDS = (
     "ip",
     "hostname",
+    "presence_status",
     "host_state",
+    "host_state_reason",
     "mac",
     "mac_vendor",
     "protocol",
@@ -52,7 +56,9 @@ def host_summary_rows(analysis: dict) -> list[dict]:
             {
                 "ip": host.get("ip", ""),
                 "hostname": host.get("hostname", ""),
+                "presence_status": host.get("presence_status", "confirmed"),
                 "state": host.get("state", ""),
+                "state_reason": host.get("state_reason", ""),
                 "mac": host.get("mac", ""),
                 "vendor": host.get("vendor", ""),
                 "os": host.get("os", ""),
@@ -92,7 +98,9 @@ def port_level_rows(analysis: dict) -> list[dict]:
                 {
                     "ip": host.get("ip", ""),
                     "hostname": host.get("hostname", ""),
+                    "presence_status": host.get("presence_status", "confirmed"),
                     "host_state": host.get("state", ""),
+                    "host_state_reason": host.get("state_reason", ""),
                     "mac": host.get("mac", ""),
                     "mac_vendor": host.get("vendor", ""),
                     "protocol": port.get("protocol", ""),

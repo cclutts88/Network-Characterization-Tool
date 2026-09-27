@@ -5,7 +5,7 @@ set -eu
 server_ip="${1:-}"
 source_cidr="${2:-}"
 admin_user="${3:-}"
-image="network-characterization-tool:0.15.9-range-20260924"
+image="network-characterization-tool:0.16.0-range-20260927-r1"
 https_port="${4:-8445}"
 
 if [ -z "$server_ip" ] || [ -z "$source_cidr" ] || [ -z "$admin_user" ]; then
@@ -33,7 +33,9 @@ password_file="$state_dir/initial-admin-password.txt"
 [ -f "$archive_checksum" ] || { printf '%s\n' "Missing $archive_checksum" >&2; exit 1; }
 [ -f "$tls_helper" ] || { printf '%s\n' "Missing $tls_helper" >&2; exit 1; }
 
-(cd "$bundle_dir/offline-images" && sha256sum -c nct-range-images.tar.sha256 >/dev/null) || {
+expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$archive_checksum")
+actual_checksum=$(sha256sum "$archive" | awk '{print $1}')
+[ -n "$expected_checksum" ] && [ "$actual_checksum" = "$expected_checksum" ] || {
     printf '%s\n' "The offline image archive checksum does not match." >&2
     exit 1
 }

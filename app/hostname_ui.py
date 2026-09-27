@@ -6,27 +6,28 @@ from fastapi.responses import HTMLResponse
 def hostname_page() -> HTMLResponse:
     return HTMLResponse(
         r'''<!doctype html>
-<html lang="en">
+<html class="nct-shell-loading" lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style id="nct-shell-bootstrap">html.nct-shell-loading body{visibility:hidden}</style>
   <title>NCT · Hostnames</title>
   <style>
     :root{color-scheme:dark;--bg:#091016;--panel:#111c25;--line:#263f49;--text:#edf6fb;--muted:#9eb0b8;--accent:#53d1b6;--blue:#64a9ff;--good:#61d095;--warn:#ffc66d;--bad:#ff837a}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#102c35,#091016 44%);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}header,main{max-width:1480px;margin:auto}header{position:sticky;top:0;z-index:100;padding:16px 0 14px;border-bottom:1px solid var(--line);background:rgba(9,16,22,.96);backdrop-filter:blur(14px);box-shadow:0 9px 24px #0006}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.nct-brand{display:flex;width:max-content;flex-direction:column;align-items:center;margin:0 auto;color:var(--text);line-height:1;text-align:center}.nct-brand>strong{padding-left:.24em;font-size:40px;letter-spacing:.24em}.nct-brand span{margin-top:3px;padding-top:3px;border-top:1px solid var(--accent);color:var(--muted);font-size:9px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;white-space:nowrap}.nct-brand span b{color:var(--accent);font-size:1.16em;font-weight:950}.nav{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;margin-top:8px}.nav a{border:1px solid #315264;background:#142d38;color:#b9cadc;border-radius:7px;padding:6px 13px;text-decoration:none;font-weight:700}.nav a.active{background:var(--accent);border-color:var(--accent);color:#07171b}main{padding:24px 0 60px}.panel{margin-bottom:18px;padding:20px;border:1px solid var(--line);border-radius:13px;background:rgba(17,28,37,.95);box-shadow:0 12px 38px #0004}h2{margin:0 0 8px;font-size:20px}h3{margin:0 0 6px}.meta,.hint{color:var(--muted)}.notice{padding:12px 14px;border:1px solid #3d6e61;border-radius:9px;background:#102a27;color:#b9f0e2}.cards{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:9px;margin-top:14px}.card{padding:12px;border:1px solid var(--line);border-radius:9px;background:#0b171f}.card b{display:block;color:var(--blue);font-size:22px}.methods{display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:10px;margin-top:14px}.method{padding:13px;border:1px solid var(--line);border-radius:9px;background:#0b171f}.method strong{display:flex;align-items:center;justify-content:space-between;gap:8px}.method p{margin:7px 0 0;color:var(--muted)}.mode{padding:2px 7px;border:1px solid #406b60;border-radius:99px;color:#b9f0e2;font-size:10px;text-transform:uppercase}.controls{display:grid;grid-template-columns:minmax(240px,1.4fr) minmax(190px,.7fr) auto;gap:10px;align-items:end}.import-grid{display:grid;grid-template-columns:minmax(260px,1fr) auto auto auto;gap:10px;align-items:end}.actions{display:flex;flex-wrap:wrap;gap:9px;align-items:center}label{display:block;margin:5px 0;color:#bed0da;font-size:12px;font-weight:700}input,select{width:100%;padding:10px 11px;border:1px solid #344754;border-radius:8px;background:#0b141b;color:var(--text);font:inherit}button{padding:9px 12px;border:1px solid #3b6f91;border-radius:7px;background:#174665;color:#fff;font:inherit;font-weight:750;cursor:pointer}button.secondary{background:transparent;border-color:#49617d}button:disabled{opacity:.5;cursor:not-allowed}.status{min-height:22px;margin-top:10px;color:var(--muted)}.status.good{color:var(--good)}.status.bad{color:var(--bad)}.status.warn{color:var(--warn)}.table-wrap{overflow:auto;max-height:62vh;border:1px solid var(--line);border-radius:9px}table{width:100%;min-width:1280px;border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{position:sticky;top:0;z-index:3;background:#0b171f;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em}td{font-size:12px}.ip{font-weight:800;color:#dcecf5}.candidate{display:block;width:100%;margin:0 0 5px;padding:6px 7px;border-color:#315264;background:#0d2029;text-align:left;font-size:11px;font-weight:650}.candidate.selected{border-color:var(--accent);background:#17483f;color:#e8fff9}.candidate small{display:block;margin-top:2px;color:var(--muted);font-weight:500}.empty{color:#657984}.operator-entry{display:grid;grid-template-columns:1fr auto;gap:5px}.selected-name{color:#b9f0e2;font-weight:800}.selected-name small{display:block;color:var(--muted);font-weight:500}.source-chip{display:inline-block;margin-top:5px;padding:2px 6px;border:1px solid #406b60;border-radius:99px;color:#b9f0e2;font-size:10px}.evidence-link{display:inline-block;margin:2px 7px 0 0;color:#9cd4ff;font-size:10px}.lease{color:#ffe3a8!important}.hidden{display:none!important}.collector-grid{display:grid;grid-template-columns:repeat(2,minmax(300px,1fr));gap:10px;margin:14px 0}.collector{border:1px solid var(--line);border-radius:9px;background:#0b171f;overflow:hidden}.collector summary{padding:13px;cursor:pointer;color:#dcecf5;font-weight:800}.collector-body{padding:0 13px 13px}.collector-body p{color:var(--muted)}.script-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:8px 0}.script-head strong{color:#b9f0e2}pre{max-height:340px;overflow:auto;margin:0;padding:12px;border:1px solid #29424e;border-radius:8px;background:#071016;color:#d7edf5;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.collection-upload{display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr) auto;gap:10px;align-items:end;margin-top:14px}.collection-note{padding:10px 12px;border-left:3px solid var(--blue);background:#0c1b25;color:var(--muted)}@media(max-width:1500px){header,main{padding-left:3vw;padding-right:3vw}}@media(max-width:900px){.methods,.collector-grid{grid-template-columns:1fr 1fr}.controls,.import-grid,.collection-upload{grid-template-columns:1fr 1fr}.cards{grid-template-columns:1fr 1fr}}@media(max-width:620px){.methods,.collector-grid,.controls,.import-grid,.collection-upload{grid-template-columns:1fr}}
   </style>
-  <script src="/assets/nct-session.js" defer></script>
+  <script src="/assets/nct-session.js"></script>
 </head>
 <body>
-  <header><h1 class="sr-only">Hostnames</h1><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div><nav class="nav" aria-label="Primary"><a href="/device-config">Device</a><a href="/scans">Nmap</a><a class="active" href="/hostnames" aria-current="page">Hostnames</a><a href="/analysis">Analyze</a><a href="/hunting">Hunt</a><a href="/reachability">Reach</a><a href="/network-map">Map</a></nav></header>
+  <header><div class="nct-brand" aria-label="NCT, Network Characterization Tool"><strong>NCT</strong><span><b>N</b>etwork <b>C</b>haracterization <b>T</b>ool</span></div></header>
   <main>
-    <section class="panel">
+    <section id="hostnameOverview" class="panel">
       <h2>Hostname evidence workspace</h2>
       <p class="hint">Review every retained name for an IP, then select the name NCT should use. Selecting a candidate preserves its source instead of hiding conflicting evidence.</p>
       <div class="notice"><strong>No network contact:</strong> Refreshing this page only reads completed Nmap scans, saved router/firewall/switch pulls, and operator imports already retained by NCT.</div>
       <div id="summaryCards" class="cards"></div>
       <div id="methods" class="methods"></div>
     </section>
-    <section class="panel">
+    <section id="serverEvidence" class="panel">
       <h2>Collect from DHCP and DNS servers</h2>
       <p class="hint">Run the matching read-only collection on an authorized server, then upload its output here. NCT retains the result and does not contact the server when this page is refreshed.</p>
       <div class="collector-grid">
@@ -138,8 +139,8 @@ sudo tcpdump -i any -nn -s 0 -w nct-hostname-collection-accountability.pcap 'hos
       </form>
       <div id="evidenceImportStatus" class="status" role="status"></div>
     </section>
-    <section class="panel">
-      <h2>Import operator hostname lists</h2>
+    <section id="operatorImport" class="panel">
+      <h2>Hostname Upload</h2>
       <p class="hint">Upload UTF-8 CSV with <code>ip,hostname</code> columns or TXT with one <code>IP hostname</code> pair per line. This is the same retained import previously shown on Analyze.</p>
       <form id="importForm" class="import-grid">
         <div><label for="identityFile">Completed hostname list</label><input id="identityFile" type="file" accept=".csv,.txt,text/csv,text/plain" required></div>
@@ -149,7 +150,7 @@ sudo tcpdump -i any -nn -s 0 -w nct-hostname-collection-accountability.pcap 'hos
       </form>
       <div id="importStatus" class="status" role="status"></div>
     </section>
-    <section class="panel">
+    <section id="hostnameReview" class="panel">
       <div class="controls">
         <div><label for="search">Find an IP or hostname</label><input id="search" type="search" placeholder="IP address or any attained name"></div>
         <div><label for="bulkSource">Choose one retained source</label><select id="bulkSource"></select></div>

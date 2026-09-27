@@ -6,6 +6,8 @@ from pathlib import Path
 import sqlite3
 import uuid
 
+from app.database import connect_database
+
 
 VALID_PAGES = {"hunt", "analyze"}
 
@@ -20,7 +22,7 @@ def utc_now() -> str:
 
 def init_view_preference_storage(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_view_preferences (
                 owner TEXT NOT NULL,
@@ -77,7 +79,7 @@ def _decode(row: sqlite3.Row | None) -> dict | None:
 def get_view_workspace(db_path: Path, *, owner: str, page: str) -> dict:
     page = _page(page)
     init_view_preference_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         preference = db.execute(
             "SELECT * FROM analyst_view_preferences WHERE owner = ? AND page = ?",
@@ -108,7 +110,7 @@ def save_view_preference(
     _, encoded = _snapshot(snapshot)
     changed_at = utc_now()
     init_view_preference_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         existing = db.execute(
             "SELECT * FROM analyst_view_preferences WHERE owner = ? AND page = ?",
@@ -158,7 +160,7 @@ def save_filter_preset(
     _, encoded = _snapshot(snapshot)
     changed_at = utc_now()
     init_view_preference_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         if preset_id:
             existing = db.execute(
@@ -212,7 +214,7 @@ def delete_filter_preset(
 ) -> dict:
     page = _page(page)
     init_view_preference_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_filter_presets WHERE preset_id = ? AND owner = ? AND page = ?",

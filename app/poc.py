@@ -28,16 +28,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.comparison import compare_analyses, coverage_warnings
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.database import configure_database, connect_database
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
     BUILTIN_PROFILES,
     build_nmap_flags,
     build_phase_nmap_flags,
     normalize_scan_options,
+    requires_split_protocol_phases,
     scan_coverage,
     scan_display_name,
 )
 from app.scan_progress import latest_nmap_status, new_scan_progress, update_scan_progress
+from app.nmap_presence import nmap_presence_counts
 from app.saved_networks import (
     SavedNetworkArchive,
     SavedNetworkCreate,
@@ -94,6 +97,9 @@ ARTIFACT_FILES = {
 }
 
 router = APIRouter(prefix="/api", tags=["poc"])
+
+_POC_STORAGE_READY: set[str] = set()
+_POC_STORAGE_LOCK = threading.RLock()
 
 
 def utc_now() -> str:
@@ -426,7 +432,7 @@ def normalize_ipv4_networks(entries: list[str], label: str) -> list[str]:
 def get_global_no_strike(db_path: Path = DB_PATH) -> dict:
     """Return the excluded no-strike list that applies to every scan path."""
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT value_json, updated_at, updated_by FROM app_settings WHERE key = ?",
             ("global_no_strike",),
@@ -446,7 +452,7 @@ def _store_global_no_strike(
     normalized = normalize_ipv4_networks(entries, "no-strike") if entries else []
     updated_at = utc_now()
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO app_settings (key, value_json, updated_at, updated_by)
@@ -723,13 +729,27 @@ def target_address_count(targets: list[str]) -> int:
 
 def apply_fping_fallback(manifest: dict) -> None:
     """Retarget Nmap when ICMP-only discovery cannot see approved hosts."""
-    manifest["command_argv"] = build_nmap_argv(
-        manifest["profile"],
+    phases = build_execution_phases(
         manifest["interface"],
+        manifest["profile_settings"],
         include_no_strike=bool(manifest.get("no_strike")),
-        scan_options=manifest["profile_settings"],
         target_file="targets.txt",
+        pre_discovered=False,
     )
+    if requires_split_protocol_phases(manifest["profile_settings"]):
+        manifest["command_argv"] = list(phases[0]["command_argv"])
+        manifest["command_note"] = (
+            "Compatibility field shows the TCP phase; execution_phases contains "
+            "the complete TCP and UDP workflow."
+        )
+    else:
+        manifest["command_argv"] = build_nmap_argv(
+            manifest["profile"],
+            manifest["interface"],
+            include_no_strike=bool(manifest.get("no_strike")),
+            scan_options=manifest["profile_settings"],
+            target_file="targets.txt",
+        )
     manifest["exact_command"] = shlex.join(manifest["command_argv"])
     manifest["execution_command_argv"] = build_nmap_execution_argv(
         manifest["command_argv"]
@@ -737,13 +757,7 @@ def apply_fping_fallback(manifest: dict) -> None:
     manifest["exact_execution_command"] = shlex.join(
         manifest["execution_command_argv"]
     )
-    manifest["execution_phases"] = build_execution_phases(
-        manifest["interface"],
-        manifest["profile_settings"],
-        include_no_strike=bool(manifest.get("no_strike")),
-        target_file="targets.txt",
-        pre_discovered=False,
-    )
+    manifest["execution_phases"] = phases
     manifest["discovery_fallback_used"] = True
 
 
@@ -780,13 +794,28 @@ def build_scan_run_manifest(
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
     use_fping = settings.get("discovery_mode") == "fping"
-    nmap_argv = build_nmap_argv(
-        profile_record["name"],
+    execution_phases = build_execution_phases(
         plan.interface,
+        settings,
         include_no_strike=bool(no_strike),
-        scan_options=settings,
-        target_file="fping-alive.txt" if use_fping else "targets.txt",
+        target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
+        pre_discovered=True,
     )
+    command_note = None
+    if requires_split_protocol_phases(settings):
+        nmap_argv = list(execution_phases[0]["command_argv"])
+        command_note = (
+            "Compatibility field shows the TCP phase; execution_phases contains "
+            "the complete TCP and UDP workflow."
+        )
+    else:
+        nmap_argv = build_nmap_argv(
+            profile_record["name"],
+            plan.interface,
+            include_no_strike=bool(no_strike),
+            scan_options=settings,
+            target_file="fping-alive.txt" if use_fping else "targets.txt",
+        )
     execution_argv = build_nmap_execution_argv(nmap_argv)
     discovery_argv = (
         build_fping_argv(plan.interface)
@@ -799,13 +828,6 @@ def build_scan_run_manifest(
         discovery_argv
         if use_fping
         else build_nmap_execution_argv(discovery_argv)
-    )
-    execution_phases = build_execution_phases(
-        plan.interface,
-        settings,
-        include_no_strike=bool(no_strike),
-        target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
-        pre_discovered=True,
     )
     capture_argv = build_tcpdump_argv(plan.interface) if capture else None
     created_at = utc_now()
@@ -893,6 +915,7 @@ def build_scan_run_manifest(
         "exact_command": shlex.join(nmap_argv),
         "execution_command_argv": execution_argv,
         "exact_execution_command": shlex.join(execution_argv),
+        "command_note": command_note,
         "execution_phases": execution_phases,
         "workflow": ["discovery", *[item["name"] for item in execution_phases], "merge", "analysis"],
         "capture_command_argv": capture_argv,
@@ -903,110 +926,144 @@ def build_scan_run_manifest(
 
 
 def init_poc_storage(db_path: Path = DB_PATH) -> None:
-    init_saved_network_storage(db_path)
-    init_scan_collaboration_storage(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as db:
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scan_runs (
-                run_id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                operator_name TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                originating_host TEXT NOT NULL,
-                interface_name TEXT NOT NULL,
-                profile TEXT NOT NULL,
-                manifest_json TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scan_profiles (
-                profile_id TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL,
-                built_in INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                source_profile_id TEXT,
-                source_profile_version INTEGER,
-                settings_json TEXT NOT NULL,
-                PRIMARY KEY (profile_id, version)
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scan_schedules (
-                schedule_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                profile_id TEXT NOT NULL,
-                profile_version INTEGER NOT NULL,
-                definition_json TEXT NOT NULL,
-                FOREIGN KEY (profile_id, profile_version)
-                    REFERENCES scan_profiles(profile_id, version)
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_by TEXT NOT NULL
-            )
-            """
-        )
-        for profile in BUILTIN_PROFILES:
-            # Retain the original Nmap-discovery version for schedules already
-            # pinned to it, then publish FPING-first behavior as the new latest
-            # built-in version for new scans and schedules.
+    storage_key = str(db_path.resolve())
+    if storage_key in _POC_STORAGE_READY and db_path.is_file():
+        return
+    with _POC_STORAGE_LOCK:
+        if storage_key in _POC_STORAGE_READY and db_path.is_file():
+            return
+        configure_database(db_path)
+        init_saved_network_storage(db_path)
+        init_scan_collaboration_storage(db_path)
+        with connect_database(db_path) as db:
             db.execute(
                 """
-                INSERT OR IGNORE INTO scan_profiles (
-                    profile_id, version, name, description, built_in,
-                    created_at, created_by, source_profile_id,
-                    source_profile_version, settings_json
-                ) VALUES (?, 1, ?, ?, 1, ?, 'system', NULL, NULL, ?)
-                """,
-                (
-                    profile["profile_id"],
-                    profile["name"],
-                    profile["description"],
-                    utc_now(),
-                    json.dumps(
-                        normalize_scan_options(
-                            {**profile["settings"], "discovery_mode": "nmap"}
+                CREATE TABLE IF NOT EXISTS scan_runs (
+                    run_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    operator_name TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    originating_host TEXT NOT NULL,
+                    interface_name TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_profiles (
+                    profile_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    built_in INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    source_profile_id TEXT,
+                    source_profile_version INTEGER,
+                    settings_json TEXT NOT NULL,
+                    PRIMARY KEY (profile_id, version)
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_schedules (
+                    schedule_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    profile_version INTEGER NOT NULL,
+                    definition_json TEXT NOT NULL,
+                    FOREIGN KEY (profile_id, profile_version)
+                        REFERENCES scan_profiles(profile_id, version)
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_analysis_cache (
+                    run_id TEXT PRIMARY KEY,
+                    analysis_version INTEGER NOT NULL,
+                    evidence_size INTEGER NOT NULL,
+                    evidence_modified_ns INTEGER NOT NULL,
+                    analysis_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES scan_runs(run_id) ON DELETE CASCADE
+                )
+                """
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_runs_status_created "
+                "ON scan_runs(status, created_at)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_runs_created "
+                "ON scan_runs(created_at DESC)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_schedules_profile "
+                "ON scan_schedules(profile_id, profile_version)"
+            )
+            for profile in BUILTIN_PROFILES:
+                # Retain the original Nmap-discovery version for schedules already
+                # pinned to it, then publish FPING-first behavior as the new latest
+                # built-in version for new scans and schedules.
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO scan_profiles (
+                        profile_id, version, name, description, built_in,
+                        created_at, created_by, source_profile_id,
+                        source_profile_version, settings_json
+                    ) VALUES (?, 1, ?, ?, 1, ?, 'system', NULL, NULL, ?)
+                    """,
+                    (
+                        profile["profile_id"],
+                        profile["name"],
+                        profile["description"],
+                        utc_now(),
+                        json.dumps(
+                            normalize_scan_options(
+                                {**profile["settings"], "discovery_mode": "nmap"}
+                            ),
+                            sort_keys=True,
                         ),
-                        sort_keys=True,
                     ),
-                ),
-            )
-            db.execute(
-                """
-                INSERT OR IGNORE INTO scan_profiles (
-                    profile_id, version, name, description, built_in,
-                    created_at, created_by, source_profile_id,
-                    source_profile_version, settings_json
-                ) VALUES (?, ?, ?, ?, 1, ?, 'system', ?, 1, ?)
-                """,
-                (
-                    profile["profile_id"],
-                    BUILTIN_PROFILE_VERSION,
-                    profile["name"],
-                    profile["description"],
-                    utc_now(),
-                    profile["profile_id"],
-                    json.dumps(normalize_scan_options(profile["settings"]), sort_keys=True),
-                ),
-            )
+                )
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO scan_profiles (
+                        profile_id, version, name, description, built_in,
+                        created_at, created_by, source_profile_id,
+                        source_profile_version, settings_json
+                    ) VALUES (?, ?, ?, ?, 1, ?, 'system', ?, 1, ?)
+                    """,
+                    (
+                        profile["profile_id"],
+                        BUILTIN_PROFILE_VERSION,
+                        profile["name"],
+                        profile["description"],
+                        utc_now(),
+                        profile["profile_id"],
+                        json.dumps(
+                            normalize_scan_options(profile["settings"]), sort_keys=True
+                        ),
+                    ),
+                )
+        _POC_STORAGE_READY.add(storage_key)
 
 
 def _profile_record(row: tuple | None) -> dict | None:
@@ -1032,7 +1089,7 @@ def get_scan_profile(
     db_path: Path = DB_PATH,
 ) -> dict | None:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         if version is None:
             row = db.execute(
                 """
@@ -1060,7 +1117,7 @@ def get_scan_profile(
 def list_scan_profiles(db_path: Path = DB_PATH, *, all_versions: bool = False) -> list[dict]:
     init_poc_storage(db_path)
     where = "" if all_versions else "WHERE p.version = (SELECT MAX(v.version) FROM scan_profiles v WHERE v.profile_id = p.profile_id)"
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute(
             f"""
             SELECT p.profile_id, p.version, p.name, p.description, p.built_in,
@@ -1078,7 +1135,7 @@ def create_scan_profile(request: ScanProfileCreate, db_path: Path = DB_PATH) -> 
     profile_id = uuid.uuid4().hex
     created_at = utc_now()
     settings = request.settings.normalized()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_profiles (
@@ -1107,7 +1164,7 @@ def create_scan_profile_version(
     if current["built_in"]:
         raise ValueError("Built-in profiles are protected; clone one before editing it")
     version = int(current["version"]) + 1
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_profiles (
@@ -1141,7 +1198,7 @@ def clone_scan_profile(
         settings=ScanOptions(**source["settings"]),
     )
     clone = create_scan_profile(clone_request, db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE scan_profiles
@@ -1215,7 +1272,7 @@ def get_scan_schedule(schedule_id: str, db_path: Path = DB_PATH) -> dict | None:
     if not RUN_ID_RE.fullmatch(schedule_id):
         return None
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
             (schedule_id,),
@@ -1248,7 +1305,7 @@ def _append_schedule_history(
 
 def _store_scan_schedule(schedule: dict, db_path: Path = DB_PATH) -> dict:
     schedule["updated_at"] = utc_now()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE scan_schedules
@@ -1344,7 +1401,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "recovery_count": 0,
         "implementation_status": "active_scheduler",
     }
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_schedules (
@@ -1363,7 +1420,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
 
 def list_scan_schedules(db_path: Path = DB_PATH) -> list[dict]:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute(
             "SELECT definition_json FROM scan_schedules ORDER BY created_at DESC"
         ).fetchall()
@@ -1464,7 +1521,7 @@ def change_scan_schedule_profile(
 
 def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             INSERT INTO scan_runs (
@@ -1482,7 +1539,7 @@ def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
 
 
 def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute(
             """
             UPDATE scan_runs SET status = ?, manifest_json = ? WHERE run_id = ?
@@ -1497,7 +1554,7 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
 
 def _queued_run_ids(db_path: Path = DB_PATH) -> list[str]:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         return [
             row[0]
             for row in db.execute(
@@ -1554,13 +1611,17 @@ def prepare_scan_run(
     return manifest
 
 
-def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
+def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int = 0, metadata_only: bool = False) -> list[dict]:
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
+        # Lightweight history never opens scan XML or enumerates artifacts.
+        expression = "json_remove(manifest_json, '$.artifacts', '$.commands', '$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', '$.command', '$.exact_execution_command')" if metadata_only else "manifest_json"
         rows = db.execute(
-            "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            f"SELECT {expression} FROM scan_runs ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            (limit, offset),
         ).fetchall()
+    if metadata_only:
+        return [json.loads(row[0]) for row in rows]
     queued_ids = _queued_run_ids(db_path)
     return [
         with_queue_state(with_host_count(json.loads(row[0])), db_path, queued_ids)
@@ -1672,7 +1733,7 @@ def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
     if not RUN_ID_RE.fullmatch(run_id):
         return None
     init_poc_storage(db_path)
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         row = db.execute(
             "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
@@ -1777,19 +1838,21 @@ def attribute_scan_run_networks(
     return with_queue_state(with_host_count(manifest), db_path)
 
 
-def nmap_host_count(xml_path: Path) -> int | None:
-    """Return the number of hosts Nmap identified as up, if XML is available."""
+def nmap_host_presence_counts(xml_path: Path) -> dict[str, int] | None:
+    """Return reported, confirmed, and assumed host counts from Nmap XML."""
     if not xml_path.is_file():
         return None
     try:
         root = ET.parse(xml_path).getroot()
     except (ET.ParseError, OSError):
         return None
-    return sum(
-        1
-        for host in root.findall("host")
-        if (host.find("status") is None or host.find("status").get("state") == "up")
-    )
+    return nmap_presence_counts(root)
+
+
+def nmap_host_count(xml_path: Path) -> int | None:
+    """Return the number of targets with direct response evidence."""
+    counts = nmap_host_presence_counts(xml_path)
+    return counts["confirmed"] if counts is not None else None
 
 
 def nmap_up_addresses(xml_path: Path) -> list[str]:
@@ -1890,10 +1953,17 @@ def merge_nmap_xml(source_paths: list[Path], destination: Path) -> int:
 
 
 def with_host_count(manifest: dict, data_dir: Path = DATA_DIR) -> dict:
-    if manifest.get("host_count") is None:
-        manifest["host_count"] = nmap_host_count(
-            run_directory(manifest["run_id"], data_dir) / "scan.xml"
-        )
+    xml_path = run_directory(manifest["run_id"], data_dir) / "scan.xml"
+    if (
+        manifest.get("host_count") is None
+        or "nmap_reported_host_count" not in manifest
+        or "nmap_assumed_host_count" not in manifest
+    ):
+        counts = nmap_host_presence_counts(xml_path)
+        if counts is not None:
+            manifest["host_count"] = counts["confirmed"]
+            manifest["nmap_reported_host_count"] = counts["reported_up"]
+            manifest["nmap_assumed_host_count"] = counts["assumed"]
     return manifest
 
 
@@ -1945,7 +2015,7 @@ def delete_scan_profile(
         raise KeyError("Scan profile not found")
     if profile["built_in"]:
         raise PermissionError("Built-in profiles are protected and cannot be deleted")
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         pinned = db.execute(
             "SELECT COUNT(*) FROM scan_schedules WHERE profile_id = ?", (profile_id,)
         ).fetchone()[0]
@@ -1955,7 +2025,7 @@ def delete_scan_profile(
         )
     if not consume_delete_challenge("profile", profile_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         removed = db.execute(
             "DELETE FROM scan_profiles WHERE profile_id = ?", (profile_id,)
         ).rowcount
@@ -1974,7 +2044,7 @@ def delete_scan_schedule(
             )
     if not consume_delete_challenge("schedule", schedule_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         db.execute("DELETE FROM scan_schedules WHERE schedule_id = ?", (schedule_id,))
     return {"deleted": True, "schedule_id": schedule_id}
 
@@ -1998,7 +2068,7 @@ def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
     run_dir = run_directory(run_id, data_dir)
     if run_dir.exists():
         shutil.rmtree(run_dir)
-    db = sqlite3.connect(db_path)
+    db = connect_database(db_path)
     try:
         db.execute("DELETE FROM scan_runs WHERE run_id = ?", (run_id,))
         db.commit()
@@ -2028,7 +2098,7 @@ def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
             if child.is_file():
                 child.unlink()
                 removed_imports += 1
-    db = sqlite3.connect(db_path)
+    db = connect_database(db_path)
     try:
         db.execute("DELETE FROM scan_runs")
         try:
@@ -2084,7 +2154,7 @@ def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
                 if child.is_file() and (child.name == "manifest.json" or child.name.startswith("uploaded-") or child.name in {"stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt"}):
                     location["files"].append(_stored_file_record(child, f"/api/device-configs/{run_dir.name}/files/{child.name}"))
             locations.append(location)
-    db = sqlite3.connect(db_path)
+    db = connect_database(db_path)
     try:
         rows = db.execute("SELECT sha256, filename, imported_at FROM imports ORDER BY imported_at DESC LIMIT ?", (limit,)).fetchall()
     except sqlite3.Error:
@@ -2342,15 +2412,23 @@ def execute_scan_run(
             run_phases = True
             alive_hosts: list[str] = []
             if manifest.get("discovery_mode") == "fping":
-                discovery_status, discovery_exit = watch_process(
-                    manifest["discovery_command_argv"],
-                    run_dir / "fping-alive.txt",
-                    run_dir / "fping-stderr.txt",
-                    phase="discovery", process_attr="discovery_process",
-                    allowed_exit_codes={0, 1}, track_nmap=False,
-                )
+                fping_start_error = ""
+                try:
+                    discovery_status, discovery_exit = watch_process(
+                        manifest["discovery_command_argv"],
+                        run_dir / "fping-alive.txt",
+                        run_dir / "fping-stderr.txt",
+                        phase="discovery", process_attr="discovery_process",
+                        allowed_exit_codes={0, 1}, track_nmap=False,
+                    )
+                except OSError as exc:
+                    discovery_status, discovery_exit = "failed", None
+                    fping_start_error = f"{type(exc).__name__}: {exc}"
+                    (run_dir / "fping-stderr.txt").write_text(
+                        fping_start_error + "\n", encoding="utf-8"
+                    )
                 exit_code = discovery_exit
-                if discovery_status != "completed":
+                if discovery_status in {"cancelled", "timed_out"}:
                     manifest["status"] = discovery_status
                     run_phases = False
                 alive_hosts = [
@@ -2361,7 +2439,38 @@ def execute_scan_run(
                     if line.strip()
                 ]
                 manifest["discovery_host_count"] = len(alive_hosts)
-                if run_phases and not alive_hosts:
+                fping_failed = discovery_status == "failed"
+                if fping_failed:
+                    retained_error = (run_dir / "fping-stderr.txt").read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip()
+                    manifest["discovery_error"] = (
+                        retained_error[-1000:]
+                        or fping_start_error
+                        or "FPING ended unsuccessfully without error text."
+                    )
+                if run_phases and (fping_failed or not alive_hosts):
+                    if fping_failed:
+                        failure_status = (
+                            f"exit status {discovery_exit}"
+                            if discovery_exit is not None
+                            else "a startup error"
+                        )
+                        fallback_reason = (
+                            f"FPING failed with {failure_status}, so host discovery is incomplete. "
+                            "No full-target Nmap fallback will start until an operator or mission "
+                            "partner explicitly authorizes it."
+                        )
+                        fallback_trigger = "fping_failed"
+                    else:
+                        fallback_reason = (
+                            "FPING completed but found no responsive hosts. No full-target Nmap "
+                            "fallback will start until an operator or mission partner explicitly "
+                            "authorizes it."
+                        )
+                        fallback_trigger = "no_responsive_hosts"
+                    manifest["fallback_reason"] = fallback_reason
+                    manifest["fallback_trigger"] = fallback_trigger
                     terminate_process(control.capture_process)
                     control.capture_process = None
                     fallback_argv = build_nmap_argv(
@@ -2378,19 +2487,16 @@ def execute_scan_run(
                             "fallback_approval_required": False,
                             "fallback_decision": "policy_stop",
                             "fallback_decided_at": utc_now(),
-                            "discovery_note": (
-                                "FPING found no responsive hosts. The pinned scheduled-scan "
-                                "policy finished without starting the full Nmap fallback."
+                            "discovery_note": fallback_reason + (
+                                " The pinned scheduled-scan policy finished without starting "
+                                "the full Nmap fallback."
                             ),
                         })
                         exit_code, run_phases = 0, False
                     else:
                         manifest["status"] = "awaiting_fallback_approval"
                         manifest["fallback_approval_required"] = True
-                        manifest["discovery_note"] = (
-                            "FPING found no responsive hosts. Full Nmap fallback is paused "
-                            "pending explicit operator or mission-partner approval."
-                        )
+                        manifest["discovery_note"] = fallback_reason
                         collect_artifacts(manifest, data_dir)
                         persist_scan_progress(
                             manifest, phase="awaiting_approval",
@@ -2411,9 +2517,9 @@ def execute_scan_run(
                             if control.fallback_decision == "approve":
                                 apply_fping_fallback(manifest)
                                 manifest["status"] = "running"
-                                manifest["discovery_note"] = (
-                                    "FPING found no responsive hosts. Full Nmap fallback "
-                                    f"approved by {control.fallback_decided_by}: "
+                                manifest["fallback_approval_required"] = False
+                                manifest["discovery_note"] = fallback_reason + (
+                                    f" Full Nmap fallback approved by {control.fallback_decided_by}: "
                                     f"{control.fallback_authorization_note}"
                                 )
                                 started = time.monotonic()
@@ -2421,9 +2527,9 @@ def execute_scan_run(
                                 start_capture("the approved fallback")
                             else:
                                 manifest["status"] = "completed_without_nmap"
-                                manifest["discovery_note"] = (
-                                    "FPING found no responsive hosts. "
-                                    f"{control.fallback_decided_by} chose to finish without "
+                                manifest["fallback_approval_required"] = False
+                                manifest["discovery_note"] = fallback_reason + (
+                                    f" {control.fallback_decided_by} chose to finish without "
                                     f"Nmap fallback: {control.fallback_authorization_note}"
                                 )
                                 exit_code, run_phases = 0, False
@@ -2552,7 +2658,26 @@ def execute_scan_run(
         manifest["completed_at"] = utc_now()
         manifest["exit_code"] = exit_code
         manifest["success"] = manifest["status"] in {"completed", "completed_without_nmap"}
-        manifest["host_count"] = nmap_host_count(run_dir / "scan.xml")
+        presence_counts = nmap_host_presence_counts(run_dir / "scan.xml")
+        manifest["host_count"] = (
+            presence_counts["confirmed"] if presence_counts is not None else None
+        )
+        manifest["nmap_reported_host_count"] = (
+            presence_counts["reported_up"] if presence_counts is not None else None
+        )
+        manifest["nmap_assumed_host_count"] = (
+            presence_counts["assumed"] if presence_counts is not None else 0
+        )
+        if presence_counts and presence_counts["assumed"]:
+            quality_note = (
+                f"Nmap -Pn assumed {presence_counts['assumed']} target"
+                f"{'s' if presence_counts['assumed'] != 1 else ''} up; "
+                f"{presence_counts['confirmed']} returned direct response evidence. "
+                "Assumed targets are not counted as confirmed live hosts."
+            )
+            manifest["execution_note"] = " ".join(
+                value for value in (manifest.get("execution_note"), quality_note) if value
+            )
         progress = manifest["progress"]
         if manifest["status"] == "completed":
             update_scan_progress(
@@ -3010,7 +3135,7 @@ def recover_scheduler_state(
     """Close orphaned work, preserve manual queue entries, and recover scheduled batches."""
     init_poc_storage(db_path)
     recovered_at = utc_now()
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         rows = db.execute("SELECT manifest_json FROM scan_runs").fetchall()
     manifests = [json.loads(row[0]) for row in rows]
     orphaned = []
@@ -3177,7 +3302,7 @@ def schedule_worker(stop_event: threading.Event, interval_seconds: float = 15.0)
 
 
 def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(imports)").fetchall()}
         metadata_expression = "metadata_json" if "metadata_json" in columns else "'{}'"
         rows = db.execute(
@@ -3201,6 +3326,10 @@ def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
                 "summary": {
                     "host_count": len(analysis.get("hosts", [])),
                     "up_count": analysis.get("up_count", 0),
+                    "reported_up_count": analysis.get(
+                        "reported_up_count", analysis.get("up_count", 0)
+                    ),
+                    "assumed_up_count": analysis.get("assumed_up_count", 0),
                     "mac_count": analysis.get("mac_count", 0),
                     "os_group_count": len(analysis.get("os_groups", [])),
                     "coverage": analysis.get("coverage", {}),
@@ -3214,7 +3343,7 @@ def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
 def get_import_history_item(sha256: str, db_path: Path = DB_PATH) -> dict | None:
     if not IMPORT_KEY_RE.fullmatch(sha256):
         return None
-    with sqlite3.connect(db_path) as db:
+    with connect_database(db_path) as db:
         columns = {item[1] for item in db.execute("PRAGMA table_info(imports)").fetchall()}
         metadata_expression = "metadata_json" if "metadata_json" in columns else "'{}'"
         row = db.execute(
@@ -3638,7 +3767,7 @@ def change_scan_run_owner(
     if manifest.get("status") != "queued":
         raise HTTPException(status_code=409, detail="Only queued scans can be reassigned")
     if actor is not None:
-        with sqlite3.connect(DB_PATH) as db:
+        with connect_database(DB_PATH) as db:
             row = db.execute(
                 "SELECT role, disabled FROM analyst_users WHERE username = ?",
                 (change.owner,),
@@ -3764,9 +3893,28 @@ def scan_run_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]
 
 @router.get("/scan-runs-grouped")
 def grouped_scan_run_history(
-    limit: int = Query(default=200, ge=1, le=200),
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = 0,
 ) -> list[dict]:
-    return group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit))
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="History offset must not be negative")
+    groups = group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit, offset=offset, metadata_only=True))
+    fields = {
+        "run_id", "status", "partial_results", "execution_note", "display_name",
+        "name", "created_at", "completed_at", "profile", "profile_id",
+        "profile_version", "profile_settings", "saved_network_ids",
+        "saved_networks", "target_selection", "manual_targets", "targets",
+        "host_count", "interface", "created_by", "operator", "scheduled_by",
+        "executed_by", "execution_method", "coverage", "scheduled",
+        "timeout_seconds", "progress", "discovery_mode", "fallback_decision",
+        "nmap_reported_host_count", "nmap_assumed_host_count",
+    }
+    for group in groups:
+        group["runs"] = [
+            {key: value for key, value in run.items() if key in fields}
+            for run in group.get("runs", [])
+        ]
+    return groups
 
 
 @router.get("/scan-runs/{run_id}")

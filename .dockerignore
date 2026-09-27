@@ -3,7 +3,9 @@ logs/
 keys/
 backups/
 __pycache__/
+.pytest_cache/
+.venv/
+.tmp-*/
 *.pyc
 *.tar
 *.tar.gz
-
