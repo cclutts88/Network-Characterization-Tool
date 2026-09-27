@@ -24,10 +24,12 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.artifacts import link_artifact, register_artifact_file
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
+DB_PATH = DATA_DIR / "analyzer.db"
 CONFIG_DIR = DATA_DIR / "device-configs"
 HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}$")
 USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -2652,7 +2654,25 @@ async def upload_result(
         stored_path.unlink(missing_ok=True)
         run_dir.rmdir()
         raise HTTPException(status_code=422, detail="Choose a non-empty result file")
+
     completed_at = utc_now()
+    artifact = register_artifact_file(
+        db_path=DB_PATH,
+        source_path=stored_path,
+        source_kind="device_config_upload",
+        source_ref=run_id,
+        original_filename=original_name[:255],
+        media_type=result_file.content_type or "application/octet-stream",
+        actor=values["operator"],
+        metadata={
+            "vendor": vendor,
+            "device_type": device_type,
+            "device_address": values["device_address"],
+            "device_name": clean_device_name or None,
+        },
+        observed_at=completed_at,
+    )
+    artifact_storage_mode = link_artifact(artifact, stored_path)
     manifest = {
         "application_version": APP_VERSION,
         "build_id": BUILD_ID,
@@ -2674,6 +2694,10 @@ async def upload_result(
         "source_filename": original_name[:255],
         "source_content_type": result_file.content_type or "application/octet-stream",
         "uploaded_size": uploaded_size,
+        "artifact_sha256": artifact["sha256"],
+        "artifact_observation_id": artifact["observation_id"],
+        "artifact_duplicate": artifact["duplicate"],
+        "artifact_storage_mode": artifact_storage_mode,
         "output_complete": True,
         "retained_output_bytes": uploaded_size,
         "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
