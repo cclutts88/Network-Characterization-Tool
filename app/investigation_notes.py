@@ -152,6 +152,7 @@ def save_note(
     changed_at = utc_now()
     init_note_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         _validate_parent(db, owner=owner, parent_id=parent_id, note_id=note_id)
         if note_id:
@@ -227,6 +228,7 @@ def delete_note(
 ) -> dict:
     init_note_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
@@ -279,6 +281,7 @@ def share_note(
 ) -> dict:
     init_note_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",

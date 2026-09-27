@@ -108,6 +108,7 @@ def set_default_layout(db_path: Path, *, owner: str, layout_id: str | None) -> d
     init_workspace_storage(db_path)
     changed_at = utc_now()
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         if layout_id is None:
             db.execute(
@@ -154,6 +155,7 @@ def save_layout(
     changed_at = utc_now()
     init_workspace_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         if layout_id:
             existing = db.execute(
@@ -204,6 +206,7 @@ def delete_layout(
 ) -> dict:
     init_workspace_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_workspace_layouts WHERE layout_id = ? AND owner = ?",
@@ -233,6 +236,7 @@ def publish_layout(
 ) -> dict:
     init_workspace_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_workspace_layouts WHERE layout_id = ?", (layout_id,)

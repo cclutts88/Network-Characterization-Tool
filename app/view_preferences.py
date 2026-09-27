@@ -112,6 +112,7 @@ def save_view_preference(
     changed_at = utc_now()
     init_view_preference_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         existing = db.execute(
             "SELECT * FROM analyst_view_preferences WHERE owner = ? AND page = ?",
@@ -162,6 +163,7 @@ def save_filter_preset(
     changed_at = utc_now()
     init_view_preference_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         if preset_id:
             existing = db.execute(
@@ -216,6 +218,7 @@ def delete_filter_preset(
     page = _page(page)
     init_view_preference_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
         db.row_factory = sqlite3.Row
         row = db.execute(
             "SELECT * FROM analyst_filter_presets WHERE preset_id = ? AND owner = ? AND page = ?",

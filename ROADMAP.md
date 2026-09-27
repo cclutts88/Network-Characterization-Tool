@@ -635,7 +635,21 @@ foundational changes.
      final startup/route tests passed. Auth/import schema setup is startup-only;
      existing collection/cache guards remain; backfill setup occurs only on explicit
      jobs. This does not claim all concurrent-write hazards or lock contention solved.
-   - [ ] Review long write transactions and high-contention write paths.
+   - [~] Review long write transactions and high-contention write paths. Started
+     deterministic simultaneous-edit checks for layouts, notes, and view preferences;
+     inspect whether version validation and mutation form one protected operation.
+     **QUALITY GATE: CLEAR:** all four simultaneous-edit reproductions (layout, note,
+     personal view, filter preset) accepted both writes to version 1 as version 2,
+     silently overwriting one change before this fix. Corrected with write transactions that
+     protect version/ownership/parent validation and mutation together; reads remain
+     read-only and existing conflict responses are retained.
+     Full suite: 555 passed; five focused concurrency/rollback tests passed after
+     stronger durable-state checks. Independent default/delete, share/delete, audit
+     rollback and lock-release checks passed. Recursive note-folder mutations still
+     hold a writer slot proportional to branch size; large-data contention remains open.
+- [~] Started disposable synthetic storage measurements for first dry run, initial
+  backfill, and repeated backfill, including wall time, CPU, peak process memory,
+  bytes and correctness checks. These do not establish production-scale acceptance.
 
    WAL and a 30-second busy timeout were already present before this redesign; the
    remaining reliability work is focused on eliminating unnecessary writes and
