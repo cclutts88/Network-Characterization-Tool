@@ -1492,7 +1492,24 @@ After this roadmap is accepted, the first implementation milestone is:
 12. Enable SQLite WAL/busy timeout and reduce contention.
 13. Build current-state read models.
 14. Implement Last Seen + evidence receipt behavior.
-15. Benchmark against Phase 0 datasets.
+15. Backfill the Artifact Registry from existing Nmap scans, imported XML, device
+    collections, and other retained source artifacts.
+16. Provide a **read-only storage analysis / dry run** before any compaction:
+    - files inspected
+    - unique content hashes
+    - exact duplicate count
+    - current storage footprint
+    - estimated reclaimable space
+    - references/observations that would be preserved
+17. Make backfill restart-safe and resumable so a container restart does not force
+    a large installation to begin hashing again.
+18. Verify every historical reference before allowing compaction.
+19. Allow optional **exact-content compaction** only after verification. SHA-256
+    identical content may share one physical artifact while retaining every scan,
+    collection, timestamp, analyst, filename, and evidence reference.
+20. Never deduplicate merely similar artifacts. Non-identical source evidence is
+    retained and compared through normalized facts/delta processing.
+21. Benchmark against Phase 0 datasets.
 
 Only after this foundation behaves reliably should NCT begin high-volume passive
 evidence ingestion.
