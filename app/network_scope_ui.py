@@ -12,6 +12,7 @@ def network_scope_page() -> HTMLResponse:
 <section class="panel" id="scopeHelp"><h2>When to create a scope</h2>
 <p>A scope represents one network context in which an address has a consistent meaning. Create separate scopes for contexts such as guest and office networks, lab and production, different customers, or disconnected sites that may reuse the same addresses.</p>
 <ul><li><strong>Reuse a scope</strong> for later scans and collections from the same network context. A new scan by itself does not require a new scope.</li>
+<li><strong>Use the hierarchy scope → named subnet → CIDR → IP address.</strong> For example, “AFB Dev” can later contain “Development Servers” at <code>10.50.15.0/24</code> and “Development Clients” at <code>10.50.16.0/24</code>. This page creates only the “AFB Dev” scope identity; subnet and CIDR association comes next.</li>
 <li><strong>Choose a recognizable label</strong> such as “Guest Wi-Fi — Building A.” Use the description for the location, owner, mission, or boundary that makes it distinct.</li>
 <li><strong>Manage</strong> opens the label, description, permanent ID, and change history. Editing the display text does not change the scope identity.</li></ul>
 <p class="notice"><strong>Current foundation status:</strong> creating a scope prepares its identity, but assignment to scans and other evidence is not enabled yet. It will not change current analysis. The assignment and correction workflow is the next separate foundation step.</p>

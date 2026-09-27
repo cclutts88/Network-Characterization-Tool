@@ -125,6 +125,13 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "storedGuidePreference===null||storedGuidePreference==='1'" in SHELL_SCRIPT
     assert "hasOwnProperty.call(snapshot,'guide_enabled'))setGuideEnabled" in SHELL_SCRIPT
     assert '<summary>Using this guide</summary>' in SHELL_SCRIPT
+    assert 'id="nct-guide-name" tabindex="0"' in SHELL_SCRIPT
+    assert 'temporary overlay when you hover over or focus the exact words Operator Guide' in SHELL_SCRIPT
+    assert '#nct-guide-help:not([open]){display:none}' in SHELL_SCRIPT
+    assert '#nct-guide-help{position:absolute' in SHELL_SCRIPT
+    assert 'do not take space from the current topic' in SHELL_SCRIPT
+    assert "guideName.addEventListener('mouseenter',showGuideHelpTemporarily)" in SHELL_SCRIPT
+    assert "guide.addEventListener('mouseleave',closeTransientGuideHelp)" in SHELL_SCRIPT
     assert 'Enable Operator Guide or Disable Operator Guide' in SHELL_SCRIPT
     assert 'The Guide tab stays halfway down the right edge' in SHELL_SCRIPT
     assert 'Hold Shift for larger keyboard steps' in SHELL_SCRIPT
@@ -137,12 +144,15 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert ".nct-guide-pinned-target{outline:3px solid" in SHELL_SCRIPT
     assert "pinnedGuideTarget.classList.add('nct-guide-pinned-target')" in SHELL_SCRIPT
     assert "guide.classList.toggle('nct-guide-pinned',guidePinned)" in SHELL_SCRIPT
+    assert "body.nct-shell>header{position:sticky!important;top:0!important" in SHELL_SCRIPT
 
 
 def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     html = network_scope_page().body.decode()
     assert "guest and office networks, lab and production" in html
     assert "A new scan by itself does not require a new scope" in html
+    assert "scope → named subnet → CIDR → IP address" in html
+    assert "Development Servers" in html and "10.50.15.0/24" in html
     assert "assignment to scans and other evidence is not enabled yet" in html
     assert "cannot currently be undone" in html
     assert "[hidden]{display:none!important}" in html
@@ -152,6 +162,8 @@ def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     assert "'Show archived scopes'" in SHELL_SCRIPT
     assert "'Manage network scope'" in SHELL_SCRIPT
     assert "Evidence assignment is not enabled in this foundation step" in SHELL_SCRIPT
+    assert "AFB Dev can later contain Development Servers at 10.50.15.0/24" in SHELL_SCRIPT
+    assert "Named subnet and CIDR association comes in the next workflow" in SHELL_SCRIPT
 
 
 def test_air_gapped_designation_uses_active_theme_palette():

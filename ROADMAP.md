@@ -686,6 +686,23 @@ foundational changes.
    deliberately disabled until current-assignment recheck, assessment/receipt creation
    and assignment linking can commit atomically. See
    [assignment contract](docs/EVIDENCE_SCOPE_ASSIGNMENTS.md).
+   2026-09-27 operator-guidance refinement start: clarify the operator-facing hierarchy
+   between a stable network scope, its named subnets, their CIDRs and individual IPs,
+   including that one scope can contain multiple subnets and this page creates only
+   the scope identity. Repair the shared top header so it remains anchored while the
+   Network Scopes page scrolls. Make the exact Operator Guide heading reveal the
+   Using this guide instructions on pointer hover or keyboard focus. Keep the closed
+   disclosure completely hidden and show the instructions as a temporary overlay so
+   they do not take space from the current topic.
+   Operator-guidance refinement completion: the page and contextual guide now show
+   scope → named subnet → CIDR → IP with a familiar AFB development example
+   spanning multiple named subnets. The shared header remains anchored while
+   content scrolls at desktop and narrow widths. Hovering or focusing the exact
+   Operator Guide heading reveals an absolute-positioned instruction overlay; closed
+   help has no visual or accessibility-tree footprint and the active topic never
+   shifts. **QUALITY GATE: CLEAR**;
+   full Docker suite **617 passed**, focused UI/scope suite **61 passed**, and live
+   browser hover/focus/dismiss, no-layout-shift, sticky-header and console checks passed.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.
