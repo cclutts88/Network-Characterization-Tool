@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.database import connect_database
+
+
+_SAVED_NETWORK_STORAGE_READY: set[str] = set()
+_SAVED_NETWORK_STORAGE_LOCK = threading.RLock()
 
 
 def utc_now() -> str:
@@ -115,40 +120,47 @@ class SavedNetworkArchive(BaseModel):
 
 
 def init_saved_network_storage(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with connect_database(db_path) as db:
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS saved_networks (
-                saved_network_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                cidr TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                category TEXT NOT NULL DEFAULT '',
-                tags_json TEXT NOT NULL DEFAULT '[]',
-                created_at TEXT NOT NULL,
-                created_by TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                updated_by TEXT NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1
+    """Run Saved Network schema setup once per process/database path."""
+    storage_key = str(db_path.resolve())
+    if storage_key in _SAVED_NETWORK_STORAGE_READY and db_path.is_file():
+        return
+    with _SAVED_NETWORK_STORAGE_LOCK:
+        if storage_key in _SAVED_NETWORK_STORAGE_READY and db_path.is_file():
+            return
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with connect_database(db_path) as db:
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS saved_networks (
+                    saved_network_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    cidr TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    category TEXT NOT NULL DEFAULT '',
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1
+                )
+                """
             )
-            """
-        )
-        # Archived entries remain available to historical scan snapshots, but
-        # they must not invisibly reserve a name or CIDR forever.  Earlier
-        # releases created unconditional unique indexes, so replace them in
-        # place with active-only indexes during normal startup.
-        db.execute("DROP INDEX IF EXISTS saved_networks_name_unique")
-        db.execute("DROP INDEX IF EXISTS saved_networks_cidr_unique")
-        db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_name_unique "
-            "ON saved_networks(lower(name)) WHERE active = 1"
-        )
-        db.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_cidr_unique "
-            "ON saved_networks(cidr) WHERE active = 1"
-        )
-
+            # Archived entries remain available to historical scan snapshots, but
+            # they must not invisibly reserve a name or CIDR forever. Earlier
+            # releases created unconditional unique indexes, so replace them once
+            # during process startup instead of on normal read paths.
+            db.execute("DROP INDEX IF EXISTS saved_networks_name_unique")
+            db.execute("DROP INDEX IF EXISTS saved_networks_cidr_unique")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_name_unique "
+                "ON saved_networks(lower(name)) WHERE active = 1"
+            )
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_cidr_unique "
+                "ON saved_networks(cidr) WHERE active = 1"
+            )
+        _SAVED_NETWORK_STORAGE_READY.add(storage_key)
 
 def _row_record(row: tuple | None) -> dict | None:
     if row is None:
