@@ -16,6 +16,8 @@ import urllib.request
 import uuid
 import zipfile
 
+from app.database import configure_database, connect_database
+
 
 MAX_QUERIES = 40
 MAX_RESULTS_PER_QUERY = 25
@@ -27,6 +29,8 @@ OFFICIAL_ARCHIVE_URL = (
     "exploitdb-main.tar.gz"
 )
 _UPDATE_LOCK = threading.Lock()
+_QUERY_CACHE_READY: set[str] = set()
+_QUERY_CACHE_LOCK = threading.RLock()
 GENERIC_PRODUCTS = {
     "", "unknown", "http", "https", "ssh", "ftp", "smtp", "dns", "domain",
     "microsoft", "windows", "linux", "network", "server",
@@ -40,6 +44,106 @@ def _configured_command() -> str:
 def _storage_root() -> Path:
     data_root = Path(os.environ.get("ANALYZER_DATA_DIR") or "/data")
     return data_root / "searchsploit"
+
+
+def _analysis_db_path() -> Path:
+    data_root = Path(os.environ.get("ANALYZER_DATA_DIR") or "/data")
+    return data_root / "analyzer.db"
+
+
+def _provider_cache_key(status: dict) -> str | None:
+    """Return a stable cache namespace for the active Exploit-DB dataset."""
+    identity = {
+        "active_version": status.get("active_version"),
+        "archive_sha256": status.get("archive_sha256"),
+        "database_updated_epoch": status.get("database_updated_epoch"),
+        "database_path": status.get("database_path"),
+    }
+    if not any(value not in {None, ""} for value in identity.values()):
+        return None
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _init_query_cache(db_path: Path | None = None) -> Path:
+    db_path = db_path or _analysis_db_path()
+    storage_key = str(db_path.resolve())
+    if storage_key in _QUERY_CACHE_READY and db_path.is_file():
+        return db_path
+    with _QUERY_CACHE_LOCK:
+        if storage_key in _QUERY_CACHE_READY and db_path.is_file():
+            return db_path
+        configure_database(db_path)
+        with connect_database(db_path) as db:
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS searchsploit_query_cache (
+                    provider_key TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    candidates_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (provider_key, query)
+                )
+                """
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS searchsploit_query_cache_updated "
+                "ON searchsploit_query_cache(updated_at)"
+            )
+        _QUERY_CACHE_READY.add(storage_key)
+    return db_path
+
+
+def _load_query_cache(provider_key: str | None, queries: list[str]) -> dict[str, list[dict]]:
+    if not provider_key or not queries:
+        return {}
+    db_path = _init_query_cache()
+    placeholders = ",".join("?" for _ in queries)
+    with connect_database(db_path) as db:
+        rows = db.execute(
+            f"""
+            SELECT query, candidates_json
+            FROM searchsploit_query_cache
+            WHERE provider_key = ? AND query IN ({placeholders})
+            """,
+            (provider_key, *queries),
+        ).fetchall()
+    cached: dict[str, list[dict]] = {}
+    for query, payload in rows:
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            cached[str(query)] = [item for item in parsed if isinstance(item, dict)]
+    return cached
+
+
+def _store_query_cache(provider_key: str | None, results: dict[str, list[dict]]) -> None:
+    if not provider_key or not results:
+        return
+    db_path = _init_query_cache()
+    updated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    with connect_database(db_path) as db:
+        db.executemany(
+            """
+            INSERT INTO searchsploit_query_cache (
+                provider_key, query, candidates_json, updated_at
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(provider_key, query) DO UPDATE SET
+                candidates_json = excluded.candidates_json,
+                updated_at = excluded.updated_at
+            """,
+            [
+                (
+                    provider_key,
+                    query,
+                    json.dumps(candidates, sort_keys=True),
+                    updated_at,
+                )
+                for query, candidates in results.items()
+            ],
+        )
 
 
 def _active_database_path() -> Path | None:
@@ -404,6 +508,8 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
             "status": "searchsploit_unavailable",
             "provider": status,
             "query_count": 0,
+            "cache_hit_count": 0,
+            "cache_miss_count": 0,
             "searched_finding_count": 0,
             "skipped_no_product_count": 0,
             "matched_host_count": 0,
@@ -430,14 +536,18 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         if len(query_findings) >= MAX_QUERIES:
             break
 
-    query_results: dict[str, list[dict]] = {}
+    provider_key = _provider_cache_key(status)
+    cached_results = _load_query_cache(provider_key, list(query_findings))
+    query_results: dict[str, list[dict]] = dict(cached_results)
+    missing_queries = [query for query in query_findings if query not in cached_results]
     warnings = []
-    if query_findings:
-        workers = min(4, len(query_findings))
+    fresh_results: dict[str, list[dict]] = {}
+    if missing_queries:
+        workers = min(4, len(missing_queries))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(_search, status["command_path"], query): query
-                for query in query_findings
+                for query in missing_queries
             }
             for future in as_completed(futures):
                 query = futures[future]
@@ -445,6 +555,9 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
                 query_results[query] = candidates
                 if warning:
                     warnings.append(warning)
+                else:
+                    fresh_results[query] = candidates
+        _store_query_cache(provider_key, fresh_results)
 
     matches = []
     for query, keyed_findings in query_findings.items():
@@ -505,6 +618,8 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         "status": "searchsploit_complete",
         "provider": status,
         "query_count": len(query_findings),
+        "cache_hit_count": len(cached_results),
+        "cache_miss_count": len(missing_queries),
         "searched_finding_count": sum(len(items) for items in query_findings.values()),
         "skipped_no_product_count": skipped_no_product_count,
         "matched_host_count": len(matched_hosts),
