@@ -108,43 +108,39 @@ def _register_record(
     canonical_path = canonical_artifact_path(artifact_root, digest)
     observation_id = uuid.uuid4().hex
     with connect_database(db_path) as db:
+        inserted = db.execute(
+            """
+            INSERT OR IGNORE INTO artifact_registry (
+                sha256, size_bytes, media_type, canonical_path,
+                first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                digest,
+                int(size_bytes),
+                media_type or "application/octet-stream",
+                str(canonical_path),
+                observed_at,
+                observed_at,
+            ),
+        ).rowcount
+        duplicate = not bool(inserted)
         existing = db.execute(
             "SELECT first_seen_at FROM artifact_registry WHERE sha256 = ?",
             (digest,),
         ).fetchone()
-        if existing is None:
-            db.execute(
-                """
-                INSERT INTO artifact_registry (
-                    sha256, size_bytes, media_type, canonical_path,
-                    first_seen_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    digest,
-                    int(size_bytes),
-                    media_type or "application/octet-stream",
-                    str(canonical_path),
-                    observed_at,
-                    observed_at,
-                ),
-            )
-            duplicate = False
-            first_seen_at = observed_at
-        else:
-            db.execute(
-                """
-                UPDATE artifact_registry
-                SET last_seen_at = ?,
-                    media_type = CASE
-                        WHEN media_type = 'application/octet-stream' AND ? != ''
-                        THEN ? ELSE media_type END
-                WHERE sha256 = ?
-                """,
-                (observed_at, media_type or "", media_type or "", digest),
-            )
-            duplicate = True
-            first_seen_at = existing[0]
+        first_seen_at = existing[0] if existing else observed_at
+        db.execute(
+            """
+            UPDATE artifact_registry
+            SET last_seen_at = ?,
+                media_type = CASE
+                    WHEN media_type = 'application/octet-stream' AND ? != ''
+                    THEN ? ELSE media_type END
+            WHERE sha256 = ?
+            """,
+            (observed_at, media_type or "", media_type or "", digest),
+        )
         db.execute(
             """
             INSERT INTO artifact_observations (
