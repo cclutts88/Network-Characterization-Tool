@@ -11,6 +11,74 @@
 
 ---
 
+# 0. Roadmap Governance — Project Source of Truth
+
+`ROADMAP.md` is the governing project-control document for NCT.
+
+All future development on this redesign must keep this file current.
+
+## 0.1 Required updates
+
+Update the roadmap whenever any of the following occurs:
+
+- A roadmap step is started.
+- A roadmap step is completed.
+- A planned capability changes materially.
+- Implementation reveals a new dependency or prerequisite.
+- A feature is deferred, split, absorbed, or reordered.
+- The implementation deviates from the planned architecture.
+- A previously unknown limitation is discovered.
+- A design decision materially changes storage, workflow, evidence meaning,
+  permissions, deployment, or analyst experience.
+
+## 0.2 Status notation
+
+Use these status markers consistently:
+
+- `[ ]` — Planned
+- `[~]` — In progress
+- `[x]` — Complete
+- `[!]` — Blocked / requires decision
+- `[-]` — Deferred / intentionally removed from the current phase
+
+Completed work should not be removed from the roadmap simply because it shipped.
+
+## 0.3 Deviation log
+
+Any meaningful deviation must be recorded in the **Architecture / Roadmap Deviation
+Log** with:
+
+- Date
+- Phase / capability
+- Planned approach
+- Implemented or revised approach
+- Reason
+- Expected impact
+- Follow-up, if any
+
+A deviation is not automatically a problem. The purpose of the log is to preserve
+engineering rationale so future work does not accidentally undo intentional
+decisions.
+
+## 0.4 Completion discipline
+
+A roadmap item should only be marked complete when:
+
+1. The implementation exists on the foundation branch.
+2. Relevant automated tests pass.
+3. Existing behavior has not regressed within the tested scope.
+4. The roadmap is updated to reflect what actually shipped.
+5. Any deviation from the original plan has been documented.
+
+## 0.5 Architecture / Roadmap Deviation Log
+
+| Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
+|---|---|---|---|---|---|
+| 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
+| 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
+
+---
+
 # 1. Mission
 
 NCT began as a network characterization platform. Its next generation expands that
@@ -448,7 +516,7 @@ foundational changes.
 
 ## Steps
 
-1. Artifact hashing and deduplication.
+1. [~] Artifact hashing and deduplication.
 2. Canonical host/service/network/device entities.
 3. Separate observations from entities.
 4. Delta detection:
@@ -458,7 +526,7 @@ foundational changes.
    - no longer observed
    - not assessed
 5. Searchsploit cache redesign.
-6. Persistent derived results.
+6. [~] Persistent derived results.
 7. Dirty-state tracking.
 8. Dependency graph.
 9. Analysis versioning.
@@ -1489,7 +1557,7 @@ After this roadmap is accepted, the first implementation milestone is:
 9. Add dirty-state tracking.
 10. Implement persistent jobs.
 11. Move expensive operations out of request/page handling.
-12. Enable SQLite WAL/busy timeout and reduce contention.
+12. [~] Enable SQLite WAL/busy timeout and reduce contention.
 13. Build current-state read models.
 14. Implement Last Seen + evidence receipt behavior.
 15. Backfill the Artifact Registry from existing Nmap scans, imported XML, device
