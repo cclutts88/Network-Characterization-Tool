@@ -2675,6 +2675,7 @@ async def upload_result(
         media_type=result_file.content_type or "application/octet-stream",
         actor=values["operator"],
         metadata={
+            "relative_path": str(stored_path.relative_to(DB_PATH.parent)),
             "vendor": vendor,
             "device_type": device_type,
             "device_address": values["device_address"],
@@ -2702,6 +2703,7 @@ async def upload_result(
         "capture_required": False,
         "network_contacted": False,
         "source_filename": original_name[:255],
+        "retained_filename": stored_name,
         "source_content_type": result_file.content_type or "application/octet-stream",
         "uploaded_size": uploaded_size,
         "artifact_sha256": artifact["sha256"],

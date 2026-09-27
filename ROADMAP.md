@@ -72,6 +72,36 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Independent quality gate — 2026-09-27
+
+- Reviewer operating rules are preserved in [docs/NCT_PROJECT_OPERATING_RULES.md](docs/NCT_PROJECT_OPERATING_RULES.md).
+- [x] Independent review of foundation commit `dbadae3` and corrective changes completed. Green tests alone
+  are not acceptance; review includes evidence semantics, missing references,
+  migration checkpoints, storage accounting, and compatibility with stable main.
+- **QUALITY GATE: CLEAR — DOCUMENTED DEVIATION** — corrected manual device-upload manifests use
+  `source_filename` / `artifact_sha256`, but storage inspection did not validate
+  these references. Missing or changed upload content now blocks verification.
+  Missing directories, unsafe paths, timed-out scans and upload attribution are also
+  corrected. Independent reproduction passed; full Docker suite: **530 passed**.
+- Docker access restored after the user enabled permission requests. Focused Linux
+  regression testing and independent re-review passed.
+- [x] Fixes completed for upload provenance, observation-backed missing references,
+  path containment, timed-out scans, and signed-in Nmap upload attribution.
+- Accepted deviation: resumed backfills skip copying and duplicate observations,
+  but still hash content for integrity verification. Large-dataset performance has
+  not been measured. Historical deletion has no observation tombstones: unresolved
+  retained sources conservatively block reclaim estimates even if deletion was
+  intentional. No evidence deletion or compaction execution is enabled.
+- Recovery limitation: if an observation row itself was lost, backfill recreates a
+  deterministic replacement ID. A legacy manifest's old ID is not rewritten; current
+  evidence downloads use retained file paths. Existing observation IDs are preserved.
+- [~] Storage category presentation started: expose database size and evidence-folder
+  usage from the existing read-only inventory. No new background inventory work.
+- User acceptance: provide a disposable running preview with scenarios and expected
+  results; development verification does not imply user, Range, or main acceptance.
+
+### Deviation history
+
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
@@ -529,9 +559,9 @@ foundational changes.
    - [x] Legacy raw-import download compatibility preserved.
    - [x] Register automated Nmap run artifacts after execution writers close.
    - [x] Register collected device artifacts beyond manual uploads, including completed/failed SSH, preflight, command history and accountability files.
-   - [x] Existing-data backfill for retained imports and finalized scan/device evidence.
+   - [~] Existing-data backfill for retained imports and finalized scan/device evidence (manual-upload provenance review reopened).
    - [x] Dry-run duplicate/storage analysis and Settings / System Health storage view.
-   - [x] Dry-run verification of known historical paths and registered content hashes; block reclaim estimates on missing/corrupt/unsafe evidence or active collections.
+   - [~] Dry-run verification of known historical paths and registered content hashes (manual-upload integrity gap under independent review).
    - [ ] Optional exact-content compaction.
    - [x] Restart-safe/resumable backfill checkpoints and persistent storage-job reports.
 
@@ -1619,8 +1649,9 @@ After this roadmap is accepted, the first implementation milestone is:
     - current storage footprint
     - estimated reclaimable space
     - references/observations that would be preserved
-17. Make backfill restart-safe and resumable so a container restart does not force
-    a large installation to begin hashing again.
+17. Make backfill restart-safe and resumable without recopying content or adding
+    duplicate observations. Integrity verification still rehashes content (documented
+    deviation); large-installation hashing performance remains unverified.
 18. Verify every historical reference before allowing compaction.
 19. Allow optional **exact-content compaction** only after verification. SHA-256
     identical content may share one physical artifact while retaining every scan,

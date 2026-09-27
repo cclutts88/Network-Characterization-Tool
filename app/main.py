@@ -126,7 +126,7 @@ from app.ui import operator_page
 from app.session_ui import analyst_admin_page, session_script
 from app.scan_references_ui import scan_references_script
 from app.view_preferences_ui import view_preferences_script
-from app.request_identity import bind_signed_in_actor
+from app.request_identity import bind_signed_in_actor, signed_in_username
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.auth import (
     SESSION_COOKIE,
@@ -1966,7 +1966,7 @@ def preview_commands(spec: CampaignSpec) -> dict:
 
 
 @app.post("/api/import")
-async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
+async def import_xml(request: Request, file: Annotated[UploadFile, File()]) -> dict:
     content = await file.read()
     if not content:
         raise HTTPException(status_code=422, detail="The uploaded file is empty")
@@ -1975,6 +1975,8 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
 
     digest = sha256_bytes(content)
     original_name = safe_name(file.filename or "scan.xml", "scan.xml")
+    original_upload_name = file.filename or "scan.xml"
+    actor = signed_in_username(request)
     observed_at = utc_now()
 
     with connect_database(DB_PATH) as db:
@@ -2006,7 +2008,7 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
         metadata = {
             "display_name": scan_display_name(Path(original_name).stem, when=imported_moment),
             "created_at": imported_at,
-            "created_by": "imported file",
+            "created_by": actor or "imported file",
             "scheduled": False,
             "scheduled_by": None,
             "executed_by": None,
@@ -2020,9 +2022,9 @@ async def import_xml(file: Annotated[UploadFile, File()]) -> dict:
         content=content,
         source_kind="nmap_import",
         source_ref=f"upload:{uuid.uuid4().hex}",
-        original_filename=original_name,
+        original_filename=original_upload_name,
         media_type=file.content_type or "application/xml",
-        actor="imported file",
+        actor=actor,
         metadata={
             "import_sha256": digest,
             "duplicate_import": existing is not None,

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -78,7 +79,7 @@ def test_backfill_retries_after_checkpoint_loss_without_duplicate_observation(tm
     backfill_storage(db_path)
     with sqlite3.connect(db_path) as db:
         db.execute("DELETE FROM artifact_backfill")
-    assert backfill_storage(db_path)["completed"] == 1
+    assert backfill_storage(db_path)["resumed_unchanged"] == 1
     assert artifact_storage_summary(db_path)["observation_count"] == 1
 
 
@@ -186,6 +187,116 @@ def test_background_status_survives_restart_and_prevents_overlap(tmp_path, monke
     assert storage_status(db_path)["report"] == {"test": True}
     (tmp_path / "storage-health.json").write_text('{"status":"running"}')
     assert storage_status(db_path)["status"] == "interrupted"
+
+
+def manual_upload(root, registered=True):
+    directory = root / "device-configs" / "upload-a"
+    directory.mkdir(parents=True)
+    path = directory / "uploaded-router-config.txt"
+    path.write_bytes(b"original upload")
+    manifest = {"run_id": "upload-a", "status": "uploaded", "operation": "manual_upload",
+                "source_filename": "router config.txt", "operator": "alice",
+                "completed_at": "2026-09-20T10:00:00+00:00",
+                "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    if registered:
+        record = register_artifact_file(db_path=root / "analyzer.db", source_path=path,
+            source_kind="device_config_upload", source_ref="upload-a", original_filename="router config.txt",
+            actor="alice", observed_at=manifest["completed_at"])
+        manifest["artifact_observation_id"] = record["observation_id"]
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    return path
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed", "directory"])
+def test_manual_upload_damage_blocks_inspection_and_false_backfill(tmp_path, damage):
+    path = manual_upload(tmp_path)
+    db_path = tmp_path / "analyzer.db"
+    if damage == "missing":
+        path.unlink()
+    elif damage == "changed":
+        path.write_bytes(b"replacement")
+    else:
+        shutil.rmtree(path.parent)
+    report = analyze_storage(db_path)
+    assert report["issue_count"] > 0
+    assert report["compaction"]["status"] == "blocked"
+    assert report["reclaimable_bytes"] == 0
+    assert backfill_storage(db_path)["completed"] == 0
+    assert artifact_storage_summary(db_path)["observation_count"] == 1
+
+
+@pytest.mark.parametrize("registered", [True, False])
+def test_upload_backfill_preserves_identity_and_provenance(tmp_path, registered):
+    path = manual_upload(tmp_path, registered)
+    db_path = tmp_path / "analyzer.db"
+    before = get_artifact(db_path, hashlib.sha256(path.read_bytes()).hexdigest()) if registered else None
+    assert backfill_storage(db_path)["issue_count"] == 0
+    with sqlite3.connect(db_path) as db:
+        db.execute("DELETE FROM artifact_backfill")
+    assert backfill_storage(db_path)["issue_count"] == 0
+    artifact = get_artifact(db_path, hashlib.sha256(path.read_bytes()).hexdigest())
+    assert len(artifact["observations"]) == 1
+    obs = artifact["observations"][0]
+    assert (obs["source_kind"], obs["original_filename"], obs["actor"], obs["observed_at"]) == (
+        "device_config_upload", "router config.txt", "alice", "2026-09-20T10:00:00+00:00")
+    if registered:
+        assert artifact["observations"] == before["observations"]
+
+
+def test_traversal_import_does_not_copy_outside_storage(tmp_path):
+    root = tmp_path / "data"
+    root.mkdir()
+    outside = tmp_path / "outside.xml"
+    outside.write_bytes(b"outside")
+    db_path = root / "analyzer.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE imports (sha256 TEXT, filename TEXT, stored_path TEXT, imported_at TEXT)")
+        db.execute("INSERT INTO imports VALUES (?, ?, ?, ?)", (hashlib.sha256(b"outside").hexdigest(),
+            "outside.xml", str(root / ".." / "outside.xml"), "2026-09-20"))
+    assert analyze_storage(db_path)["issue_count"] > 0
+    assert backfill_storage(db_path)["completed"] == 0
+    assert not (root / "artifacts").exists()
+
+
+def test_timed_out_scan_is_finalized(tmp_path):
+    collection(tmp_path, "timeout", status="timed_out", folder="scan-runs")
+    result = backfill_storage(tmp_path / "analyzer.db")
+    assert result["completed"] == 1
+    assert result["active_collections_skipped"] == 0
+
+
+def test_import_existing_observation_not_duplicated(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    record = register_artifact_bytes(db_path=db_path, content=b"xml", source_kind="nmap_import",
+        source_ref="upload:original", original_filename="original name.xml", actor="alice", observed_at="2026-09-20")
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE imports (sha256 TEXT, filename TEXT, stored_path TEXT, imported_at TEXT)")
+        db.execute("INSERT INTO imports VALUES (?, ?, ?, ?)", (record["sha256"], "original-name.xml",
+            record["canonical_path"], "2026-09-20"))
+    assert backfill_storage(db_path)["issue_count"] == 0
+    assert artifact_storage_summary(db_path)["observation_count"] == 1
+
+
+def test_checkpoint_does_not_hide_missing_observation(tmp_path):
+    manual_upload(tmp_path)
+    db_path = tmp_path / "analyzer.db"
+    backfill_storage(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute("DELETE FROM artifact_observations")
+    assert backfill_storage(db_path)["completed"] == 1
+    assert artifact_storage_summary(db_path)["observation_count"] == 1
+
+
+def test_checkpoint_does_not_hide_changed_expected_hash(tmp_path):
+    path = manual_upload(tmp_path)
+    db_path = tmp_path / "analyzer.db"
+    backfill_storage(db_path)
+    manifest_path = path.parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifact_sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(manifest))
+    assert backfill_storage(db_path)["issue_count"] > 0
+    assert analyze_storage(db_path)["compaction"]["status"] == "blocked"
 
 
 @pytest.mark.parametrize("role,expected", [(None, 401), ("viewer", 403), ("analyst", 403), ("admin", 200)])

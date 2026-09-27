@@ -20,6 +20,21 @@ ROUTE_XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2
 <runstats><finished timestr="done"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
 
 
+def test_import_preserves_authenticated_actor_and_original_filename(monkeypatch):
+    import app.main as main
+    from app.artifacts import get_artifact
+    monkeypatch.setattr(main, "auth_enabled", lambda: True)
+    monkeypatch.setattr(main, "session_identity", lambda *args: {"username": "upload-analyst", "role": "admin"})
+    with TestClient(app) as client:
+        response = client.post("/api/import", files={"file": ("Original scan name.xml", ROUTE_XML, "application/xml")})
+    assert response.status_code == 200
+    result = response.json()
+    artifact = get_artifact(main.DB_PATH, result["sha256"])
+    observation = next(o for o in artifact["observations"] if o["observation_id"] == result["artifact_observation_id"])
+    assert observation["actor"] == "upload-analyst"
+    assert observation["original_filename"] == "Original scan name.xml"
+
+
 def test_primary_pages_and_profiles_are_available():
     with TestClient(app) as client:
         device_page = client.get("/")

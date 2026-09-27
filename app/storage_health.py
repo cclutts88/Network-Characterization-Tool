@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import stat
@@ -19,7 +20,7 @@ from app.database import connect_database
 
 _LOCK = threading.Lock()
 _ACTIVE: set[str] = set()
-TERMINAL = {"completed", "completed_without_nmap", "failed", "cancelled", "interrupted", "uploaded"}
+TERMINAL = {"completed", "completed_without_nmap", "failed", "cancelled", "interrupted", "uploaded", "timed_out"}
 
 
 def _read_db(db_path: Path):
@@ -29,6 +30,9 @@ def _read_db(db_path: Path):
 def _safe_file(path: Path, root: Path) -> bool:
     try:
         relative = path.absolute().relative_to(root.absolute())
+        if ".." in relative.parts or root.is_symlink():
+            return False
+        path.resolve().relative_to(root.resolve())
         current = root
         for part in relative.parts:
             current = current / part
@@ -54,6 +58,8 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
     active = 0
     scan_manifests = {}
     imports = []
+    observations = []
+    import_observations = []
     if db_path.exists():
         db = _read_db(db_path)
         try:
@@ -69,6 +75,9 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
                         issues.append(f"Unreadable scan history: {run_id}")
             if "imports" in tables:
                 imports = db.execute("SELECT sha256, filename, stored_path, imported_at FROM imports").fetchall()
+            if "artifact_observations" in tables:
+                observations = db.execute("SELECT source_kind, source_ref, original_filename, sha256, observation_id, metadata_json FROM artifact_observations").fetchall()
+                import_observations = db.execute("SELECT sha256, observed_at, observation_id FROM artifact_observations WHERE source_kind='nmap_import'").fetchall()
         finally:
             db.close()
     for folder, kind in (("scan-runs", "nmap_scan"), ("device-configs", "device_collection")):
@@ -76,6 +85,10 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
         directories = {p.name: p for p in base.iterdir()} if base.is_dir() and not base.is_symlink() else {}
         if kind == "nmap_scan":
             directories.update({key: base / key for key in scan_manifests})
+        source_kinds = {kind, "device_config_upload"} if kind == "device_collection" else {kind}
+        for obs in observations:
+            if obs[0] in source_kinds:
+                directories.setdefault(obs[1], base / obs[1])
         for run_id, directory in sorted(directories.items()):
             if directory.is_symlink() or directory.parent != base or not directory.is_dir():
                 issues.append(f"Missing or unsafe collection directory: {folder}/{run_id}")
@@ -106,6 +119,39 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
                 expected = {manifest.get("local_output_name")} - {None, ""}
             registered = {item["filename"]: item["sha256"]
                           for item in manifest.get("artifact_registry", {}).get("files", [])}
+            manual = kind == "device_collection" and manifest.get("operation") == "manual_upload"
+            upload_name = None
+            if manual:
+                original = manifest.get("source_filename") or "configuration-result.txt"
+                safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", original.strip()).strip(".-")[:80] or "configuration-result.txt"
+                upload_name = manifest.get("retained_filename") or f"uploaded-{safe}"
+                names.add(upload_name)
+                expected.add(upload_name)
+                if manifest.get("artifact_sha256"):
+                    registered[upload_name] = manifest["artifact_sha256"]
+            existing_observations = {}
+            for obs_kind, obs_ref, obs_name, digest, obs_id, raw_metadata in observations:
+                if obs_kind not in source_kinds or obs_ref != run_id:
+                    continue
+                try:
+                    metadata = json.loads(raw_metadata)
+                    relative_path = metadata.get("relative_path")
+                    filename = upload_name if obs_kind == "device_config_upload" else obs_name
+                    if relative_path:
+                        observed_path = root / relative_path
+                        if observed_path.parent != directory:
+                            raise ValueError("Observation outside collection")
+                        filename = observed_path.name
+                    if not filename:
+                        raise ValueError("Missing observation filename")
+                    if filename in registered and registered[filename] != digest:
+                        raise ValueError("Conflicting retained hashes")
+                    registered[filename] = digest
+                    expected.add(filename)
+                    if obs_kind == ("device_config_upload" if manual and filename == upload_name else kind):
+                        existing_observations[filename] = obs_id
+                except (ValueError, TypeError, AttributeError):
+                    issues.append(f"Unresolved observation: {obs_id}")
             expected.update(registered)
             for filename in sorted(names | expected):
                 path = directory / filename
@@ -113,8 +159,10 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
                     if filename in expected or path.is_symlink():
                         issues.append(f"Missing or unsafe evidence: {folder}/{run_id}/{filename}")
                     continue
-                references.append({"path": path, "kind": kind, "ref": run_id,
-                                   "filename": filename, "actor": manifest.get("owner") or manifest.get("operator"),
+                references.append({"path": path, "kind": "device_config_upload" if manual and filename == upload_name else kind, "ref": run_id,
+                                   "filename": manifest.get("source_filename", filename) if manual and filename == upload_name else filename,
+                                   "existing_observation": existing_observations.get(filename),
+                                   "actor": manifest.get("owner") or manifest.get("operator"),
                                    "observed_at": manifest.get("completed_at") or manifest.get("created_at"),
                                    **({"expected_hash": registered[filename]} if filename in registered else {})})
     for digest, filename, stored_path, imported_at in imports:
@@ -123,6 +171,7 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
             issues.append(f"Missing or unsafe imported evidence: {digest}")
             continue
         references.append({"path": path, "kind": "nmap_import", "ref": digest,
+                           "existing_observation": next((o[2] for o in import_observations if o[0] == digest and o[1] == imported_at), None),
                            "filename": filename, "observed_at": imported_at, "expected_hash": digest})
     return references, issues, active
 
@@ -232,11 +281,24 @@ def backfill_storage(db_path: Path) -> dict:
             with connect_database(db_path) as db:
                 checkpoint = db.execute("SELECT fingerprint, sha256 FROM artifact_backfill WHERE source_key=?", (key,)).fetchone()
             canonical = canonical_artifact_path(artifact_root_for(db_path), checkpoint[1]) if checkpoint else None
-            if checkpoint and checkpoint[0] == fingerprint and _safe_file(canonical, db_path.parent) and sha256_file(canonical)[0] == checkpoint[1]:
+            if (checkpoint and ref.get("existing_observation") and checkpoint[0] == fingerprint
+                    and ref.get("expected_hash") == checkpoint[1]
+                    and _safe_file(canonical, db_path.parent) and sha256_file(canonical)[0] == checkpoint[1]):
                 skipped += 1
                 continue
             if ref.get("expected_hash") and sha256_file(path)[0] != ref["expected_hash"]:
                 raise ValueError("Import content does not match its retained hash")
+            if ref.get("existing_observation"):
+                digest = ref["expected_hash"]
+                canonical = canonical_artifact_path(artifact_root_for(db_path), digest)
+                if not _safe_file(canonical, db_path.parent) or sha256_file(canonical)[0] != digest:
+                    raise ValueError("Existing observation has no verified canonical content")
+                if json.dumps(_fingerprint(path)) != fingerprint:
+                    raise ValueError("Evidence changed during backfill")
+                with connect_database(db_path) as db:
+                    db.execute("INSERT OR REPLACE INTO artifact_backfill VALUES (?, ?, ?)", (key, fingerprint, digest))
+                skipped += 1
+                continue
             record = register_artifact_file(
                 db_path=db_path, source_path=path, source_kind=ref["kind"], source_ref=ref["ref"],
                 original_filename=ref["filename"], actor=ref.get("actor"), observed_at=ref.get("observed_at"),

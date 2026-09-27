@@ -44,6 +44,7 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
 
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(device_configs, "DB_PATH", tmp_path / "analyzer.db")
     with TestClient(app) as client:
         response = client.post(
             "/api/device-configs/upload",
