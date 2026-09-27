@@ -538,7 +538,7 @@ foundational changes.
    - historical scans
    - device configurations
    - enrichment-heavy cases
-5. [ ] Record baseline:
+5. [~] Record baseline:
    - CPU
    - RAM
    - disk
@@ -546,6 +546,9 @@ foundational changes.
    - page load
    - query duration
    - enrichment duration
+   - [x] Initial synthetic foundation storage measurements recorded in
+     [docs/STORAGE_BENCHMARK_2026-09-27.md](docs/STORAGE_BENCHMARK_2026-09-27.md).
+     This is not a stable-main comparison or complete Phase 0 baseline.
 6. [~] Preserve old-range Docker compatibility and offline operation.
 
 ## Exit criteria
@@ -647,9 +650,11 @@ foundational changes.
      stronger durable-state checks. Independent default/delete, share/delete, audit
      rollback and lock-release checks passed. Recursive note-folder mutations still
      hold a writer slot proportional to branch size; large-data contention remains open.
-- [~] Started disposable synthetic storage measurements for first dry run, initial
-  backfill, and repeated backfill, including wall time, CPU, peak process memory,
-  bytes and correctness checks. These do not establish production-scale acceptance.
+   - [x] Initial disposable synthetic storage measurements executed for 100 and 1,000
+     collections: first dry run, initial backfill, repeated backfill, wall time,
+     CPU, peak process memory and bytes. Original-file and observation-count checks
+     passed. Reviewer CLEAR; report and reproducible script retained. Production-scale,
+     cold-cache, concurrent-workload and note-tree acceptance remain open.
 
    WAL and a 30-second busy timeout were already present before this redesign; the
    remaining reliability work is focused on eliminating unnecessary writes and
