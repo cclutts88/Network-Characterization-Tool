@@ -100,6 +100,15 @@ A roadmap item should only be marked complete when:
   route/storage tests passed. Browser dry run, backfill, repeated backfill and report
   persistence after preview restart verified; no browser console warnings/errors.
 - Preview acceptance checklist: [docs/STORAGE_PREVIEW_CHECKLIST.md](docs/STORAGE_PREVIEW_CHECKLIST.md).
+- [x] User-requested Operator Guide implementation: backfill purpose/process on hover
+  or focus, dry-run comparison, and free corner resizing across the shared shell.
+  Size persists across pages and refreshes, with viewport limits, Reset size, keyboard
+  resizing, and existing top/bottom docking. Guide tab stays at the pane's vertical
+  midpoint. Fixed Expand/Compact and standalone tooltip superseded by user direction.
+  Reviewer cleared resize logic, including pointer ownership and capture-loss handling;
+  66 focused tests passed. Browser verified keyboard resizing, cross-page persistence,
+  top/bottom docking, centered tab, and narrow-screen bounds. Automated native drag
+  interaction could not be confirmed; direct user corner-drag acceptance remains pending.
 - User acceptance: provide a disposable running preview with scenarios and expected
   results; development verification does not imply user, Range, or main acceptance.
 
