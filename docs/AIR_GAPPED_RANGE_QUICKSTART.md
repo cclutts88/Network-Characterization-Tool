@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20260926.zip` uploaded to
+- the file `NCT-Air-Gapped-Exercise-Range-0.16.0-20260927-r1.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-unzip NCT-Air-Gapped-Range-Deployment-0.16.0-20260926.zip
+unzip NCT-Air-Gapped-Exercise-Range-0.16.0-20260927-r1.zip
 cd /root/NCT-Air-Gapped-Range-Deployment
 ```
 
@@ -242,7 +242,7 @@ Replace `RANGE_IP` in the last command. Confirm all of the following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-20260926`;
+- the build ID is `0.16.0-range-20260927-r1`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
