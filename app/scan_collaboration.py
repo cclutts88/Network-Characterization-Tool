@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import threading
 
 from app.database import connect_database
+
+
+_SCAN_COLLAB_STORAGE_READY: set[str] = set()
+_SCAN_COLLAB_STORAGE_LOCK = threading.RLock()
 
 
 class DraftConflict(RuntimeError):
@@ -18,30 +23,37 @@ def utc_now() -> str:
 
 
 def init_scan_collaboration_storage(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with connect_database(db_path) as db:
-        db.execute(
-            """CREATE TABLE IF NOT EXISTS analyst_scan_drafts (
-                owner TEXT PRIMARY KEY,
-                snapshot_json TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                updated_at TEXT NOT NULL
-            )"""
-        )
-        db.execute(
-            """CREATE TABLE IF NOT EXISTS scan_run_audit (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                event TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                changed_at TEXT NOT NULL,
-                details TEXT NOT NULL DEFAULT ''
-            )"""
-        )
-        db.execute(
-            "CREATE INDEX IF NOT EXISTS scan_run_audit_run ON scan_run_audit(run_id, event_id)"
-        )
-
+    """Run collaboration schema setup once per process/database path."""
+    storage_key = str(db_path.resolve())
+    if storage_key in _SCAN_COLLAB_STORAGE_READY and db_path.is_file():
+        return
+    with _SCAN_COLLAB_STORAGE_LOCK:
+        if storage_key in _SCAN_COLLAB_STORAGE_READY and db_path.is_file():
+            return
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with connect_database(db_path) as db:
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS analyst_scan_drafts (
+                    owner TEXT PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS scan_run_audit (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    event TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT ''
+                )"""
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS scan_run_audit_run ON scan_run_audit(run_id, event_id)"
+            )
+        _SCAN_COLLAB_STORAGE_READY.add(storage_key)
 
 def get_scan_draft(db_path: Path, owner: str) -> dict | None:
     init_scan_collaboration_storage(db_path)
