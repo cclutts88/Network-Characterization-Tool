@@ -703,6 +703,30 @@ foundational changes.
    shifts. **QUALITY GATE: CLEAR**;
    full Docker suite **617 passed**, focused UI/scope suite **61 passed**, and live
    browser hover/focus/dismiss, no-layout-shift, sticky-header and console checks passed.
+   2026-09-27 built-in system-guide start: add a read-only How NCT Works README
+   to the hamburger menu for all signed-in roles. Explain, in operator language,
+   how evidence is collected, retained, registered, observed, scoped, verified,
+   parsed, correlated, analyzed and presented; distinguish current capability from
+   foundation work and planned behavior. Document storage locations, evidence
+   safeguards and the relationship between original evidence, metadata, derived
+   results and browser-only preferences. Add a maintenance rule requiring future
+   data-flow changes to update the built-in guide and its contract checks.
+   Built-in system-guide completion: the hamburger menu now exposes a read-only
+   **How NCT Works** README to local mode and every authenticated role. The guide
+   explains active collection versus file upload, the ingestion pipeline, current
+   Artifact Registry coverage, storage boundaries, Saved Networks versus Network
+   Scopes, analysis interpretation, operator workflow, role boundaries, evidence
+   safeguards and plain-language terms. Available, partly available, foundation and
+   planned behavior are labeled separately. Review halted the first draft because
+   exact-byte retention and processing-version visibility were described too broadly;
+   the final guide correctly limits Artifact Registry coverage to registered Nmap and
+   device evidence, documents the current hostname-import exception and states that
+   common analysis versioning remains planned. The project operating rules now require
+   future data-flow and role changes to update this operator contract and its checks.
+   **QUALITY GATE: CLEAR**; full Docker suite **622 passed**, final focused guide,
+   authentication, storage, scope and UI suite **101 passed**, novice acceptance was
+   clear after two wording refinements, and live browser hamburger, responsive layout,
+   shared shell, contextual guide and console checks passed. No architecture deviation.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.

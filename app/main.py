@@ -5,6 +5,7 @@ from app.artifacts import get_artifact, init_artifact_storage, register_artifact
 from app.nmap_evidence import nmap_xml_coverage
 from app.storage_health import storage_status, start_storage_job
 from app.storage_ui import storage_page
+from app.how_nct_works_ui import how_nct_works_page
 from app.network_scope_ui import network_scope_page
 from app.network_scopes import (
     NetworkScopeConflict,
@@ -1237,6 +1238,13 @@ def require_storage_admin(request: Request) -> None:
 def system_health_page(request: Request) -> HTMLResponse:
     require_storage_admin(request)
     return storage_page()
+
+
+@app.get("/help/how-nct-works", response_class=HTMLResponse)
+def how_nct_works_readme() -> HTMLResponse:
+    return how_nct_works_page(
+        app_version=APP_VERSION, build_id=BUILD_ID, build_commit=BUILD_COMMIT,
+    )
 
 
 @app.get("/api/system/storage")

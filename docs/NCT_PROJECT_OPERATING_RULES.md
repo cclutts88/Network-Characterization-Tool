@@ -310,6 +310,16 @@ Update it when:
 
 Do not allow implementation to materially outrun the roadmap.
 
+## Built-in How NCT Works Guide
+
+Treat the built-in `/help/how-nct-works` README as part of the operator contract.
+Any feature that changes how NCT collects, imports, retains, registers, scopes,
+parses, correlates, analyzes, caches, presents, migrates or removes data must update
+the built-in guide and its contract checks in the same change. Keep current behavior,
+foundation work and planned capability visibly distinct. Write for an operator who
+does not know the implementation, while retaining enough detail to explain evidence
+provenance, storage boundaries and important limitations.
+
 # Review Cadence
 
 Do not invoke the reviewer for every trivial edit.
