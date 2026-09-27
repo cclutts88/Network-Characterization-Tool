@@ -78,6 +78,7 @@ A roadmap item should only be marked complete when:
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
 | 2026-09-27 | Phase 1 | Nmap imports remain readable through the existing `/data/imports` path model while Artifact Registry is introduced | New imports are stored in the canonical content-addressed artifact store; the raw-download guard was revised to trust either a verified legacy import path or the exact path registered for that SHA-256 | CI exposed that the legacy download endpoint intentionally rejected paths outside `/data/imports` | Preserves existing download behavior while enabling deduplicated storage; legacy imports remain supported during migration |
 
+| 2026-09-27 | Phase 1 | Introduce Artifact Registry without changing existing import behavior | Artifact Registry integration initially caused the existing raw Nmap download test to reject canonical artifact paths; compatibility validation was updated and the subsequent full CI run passed | Legacy endpoint assumed all imported XML lived directly under `/data/imports` | Treat legacy file-layout assumptions as migration compatibility requirements; no Phase 1 item marked complete until green CI |
 ---
 
 # 1. Mission
@@ -471,9 +472,9 @@ foundational changes.
 
 ## Steps
 
-1. Keep `main` untouched as the stable baseline.
-2. Perform foundational development on `foundation/evidence-engine-v2`.
-3. Inventory current:
+1. [x] Keep `main` untouched as the stable baseline.
+2. [x] Perform foundational development on `foundation/evidence-engine-v2`.
+3. [~] Inventory current:
    - schema
    - data locations
    - scan pipeline
@@ -482,7 +483,7 @@ foundational changes.
    - device parsing
    - exports
    - background work
-4. Build repeatable test datasets:
+4. [~] Build repeatable test datasets:
    - small network
    - medium network
    - large/range network
@@ -492,7 +493,7 @@ foundational changes.
    - historical scans
    - device configurations
    - enrichment-heavy cases
-5. Record baseline:
+5. [ ] Record baseline:
    - CPU
    - RAM
    - disk
@@ -500,7 +501,7 @@ foundational changes.
    - page load
    - query duration
    - enrichment duration
-6. Preserve old-range Docker compatibility and offline operation.
+6. [~] Preserve old-range Docker compatibility and offline operation.
 
 ## Exit criteria
 
@@ -518,6 +519,21 @@ foundational changes.
 ## Steps
 
 1. [~] Artifact hashing and deduplication.
+   - [x] Content-addressed Artifact Registry schema and canonical SHA-256 store.
+   - [x] Artifact observation history.
+   - [x] Nmap manual imports routed through canonical artifact storage.
+   - [x] Manual device-config uploads registered and deduplicated.
+   - [x] Legacy raw-import download compatibility preserved.
+   - [ ] Register automated Nmap run artifacts.
+   - [ ] Register collected device artifacts beyond manual uploads.
+   - [ ] Existing-data backfill.
+   - [ ] Dry-run duplicate/storage analysis.
+   - [ ] Reference verification.
+   - [ ] Optional exact-content compaction.
+   - [ ] Restart-safe/resumable migration state.
+
+   Artifact Registry core and new-ingest integration are implemented and passing CI;
+   historical backfill/compaction is not yet implemented.
 2. Canonical host/service/network/device entities.
 3. Separate observations from entities.
 4. Delta detection:
@@ -526,17 +542,30 @@ foundational changes.
    - unchanged
    - no longer observed
    - not assessed
-5. Searchsploit cache redesign.
+5. [x] Searchsploit cache redesign.
 6. [~] Persistent derived results.
-7. Dirty-state tracking.
-8. Dependency graph.
-9. Analysis versioning.
-10. Persistent jobs and partial failure.
-11. Lightweight worker.
-12. SQLite WAL/busy-timeout/transaction remediation.
-13. Current-state read models.
-14. Last Seen + evidence receipt model.
-15. Benchmark against Phase 0 datasets.
+   - [x] Searchsploit query results are now persisted and reused across requests.
+   - [x] Cache identity changes with the active Exploit-DB dataset.
+   - [ ] Persist remaining analysis families under the common derived-result model.
+7. [ ] Dirty-state tracking.
+8. [ ] Dependency graph.
+9. [ ] Analysis versioning.
+10. [ ] Persistent jobs and partial failure.
+11. [ ] Lightweight worker.
+12. [~] SQLite WAL/busy-timeout/transaction remediation.
+   - [x] Confirmed WAL mode at application startup.
+   - [x] Confirmed 30-second SQLite busy timeout.
+   - [x] Removed repeated Saved Network schema/index DDL from normal access.
+   - [x] Removed repeated scan-collaboration schema DDL from normal access.
+   - [ ] Audit remaining storage modules for request-path initialization/DDL.
+   - [ ] Review long write transactions and high-contention write paths.
+
+   WAL and a 30-second busy timeout were already present before this redesign; the
+   remaining reliability work is focused on eliminating unnecessary writes and
+   contention.
+13. [ ] Current-state read models.
+14. [ ] Last Seen + evidence receipt model.
+15. [ ] Benchmark against Phase 0 datasets.
 
 ## Exit criteria
 
