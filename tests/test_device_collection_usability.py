@@ -42,7 +42,8 @@ object network WEB_SERVER
 def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatch):
     from app import device_configs
 
-    monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
+    config_dir = tmp_path / "device-configs"
+    monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
     with TestClient(app) as client:
         response = client.post(
             "/api/device-configs/upload",
@@ -55,9 +56,46 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
             },
             files={"result_file": ("router.txt", SAMPLE_CONFIG, "text/plain")},
         )
+        duplicate = client.post(
+            "/api/device-configs/upload",
+            data={
+                "operator": "analyst",
+                "originating_host": "nct-test",
+                "vendor": "cisco",
+                "device_type": "router",
+                "device_address": "192.0.2.10",
+            },
+            files={"result_file": ("router-copy.txt", SAMPLE_CONFIG, "text/plain")},
+        )
 
     assert response.status_code == 200
     assert response.json()["reason"] == ""
+    assert response.json()["artifact_duplicate"] is False
+    assert duplicate.status_code == 200
+    assert duplicate.json()["artifact_duplicate"] is True
+    assert response.json()["artifact_sha256"] == duplicate.json()["artifact_sha256"]
+    first_path = (
+        config_dir
+        / response.json()["run_id"]
+        / next(
+            item["name"]
+            for item in response.json()["artifacts"]
+            if item["name"].startswith("uploaded-")
+        )
+    )
+    second_path = (
+        config_dir
+        / duplicate.json()["run_id"]
+        / next(
+            item["name"]
+            for item in duplicate.json()["artifacts"]
+            if item["name"].startswith("uploaded-")
+        )
+    )
+    assert first_path.read_text() == SAMPLE_CONFIG
+    assert second_path.read_text() == SAMPLE_CONFIG
+    assert response.json()["artifact_storage_mode"] in {"hardlink", "copy"}
+    assert duplicate.json()["artifact_storage_mode"] in {"hardlink", "copy"}
 
 
 def make_collection(config_dir, run_id="d" * 32):
