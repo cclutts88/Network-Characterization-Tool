@@ -118,7 +118,7 @@ A roadmap item should only be marked complete when:
 |---|---|---|---|---|---|
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
-| 2026-09-27 | Phase 1 entities | Establish canonical Host, Service, Network, and Device entities with normalized ingestion and correlation | The initial internal slice implements explicit-scope IPv4/IPv6 address endpoints, TCP/UDP/SCTP transport endpoints, and immutable artifact-backed assessments. These are scoped endpoint identities and observations; they do not claim physical Host or Device reconciliation | Addresses can overlap across network contexts, and retained evidence does not yet provide a reviewed stable identifier and assignment rule for safely merging endpoints into physical systems. Existing Saved Networks are editable target selections, so they cannot provide canonical identity or automatic scope inference | Automatic scope inference, production ingestion wiring, physical Host/Device reconciliation, network/device normalization, and presentation remain deferred. Nmap translation requires one explicit whole-artifact scope and remains unwired until assignment/correction semantics are reviewed. Future correction must preserve the original assessment and link its replacement rather than move evidence in place |
+| 2026-09-27 | Phase 1 entities | Establish canonical Host, Service, Network, and Device entities with normalized ingestion and correlation | The initial internal slice implements explicit-scope IPv4/IPv6 address endpoints, TCP/UDP/SCTP transport endpoints, and immutable artifact-backed assessments. These are scoped endpoint identities and observations; they do not claim physical Host or Device reconciliation | Addresses can overlap across network contexts, and retained evidence does not yet provide a reviewed stable identifier and assignment rule for safely merging endpoints into physical systems. Existing Saved Networks are editable target selections, so they cannot provide canonical identity or automatic scope inference | Automatic scope inference, production ingestion wiring, physical Host/Device reconciliation, network/device normalization, and presentation remain deferred. Whole-artifact assignment and correction semantics are reviewed and append-only. The internal Nmap coordinator now resolves the reviewed assignment server-side, rechecks it under the write lock, and atomically commits the assessment, receipts, and immutable assignment link. Routes and operator workflows remain disabled pending their separate authorization and workflow gate |
 | 2026-09-27 | Phase 1 | Nmap imports remain readable through the existing `/data/imports` path model while Artifact Registry is introduced | New imports are stored in the canonical content-addressed artifact store; the raw-download guard was revised to trust either a verified legacy import path or the exact path registered for that SHA-256 | CI exposed that the legacy download endpoint intentionally rejected paths outside `/data/imports` | Preserves existing download behavior while enabling deduplicated storage; legacy imports remain supported during migration |
 
 | 2026-09-27 | Phase 1 | Introduce Artifact Registry without changing existing import behavior | Artifact Registry integration initially caused the existing raw Nmap download test to reject canonical artifact paths; compatibility validation was updated and the subsequent full CI run passed | Legacy endpoint assumed all imported XML lived directly under `/data/imports` | Treat legacy file-layout assumptions as migration compatibility requirements; no Phase 1 item marked complete until green CI |
@@ -727,6 +727,32 @@ foundational changes.
    authentication, storage, scope and UI suite **101 passed**, novice acceptance was
    clear after two wording refinements, and live browser hamburger, responsive layout,
    shared shell, contextual guide and console checks passed. No architecture deviation.
+   2026-09-27 assigned-Nmap coordinator start: add an internal, unwired coordinator
+   that accepts only the reviewed assignment identity, resolves its observation and
+   scope server-side, verifies and parses canonical Nmap bytes before the write lock,
+   then rechecks the current assignment and active scope while assessment, endpoint,
+   receipt and assignment-link records commit together. Exact completed replay must
+   remain a no-op after later correction or scope archive; stale or archived unlinked
+   work must fail without partial rows. Correction and archive races, parser-version
+   separation, identical bytes in separate observations, correction back to a prior
+   scope, artifact corruption and injected write failure require adversarial tests.
+   Production imports, routes and operator screens remain disconnected pending this
+   implementation, independent review and a later authorization/workflow gate.
+   Assigned-Nmap coordinator completion: canonical verification and parsing now occur
+   before a short writer transaction that rechecks the exact current assignment and
+   active scope, then creates or reuses the assessment and commits endpoint, service,
+   receipt and immutable assignment-link records together. Exact linked replay is a
+   no-op after later correction or archive; unlinked stale/archived work is rejected.
+   Database enforcement blocks direct stale/inactive linking. Tests cover injected
+   rollback, corrupt/missing/changed evidence, changed-facts conflict, both orderings
+   of correction/archive races, correction back to a prior scope, parser versions,
+   database replacement and separate observations of identical bytes. The built-in
+   guide labels this internal behavior and states that normal imports and operator
+   screens do not use it. **QUALITY GATE: CLEAR**; full Docker suite **641 passed**,
+   independent reviewer suite **77 passed**, novice wording review clear after the
+   all-or-nothing explanation was simplified, live guide reload and browser-console
+   checks passed, and no route imports the coordinator. No architecture deviation.
+   Production wiring remains a separate gate.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.

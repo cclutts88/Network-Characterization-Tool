@@ -19,7 +19,7 @@ from app.artifacts import (
     canonical_artifact_path,
     get_artifact_observation,
 )
-from app.entities import record_assessment
+from app.entities import PreparedAssessment, persist_prepared_assessment, prepare_assessment
 from app.nmap_presence import nmap_host_presence
 
 
@@ -203,8 +203,11 @@ def _host_facts(host: ET.Element, locator: str, coverage: dict,
     }
 
 
-def ingest_nmap_observation(db_path: Path, *, observation_id: str, scope_id: str) -> dict:
-    """Translate one verified artifact observation into one explicit network scope.
+def prepare_nmap_observation(
+    db_path: Path, *, observation_id: str, scope_id: str,
+    parser_version: str = NMAP_ENDPOINT_PARSER,
+) -> tuple[PreparedAssessment, dict]:
+    """Verify, parse, validate and freeze one scoped Nmap assessment.
 
     The caller asserts that the entire artifact belongs to `scope_id`. No Saved
     Network, CIDR, filename or command target is used to infer identity.
@@ -251,9 +254,9 @@ def ingest_nmap_observation(db_path: Path, *, observation_id: str, scope_id: str
             hosts.append({"address": address, "facts": facts, "services": services})
 
     assessed_at = scan_end["utc"] if scan_end["valid"] else None
-    assessment_id = record_assessment(
-        db_path, scope_id=scope_id, artifact_observation_id=observation_id,
-        parser_version=NMAP_ENDPOINT_PARSER, assessed_at=assessed_at,
+    prepared = prepare_assessment(
+        scope_id=scope_id, artifact_observation_id=observation_id,
+        parser_version=parser_version, assessed_at=assessed_at,
         time_basis="nmap runstats finished epoch" if assessed_at else None,
         assessment_facts={
             "adapter": "nmap_xml", "scope_assignment": "explicit_whole_artifact",
@@ -264,9 +267,25 @@ def ingest_nmap_observation(db_path: Path, *, observation_id: str, scope_id: str
         },
         hosts=hosts,
     )
-    return {"assessment_id": assessment_id, "scope_id": scope_id,
-            "artifact_observation_id": observation_id,
-            "parser_version": NMAP_ENDPOINT_PARSER,
-            "address_count": len(hosts),
-            "service_receipt_count": sum(len(host["services"]) for host in hosts),
-            "assessed_at": assessed_at}
+    return prepared, {
+        "assessment_id": prepared.assessment_id,
+        "scope_id": scope_id,
+        "artifact_observation_id": observation_id,
+        "parser_version": parser_version,
+        "address_count": len(hosts),
+        "service_receipt_count": sum(len(host["services"]) for host in hosts),
+        "assessed_at": assessed_at,
+    }
+
+
+def ingest_nmap_observation(db_path: Path, *, observation_id: str, scope_id: str) -> dict:
+    """Translate one verified observation into one caller-selected scope.
+
+    This low-level internal adapter remains unwired. New assigned ingestion must use
+    the assignment coordinator so scope cannot be supplied independently.
+    """
+    prepared, result = prepare_nmap_observation(
+        db_path, observation_id=observation_id, scope_id=scope_id,
+    )
+    persist_prepared_assessment(db_path, prepared)
+    return result

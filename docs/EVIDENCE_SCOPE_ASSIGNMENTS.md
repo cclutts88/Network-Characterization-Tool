@@ -1,8 +1,9 @@
 # Evidence scope assignment and correction
 
 This internal foundation records an operator's explicit network context for one
-Artifact Registry observation. It does not ingest, parse, move or rewrite evidence.
-No application route or user interface calls it yet.
+Artifact Registry observation. An internal Nmap coordinator can now verify that
+assignment, parse the retained artifact and save all scoped assessment records as one
+operation. No application route, normal import or user interface calls it yet.
 
 ## Identity and assignment
 
@@ -32,11 +33,26 @@ No application route or user interface calls it yet.
   provenance. Endpoint entities, service entities, assessments and receipts are also
   immutable at the database layer.
 
+## Internal assigned Nmap processing
+
+- Processing accepts the exact assignment identity and processor identity. The
+  observation and scope are resolved from the retained assignment; callers cannot
+  supply a separate scope.
+- Canonical bytes are verified and parsed before the short writer transaction. Inside
+  that transaction, the coordinator rechecks that the assignment is still the current
+  leaf and the destination scope remains active.
+- Assessment, endpoint, service, receipt and assignment-link records commit together.
+  A failure leaves none of those new records behind.
+- An exact completed replay performs no writes even after a later correction or scope
+  archive. A stale or archived assignment that never completed is rejected.
+- A correction back to a previously used scope reuses the identical assessment for
+  the same parser version and adds the new immutable assignment link. Separate
+  observations and parser versions remain separate assessments.
+- Database enforcement also blocks direct insertion of a new link for a superseded
+  assignment or archived destination.
+
 ## Remaining gate
 
-Production ingestion must accept the reviewed assignment ID rather than a caller
-supplied scope. It must resolve the observation and scope server-side, verify the
-assignment is still the current leaf and the destination scope is active, then commit
-the assessment, receipts and assignment link in one write transaction. Exact replay,
-correction-versus-ingestion races, archived-scope behavior, role authorization and the
-operator workflow require their own review before any route is enabled.
+Production route and import integration remain disabled. Role authorization, the
+operator assignment screen, mixed-scope handling and the decision about which import
+workflows enter this coordinator require separate review before any route is enabled.

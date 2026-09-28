@@ -18,7 +18,11 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     for storage in ("Artifact storage", "SQLite database", "Derived-result storage", "This browser"):
         assert storage in html
     assert "does not guess from a CIDR or filename" in html
-    assert "operator workflow is not connected yet" in html
+    assert "you cannot assign evidence to a scope yet" in html
+    assert "normal imports and operator screens do not use them yet" in html
+    assert "Normal imports do not use this path yet" in html
+    assert "saves the analysis and its source and scope links all at once" in html
+    assert "If any part fails, none of those new records is saved" in html
     assert "not observed in this collection" in html
     assert "Automatic compaction remains disabled" in html
     assert "A dry run reports only" in html

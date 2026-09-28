@@ -145,6 +145,20 @@ def init_evidence_scope_assignment_storage(db_path: Path) -> None:
                       AND assignment.scope_id = assessment.scope_id
                 )
                 BEGIN SELECT RAISE(ABORT, 'assignment and assessment do not match'); END;
+            CREATE TRIGGER IF NOT EXISTS assessment_scope_assignment_links_current_active
+                BEFORE INSERT ON assessment_scope_assignment_links
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM artifact_scope_assignments assignment
+                    JOIN network_scopes scope ON scope.scope_id = assignment.scope_id
+                    WHERE assignment.assignment_id = NEW.assignment_id
+                      AND scope.active = 1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM artifact_scope_assignments successor
+                          WHERE successor.supersedes_assignment_id = assignment.assignment_id
+                      )
+                )
+                BEGIN SELECT RAISE(ABORT, 'assignment is stale or scope is archived'); END;
             CREATE TRIGGER IF NOT EXISTS assessment_scope_assignment_links_no_update
                 BEFORE UPDATE ON assessment_scope_assignment_links
                 BEGIN SELECT RAISE(ABORT, 'assessment assignment links are immutable'); END;

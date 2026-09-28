@@ -6,6 +6,7 @@ Receipts retain assessments without selecting a latest/current truth.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -15,6 +16,18 @@ from pathlib import Path
 from app.artifacts import init_artifact_storage, utc_now
 from app.database import connect_database, initialize_once_per_database
 from app.network_scopes import init_network_scope_storage
+
+
+@dataclass(frozen=True)
+class PreparedAssessment:
+    """Validated, immutable assessment input ready for one database transaction."""
+
+    assessment_id: str
+    scope_id: str
+    artifact_observation_id: str
+    parser_version: str
+    assessed_at: str | None
+    payload_json: str
 
 
 def _json(value) -> str:
@@ -137,18 +150,12 @@ def init_entity_storage(db_path: Path) -> None:
         """)
 
 
-def record_assessment(
-    db_path: Path, *, scope_id: str, artifact_observation_id: str,
-    parser_version: str, assessed_at: str | None, hosts: list[dict],
-    time_basis: str | None = None, assessment_facts: dict | None = None,
-) -> str:
-    """Atomically retain normalized source facts, including closed/unknown states.
-
-    The adapter must provide facts from the referenced artifact, before analyst
-    overrides/enrichment. Missing source time must be None, never upload time.
-    Identical replays are no-ops; changed results require a new parser version.
-    A missing host/port in a later assessment does not mean it disappeared.
-    """
+def prepare_assessment(
+    *, scope_id: str, artifact_observation_id: str, parser_version: str,
+    assessed_at: str | None, hosts: list[dict], time_basis: str | None = None,
+    assessment_facts: dict | None = None,
+) -> PreparedAssessment:
+    """Validate and freeze source facts without opening a write transaction."""
     scope_id = _text(scope_id, "scope_id")
     artifact_observation_id = _text(artifact_observation_id, "artifact_observation_id")
     parser_version = _text(parser_version, "parser_version")
@@ -194,39 +201,99 @@ def record_assessment(
     normalized.sort(key=lambda h: h["address"])
     payload = _json({"assessed_at": assessed_at, "time_basis": time_basis,
                      "facts": assessment_facts, "hosts": normalized})
-    # Freeze caller-owned dictionaries before opening a transaction. Receipt facts
-    # must be exactly the snapshot used for replay conflict detection.
-    normalized = json.loads(payload)["hosts"]
     assessment_id = _id(scope_id, artifact_observation_id, parser_version)
+    return PreparedAssessment(
+        assessment_id=assessment_id,
+        scope_id=scope_id,
+        artifact_observation_id=artifact_observation_id,
+        parser_version=parser_version,
+        assessed_at=assessed_at,
+        payload_json=payload,
+    )
+
+
+def record_prepared_assessment_on_connection(
+    db, prepared: PreparedAssessment,
+) -> tuple[str, bool]:
+    """Create or verify an assessment inside the caller's active transaction."""
+    prior = db.execute(
+        "SELECT payload_json FROM entity_assessments WHERE assessment_id = ?",
+        (prepared.assessment_id,),
+    ).fetchone()
+    if prior:
+        if prior[0] != prepared.payload_json:
+            raise ValueError(
+                "Assessment already exists with different facts; use a new parser version"
+            )
+        return prepared.assessment_id, False
+    scope = db.execute(
+        "SELECT active FROM network_scopes WHERE scope_id = ?", (prepared.scope_id,)
+    ).fetchone()
+    if scope is None:
+        raise ValueError("Network scope does not exist")
+    if not bool(scope[0]):
+        raise ValueError("Network scope is archived")
+    db.execute(
+        "INSERT INTO entity_assessments VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            prepared.assessment_id, prepared.scope_id,
+            prepared.artifact_observation_id, prepared.parser_version,
+            prepared.assessed_at, utc_now(), prepared.payload_json,
+        ),
+    )
+    # Rehydrate the exact frozen snapshot used for replay conflict detection.
+    normalized = json.loads(prepared.payload_json)["hosts"]
+    for host in normalized:
+        host_id = _id("host", prepared.scope_id, host["address"])
+        db.execute(
+            "INSERT OR IGNORE INTO endpoint_entities VALUES (?, ?, ?)",
+            (host_id, prepared.scope_id, host["address"]),
+        )
+        db.execute(
+            "INSERT INTO endpoint_receipts VALUES (?, ?, ?)",
+            (prepared.assessment_id, host_id, _json(host["facts"])),
+        )
+        for service in host["services"]:
+            service_id = _id("service", host_id, service["protocol"], service["port"])
+            db.execute(
+                "INSERT OR IGNORE INTO service_entities VALUES (?, ?, ?, ?)",
+                (service_id, host_id, service["protocol"], service["port"]),
+            )
+            db.execute(
+                "INSERT INTO service_receipts VALUES (?, ?, ?)",
+                (prepared.assessment_id, service_id, _json(service["facts"])),
+            )
+    return prepared.assessment_id, True
+
+
+def persist_prepared_assessment(db_path: Path, prepared: PreparedAssessment) -> str:
+    """Persist a prepared assessment as one standalone transaction."""
     init_entity_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        prior = db.execute("SELECT payload_json FROM entity_assessments WHERE assessment_id = ?",
-                           (assessment_id,)).fetchone()
-        if prior:
-            if prior[0] != payload:
-                raise ValueError("Assessment already exists with different facts; use a new parser version")
-            return assessment_id
-        scope = db.execute(
-            "SELECT active FROM network_scopes WHERE scope_id = ?", (scope_id,)
-        ).fetchone()
-        if scope is None:
-            raise ValueError("Network scope does not exist")
-        if not bool(scope[0]):
-            raise ValueError("Network scope is archived")
-        db.execute("INSERT INTO entity_assessments VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (assessment_id, scope_id, artifact_observation_id, parser_version,
-                    assessed_at, utc_now(), payload))
-        for host in normalized:
-            host_id = _id("host", scope_id, host["address"])
-            db.execute("INSERT OR IGNORE INTO endpoint_entities VALUES (?, ?, ?)",
-                       (host_id, scope_id, host["address"]))
-            db.execute("INSERT INTO endpoint_receipts VALUES (?, ?, ?)",
-                       (assessment_id, host_id, _json(host["facts"])))
-            for service in host["services"]:
-                service_id = _id("service", host_id, service["protocol"], service["port"])
-                db.execute("INSERT OR IGNORE INTO service_entities VALUES (?, ?, ?, ?)",
-                           (service_id, host_id, service["protocol"], service["port"]))
-                db.execute("INSERT INTO service_receipts VALUES (?, ?, ?)",
-                           (assessment_id, service_id, _json(service["facts"])))
+        assessment_id, _ = record_prepared_assessment_on_connection(db, prepared)
     return assessment_id
+
+
+def record_assessment(
+    db_path: Path, *, scope_id: str, artifact_observation_id: str,
+    parser_version: str, assessed_at: str | None, hosts: list[dict],
+    time_basis: str | None = None, assessment_facts: dict | None = None,
+) -> str:
+    """Atomically retain normalized source facts, including closed/unknown states.
+
+    The adapter must provide facts from the referenced artifact, before analyst
+    overrides/enrichment. Missing source time must be None, never upload time.
+    Identical replays are no-ops; changed results require a new parser version.
+    A missing host/port in a later assessment does not mean it disappeared.
+    """
+    prepared = prepare_assessment(
+        scope_id=scope_id,
+        artifact_observation_id=artifact_observation_id,
+        parser_version=parser_version,
+        assessed_at=assessed_at,
+        hosts=hosts,
+        time_basis=time_basis,
+        assessment_facts=assessment_facts,
+    )
+    return persist_prepared_assessment(db_path, prepared)
