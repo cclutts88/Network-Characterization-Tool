@@ -70,7 +70,7 @@ DEVICE_TYPES = ("router", "firewall", "switch")
 
 COMMAND_HISTORY_COMMANDS = {
     "vyos": "show history",
-    "cisco": "show history",
+    "cisco": "show history all",
     "juniper": "show cli history | no-more",
     "pfsense": "cat ~/.history",
     "unifi": "cat ~/.bash_history ~/.ash_history ~/.history 2>/dev/null",
@@ -1258,8 +1258,14 @@ def _collect_cisco_command_outputs(
     pager_commands = {"terminal length 0", "terminal pager 0"}
     pager_command = next((command for command in commands if command in pager_commands), None)
     requested_commands = [command for command in commands if command not in pager_commands]
+    configured_history_command = COMMAND_HISTORY_COMMANDS["cisco"]
     history_command = next(
-        (command for command in requested_commands if command == "show history"), None
+        (
+            command
+            for command in requested_commands
+            if command == configured_history_command
+        ),
+        None,
     )
     send_commands = (
         ([history_command] if history_command else [])
