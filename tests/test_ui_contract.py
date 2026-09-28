@@ -369,6 +369,33 @@ def test_enterprise_shell_replaces_legacy_navigation_on_every_primary_page():
     assert 'bottom:9px' in SESSION_SCRIPT
 
 
+def test_scan_workflow_is_grouped_under_scan_details_navigation():
+    collect_group = SHELL_SCRIPT.split("{label:'Collect'", 1)[1].split("{label:'Identify'", 1)[0]
+
+    assert "{title:'Nmap scans',icon:'scan'" in collect_group
+    assert "{title:'Scan Details',description:" in collect_group
+    assert "Saved target boundaries, shared scan exclusions" in collect_group
+    grouped_tasks = [
+        "Saved Networks",
+        "No-Strike exclusions",
+        "Scan profiles",
+    ]
+    positions = [collect_group.index(f"title:'{title}'") for title in grouped_tasks]
+    assert positions == sorted(positions)
+    scan_details = collect_group.split("{title:'Scan Details'", 1)[1].split("{href:'/analysis#xmlImport'", 1)[0]
+    assert all(f"title:'{title}'" in scan_details for title in grouped_tasks)
+    for title in ["New scan", "Active scans", "Schedules", "Scan history"]:
+        assert f"title:'{title}'" not in scan_details.split("]},", 1)[0]
+        assert f"title:'{title}'" in collect_group
+    assert "Import Nmap evidence" not in scan_details
+    assert "detail.open=false" in SHELL_SCRIPT
+    assert "function appendNavItem" in SHELL_SCRIPT
+    assert "while(ancestor&&ancestor!==sidebar)" in SHELL_SCRIPT
+    assert "ancestor.open=true" in SHELL_SCRIPT
+    assert "link?.setAttribute('aria-current','page')" in SHELL_SCRIPT
+    assert "summary.title=item.planned?`${itemLabel} — planned`:(item.description||itemLabel)" in SHELL_SCRIPT
+
+
 def test_cross_task_actions_reveal_their_destination_in_the_new_shell():
     scan_html = operator_page().body.decode()
     device_html = device_config_page().body.decode()

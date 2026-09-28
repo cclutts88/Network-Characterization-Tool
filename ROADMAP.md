@@ -868,6 +868,21 @@ high-volume passive evidence.
 ## Steps
 
 1. Preserve and improve Saved Networks.
+   2026-09-27 scan-navigation refinement start: under **Nmap Scans**, group only
+   Saved Networks, No-Strike Exclusions and Scan Profiles under one nested,
+   collapsible **Scan Details** entry. Keep New Scan, Active Scans, Schedules,
+   Scan History and Import Nmap Evidence beside that subgroup. Preserve direct
+   task links, current-page highlighting, keyboard disclosure behavior and
+   automatic expansion of every ancestor while a contained task is active.
+   Scan-navigation refinement completion: the shared shell now supports nested
+   disclosures and opens every ancestor for the active task. **Scan Details**
+   contains exactly Saved Networks, No-Strike Exclusions and Scan Profiles; all
+   other Nmap destinations remain sibling links with unchanged addresses. Direct
+   loading, keyboard disclosure, active highlighting, collapsed navigation and
+   Operator Guide behavior passed live browser review with no console errors.
+   **QUALITY GATE: CLEAR**; full Docker suite **655 passed**, independent focused
+   suite **80 passed**, novice operator review **PASS**, and `git diff --check`
+   found no whitespace errors.
    - Add an optional, persistent association from a Saved Network to one active
      Network Scope. Analysts may select or deliberately change the association;
      administrators continue to create and archive scope identities.
