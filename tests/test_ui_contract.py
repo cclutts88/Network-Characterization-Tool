@@ -154,7 +154,8 @@ def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     assert "scope → named subnet → CIDR → IP address" in html
     assert "Development Servers" in html and "10.50.15.0/24" in html
     assert "one exact manual Nmap upload from Analyze" in html
-    assert "Automated scans and other evidence paths are not connected yet" in html
+    assert "Saved Network with an active scope for future scans" in html
+    assert "Mixed or manual scan targets remain unscoped" in html
     assert "cannot currently be undone" in html
     assert "[hidden]{display:none!important}" in html
     assert "$('save').disabled=false" in html
@@ -162,9 +163,9 @@ def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     assert "'Reason for change'" in SHELL_SCRIPT
     assert "'Show archived scopes'" in SHELL_SCRIPT
     assert "'Manage network scope'" in SHELL_SCRIPT
-    assert "Evidence assignment is not enabled in this foundation step" in SHELL_SCRIPT
-    assert "AFB Dev can later contain Development Servers at 10.50.15.0/24" in SHELL_SCRIPT
-    assert "Named subnet and CIDR association comes in the next workflow" in SHELL_SCRIPT
+    assert "Analysts can select an active scope from Saved Networks for future scans" in SHELL_SCRIPT
+    assert "AFB Dev can contain Development Servers at 10.50.15.0/24" in SHELL_SCRIPT
+    assert "Network Scope for future scans" in SHELL_SCRIPT
 
 
 def test_air_gapped_designation_uses_active_theme_palette():
@@ -317,7 +318,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "name:candidateSavedName(item)" in html
     assert 'id="scopeMode"' in html
     assert "Enter an IP or range manually" in html
-    assert "Combine saved and manual scopes" in html
+    assert "Combine saved and manual targets" in html
     assert "manual_targets" in html
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html

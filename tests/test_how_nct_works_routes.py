@@ -18,9 +18,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     for storage in ("Artifact storage", "SQLite database", "Derived-result storage", "This browser"):
         assert storage in html
     assert "does not guess from a CIDR or filename" in html
-    assert "After a manual Nmap XML upload" in html
-    assert "Every address in the file must belong to the selected scope" in html
-    assert "Automated scans and other evidence paths are not connected yet" in html
+    assert "associate a Saved Network with one active Network Scope" in html
+    assert "Mixed, combined, manual, and unassociated scan targets" in html
+    assert "New schedules pin the reviewed context" in html
     assert "Optionally assign manual Nmap context" in html
     assert "Several subnets may share one scope" in html
     assert "saves the analysis and its source and scope links all at once" in html
@@ -35,8 +35,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "password is used only for the short-lived SSH session" in html
     assert "Uploading existing Nmap XML" in html
     assert "Saved Network" in html and "Network Scope" in html
-    assert "planned explicit Saved Network association" in html
-    assert "affect future scans only" in html
+    assert "choose the Network Scope that gives future scans" in html
+    assert "affects future scans only" in html
     assert "offline Exploit-DB matches are candidates for analyst validation" in html
     assert "Viewer accounts can read shared evidence" in html
     assert "Current scan and device-configuration comparisons are available" in html

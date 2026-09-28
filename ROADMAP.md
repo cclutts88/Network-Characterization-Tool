@@ -893,6 +893,35 @@ high-volume passive evidence.
    - This is an explicit reviewed association, not scope inference from the Saved
      Network name, CIDR or target text. Manual XML without a trustworthy Saved
      Network link continues to require an explicit whole-file decision.
+   2026-09-27 Saved Network scope-association implementation start: record each
+   analyst choice as an append-only, revision-checked association event instead
+   of changing a scope field in place. A scan made only from Saved Networks may
+   inherit a scope when every selected network has the same current active scope;
+   manual, combined, unassociated and mixed-scope requests remain visibly
+   unscoped and are still allowed to collect. At submission NCT must recheck the
+   reviewed association under the same write lock that records an immutable run
+   scope snapshot. Scoped artifact observations copy that retained snapshot, so
+   later Saved Network or scope changes cannot rewrite history. New schedules pin
+   the reviewed scope context at creation and stop with an explicit error if that
+   scope is later archived. Existing Saved Networks, runs, artifacts and schedules
+   remain readable and unscoped; no name, CIDR, target, filename or content-based
+   scope inference or backfill is permitted.
+   Saved Network scope-association completion: the Saved Network editor now saves
+   target details and future-scan context as one transaction, with required reasons
+   for assignment, change or clearing and a clear unscoped choice. Submission rechecks
+   the exact reviewed association under the run write lock; database rules bind each
+   run, schedule and artifact snapshot to its authoritative scope and source rows,
+   reject archived scopes, malformed audit data, stale direct-run associations and
+   cross-origin mutation, while retaining a schedule's already-reviewed context after
+   later Saved Network changes. Scan review and history show the retained context;
+   manual, combined, mixed and unassociated targets remain visibly unscoped. The first
+   independent review halted on weak direct-write provenance, a local-mode origin gap,
+   a schedule error response and partial two-step saves; a second attack pass found
+   historical-association and archived-scope insert gaps. All findings were corrected
+   and independently reproduced. **QUALITY GATE: CLEAR**; full Docker suite **664
+   passed**, independent focused suite **95 passed**, novice operator review **PASS**,
+   and live browser save, inherited scan review and console checks passed. No scope is
+   inferred and no earlier run or evidence is rewritten. No architecture deviation.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
 3. Saved scan profiles:
    - TCP

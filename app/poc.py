@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.comparison import compare_analyses, coverage_warnings
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import configure_database, connect_database
-from app.artifacts import register_finalized_files
+from app.artifacts import init_artifact_storage, register_finalized_files
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
     BUILTIN_PROFILES,
@@ -49,10 +49,31 @@ from app.saved_networks import (
     archive_saved_network,
     create_saved_network,
     get_saved_network,
+    get_saved_network_with_warnings,
     init_saved_network_storage,
+    insert_saved_network_record,
     list_saved_networks,
     resolve_saved_network_targets,
+    saved_network_integrity_message,
     update_saved_network,
+    update_saved_network_record,
+)
+from app.network_scopes import list_network_scopes
+from app.saved_network_scope_associations import (
+    SavedNetworkScopeConflict,
+    attach_scope_associations,
+    change_saved_network_scope_association,
+    current_saved_network_scope_association,
+    current_scope_association_in_transaction,
+    get_schedule_scope_context,
+    init_scan_scope_context_storage,
+    init_saved_network_scope_storage,
+    insert_run_scope_context,
+    insert_saved_network_scope_association,
+    insert_schedule_scope_context,
+    list_saved_network_scope_history,
+    resolve_reviewed_scope_context,
+    resolve_schedule_scope_context_in_transaction,
 )
 from app.request_identity import bind_signed_in_actor
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
@@ -99,7 +120,7 @@ ARTIFACT_FILES = {
 
 router = APIRouter(prefix="/api", tags=["poc"])
 
-_POC_STORAGE_READY: set[str] = set()
+_POC_STORAGE_READY: dict[str, tuple[int, int]] = {}
 _POC_STORAGE_LOCK = threading.RLock()
 
 
@@ -156,6 +177,91 @@ class ScanProfileClone(BaseModel):
     source_version: int | None = Field(default=None, ge=1)
 
 
+class ReviewedScopeAssociation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    association_id: str = Field(min_length=1, max_length=100)
+    revision: int = Field(ge=1)
+
+
+class SavedNetworkScopeChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_id: str | None = Field(default=None, max_length=100)
+    expected_association_id: str | None = Field(default=None, max_length=100)
+    expected_revision: int | None = Field(default=None, ge=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("scope_id", "expected_association_id")
+    @classmethod
+    def clean_optional_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("reason")
+    @classmethod
+    def clean_scope_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("A reason for the Network Scope change is required")
+        return cleaned
+
+
+class SavedNetworkContextSave(BaseModel):
+    """One all-or-nothing Saved Network and future-scan context change."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    saved_network_id: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=100)
+    cidr: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=500)
+    category: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list, max_length=30)
+    scope_id: str | None = Field(default=None, max_length=100)
+    expected_association_id: str | None = Field(default=None, max_length=100)
+    expected_revision: int | None = Field(default=None, ge=1)
+    scope_reason: str = Field(default="", max_length=500)
+
+    @field_validator(
+        "saved_network_id", "scope_id", "expected_association_id"
+    )
+    @classmethod
+    def clean_context_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("name", "cidr")
+    @classmethod
+    def clean_context_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value cannot be blank")
+        return cleaned
+
+    @field_validator("description", "category", "scope_reason")
+    @classmethod
+    def clean_context_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def clean_context_tags(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            tag = item.strip()
+            key = tag.casefold()
+            if tag and key not in seen:
+                cleaned.append(tag)
+                seen.add(key)
+        return cleaned
+
+
 class ScanScheduleCreate(BaseModel):
     """A version-pinned recurring or one-time scan schedule."""
 
@@ -166,6 +272,9 @@ class ScanScheduleCreate(BaseModel):
     profile_id: str = Field(min_length=1, max_length=128)
     profile_version: int = Field(ge=1)
     targets: list[str] = Field(min_length=1)
+    manual_targets: list[str] = Field(default_factory=list)
+    saved_network_ids: list[str] = Field(default_factory=list)
+    reviewed_scope_associations: list[ReviewedScopeAssociation] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
     interface: str = Field(min_length=1, max_length=64)
     cadence: Literal[
@@ -254,6 +363,7 @@ class ScanRunPlan(BaseModel):
     targets: list[str] = Field(default_factory=list)
     manual_targets: list[str] = Field(default_factory=list)
     saved_network_ids: list[str] = Field(default_factory=list)
+    reviewed_scope_associations: list[ReviewedScopeAssociation] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
 
     @field_validator("operator", "name", "originating_host", "interface", "profile")
@@ -895,6 +1005,9 @@ def build_scan_run_manifest(
         "saved_network_ids": [
             item["saved_network_id"] for item in saved_network_snapshots
         ],
+        "reviewed_scope_associations": [
+            item.model_dump() for item in plan.reviewed_scope_associations
+        ],
         "saved_networks": saved_network_snapshots,
         "target_selection": {
             "saved_networks": saved_network_snapshots,
@@ -928,12 +1041,23 @@ def build_scan_run_manifest(
 
 def init_poc_storage(db_path: Path = DB_PATH) -> None:
     storage_key = str(db_path.resolve())
-    if storage_key in _POC_STORAGE_READY and db_path.is_file():
+    try:
+        info = db_path.stat()
+        storage_identity = (info.st_dev, info.st_ino)
+    except FileNotFoundError:
+        storage_identity = None
+    if storage_identity is not None and _POC_STORAGE_READY.get(storage_key) == storage_identity:
         return
     with _POC_STORAGE_LOCK:
-        if storage_key in _POC_STORAGE_READY and db_path.is_file():
+        try:
+            info = db_path.stat()
+            storage_identity = (info.st_dev, info.st_ino)
+        except FileNotFoundError:
+            storage_identity = None
+        if storage_identity is not None and _POC_STORAGE_READY.get(storage_key) == storage_identity:
             return
         configure_database(db_path)
+        init_artifact_storage(db_path)
         init_saved_network_storage(db_path)
         init_scan_collaboration_storage(db_path)
         with connect_database(db_path) as db:
@@ -1064,7 +1188,9 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                         ),
                     ),
                 )
-        _POC_STORAGE_READY.add(storage_key)
+        init_scan_scope_context_storage(db_path)
+        info = db_path.stat()
+        _POC_STORAGE_READY[storage_key] = (info.st_dev, info.st_ino)
 
 
 def _profile_record(row: tuple | None) -> dict | None:
@@ -1335,9 +1461,22 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         and "chunking_enabled" not in request.model_fields_set
     )
     chunking_enabled = request.chunking_enabled or legacy_chunk_request
+    if request.saved_network_ids or request.manual_targets:
+        resolved_targets, saved_network_snapshots, manual_targets = (
+            resolve_saved_network_targets(
+                request.saved_network_ids,
+                request.manual_targets,
+                db_path,
+                max_addresses=MAX_EXPANDED_ADDRESSES,
+            )
+        )
+    else:
+        resolved_targets = normalize_ipv4_networks(request.targets, "target")
+        saved_network_snapshots = []
+        manual_targets = []
     created_at = utc_now()
     definition = {
-        "schema_version": 4,
+        "schema_version": 5,
         "schedule_id": uuid.uuid4().hex,
         "name": request.name,
         "created_at": created_at,
@@ -1347,7 +1486,15 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "profile_version": profile["version"],
         "profile_name": profile["name"],
         "profile_snapshot": profile["settings"],
-        "targets": normalize_ipv4_networks(request.targets, "target"),
+        "targets": resolved_targets,
+        "manual_targets": manual_targets,
+        "saved_network_ids": [
+            item["saved_network_id"] for item in saved_network_snapshots
+        ],
+        "saved_networks": saved_network_snapshots,
+        "reviewed_scope_associations": [
+            item.model_dump() for item in request.reviewed_scope_associations
+        ],
         "no_strike": normalize_ipv4_networks(request.no_strike, "no-strike") if request.no_strike else [],
         "interface": request.interface,
         "cadence": request.cadence,
@@ -1403,6 +1550,17 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "implementation_status": "active_scheduler",
     }
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        context = resolve_reviewed_scope_context(
+            db,
+            saved_network_ids=definition["saved_network_ids"],
+            manual_targets=definition["manual_targets"],
+            reviewed_associations=definition["reviewed_scope_associations"],
+        )
+        definition["network_scope_context"] = context
+        definition["network_scope_status"] = (
+            "pinned" if context is not None else "unscoped"
+        )
         db.execute(
             """
             INSERT INTO scan_schedules (
@@ -1416,6 +1574,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
                 definition["profile_version"], json.dumps(definition, sort_keys=True),
             ),
         )
+        insert_schedule_scope_context(db, definition["schedule_id"], context)
     return definition
 
 
@@ -1439,47 +1598,69 @@ def set_scan_schedule_enabled(
     changed_by: str | None = None,
     db_path: Path = DB_PATH,
 ) -> dict:
-    schedule = get_scan_schedule(schedule_id, db_path)
-    if schedule is None:
-        raise KeyError("Scan schedule not found")
-    previous = bool(schedule.get("enabled"))
-    schedule["enabled"] = bool(enabled)
-    actor = changed_by or schedule.get("last_changed_by") or schedule["created_by"]
-    if enabled:
-        completed_chunks = int(schedule.get("completed_chunk_count") or 0)
-        total_chunks = int(schedule.get("active_chunk_count") or 0)
-        resuming = (
-            completed_chunks
-            and total_chunks
-            and completed_chunks < total_chunks
-            and schedule.get("batch_status")
-            in {
-                "paused_after_current_chunk",
-                "interrupted_paused",
-                "failed_to_dispatch",
-            }
-        )
-        if resuming:
-            schedule["batch_status"] = "recovery_pending"
-            schedule["resume_after_chunk"] = completed_chunks
-            schedule["next_run_at"] = utc_now()
-        elif not schedule.get("next_run_at"):
-            schedule["next_run_at"] = utc_now()
-        elif _as_utc(schedule["next_run_at"]) < datetime.now(timezone.utc):
-            if schedule["cadence"] == "once":
+    init_poc_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError("Scan schedule not found")
+        schedule = json.loads(row[0])
+        previous = bool(schedule.get("enabled"))
+        if enabled:
+            resolve_schedule_scope_context_in_transaction(db, schedule_id)
+        schedule["enabled"] = bool(enabled)
+        actor = changed_by or schedule.get("last_changed_by") or schedule["created_by"]
+        if enabled:
+            completed_chunks = int(schedule.get("completed_chunk_count") or 0)
+            total_chunks = int(schedule.get("active_chunk_count") or 0)
+            resuming = (
+                completed_chunks
+                and total_chunks
+                and completed_chunks < total_chunks
+                and schedule.get("batch_status")
+                in {
+                    "paused_after_current_chunk",
+                    "interrupted_paused",
+                    "failed_to_dispatch",
+                }
+            )
+            if resuming:
+                schedule["batch_status"] = "recovery_pending"
+                schedule["resume_after_chunk"] = completed_chunks
                 schedule["next_run_at"] = utc_now()
-            else:
-                schedule["next_run_at"] = next_schedule_time(
-                    schedule, datetime.now(timezone.utc)
-                ).isoformat()
-    if previous != bool(enabled):
-        _append_schedule_history(
-            schedule,
-            "enabled" if enabled else "paused",
-            actor,
-            "Enabled recurring execution" if enabled else "Paused recurring execution",
+            elif not schedule.get("next_run_at"):
+                schedule["next_run_at"] = utc_now()
+            elif _as_utc(schedule["next_run_at"]) < datetime.now(timezone.utc):
+                if schedule["cadence"] == "once":
+                    schedule["next_run_at"] = utc_now()
+                else:
+                    schedule["next_run_at"] = next_schedule_time(
+                        schedule, datetime.now(timezone.utc)
+                    ).isoformat()
+        if previous != bool(enabled):
+            _append_schedule_history(
+                schedule,
+                "enabled" if enabled else "paused",
+                actor,
+                "Enabled recurring execution" if enabled else "Paused recurring execution",
+            )
+        schedule["updated_at"] = utc_now()
+        db.execute(
+            """
+            UPDATE scan_schedules
+            SET name = ?, profile_id = ?, profile_version = ?, definition_json = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                schedule["name"], schedule["profile_id"],
+                schedule["profile_version"], json.dumps(schedule, sort_keys=True),
+                schedule_id,
+            ),
         )
-    return _store_scan_schedule(schedule, db_path)
+    return schedule
 
 
 def change_scan_schedule_profile(
@@ -1539,6 +1720,65 @@ def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
         )
 
 
+def insert_reviewed_scan_run(
+    manifest: dict,
+    plan: ScanRunPlan,
+    db_path: Path = DB_PATH,
+    *,
+    audit_event: str | None = None,
+) -> None:
+    """Atomically recheck reviewed context, retain the run, and snapshot context."""
+    init_poc_storage(db_path)
+    reviewed = [item.model_dump() for item in plan.reviewed_scope_associations]
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        if plan.scheduled and plan.schedule_id:
+            context = resolve_schedule_scope_context_in_transaction(
+                db, plan.schedule_id
+            )
+        else:
+            context = resolve_reviewed_scope_context(
+                db,
+                saved_network_ids=manifest.get("saved_network_ids") or [],
+                manual_targets=manifest.get("manual_targets") or [],
+                reviewed_associations=reviewed,
+            )
+        manifest["network_scope_context"] = context
+        manifest["network_scope_status"] = (
+            "inherited" if context is not None else "unscoped"
+        )
+        db.execute(
+            """
+            INSERT INTO scan_runs (
+                run_id, created_at, status, operator_name, reason,
+                originating_host, interface_name, profile, manifest_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                manifest["run_id"], manifest["created_at"], manifest["status"],
+                manifest["operator"], manifest["reason"],
+                manifest["originating_host"], manifest["interface"],
+                manifest["profile"], json.dumps(manifest, sort_keys=True),
+            ),
+        )
+        insert_run_scope_context(db, manifest["run_id"], context)
+        if audit_event:
+            db.execute(
+                """
+                INSERT INTO scan_run_audit (
+                    run_id, event, actor, changed_at, details
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest["run_id"], audit_event,
+                    manifest.get("requested_by") or manifest.get("created_by")
+                    or manifest["operator"],
+                    manifest["created_at"],
+                    "Submitted to the shared analyzer queue",
+                ),
+            )
+
+
 def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
     with connect_database(db_path) as db:
         db.execute(
@@ -1583,7 +1823,7 @@ def with_queue_state(
 
 def save_scan_run_plan(plan: ScanRunPlan, db_path: Path = DB_PATH) -> dict:
     manifest = build_scan_run_manifest(plan, db_path=db_path)
-    insert_scan_run_manifest(manifest, db_path)
+    insert_reviewed_scan_run(manifest, plan, db_path)
     return manifest
 
 
@@ -1600,15 +1840,7 @@ def prepare_scan_run(
         status="queued",
         db_path=db_path,
     )
-    insert_scan_run_manifest(manifest, db_path)
-    append_scan_audit(
-        db_path,
-        run_id=manifest["run_id"],
-        event="queued",
-        actor=manifest.get("requested_by") or manifest.get("created_by") or manifest["operator"],
-        details="Submitted to the shared analyzer queue",
-        changed_at=manifest["created_at"],
-    )
+    insert_reviewed_scan_run(manifest, request, db_path, audit_event="queued")
     return manifest
 
 
@@ -2895,6 +3127,7 @@ def execute_schedule_batch(
         schedule = get_scan_schedule(schedule_id, db_path)
         if schedule is None:
             return
+        get_schedule_scope_context(db_path, schedule_id, require_active=True)
         chunks = schedule_target_chunks(schedule, db_path)
         if not chunks:
             schedule["batch_status"] = "stopped_no_targets"
@@ -3054,6 +3287,7 @@ def queue_scan_schedule_batch(
     schedule = get_scan_schedule(schedule_id, db_path)
     if schedule is None:
         raise KeyError("Scan schedule not found")
+    get_schedule_scope_context(db_path, schedule_id, require_active=True)
     chunks = schedule_target_chunks(schedule, db_path)
     if not chunks:
         raise ValueError("No addresses remain after no-strike filtering")
@@ -3406,9 +3640,110 @@ def scan_profile_history(all_versions: bool = False) -> list[dict]:
     return list_scan_profiles(all_versions=all_versions)
 
 
+def save_saved_network_with_context(
+    request: SavedNetworkContextSave,
+    *,
+    actor: str,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Save the network and its future-scan context in one transaction."""
+    init_poc_storage(db_path)
+    normalized_from: str | None = None
+    try:
+        with connect_database(db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            if request.saved_network_id is None:
+                if (
+                    request.expected_association_id is not None
+                    or request.expected_revision is not None
+                ):
+                    raise SavedNetworkScopeConflict(
+                        "A new Saved Network cannot reference earlier context"
+                    )
+                saved_network_id, normalized_from = insert_saved_network_record(
+                    db,
+                    SavedNetworkCreate(
+                        name=request.name,
+                        cidr=request.cidr,
+                        description=request.description,
+                        category=request.category,
+                        tags=request.tags,
+                        created_by=actor,
+                    ),
+                )
+                current = None
+            else:
+                saved_network_id = request.saved_network_id
+                current = current_scope_association_in_transaction(
+                    db, saved_network_id
+                )
+                current_id = current["association_id"] if current else None
+                current_revision = int(current["revision"]) if current else None
+                if (
+                    request.expected_association_id != current_id
+                    or request.expected_revision != current_revision
+                ):
+                    raise SavedNetworkScopeConflict(
+                        "Saved Network context changed in another session; reload and review it again"
+                    )
+                normalized_from = update_saved_network_record(
+                    db,
+                    saved_network_id,
+                    SavedNetworkUpdate(
+                        name=request.name,
+                        cidr=request.cidr,
+                        description=request.description,
+                        category=request.category,
+                        tags=request.tags,
+                        updated_by=actor,
+                    ),
+                )
+            current_scope = current["scope_id"] if current else None
+            if request.scope_id != current_scope:
+                if not request.scope_reason:
+                    raise ValueError(
+                        "Enter why the Network Scope is being assigned, changed, or cleared"
+                    )
+                insert_saved_network_scope_association(
+                    db,
+                    saved_network_id,
+                    scope_id=request.scope_id,
+                    expected_association_id=(
+                        current["association_id"] if current else None
+                    ),
+                    expected_revision=(int(current["revision"]) if current else None),
+                    actor=actor,
+                    reason=request.scope_reason,
+                )
+    except sqlite3.IntegrityError as exc:
+        if "saved_networks" in str(exc).lower():
+            raise ValueError(saved_network_integrity_message(exc)) from exc
+        raise SavedNetworkScopeConflict(str(exc)) from exc
+    record = get_saved_network_with_warnings(
+        saved_network_id, db_path, normalized_from=normalized_from,
+    )
+    return attach_scope_associations(db_path, [record])[0]
+
+
 @router.get("/saved-networks")
 def saved_network_history(include_archived: bool = False) -> list[dict]:
-    return list_saved_networks(DB_PATH, include_archived=include_archived)
+    return attach_scope_associations(
+        DB_PATH,
+        list_saved_networks(DB_PATH, include_archived=include_archived),
+    )
+
+
+@router.get("/network-scope-options")
+def active_network_scope_options() -> list[dict]:
+    return [
+        {
+            "scope_id": item["scope_id"],
+            "label": item["label"],
+            "description": item["description"],
+            "version": item["version"],
+        }
+        for item in list_network_scopes(DB_PATH)
+    ]
 
 
 @router.get("/saved-networks/{saved_network_id}")
@@ -3416,7 +3751,64 @@ def saved_network_detail(saved_network_id: str) -> dict:
     record = get_saved_network(saved_network_id, DB_PATH)
     if record is None:
         raise HTTPException(status_code=404, detail="Saved Network not found")
-    return record
+    return attach_scope_associations(DB_PATH, [record])[0]
+
+
+@router.get("/saved-networks/{saved_network_id}/scope-history")
+def saved_network_scope_history(saved_network_id: str) -> list[dict]:
+    if get_saved_network(saved_network_id, DB_PATH) is None:
+        raise HTTPException(status_code=404, detail="Saved Network not found")
+    return list_saved_network_scope_history(DB_PATH, saved_network_id)
+
+
+@router.post("/saved-networks/contextual-save")
+def save_saved_network_and_context(
+    payload: SavedNetworkContextSave, http_request: Request
+) -> dict:
+    analyst = getattr(http_request.state, "analyst", None)
+    actor = (
+        str(analyst.get("username"))
+        if analyst and analyst.get("username")
+        else "local-operator"
+    )
+    try:
+        return save_saved_network_with_context(payload, actor=actor, db_path=DB_PATH)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/saved-networks/{saved_network_id}/network-scope")
+def set_saved_network_scope(
+    saved_network_id: str,
+    payload: SavedNetworkScopeChange,
+    http_request: Request,
+) -> dict:
+    analyst = getattr(http_request.state, "analyst", None)
+    actor = (
+        str(analyst.get("username"))
+        if analyst and analyst.get("username")
+        else "local-operator"
+    )
+    try:
+        return change_saved_network_scope_association(
+            DB_PATH,
+            saved_network_id,
+            scope_id=payload.scope_id,
+            expected_association_id=payload.expected_association_id,
+            expected_revision=payload.expected_revision,
+            actor=actor,
+            reason=payload.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/saved-networks", status_code=201)
@@ -3568,14 +3960,16 @@ def delete_saved_scan_profile(profile_id: str, confirmation: DeleteConfirmation)
 
 @router.get("/scan-schedules")
 def scan_schedule_history() -> list[dict]:
-    return list_scan_schedules()
+    return list_scan_schedules(DB_PATH)
 
 
 @router.post("/scan-schedules", status_code=201)
 def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> dict:
     try:
         request = bind_signed_in_actor(http_request, request, "created_by")
-        return create_scan_schedule(request)
+        return create_scan_schedule(request, DB_PATH)
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -3587,10 +3981,13 @@ def change_scan_schedule_state(
     try:
         request = bind_signed_in_actor(http_request, request, "changed_by")
         return set_scan_schedule_enabled(
-            schedule_id, request.enabled, changed_by=request.changed_by
+            schedule_id, request.enabled, changed_by=request.changed_by,
+            db_path=DB_PATH,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/scan-schedules/{schedule_id}/profile")
@@ -3614,6 +4011,8 @@ def run_saved_scan_schedule(schedule_id: str) -> dict:
         return run_scan_schedule_now(schedule_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -3647,6 +4046,8 @@ def create_scan_run_plan(plan: ScanRunPlan, http_request: Request) -> dict:
             actor_fields.append("scheduled_by")
         plan = bind_signed_in_actor(http_request, plan, *actor_fields)
         return save_scan_run_plan(plan)
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -3659,6 +4060,8 @@ def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
             actor_fields.append("scheduled_by")
         request = bind_signed_in_actor(http_request, request, *actor_fields)
         return launch_scan_run(request)
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

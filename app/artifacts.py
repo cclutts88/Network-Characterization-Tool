@@ -11,6 +11,10 @@ import threading
 import uuid
 
 from app.database import configure_database, connect_database
+from app.saved_network_scope_associations import (
+    get_run_scope_context,
+    insert_artifact_observation_scope_context,
+)
 
 
 _ARTIFACT_STORAGE_READY: set[tuple[str, str, int, int]] = set()
@@ -110,6 +114,8 @@ def _register_record(
     metadata: dict | None,
     observed_at: str | None,
     observation_key: str | None = None,
+    run_id: str | None = None,
+    scope_context: dict | None = None,
 ) -> dict:
     init_artifact_storage(db_path, artifact_root)
     observed_at = observed_at or utc_now()
@@ -144,24 +150,45 @@ def _register_record(
             """,
             (observed_at, observed_at, media_type or "", media_type or "", digest),
         )
-        db.execute(
+        observation_values = (
+            observation_id,
+            digest,
+            source_kind,
+            source_ref,
+            observed_at,
+            original_filename,
+            actor,
+            json.dumps(metadata or {}, sort_keys=True),
+        )
+        observation_inserted = db.execute(
             """
             INSERT OR IGNORE INTO artifact_observations (
                 observation_id, sha256, source_kind, source_ref, observed_at,
                 original_filename, actor, metadata_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                observation_id,
-                digest,
-                source_kind,
-                source_ref,
-                observed_at,
-                original_filename,
-                actor,
-                json.dumps(metadata or {}, sort_keys=True),
-            ),
-        )
+            observation_values,
+        ).rowcount
+        if not observation_inserted:
+            existing_observation = db.execute(
+                """
+                SELECT observation_id, sha256, source_kind, source_ref, observed_at,
+                       original_filename, actor, metadata_json
+                FROM artifact_observations WHERE observation_id = ?
+                """,
+                (observation_id,),
+            ).fetchone()
+            if existing_observation is None or tuple(existing_observation) != observation_values:
+                raise ValueError("Artifact observation replay does not match retained provenance")
+        if scope_context is not None:
+            if not run_id:
+                raise ValueError("Scoped artifact observations require a scan run")
+            insert_artifact_observation_scope_context(
+                db,
+                observation_id=observation_id,
+                run_id=run_id,
+                context=scope_context,
+            )
         first_seen_at, last_seen_at = db.execute(
             "SELECT first_seen_at, last_seen_at FROM artifact_registry WHERE sha256 = ?", (digest,)
         ).fetchone()
@@ -235,6 +262,8 @@ def register_artifact_file(
     observed_at: str | None = None,
     artifact_root: Path | None = None,
     observation_key: str | None = None,
+    run_id: str | None = None,
+    scope_context: dict | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     before = source_path.stat()
@@ -271,6 +300,8 @@ def register_artifact_file(
         metadata=metadata,
         observed_at=observed_at,
         observation_key=observation_key,
+        run_id=run_id,
+        scope_context=scope_context,
     )
     record["physical_created"] = physical_created
     return record
@@ -300,6 +331,7 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                              source_kind: str, filenames) -> None:
     """Called after writers close, never from history/read endpoints."""
     records, errors = [], []
+    scope_context = get_run_scope_context(db_path, manifest["run_id"])
     for filename in dict.fromkeys(filenames):
         path = run_dir / filename
         if filename == "manifest.json" or not path.is_file() or path.is_symlink():
@@ -312,6 +344,7 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                 observed_at=manifest.get("completed_at") or manifest.get("created_at"),
                 observation_key=f"{source_kind}:{manifest['run_id']}:{filename}",
                 metadata={"relative_path": str(path.relative_to(db_path.parent))},
+                run_id=manifest["run_id"], scope_context=scope_context,
             )
             record["storage_mode"] = link_artifact(record, path)
             records.append({"filename": filename, "sha256": record["sha256"],

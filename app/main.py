@@ -1227,6 +1227,10 @@ async def database_error_response(request: Request, exc: sqlite3.OperationalErro
 @app.middleware("http")
 async def local_authentication_guard(request: Request, call_next):
     request.state.analyst = None
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
+            return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
     if not auth_enabled():
         return await call_next(request)
     public_paths = {"/health", "/login", "/api/auth/login"}
@@ -1242,9 +1246,6 @@ async def local_authentication_guard(request: Request, call_next):
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
     request.state.analyst = analyst
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
-        origin = request.headers.get("origin")
-        if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
-            return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
         personal_default_change = (
             request.url.path == "/api/workspaces/layouts/default/clear"
             or request.url.path.endswith("/default")

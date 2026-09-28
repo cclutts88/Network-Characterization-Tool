@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.database import connect_database
 
 
-_SAVED_NETWORK_STORAGE_READY: set[str] = set()
+_SAVED_NETWORK_STORAGE_READY: dict[str, tuple[int, int]] = {}
 _SAVED_NETWORK_STORAGE_LOCK = threading.RLock()
 
 
@@ -122,10 +122,20 @@ class SavedNetworkArchive(BaseModel):
 def init_saved_network_storage(db_path: Path) -> None:
     """Run Saved Network schema setup once per process/database path."""
     storage_key = str(db_path.resolve())
-    if storage_key in _SAVED_NETWORK_STORAGE_READY and db_path.is_file():
+    try:
+        info = db_path.stat()
+        storage_identity = (info.st_dev, info.st_ino)
+    except FileNotFoundError:
+        storage_identity = None
+    if storage_identity is not None and _SAVED_NETWORK_STORAGE_READY.get(storage_key) == storage_identity:
         return
     with _SAVED_NETWORK_STORAGE_LOCK:
-        if storage_key in _SAVED_NETWORK_STORAGE_READY and db_path.is_file():
+        try:
+            info = db_path.stat()
+            storage_identity = (info.st_dev, info.st_ino)
+        except FileNotFoundError:
+            storage_identity = None
+        if storage_identity is not None and _SAVED_NETWORK_STORAGE_READY.get(storage_key) == storage_identity:
             return
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with connect_database(db_path) as db:
@@ -160,7 +170,8 @@ def init_saved_network_storage(db_path: Path) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS saved_networks_active_cidr_unique "
                 "ON saved_networks(cidr) WHERE active = 1"
             )
-        _SAVED_NETWORK_STORAGE_READY.add(storage_key)
+        info = db_path.stat()
+        _SAVED_NETWORK_STORAGE_READY[storage_key] = (info.st_dev, info.st_ino)
 
 def _row_record(row: tuple | None) -> dict | None:
     if row is None:
@@ -249,47 +260,43 @@ def _duplicate_message(exc: sqlite3.IntegrityError) -> str:
     return "A Saved Network already uses this name"
 
 
-def create_saved_network(request: SavedNetworkCreate, db_path: Path) -> dict:
-    init_saved_network_storage(db_path)
+def saved_network_integrity_message(exc: sqlite3.IntegrityError) -> str:
+    return _duplicate_message(exc)
+
+
+def insert_saved_network_record(
+    db: sqlite3.Connection, request: SavedNetworkCreate
+) -> tuple[str, str | None]:
+    """Insert a Saved Network inside the caller's transaction."""
     cidr, was_normalized = normalize_cidr(request.cidr)
     timestamp = utc_now()
     saved_network_id = uuid.uuid4().hex
-    try:
-        with connect_database(db_path) as db:
-            db.execute(
-                """
-                INSERT INTO saved_networks (
-                    saved_network_id, name, cidr, description, category, tags_json,
-                    created_at, created_by, updated_at, updated_by, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                """,
-                (
-                    saved_network_id,
-                    request.name,
-                    cidr,
-                    request.description,
-                    request.category,
-                    json.dumps(request.tags),
-                    timestamp,
-                    request.created_by,
-                    timestamp,
-                    request.created_by,
-                ),
-            )
-    except sqlite3.IntegrityError as exc:
-        raise ValueError(_duplicate_message(exc)) from exc
-    record = get_saved_network(saved_network_id, db_path)
-    return _with_warnings(
-        record,
-        db_path,
-        normalized_from=request.cidr if was_normalized else None,
+    db.execute(
+        """
+        INSERT INTO saved_networks (
+            saved_network_id, name, cidr, description, category, tags_json,
+            created_at, created_by, updated_at, updated_by, active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """,
+        (
+            saved_network_id, request.name, cidr, request.description,
+            request.category, json.dumps(request.tags), timestamp,
+            request.created_by, timestamp, request.created_by,
+        ),
     )
+    return saved_network_id, request.cidr if was_normalized else None
 
 
-def update_saved_network(
-    saved_network_id: str, request: SavedNetworkUpdate, db_path: Path
-) -> dict:
-    current = get_saved_network(saved_network_id, db_path)
+def update_saved_network_record(
+    db: sqlite3.Connection,
+    saved_network_id: str,
+    request: SavedNetworkUpdate,
+) -> str | None:
+    """Update a Saved Network inside the caller's transaction."""
+    row = db.execute(
+        f"{_select_sql()} WHERE saved_network_id = ?", (saved_network_id,)
+    ).fetchone()
+    current = _row_record(row)
     if current is None:
         raise KeyError("Saved Network not found")
     values = request.model_dump(exclude_unset=True)
@@ -302,33 +309,59 @@ def update_saved_network(
             normalized_from = entered
     updated = {**current, **values}
     updated["tags"] = _clean_tags(updated.get("tags") or [])
-    timestamp = utc_now()
+    db.execute(
+        """
+        UPDATE saved_networks
+        SET name = ?, cidr = ?, description = ?, category = ?, tags_json = ?,
+            updated_at = ?, updated_by = ?
+        WHERE saved_network_id = ?
+        """,
+        (
+            updated["name"], updated["cidr"], updated["description"],
+            updated["category"], json.dumps(updated["tags"]), utc_now(),
+            request.updated_by, saved_network_id,
+        ),
+    )
+    return normalized_from
+
+
+def get_saved_network_with_warnings(
+    saved_network_id: str,
+    db_path: Path,
+    *,
+    normalized_from: str | None = None,
+) -> dict:
+    record = get_saved_network(saved_network_id, db_path)
+    if record is None:
+        raise KeyError("Saved Network not found")
+    return _with_warnings(record, db_path, normalized_from=normalized_from)
+
+
+def create_saved_network(request: SavedNetworkCreate, db_path: Path) -> dict:
+    init_saved_network_storage(db_path)
     try:
         with connect_database(db_path) as db:
-            db.execute(
-                """
-                UPDATE saved_networks
-                SET name = ?, cidr = ?, description = ?, category = ?, tags_json = ?,
-                    updated_at = ?, updated_by = ?
-                WHERE saved_network_id = ?
-                """,
-                (
-                    updated["name"],
-                    updated["cidr"],
-                    updated["description"],
-                    updated["category"],
-                    json.dumps(updated["tags"]),
-                    timestamp,
-                    request.updated_by,
-                    saved_network_id,
-                ),
+            saved_network_id, normalized_from = insert_saved_network_record(db, request)
+    except sqlite3.IntegrityError as exc:
+        raise ValueError(_duplicate_message(exc)) from exc
+    return get_saved_network_with_warnings(
+        saved_network_id, db_path, normalized_from=normalized_from,
+    )
+
+
+def update_saved_network(
+    saved_network_id: str, request: SavedNetworkUpdate, db_path: Path
+) -> dict:
+    init_saved_network_storage(db_path)
+    try:
+        with connect_database(db_path) as db:
+            normalized_from = update_saved_network_record(
+                db, saved_network_id, request
             )
     except sqlite3.IntegrityError as exc:
         raise ValueError(_duplicate_message(exc)) from exc
-    return _with_warnings(
-        get_saved_network(saved_network_id, db_path),
-        db_path,
-        normalized_from=normalized_from,
+    return get_saved_network_with_warnings(
+        saved_network_id, db_path, normalized_from=normalized_from,
     )
 
 

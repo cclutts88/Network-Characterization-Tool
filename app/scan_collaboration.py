@@ -8,7 +8,7 @@ import threading
 from app.database import connect_database
 
 
-_SCAN_COLLAB_STORAGE_READY: set[str] = set()
+_SCAN_COLLAB_STORAGE_READY: dict[str, tuple[int, int]] = {}
 _SCAN_COLLAB_STORAGE_LOCK = threading.RLock()
 
 
@@ -25,10 +25,20 @@ def utc_now() -> str:
 def init_scan_collaboration_storage(db_path: Path) -> None:
     """Run collaboration schema setup once per process/database path."""
     storage_key = str(db_path.resolve())
-    if storage_key in _SCAN_COLLAB_STORAGE_READY and db_path.is_file():
+    try:
+        info = db_path.stat()
+        storage_identity = (info.st_dev, info.st_ino)
+    except FileNotFoundError:
+        storage_identity = None
+    if storage_identity is not None and _SCAN_COLLAB_STORAGE_READY.get(storage_key) == storage_identity:
         return
     with _SCAN_COLLAB_STORAGE_LOCK:
-        if storage_key in _SCAN_COLLAB_STORAGE_READY and db_path.is_file():
+        try:
+            info = db_path.stat()
+            storage_identity = (info.st_dev, info.st_ino)
+        except FileNotFoundError:
+            storage_identity = None
+        if storage_identity is not None and _SCAN_COLLAB_STORAGE_READY.get(storage_key) == storage_identity:
             return
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with connect_database(db_path) as db:
@@ -53,7 +63,8 @@ def init_scan_collaboration_storage(db_path: Path) -> None:
             db.execute(
                 "CREATE INDEX IF NOT EXISTS scan_run_audit_run ON scan_run_audit(run_id, event_id)"
             )
-        _SCAN_COLLAB_STORAGE_READY.add(storage_key)
+        info = db_path.stat()
+        _SCAN_COLLAB_STORAGE_READY[storage_key] = (info.st_dev, info.st_ino)
 
 def get_scan_draft(db_path: Path, owner: str) -> dict | None:
     init_scan_collaboration_storage(db_path)
