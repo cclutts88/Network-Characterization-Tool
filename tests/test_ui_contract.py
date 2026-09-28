@@ -153,7 +153,8 @@ def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     assert "A new scan by itself does not require a new scope" in html
     assert "scope → named subnet → CIDR → IP address" in html
     assert "Development Servers" in html and "10.50.15.0/24" in html
-    assert "assignment to scans and other evidence is not enabled yet" in html
+    assert "one exact manual Nmap upload from Analyze" in html
+    assert "Automated scans and other evidence paths are not connected yet" in html
     assert "cannot currently be undone" in html
     assert "[hidden]{display:none!important}" in html
     assert "$('save').disabled=false" in html
@@ -1040,7 +1041,32 @@ def test_primary_navigation_follows_the_operator_workflow():
     nmap_group = SHELL_SCRIPT.split("{title:'Nmap scans'", 1)[1].split("{label:'Identify'", 1)[0]
     current_network_group = SHELL_SCRIPT.split("{title:'Current network'", 1)[1].split("{title:'Network devices'", 1)[0]
     assert "href:'/analysis#xmlImport',title:'Import Nmap evidence'" in nmap_group
+    assert "href:'/analysis#nmapScopeAssignments'" not in nmap_group
     assert "href:'/analysis#xmlImport'" not in current_network_group
+    assert "upload authorized nmap xml, analyze the current view" in SHELL_SCRIPT.lower()
+
+
+def test_manual_nmap_scope_assignment_ui_is_explicit_accessible_and_recoverable():
+    html = analysis_page().body.decode()
+    assert 'id="nmapScopeAssignments"' in html
+    assert '<section id="xmlImport" class="panel">' in html
+    assert '<div id="nmapScopeAssignments" class="assignment-workspace">' in html
+    assert "Next: optionally assign network context" in html
+    assert "NCT never selects one from a Saved Network, CIDR, scan target, filename, hash, or previous upload" in html
+    assert "If the file combines different isolated network contexts, do not assign it" in html
+    assert '<option value="">Choose an active Network Scope</option>' in html
+    assert 'label for="${scopeId}"' in html
+    assert 'label for="${reasonId}"' in html
+    assert '<div class="assignment-confirm"><input id="${confirmId}"' in html
+    assert '<label for="${confirmId}">${confirmation}' in html
+    assert 'class="status assignment-process-status" role="status"' in html
+    assert "card.querySelector('.assignment-process-status')" in html
+    assert "creates scoped address, service, assessment, and evidence-receipt records" in html
+    assert "Completion appears in this history" in html
+    assert "The scope decision is retained, but processing did not complete" in html
+    assert "it does not change current analysis views" in html.lower()
+    assert "does not change the current Analyze, Hunt, Reach, or Map results" in html
+    assert "does not grant scan authority, require analysts to be tasked" in SHELL_SCRIPT
 
 
 def test_scan_history_uses_open_details_for_retained_evidence_files():

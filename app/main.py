@@ -3,6 +3,19 @@ from __future__ import annotations
 from app.database import configure_database, connect_database
 from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
 from app.nmap_evidence import nmap_xml_coverage
+from app.assigned_nmap_ingestion import AssignedNmapConflict, ingest_assigned_nmap_observation
+from app.evidence_scope_assignments import (
+    EvidenceScopeConflict,
+    assign_artifact_scope,
+    correct_artifact_scope,
+    init_evidence_scope_assignment_storage,
+)
+from app.nmap_assignment_workflow import (
+    active_assignment_scope_options,
+    get_manual_nmap_assignment_status,
+    list_manual_nmap_assignment_statuses,
+    manual_nmap_assignment_for_processing,
+)
 from app.storage_health import storage_status, start_storage_job
 from app.storage_ui import storage_page
 from app.how_nct_works_ui import how_nct_works_page
@@ -217,7 +230,7 @@ from defusedxml import ElementTree as ET
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -403,6 +416,22 @@ class NetworkScopeUpdateRequest(BaseModel):
 class NetworkScopeArchiveRequest(BaseModel):
     expected_version: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class NmapScopeAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=500)
+    whole_artifact_confirmed: bool
+
+
+class NmapScopeCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    destination_scope_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=500)
+    whole_artifact_confirmed: bool
 
 
 class AnalystUserRequest(BaseModel):
@@ -1162,6 +1191,7 @@ async def lifespan(_: FastAPI):
     init_network_semantics_storage(DB_PATH)
     init_host_identity_storage(DB_PATH)
     init_exposure_report_storage(DB_PATH)
+    init_evidence_scope_assignment_storage(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1339,6 +1369,109 @@ def network_scope_history(scope_id: str, request: Request) -> list[dict]:
                for item in list_network_scopes(DB_PATH, include_archived=True)):
         raise HTTPException(status_code=404, detail="Network scope not found")
     return list_network_scope_history(DB_PATH, scope_id)
+
+
+def require_nmap_assignment_mutator(request: Request) -> str:
+    if auth_enabled():
+        analyst = request.state.analyst
+        if analyst is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if analyst.get("role") not in {"analyst", "admin"}:
+            raise HTTPException(status_code=403, detail="Analyst or administrator role required")
+        return analyst["username"]
+    return signed_in_username(request) or "local-operator"
+
+
+def _nmap_assignment_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    if isinstance(exc, (EvidenceScopeConflict, AssignedNmapConflict)):
+        return HTTPException(status_code=409, detail=str(exc))
+    message = str(exc)
+    status = 409 if any(
+        word in message.lower() for word in ("already", "archived", "current", "stale")
+    ) else 422
+    return HTTPException(status_code=status, detail=message)
+
+
+@app.get("/api/nmap-assignment-scopes")
+def nmap_assignment_scope_options() -> list[dict]:
+    return active_assignment_scope_options(DB_PATH)
+
+
+@app.get("/api/nmap-observations/assignments")
+def nmap_observation_assignment_list(
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict]:
+    return list_manual_nmap_assignment_statuses(DB_PATH, limit=limit)
+
+
+@app.get("/api/nmap-observations/{observation_id}/scope-assignment")
+def nmap_observation_assignment_status(observation_id: str) -> dict:
+    try:
+        return get_manual_nmap_assignment_status(DB_PATH, observation_id)
+    except (KeyError, ValueError) as exc:
+        raise _nmap_assignment_error(exc) from exc
+
+
+@app.post("/api/nmap-observations/{observation_id}/scope-assignment", status_code=201)
+def nmap_observation_scope_assign(
+    observation_id: str, request: Request, payload: NmapScopeAssignmentRequest,
+) -> dict:
+    actor = require_nmap_assignment_mutator(request)
+    try:
+        get_manual_nmap_assignment_status(DB_PATH, observation_id)
+        assign_artifact_scope(
+            DB_PATH,
+            artifact_observation_id=observation_id,
+            scope_id=payload.scope_id,
+            actor=actor,
+            reason=payload.reason,
+            whole_artifact_confirmed=payload.whole_artifact_confirmed,
+        )
+        return get_manual_nmap_assignment_status(DB_PATH, observation_id)
+    except (KeyError, ValueError) as exc:
+        raise _nmap_assignment_error(exc) from exc
+
+
+@app.post("/api/nmap-scope-assignments/{assignment_id}/corrections", status_code=201)
+def nmap_observation_scope_correct(
+    assignment_id: str, request: Request, payload: NmapScopeCorrectionRequest,
+) -> dict:
+    actor = require_nmap_assignment_mutator(request)
+    try:
+        eligible = manual_nmap_assignment_for_processing(DB_PATH, assignment_id)
+        correct_artifact_scope(
+            DB_PATH,
+            expected_assignment_id=assignment_id,
+            destination_scope_id=payload.destination_scope_id,
+            actor=actor,
+            reason=payload.reason,
+            whole_artifact_confirmed=payload.whole_artifact_confirmed,
+        )
+        return get_manual_nmap_assignment_status(
+            DB_PATH, eligible["artifact_observation_id"],
+        )
+    except (KeyError, ValueError) as exc:
+        raise _nmap_assignment_error(exc) from exc
+
+
+@app.post("/api/nmap-scope-assignments/{assignment_id}/process")
+def nmap_observation_scope_process(assignment_id: str, request: Request) -> dict:
+    actor = require_nmap_assignment_mutator(request)
+    try:
+        eligible = manual_nmap_assignment_for_processing(DB_PATH, assignment_id)
+        processing = ingest_assigned_nmap_observation(
+            DB_PATH, expected_assignment_id=assignment_id, linked_by=actor,
+        )
+        return {
+            "processing": processing,
+            "status": get_manual_nmap_assignment_status(
+                DB_PATH, eligible["artifact_observation_id"],
+            ),
+        }
+    except (KeyError, ValueError) as exc:
+        raise _nmap_assignment_error(exc) from exc
 
 
 @app.get("/health")

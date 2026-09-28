@@ -18,11 +18,16 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     for storage in ("Artifact storage", "SQLite database", "Derived-result storage", "This browser"):
         assert storage in html
     assert "does not guess from a CIDR or filename" in html
-    assert "you cannot assign evidence to a scope yet" in html
-    assert "normal imports and operator screens do not use them yet" in html
-    assert "Normal imports do not use this path yet" in html
+    assert "After a manual Nmap XML upload" in html
+    assert "Every address in the file must belong to the selected scope" in html
+    assert "Automated scans and other evidence paths are not connected yet" in html
+    assert "Optionally assign manual Nmap context" in html
+    assert "Several subnets may share one scope" in html
     assert "saves the analysis and its source and scope links all at once" in html
-    assert "If any part fails, none of those new records is saved" in html
+    assert "If any part fails, none of those new processing records is saved" in html
+    assert "will not grant scan authority" in html
+    assert "require every scan to be assigned first" in html
+    assert "Planned optional tasking will help a lead coordinate work" in html
     assert "not observed in this collection" in html
     assert "Automatic compaction remains disabled" in html
     assert "A dry run reports only" in html
@@ -30,6 +35,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "password is used only for the short-lived SSH session" in html
     assert "Uploading existing Nmap XML" in html
     assert "Saved Network" in html and "Network Scope" in html
+    assert "planned explicit Saved Network association" in html
+    assert "affect future scans only" in html
     assert "offline Exploit-DB matches are candidates for analyst validation" in html
     assert "Viewer accounts can read shared evidence" in html
     assert "Current scan and device-configuration comparisons are available" in html

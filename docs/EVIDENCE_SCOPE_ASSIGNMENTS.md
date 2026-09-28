@@ -1,9 +1,11 @@
 # Evidence scope assignment and correction
 
 This internal foundation records an operator's explicit network context for one
-Artifact Registry observation. An internal Nmap coordinator can now verify that
-assignment, parse the retained artifact and save all scoped assessment records as one
-operation. No application route, normal import or user interface calls it yet.
+Artifact Registry observation. Manual Nmap uploads now have an explicit operator
+workflow that records or corrects the assignment and separately asks the coordinator
+to verify the retained artifact and save all scoped assessment records as one
+operation. Existing Analyze, Hunt, Reach and Map results continue to use their current
+read paths while this foundation is expanded.
 
 ## Identity and assignment
 
@@ -51,8 +53,28 @@ operation. No application route, normal import or user interface calls it yet.
 - Database enforcement also blocks direct insertion of a new link for a superseded
   assignment or archived destination.
 
+## Manual upload operator workflow
+
+- The workflow is limited to exact observations created by manual Nmap XML imports.
+  Upload and legacy analysis still complete first. Assignment and foundation processing
+  are deliberate follow-up actions in the same Import Nmap Evidence workspace, so a
+  refresh or lost response can be recovered.
+- Recent observation status and immutable assignment history are read-only queries.
+  They do not reparse the XML or initialize storage on the request path.
+- A scope is never preselected. The operator must choose an active scope, record a
+  reason and confirm that every address in the file belongs to that context. Several
+  subnets may belong to one scope; mixed isolated contexts remain unsupported.
+- Analysts and administrators may assign, correct and process. Viewers may review the
+  status and history. Network Scope creation and archival remain administrator actions.
+  Authentication-disabled installations attribute actions to the local operator.
+- Processing failure retains the assignment and reports that it can be retried. A
+  correction is a separate append-only decision and must then be processed explicitly.
+- The workflow does not contact the network, grant scan authority, require an analyst
+  to be tasked or change the current Analyze, Hunt, Reach or Map results.
+
 ## Remaining gate
 
-Production route and import integration remain disabled. Role authorization, the
-operator assignment screen, mixed-scope handling and the decision about which import
-workflows enter this coordinator require separate review before any route is enabled.
+Automated scan artifacts, device evidence and other imports do not enter this workflow.
+Saved Network or CIDR inference, mixed-scope and per-host partitioning, migration of old
+records, job processing, current-state/Last Seen views and a general read-model switch
+remain separately reviewed roadmap work.

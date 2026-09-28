@@ -119,6 +119,7 @@ A roadmap item should only be marked complete when:
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
 | 2026-09-27 | Phase 1 entities | Establish canonical Host, Service, Network, and Device entities with normalized ingestion and correlation | The initial internal slice implements explicit-scope IPv4/IPv6 address endpoints, TCP/UDP/SCTP transport endpoints, and immutable artifact-backed assessments. These are scoped endpoint identities and observations; they do not claim physical Host or Device reconciliation | Addresses can overlap across network contexts, and retained evidence does not yet provide a reviewed stable identifier and assignment rule for safely merging endpoints into physical systems. Existing Saved Networks are editable target selections, so they cannot provide canonical identity or automatic scope inference | Automatic scope inference, production ingestion wiring, physical Host/Device reconciliation, network/device normalization, and presentation remain deferred. Whole-artifact assignment and correction semantics are reviewed and append-only. The internal Nmap coordinator now resolves the reviewed assignment server-side, rechecks it under the write lock, and atomically commits the assessment, receipts, and immutable assignment link. Routes and operator workflows remain disabled pending their separate authorization and workflow gate |
+| 2026-09-27 | Phase 1 ingestion wiring | Replace current import consumers with normalized scoped ingestion | First expose an explicit, post-import, observation-level foundation workflow for manual Nmap uploads beside the unchanged legacy analysis path. Assignment creation, correction and retry remain separate recoverable operations. Administrators manage scope identities; analysts and administrators apply reviewed evidence context; viewers are read-only; authentication-disabled mode attributes changes to the local operator | Replacing current Analyze, Hunt, Reach and Map consumers in the same step would combine evidence-model migration with a new operator audit workflow and risk stable behavior. Exact observations also cannot be represented safely by the current hash-grouped import history | Temporary dual processing and storage are expected. Assigning a scope does not change current views. Automated scan artifacts, inference, mixed-scope partitioning, bulk migration and read-model replacement remain separate gates. The observation-level status/history API and UI must make incomplete processing recoverable without creating another observation or assignment root |
 | 2026-09-27 | Phase 1 | Nmap imports remain readable through the existing `/data/imports` path model while Artifact Registry is introduced | New imports are stored in the canonical content-addressed artifact store; the raw-download guard was revised to trust either a verified legacy import path or the exact path registered for that SHA-256 | CI exposed that the legacy download endpoint intentionally rejected paths outside `/data/imports` | Preserves existing download behavior while enabling deduplicated storage; legacy imports remain supported during migration |
 
 | 2026-09-27 | Phase 1 | Introduce Artifact Registry without changing existing import behavior | Artifact Registry integration initially caused the existing raw Nmap download test to reject canonical artifact paths; compatibility validation was updated and the subsequent full CI run passed | Legacy endpoint assumed all imported XML lived directly under `/data/imports` | Treat legacy file-layout assumptions as migration compatibility requirements; no Phase 1 item marked complete until green CI |
@@ -753,6 +754,37 @@ foundational changes.
    all-or-nothing explanation was simplified, live guide reload and browser-console
    checks passed, and no route imports the coordinator. No architecture deviation.
    Production wiring remains a separate gate.
+   2026-09-27 manual-Nmap assignment workflow start: expose the reviewed foundation
+   path only for exact manual-upload observations while preserving `/api/import` and
+   every current analysis consumer. Add observation-level status/history that performs
+   no parsing or writes; explicit initial assignment, append-only correction and
+   separately retryable coordinator processing; and active-scope choices that do not
+   widen administrator-only scope management. Analysts and administrators may mutate,
+   viewers may inspect, and local mode uses `local-operator`; actor, parser version and
+   processing scope are server-owned. Require a reason and whole-artifact confirmation,
+   never preselect or infer scope, and explain that one scope may contain several
+   subnets while mixed network contexts remain unsupported. The UI must recover after
+   refresh or response loss, distinguish assigned-but-unprocessed from complete, retain
+   immutable correction history and state clearly that current Analyze, Hunt, Reach and
+   Map results do not change. Automated runs, bulk legacy migration, background jobs,
+   mixed-scope partitioning and read-model replacement remain deferred. This is a
+   documented temporary dual-path architecture; see the Phase 1 deviation entry above.
+   2026-09-27 manual-Nmap assignment workflow completion: exact manual-upload
+   observations now expose read-only durable status and history, explicit initial
+   assignment, append-only correction and separately retryable atomic processing.
+   The operator flow is embedded directly beneath upload in the single Import Nmap
+   Evidence workspace rather than appearing as a separate navigation task. It keeps
+   current Analyze, Hunt, Reach and Map results unchanged; explains whole-file scope,
+   mixed-context limits, processing outputs and failure recovery; and gives viewers a
+   read-only view while analysts/administrators may act. A live disposable flow covered
+   import, assignment, processing, correction and reload recovery. Reviewer findings
+   about permanent scope archive and planned tasking wording were corrected, novice
+   feedback added the in-place processing explanation, and a live checkbox-label defect
+   was corrected. **QUALITY GATE: CLEAR**; full Docker suite **654 passed**, independent
+   reviewer focused suite **106 passed**, primary focused gate **99 passed**, and
+   `git diff --check` found no whitespace errors. The next scan-path integration is the
+   explicit Saved Network-to-Network Scope association recorded under Phase 2; it is
+   not CIDR/name inference and does not rewrite prior evidence.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.
@@ -836,6 +868,16 @@ high-volume passive evidence.
 ## Steps
 
 1. Preserve and improve Saved Networks.
+   - Add an optional, persistent association from a Saved Network to one active
+     Network Scope. Analysts may select or deliberately change the association;
+     administrators continue to create and archive scope identities.
+   - Show the inherited scope during scan review, carry its exact opaque ID into
+     each future scan run and artifact observation, and do not ask the analyst to
+     select it again for every scan. A later Saved Network change must never rewrite
+     the scope retained with earlier runs or evidence.
+   - This is an explicit reviewed association, not scope inference from the Saved
+     Network name, CIDR or target text. Manual XML without a trustworthy Saved
+     Network link continues to require an explicit whole-file decision.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
 3. Saved scan profiles:
    - TCP
@@ -1254,6 +1296,10 @@ Provide a consolidated view of:
 - Recent activity
 - Evidence freshness
 
+This is an oversight and coordination view: show what was done, who did it, and
+what still needs attention. It must not turn ordinary analyst actions into a
+crew-lead approval queue or hide unassigned work.
+
 Do **not** create opaque productivity scores.
 
 ## 8.4 Investigation continuity
@@ -1288,6 +1334,12 @@ Replace the current lightweight note concept with structured tasks:
 
 Tasks may link directly to evidence and, when authorized, provide an action such
 as **Run Scan**.
+
+Tasking is optional coordination, not an execution prerequisite. An analyst who
+already has permission to run an authorized scan may do so without first receiving
+a task. Creating or assigning a task identifies responsibility and desired work; it
+does not grant, remove, or narrow the analyst's existing role permissions. The Crew
+Lead view must include both tasked and independently initiated activity.
 
 Task states:
 
