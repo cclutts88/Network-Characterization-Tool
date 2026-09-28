@@ -922,6 +922,36 @@ high-volume passive evidence.
    passed**, independent focused suite **95 passed**, novice operator review **PASS**,
    and live browser save, inherited scan review and console checks passed. No scope is
    inferred and no earlier run or evidence is rewritten. No architecture deviation.
+   2026-09-27 finalized-scan foundation processing start: add an explicit, retryable
+   Scan History action for the retained aggregate `scan.xml` from a finalized automated
+   run whose immutable run and artifact-observation context already carry one reviewed
+   Network Scope. Resolve the exact observation and scope server-side, never infer from
+   target text or current Saved Network settings, and never process discovery/TCP/UDP
+   component XML as separate assessments. Status reads must remain read-only; processing
+   must reuse the verified Nmap adapter and atomic coordinator, retain exact replay and
+   failure recovery, create no scan or network contact, and leave current Analyze, Hunt,
+   Reach and Map consumers unchanged. Unscoped, mixed-context, manual-target and legacy
+   runs remain visibly ineligible rather than receiving a guessed scope.
+   2026-09-27 finalized-scan foundation processing complete (foundation): Scan History
+   now offers analysts and administrators an explicit, retryable action for one completed
+   run's registered aggregate `scan.xml`. The server resolves the exact run, artifact
+   observation, immutable Network Scope and signed-in actor; component XML and client
+   scope/parser/actor claims are excluded. Processing verifies the canonical bytes,
+   records durable running/complete/error/interrupted status, preserves corrected
+   assignment history and exact replay, and publishes assessment, entity and receipt
+   records atomically without network contact or changes to current views. Startup marks
+   stranded work retryable, and status reads remain read-only. The first final review
+   halted on unsafe file-first scan deletion, nondeterministic same-second retry ordering
+   and active work being labeled interrupted. All three were corrected: protected single
+   and bulk deletion now fail closed before any file removal, concurrent processing and
+   deletion are serialized by the database, true insertion order selects the latest
+   attempt, and running work is distinct from restart-recovered interruption. Processed
+   or scope-linked scan history is therefore intentionally retained; unprotected scan
+   deletion remains available. **QUALITY GATE: CLEAR**; full Docker suite **697 passed**,
+   focused deletion/processing suite **44 passed**, novice operator review **PASS**, and
+   live browser reload, retained-scope, guide and console checks passed. No architecture
+   deviation; No-Strike behavior and current Analyze, Hunt, Reach and Map views remain
+   unchanged.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled

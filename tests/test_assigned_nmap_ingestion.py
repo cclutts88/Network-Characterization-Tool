@@ -409,7 +409,7 @@ def test_schema_initialization_recovers_after_database_replacement(tmp_path):
     assert counts(db)["assessment_scope_assignment_links"] == 1
 
 
-def test_coordinator_is_only_imported_by_the_reviewed_application_route():
+def test_coordinator_is_only_imported_by_reviewed_processing_boundaries():
     coordinator_path = Path(coordinator.__file__).resolve()
     importers = []
     for source in Path("app").glob("*.py"):
@@ -417,4 +417,4 @@ def test_coordinator_is_only_imported_by_the_reviewed_application_route():
             continue
         if "assigned_nmap_ingestion" in source.read_text(encoding="utf-8"):
             importers.append(source.name)
-    assert importers == ["main.py"]
+    assert importers == ["automated_nmap_foundation.py", "main.py"]

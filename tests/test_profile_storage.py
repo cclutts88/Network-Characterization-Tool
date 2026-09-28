@@ -25,6 +25,7 @@ from app.poc import (
     create_scan_profile,
     create_scan_profile_version,
     create_scan_schedule,
+    delete_all_scan_data,
     delete_scan_data,
     delete_scan_profile,
     delete_scan_schedule,
@@ -197,6 +198,39 @@ def test_scan_and_schedule_deletion_accept_visible_confirmation_challenges(tmp_p
     )["deleted"] is True
     assert not run_dir.exists()
     assert poc.get_scan_run_plan(run_id, db_path) is None
+
+
+def test_bulk_scan_deletion_removes_database_rows_before_files(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    data_dir = tmp_path / "data"
+    run_ids = ["d" * 32, "e" * 32]
+    for run_id in run_ids:
+        insert_scan_run_manifest(
+            {
+                "run_id": run_id,
+                "created_at": "2026-09-09T12:00:00+00:00",
+                "status": "completed",
+                "operator": "analyst01",
+                "reason": "Bulk deletion test",
+                "originating_host": "test-host",
+                "interface": "eth0",
+                "profile": "Standard",
+            },
+            db_path,
+        )
+        run_dir = data_dir / "scan-runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "scan.xml").write_text("evidence", encoding="utf-8")
+    imported = data_dir / "imports" / "manual.xml"
+    imported.parent.mkdir(parents=True)
+    imported.write_text("evidence", encoding="utf-8")
+
+    challenge = issue_delete_challenge("all", None)["challenge"]
+    result = delete_all_scan_data(challenge, db_path=db_path, data_dir=data_dir)
+
+    assert result == {"deleted": True, "removed_runs": 2, "removed_imports": 1}
+    assert not imported.exists()
+    assert all(poc.get_scan_run_plan(run_id, db_path) is None for run_id in run_ids)
 
 
 def test_scheduler_splits_a_slash_24_into_six_sequential_chunks(tmp_path):

@@ -76,6 +76,7 @@ from app.saved_network_scope_associations import (
     resolve_schedule_scope_context_in_transaction,
 )
 from app.request_identity import bind_signed_in_actor
+from app.automated_nmap_foundation import get_automated_scan_foundation_status
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -2689,15 +2690,17 @@ def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
             raise RuntimeError("Active scans must be cancelled before they can be deleted")
     if not consume_delete_challenge("scan", run_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
+    try:
+        with connect_database(db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM scan_runs WHERE run_id = ?", (run_id,))
+    except sqlite3.IntegrityError as exc:
+        raise RuntimeError(
+            "This scan is retained by scope or processed evidence records and cannot be deleted"
+        ) from exc
     run_dir = run_directory(run_id, data_dir)
     if run_dir.exists():
         shutil.rmtree(run_dir)
-    db = connect_database(db_path)
-    try:
-        db.execute("DELETE FROM scan_runs WHERE run_id = ?", (run_id,))
-        db.commit()
-    finally:
-        db.close()
     return {"deleted": True, "run_id": run_id}
 
 
@@ -2708,6 +2711,18 @@ def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
             raise RuntimeError("Active scans must be cancelled before all scan data can be deleted")
     if not consume_delete_challenge("all", None, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
+    try:
+        with connect_database(db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM scan_runs")
+            try:
+                db.execute("DELETE FROM imports")
+            except sqlite3.OperationalError:
+                pass
+    except sqlite3.IntegrityError as exc:
+        raise RuntimeError(
+            "Some scans are retained by scope or processed evidence records; no scan data was deleted"
+        ) from exc
     root = scan_data_root(data_dir)
     removed_runs = 0
     if root.exists():
@@ -2722,16 +2737,6 @@ def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
             if child.is_file():
                 child.unlink()
                 removed_imports += 1
-    db = connect_database(db_path)
-    try:
-        db.execute("DELETE FROM scan_runs")
-        try:
-            db.execute("DELETE FROM imports")
-        except sqlite3.OperationalError:
-            pass
-        db.commit()
-    finally:
-        db.close()
     return {"deleted": True, "removed_runs": removed_runs, "removed_imports": removed_imports}
 
 
@@ -4762,7 +4767,9 @@ def grouped_scan_run_history(
 ) -> list[dict]:
     if offset < 0:
         raise HTTPException(status_code=422, detail="History offset must not be negative")
-    groups = group_scan_runs_by_saved_network(list_scan_run_plans(limit=limit, offset=offset, metadata_only=True))
+    groups = group_scan_runs_by_saved_network(
+        list_scan_run_plans(DB_PATH, limit=limit, offset=offset, metadata_only=True)
+    )
     fields = {
         "run_id", "status", "partial_results", "execution_note", "display_name",
         "name", "created_at", "completed_at", "profile", "profile_id",
@@ -4772,10 +4779,16 @@ def grouped_scan_run_history(
         "executed_by", "execution_method", "coverage", "scheduled",
         "timeout_seconds", "progress", "discovery_mode", "fallback_decision",
         "nmap_reported_host_count", "nmap_assumed_host_count",
+        "network_scope_context",
     }
     for group in groups:
         group["runs"] = [
-            {key: value for key, value in run.items() if key in fields}
+            {
+                **{key: value for key, value in run.items() if key in fields},
+                "foundation_status": get_automated_scan_foundation_status(
+                    DB_PATH, run["run_id"]
+                ),
+            }
             for run in group.get("runs", [])
         ]
     return groups

@@ -4,6 +4,13 @@ from app.database import configure_database, connect_database
 from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
 from app.nmap_evidence import nmap_xml_coverage
 from app.assigned_nmap_ingestion import AssignedNmapConflict, ingest_assigned_nmap_observation
+from app.automated_nmap_foundation import (
+    AutomatedNmapFoundationConflict,
+    get_automated_scan_foundation_status,
+    init_automated_nmap_foundation_storage,
+    process_automated_scan_foundation,
+    recover_interrupted_automated_scan_foundation,
+)
 from app.evidence_scope_assignments import (
     EvidenceScopeConflict,
     assign_artifact_scope,
@@ -1218,6 +1225,8 @@ async def lifespan(_: FastAPI):
     init_host_identity_storage(DB_PATH)
     init_exposure_report_storage(DB_PATH)
     init_evidence_scope_assignment_storage(DB_PATH)
+    init_automated_nmap_foundation_storage(DB_PATH)
+    recover_interrupted_automated_scan_foundation(DB_PATH)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1498,6 +1507,25 @@ def nmap_observation_scope_process(assignment_id: str, request: Request) -> dict
             ),
         }
     except (KeyError, ValueError) as exc:
+        raise _nmap_assignment_error(exc) from exc
+
+
+@app.get("/api/scan-runs/{run_id}/foundation-status")
+def automated_scan_foundation_status(run_id: str) -> dict:
+    try:
+        return get_automated_scan_foundation_status(DB_PATH, run_id)
+    except (KeyError, ValueError) as exc:
+        raise _nmap_assignment_error(exc) from exc
+
+
+@app.post("/api/scan-runs/{run_id}/foundation-process")
+def automated_scan_foundation_process(run_id: str, request: Request) -> dict:
+    actor = require_nmap_assignment_mutator(request)
+    try:
+        return process_automated_scan_foundation(DB_PATH, run_id, actor)
+    except (KeyError, ValueError) as exc:
+        if isinstance(exc, AutomatedNmapFoundationConflict):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         raise _nmap_assignment_error(exc) from exc
 
 

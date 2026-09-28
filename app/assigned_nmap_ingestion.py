@@ -1,7 +1,8 @@
-"""Internal atomic bridge from reviewed scope assignment to Nmap assessment.
+"""Atomic bridge from a reviewed scope assignment to an Nmap assessment.
 
-No route or production import calls this module yet. Scope and observation always
-come from the immutable assignment selected by its exact identity.
+Scope and observation always come from the immutable assignment selected by its
+exact identity. Manual imports and explicit automated-scan processing both reuse
+this coordinator; ordinary analysis consumers do not.
 """
 from __future__ import annotations
 

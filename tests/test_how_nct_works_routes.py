@@ -22,9 +22,11 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Mixed, combined, manual, and unassociated scan targets" in html
     assert "New schedules pin the reviewed context" in html
     assert "Optionally assign manual Nmap context" in html
+    assert "Optionally process automated scan evidence" in html
+    assert "Unscoped or mixed-context scans remain unavailable" in html
     assert "Several subnets may share one scope" in html
     assert "saves the analysis and its source and scope links all at once" in html
-    assert "If any part fails, none of those new processing records is saved" in html
+    assert "If any part fails, none of those new processing records is published" in html
     assert "will not grant scan authority" in html
     assert "require every scan to be assigned first" in html
     assert "Planned optional tasking will help a lead coordinate work" in html
