@@ -998,6 +998,7 @@ high-volume passive evidence.
    - MAC
    - identity
 9. Device-config persistence/comparison/deletion.
+   - [x] Cisco IOS/IOS XE collection uses `show history all` for retained command-history evidence rather than `show history`, which only reflects the current EXEC-session buffer. Keep vendor/platform history commands separate and preserve legacy collection readability.
 10. Collapsible/filterable route/config displays.
 11. Consolidate TXT/IP-by-OS and related exports into Export Manager.
 
