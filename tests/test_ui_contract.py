@@ -284,7 +284,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Built-in profile protected" in html
     assert 'id="noStrikePanel"' in html
     assert "Global No-Strikes are excluded addresses" in html
-    assert "Profiles cannot turn them off" in html
+    assert "profiles cannot turn off" in html
     assert "changed_by:auditActor()" in html
     assert 'id="globalNoStrikeStatus" class="status" role="status"' in html
     assert "setGlobalSafetyStatus(error.message,'bad')" in html
@@ -292,8 +292,10 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "/api/safety/scan-summary" in html
     assert "Pre-launch scope &amp; safety check" in html
     assert 'id="safetyEffective"' in html
-    assert "globalNoStrikeSummary').textContent=`${entries.length} excluded`" in html
+    assert "globalNoStrikeSummary').textContent=`${entries.length} excluded · r" in html
     assert "Remove a global No-Strike exclusion" in html
+    assert "Downloaded packages are fixed snapshots" in html
+    assert "Preview is advisory; NCT rechecks before active contact" in html
     assert "Pause and require operator approval before Nmap" in html
     assert "Estimated time left" in html
     assert "Timeout limit in" in html
@@ -334,6 +336,22 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "/api/scan-schedules/" in html
     assert ".join('\n')" not in html
     assert r".join('\n')" in html
+
+
+def test_operator_guides_explain_no_strike_timing_and_static_packages():
+    from app.how_nct_works_ui import how_nct_works_page
+
+    readme = how_nct_works_page().body.decode()
+    assert "How No-Strike safety is applied" in readme
+    assert "before every active scan phase" in SHELL_SCRIPT
+    assert "A downloaded package is a static snapshot" in readme
+    assert "requests cancellation promptly" in readme
+    assert "original list of target batches" in readme
+    assert "A software rollback can still read the current exclusions" in readme
+    html = operator_page().body.decode()
+    assert "canRemove=sessionAnalyst?.role==='admin'" in html
+    assert "administrator removal required" in html
+    assert "role:'admin',local:true" in html
 
 
 def test_scan_queue_polling_stops_when_the_session_is_rejected():

@@ -923,6 +923,34 @@ high-volume passive evidence.
    and live browser save, inherited scan review and console checks passed. No scope is
    inferred and no earlier run or evidence is rewritten. No architecture deviation.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
+   2026-09-27 No-Strike enforcement review start: verify the shared and
+   scan-specific exclusions across safety previews, direct queued scans, scheduled
+   scans, fallback paths and portable packages. Define and expose the exact timing
+   boundary for queued, running and downloaded work; prevent concurrent safety-list
+   changes from losing one another; retain the exact exclusions actually certified
+   for each run or package; and stop safely when exclusions remove every target.
+   Global exclusions remain additive and profiles must never bypass them.
+   2026-09-27 No-Strike enforcement complete (foundation): shared exclusions now
+   use atomic, append-only numbered revisions with validated addresses, UTC times
+   and server-bound operator identity. Queued, recovered, scheduled, discovery,
+   TCP, UDP and approved-fallback contact boundaries recertify the current shared
+   list plus the run-specific additions and stop safely when no targets remain.
+   Intersecting new rules signal every affected active run before attempting audit
+   writes, while the revision and intersection are retained whenever storage is
+   available. Scheduled recovery keeps the original target batches; older records
+   without that saved list pause for review. Portable packages retain one static
+   generation-time safety snapshot. Authenticated analysts may add protection,
+   administrators remove it after confirmation, fallback decisions remain with the
+   owner or an administrator, and local mode uses the server-owned local-operator
+   identity. The prior settings row remains an atomic rollback-compatible mirror;
+   re-upgrade conservatively combines exclusions added by older software and
+   requires reviewed removals to be repeated. Legacy queued commands are upgraded
+   without corrupting their terminal wrapper. **QUALITY GATE: CLEAR**; full Docker
+   suite **682 passed**, independent focused safety suite **142 passed** plus **9
+   authentication regressions**, novice operator review **PASS**, and live browser,
+   contextual-guide and console checks passed. No architecture deviation; timing,
+   restart, rollback and static-package boundaries are documented in the built-in
+   guide.
 3. Saved scan profiles:
    - TCP
    - UDP

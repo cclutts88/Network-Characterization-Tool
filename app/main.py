@@ -31,12 +31,13 @@ from app.network_scopes import (
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
-    effective_no_strike,
+    get_global_no_strike,
     get_import_history_item,
     get_scan_profile,
     get_scan_run_plan,
     init_poc_storage,
     list_scan_run_plans,
+    normalize_ipv4_networks,
     recover_scheduler_state,
     router as poc_router,
     run_directory,
@@ -609,19 +610,22 @@ def sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def validate_campaign(spec: CampaignSpec) -> tuple[list[str], list[tuple[str, list[str]]]]:
+def validate_campaign(
+    spec: CampaignSpec, global_state: dict | None = None
+) -> tuple[list[str], list[tuple[str, list[str]]]]:
     if spec.no_strike_mode == "entered" and not spec.no_strike:
         raise ValueError("No-strike mode is 'entered', but the no-strike list is empty")
     if spec.no_strike_mode == "none" and spec.no_strike:
         raise ValueError("Choose 'entered' when supplying no-strike addresses")
 
-    effective_entries, _ = effective_no_strike(spec.no_strike, DB_PATH)
-    no_strike_addresses: list[str] = []
-    if effective_entries:
-        no_strike_addresses = addresses_for(
-            parse_networks(effective_entries, "no-strike")
-        )
-    blocked = set(no_strike_addresses)
+    global_state = global_state or get_global_no_strike(DB_PATH)
+    additional = normalize_ipv4_networks(spec.no_strike, "no-strike") if spec.no_strike else []
+    effective_entries = normalize_ipv4_networks(
+        [*global_state["entries"], *additional], "no-strike"
+    ) if global_state["entries"] or additional else []
+    blocked_networks = (
+        parse_networks(effective_entries, "no-strike") if effective_entries else []
+    )
 
     seen_names: set[str] = set()
     segments: list[tuple[str, list[str]]] = []
@@ -632,14 +636,17 @@ def validate_campaign(spec: CampaignSpec) -> tuple[list[str], list[tuple[str, li
             raise ValueError(f"Terrain segment names must be unique: {segment.name}")
         seen_names.add(segment_slug.lower())
         target_addresses = addresses_for(parse_networks(segment.targets, "terrain"))
-        allowed = [address for address in target_addresses if address not in blocked]
+        allowed = [
+            address for address in target_addresses
+            if not any(ipaddress.ip_address(address) in network for network in blocked_networks)
+        ]
         if not allowed:
             raise ValueError(f"No scannable addresses remain in terrain segment: {segment.name}")
         total += len(allowed)
         if total > MAX_EXPANDED_ADDRESSES:
             raise ValueError(f"Campaign exceeds the {MAX_EXPANDED_ADDRESSES:,}-address safety limit")
         segments.append((segment_slug, allowed))
-    return no_strike_addresses, segments
+    return effective_entries, segments
 
 
 def campaign_chunking_enabled(spec: CampaignSpec) -> bool:
@@ -651,8 +658,10 @@ def campaign_chunking_enabled(spec: CampaignSpec) -> bool:
     return spec.chunking_enabled or legacy_chunk_request
 
 
-def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict]]:
-    no_strike, segments = validate_campaign(spec)
+def build_scan_plan(
+    spec: CampaignSpec, global_state: dict | None = None
+) -> tuple[list[str], list[str], list[dict]]:
+    no_strike, segments = validate_campaign(spec, global_state)
     profile = resolve_campaign_profile(spec)
     settings = profile["settings"]
     use_fping = settings.get("discovery_mode") == "fping"
@@ -739,8 +748,12 @@ def build_scan_plan(spec: CampaignSpec) -> tuple[list[str], list[str], list[dict
 def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
     if spec.scheduled and not (spec.scheduled_by or "").strip():
         raise ValueError("Scheduled packages must retain the scheduler identity")
-    no_strike, flags, scan_plan = build_scan_plan(spec)
-    global_no_strike = effective_no_strike([], DB_PATH)[0]
+    global_state = get_global_no_strike(DB_PATH)
+    no_strike, flags, scan_plan = build_scan_plan(spec, global_state)
+    global_no_strike = global_state["entries"]
+    additional_no_strike = (
+        normalize_ipv4_networks(spec.no_strike, "no-strike") if spec.no_strike else []
+    )
     profile = resolve_campaign_profile(spec)
     moment = datetime.now(timezone.utc)
     created_at = moment.replace(microsecond=0).isoformat()
@@ -750,7 +763,13 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
     unix_lines = ["#!/usr/bin/env bash", "set -euo pipefail", "mkdir -p results"]
     windows_lines = ["@echo off", "if not exist results mkdir results"]
 
-    no_strike_text = "\n".join(no_strike) + ("\n" if no_strike else "")
+    package_no_strike = [
+        str(network.network_address) if network.prefixlen == 32 else str(network)
+        for network in (
+            ipaddress.ip_network(entry, strict=False) for entry in no_strike
+        )
+    ]
+    no_strike_text = "\n".join(package_no_strike) + ("\n" if package_no_strike else "")
     files["no-strike.txt"] = no_strike_text.encode()
 
     for chunk in scan_plan:
@@ -814,6 +833,10 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
         "no_strike_count": len(no_strike),
         "global_no_strike": global_no_strike,
         "global_no_strike_count": len(global_no_strike),
+        "additional_no_strike": additional_no_strike,
+        "global_no_strike_revision": global_state["revision"],
+        "global_no_strike_as_of": global_state["updated_at"],
+        "safety_snapshot": "static_at_generation",
         "no_strike_sha256": sha256_bytes(files["no-strike.txt"]),
         "chunking_enabled": campaign_chunking_enabled(spec),
         "chunk_size": spec.chunk_size,
@@ -842,6 +865,9 @@ Chunks: {len(chunks)}
 - Nmap traceroute collection: `{'enabled' if profile['settings'].get('traceroute') else 'disabled'}`.
 - Every target file has had the certified no-strike addresses removed.
 - Every command also uses `--excludefile no-strike.txt` as a second safeguard.
+- This package is a static safety snapshot certified at generation time against
+  global No-Strike revision {global_state['revision']}. Regenerate it after the
+  shared No-Strike list changes.
 - TCP + UDP top-port scopes run as independent TCP and UDP phases so each selected count is preserved.
 - Chunks never mix terrain segments.
 - This application generated these commands; it did not execute Nmap.

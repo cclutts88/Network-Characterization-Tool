@@ -5,9 +5,11 @@ from pathlib import Path
 import pytest
 
 from app.poc import (
+    NoStrikeUpdate,
     RunControl,
     ScanOptions,
     ScanRunRequest,
+    add_global_no_strike,
     execute_scan_run,
     get_scan_run_plan,
     nmap_host_presence_counts,
@@ -36,6 +38,85 @@ class FakeProcess:
     def wait(self, timeout=None):
         self.terminated = True
         return 0
+
+
+def test_queued_run_is_recertified_and_stops_before_contact(tmp_path):
+    db_path = tmp_path / "nct.db"
+    data_dir = tmp_path / "data"
+    request = ScanRunRequest(
+        operator="Tester",
+        originating_host="test-host",
+        interface="eth0",
+        targets=["192.0.2.10/32"],
+        capture=True,
+    )
+    manifest = prepare_scan_run(request, db_path, interfaces={"eth0"})
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.10"], changed_by="safety-officer"),
+        db_path,
+    )
+    launched = []
+
+    execute_scan_run(
+        manifest["run_id"],
+        RunControl(),
+        db_path=db_path,
+        data_dir=data_dir,
+        popen_factory=lambda *args, **kwargs: launched.append((args, kwargs)),
+        sleep_fn=lambda _seconds: None,
+    )
+
+    completed = get_scan_run_plan(manifest["run_id"], db_path)
+    assert launched == []
+    assert completed["status"] == "stopped_no_targets"
+    assert completed["no_strike"] == ["192.0.2.10/32"]
+    assert completed["no_strike_certifications"][-1]["phase"] == "queue_start"
+    assert completed["no_strike_certifications"][-1]["remaining_address_count"] == 0
+
+
+def test_new_global_exclusion_is_rechecked_between_protocol_phases(tmp_path):
+    db_path = tmp_path / "nct.db"
+    data_dir = tmp_path / "data"
+    request = ScanRunRequest(
+        operator="Tester",
+        originating_host="test-host",
+        interface="eth0",
+        profile="Custom",
+        scan_options=ScanOptions(
+            protocol="tcp_udp", tcp_scope="common", udp_scope="common",
+            discovery_mode="nmap",
+        ),
+        targets=["192.0.2.10/32"],
+        capture=True,
+    )
+    manifest = prepare_scan_run(request, db_path, interfaces={"eth0"})
+    launched = []
+
+    def fake_popen(argv, *, cwd: Path, **_kwargs):
+        command = " ".join(str(item) for item in argv)
+        launched.append(command)
+        if command.startswith("tcpdump"):
+            return FakeProcess(None)
+        if "discovery.xml" in command:
+            (cwd / "discovery.xml").write_bytes(DISCOVERY_XML)
+        elif "tcp-scan.xml" in command:
+            (cwd / "tcp-scan.xml").write_bytes(TCP_XML)
+            add_global_no_strike(
+                NoStrikeUpdate(entries=["192.0.2.10"], changed_by="safety-officer"),
+                db_path,
+            )
+        return FakeProcess(0)
+
+    execute_scan_run(
+        manifest["run_id"], RunControl(), db_path=db_path, data_dir=data_dir,
+        popen_factory=fake_popen, sleep_fn=lambda _seconds: None,
+    )
+
+    completed = get_scan_run_plan(manifest["run_id"], db_path)
+    assert any("tcp-scan.xml" in command for command in launched)
+    assert not any("udp-scan.xml" in command for command in launched)
+    assert completed["status"] == "stopped_no_targets"
+    assert completed["no_strike_certifications"][-1]["phase"] == "udp_scan"
 
 
 def test_scan_run_default_timeout_is_45_minutes():

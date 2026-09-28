@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import CampaignSpec, TerrainSegment, app, build_scan_plan
 from app.device_configs import DeviceConfigPlan, _interactive_master_args
-from app.poc import insert_scan_run_manifest, run_directory
+from app.poc import NoStrikeUpdate, add_global_no_strike, insert_scan_run_manifest, run_directory
 
 
 ROUTE_XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10">
@@ -18,6 +18,40 @@ ROUTE_XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2
 <address addr="00:11:22:33:44:55" addrtype="mac" vendor="Example"/>
 <ports><port protocol="tcp" portid="443"><state state="open" reason="syn-ack"/><service name="https"/></port></ports></host>
 <runstats><finished timestr="done"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
+
+
+def test_package_uses_one_static_global_safety_snapshot(tmp_path, monkeypatch):
+    import app.main as main
+
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    original_build_scan_plan = main.build_scan_plan
+
+    def mutate_after_planning(spec, global_state=None):
+        result = original_build_scan_plan(spec, global_state)
+        add_global_no_strike(
+            NoStrikeUpdate(entries=["198.51.100.1"], changed_by="analyst"), db_path
+        )
+        return result
+
+    monkeypatch.setattr(main, "build_scan_plan", mutate_after_planning)
+    spec = CampaignSpec(
+        name="Static Safety Snapshot",
+        profile="standard",
+        terrain=[TerrainSegment(name="Test", targets=["198.51.100.0/30"])],
+        no_strike_mode="none",
+    )
+
+    _, content = main.build_package(spec)
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        exclusions = archive.read("no-strike.txt").decode().splitlines()
+        targets = archive.read("targets/001-Test.txt").decode().splitlines()
+
+    assert manifest["global_no_strike"] == exclusions == []
+    assert manifest["global_no_strike_revision"] == 0
+    assert manifest["safety_snapshot"] == "static_at_generation"
+    assert "198.51.100.1" in targets
 
 
 def test_import_preserves_authenticated_actor_and_original_filename(monkeypatch):

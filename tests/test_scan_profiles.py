@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import subprocess
 
 import pytest
+import app.poc as poc
 
 from app.poc import (
     FallbackDecision,
@@ -63,6 +65,22 @@ def test_linux_nmap_execution_uses_a_terminal_and_preserves_exit_status():
     assert execution[-1] == "/dev/null"
     assert "nmap -n -iL targets.txt -oX scan.xml" in execution
     assert build_nmap_execution_argv(command, platform_name="nt") == command
+
+
+def test_legacy_safety_upgrade_rebuilds_the_execution_wrapper():
+    manifest = {
+        "discovery_mode": "fping",
+        "command_argv": ["true"],
+        "execution_command_argv": build_nmap_execution_argv(["true"]),
+        "execution_phases": [],
+    }
+
+    poc._ensure_manifest_excludefile_commands(manifest)
+
+    wrapper = manifest["execution_command_argv"]
+    assert wrapper[-1] == "/dev/null"
+    assert "--excludefile no-strike.txt" in wrapper[wrapper.index("--command") + 1]
+    assert subprocess.run(wrapper, check=False).returncode == 0
 
 
 def test_combined_scan_uses_independent_protocol_port_scopes():

@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import ipaddress
+import json
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException, Request
 
 import app.poc as poc
+from app.database import connect_database
 from app.poc import (
     ScanOptions,
+    FallbackDecision,
+    RunControl,
     ScanProfileCreate,
     ScanProfileVersionCreate,
     ScanScheduleCreate,
     ScheduleProfileChange,
     change_scan_schedule_profile,
+    add_to_global_no_strike,
     add_global_no_strike,
     create_scan_profile,
     create_scan_profile_version,
@@ -20,6 +28,7 @@ from app.poc import (
     delete_scan_data,
     delete_scan_profile,
     delete_scan_schedule,
+    decide_scan_fallback,
     effective_no_strike,
     execute_schedule_batch,
     get_global_no_strike,
@@ -29,6 +38,7 @@ from app.poc import (
     NoStrikeRemoval,
     NoStrikeUpdate,
     remove_global_no_strike,
+    remove_from_global_no_strike,
     recover_scheduler_state,
     record_schedule_conflict,
     scan_safety_summary,
@@ -429,6 +439,7 @@ def test_restart_recovery_resumes_after_completed_chunks(monkeypatch, tmp_path):
         db_path,
     )
     batch_id = "a" * 32
+    frozen_chunks = schedule_target_chunks(schedule, db_path)
     schedule.update(
         {
             "batch_status": "running",
@@ -436,6 +447,7 @@ def test_restart_recovery_resumes_after_completed_chunks(monkeypatch, tmp_path):
             "active_chunk_number": 2,
             "active_chunk_count": 3,
             "completed_chunk_count": 1,
+            "active_target_chunks": frozen_chunks,
         }
     )
     poc._store_scan_schedule(schedule, db_path)
@@ -467,7 +479,13 @@ def test_restart_recovery_resumes_after_completed_chunks(monkeypatch, tmp_path):
     assert recovered["orphaned_run_ids"] == ["2" * 32]
     assert pending["batch_status"] == "recovery_pending"
     assert pending["resume_after_chunk"] == 1
+    assert pending["active_target_chunks"] == frozen_chunks
     assert poc.get_scan_run_plan("2" * 32, db_path)["status"] == "interrupted"
+
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["198.51.100.4"], changed_by="safety-officer"),
+        db_path,
+    )
 
     captured = []
     completed = {}
@@ -492,9 +510,49 @@ def test_restart_recovery_resumes_after_completed_chunks(monkeypatch, tmp_path):
     )
 
     assert [item["chunk_number"] for item in captured] == [2, 3]
+    assert [item["targets"] for item in captured] == frozen_chunks[1:]
+    assert all(item["no_strike"] == [] for item in captured)
     finished = poc.get_scan_schedule(schedule["schedule_id"], db_path)
     assert finished["last_occurrence_status"] == "completed"
     assert finished["completed_chunk_count"] == 3
+
+
+def test_legacy_restart_without_frozen_chunks_pauses_for_review(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    data_dir = tmp_path / "data"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Legacy interrupted schedule",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["198.51.100.0/29"],
+            interface="eth0",
+            cadence="daily",
+            first_run_at=datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc),
+            chunk_size=3,
+            enabled=True,
+        ),
+        db_path,
+    )
+    schedule.update(
+        {
+            "batch_status": "running",
+            "active_batch_id": "d" * 32,
+            "active_chunk_number": 2,
+            "active_chunk_count": 3,
+            "completed_chunk_count": 1,
+            "active_target_chunks": None,
+        }
+    )
+    poc._store_scan_schedule(schedule, db_path)
+
+    recover_scheduler_state(db_path, data_dir)
+    recovered = poc.get_scan_schedule(schedule["schedule_id"], db_path)
+
+    assert recovered["enabled"] is False
+    assert recovered["batch_status"] == "recovery_review_required"
+    assert "original chunk plan" in recovered["last_dispatch_note"]
 
 
 def test_schedule_conflict_flag_counts_occurrences_not_retry_checks(tmp_path):
@@ -579,4 +637,417 @@ def test_scan_safety_summary_does_not_double_count_overlapping_exclusions(tmp_pa
         "overlap_address_count": 2,
         "excluded_address_count": 5,
         "effective_address_count": 3,
+        "global_no_strike_revision": 1,
+        "global_no_strike_as_of": summary["global_no_strike_as_of"],
     }
+    assert summary["global_no_strike_as_of"]
+
+
+def test_global_no_strike_updates_are_atomic_and_versioned(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+
+    def add(index: int):
+        return add_global_no_strike(
+            NoStrikeUpdate(
+                entries=[f"198.51.100.{index}"], changed_by=f"analyst-{index}"
+            ),
+            db_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(add, range(1, 17)))
+
+    state = get_global_no_strike(db_path)
+    assert state["entries"] == ["198.51.100.1/32", "198.51.100.2/31", "198.51.100.4/30", "198.51.100.8/29", "198.51.100.16/32"]
+    assert state["revision"] == 16
+    with sqlite3.connect(db_path) as db:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            db.execute(
+                "UPDATE global_no_strike_history SET changed_by = 'tampered' WHERE revision = 1"
+            )
+
+
+def test_global_no_strike_current_state_comes_from_valid_contiguous_history(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.1"], changed_by="analyst"), db_path
+    )
+
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+            VALUES ('global_no_strike', '[]', '2026-09-27T00:00:00Z', 'bypass')
+            ON CONFLICT(key) DO UPDATE SET
+                value_json = excluded.value_json,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """
+        )
+    assert get_global_no_strike(db_path) == {
+        "entries": ["192.0.2.1/32"],
+        "updated_at": get_global_no_strike(db_path)["updated_at"],
+        "updated_by": "analyst",
+        "revision": 1,
+    }
+
+    with connect_database(db_path) as db:
+        with pytest.raises(sqlite3.IntegrityError, match="Invalid Global No-Strike"):
+            db.execute(
+                """
+                INSERT INTO global_no_strike_history
+                    (revision, entries_json, action, changed_at, changed_by)
+                VALUES (3, '[\"192.0.2.2/32\"]', 'add', '2026-09-27T00:00:00Z', 'bypass')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="Invalid Global No-Strike"):
+            db.execute(
+                """
+                INSERT INTO global_no_strike_history
+                    (revision, entries_json, action, changed_at, changed_by)
+                VALUES (2, '[\"not-a-network\"]', 'add', '2026-09-27T00:00:00+00:00', 'bypass')
+                """
+            )
+        for changed_at, changed_by in (
+            ("not-a-time", "bypass"),
+            ("2026-09-27T00:00:00+00:00", " padded actor "),
+            ("2026-09-27T00:00:00+00:00", ""),
+        ):
+            with pytest.raises(sqlite3.IntegrityError, match="Invalid Global No-Strike"):
+                db.execute(
+                    """
+                    INSERT INTO global_no_strike_history
+                        (revision, entries_json, action, changed_at, changed_by)
+                    VALUES (2, '[\"192.0.2.2/32\"]', 'add', ?, ?)
+                    """,
+                    (changed_at, changed_by),
+                )
+
+
+def test_legacy_settings_mirror_tracks_add_and_remove_for_immediate_rollback(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    added = add_global_no_strike(
+        NoStrikeUpdate(entries=["203.0.113.9"], changed_by="analyst"), db_path
+    )
+    with sqlite3.connect(db_path) as db:
+        legacy_after_add = db.execute(
+            "SELECT value_json, updated_by FROM app_settings WHERE key = 'global_no_strike'"
+        ).fetchone()
+    assert legacy_after_add == (json.dumps(added["entries"]), "analyst")
+
+    challenge = issue_delete_challenge(
+        "global-no-strike", "203.0.113.9/32"
+    )["challenge"]
+    removed = remove_global_no_strike(
+        NoStrikeRemoval(
+            entries=["203.0.113.9/32"],
+            changed_by="admin",
+            confirmation=challenge,
+        ),
+        db_path,
+    )
+    with sqlite3.connect(db_path) as db:
+        legacy_after_remove = db.execute(
+            "SELECT value_json, updated_by FROM app_settings WHERE key = 'global_no_strike'"
+        ).fetchone()
+    assert legacy_after_remove == (json.dumps(removed["entries"]), "admin")
+
+
+def test_reupgrade_conservatively_merges_exclusions_added_by_older_version(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["203.0.113.9"], changed_by="analyst"), db_path
+    )
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            UPDATE app_settings
+            SET value_json = ?, updated_at = ?, updated_by = ?
+            WHERE key = 'global_no_strike'
+            """,
+            (
+                json.dumps(["203.0.113.9/32", "203.0.113.10/32"]),
+                "2026-09-27T00:00:00+00:00",
+                "legacy-operator",
+            ),
+        )
+    poc._POC_STORAGE_READY.pop(str(db_path.resolve()), None)
+
+    poc.init_poc_storage(db_path)
+    state = get_global_no_strike(db_path)
+
+    assert state["entries"] == ["203.0.113.9/32", "203.0.113.10/32"]
+    assert state["revision"] == 2
+    assert state["updated_by"] == "legacy-rollback-reconciliation"
+
+
+def test_stale_removal_challenge_preserves_a_later_addition(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.1"], changed_by="admin"), db_path
+    )
+    challenge = issue_delete_challenge(
+        "global-no-strike", "192.0.2.1/32"
+    )["challenge"]
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.2"], changed_by="analyst"), db_path
+    )
+    result = remove_global_no_strike(
+        NoStrikeRemoval(
+            entries=["192.0.2.1/32"], changed_by="admin", confirmation=challenge
+        ),
+        db_path,
+    )
+
+    assert result["entries"] == ["192.0.2.2/32"]
+    assert result["revision"] == 3
+
+
+def test_broad_global_no_strike_is_symbolic_and_can_stop_all_targets(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    saved = add_global_no_strike(
+        NoStrikeUpdate(entries=["0.0.0.0/0"], changed_by="admin"), db_path
+    )
+    summary = scan_safety_summary(["203.0.113.0/30"], [], db_path)
+
+    assert saved["entries"] == ["0.0.0.0/0"]
+    assert summary["effective_address_count"] == 0
+    assert summary["global_excluded_address_count"] == 4
+
+
+def test_authenticated_actor_is_bound_and_only_admin_can_remove_global_rule(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
+    analyst_request = Request({"type": "http", "headers": []})
+    analyst_request.state.analyst = {"username": "analyst.one", "role": "analyst"}
+    saved = add_to_global_no_strike(
+        NoStrikeUpdate(entries=["203.0.113.5"], changed_by="forged-name"),
+        analyst_request,
+    )
+    assert saved["updated_by"] == "analyst.one"
+
+    challenge = issue_delete_challenge(
+        "global-no-strike", "203.0.113.5/32"
+    )["challenge"]
+    removal = NoStrikeRemoval(
+        entries=["203.0.113.5/32"],
+        changed_by="forged-name",
+        confirmation=challenge,
+    )
+    with pytest.raises(HTTPException) as denied:
+        remove_from_global_no_strike(removal, analyst_request)
+    assert denied.value.status_code == 403
+
+    admin_request = Request({"type": "http", "headers": []})
+    admin_request.state.analyst = {"username": "admin.one", "role": "admin"}
+    removed = remove_from_global_no_strike(removal, admin_request)
+    assert removed["updated_by"] == "admin.one"
+    assert removed["entries"] == []
+
+
+def test_local_mode_ignores_client_supplied_safety_and_fallback_actor(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
+    local_request = Request({"type": "http", "headers": []})
+    local_request.state.analyst = None
+    saved = add_to_global_no_strike(
+        NoStrikeUpdate(entries=["203.0.113.7"], changed_by="forged-remote-name"),
+        local_request,
+    )
+    assert saved["updated_by"] == "local-operator"
+
+    run_id = "c" * 32
+    insert_scan_run_manifest(
+        {
+            "run_id": run_id,
+            "created_at": "2026-09-27T00:00:00+00:00",
+            "status": "awaiting_fallback_approval",
+            "operator": "local-operator",
+            "owner": "local-operator",
+            "reason": "test",
+            "originating_host": "test-host",
+            "interface": "eth0",
+            "profile": "Custom",
+        },
+        db_path,
+    )
+    control = RunControl()
+    poc.ACTIVE_RUNS[run_id] = control
+    try:
+        decide_scan_fallback(
+            run_id,
+            FallbackDecision(
+                decision="approve",
+                decided_by="forged-remote-name",
+                authorization_note="Authorized local test",
+            ),
+            local_request,
+        )
+        assert control.fallback_decided_by == "local-operator"
+    finally:
+        poc.ACTIVE_RUNS.pop(run_id, None)
+
+
+def test_only_scan_owner_or_admin_can_decide_fallback(tmp_path, monkeypatch):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
+    run_id = "a" * 32
+    manifest = {
+        "run_id": run_id,
+        "created_at": "2026-09-27T00:00:00+00:00",
+        "status": "awaiting_fallback_approval",
+        "operator": "owner.one",
+        "owner": "owner.one",
+        "reason": "test",
+        "originating_host": "test-host",
+        "interface": "eth0",
+        "profile": "Custom",
+    }
+    insert_scan_run_manifest(manifest, db_path)
+    control = RunControl()
+    poc.ACTIVE_RUNS[run_id] = control
+    decision = FallbackDecision(
+        decision="approve", decided_by="forged", authorization_note="Authorized test"
+    )
+    other_request = Request({"type": "http", "headers": []})
+    other_request.state.analyst = {"username": "other.one", "role": "analyst"}
+    try:
+        with pytest.raises(HTTPException) as denied:
+            decide_scan_fallback(run_id, decision, other_request)
+        assert denied.value.status_code == 403
+
+        owner_request = Request({"type": "http", "headers": []})
+        owner_request.state.analyst = {"username": "owner.one", "role": "analyst"}
+        accepted = decide_scan_fallback(run_id, decision, owner_request)
+        assert accepted["decision"] == "approve"
+        assert control.fallback_decided_by == "owner.one"
+    finally:
+        poc.ACTIVE_RUNS.pop(run_id, None)
+
+
+def test_new_global_rule_requests_cancellation_of_intersecting_active_run(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    run_id = "b" * 32
+    manifest = {
+        "run_id": run_id,
+        "created_at": "2026-09-27T00:00:00+00:00",
+        "status": "running",
+        "operator": "owner.one",
+        "owner": "owner.one",
+        "reason": "test",
+        "originating_host": "test-host",
+        "interface": "eth0",
+        "profile": "Custom",
+        "targets": ["198.51.100.0/30"],
+    }
+    insert_scan_run_manifest(manifest, db_path)
+    control = RunControl()
+    poc.ACTIVE_RUNS[run_id] = control
+    try:
+        add_global_no_strike(
+            NoStrikeUpdate(entries=["198.51.100.2"], changed_by="analyst"), db_path
+        )
+        assert control.cancel_event.is_set()
+        updated = poc.get_scan_run_plan(run_id, db_path)
+        assert updated["cancellation_cause"] == "global_no_strike"
+        assert updated["safety_cancellation_requested"]["global_no_strike_revision"] == 1
+        assert updated["safety_cancellation_requested"]["intersecting_exclusions"] == [
+            "198.51.100.2/32"
+        ]
+        with connect_database(db_path, read_only=True) as db:
+            event = db.execute(
+                "SELECT event, actor, details FROM scan_run_audit WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        assert event[0] == "safety_cancellation_requested"
+        assert event[1] == "analyst"
+        assert "revision 1" in event[2]
+    finally:
+        poc.ACTIVE_RUNS.pop(run_id, None)
+
+
+def test_safety_signal_reaches_every_active_run_when_provenance_writes_fail(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    run_ids = ["d" * 32, "e" * 32]
+    controls = {}
+    for run_id in run_ids:
+        insert_scan_run_manifest(
+            {
+                "run_id": run_id,
+                "created_at": "2026-09-27T00:00:00+00:00",
+                "status": "running",
+                "operator": "owner.one",
+                "owner": "owner.one",
+                "reason": "test",
+                "originating_host": "test-host",
+                "interface": "eth0",
+                "profile": "Custom",
+                "targets": ["198.51.100.0/30"],
+            },
+            db_path,
+        )
+        controls[run_id] = RunControl()
+        poc.ACTIVE_RUNS[run_id] = controls[run_id]
+    monkeypatch.setattr(
+        poc,
+        "update_scan_run_manifest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("write failed")),
+    )
+    monkeypatch.setattr(
+        poc,
+        "append_scan_audit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("audit failed")),
+    )
+    try:
+        saved = add_global_no_strike(
+            NoStrikeUpdate(entries=["198.51.100.2"], changed_by="analyst"),
+            db_path,
+        )
+        assert saved["entries"] == ["198.51.100.2/32"]
+        assert all(control.cancel_event.is_set() for control in controls.values())
+    finally:
+        for run_id in run_ids:
+            poc.ACTIVE_RUNS.pop(run_id, None)
+
+
+def test_scheduled_manifest_keeps_global_and_schedule_exclusions_separate(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["192.0.2.1"], changed_by="analyst"), db_path
+    )
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Safety provenance",
+            created_by="analyst",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["192.0.2.0/29"],
+            no_strike=["192.0.2.2"],
+            interface="eth0",
+            cadence="daily",
+            first_run_at=datetime(2026, 9, 28, tzinfo=timezone.utc),
+        ),
+        db_path,
+    )
+    request = poc._scheduled_request(
+        schedule,
+        ["192.0.2.0/29"],
+        batch_id="c" * 32,
+        chunk_number=1,
+        chunk_count=1,
+        batch_hosts_total=8,
+        batch_hosts_completed_before=0,
+        db_path=db_path,
+    )
+    manifest = poc.build_scan_run_manifest(request, db_path=db_path)
+
+    assert manifest["coverage"]["global_no_strike"] == ["192.0.2.1/32"]
+    assert manifest["coverage"]["additional_no_strike"] == ["192.0.2.2/32"]
+    assert manifest["no_strike_submission"]["global"] == ["192.0.2.1/32"]
+    assert manifest["no_strike_submission"]["additional"] == ["192.0.2.2/32"]

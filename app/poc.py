@@ -533,7 +533,10 @@ def normalize_ipv4_networks(entries: list[str], label: str) -> list[str]:
     if label == "target" and not networks:
         raise ValueError("At least one target is required")
     collapsed = list(ipaddress.collapse_addresses(networks))
-    if sum(network.num_addresses for network in collapsed) > MAX_EXPANDED_ADDRESSES:
+    # Targets are expanded by the scanner, so bound them here.  No-Strike
+    # entries remain symbolic CIDRs and may intentionally cover very large
+    # ranges such as 0.0.0.0/0.
+    if label == "target" and sum(network.num_addresses for network in collapsed) > MAX_EXPANDED_ADDRESSES:
         raise ValueError(
             f"{label.title()} scope exceeds the {MAX_EXPANDED_ADDRESSES}-address safety limit"
         )
@@ -545,57 +548,164 @@ def get_global_no_strike(db_path: Path = DB_PATH) -> dict:
     init_poc_storage(db_path)
     with connect_database(db_path) as db:
         row = db.execute(
-            "SELECT value_json, updated_at, updated_by FROM app_settings WHERE key = ?",
-            ("global_no_strike",),
+            """
+            SELECT revision, entries_json, changed_at, changed_by
+            FROM global_no_strike_history
+            ORDER BY revision DESC
+            LIMIT 1
+            """
         ).fetchone()
     if not row:
-        return {"entries": [], "updated_at": None, "updated_by": None}
+        return {
+            "entries": [], "updated_at": None, "updated_by": None,
+            "revision": 0,
+        }
     return {
-        "entries": json.loads(row[0]),
-        "updated_at": row[1],
-        "updated_by": row[2],
+        "entries": json.loads(row[1]),
+        "updated_at": row[2],
+        "updated_by": row[3],
+        "revision": int(row[0]),
     }
 
 
-def _store_global_no_strike(
-    entries: list[str], changed_by: str, db_path: Path = DB_PATH
+def _global_no_strike_state_in_transaction(db) -> dict:
+    row = db.execute(
+        """
+        SELECT revision, entries_json, changed_at, changed_by
+        FROM global_no_strike_history
+        ORDER BY revision DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return {
+        "entries": json.loads(row[1]) if row else [],
+        "updated_at": row[2] if row else None,
+        "updated_by": row[3] if row else None,
+        "revision": int(row[0]) if row else 0,
+    }
+
+
+def _store_global_no_strike_in_transaction(
+    db, entries: list[str], changed_by: str, *, action: str
 ) -> dict:
     normalized = normalize_ipv4_networks(entries, "no-strike") if entries else []
     updated_at = utc_now()
-    init_poc_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute(
-            """
-            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value_json = excluded.value_json,
-                updated_at = excluded.updated_at,
-                updated_by = excluded.updated_by
-            """,
-            ("global_no_strike", json.dumps(normalized), updated_at, changed_by),
-        )
+    revision = int(db.execute(
+        "SELECT COALESCE(MAX(revision), 0) + 1 FROM global_no_strike_history"
+    ).fetchone()[0])
+    db.execute(
+        """
+        INSERT INTO global_no_strike_history (
+            revision, entries_json, action, changed_at, changed_by
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (revision, json.dumps(normalized), action, updated_at, changed_by),
+    )
+    # Keep the former settings row as an atomic compatibility mirror so an
+    # immediate application rollback retains the same safety boundary. The
+    # append-only history above remains authoritative for this version.
+    db.execute(
+        """
+        INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value_json = excluded.value_json,
+            updated_at = excluded.updated_at,
+            updated_by = excluded.updated_by
+        """,
+        ("global_no_strike", json.dumps(normalized), updated_at, changed_by),
+    )
     return {
         "entries": normalized,
         "updated_at": updated_at,
         "updated_by": changed_by,
+        "revision": revision,
     }
 
 
 def add_global_no_strike(
     request: NoStrikeUpdate, db_path: Path = DB_PATH
 ) -> dict:
-    current = get_global_no_strike(db_path)["entries"]
-    return _store_global_no_strike(
-        [*current, *request.entries], request.changed_by, db_path
+    requested = normalize_ipv4_networks(request.entries, "no-strike")
+    init_poc_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        current = _global_no_strike_state_in_transaction(db)["entries"]
+        result = _store_global_no_strike_in_transaction(
+            db, [*current, *requested], request.changed_by, action="add"
+        )
+    _cancel_active_runs_for_new_exclusions(
+        requested,
+        revision=result["revision"],
+        changed_by=request.changed_by,
+        db_path=db_path,
     )
+    return result
+
+
+def _cancel_active_runs_for_new_exclusions(
+    entries: list[str], *, revision: int, changed_by: str, db_path: Path = DB_PATH
+) -> None:
+    """Promptly stop active contact when a new shared boundary intersects it."""
+    exclusions = [ipaddress.ip_network(item, strict=False) for item in entries]
+    with ACTIVE_RUNS_LOCK:
+        active = list(ACTIVE_RUNS.items())
+    cancellation_records = []
+    for run_id, control in active:
+        manifest = get_scan_run_plan(run_id, db_path)
+        if manifest is None:
+            continue
+        targets = [
+            ipaddress.ip_network(item, strict=False)
+            for item in manifest.get("targets") or []
+        ]
+        intersecting = sorted({
+            str(exclusion)
+            for target in targets
+            for exclusion in exclusions
+            if target.overlaps(exclusion)
+        })
+        if not intersecting:
+            continue
+        requested_at = utc_now()
+        cause = {
+            "global_no_strike_revision": revision,
+            "intersecting_exclusions": intersecting,
+            "requested_at": requested_at,
+            "requested_by": changed_by,
+        }
+        # Stop every intersecting control before any database write can fail.
+        # Persistence below is provenance for the already-issued safety signal.
+        control.cancel_event.set()
+        manifest["safety_cancellation_requested"] = cause
+        manifest["cancellation_cause"] = "global_no_strike"
+        cancellation_records.append((run_id, manifest, intersecting))
+    for run_id, manifest, intersecting in cancellation_records:
+        try:
+            update_scan_run_manifest(manifest, db_path)
+        except Exception:
+            pass
+        try:
+            append_scan_audit(
+                db_path,
+                run_id=run_id,
+                event="safety_cancellation_requested",
+                actor=changed_by,
+                details=(
+                    f"Global No-Strike revision {revision} intersects this run: "
+                    + ", ".join(intersecting)
+                ),
+            )
+        except Exception:
+            pass
 
 
 def effective_no_strike(
     additional: list[str] | None = None, db_path: Path = DB_PATH
 ) -> tuple[list[str], list[str]]:
     """Merge persistent exclusions with optional run-specific exclusions."""
-    global_entries = get_global_no_strike(db_path)["entries"]
+    global_state = get_global_no_strike(db_path)
+    global_entries = global_state["entries"]
     combined = [*global_entries, *(additional or [])]
     return (
         normalize_ipv4_networks(combined, "no-strike") if combined else [],
@@ -613,7 +723,8 @@ def scan_safety_summary(
     normalized_additional = (
         normalize_ipv4_networks(additional, "no-strike") if additional else []
     )
-    global_entries = get_global_no_strike(db_path)["entries"]
+    global_state = get_global_no_strike(db_path)
+    global_entries = global_state["entries"]
 
     target_addresses = {
         str(address)
@@ -622,22 +733,19 @@ def scan_safety_summary(
         )
         for address in network
     }
+    global_networks = [
+        ipaddress.ip_network(entry, strict=False) for entry in global_entries
+    ]
+    additional_networks = [
+        ipaddress.ip_network(entry, strict=False) for entry in normalized_additional
+    ]
     global_addresses = {
-        str(address)
-        for network in (
-            ipaddress.ip_network(entry, strict=False) for entry in global_entries
-        )
-        for address in network
-        if str(address) in target_addresses
+        address for address in target_addresses
+        if any(ipaddress.ip_address(address) in network for network in global_networks)
     }
     additional_addresses = {
-        str(address)
-        for network in (
-            ipaddress.ip_network(entry, strict=False)
-            for entry in normalized_additional
-        )
-        for address in network
-        if str(address) in target_addresses
+        address for address in target_addresses
+        if any(ipaddress.ip_address(address) in network for network in additional_networks)
     }
     overlap_addresses = global_addresses & additional_addresses
     additional_unique = additional_addresses - global_addresses
@@ -653,6 +761,8 @@ def scan_safety_summary(
         "overlap_address_count": len(overlap_addresses),
         "excluded_address_count": len(excluded_addresses),
         "effective_address_count": len(target_addresses - excluded_addresses),
+        "global_no_strike_revision": global_state["revision"],
+        "global_no_strike_as_of": global_state["updated_at"],
     }
 
 
@@ -660,17 +770,22 @@ def remove_global_no_strike(
     request: NoStrikeRemoval, db_path: Path = DB_PATH
 ) -> dict:
     requested = normalize_ipv4_networks(request.entries, "no-strike")
-    current = get_global_no_strike(db_path)["entries"]
-    missing = [entry for entry in requested if entry not in current]
-    if missing:
-        raise KeyError("No-strike entry not found: " + ", ".join(missing))
     identifier = ",".join(requested)
     if not consume_delete_challenge(
         "global-no-strike", identifier, request.confirmation
     ):
         raise PermissionError("The confirmation string is invalid or expired")
-    remaining = [entry for entry in current if entry not in set(requested)]
-    result = _store_global_no_strike(remaining, request.changed_by, db_path)
+    init_poc_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        current = _global_no_strike_state_in_transaction(db)["entries"]
+        missing = [entry for entry in requested if entry not in current]
+        if missing:
+            raise KeyError("No-strike entry not found: " + ", ".join(missing))
+        remaining = [entry for entry in current if entry not in set(requested)]
+        result = _store_global_no_strike_in_transaction(
+            db, remaining, request.changed_by, action="remove"
+        )
     result["removed"] = requested
     return result
 
@@ -843,7 +958,7 @@ def apply_fping_fallback(manifest: dict) -> None:
     phases = build_execution_phases(
         manifest["interface"],
         manifest["profile_settings"],
-        include_no_strike=bool(manifest.get("no_strike")),
+        include_no_strike=True,
         target_file="targets.txt",
         pre_discovered=False,
     )
@@ -857,7 +972,7 @@ def apply_fping_fallback(manifest: dict) -> None:
         manifest["command_argv"] = build_nmap_argv(
             manifest["profile"],
             manifest["interface"],
-            include_no_strike=bool(manifest.get("no_strike")),
+            include_no_strike=True,
             scan_options=manifest["profile_settings"],
             target_file="targets.txt",
         )
@@ -901,14 +1016,21 @@ def build_scan_run_manifest(
         db_path,
         max_addresses=MAX_EXPANDED_ADDRESSES,
     )
-    no_strike, global_no_strike = effective_no_strike(plan.no_strike, db_path)
+    additional_no_strike = (
+        normalize_ipv4_networks(plan.no_strike, "no-strike") if plan.no_strike else []
+    )
+    global_state = get_global_no_strike(db_path)
+    global_no_strike = global_state["entries"]
+    no_strike = normalize_ipv4_networks(
+        [*global_no_strike, *additional_no_strike], "no-strike"
+    ) if global_no_strike or additional_no_strike else []
     profile_record = resolve_scan_profile(plan, db_path)
     settings = profile_record["settings"]
     use_fping = settings.get("discovery_mode") == "fping"
     execution_phases = build_execution_phases(
         plan.interface,
         settings,
-        include_no_strike=bool(no_strike),
+        include_no_strike=True,
         target_file="fping-alive.txt" if use_fping else "discovery-alive.txt",
         pre_discovered=True,
     )
@@ -923,7 +1045,7 @@ def build_scan_run_manifest(
         nmap_argv = build_nmap_argv(
             profile_record["name"],
             plan.interface,
-            include_no_strike=bool(no_strike),
+            include_no_strike=True,
             scan_options=settings,
             target_file="fping-alive.txt" if use_fping else "targets.txt",
         )
@@ -932,7 +1054,7 @@ def build_scan_run_manifest(
         build_fping_argv(plan.interface)
         if use_fping
         else build_nmap_discovery_argv(
-            plan.interface, include_no_strike=bool(no_strike)
+            plan.interface, include_no_strike=True
         )
     )
     discovery_execution_argv = (
@@ -951,13 +1073,19 @@ def build_scan_run_manifest(
         "targets": targets,
         "no_strike": no_strike,
         "global_no_strike": global_no_strike,
-        "additional_no_strike": normalize_ipv4_networks(plan.no_strike, "no-strike") if plan.no_strike else [],
+        "additional_no_strike": additional_no_strike,
+        "global_no_strike_revision": global_state["revision"],
+        "global_no_strike_as_of": global_state["updated_at"],
         "interface": plan.interface,
         "profile_id": profile_record["profile_id"],
         "profile_name": profile_record["name"],
         "profile_version": profile_record["version"],
     }
     scope_hosts_total = len(expanded_discovery_targets(targets, no_strike))
+    if scope_hosts_total == 0:
+        raise ValueError(
+            "No addresses remain after global and scan-specific No-Strike exclusions"
+        )
     progress = new_scan_progress(
         scope_hosts_total,
         phase=status,
@@ -1014,6 +1142,14 @@ def build_scan_run_manifest(
             "manual_targets": manual_targets,
         },
         "no_strike": no_strike,
+        "no_strike_submission": {
+            "global": global_no_strike,
+            "additional": additional_no_strike,
+            "effective": no_strike,
+            "revision": global_state["revision"],
+            "certified_at": created_at,
+        },
+        "no_strike_certifications": [],
         "coverage": coverage,
         "capture_requested": capture,
         "discovery_mode": settings.get("discovery_mode", "nmap"),
@@ -1118,6 +1254,131 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                 )
                 """
             )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS global_no_strike_history (
+                    revision INTEGER PRIMARY KEY,
+                    entries_json TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    changed_by TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS global_no_strike_history_no_update
+                BEFORE UPDATE ON global_no_strike_history
+                BEGIN
+                    SELECT RAISE(ABORT, 'Global No-Strike history is append-only');
+                END
+                """
+            )
+            db.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS global_no_strike_history_no_delete
+                BEFORE DELETE ON global_no_strike_history
+                BEGIN
+                    SELECT RAISE(ABORT, 'Global No-Strike history is append-only');
+                END
+                """
+            )
+            db.execute("DROP TRIGGER IF EXISTS global_no_strike_history_valid_insert")
+            db.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS global_no_strike_history_valid_insert
+                BEFORE INSERT ON global_no_strike_history
+                WHEN NEW.revision != COALESCE(
+                        (SELECT MAX(revision) + 1 FROM global_no_strike_history), 1
+                    )
+                    OR NEW.entries_json IS NOT nct_normalize_ipv4_network_list(NEW.entries_json)
+                    OR NEW.action NOT IN ('add', 'remove', 'legacy_snapshot')
+                    OR nct_is_canonical_utc(NEW.changed_at) != 1
+                    OR NEW.changed_by != trim(NEW.changed_by)
+                    OR trim(NEW.changed_by) = ''
+                    OR length(NEW.changed_by) > 100
+                BEGIN
+                    SELECT RAISE(ABORT, 'Invalid Global No-Strike history revision');
+                END
+                """
+            )
+            existing_no_strike = db.execute(
+                "SELECT value_json, updated_at, updated_by FROM app_settings WHERE key = ?",
+                ("global_no_strike",),
+            ).fetchone()
+            history_count = int(db.execute(
+                "SELECT COUNT(*) FROM global_no_strike_history"
+            ).fetchone()[0])
+            if existing_no_strike and history_count == 0:
+                legacy_entries = normalize_ipv4_networks(
+                    json.loads(existing_no_strike[0]), "no-strike"
+                )
+                legacy_actor = str(existing_no_strike[2]).strip()[:100] or "legacy-migration"
+                db.execute(
+                    """
+                    INSERT INTO global_no_strike_history (
+                        revision, entries_json, action, changed_at, changed_by
+                    ) VALUES (1, ?, 'legacy_snapshot', ?, ?)
+                    """,
+                    (
+                        json.dumps(legacy_entries),
+                        utc_now(),
+                        legacy_actor,
+                    ),
+                )
+            latest_no_strike = db.execute(
+                """
+                SELECT revision, entries_json, changed_at, changed_by
+                FROM global_no_strike_history
+                ORDER BY revision DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if latest_no_strike:
+                authoritative_entries = json.loads(latest_no_strike[1])
+                mirror_entries = (
+                    normalize_ipv4_networks(
+                        json.loads(existing_no_strike[0]), "no-strike"
+                    )
+                    if existing_no_strike else []
+                )
+                reconciled_entries = normalize_ipv4_networks(
+                    [*authoritative_entries, *mirror_entries], "no-strike"
+                ) if authoritative_entries or mirror_entries else []
+                if reconciled_entries != authoritative_entries:
+                    reconciled_at = utc_now()
+                    reconciled_by = "legacy-rollback-reconciliation"
+                    next_revision = int(latest_no_strike[0]) + 1
+                    db.execute(
+                        """
+                        INSERT INTO global_no_strike_history (
+                            revision, entries_json, action, changed_at, changed_by
+                        ) VALUES (?, ?, 'legacy_snapshot', ?, ?)
+                        """,
+                        (
+                            next_revision,
+                            json.dumps(reconciled_entries),
+                            reconciled_at,
+                            reconciled_by,
+                        ),
+                    )
+                    latest_no_strike = (
+                        next_revision,
+                        json.dumps(reconciled_entries),
+                        reconciled_at,
+                        reconciled_by,
+                    )
+                db.execute(
+                    """
+                    INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+                    VALUES ('global_no_strike', ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value_json = excluded.value_json,
+                        updated_at = excluded.updated_at,
+                        updated_by = excluded.updated_by
+                    """,
+                    (latest_no_strike[1], latest_no_strike[2], latest_no_strike[3]),
+                )
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS scan_analysis_cache (
@@ -1539,6 +1800,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "active_batch_id": None,
         "active_chunk_number": None,
         "active_chunk_count": None,
+        "active_target_chunks": None,
         "completed_chunk_count": 0,
         "resume_after_chunk": 0,
         "last_occurrence_started_at": None,
@@ -1791,6 +2053,135 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
                 manifest["run_id"],
             ),
         )
+
+
+class NoScannableTargetsError(RuntimeError):
+    pass
+
+
+def _add_excludefile(argv: list[str] | None) -> list[str] | None:
+    if not argv or "--excludefile" in argv:
+        return argv
+    return [*argv, "--excludefile", "no-strike.txt"]
+
+
+def _ensure_manifest_excludefile_commands(manifest: dict) -> None:
+    """Upgrade queued legacy commands so a later safety update is enforceable."""
+    keys = ["command_argv", "fallback_command_argv"]
+    if manifest.get("discovery_mode") != "fping":
+        keys.append("discovery_command_argv")
+    for key in keys:
+        if isinstance(manifest.get(key), list) and manifest[key]:
+            manifest[key] = _add_excludefile(manifest[key])
+    if manifest.get("command_argv"):
+        manifest["execution_command_argv"] = build_nmap_execution_argv(
+            manifest["command_argv"]
+        )
+    if (
+        manifest.get("discovery_mode") != "fping"
+        and manifest.get("discovery_command_argv")
+    ):
+        manifest["discovery_execution_command_argv"] = build_nmap_execution_argv(
+            manifest["discovery_command_argv"]
+        )
+    for phase in manifest.get("execution_phases") or []:
+        if isinstance(phase.get("command_argv"), list) and phase["command_argv"]:
+            phase["command_argv"] = _add_excludefile(phase["command_argv"])
+            phase["execution_command_argv"] = build_nmap_execution_argv(
+                phase["command_argv"]
+            )
+        if phase.get("command_argv"):
+            phase["exact_command"] = shlex.join(phase["command_argv"])
+        if phase.get("execution_command_argv"):
+            phase["exact_execution_command"] = shlex.join(
+                phase["execution_command_argv"]
+            )
+    for argv_key, exact_key in (
+        ("command_argv", "exact_command"),
+        ("execution_command_argv", "exact_execution_command"),
+        ("discovery_command_argv", "exact_discovery_command"),
+        ("discovery_execution_command_argv", "exact_discovery_execution_command"),
+        ("fallback_command_argv", "exact_fallback_command"),
+    ):
+        if manifest.get(argv_key):
+            manifest[exact_key] = shlex.join(manifest[argv_key])
+
+
+def certify_scan_contact_phase(
+    manifest: dict,
+    phase: str,
+    *,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+) -> list[str]:
+    """Re-certify the safety boundary immediately before active contact."""
+    global_state = get_global_no_strike(db_path)
+    coverage = manifest.setdefault("coverage", {})
+    submission = manifest.get("no_strike_submission") or {}
+    additional = coverage.get("additional_no_strike")
+    if additional is None:
+        additional = submission.get("additional")
+    if additional is None:
+        # Legacy queued runs did not separate source lists. Preserve their old
+        # effective list as an additional boundary, then add the current global list.
+        additional = manifest.get("no_strike") or []
+    additional = normalize_ipv4_networks(additional, "no-strike") if additional else []
+    effective = normalize_ipv4_networks(
+        [*global_state["entries"], *additional], "no-strike"
+    ) if global_state["entries"] or additional else []
+    remaining = expanded_discovery_targets(manifest["targets"], effective)
+    certified_at = utc_now()
+    certification = {
+        "phase": phase,
+        "certified_at": certified_at,
+        "global_revision": global_state["revision"],
+        "global_as_of": global_state["updated_at"],
+        "global": global_state["entries"],
+        "additional": additional,
+        "effective": effective,
+        "remaining_address_count": len(remaining),
+    }
+    manifest["no_strike"] = effective
+    manifest.setdefault("no_strike_certifications", []).append(certification)
+    coverage.update({
+        "no_strike": effective,
+        "global_no_strike": global_state["entries"],
+        "additional_no_strike": additional,
+        "global_no_strike_revision": global_state["revision"],
+        "global_no_strike_as_of": global_state["updated_at"],
+        "no_strike_last_certified_at": certified_at,
+        "no_strike_last_certified_phase": phase,
+    })
+    if isinstance(manifest.get("progress"), dict):
+        manifest["progress"]["scope_hosts_total"] = len(remaining)
+    _ensure_manifest_excludefile_commands(manifest)
+    run_dir = run_directory(manifest["run_id"], data_dir)
+    if run_dir.exists():
+        (run_dir / "no-strike.txt").write_text(
+            "\n".join(effective) + ("\n" if effective else ""), encoding="utf-8"
+        )
+        if manifest.get("discovery_mode") == "fping":
+            (run_dir / "discovery-targets.txt").write_text(
+                "\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8"
+            )
+        write_manifest_file(manifest, data_dir)
+    update_scan_run_manifest(manifest, db_path)
+    append_scan_audit(
+        db_path,
+        run_id=manifest["run_id"],
+        event="no_strike_certified",
+        actor="system",
+        details=(
+            f"{phase}: global revision {global_state['revision']}; "
+            f"{len(remaining)} address(es) remain"
+        ),
+        changed_at=certified_at,
+    )
+    if not remaining:
+        raise NoScannableTargetsError(
+            "No addresses remain after the latest global and scan-specific No-Strike exclusions"
+        )
+    return remaining
 
 
 def _queued_run_ids(db_path: Path = DB_PATH) -> list[str]:
@@ -2549,10 +2940,11 @@ def execute_scan_run(
             "\n".join(discovery_targets) + ("\n" if discovery_targets else ""),
             encoding="utf-8",
         )
-    if manifest["no_strike"]:
-        (run_dir / "no-strike.txt").write_text(
-            "\n".join(manifest["no_strike"]) + "\n", encoding="utf-8"
-        )
+    (run_dir / "no-strike.txt").write_text(
+        "\n".join(manifest.get("no_strike") or [])
+        + ("\n" if manifest.get("no_strike") else ""),
+        encoding="utf-8",
+    )
     manifest["started_at"] = utc_now()
     manifest["status"] = "running"
     append_scan_audit(
@@ -2624,6 +3016,9 @@ def execute_scan_run(
                 sleep_fn(0.2)
 
     try:
+        certify_scan_contact_phase(
+            manifest, "queue_start", db_path=db_path, data_dir=data_dir
+        )
         capture_error_path = run_dir / "capture-stderr.txt"
         with capture_error_path.open("wb") as capture_error_handle:
             def start_capture(label: str = "the scan") -> None:
@@ -2645,6 +3040,9 @@ def execute_scan_run(
             run_phases = True
             alive_hosts: list[str] = []
             if manifest.get("discovery_mode") == "fping":
+                certify_scan_contact_phase(
+                    manifest, "fping_discovery", db_path=db_path, data_dir=data_dir
+                )
                 fping_start_error = ""
                 try:
                     discovery_status, discovery_exit = watch_process(
@@ -2748,6 +3146,12 @@ def execute_scan_run(
                                 "fallback_decided_at": utc_now(),
                             })
                             if control.fallback_decision == "approve":
+                                certify_scan_contact_phase(
+                                    manifest,
+                                    "approved_fallback",
+                                    db_path=db_path,
+                                    data_dir=data_dir,
+                                )
                                 apply_fping_fallback(manifest)
                                 manifest["status"] = "running"
                                 manifest["fallback_approval_required"] = False
@@ -2767,6 +3171,9 @@ def execute_scan_run(
                                 )
                                 exit_code, run_phases = 0, False
             else:
+                certify_scan_contact_phase(
+                    manifest, "nmap_discovery", db_path=db_path, data_dir=data_dir
+                )
                 discovery_status, discovery_exit = watch_process(
                     manifest["discovery_execution_command_argv"],
                     run_dir / "discovery-stdout.txt",
@@ -2800,6 +3207,12 @@ def execute_scan_run(
                 )
                 for phase in manifest.get("execution_phases") or []:
                     phase_name = phase["name"]
+                    certify_scan_contact_phase(
+                        manifest,
+                        f"{phase_name}_scan",
+                        db_path=db_path,
+                        data_dir=data_dir,
+                    )
                     phase["status"] = "running"
                     phase["started_at"] = utc_now()
                     persist_scan_progress(
@@ -2881,6 +3294,9 @@ def execute_scan_run(
             (run_dir / "stderr.txt").write_bytes(
                 b"\n".join(path.read_bytes() for path in error_sources if path.is_file())
             )
+    except NoScannableTargetsError as exc:
+        manifest["status"] = "stopped_no_targets"
+        manifest["error"] = str(exc)
     except Exception as exc:
         manifest["status"] = "failed"
         manifest["error"] = f"{type(exc).__name__}: {exc}"
@@ -3081,7 +3497,6 @@ def _scheduled_request(
     batch_hosts_completed_before: int,
     db_path: Path = DB_PATH,
 ) -> ScanRunRequest:
-    no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
     return ScanRunRequest(
         operator=schedule["created_by"],
         created_by=schedule["created_by"],
@@ -3098,7 +3513,9 @@ def _scheduled_request(
         profile_id=schedule["profile_id"],
         profile_version=schedule["profile_version"],
         targets=targets,
-        no_strike=no_strike,
+        # The manifest builder adds the current global list exactly once and
+        # retains this schedule-specific list as its separate source.
+        no_strike=schedule.get("no_strike") or [],
         capture=True,
         timeout_seconds=int(schedule.get("timeout_seconds") or 2700),
         fallback_policy=schedule.get("fallback_policy", "require_approval"),
@@ -3122,13 +3539,17 @@ def execute_schedule_batch(
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> None:
     successful_states = {"completed", "completed_without_nmap"}
-    terminal_states = successful_states | {"failed", "cancelled", "timed_out"}
+    terminal_states = successful_states | {
+        "failed", "cancelled", "timed_out", "stopped_no_targets"
+    }
     try:
         schedule = get_scan_schedule(schedule_id, db_path)
         if schedule is None:
             return
         get_schedule_scope_context(db_path, schedule_id, require_active=True)
-        chunks = schedule_target_chunks(schedule, db_path)
+        chunks = schedule.get("active_target_chunks") or schedule_target_chunks(
+            schedule, db_path
+        )
         if not chunks:
             schedule["batch_status"] = "stopped_no_targets"
             schedule["enabled"] = False
@@ -3251,6 +3672,7 @@ def execute_schedule_batch(
         schedule["active_chunk_number"] = total
         schedule["completed_chunk_count"] = total
         schedule["resume_after_chunk"] = 0
+        schedule["active_target_chunks"] = None
         schedule["next_chunk_at"] = None
         schedule["occurrence_count"] = int(schedule.get("occurrence_count") or 0) + 1
         schedule["last_occurrence_status"] = "completed"
@@ -3288,10 +3710,18 @@ def queue_scan_schedule_batch(
     if schedule is None:
         raise KeyError("Scan schedule not found")
     get_schedule_scope_context(db_path, schedule_id, require_active=True)
-    chunks = schedule_target_chunks(schedule, db_path)
+    recovering = schedule.get("batch_status") == "recovery_pending"
+    if recovering and not schedule.get("active_target_chunks"):
+        raise RuntimeError(
+            "This interrupted legacy schedule has no frozen chunk plan; review it and start a new occurrence"
+        )
+    chunks = (
+        schedule.get("active_target_chunks")
+        if recovering and schedule.get("active_target_chunks")
+        else schedule_target_chunks(schedule, db_path)
+    )
     if not chunks:
         raise ValueError("No addresses remain after no-strike filtering")
-    recovering = schedule.get("batch_status") == "recovery_pending"
     resume_after = (
         min(max(int(schedule.get("resume_after_chunk") or 0), 0), len(chunks))
         if recovering
@@ -3308,6 +3738,7 @@ def queue_scan_schedule_batch(
     schedule["active_chunk_count"] = len(chunks)
     schedule["completed_chunk_count"] = resume_after
     schedule["resume_after_chunk"] = resume_after
+    schedule["active_target_chunks"] = chunks
     schedule["last_dispatch_note"] = (
         f"Recovery queued at chunk {resume_after + 1} of {len(chunks)}"
         if recovering and resume_after < len(chunks)
@@ -3464,7 +3895,8 @@ def recover_scheduler_state(
             )
         ]
         schedule["recovery_count"] = int(schedule.get("recovery_count") or 0) + 1
-        if schedule.get("enabled"):
+        has_frozen_chunks = bool(schedule.get("active_target_chunks"))
+        if schedule.get("enabled") and has_frozen_chunks:
             schedule["batch_status"] = "recovery_pending"
             schedule["next_run_at"] = recovered_at
             schedule["last_dispatch_note"] = (
@@ -3473,6 +3905,18 @@ def recover_scheduler_state(
             details = (
                 f"Recovered an interrupted batch; {completed} completed chunk(s) "
                 "will not be repeated"
+            )
+        elif schedule.get("enabled"):
+            schedule["enabled"] = False
+            schedule["batch_status"] = "recovery_review_required"
+            schedule["next_run_at"] = None
+            schedule["last_dispatch_note"] = (
+                "Interrupted legacy occurrence paused because its original chunk plan "
+                "was not retained; review it and start a new occurrence"
+            )
+            details = (
+                "Paused an interrupted legacy batch because its original target chunks "
+                "were unavailable and could not be resumed safely"
             )
         else:
             schedule["batch_status"] = "interrupted_paused"
@@ -3803,6 +4247,8 @@ def set_saved_network_scope(
             actor=actor,
             reason=payload.reason,
         )
+
+
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
     except SavedNetworkScopeConflict as exc:
@@ -3846,13 +4292,13 @@ def archive_saved_network_record(
 
 @router.get("/safety/no-strike")
 def global_no_strike_list() -> dict:
-    return get_global_no_strike()
+    return get_global_no_strike(DB_PATH)
 
 
 @router.post("/safety/scan-summary")
 def preview_scan_safety(request: ScanSafetySummaryRequest) -> dict:
     try:
-        return scan_safety_summary(request.targets, request.no_strike)
+        return scan_safety_summary(request.targets, request.no_strike, DB_PATH)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -3860,8 +4306,12 @@ def preview_scan_safety(request: ScanSafetySummaryRequest) -> dict:
 @router.post("/safety/no-strike", status_code=201)
 def add_to_global_no_strike(request: NoStrikeUpdate, http_request: Request) -> dict:
     try:
-        request = bind_signed_in_actor(http_request, request, "changed_by")
-        return add_global_no_strike(request)
+        analyst = getattr(http_request.state, "analyst", None)
+        if analyst and analyst.get("role") not in {"analyst", "admin"}:
+            raise HTTPException(status_code=403, detail="Analyst or administrator role required")
+        actor = str(analyst.get("username")) if analyst else "local-operator"
+        request = request.model_copy(update={"changed_by": actor})
+        return add_global_no_strike(request, DB_PATH)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -3872,7 +4322,7 @@ def global_no_strike_remove_challenge(entries: list[str]) -> dict:
         requested = normalize_ipv4_networks(entries, "no-strike")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    current = get_global_no_strike()["entries"]
+    current = get_global_no_strike(DB_PATH)["entries"]
     if any(entry not in current for entry in requested):
         raise HTTPException(status_code=404, detail="No-strike entry not found")
     return issue_delete_challenge("global-no-strike", ",".join(requested))
@@ -3883,8 +4333,15 @@ def remove_from_global_no_strike(
     request: NoStrikeRemoval, http_request: Request
 ) -> dict:
     try:
-        request = bind_signed_in_actor(http_request, request, "changed_by")
-        return remove_global_no_strike(request)
+        analyst = getattr(http_request.state, "analyst", None)
+        if analyst and analyst.get("role") != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Administrator role required to remove a global No-Strike exclusion",
+            )
+        actor = str(analyst.get("username")) if analyst else "local-operator"
+        request = request.model_copy(update={"changed_by": actor})
+        return remove_global_no_strike(request, DB_PATH)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -4072,10 +4529,11 @@ def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
 def decide_scan_fallback(
     run_id: str, request: FallbackDecision, http_request: Request
 ) -> dict:
-    request = bind_signed_in_actor(http_request, request, "decided_by")
-    manifest = get_scan_run_plan(run_id)
+    manifest = get_scan_run_plan(run_id, DB_PATH)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
+    actor, _ = _require_run_control(http_request, manifest)
+    request = request.model_copy(update={"decided_by": actor})
     with ACTIVE_RUNS_LOCK:
         control = ACTIVE_RUNS.get(run_id)
         if control is None or manifest["status"] != "awaiting_fallback_approval":
