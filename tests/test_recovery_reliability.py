@@ -35,7 +35,7 @@ interface Ethernet1
  ip address 10.80.0.1 255.255.255.0
 ip route 10.99.0.0 255.255.255.0 10.80.0.3
 end
-===== show history =====
+===== show history all =====
   1 show version
   2 configure terminal
 ''')
@@ -323,8 +323,8 @@ def test_cisco_key_collection_retains_history_first(tmp_path, monkeypatch):
     monkeypatch.setattr(device_configs, 'stop_accountability_capture', lambda *args: None)
     monkeypatch.setattr(device_configs, 'capture_is_valid', lambda *args: True)
     def collect(prefix, commands, output):
-        assert commands[0] == 'show history'
-        output.write_text('===== show history =====\n1 show version\n===== show running-config =====\nhostname test-router\nend\n')
+        assert commands[0] == 'show history all'
+        output.write_text('===== show history all =====\n1 show version\n===== show running-config =====\nhostname test-router\nend\n')
         return '', 0, [], None, False
     monkeypatch.setattr(device_configs, '_run_cisco_command_sequence_to_file', collect)
     plan = device_configs.DeviceConfigPlan(vendor='cisco', device_type='router', device_address='10.0.0.1', username='operator', key_path='/keys/test', operator='analyst', originating_host='test', accountability_interface='eth0')
@@ -443,8 +443,8 @@ def test_interactive_collection_preserves_history_even_when_config_fails(tmp_pat
     monkeypatch.setattr(device_configs, '_control_ssh_args', lambda *_: ['ssh','target'])
     monkeypatch.setattr(device_configs, '_finish_interactive_session', lambda _, **kwargs: kwargs)
     def collect(prefix, commands, output):
-        assert commands[0] == 'show history'
-        output.write_text('===== show history =====\n1 show version\n===== show running-config =====\n[NCT] no usable output\n')
+        assert commands[0] == 'show history all'
+        output.write_text('===== show history all =====\n1 show version\n===== show running-config =====\n[NCT] no usable output\n')
         return '', 0, ['show running-config'], 'Running configuration unavailable', False
     monkeypatch.setattr(device_configs, '_run_cisco_command_sequence_to_file', collect)
     result = device_configs._run_interactive_collection(session)
