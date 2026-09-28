@@ -230,6 +230,31 @@ NCT must remain usable on limited range hardware. Avoid architecture that requir
 Kubernetes, Elasticsearch, Redis, or an external database cluster just to use core
 features.
 
+## 2.8 Mission data must be portable and merge-safe across disconnected sites
+
+NCT must support geographically separated, fully offline kits that independently
+collect and analyze the same mission and later exchange mission state by removable
+media.
+
+This requirement applies to new persistent mission entities immediately, even before
+the synchronization engine itself is implemented.
+
+New mission-state designs must therefore prefer:
+
+- Globally stable identifiers rather than installation-local identity.
+- Append-only revision/event history for consequential analyst and mission changes.
+- Explicit provenance for site, analyst, source evidence, revision, and processing.
+- Merge-safe semantics that do not rely on wall-clock timestamps alone.
+- Archive/tombstone behavior where absence from an export cannot be mistaken for
+  deletion.
+- Idempotent replay so the same bundle can be imported more than once safely.
+- Exact artifact identity through the Artifact Registry.
+- Separation of mission truth from machine-local configuration, credentials, and
+  presentation state.
+
+Do not introduce new persistent mission objects that can only be reconciled by
+copying/replacing the SQLite database or by applying last-writer-wins semantics.
+
 ---
 
 # 3. Performance Budgets
@@ -1839,6 +1864,750 @@ Health should expose:
 
 ---
 
+
+# CROSS-CUTTING WORKSTREAM E — Offline Mission Portability & Multi-Site Synchronization
+
+**Purpose:** Allow multiple geographically separated NCT kits with no network
+connectivity between them to exchange mission evidence and analyst-generated mission
+state by removable media and converge on a defensible common operational picture.
+
+This is **not** database backup/restore. Each site may continue working independently
+between exchanges. Synchronization must merge independently produced mission state
+without silently overwriting another site's evidence, analyst decisions, or history.
+
+## E.1 Operational model
+
+Support at least two package types:
+
+### Full Mission Package
+
+Used for:
+
+- Initial provisioning of another kit.
+- Rebuilding a lost/replaced kit.
+- Establishing a new site from an existing mission picture.
+- Periodic full reconciliation when required.
+
+A full package includes the complete portable mission state selected for export,
+subject to retention, classification, size, and operator controls.
+
+### Delta Sync Package
+
+Used for routine site-to-site exchange.
+
+A destination-specific delta should contain only mission records, revisions,
+tombstones, receipts, and artifact bytes not already acknowledged by the destination
+site.
+
+Example:
+
+```text
+Site Alpha
+  ↓ export changes since Bravo acknowledgment #42
+Removable media
+  ↓
+Site Bravo
+  ↓ verify → preview → merge → acknowledge
+```
+
+Re-importing the same valid bundle must be idempotent.
+
+## E.2 Stable site identity
+
+Every NCT installation participating in offline synchronization requires a durable,
+randomly generated `site_id`.
+
+Retain:
+
+- Site ID.
+- Human-readable site/kit label.
+- Site creation time.
+- Site public signing identity/fingerprint.
+- Site status: active, retired, replaced, compromised.
+- Replacement lineage where applicable.
+
+Site identity must survive normal application upgrades, container replacement, and
+mission-data export/import.
+
+Cloning a system image must not silently create two active kits with the same logical
+site identity. Provide an explicit clone/new-site initialization workflow.
+
+## E.3 Globally stable mission identities
+
+Any mission object that may cross sites must have a globally stable identifier that
+does not depend on local SQLite row numbers.
+
+This includes, as applicable:
+
+- Artifact identities.
+- Artifact observations/encounters.
+- Network Scopes.
+- Saved Networks when treated as shared mission objects.
+- Hosts/endpoints/services and later reconciled physical devices.
+- Device collections/configurations.
+- Findings.
+- Recommendations.
+- Investigation Lenses.
+- Tasks.
+- Comments.
+- Notes.
+- Reports/report definitions.
+- Pinned evidence.
+- Coverage records.
+- Hardening simulations.
+- Mission-relevant analyst/user identities.
+- Archive/tombstone records.
+- Synchronization events and acknowledgments.
+
+Local surrogate database keys may still exist internally, but they must never be the
+cross-site identity.
+
+## E.4 Analyst identity and authentication separation
+
+Portable analyst identity must be separated from local authentication.
+
+Synchronize mission-relevant identity such as:
+
+- Canonical analyst/person ID.
+- Callsign/display alias.
+- Authorship and ownership references.
+- Role context when needed to understand historical actions.
+- Site where the action originated.
+
+Do **not** synchronize by default:
+
+- Password hashes.
+- Active sessions.
+- API credentials.
+- Private keys.
+- MFA secrets.
+- Local authentication tokens.
+
+Each site authenticates users locally. Historical provenance must still resolve to the
+same analyst after import.
+
+Provide an explicit identity-collision workflow for independently created records that
+appear to refer to the same person. Never merge analyst identities solely by display
+name or callsign.
+
+## E.5 Portable mission-data classes
+
+The synchronization manifest must classify content.
+
+### Portable by default
+
+Include mission truth such as:
+
+- Source artifacts and Artifact Registry metadata.
+- Artifact observations and provenance.
+- Normalized facts/entities.
+- Immutable assessments and evidence receipts.
+- Nmap evidence and scan metadata.
+- Device configurations and parsed facts.
+- Network Scopes and relevant scope history.
+- Evidence assignment/correction history.
+- Coverage records and blind-spot state.
+- Findings and recommendations.
+- Investigation Lenses.
+- Tasks and mission comments.
+- Analyst notes intended as mission records.
+- Pinned evidence.
+- Report definitions and report snapshots.
+- Audit/provenance events required to understand mission history.
+- Archive/tombstone events.
+- Derived results when their input/version dependencies remain valid.
+
+### Local by default
+
+Exclude machine/site-local state such as:
+
+- Passwords and authentication secrets.
+- TLS private keys.
+- Session cookies/tokens.
+- Host-specific filesystem paths.
+- Local deployment configuration.
+- Container/runtime state.
+- Local port bindings.
+- Machine-specific health data.
+- Temporary caches that can be rebuilt.
+- Local browser/session state.
+- Personal UI preferences unless explicitly selected for portability.
+
+The package format must explicitly distinguish these classes rather than relying on
+directory-copy exclusions.
+
+## E.6 Event/revision model
+
+Consequential mutable mission objects require revision history suitable for
+multi-writer merge.
+
+Each portable change should retain enough information to identify:
+
+- Object ID.
+- Revision/event ID.
+- Originating site ID.
+- Originating site-local monotonic sequence.
+- Parent/base revision(s).
+- Analyst/actor identity where applicable.
+- Wall-clock event time.
+- Processing/import time.
+- Change type.
+- Previous/current state or immutable event payload.
+- Provenance/evidence dependencies.
+
+Wall-clock timestamps are evidence and display information; they are **not** sufficient
+for ordering or conflict resolution.
+
+A site-local monotonically increasing sequence or equivalent causal marker must allow
+NCT to determine what a destination has already received even when site clocks differ.
+
+## E.7 Conflict detection and resolution
+
+Never use unconditional last-writer-wins for consequential mission state.
+
+Automatically merge when operations are provably non-conflicting, such as:
+
+- Two different new artifacts.
+- Independent observations of the same artifact.
+- Independent comments.
+- Independent evidence receipts.
+- Append-only history.
+- Exact duplicate events already imported.
+
+Raise a conflict when independent branches change the same consequential mutable
+state incompatibly.
+
+Examples:
+
+- Site Alpha renames a Network Scope while Site Bravo archives it.
+- Two sites independently change the disposition of the same Finding.
+- Two sites edit the same report section from the same base revision.
+- Two analysts independently reassign the same task.
+- Competing evidence-assignment corrections descend from the same prior assignment.
+
+Conflict UI must show:
+
+- Object.
+- Common base revision.
+- Alpha/source change.
+- Bravo/local change.
+- Provenance/analyst/site/time for each.
+- Evidence affected.
+- Merge options.
+- Whether both histories can be retained.
+- Resulting revision before confirmation.
+
+Conflict resolution itself becomes a new provenance-preserved revision/event.
+
+Do not delete the losing branch from history.
+
+## E.8 Archive, deletion, and tombstones
+
+Absence from a package is not deletion.
+
+Portable mission objects that can be archived/deleted require durable tombstone or
+archive events sufficient for disconnected peers to learn the state change later.
+
+Requirements:
+
+- Tombstone has stable object identity and origin.
+- Tombstone participates in normal synchronization.
+- Receiving a tombstone does not destroy required historical provenance.
+- Evidence referenced by retained findings/reports/lenses cannot be physically
+  removed merely because another site archived its parent object.
+- Tombstone retention must be long enough to cover every participating site's
+  synchronization horizon.
+- Physical deletion/compaction must remain a separate policy decision.
+
+Where hard deletion is supported, define how a long-offline kit is prevented from
+resurrecting deleted state when it later reconnects by removable-media exchange.
+
+## E.9 Artifact transfer and deduplication
+
+Use Artifact Registry SHA-256 identity for exact source-artifact transfer.
+
+For each referenced artifact:
+
+- Include canonical SHA-256.
+- Include expected size.
+- Include media type/source type.
+- Include provenance/observation references.
+- Include bytes only when required by the selected package and destination state.
+
+If the destination already holds verified identical bytes, reuse the local canonical
+artifact and import only missing observations/references.
+
+Never deduplicate merely similar artifacts.
+
+A bundle must not create a second physical copy solely because the same artifact
+arrived from another site.
+
+## E.10 Bundle manifest
+
+Every package requires a machine-readable manifest containing at minimum:
+
+- Bundle format version.
+- Bundle ID.
+- Bundle type: full or delta.
+- Source site ID and label.
+- Intended destination site ID when destination-specific.
+- Mission/workspace identifier.
+- Export sequence/range.
+- Creation time.
+- NCT application version.
+- Schema version(s).
+- Parser/analysis versions relevant to included derived data.
+- Included record counts by class.
+- Included artifact hashes/sizes.
+- Dependency graph or dependency references.
+- Tombstone/archive count.
+- Conflict-relevant revision metadata.
+- Previous synchronization acknowledgment/checkpoint.
+- Whole-package integrity metadata.
+- Signature/certificate/fingerprint metadata.
+- Encryption metadata when used.
+- Export policy/options used.
+
+The manifest itself must be integrity protected.
+
+## E.11 Integrity, authenticity, and optional confidentiality
+
+Treat removable media and transferred bundles as untrusted until verification
+completes.
+
+Before mission data is committed:
+
+1. Validate bundle structure and format version.
+2. Validate source site identity/trust.
+3. Verify bundle signature when signing is enabled/required.
+4. Verify manifest integrity.
+5. Verify every included file hash and size.
+6. Validate all internal references.
+7. Validate schema/version compatibility.
+8. Parse content only through bounded, hardened parsers.
+9. Generate a read-only import preview.
+10. Commit through a transactional/checkpointed merge.
+
+Support site-level digital signing so an operator can verify who produced the package
+and that it was not modified.
+
+Support optional package encryption for environments where mission policy requires
+confidentiality on removable media. Encryption must not replace signature/integrity
+verification.
+
+Private signing/decryption keys must remain local and must never be exported inside
+ordinary mission packages.
+
+## E.12 Untrusted archive/media protections
+
+The importer must reject or safely contain:
+
+- Path traversal.
+- Absolute paths.
+- Symlinks/hardlinks that escape the staging area.
+- Device files.
+- Executable/autostart behavior.
+- Unexpected file types.
+- Archive nesting beyond configured limits.
+- Decompression bombs.
+- Excessive file counts.
+- Excessive individual/total extracted size.
+- Malformed XML/JSON/CSV/Parquet.
+- Oversized fields.
+- Duplicate manifest identities with conflicting bytes.
+- Hash mismatch.
+- Signature mismatch.
+- Unsupported schema requiring unsafe downgrade.
+
+Nothing in a package is executed.
+
+Import occurs from a staging area and must not trust removable-media paths as
+application storage.
+
+## E.13 Import preview and atomicity
+
+Before merge, show:
+
+- Source site.
+- Bundle ID/type.
+- Export sequence.
+- Signature/trust result.
+- NCT/schema compatibility.
+- New records by type.
+- Already-known records.
+- New artifact bytes required.
+- Artifact bytes already present.
+- Tombstones/archives.
+- Automatically mergeable updates.
+- Conflicts requiring review.
+- Unsupported/deferred records.
+- Disk-space requirement.
+- Estimated resulting storage use.
+- Any condition that will block import.
+
+No mission changes occur during preview.
+
+Import must be:
+
+- Transactional where practical.
+- Checkpointed for large artifact transfers.
+- Restart-safe.
+- Idempotent.
+- Recoverable after process/container restart.
+- Safe if removable media is removed after staging completes.
+
+A failed merge must not leave half-applied object state.
+
+## E.14 Full versus delta state tracking
+
+Track synchronization state per peer site.
+
+At minimum retain:
+
+- Peer site ID.
+- Last package received.
+- Last source sequence acknowledged.
+- Last package exported for that peer.
+- Records/artifacts acknowledged.
+- Outstanding/unacknowledged changes.
+- Last successful verification/import time.
+- Last failed/import-conflict state.
+
+Do not use only "last sync time" to compute deltas.
+
+Support a destination-specific action such as:
+
+```text
+Export changes for Site Bravo since acknowledgment #42
+```
+
+If peer state is missing or untrustworthy, fall back safely to a full reconciliation
+manifest rather than guessing.
+
+## E.15 Clock skew and temporal semantics
+
+Disconnected kits may have inaccurate or divergent clocks.
+
+Therefore retain separately:
+
+- Source observation time.
+- Analyst-entered event time.
+- Origin-site wall-clock time.
+- Origin-site monotonic sequence/causal order.
+- Destination import time.
+
+Never silently rewrite source timestamps to destination time.
+
+Clock skew warnings should be visible when a site's reported wall clock differs
+materially from other trusted evidence, but skew alone must not invalidate the
+mission record.
+
+## E.16 Schema and application-version compatibility
+
+Every bundle declares its schema and feature requirements.
+
+Required behavior:
+
+- Newer NCT should import supported older bundle versions through explicit migrations.
+- Older NCT must refuse a bundle requiring unsupported semantics rather than partially
+  importing it as if complete.
+- Unsupported record classes may only be deferred if the package format preserves
+  them losslessly and the operator is clearly told they were not applied.
+- No destructive schema downgrade.
+- Imported derived results must be marked stale/recomputed when local parser or
+  analysis-version dependencies differ.
+- Raw/source evidence should remain available so a newer site can re-normalize it.
+
+Publish and test a compatibility matrix before mission-ready acceptance.
+
+## E.17 Large-data and passive-telemetry strategy
+
+Full passive telemetry can make portable bundles impractically large.
+
+Support:
+
+- Artifact/record inventory before export.
+- Estimated package size.
+- Selectable time windows when policy permits.
+- Durable aggregated relationship export.
+- Optional omission of locally reproducible caches/derived data.
+- Destination-aware artifact byte suppression.
+- Multi-volume packages if required.
+- Chunked/checkpointed creation and staging.
+- Explicit handling of media capacity.
+- Clear distinction between "full mission knowledge" and "all raw retained telemetry."
+
+Never claim another site has a complete evidence picture when raw evidence was omitted.
+Coverage metadata must show what was and was not transferred.
+
+## E.18 Derived-result portability
+
+Derived results may be imported only when their dependencies are identifiable.
+
+Each portable derived result should retain:
+
+- Input artifact/observation/entity IDs.
+- Parser/engine version.
+- Analysis version.
+- Generation time.
+- Dependency hashes/versions.
+- Current/stale state.
+
+If dependencies or analysis versions do not match locally, preserve the imported
+result as historical provenance but mark it stale and queue/recommend safe local
+recomputation.
+
+Never let an incompatible imported cache become authoritative current analysis.
+
+## E.19 Permissions and operator controls
+
+Export/import is a privileged operation.
+
+Define explicit permissions for:
+
+- Create full mission export.
+- Create delta export.
+- Export sensitive raw evidence.
+- Export analyst notes/private lenses.
+- Import a package.
+- Trust/add/retire a peer site.
+- Resolve synchronization conflicts.
+- Apply tombstones/archive changes.
+- Override compatibility warnings where policy permits.
+
+Export must respect existing evidence visibility and classification/mission policy.
+
+Do not let a user export information merely because it physically exists on the kit
+if their role is not authorized to access/export it.
+
+## E.20 Private and personal analyst content
+
+Before implementation, define portability semantics for:
+
+- Private Investigation Lenses.
+- Draft notes.
+- Personal filter presets.
+- Personal dashboards.
+- Unsubmitted findings/recommendations.
+- Locally saved report drafts.
+
+Default rule: mission records explicitly intended to survive personnel/site movement
+should be portable; purely personal convenience state should remain local unless the
+user selects it.
+
+Private content must not silently become visible to another site's analysts merely
+because it was synchronized.
+
+## E.21 Audit trail
+
+Record every export and import.
+
+Audit should include:
+
+- Operator.
+- Site.
+- Bundle ID.
+- Destination/source site.
+- Time.
+- Bundle type.
+- Export filters/options.
+- Record/artifact counts.
+- Signature/trust result.
+- Import preview result.
+- Applied/ignored/deferred counts.
+- Conflicts.
+- Conflict resolutions.
+- Failed integrity/compatibility checks.
+- Final status.
+
+Audit records themselves must participate in appropriate mission continuity without
+creating recursive unbounded export growth.
+
+## E.22 UI workflow
+
+Add a mission-level workflow such as:
+
+**Mission → Offline Sync**
+
+### Export
+
+Show:
+
+- Destination site.
+- Full vs delta.
+- Changes since last acknowledged exchange.
+- New records/artifacts.
+- Estimated transfer size.
+- Omitted/local-only classes.
+- Warnings.
+- Media free-space check where available.
+- Create/verify bundle action.
+
+### Import
+
+Show:
+
+- Source site.
+- Bundle/sequence.
+- Signature/trust.
+- Compatibility.
+- New/already-known records.
+- Artifact transfer savings.
+- Tombstones.
+- Conflicts.
+- Required disk space.
+- Preview.
+- Import action.
+
+### Conflict Review
+
+Provide a dedicated queue with object-level provenance and explicit resolution.
+
+### Site/Peer Management
+
+Allow authorized operators to:
+
+- Name this site.
+- View site ID/fingerprint.
+- Add/trust peer identity.
+- Retire/replace a site.
+- View last exchange/acknowledgment.
+- Force full reconciliation when needed.
+
+## E.23 Failure and recovery cases that must be tested
+
+Test at minimum:
+
+- Same bundle imported twice.
+- Delta imported before required predecessor.
+- Missing predecessor but complete dependency set present.
+- Interrupted export.
+- Interrupted staging.
+- Interrupted database merge.
+- Container restart during import.
+- Media removal during copy.
+- Media removal after staging.
+- Full disk.
+- Corrupted archive.
+- Changed manifest.
+- One corrupted artifact among many.
+- Invalid signature.
+- Unknown/untrusted site.
+- Retired/compromised site.
+- Wrong destination package.
+- Site clone with duplicate site ID.
+- Clock skew.
+- Future-dated records.
+- Same globally stable object created independently at two sites.
+- Conflicting revisions.
+- Archive versus edit conflict.
+- Tombstone followed by stale offline resurrection attempt.
+- Analyst identity collision.
+- Schema older/newer in both directions.
+- Parser/analysis version mismatch.
+- Exact duplicate artifact from multiple sites.
+- Similar-but-not-identical artifacts.
+- Large bundle across multiple media volumes/chunks.
+- Partial passive-telemetry transfer.
+- Private-content permission boundaries.
+- Import by unauthorized role.
+- Reconciliation after months offline.
+
+## E.24 Implementation sequence
+
+Implement in this order unless a documented deviation is approved:
+
+1. [ ] Define stable Site identity and trust model.
+2. [ ] Inventory all portable mission-data classes and all local-only classes.
+3. [ ] Audit every current/new persistent mission entity for globally stable IDs.
+4. [ ] Add/confirm causal revision metadata and append-only history where required.
+5. [ ] Define archive/tombstone semantics and resurrection prevention.
+6. [ ] Define analyst identity portability separate from authentication.
+7. [ ] Define bundle manifest/schema and compatibility rules.
+8. [ ] Implement deterministic read-only mission inventory.
+9. [ ] Implement full export package creation.
+10. [ ] Implement hardened staging and package verification.
+11. [ ] Implement read-only import preview.
+12. [ ] Implement idempotent import of immutable artifacts/observations.
+13. [ ] Implement merge of append-only mission records.
+14. [ ] Implement mutable-object conflict detection.
+15. [ ] Implement conflict-review/resolution workflow.
+16. [ ] Implement peer acknowledgment and destination-specific delta calculation.
+17. [ ] Implement delta export/import.
+18. [ ] Implement tombstone/archive propagation.
+19. [ ] Implement schema/analysis-version compatibility and stale-result handling.
+20. [ ] Implement package signing/trust workflow.
+21. [ ] Implement optional package encryption where mission policy requires it.
+22. [ ] Implement large-data/chunking/multi-volume behavior.
+23. [ ] Implement Mission → Offline Sync UI.
+24. [ ] Add complete audit/provenance reporting.
+25. [ ] Run two-site convergence tests with independent changes.
+26. [ ] Run three-or-more-site convergence tests with transitive exchanges.
+27. [ ] Run long-offline-site resurrection/conflict tests.
+28. [ ] Validate on representative disconnected Range hardware and removable media.
+29. [ ] Publish operator workflow, recovery procedure, compatibility matrix, and known
+    limitations.
+30. [ ] Mission-ready acceptance only after the development gate below passes.
+
+## E.25 Key watch points / breakpoints
+
+The independent reviewer must treat these as explicit quality-gate watch points:
+
+- Any new mission entity using only local integer identity.
+- Last-writer-wins for consequential mission state.
+- Merge ordering based solely on timestamps.
+- SQLite database replacement presented as synchronization.
+- Missing tombstones for portable mutable objects.
+- A deletion that can be resurrected by a long-offline site.
+- Credentials/secrets entering ordinary mission packages.
+- Private analyst content losing its visibility boundary.
+- Artifact observations collapsing into one encounter because bytes are identical.
+- Similar-but-nonidentical artifacts being deduplicated.
+- Imported derived results becoming current despite version mismatch.
+- Missing provenance after merge.
+- Silent conflict resolution.
+- Package parsing before integrity/structure validation.
+- Importing directly from removable-media paths.
+- Partial imports reported as complete.
+- Delta generation from wall-clock time instead of acknowledgments/sequences.
+- Site cloning producing duplicate active site identity.
+- Unsupported schema being partially interpreted without warning.
+- Full-mission claims when evidence classes were intentionally omitted.
+- A failed import leaving partially committed mission state.
+- Sync/audit events recursively causing unbounded package growth.
+- Package signing keys or authentication secrets being exported.
+- Cross-site role/permission assumptions granting unintended access.
+- Performance that requires external infrastructure incompatible with disconnected
+  constrained kits.
+
+Any one of these requires **HALTED FOR REVIEW** until resolved or explicitly accepted
+and documented.
+
+## E.26 Success criteria
+
+Offline Mission Synchronization is successful when:
+
+1. Two disconnected sites can independently work, exchange packages in either order,
+   and converge without losing evidence or analyst history.
+2. Exact duplicate artifacts transfer/store only once while every encounter remains
+   preserved.
+3. Conflicting analyst decisions are surfaced rather than silently overwritten.
+4. A kit months out of date can safely reconcile without resurrecting retired state.
+5. Wall-clock skew does not corrupt ordering.
+6. Re-importing a package causes no duplicate logical state.
+7. Interrupted import/export resumes or safely restarts.
+8. Unsupported versions fail safely and explain why.
+9. Every merged conclusion remains traceable to source site, analyst, evidence, and
+   revision history.
+10. A destination can prove what it has and generate a compact delta acknowledgment.
+11. Mission truth can move without moving credentials or machine-local secrets.
+12. Operators can understand whether a site has a complete, partial, or stale mission
+    picture.
+13. Full and delta packages work on representative offline Range hardware and approved
+    removable-media workflows.
+
+---
+
 # 12. Product Identity
 
 The working project name is:
@@ -1903,6 +2672,29 @@ Do not rely on Crew Lead workflow until:
 Dashboard widgets must query normalized/prepared evidence. They may not reparse
 source artifacts as part of normal interaction.
 
+## Gate 5 — Offline Mission Synchronization
+
+Do not call multi-site mission synchronization mission-ready until:
+
+- Every portable mission object uses globally stable cross-site identity.
+- Site identity and peer trust are explicit and clone-safe.
+- Consequential mutable objects have merge-safe revision history.
+- Archive/tombstone semantics prevent stale-site resurrection.
+- Analyst identity is portable without exporting authentication secrets.
+- Full export/import is verified, previewed, idempotent and restart-safe.
+- Destination-specific delta exchange uses acknowledgments/sequences rather than only
+  timestamps.
+- Conflicts are detected and require explicit provenance-preserving resolution.
+- Artifact transfer deduplicates only exact verified content.
+- Imported derived results honor parser/analysis-version dependencies.
+- Bundle integrity/signature checks occur before commit.
+- Removable-media/archive hardening tests pass.
+- Two-site and multi-site convergence tests pass.
+- Long-offline-site reconciliation tests pass.
+- Version compatibility matrix is documented and tested.
+- Mission-local versus machine-local data boundaries are documented and enforced.
+- Range/offline hardware validation and operator recovery procedures are complete.
+
 ---
 
 # 14. Development Order
@@ -1937,6 +2729,7 @@ The following run horizontally across phases:
 
 - Report Composer / Export Manager
 - Retention and compaction
+- Offline Mission Portability & Multi-Site Synchronization
 - Provenance
 - Deployment
 - Performance
@@ -2008,3 +2801,7 @@ The redesign succeeds when:
 11. More retained knowledge does not automatically mean slower interactive use.
 12. NCT becomes progressively more knowledgeable through **incremental learning**,
     not progressively slower through repeated full re-analysis.
+13. Multiple disconnected NCT kits can exchange verified mission packages, preserve
+    independent evidence and analyst history, surface conflicts, and converge on a
+    common mission picture without copying/replacing the database or exposing local
+    credentials.
