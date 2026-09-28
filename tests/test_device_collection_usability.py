@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.device_configs import (
+    COMMAND_HISTORY_COMMANDS,
     _collect_cisco_command_outputs,
     _limit_retained_collection_file,
     _run_cisco_command_sequence,
@@ -391,6 +392,9 @@ for raw in sys.stdin:
     print(command, flush=True)
     if command == 'terminal length 0':
         print('Terminal length set', flush=True)
+    elif command == 'show history all':
+        print("CMD: 'configure terminal' 10:00:00 UTC Sun Sep 28 2026", flush=True)
+        print("CMD: 'interface GigabitEthernet1' 10:01:00 UTC Sun Sep 28 2026", flush=True)
     elif command == 'show version':
         print('Cisco IOS XE Software, Version 17.12', flush=True)
     elif command == 'show running-config':
@@ -417,6 +421,7 @@ for raw in sys.stdin:
         [sys.executable, str(fake_device), "admin@192.0.2.1"],
         [
             "terminal length 0",
+            COMMAND_HISTORY_COMMANDS["cisco"],
             "show version",
             "show running-config",
             "show ip route",
@@ -426,11 +431,14 @@ for raw in sys.stdin:
 
     assert exit_code == 0
     assert error is None
+    assert COMMAND_HISTORY_COMMANDS["cisco"] == "show history all"
     assert "COMMANDS_QUEUED_TOO_EARLY" not in transcript
+    assert "CMD: 'configure terminal'" in outputs["show history all"]
     assert "S 10.7.207.0/24 via 192.0.2.1" in outputs["show ip route"]
     assert "Extended IP access list OUTSIDE-IN" in outputs["show access-lists"]
     assert responded == {
         "terminal length 0",
+        "show history all",
         "show version",
         "show running-config",
         "show ip route",
