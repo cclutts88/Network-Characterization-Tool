@@ -128,6 +128,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 persistent derived results | Introduce the common derived-result model after persisting additional analysis families | Establish a minimal immutable result store and one verified Nmap base-analysis adapter before replacing any production cache read | Existing scan analysis reuse is keyed by file size, modification time and a local integer version. Device summaries and exposure reports have broader dependency and retention contracts that are not yet safe to generalize. Exact computation identity and atomic publication must be proved before migration | This deliberately introduces family/version identity and immutable input manifests ahead of the broader dependency-graph and analysis-versioning milestones. The first adapter contains only `parse_xml()` output for one verified artifact; run grouping, scope, provenance, overrides, enrichment and current-state claims remain outside. Existing production cache paths remain unchanged pending a separate quality gate |
 | 2026-10-03 | Phase 1 production Nmap result migration | Replace the legacy size/modified-time scan-analysis cache in one step | Migrate only authoritative finalized `nmap_scan` observations for each run's exact `scan.xml`; parse unregistered historical scan XML directly without caching until explicit backfill registers it | Finalized run-local XML may be a separate copy from canonical artifact storage, historical scans may have no registry observation, and page reads must not create evidence or perform implicit backfill | Every registered terminal-run analysis verifies both run-local and canonical bytes. Ambiguous, missing, changed or corrupt registered evidence fails explicitly. Per the user's direction that the verified store is the new supported method, disposable legacy cache rows and their table are removed during storage initialization; rollback code can recreate an empty table. Historical scan XML and provenance are not deleted. Unregistered historical files remain usable at the temporary cost of repeated full parsing and verification. Run grouping, scope, overrides, enrichment, provenance, current-state claims and foundation explorer reads remain outside this migration |
 | 2026-10-03 | Phase 1 topology result migration | Reuse the production Nmap base-analysis payload in Map and device correlations | Preserve the existing topology reader as a separate immutable result family while sharing exact scan-source verification and publication safeguards | The topology reader intentionally differs from Analyze presence semantics: directly substituting the base payload would remove assumed, down, or otherwise legacy-visible host records and change missing-value handling, ordering, and service defaults | Migrate only automated Map and device-correlation XML reads. Keep graph assembly, source context, device correlation, imports and existing record limits outside the reusable payload. Correcting legacy topology interpretation requires a separate evidence-semantics gate. Device-summary caching remains deferred until its multi-file and command-history dependency contract is defined |
+| 2026-10-03 | Phase 1 device-summary result migration | Replace the device summary cache as one production change | Stage the work: first extract a frozen snapshot calculation and internal verified adapter, then separately gate production reuse for finalized manual uploads before broader collected-device migration | Device summaries select among multiple ordered files, distinguish missing from empty history, consume semantic manifest fields, preserve full routes, normalize command history, and can race collection deletion. Manual uploads and active collections also use different Artifact Registry identities | Keep the current device cache during the staged migration. Page reads do not register or backfill evidence. Production wiring requires a durable collection-authority guard; legacy, partial and broader collected-device paths remain on their current behavior until separately reviewed. Cache retirement is a later atomic startup migration after every dependent path moves |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -957,6 +958,41 @@ foundational changes.
        focused suite passed **44 tests**, the reviewer independently passed **49 tests**,
        the novice operator passed the revised wording, and Python compilation plus
        `git diff --check` passed.
+     - [~] Define and migrate the retained device-summary calculation.
+       Work started 2026-10-03 with the dependency contract as the first gate. **QUALITY
+       GATE: CLEAR - DOCUMENTED DEVIATION.** The reviewed migration is intentionally
+       staged: extract a pure calculation from one frozen, ordered source snapshot and
+       prove an internal verified adapter first; separately gate production reuse for
+       finalized manual uploads; then migrate broader collected-device evidence. The
+       contract preserves sorted `uploaded-*`, then sorted `*-config.txt`, then
+       `stdout.txt` configuration priority; `stdout.txt`-first raw-output priority; empty
+       versus missing inputs; dedicated command history versus configuration-section
+       fallback; complete routes; current bounded presentation sections and UTF-8
+       replacement decoding. Semantic inputs include vendor, ordered commands, history
+       command/attempt status and the exact `output_complete is False` rule. Run identity,
+       filenames and collection provenance stay outside shared calculation content.
+       Registered bytes must be verified before and after calculation; page reads do not
+       register or backfill legacy evidence. The existing cache and normalized command
+       observations remain until every dependent path and a durable deletion/publication
+       authority guard pass separate cold, warm, corruption, replacement, concurrency and
+       rollback review.
+       - [x] Frozen calculation and internal verified manual-upload adapter.
+         Completed 2026-10-03 without changing production Network Devices reads. One
+         calculation now receives a frozen text/metadata snapshot rather than reopening
+         evidence during parsing. The internal adapter verifies the registered run-local
+         and canonical upload, identifies semantic manifest and selection-shape inputs,
+         excludes run identity and retained filenames from shared content, reattaches
+         those details on return, preserves command-history line numbers, and links every
+         separate upload encounter. Exact bytes reuse one immutable result; same-size/time
+         changes, unreviewed extra files and mid-calculation manifest changes fail closed.
+         Existing cache tables and normalized command observations are unchanged. The
+         built-in guide labels this as internal groundwork with no page or operator-action
+         change. **QUALITY GATE: CLEAR - DOCUMENTED DEVIATION**; the full Docker suite
+         passed **798 tests**, the focused suite passed **78 tests**, the reviewer passed
+         **65 regressions plus 20 independent wrapper/adapter comparisons**, and the
+         novice operator passed the revised wording.
+       - [ ] Add durable collection authority and separately gate production reuse for
+         finalized manual uploads before expanding to multi-file device collections.
 7. [ ] Dirty-state tracking.
 8. [ ] Dependency graph.
 9. [ ] Analysis versioning.

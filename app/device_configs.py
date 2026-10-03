@@ -2032,19 +2032,51 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
             str(manifest.get("history_command") or "show history"), ""
         )
     )
-    command_history = parse_command_history(
-        history_text,
-        attempted=(
+    return calculate_device_collection_summary(
+        run_id=run_id,
+        configuration_text=configuration_text,
+        source_filename=source_filename,
+        configuration_truncated=configuration_truncated,
+        raw_output=raw_output,
+        raw_filename=raw_filename,
+        raw_truncated=raw_truncated,
+        history_text=history_text,
+        history_attempted=(
             history_path.is_file()
             or bool(manifest.get("command_history_status"))
             or bool(manifest.get("history_command"))
         ),
-        nct_commands=manifest.get("commands") or [],
+        vendor=str(manifest.get("vendor") or "").lower(),
+        commands=manifest.get("commands") or [],
+        output_complete=manifest.get("output_complete"),
+    )
+
+
+def calculate_device_collection_summary(
+    *,
+    run_id: str,
+    configuration_text: str,
+    source_filename: str | None,
+    configuration_truncated: bool,
+    raw_output: str,
+    raw_filename: str | None,
+    raw_truncated: bool,
+    history_text: str,
+    history_attempted: bool,
+    vendor: str,
+    commands: list,
+    output_complete: object,
+) -> dict:
+    """Calculate one device summary from a single frozen source snapshot."""
+    command_history = parse_command_history(
+        history_text,
+        attempted=history_attempted,
+        nct_commands=commands,
     )
     volatile_configuration = assess_volatile_configuration(
-        configuration_text, str(manifest.get("vendor") or "").lower()
+        configuration_text, vendor
     )
-    if configuration_truncated or manifest.get("output_complete") is False:
+    if configuration_truncated or output_complete is False:
         volatile_configuration = {
             "status": "unavailable", "comparable": False,
             "detail": "The retained configuration is incomplete; collect complete running and startup evidence before comparing them.",
@@ -2065,7 +2097,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
     from app.vendor_policy import parse_vendor_policy
 
     interfaces, routes = parse_config_text(configuration_text)
-    switch_detail = parse_switch_evidence(configuration_text, manifest.get("commands", []))
+    switch_detail = parse_switch_evidence(configuration_text, commands)
     interfaces = merge_switch_interfaces(interfaces, switch_detail)
     neighbors = parse_neighbor_text(configuration_text)
     topology_neighbors = parse_topology_neighbors(configuration_text)
@@ -2093,7 +2125,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         + int(iptables_policy["counts"]["ipset_members"]),
     )
     switching = _evidence_lines(configuration_text, SWITCHING_PATTERNS)
-    commands = [str(value) for value in manifest.get("commands", [])][:MAX_SUMMARY_ITEMS]
+    commands = [str(value) for value in commands][:MAX_SUMMARY_ITEMS]
     routes = [
         {
             **route,

@@ -62,6 +62,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "does not reuse or skip a network scan" in html
     assert "Map and Network Devices also interpret host relationships and traceroute paths" in html
     assert "view may be incomplete and shows a warning" in html
+    assert "Network Devices still uses its existing results" in html
+    assert "The page has not changed, and there is no new operator action" in html
     assert "every file encounter keeps its own source details" in html
     assert "Older unregistered scan files are still read directly" in html
     assert "There is no new operator action or button" in html

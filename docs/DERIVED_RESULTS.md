@@ -94,8 +94,14 @@ completed for the same verified bytes. It does not mean the result is current, l
 fresh, or still true on the network.
 
 Device summaries, exposure reports, SearchSploit results, coverage comparisons and other
-analysis families retain their existing storage. Their full dependency and retention
-contracts must be defined before migration.
+analysis families retain their existing production storage. Device-summary foundation
+work now has a pure calculation from one frozen source snapshot and an internal verified
+manual-upload adapter. The adapter declares exact configuration/raw inputs, embedded
+history presence, semantic manifest fields, selection shape, parser limits and separate
+artifact-observation links. It is deliberately not called by Network Devices yet. The
+existing device cache remains authoritative until a durable database authority record
+can prevent publication from racing collection deletion or semantic manifest changes;
+broader multi-file collections need their own production gate.
 
 Dirty-state propagation, dependency scheduling, global analysis versioning, persistent
 jobs, workers and operator-facing saved-result controls remain later milestones.
