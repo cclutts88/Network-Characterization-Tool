@@ -124,6 +124,7 @@ A roadmap item should only be marked complete when:
 
 | 2026-09-27 | Phase 1 | Introduce Artifact Registry without changing existing import behavior | Artifact Registry integration initially caused the existing raw Nmap download test to reject canonical artifact paths; compatibility validation was updated and the subsequent full CI run passed | Legacy endpoint assumed all imported XML lived directly under `/data/imports` | Treat legacy file-layout assumptions as migration compatibility requirements; no Phase 1 item marked complete until green CI |
 | 2026-10-03 | Phase 1 delta detection | Classify evidence as `new`, `changed`, `unchanged`, `no longer observed`, or `not assessed` | Begin with an explicit Record A / Record B comparison of reported service states for one scoped address; label one-sided receipts `recorded only in A/B` | Current Nmap receipts preserve reported protocol/port states, but target and port coverage may be unknown or incomplete and processing order does not establish observation chronology | Keep Phase 1 delta detection incomplete. One-sided receipts remain missing evidence, not disappearance or a newly present service. Current-state selection, Last Seen, automatic baselines and coverage-backed lifecycle labels remain separate gates |
+| 2026-10-03 | Phase 1 delta coverage | Add lifecycle labels directly from existing Nmap assessment receipts | Add a versioned coverage-receipt contract first; keep lifecycle labels blocked until records prove successful completion, non-overlapping collection order, confirmed host response, exact protocol/port inclusion and complete omitted-port accounting | Review found that requested `scaninfo` ports alone do not prove probe completion, host-level `extraports` were not retained, and multi-phase aggregate XML can mix host timing from one phase with completion time from another | Existing `nmap-endpoints:1` assessments remain readable as historical evidence and do not silently gain stronger claims. Reprocess a current assignment with `nmap-endpoints:2` to create coverage receipts. Ambiguous, incomplete and combined-phase evidence must explain why it is ineligible and resolve to `not assessed` when lifecycle classification is added |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -817,6 +818,18 @@ foundational changes.
    state inference, Last Seen, disappearance detection and Range deployment remain later
    gates.
 4. [~] Delta detection:
+   - [x] Versioned coverage receipts and lifecycle eligibility reasons. Work started
+     2026-10-03 after independent review halted direct lifecycle classification because
+     existing receipts did not retain completion and omitted-port evidence. The new
+     contract must preserve exact requested port ranges, successful completion,
+     host response, host timing, aggregate omitted-port accounting and NCT multi-phase
+     provenance without changing older assessment claims.
+     2026-10-03 completion: `nmap-endpoints:2` now records versioned coverage receipts
+     without strengthening older assessments. Receipts retain successful completion,
+     exact requested protocol/port intervals, confirmed host response, host collection
+     time, complete omitted-port accounting and multi-phase provenance. Missing,
+     contradictory, malformed, unsuccessful, undeclared-protocol and ambiguous merged
+     evidence fails closed with an operator-readable reason.
    - [x] Explicit source-record comparison: compare reported transport state for
      one address in two analyst-selected, current unsuperseded assessments within one
      exact Network Scope. Use neutral Record A / Record B labels and never infer order
@@ -841,12 +854,32 @@ foundational changes.
      the workflow after one plain-language warning refinement. **QUALITY GATE: CLEAR —
      DOCUMENTED DEVIATION**; the full Docker suite passed **711 tests**, the independent
      reviewer passed **76 focused tests**, and `git diff --check` passed. Coverage-backed
-     lifecycle categories, current truth, Last Seen and disappearance remain unfinished.
-   - [ ] new
-   - [ ] changed
-   - [ ] unchanged
-   - [ ] no longer observed
-   - [ ] not assessed
+     lifecycle categories were left unfinished by that milestone and are completed by
+     the coverage-aware milestone below. Current truth, Last Seen and proof of
+     disappearance remain unfinished.
+   - [x] new
+   - [x] changed
+   - [x] unchanged
+   - [x] no longer observed
+   - [x] not assessed
+     2026-10-03 completion: the saved-record comparison now orders evidence only from
+     successful, strictly non-overlapping host collection intervals and then applies one
+     state-transition table independent of whether Nmap printed a port individually or
+     summarized it. Closed to open is Newly observed; open to closed is No longer
+     observed; equal supported states are Unchanged; other exact differences are Changed;
+     and uncertain time or coverage is Not assessed. A common-ports scan followed by a
+     top-100 scan therefore marks a previously reported port outside the later top 100 as
+     Not assessed, with a plain explanation that its later state is unknown. The UI also
+     distinguishes an individual service row from a complete scan summary and repeats
+     that these are historical labels, not live truth. Disposable browser validation
+     exercised all five labels, record selection, the common-ports/top-100 case, guide
+     wording and a clean browser console. **QUALITY GATE: CLEAR - DOCUMENTED DEVIATION**;
+     the full Docker suite passed **753 tests**, the post-wording focused suite passed
+     **95 tests**, and the independent reviewer passed **137 focused plus 24 additional
+     transition/order checks**. The novice operator independently passed the final live
+     workflow after the scan-summary explanation was added. Current truth, Last Seen,
+     automatic baselines, physical-device reconciliation and proof of disappearance
+     remain later gates.
 5. [x] Searchsploit cache redesign.
 6. [~] Persistent derived results.
    - [x] Searchsploit query results are now persisted and reused across requests.

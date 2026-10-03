@@ -41,6 +41,38 @@ def comparison_xml(services, *, address="192.0.2.10", start="100", finish="110")
     ).encode()
 
 
+def lifecycle_xml(
+    requested_ports, services, *, address="192.0.2.10", start=100,
+    protocol="tcp", host_start=None, host_end=None, finish=None,
+    omitted_state="closed",
+):
+    finish = finish if finish is not None else start + 10
+    host_start = host_start if host_start is not None else start + 1
+    host_end = host_end if host_end is not None else finish - 1
+    ports = []
+    explicit_requested = 0
+    for item_protocol, port, state in services:
+        if item_protocol == protocol and port in requested_ports:
+            explicit_requested += 1
+        state_xml = "" if state is None else f'<state state="{state}"/>'
+        ports.append(
+            f'<port protocol="{item_protocol}" portid="{port}">{state_xml}'
+            f'<service name="service-{port}"/></port>'
+        )
+    omitted = len(requested_ports) - explicit_requested
+    extras = f'<extraports state="{omitted_state}" count="{omitted}"/>' if omitted else ""
+    service_list = ",".join(str(port) for port in requested_ports)
+    return (
+        f'<nmaprun scanner="nmap" args="nmap -n {address}" start="{start}">'
+        f'<scaninfo type="{"syn" if protocol == "tcp" else protocol}" '
+        f'protocol="{protocol}" numservices="{len(requested_ports)}" '
+        f'services="{service_list}"/>'
+        f'<host starttime="{host_start}" endtime="{host_end}"><status state="up" reason="syn-ack"/>'
+        f'<address addr="{address}" addrtype="ipv4"/><ports>{extras}{"".join(ports)}</ports>'
+        f'</host><runstats><finished time="{finish}" exit="success"/></runstats></nmaprun>'
+    ).encode()
+
+
 def scope(db, label):
     return create_network_scope(db, label=label, created_by="admin")
 
@@ -71,7 +103,7 @@ def assign(db, item, destination):
     )
 
 
-def process(db, assignment, parser_version="nmap-endpoints:1"):
+def process(db, assignment, parser_version="nmap-endpoints:2"):
     return ingest_assigned_nmap_observation(
         db,
         expected_assignment_id=assignment["assignment_id"],
@@ -210,11 +242,11 @@ def test_other_parser_is_history_archived_scope_remains_readable_and_pages_are_b
     lab = scope(db, "Lab")
     item = observation(db)
     assignment = assign(db, item, lab)
-    process(db, assignment, parser_version="nmap-endpoints:2")
+    process(db, assignment, parser_version="nmap-endpoints:1")
 
     view = get_foundation_scope_evidence(db, lab["scope_id"])
     assert view["endpoints"] == []
-    assert view["separate_history"][0]["parser_version"] == "nmap-endpoints:2"
+    assert view["separate_history"][0]["parser_version"] == "nmap-endpoints:1"
     process(db, assignment)
     archive_network_scope(
         db, lab["scope_id"], expected_version=1,
@@ -520,12 +552,14 @@ def test_service_comparison_uses_neutral_evidence_labels_and_preserves_sources(t
     assert by_service[("udp", 53)]["record_a"]["reported_state"] == "open|filtered"
     assert by_service[("udp", 53)]["record_b"]["reported_state"] == "unknown"
     assert result["record_a"]["source"]["observation_id"] == first_item["observation_id"]
+    assert result["record_a"]["endpoint_facts"]["port_coverage"]["contract"] == "nmap-coverage:1"
     assert result["record_b"]["assessment"]["collection_window"]["start"]["utc"] == (
         "1970-01-01T00:03:20+00:00"
     )
     assert result["claims"] == {
-        "record_order_or_current_truth": False,
-        "new_or_no_longer_observed": False,
+        "record_order_from_non_overlapping_host_intervals": False,
+        "coverage_aware_lifecycle": True,
+        "current_truth": False,
         "last_seen": False,
         "absence_or_disappearance": False,
     }
@@ -542,6 +576,186 @@ def test_service_comparison_uses_neutral_evidence_labels_and_preserves_sources(t
     )["scope"]["active"] is False
 
 
+def _lifecycle_pair(db, lab, first_xml, second_xml):
+    first_item = observation(db, "upload:lifecycle-earlier", content=first_xml)
+    second_item = observation(db, "upload:lifecycle-later", content=second_xml)
+    first_assignment, second_assignment = assign(db, first_item, lab), assign(db, second_item, lab)
+    first_processing, second_processing = process(db, first_assignment), process(db, second_assignment)
+    entity_id = get_foundation_scope_evidence(db, lab["scope_id"])["endpoints"][0]["entity_id"]
+    first_record = {"assignment_id": first_assignment["assignment_id"],
+                    "assessment_id": first_processing["assessment_id"]}
+    second_record = {"assignment_id": second_assignment["assignment_id"],
+                     "assessment_id": second_processing["assessment_id"]}
+    return entity_id, first_record, second_record
+
+
+def test_lifecycle_classifies_ordered_explicit_and_covered_omitted_services(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    requested = [22, 443, 8443, 9443]
+    earlier = lifecycle_xml(
+        requested,
+        [("tcp", 22, "open"), ("tcp", 443, "open"), ("tcp", 8443, "open")],
+        start=100,
+    )
+    later = lifecycle_xml(
+        requested,
+        [("tcp", 22, "open"), ("tcp", 443, "closed"), ("tcp", 9443, "open")],
+        start=200,
+    )
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, later)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    lifecycle = {(item["protocol"], item["port"]): item["lifecycle"]
+                 for item in result["services"]}
+    assert result["chronology"] == {
+        "status": "ordered", "earlier": "record_a", "later": "record_b",
+        "reason": "Record A host collection ended before Record B began",
+    }
+    assert lifecycle[("tcp", 22)]["classification"] == "unchanged"
+    assert lifecycle[("tcp", 443)]["classification"] == "no_longer_observed"
+    assert lifecycle[("tcp", 8443)]["classification"] == "no_longer_observed"
+    assert lifecycle[("tcp", 9443)]["classification"] == "new"
+    assert result["claims"] == {
+        "record_order_from_non_overlapping_host_intervals": True,
+        "coverage_aware_lifecycle": True,
+        "current_truth": False,
+        "last_seen": False,
+        "absence_or_disappearance": False,
+    }
+
+    reversed_result = compare_records(
+        db, lab["scope_id"], entity_id, second_record, first_record,
+    )
+    reversed_lifecycle = {
+        (item["protocol"], item["port"]): item["lifecycle"]["classification"]
+        for item in reversed_result["services"]
+    }
+    assert reversed_result["chronology"]["earlier"] == "record_b"
+    assert reversed_lifecycle == {
+        (key[0], key[1]): value["classification"] for key, value in lifecycle.items()
+    }
+
+
+def test_top_100_after_broader_scan_marks_uncovered_earlier_port_not_assessed(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = lifecycle_xml(
+        [22, 443, 12345],
+        [("tcp", 22, "open"), ("tcp", 443, "open"), ("tcp", 12345, "open")],
+        start=100,
+    )
+    later = lifecycle_xml(
+        list(range(1, 101)), [("tcp", 22, "open")], start=200,
+    )
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, later)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    lifecycle = {item["port"]: item["lifecycle"] for item in result["services"]}
+    assert lifecycle[22]["classification"] == "unchanged"
+    assert lifecycle[443]["classification"] == "not_assessed"
+    assert lifecycle[12345]["classification"] == "not_assessed"
+    assert lifecycle[443]["reason"] == (
+        "Port 443 was not included in the later record's selected TCP ports, "
+        "so its later state is unknown"
+    )
+
+
+def test_overlapping_or_incomplete_records_keep_lifecycle_not_assessed(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = lifecycle_xml([22], [("tcp", 22, "open")], start=100, host_end=109)
+    overlapping = lifecycle_xml(
+        [22], [("tcp", 22, "closed")], start=105, host_start=108, host_end=114,
+        finish=115,
+    )
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, overlapping)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    assert result["chronology"]["status"] == "unresolved"
+    assert result["services"][0]["lifecycle"]["classification"] == "not_assessed"
+    assert "overlap or touch" in result["services"][0]["lifecycle"]["reason"]
+
+
+def test_explicit_service_outside_declared_protocol_coverage_is_not_assessed(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = lifecycle_xml([22], [("tcp", 22, "open"), ("udp", 53, "open")], start=100)
+    later = lifecycle_xml([22], [("tcp", 22, "open"), ("udp", 53, "closed")], start=200)
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, later)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    lifecycle = {(item["protocol"], item["port"]): item["lifecycle"]
+                 for item in result["services"]}
+    assert lifecycle[("tcp", 22)]["classification"] == "not_assessed"
+    assert lifecycle[("udp", 53)]["classification"] == "not_assessed"
+    assert "protocols not declared" in lifecycle[("tcp", 22)]["reason"]
+
+
+@pytest.mark.parametrize(("earlier_services","later_services","aggregate_state"), [
+    ([("tcp", 443, "closed")], [], "closed"),
+    ([], [("tcp", 443, "closed")], "closed"),
+    ([("tcp", 443, "open")], [], "open"),
+    ([], [("tcp", 443, "open")], "open"),
+])
+def test_explicit_and_aggregate_same_state_is_unchanged(
+    tmp_path, earlier_services, later_services, aggregate_state,
+):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = lifecycle_xml(
+        [443], earlier_services, start=100, omitted_state=aggregate_state,
+    )
+    later = lifecycle_xml(
+        [443], later_services, start=200, omitted_state=aggregate_state,
+    )
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, later)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    assert result["services"][0]["lifecycle"]["classification"] == "unchanged"
+    assert "aggregate" in result["services"][0]["lifecycle"]["reason"]
+
+
+@pytest.mark.parametrize(
+    ("earlier_services", "later_services", "earlier_aggregate", "later_aggregate", "expected"),
+    [
+        ([("tcp", 443, "closed")], [("tcp", 443, "open")], "closed", "closed", "new"),
+        ([], [("tcp", 443, "open")], "closed", "closed", "new"),
+        ([("tcp", 443, "closed")], [], "closed", "open", "new"),
+        ([("tcp", 443, "open")], [("tcp", 443, "closed")], "closed", "closed", "no_longer_observed"),
+        ([], [("tcp", 443, "closed")], "open", "closed", "no_longer_observed"),
+        ([("tcp", 443, "open")], [], "closed", "closed", "no_longer_observed"),
+        ([("tcp", 443, "open")], [("tcp", 443, "filtered")], "closed", "closed", "changed"),
+        ([], [("tcp", 443, "filtered")], "open", "closed", "changed"),
+        ([("tcp", 443, "filtered")], [], "closed", "open", "changed"),
+    ],
+)
+def test_state_transition_label_does_not_depend_on_explicit_or_aggregate_format(
+    tmp_path, earlier_services, later_services, earlier_aggregate, later_aggregate, expected,
+):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = lifecycle_xml(
+        [443], earlier_services, start=100, omitted_state=earlier_aggregate,
+    )
+    later = lifecycle_xml(
+        [443], later_services, start=200, omitted_state=later_aggregate,
+    )
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, later)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    assert result["services"][0]["lifecycle"]["classification"] == expected
+
+
+@pytest.mark.parametrize("aggregate_state", ["filtered", "open|filtered"])
+def test_ambiguous_aggregate_state_does_not_support_loss(tmp_path, aggregate_state):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = lifecycle_xml([443], [("tcp", 443, "open")], start=100)
+    later = lifecycle_xml(
+        [443], [], start=200, omitted_state=aggregate_state,
+    )
+    entity_id, first_record, second_record = _lifecycle_pair(db, lab, earlier, later)
+    result = compare_records(db, lab["scope_id"], entity_id, first_record, second_record)
+    lifecycle = result["services"][0]["lifecycle"]
+    assert lifecycle["classification"] == "not_assessed"
+    assert f"Aggregate {aggregate_state} does not establish an exact service state" == lifecycle["reason"]
+
+
 def test_service_comparison_rejects_stale_cross_scope_parser_and_same_record(tmp_path):
     db = tmp_path / "nct.db"
     first_scope, second_scope = scope(db, "First"), scope(db, "Second")
@@ -556,7 +770,7 @@ def test_service_comparison_rejects_stale_cross_scope_parser_and_same_record(tmp
     other_assignment = assign(db, other_scope_item, second_scope)
     other_processing = process(db, other_assignment)
     unsupported_assignment = assign(db, unsupported_item, first_scope)
-    unsupported_processing = process(db, unsupported_assignment, parser_version="nmap-endpoints:2")
+    unsupported_processing = process(db, unsupported_assignment, parser_version="nmap-endpoints:3")
     scoped = get_foundation_scope_evidence(db, first_scope["scope_id"])
     entity_id = scoped["endpoints"][0]["entity_id"]
     first_record = {

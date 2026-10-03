@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+from decimal import Decimal, InvalidOperation
 
 from app.database import connect_database
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
@@ -768,6 +769,7 @@ SELECT assignment.assignment_id, assignment.revision, assignment.event_kind,
        json_extract(assessment.payload_json, '$.facts.scan_start') AS scan_start_json,
        json_extract(assessment.payload_json, '$.facts.scan_end') AS scan_end_json,
        json_extract(assessment.payload_json, '$.facts.coverage') AS coverage_json,
+       receipt.facts_json AS endpoint_facts_json,
        observation.observation_id, observation.sha256, observation.source_kind,
        observation.source_ref, observation.observed_at, observation.original_filename,
        observation.actor AS observation_actor,
@@ -854,6 +856,7 @@ def _comparison_record(row: sqlite3.Row) -> dict:
             "coverage": _json(row["coverage_json"]),
         },
         "source": _source(row),
+        "endpoint_facts": _json(row["endpoint_facts_json"]),
         "service_count": int(row["service_count"]),
     }
 
@@ -894,13 +897,179 @@ def _comparison_kind(record_a: dict | None, record_b: dict | None) -> str:
     return "different_reported_state"
 
 
+def _interval_values(record: dict, label: str) -> tuple[Decimal, Decimal] | tuple[None, str]:
+    completion = record.get("assessment", {}).get("coverage", {}).get("completion", {})
+    if not completion.get("successful"):
+        return None, f"{label} source did not prove successful completion"
+    interval = (
+        record.get("endpoint_facts", {}).get("port_coverage", {})
+        .get("collection_interval", {})
+    )
+    if not interval.get("eligible"):
+        detail = "; ".join(interval.get("reasons") or []) or "interval proof is unavailable"
+        return None, f"{label} collection interval is not eligible: {detail}"
+    start, end = interval.get("start") or {}, interval.get("end") or {}
+    try:
+        start_value, end_value = Decimal(start["raw"]), Decimal(end["raw"])
+    except (InvalidOperation, KeyError, TypeError):
+        return None, f"{label} collection interval is unreadable"
+    if not start_value.is_finite() or not end_value.is_finite() or start_value >= end_value:
+        return None, f"{label} collection interval is invalid"
+    return start_value, end_value
+
+
+def _comparison_chronology(record_a: dict, record_b: dict) -> dict:
+    interval_a = _interval_values(record_a, "Record A")
+    interval_b = _interval_values(record_b, "Record B")
+    reasons = [value[1] for value in (interval_a, interval_b) if value[0] is None]
+    if reasons:
+        return {"status": "unresolved", "earlier": None, "later": None,
+                "reason": "; ".join(reasons)}
+    start_a, end_a = interval_a
+    start_b, end_b = interval_b
+    if end_a < start_b:
+        return {
+            "status": "ordered", "earlier": "record_a", "later": "record_b",
+            "reason": "Record A host collection ended before Record B began",
+        }
+    if end_b < start_a:
+        return {
+            "status": "ordered", "earlier": "record_b", "later": "record_a",
+            "reason": "Record B host collection ended before Record A began",
+        }
+    return {
+        "status": "unresolved", "earlier": None, "later": None,
+        "reason": "Host collection intervals overlap or touch; chronological order is unresolved",
+    }
+
+
+def _coverage_for_omission(
+    record: dict, label: str, protocol: str, port: int,
+) -> tuple[bool, str, str | None]:
+    receipt = record.get("endpoint_facts", {}).get("port_coverage", {})
+    if receipt.get("contract") != "nmap-coverage:1":
+        return False, f"{label} record has no supported versioned coverage receipt", None
+    protocol_receipt = (receipt.get("protocols") or {}).get(protocol)
+    if not isinstance(protocol_receipt, dict):
+        return False, f"{label} record has no exact {protocol.upper()} coverage receipt", None
+    if not protocol_receipt.get("omission_coverage_eligible"):
+        detail = "; ".join(protocol_receipt.get("reasons") or []) or "coverage proof is incomplete"
+        return False, f"{label} record cannot support a missing-service conclusion: {detail}", None
+    intervals = protocol_receipt.get("requested_intervals") or []
+    if not any(int(item.get("start", 1)) <= port <= int(item.get("end", -1))
+               for item in intervals):
+        return False, (
+            f"Port {port} was not included in the {label.lower()} record's selected "
+            f"{protocol.upper()} ports, so its {label.lower()} state is unknown"
+        ), None
+    if not protocol_receipt.get("omitted_state_eligible"):
+        detail = "; ".join(protocol_receipt.get("omitted_state_reasons") or [])
+        return False, f"{label} omitted-port state is not attributable: {detail}", None
+    state = protocol_receipt.get("omitted_reported_state")
+    return True, (
+        f"The {label.lower()} record successfully covered {protocol.upper()} port {port} "
+        f"and reported omitted ports as {state}"
+    ), state
+
+
+def _coverage_for_explicit(record: dict, label: str, protocol: str, port: int) -> tuple[bool, str]:
+    receipt = record.get("endpoint_facts", {}).get("port_coverage", {})
+    if receipt.get("contract") != "nmap-coverage:1":
+        return False, f"{label} record has no supported versioned coverage receipt"
+    protocol_receipt = (receipt.get("protocols") or {}).get(protocol)
+    if not isinstance(protocol_receipt, dict):
+        return False, f"{label} record has no exact {protocol.upper()} coverage receipt"
+    if not protocol_receipt.get("explicit_observation_eligible"):
+        detail = "; ".join(protocol_receipt.get("explicit_observation_reasons") or [])
+        return False, f"{label} explicit service is not coverage-eligible: {detail or 'coverage proof is incomplete'}"
+    intervals = protocol_receipt.get("requested_intervals") or []
+    if not any(int(item.get("start", 1)) <= port <= int(item.get("end", -1))
+               for item in intervals):
+        return False, (
+            f"Port {port} was not included in the {label.lower()} record's selected "
+            f"{protocol.upper()} ports, so its {label.lower()} state is unknown"
+        )
+    return True, f"The {label.lower()} record explicitly and validly covered {protocol.upper()} port {port}"
+
+
+def _lifecycle_result(
+    chronology: dict, record_a_metadata: dict, record_b_metadata: dict,
+    record_a: dict | None, record_b: dict | None, protocol: str, port: int,
+) -> dict:
+    if chronology["status"] != "ordered":
+        return {"classification": "not_assessed", "reason": chronology["reason"]}
+    if chronology["earlier"] == "record_a":
+        earlier, later = record_a, record_b
+        earlier_metadata, later_metadata = record_a_metadata, record_b_metadata
+    else:
+        earlier, later = record_b, record_a
+        earlier_metadata, later_metadata = record_b_metadata, record_a_metadata
+
+    def resolve_state(record_metadata, record, label):
+        if record is not None:
+            eligible, reason = _coverage_for_explicit(
+                record_metadata, label, protocol, port,
+            )
+            state = record.get("reported_state")
+            if not eligible:
+                return None, None, reason
+            if state is None:
+                return None, None, f"The {label.lower()} explicit service receipt has no reported state"
+            return state, "explicit", reason
+        eligible, reason, state = _coverage_for_omission(
+            record_metadata, label, protocol, port,
+        )
+        if not eligible:
+            return None, None, reason
+        if state not in {"open", "closed"}:
+            return None, None, f"Aggregate {state} does not establish an exact service state"
+        return state, "aggregate", reason
+
+    earlier_state, earlier_basis, earlier_reason = resolve_state(
+        earlier_metadata, earlier, "Earlier",
+    )
+    later_state, later_basis, later_reason = resolve_state(
+        later_metadata, later, "Later",
+    )
+    unresolved = [
+        reason for state, reason in (
+            (earlier_state, earlier_reason), (later_state, later_reason),
+        ) if state is None
+    ]
+    if unresolved:
+        return {"classification": "not_assessed", "reason": "; ".join(unresolved)}
+
+    basis_note = (
+        f"earlier {earlier_basis} evidence and later {later_basis} evidence"
+    )
+    if earlier_state == later_state:
+        return {
+            "classification": "unchanged",
+            "reason": f"Both ordered records reported {earlier_state} using {basis_note}",
+        }
+    if earlier_state == "closed" and later_state == "open":
+        return {
+            "classification": "new",
+            "reason": f"State moved from closed to open using {basis_note}",
+        }
+    if earlier_state == "open" and later_state == "closed":
+        return {
+            "classification": "no_longer_observed",
+            "reason": f"State moved from open to closed using {basis_note}",
+        }
+    return {
+        "classification": "changed",
+        "reason": f"Reported state changed from {earlier_state} to {later_state} using {basis_note}",
+    }
+
+
 def compare_foundation_receipt_services(
     db_path: Path, scope_id: str, entity_id: str, *,
     record_a_assignment_id: str, record_a_assessment_id: str,
     record_b_assignment_id: str, record_b_assessment_id: str,
     limit: int = 100, offset: int = 0,
 ) -> dict:
-    """Compare explicit service states in two selected current source records."""
+    """Compare service states in two selected saved source records."""
     limit, offset = _page(limit, offset, MAX_SERVICE_PAGE)
     if (record_a_assignment_id, record_a_assessment_id) == (
         record_b_assignment_id, record_b_assessment_id,
@@ -935,6 +1104,9 @@ def compare_foundation_receipt_services(
             raise KeyError(
                 "A selected source record is unavailable, superseded, or uses an unsupported parser"
             )
+        record_a_metadata = _comparison_record(record_a_row)
+        record_b_metadata = _comparison_record(record_b_row)
+        chronology = _comparison_chronology(record_a_metadata, record_b_metadata)
         rows = db.execute(
             _SERVICE_COMPARISON_SQL,
             (record_a_assessment_id, entity_id,
@@ -965,12 +1137,17 @@ def compare_foundation_receipt_services(
                 "comparison": _comparison_kind(record_a, record_b),
                 "record_a": record_a,
                 "record_b": record_b,
+                "lifecycle": _lifecycle_result(
+                    chronology, record_a_metadata, record_b_metadata,
+                    record_a, record_b, row["protocol"], int(row["port"]),
+                ),
             })
     return {
         "scope": _scope(scope_row),
         "endpoint": {"entity_id": endpoint["entity_id"], "address": endpoint["address"]},
-        "record_a": _comparison_record(record_a_row),
-        "record_b": _comparison_record(record_b_row),
+        "record_a": record_a_metadata,
+        "record_b": record_b_metadata,
+        "chronology": chronology,
         "services": comparisons,
         "pagination": {
             "limit": limit, "offset": offset, "total": total,
@@ -978,8 +1155,9 @@ def compare_foundation_receipt_services(
         },
         "read_only": True,
         "claims": {
-            "record_order_or_current_truth": False,
-            "new_or_no_longer_observed": False,
+            "record_order_from_non_overlapping_host_intervals": chronology["status"] == "ordered",
+            "coverage_aware_lifecycle": True,
+            "current_truth": False,
             "last_seen": False,
             "absence_or_disappearance": False,
         },

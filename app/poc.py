@@ -2518,7 +2518,10 @@ def merge_nmap_xml(source_paths: list[Path], destination: Path) -> int:
             continue
     if not roots:
         raise ValueError("No readable Nmap phase XML was available to merge")
-    merged = ET.Element("nmaprun", dict(roots[0].attrib))
+    merged_attributes = dict(roots[0].attrib)
+    merged_attributes["nct_source"] = "protocol-phase-merge"
+    merged_attributes["nct_phase_count"] = str(len(roots))
+    merged = ET.Element("nmaprun", merged_attributes)
     for root in roots:
         for scaninfo in root.findall("scaninfo"):
             merged.append(ET.fromstring(ET.tostring(scaninfo, encoding="unicode")))

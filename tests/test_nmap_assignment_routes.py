@@ -176,7 +176,7 @@ def test_body_cannot_supply_actor_or_processing_parser(tmp_path, monkeypatch):
     assert assigned.json()["current_assignment"]["actor"] == "alice"
     # This endpoint has no request body contract; supplied parser data cannot affect it.
     assert parser_rejected.status_code == 200
-    assert parser_rejected.json()["processing"]["parser_version"] == "nmap-endpoints:1"
+    assert parser_rejected.json()["processing"]["parser_version"] == "nmap-endpoints:2"
 
 
 def test_viewer_reads_status_but_cannot_assign_process_or_correct(tmp_path, monkeypatch):

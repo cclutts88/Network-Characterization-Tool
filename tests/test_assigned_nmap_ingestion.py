@@ -73,7 +73,7 @@ def test_happy_path_commits_complete_graph_and_exact_replay_is_noop(tmp_path):
         "assessment_id": first["assessment_id"],
         "scope_id": assignment["scope_id"],
         "artifact_observation_id": item["observation_id"],
-        "parser_version": "nmap-endpoints:1",
+        "parser_version": "nmap-endpoints:2",
         "address_count": 1,
         "service_receipt_count": 1,
         "assessed_at": "1970-01-01T00:01:50+00:00",
@@ -201,8 +201,8 @@ def test_correction_back_to_prior_scope_reuses_assessment_and_adds_link(tmp_path
 def test_parser_versions_create_separate_assessments_and_links(tmp_path):
     db = tmp_path / "nct.db"
     assignment = assign(db, artifact(db), scope(db, "Lab"))
-    first = ingest(db, assignment)
-    second = ingest(db, assignment, parser_version="nmap-endpoints:2")
+    first = ingest(db, assignment, parser_version="nmap-endpoints:1")
+    second = ingest(db, assignment)
     assert first["assessment_id"] != second["assessment_id"]
     assert second["assessment_created"] is True
     assert second["link_created"] is True

@@ -1764,7 +1764,15 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "Use as Record B" in html
     assert "Compare reported service states" in html
     assert "/service-comparison?${params}" in html
-    assert "Recorded only in A or B means the other file did not report that service" in html
+    assert "Lifecycle labels are used only when exact coverage supports the historical state transition" in html
+    assert "Coverage-aware change" in html
+    assert "Evidence result</strong> describes what each file reported" in html
+    assert "what the files and their coverage allow us to conclude" in html
+    assert "Not recorded</strong> means there is no individual service row" in html
+    assert "the completed scan summary accounts for that exact port" in html
+    assert "processedEvidenceLifecycleLabel" in html
+    assert "does not prove the service is gone now" in html
+    assert "Coverage-aware historical comparison complete" in html
     assert "processedEvidenceSelectionSignature" in html
     assert "const comparison=historical?'':" in html
     assert "if(!run)return" in html
@@ -1773,6 +1781,9 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "className='processed-evidence-comparison-status status bad'" in html
     assert "Source reported presence" in html
     assert "File-reported coverage" in html
+    assert "Coverage receipt ${esc(contract)}" in html
+    assert "missing-service coverage" in html
+    assert "No versioned coverage receipt is available" in html
     assert "aggregate timing and does not precisely date every service observation" in html
     assert "Addresses with separate history" in html
     assert 'id="loadMoreProcessedScopes"' in html

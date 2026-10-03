@@ -91,6 +91,291 @@ def test_verified_nmap_adapter_preserves_scope_times_presence_and_all_states(tmp
     assert down["facts"]["presence"]["classification"] == "not_up"
 
 
+def test_versioned_coverage_receipt_proves_complete_single_protocol_omissions(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun scanner="nmap" start="100">
+    <scaninfo type="syn" protocol="tcp" numservices="3" services="22,80,443"/>
+    <host starttime="101" endtime="109"><status state="up" reason="syn-ack"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/><ports>
+    <extraports state="closed" count="2"><extrareasons reason="reset" count="2"/></extraports>
+    <port protocol="tcp" portid="22"><state state="open" reason="syn-ack"/></port>
+    </ports></host><runstats><finished time="110" exit="success"/></runstats></nmaprun>'''
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    payload = assessments(db)[0]
+    coverage = payload["facts"]["coverage"]
+    host_coverage = payload["hosts"][0]["facts"]["port_coverage"]
+    assert coverage["coverage_contract"] == "nmap-coverage:1"
+    assert coverage["completion"] == {
+        "finished_present": True,
+        "exit": "success",
+        "successful": True,
+        "reason": "Nmap recorded a successful finished state",
+    }
+    assert coverage["scan_types"][0]["service_intervals"] == [
+        {"start": 22, "end": 22},
+        {"start": 80, "end": 80},
+        {"start": 443, "end": 443},
+    ]
+    assert host_coverage["contract"] == "nmap-coverage:1"
+    assert host_coverage["protocols"]["tcp"] == {
+        "requested_port_count": 3,
+        "requested_intervals": coverage["scan_types"][0]["service_intervals"],
+        "explicit_port_count": 1,
+        "aggregate_omitted_port_count": 2,
+        "accounted_port_count": 3,
+        "explicit_observation_eligible": True,
+        "explicit_observation_reasons": [],
+        "omission_coverage_eligible": True,
+        "reasons": [],
+        "aggregate_states": ["closed"],
+        "omitted_reported_state": "closed",
+        "omitted_state_eligible": True,
+        "omitted_state_reasons": [],
+    }
+
+
+@pytest.mark.parametrize(("finished","services","numservices","expected"), [
+    ('<finished time="110" exit="error"/>', "22,80,443", "3", "successful completion"),
+    ('<finished time="110" exit="success"/>', "22,invalid", "2", "port list is not exact"),
+    ('<finished time="110" exit="success"/>', "22,80", "3", "port list is not exact"),
+])
+def test_coverage_receipt_explains_incomplete_or_ambiguous_port_evidence(
+    tmp_path, finished, services, numservices, expected,
+):
+    db = tmp_path / "nct.db"
+    content = f'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="{numservices}" services="{services}"/>
+    <host starttime="101" endtime="109"><status state="up" reason="syn-ack"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/><ports>
+    <extraports state="closed" count="1"/><port protocol="tcp" portid="22"><state state="open"/></port>
+    </ports></host><runstats>{finished}</runstats></nmaprun>'''.encode()
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    receipt = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert any(expected in reason for reason in receipt["reasons"])
+
+
+def test_multi_phase_aggregate_retains_provenance_and_blocks_omission_claims(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100" nct_source="protocol-phase-merge" nct_phase_count="2">
+    <scaninfo type="syn" protocol="tcp" numservices="1" services="22"/>
+    <scaninfo type="udp" protocol="udp" numservices="1" services="53"/>
+    <host starttime="101" endtime="109"><status state="up" reason="syn-ack"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/><ports>
+    <extraports state="closed" count="1"/><port protocol="tcp" portid="22"><state state="open"/></port>
+    </ports></host><runstats><finished time="210" exit="success"/></runstats></nmaprun>'''
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    payload = assessments(db)[0]
+    assert payload["facts"]["coverage"]["source_composition"] == {
+        "kind": "protocol-phase-merge",
+        "phase_count": 2,
+        "timing_attribution": "ambiguous_across_phases",
+        "provenance_valid": True,
+        "reasons": [],
+    }
+    protocols = payload["hosts"][0]["facts"]["port_coverage"]["protocols"]
+    assert protocols["tcp"]["omission_coverage_eligible"] is False
+    assert protocols["udp"]["omission_coverage_eligible"] is False
+    assert any("ambiguous host timing" in reason for reason in protocols["tcp"]["reasons"])
+
+
+@pytest.mark.parametrize(("scaninfo","ports","reason"), [
+    (
+        '<scaninfo type="syn" protocol="tcp" numservices="2" services="22,23"/>',
+        '<extraports state="closed" count="1"/>'
+        '<port protocol="tcp" portid="80"><state state="open"/></port>',
+        "explicit ports fall outside the requested list: 80",
+    ),
+    (
+        '<scaninfo type="syn" protocol="tcp" numservices="2" services="22,23"/>',
+        '<extraports state="closed" count="3"/>'
+        '<extraports state="filtered" count="-1"/>',
+        "aggregate omitted-port evidence is invalid or contradictory",
+    ),
+    (
+        '<scaninfo type="syn" protocol="tcp" numservices="2" services="U:22,U:23"/>',
+        '<extraports state="closed" count="2"/>',
+        "requested port list is not exact",
+    ),
+])
+def test_coverage_receipt_rejects_false_port_accounting(tmp_path, scaninfo, ports, reason):
+    db = tmp_path / "nct.db"
+    content = f'''<nmaprun start="100">{scaninfo}
+    <host starttime="101" endtime="109"><status state="up" reason="syn-ack"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/><ports>{ports}</ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''.encode()
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    receipt = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert reason in receipt["reasons"]
+
+
+@pytest.mark.parametrize("phase_count", ["bogus", "0", "-1"])
+def test_marked_merge_with_invalid_phase_provenance_fails_closed(tmp_path, phase_count):
+    db = tmp_path / "nct.db"
+    content = f'''<nmaprun start="100" nct_source="protocol-phase-merge"
+    nct_phase_count="{phase_count}"><scaninfo type="syn" protocol="tcp"
+    numservices="2" services="22,23"/><host starttime="101" endtime="109">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><extraports state="closed" count="2"/></ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''.encode()
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    payload = assessments(db)[0]
+    assert payload["facts"]["coverage"]["source_composition"]["provenance_valid"] is False
+    receipt = payload["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert "NCT phase count is missing or invalid" in receipt["reasons"]
+
+
+def test_equal_host_interval_is_not_chronology_eligible(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="1" services="22"/><host starttime="105" endtime="105">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><port protocol="tcp" portid="22"><state state="open"/></port></ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    interval = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["collection_interval"]
+    assert interval["eligible"] is False
+    assert interval["reasons"] == ["host collection interval is empty or reversed"]
+
+
+def test_legacy_unmarked_automated_aggregate_does_not_gain_coverage_claims(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="2" services="22,23"/><host starttime="101" endtime="109">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><extraports state="closed" count="2"/></ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''
+    artifact = register_artifact_bytes(
+        db_path=db, content=content, source_kind="nmap_scan", source_ref="run-legacy",
+        original_filename="scan.xml", media_type="application/xml", actor="analyst",
+        observed_at="2030-01-01T00:00:00+00:00",
+    )
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    payload = assessments(db)[0]
+    composition = payload["facts"]["coverage"]["source_composition"]
+    assert composition["kind"] == "legacy_unmarked_automated_aggregate"
+    assert composition["provenance_valid"] is False
+    receipt = payload["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert any("lacks phase provenance" in reason for reason in receipt["reasons"])
+
+
+def test_unexpected_explicit_protocol_blocks_aggregate_attribution(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="3" services="22,23,24"/><host starttime="101" endtime="109">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><extraports state="closed" count="2"/>
+    <port protocol="udp" portid="53"><state state="open"/></port></ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    receipt = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert "explicit ports use protocols not declared by scaninfo: udp" in receipt["reasons"]
+
+
+@pytest.mark.parametrize("extraports", [
+    '<extraports count="2"/>',
+    '<extraports state="closed" count="2"><extrareasons reason="reset" count="3"/></extraports>',
+    '<extraports state="closed" count="2"><extrareasons reason="reset" count="bad"/></extraports>',
+])
+def test_contradictory_aggregate_summary_blocks_coverage(tmp_path, extraports):
+    db = tmp_path / "nct.db"
+    content = f'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="2" services="22,23"/><host starttime="101" endtime="109">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports>{extraports}</ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''.encode()
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    receipt = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert "aggregate omitted-port evidence is invalid or contradictory" in receipt["reasons"]
+
+
+def test_multi_phase_host_interval_is_not_chronology_eligible(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100" nct_source="protocol-phase-merge" nct_phase_count="2">
+    <scaninfo type="syn" protocol="tcp" numservices="1" services="22"/>
+    <host starttime="101" endtime="109"><status state="up" reason="syn-ack"/>
+    <address addr="192.0.2.10" addrtype="ipv4"/><ports>
+    <port protocol="tcp" portid="22"><state state="open"/></port></ports></host>
+    <runstats><finished time="210" exit="success"/></runstats></nmaprun>'''
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    interval = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["collection_interval"]
+    assert interval["eligible"] is False
+    assert any("does not cover every merged phase" in reason
+               for reason in interval["reasons"])
+
+
+@pytest.mark.parametrize("count_attribute", ['count="-1"', 'count="bad"', 'count=""', ''])
+def test_invalid_aggregate_count_retains_raw_invalid_state(tmp_path, count_attribute):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="1" services="22"/><host starttime="101" endtime="109">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><extraports state="closed" {count_attribute}/></ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''
+    content = content.replace(b"{count_attribute}", count_attribute.encode())
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    receipt = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]
+    expected_raw = count_attribute.split('="', 1)[1][:-1] if count_attribute else None
+    assert receipt["extraports"][0]["count_raw"] == expected_raw
+    assert receipt["extraports"][0]["count"] == 0
+    assert receipt["extraports"][0]["valid"] is False
+    assert receipt["protocols"]["tcp"]["omission_coverage_eligible"] is False
+
+
+def test_port_zero_is_not_dropped_from_protocol_consistency_check(tmp_path):
+    db = tmp_path / "nct.db"
+    content = b'''<nmaprun start="100"><scaninfo type="syn" protocol="tcp"
+    numservices="1" services="22"/><host starttime="101" endtime="109">
+    <status state="up" reason="syn-ack"/><address addr="192.0.2.10" addrtype="ipv4"/>
+    <ports><extraports state="closed" count="1"/>
+    <port protocol="udp" portid="0"><state state="open"/></port></ports></host>
+    <runstats><finished time="110" exit="success"/></runstats></nmaprun>'''
+    artifact = register(db, content)
+    ingest_nmap_observation(
+        db, observation_id=artifact["observation_id"], scope_id=scope(db),
+    )
+    receipt = assessments(db)[0]["hosts"][0]["facts"]["port_coverage"]["protocols"]["tcp"]
+    assert receipt["omission_coverage_eligible"] is False
+    assert "explicit ports use protocols not declared by scaninfo: udp" in receipt["reasons"]
+
+
 def test_explicit_scopes_separate_same_addresses_and_replay_is_idempotent(tmp_path):
     db = tmp_path / "nct.db"
     artifact = register(db)

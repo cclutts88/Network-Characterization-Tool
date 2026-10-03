@@ -45,8 +45,12 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Processed evidence by Network Scope" in html
     assert "Inspect and compare processed receipts" in html
     assert "neutral Record A and Record B" in html
-    assert "Read-only source-record service-state comparison" in html
-    assert "not proof that it appeared or disappeared" in html
+    assert "Coverage-aware historical service classification" in html
+    assert "outside the other record's selected ports is Not assessed" in html
+    assert "unambiguous closed result" in html
+    assert "does not say the service is gone now" in html
+    assert "does not create a service change" in html
+    assert "Versioned coverage receipts retain successful completion" in html
     assert "does not treat the most recently processed file as automatic truth" in html
     assert "Planned: passive activity summaries" in html
     assert "Build details · version" in html

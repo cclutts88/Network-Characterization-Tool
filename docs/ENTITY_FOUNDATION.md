@@ -69,11 +69,12 @@ no latest/current-state selection or Last Seen calculation in this layer.
   precision matters. NCT's combined `scan.xml` keeps the last phase's scan-finished
   time but does not attach a phase timestamp to each merged port observation.
 - Physical Host/Device reconciliation and normalized network/interface entities.
-- Typed evidence read models now include a read-only scoped explorer. Automatic
-  current-state selection and lifecycle calculations remain open.
+- Typed evidence read models now include a read-only scoped explorer and coverage-aware
+  historical service lifecycle labels. Automatic current-state selection remains open.
 - The first bounded comparison slice is specified in
   [FOUNDATION_EVIDENCE_COMPARISON.md](FOUNDATION_EVIDENCE_COMPARISON.md). It compares
-  explicit service states between two selected source records without lifecycle claims.
+  two selected source records and uses versioned coverage receipts to label supported
+  historical state transitions without claiming current truth or Last Seen.
 - Parser-result caching, processing jobs, failure status and source-change validation.
 - Broader production-consumer integration, migration and operator acceptance.
 

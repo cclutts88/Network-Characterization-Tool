@@ -23,9 +23,55 @@ from app.entities import PreparedAssessment, persist_prepared_assessment, prepar
 from app.nmap_presence import nmap_host_presence
 
 
-NMAP_ENDPOINT_PARSER = "nmap-endpoints:1"
+NMAP_ENDPOINT_PARSER = "nmap-endpoints:2"
+NMAP_COVERAGE_CONTRACT = "nmap-coverage:1"
 MAX_NMAP_XML_BYTES = 100 * 1024 * 1024
 SUPPORTED_TRANSPORTS = {"tcp", "udp", "sctp"}
+
+
+def _service_intervals(raw: str, declared_count: int, protocol: str) -> dict:
+    """Normalize an Nmap scaninfo service list without expanding large ranges."""
+    intervals: list[dict[str, int]] = []
+    reasons: list[str] = []
+    for token in str(raw or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if ":" in token:
+            prefix, token = (part.strip() for part in token.rsplit(":", 1))
+            expected = {"tcp": {"t", "tcp"}, "udp": {"u", "udp"},
+                        "sctp": {"s", "sctp"}}.get(protocol.lower(), set())
+            if prefix.lower() not in expected:
+                reasons.append(f"service-list prefix {prefix} does not match {protocol}")
+                continue
+        match = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", token)
+        if match is None:
+            reasons.append(f"unrecognized service-list token: {token}")
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start < 0 or end > 65535 or end < start:
+            reasons.append(f"invalid service-list range: {token}")
+            continue
+        intervals.append({"start": start, "end": end})
+    intervals.sort(key=lambda item: (item["start"], item["end"]))
+    merged: list[dict[str, int]] = []
+    for interval in intervals:
+        if merged and interval["start"] <= merged[-1]["end"] + 1:
+            merged[-1]["end"] = max(merged[-1]["end"], interval["end"])
+        else:
+            merged.append(dict(interval))
+    normalized_count = sum(item["end"] - item["start"] + 1 for item in merged)
+    if normalized_count != declared_count:
+        reasons.append(
+            f"service-list count {normalized_count} does not match declared count {declared_count}"
+        )
+    return {
+        "intervals": merged,
+        "normalized_count": normalized_count,
+        "exact": not reasons and declared_count > 0,
+        "reasons": reasons,
+    }
 
 
 def nmap_xml_coverage(root: ET.Element) -> dict:
@@ -40,10 +86,20 @@ def nmap_xml_coverage(root: ET.Element) -> dict:
         protocol = (info.get("protocol") or "").upper()
         if protocol and protocol not in protocols:
             protocols.append(protocol)
+        try:
+            declared_count = int(info.get("numservices", "0") or 0)
+        except ValueError:
+            declared_count = 0
+        service_list = _service_intervals(
+            info.get("services", ""), declared_count, protocol,
+        )
         scan_types.append({
             "type": info.get("type", ""), "protocol": protocol,
             "services": info.get("services", ""),
-            "service_count": int(info.get("numservices", "0") or 0),
+            "service_count": declared_count,
+            "service_intervals": service_list["intervals"],
+            "service_list_exact": service_list["exact"],
+            "service_list_reasons": service_list["reasons"],
         })
     if not protocols:
         if "-sU" in argument_tokens:
@@ -59,8 +115,47 @@ def nmap_xml_coverage(root: ET.Element) -> dict:
     targets = sorted(command_tokens) if all(
         not token.startswith("-") for token in command_tokens
     ) else None
+    finished = root.find("./runstats/finished")
+    finish_exit = finished.get("exit") if finished is not None else None
+    source_kind = root.get("nct_source")
+    phase_count_raw = root.get("nct_phase_count")
+    phase_count = None
+    provenance_reasons = []
+    if source_kind == "protocol-phase-merge":
+        try:
+            phase_count = int(phase_count_raw or "")
+            if phase_count < 1:
+                raise ValueError
+        except ValueError:
+            provenance_reasons.append("NCT phase count is missing or invalid")
+    elif source_kind is not None:
+        provenance_reasons.append(f"unknown NCT source composition: {source_kind}")
+    elif phase_count_raw is not None:
+        provenance_reasons.append("NCT phase count is present without source composition")
+    composition = {
+        "kind": source_kind or "native_or_unmarked",
+        "phase_count": phase_count,
+        "timing_attribution": (
+            "invalid_merge_provenance" if provenance_reasons
+            else "ambiguous_across_phases" if phase_count is not None and phase_count > 1
+            else "single_run_or_phase"
+        ),
+        "provenance_valid": not provenance_reasons,
+        "reasons": provenance_reasons,
+    }
     return {
         "source": "nmap_xml", "protocols": protocols, "scan_types": scan_types,
+        "coverage_contract": NMAP_COVERAGE_CONTRACT,
+        "completion": {
+            "finished_present": finished is not None,
+            "exit": finish_exit,
+            "successful": finish_exit == "success",
+            "reason": (
+                "Nmap recorded a successful finished state" if finish_exit == "success"
+                else "Nmap did not record a successful finished state"
+            ),
+        },
+        "source_composition": composition,
         "command": arguments,
         "timing": next((t for t in argument_tokens if re.fullmatch(r"-T[0-5]", t)), None),
         "dns_resolution_disabled": "-n" in argument_tokens,
@@ -70,6 +165,169 @@ def nmap_xml_coverage(root: ET.Element) -> dict:
             "unambiguous positional arguments" if targets is not None
             else "unknown because Nmap option values cannot be separated safely"
         ),
+    }
+
+
+def _port_in_intervals(port: int, intervals: list[dict]) -> bool:
+    return any(int(item.get("start", 0)) <= port <= int(item.get("end", -1))
+               for item in intervals)
+
+
+def _host_port_coverage(host: ET.Element, coverage: dict, presence: str,
+                        host_start: dict, host_end: dict) -> dict:
+    explicit_by_protocol: dict[str, list[int]] = {}
+    for port in host.findall("./ports/port"):
+        protocol = (port.get("protocol") or "").strip().lower()
+        try:
+            port_id = int(port.get("portid", ""))
+        except ValueError:
+            continue
+        if protocol and 0 <= port_id <= 65535:
+            explicit_by_protocol.setdefault(protocol, []).append(port_id)
+    extraports = []
+    extraports_valid = True
+    for node in host.findall("./ports/extraports"):
+        state = (node.get("state") or "").strip()
+        if not state:
+            extraports_valid = False
+        count_raw = node.get("count")
+        count_valid = True
+        try:
+            if not re.fullmatch(r"\d+", count_raw or ""):
+                raise ValueError
+            count = int(count_raw)
+        except ValueError:
+            count = 0
+            count_valid = False
+            extraports_valid = False
+        reason_rows = [dict(sorted(item.attrib.items()))
+                       for item in node.findall("extrareasons")]
+        reason_total = 0
+        reason_counts_valid = True
+        for reason in reason_rows:
+            try:
+                reason_count = int(reason.get("count", ""))
+                if reason_count < 0:
+                    raise ValueError
+                reason_total += reason_count
+            except ValueError:
+                reason_counts_valid = False
+        if reason_rows and (not reason_counts_valid or reason_total != count):
+            extraports_valid = False
+        extraports.append({
+            "state": state,
+            "count": count,
+            "count_raw": count_raw,
+            "reasons": reason_rows,
+            "reason_count_total": reason_total if reason_rows else None,
+            "valid": bool(state) and count_valid and (
+                not reason_rows or (reason_counts_valid and reason_total == count)
+            ),
+        })
+    aggregate_count = sum(item["count"] for item in extraports)
+    scan_types = coverage.get("scan_types") or []
+    protocol_counts: dict[str, int] = {}
+    for item in scan_types:
+        protocol = str(item.get("protocol") or "").lower()
+        if protocol:
+            protocol_counts[protocol] = protocol_counts.get(protocol, 0) + 1
+    results = {}
+    for item in scan_types:
+        protocol = str(item.get("protocol") or "").lower()
+        if not protocol or protocol in results:
+            continue
+        base_reasons = []
+        if not coverage.get("completion", {}).get("successful"):
+            base_reasons.append("source run did not record successful completion")
+        if presence != "confirmed":
+            base_reasons.append(f"host presence is {presence}, not confirmed")
+        if protocol_counts.get(protocol) != 1:
+            base_reasons.append("multiple scan sections exist for this protocol")
+        if not item.get("service_list_exact"):
+            base_reasons.append("requested port list is not exact")
+        composition = coverage.get("source_composition") or {}
+        if not composition.get("provenance_valid", True):
+            base_reasons.extend(composition.get("reasons") or ["source composition is invalid"])
+        elif composition.get("timing_attribution") == "ambiguous_across_phases":
+            base_reasons.append("source combines phases with ambiguous host timing")
+        unexpected_protocols = sorted(
+            set(explicit_by_protocol) - set(protocol_counts)
+        )
+        if unexpected_protocols:
+            base_reasons.append(
+                "explicit ports use protocols not declared by scaninfo: "
+                + ", ".join(unexpected_protocols)
+            )
+        explicit_ports = explicit_by_protocol.get(protocol, [])
+        requested_intervals = item.get("service_intervals") or []
+        outside = sorted({port for port in explicit_ports
+                          if not _port_in_intervals(port, requested_intervals)})
+        if outside:
+            base_reasons.append(
+                "explicit ports fall outside the requested list: "
+                + ", ".join(str(port) for port in outside)
+            )
+        omission_reasons = list(base_reasons)
+        if len(protocol_counts) != 1:
+            omission_reasons.append(
+                "aggregate omitted-port counts cannot be assigned to one protocol"
+            )
+        if not extraports_valid:
+            omission_reasons.append(
+                "aggregate omitted-port evidence is invalid or contradictory"
+            )
+        explicit_count = len(explicit_ports)
+        declared_count = int(item.get("service_count") or 0)
+        accounted_count = explicit_count + aggregate_count if len(protocol_counts) == 1 else None
+        if accounted_count is not None and accounted_count != declared_count:
+            omission_reasons.append(
+                f"explicit plus aggregate port count {accounted_count} does not match requested count {declared_count}"
+            )
+        aggregate_states = sorted({
+            item["state"] for item in extraports if item.get("valid") and item.get("count", 0) > 0
+        })
+        state_reasons = []
+        if len(aggregate_states) != 1:
+            state_reasons.append(
+                "aggregate omitted ports do not have one attributable reported state"
+            )
+        results[protocol] = {
+            "requested_port_count": declared_count,
+            "requested_intervals": requested_intervals,
+            "explicit_port_count": explicit_count,
+            "aggregate_omitted_port_count": aggregate_count if len(protocol_counts) == 1 else None,
+            "accounted_port_count": accounted_count,
+            "explicit_observation_eligible": not base_reasons,
+            "explicit_observation_reasons": base_reasons,
+            "omission_coverage_eligible": not omission_reasons,
+            "reasons": omission_reasons,
+            "aggregate_states": aggregate_states,
+            "omitted_reported_state": aggregate_states[0] if len(aggregate_states) == 1 else None,
+            "omitted_state_eligible": not omission_reasons and not state_reasons,
+            "omitted_state_reasons": omission_reasons + state_reasons,
+        }
+    interval_reasons = []
+    if not host_start.get("valid") or not host_end.get("valid"):
+        interval_reasons.append("host collection start and end are not both valid")
+    elif Decimal(host_start["raw"]) >= Decimal(host_end["raw"]):
+        interval_reasons.append("host collection interval is empty or reversed")
+    composition = coverage.get("source_composition") or {}
+    if composition.get("timing_attribution") == "ambiguous_across_phases":
+        interval_reasons.append("host collection interval does not cover every merged phase")
+    elif not composition.get("provenance_valid", True):
+        interval_reasons.extend(
+            composition.get("reasons") or ["source composition is invalid"]
+        )
+    return {
+        "contract": NMAP_COVERAGE_CONTRACT,
+        "collection_interval": {
+            "eligible": not interval_reasons,
+            "reasons": interval_reasons,
+            "start": host_start,
+            "end": host_end,
+        },
+        "protocols": results,
+        "extraports": extraports,
     }
 
 
@@ -185,6 +443,9 @@ def _host_facts(host: ET.Element, locator: str, coverage: dict,
         host.get("starttime"), host.get("endtime"),
         outer_start=scan_start, outer_end=scan_end,
     )
+    port_coverage = _host_port_coverage(
+        host, coverage, presence, host_start, host_end,
+    )
     return {
         "extraction_locator": locator,
         "status": dict(sorted(status.attrib.items())) if status is not None else {},
@@ -200,6 +461,7 @@ def _host_facts(host: ET.Element, locator: str, coverage: dict,
             "precision": "nmap epoch seconds when valid",
         },
         "coverage_ref": "assessment",
+        "port_coverage": port_coverage,
     }
 
 
@@ -223,6 +485,20 @@ def prepare_nmap_observation(
         raise ValueError("Artifact root is not <nmaprun>")
 
     coverage = nmap_xml_coverage(root)
+    composition = coverage["source_composition"]
+    if (
+        observation["source_kind"] == "nmap_scan"
+        and observation.get("original_filename") == "scan.xml"
+        and composition["kind"] == "native_or_unmarked"
+    ):
+        composition.update({
+            "kind": "legacy_unmarked_automated_aggregate",
+            "timing_attribution": "invalid_merge_provenance",
+            "provenance_valid": False,
+            "reasons": [
+                "legacy automated aggregate lacks phase provenance; re-run collection to create attributable coverage"
+            ],
+        })
     finished = root.find("./runstats/finished")
     scan_start, scan_end = _time_window(
         root.get("start"), finished.get("time") if finished is not None else None,
