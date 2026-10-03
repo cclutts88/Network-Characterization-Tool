@@ -1,8 +1,10 @@
 # Scoped endpoint and evidence storage
 
-This is an additive internal foundation, not a replacement for current NCT analysis.
-The initial `app/entities.py` contract stores address endpoints, transport endpoints,
-and immutable assessment receipts. It is not yet called by application routes.
+This is an additive foundation, not a replacement for current NCT analysis. The
+`app/entities.py` contract stores address endpoints, transport endpoints, and immutable
+assessment receipts. Reviewed manual Nmap assignments and eligible finalized scans now
+write through the server-side coordinator; existing Analyze, Hunt, Reach, and Map
+consumers remain separate while typed read models are introduced incrementally.
 
 ## Identity
 
@@ -47,28 +49,30 @@ no latest/current-state selection or Last Seen calculation in this layer.
 
 ## Remaining gates
 
-- The first verified Nmap XML adapter is implemented internally. It rereads the
+- The first verified Nmap XML adapter is implemented and is invoked only through the
+  reviewed manual-assignment and finalized-scan processing workflows. It rereads the
   canonical bytes, verifies size and SHA-256, rejects unsafe XML, retains scan and
   host epoch values with their validity, preserves every reported TCP/UDP/SCTP
   state, and records `-Pn` assumed presence without upgrading it to confirmation.
-  It requires an explicit scope for the entire artifact and is not called by routes.
+  It requires an explicit scope for the entire artifact and is never called by ordinary
+  read routes.
   Reversed time windows and host times outside a valid scan window retain their raw
   text but have no validated UTC value. Missing host status remains unknown. Because
   Nmap's flattened command string does not identify which options consume values,
   targets are retained only for commands with unambiguous positional arguments;
   otherwise the raw command is kept and target arguments are explicitly unknown.
-- Operator scope creation is available. Internal whole-artifact observation assignment
-  and immutable correction storage are implemented, but routes and adapter wiring stay
-  disabled until the assessment, receipts and assignment link can commit atomically.
-  Mixed-scope handling remains blocked. The adapter never infers scope from Saved
-  Networks, CIDRs, targets or filenames.
+- Operator scope creation, whole-artifact manual assignment, append-only correction,
+  eligible finalized-scan inheritance, and atomic assessment/receipt linking are
+  available on the foundation branch. Mixed-scope handling remains blocked. The adapter
+  never infers scope from Saved Networks, CIDRs, targets or filenames.
 - Production scan integration must prefer original protocol-phase XML when timing
   precision matters. NCT's combined `scan.xml` keeps the last phase's scan-finished
   time but does not attach a phase timestamp to each merged port observation.
 - Physical Host/Device reconciliation and normalized network/interface entities.
-- Typed evidence read models, evidence locators and lifecycle calculations.
+- Typed evidence read models now include a read-only scoped explorer. Automatic
+  current-state selection and lifecycle calculations remain open.
 - Parser-result caching, processing jobs, failure status and source-change validation.
-- Production integration, migration and operator-facing inspection/acceptance.
+- Broader production-consumer integration, migration and operator acceptance.
 
 The storage contract alone does not complete canonical entities, evidence receipts,
 Last Seen, delta detection or the broader roadmap.

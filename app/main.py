@@ -17,6 +17,12 @@ from app.evidence_scope_assignments import (
     correct_artifact_scope,
     init_evidence_scope_assignment_storage,
 )
+from app.foundation_evidence import (
+    get_foundation_endpoint_evidence,
+    get_foundation_receipt_services,
+    get_foundation_scope_evidence,
+    list_foundation_evidence_scopes,
+)
 from app.nmap_assignment_workflow import (
     active_assignment_scope_options,
     get_manual_nmap_assignment_status,
@@ -1433,6 +1439,70 @@ def _nmap_assignment_error(exc: Exception) -> HTTPException:
 @app.get("/api/nmap-assignment-scopes")
 def nmap_assignment_scope_options() -> list[dict]:
     return active_assignment_scope_options(DB_PATH)
+
+
+@app.get("/api/foundation-evidence/scopes")
+def foundation_evidence_scope_list(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    return list_foundation_evidence_scopes(DB_PATH, limit=limit, offset=offset)
+
+
+@app.get("/api/foundation-evidence/scopes/{scope_id}")
+def foundation_evidence_scope_detail(
+    scope_id: str,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pending_limit: int = Query(default=25, ge=1, le=25),
+    pending_offset: int = Query(default=0, ge=0),
+    history_limit: int = Query(default=25, ge=1, le=25),
+    history_offset: int = Query(default=0, ge=0),
+    historical_endpoint_limit: int = Query(default=25, ge=1, le=100),
+    historical_endpoint_offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_foundation_scope_evidence(
+            DB_PATH, scope_id, limit=limit, offset=offset,
+            pending_limit=pending_limit, pending_offset=pending_offset,
+            history_limit=history_limit, history_offset=history_offset,
+            historical_endpoint_limit=historical_endpoint_limit,
+            historical_endpoint_offset=historical_endpoint_offset,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get("/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}")
+def foundation_evidence_endpoint_detail(
+    scope_id: str, entity_id: str,
+    limit: int = Query(default=10, ge=1, le=25),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_foundation_endpoint_evidence(
+            DB_PATH, scope_id, entity_id, limit=limit, offset=offset,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get(
+    "/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}"
+    "/assignments/{assignment_id}/assessments/{assessment_id}/services"
+)
+def foundation_evidence_receipt_services(
+    scope_id: str, entity_id: str, assignment_id: str, assessment_id: str,
+    limit: int = Query(default=100, ge=1, le=250),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_foundation_receipt_services(
+            DB_PATH, scope_id, entity_id, assignment_id, assessment_id,
+            limit=limit, offset=offset,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
 
 
 @app.get("/api/nmap-observations/assignments")

@@ -118,7 +118,7 @@ A roadmap item should only be marked complete when:
 |---|---|---|---|---|---|
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
-| 2026-09-27 | Phase 1 entities | Establish canonical Host, Service, Network, and Device entities with normalized ingestion and correlation | The initial internal slice implements explicit-scope IPv4/IPv6 address endpoints, TCP/UDP/SCTP transport endpoints, and immutable artifact-backed assessments. These are scoped endpoint identities and observations; they do not claim physical Host or Device reconciliation | Addresses can overlap across network contexts, and retained evidence does not yet provide a reviewed stable identifier and assignment rule for safely merging endpoints into physical systems. Existing Saved Networks are editable target selections, so they cannot provide canonical identity or automatic scope inference | Automatic scope inference, production ingestion wiring, physical Host/Device reconciliation, network/device normalization, and presentation remain deferred. Whole-artifact assignment and correction semantics are reviewed and append-only. The internal Nmap coordinator now resolves the reviewed assignment server-side, rechecks it under the write lock, and atomically commits the assessment, receipts, and immutable assignment link. Routes and operator workflows remain disabled pending their separate authorization and workflow gate |
+| 2026-09-27 | Phase 1 entities | Establish canonical Host, Service, Network, and Device entities with normalized ingestion and correlation | The initial internal slice implements explicit-scope IPv4/IPv6 address endpoints, TCP/UDP/SCTP transport endpoints, and immutable artifact-backed assessments. These are scoped endpoint identities and observations; they do not claim physical Host or Device reconciliation | Addresses can overlap across network contexts, and retained evidence does not yet provide a reviewed stable identifier and assignment rule for safely merging endpoints into physical systems. Existing Saved Networks are editable target selections, so they cannot provide canonical identity or automatic scope inference | Automatic scope inference and physical Host/Device reconciliation remain deferred. Whole-artifact assignment and correction semantics are reviewed and append-only. Manual imports and eligible finalized scans now use the server-side coordinator to atomically commit assessments, receipts, and immutable assignment links. The first read-only scoped evidence explorer is tracked under Phase 1 steps 3 and 13; it does not select current truth or infer device identity. |
 | 2026-09-27 | Phase 1 ingestion wiring | Replace current import consumers with normalized scoped ingestion | First expose an explicit, post-import, observation-level foundation workflow for manual Nmap uploads beside the unchanged legacy analysis path. Assignment creation, correction and retry remain separate recoverable operations. Administrators manage scope identities; analysts and administrators apply reviewed evidence context; viewers are read-only; authentication-disabled mode attributes changes to the local operator | Replacing current Analyze, Hunt, Reach and Map consumers in the same step would combine evidence-model migration with a new operator audit workflow and risk stable behavior. Exact observations also cannot be represented safely by the current hash-grouped import history | Temporary dual processing and storage are expected. Assigning a scope does not change current views. Automated scan artifacts, inference, mixed-scope partitioning, bulk migration and read-model replacement remain separate gates. The observation-level status/history API and UI must make incomplete processing recoverable without creating another observation or assignment root |
 | 2026-09-27 | Phase 1 | Nmap imports remain readable through the existing `/data/imports` path model while Artifact Registry is introduced | New imports are stored in the canonical content-addressed artifact store; the raw-download guard was revised to trust either a verified legacy import path or the exact path registered for that SHA-256 | CI exposed that the legacy download endpoint intentionally rejected paths outside `/data/imports` | Preserves existing download behavior while enabling deduplicated storage; legacy imports remain supported during migration |
 
@@ -788,6 +788,33 @@ foundational changes.
 3. [~] Separate observations from entities.
    First slice retains source observation, parser version and source-assessment time
    separately from import encounter time; no inferred current state or disappearance.
+   2026-10-03 typed evidence read-model start: add a read-only Processed Evidence
+   explorer inside Analyze / Changes Over Time. Operators will select one exact Network
+   Scope, load bounded address/transport summaries, and expand one endpoint to inspect
+   assignment, assessment, source-observation, parser, locator, presence/state and
+   collection-window receipts. Primary results include only the current unsuperseded
+   assignment processed by the supported Nmap parser; superseded assignments, other
+   parser versions and pending corrections remain visible as separately labeled history.
+   Reads must use one SQLite snapshot, perform no schema setup, hashing, parsing, cache
+   writes or network contact, and preserve separate encounters of identical bytes and
+   overlapping addresses in different scopes. This milestone does not select a latest
+   truth, merge physical devices, calculate Last Seen, or claim disappearance.
+   2026-10-03 typed evidence read-model completion: Analyze / Changes Over Time now
+   provides a bounded, read-only Processed Evidence explorer by exact Network Scope.
+   Operators can page through current and historical addresses, pending records and
+   separate assignment/parser history, then open retained source receipts and reported
+   services without loading entire evidence files into the page. The explorer labels
+   source-reported presence, scan timing and coverage limits; exposes the retained source,
+   assignment reason and processing details; and explicitly avoids current-truth, device,
+   Last Seen and disappearance claims. Aggregate database queries replaced the original
+   cross-product summary, and every expandable result is independently paged. A live
+   disposable browser check covered mouse and keyboard use, specific Operator Guide help,
+   small-screen layout, source/service drill-down and a clean browser console. The novice
+   operator found the completed flow understandable and requested wording refinements that
+   are included. **QUALITY GATE: CLEAR**; the full Docker suite passed **707 tests**, the
+   independent reviewer passed **72 focused tests**, and `git diff --check` passed. Current
+   state inference, Last Seen, disappearance detection and Range deployment remain later
+   gates.
 4. Delta detection:
    - new
    - changed
@@ -846,7 +873,9 @@ foundational changes.
    WAL and a 30-second busy timeout were already present before this redesign; the
    remaining reliability work is focused on eliminating unnecessary writes and
    contention.
-13. [ ] Current-state read models.
+13. [~] Current-state read models.
+   - [x] Initial typed scoped-evidence read model and lazy operator explorer. This is
+     evidence history only; automatic current-state selection remains planned.
 14. [ ] Last Seen + evidence receipt model.
 15. [ ] Benchmark against Phase 0 datasets.
 

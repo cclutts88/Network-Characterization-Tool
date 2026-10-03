@@ -1753,6 +1753,20 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="loadNetworkChanges"' in html
     assert "/api/analysis/network-changes" in html
     assert "renderNetworkChanges" in html
+    assert "Processed evidence by Network Scope" in html
+    assert 'id="processedEvidenceScope"' in html
+    assert 'id="loadProcessedEvidence"' in html
+    assert "/api/foundation-evidence/scopes" in html
+    assert "Open saved source records" in html
+    assert "Open ${serviceCount} reported service" in html
+    assert "Source reported presence" in html
+    assert "File-reported coverage" in html
+    assert "aggregate timing and does not precisely date every service observation" in html
+    assert "Addresses with separate history" in html
+    assert 'id="loadMoreProcessedScopes"' in html
+    assert "request!==processedEvidenceRequest" in html
+    assert "does not select the latest network truth" in html
+    assert "loadProcessedEvidenceScopes" in html
     assert 'id="networkControlsPanel"' not in html
     assert '<span>Routes and policy</span>' not in html
     assert 'id="comparisonBaseline"' in html
