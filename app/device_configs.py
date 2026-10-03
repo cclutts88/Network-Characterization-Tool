@@ -2035,7 +2035,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         _read_text_prefix(history_path, MAX_RESPONSE_OUTPUT_CHARS)
         if history_path.is_file()
         else _labeled_command_sections(configuration_text).get(
-            str(manifest.get("history_command") or "show history"), ""
+            str(manifest.get("history_command") or "show history all"), ""
         )
     )
     command_history = parse_command_history(
