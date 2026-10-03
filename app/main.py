@@ -18,6 +18,7 @@ from app.evidence_scope_assignments import (
     init_evidence_scope_assignment_storage,
 )
 from app.foundation_evidence import (
+    compare_foundation_receipt_services,
     get_foundation_endpoint_evidence,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
@@ -1499,6 +1500,32 @@ def foundation_evidence_receipt_services(
     try:
         return get_foundation_receipt_services(
             DB_PATH, scope_id, entity_id, assignment_id, assessment_id,
+            limit=limit, offset=offset,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get(
+    "/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}"
+    "/service-comparison"
+)
+def foundation_evidence_service_comparison(
+    scope_id: str, entity_id: str,
+    record_a_assignment_id: str = Query(min_length=1),
+    record_a_assessment_id: str = Query(min_length=1),
+    record_b_assignment_id: str = Query(min_length=1),
+    record_b_assessment_id: str = Query(min_length=1),
+    limit: int = Query(default=100, ge=1, le=250),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return compare_foundation_receipt_services(
+            DB_PATH, scope_id, entity_id,
+            record_a_assignment_id=record_a_assignment_id,
+            record_a_assessment_id=record_a_assessment_id,
+            record_b_assignment_id=record_b_assignment_id,
+            record_b_assessment_id=record_b_assessment_id,
             limit=limit, offset=offset,
         )
     except (KeyError, ValueError) as exc:

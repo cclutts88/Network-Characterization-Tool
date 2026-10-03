@@ -6,6 +6,7 @@ from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
 from app.entities import record_assessment
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
 from app.foundation_evidence import (
+    compare_foundation_receipt_services,
     get_foundation_endpoint_evidence,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
@@ -22,6 +23,22 @@ XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS -sU 192.0.2.1
 <port protocol="tcp" portid="53"><state state="open" reason="syn-ack"/><service name="domain"/></port>
 <port protocol="udp" portid="53"><state state="open|filtered"/><service name="domain"/></port>
 </ports></host><runstats><finished time="110" timestr="done"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
+
+
+def comparison_xml(services, *, address="192.0.2.10", start="100", finish="110"):
+    ports = []
+    for protocol, port, state in services:
+        state_xml = "" if state is None else f'<state state="{state}"/>'
+        ports.append(
+            f'<port protocol="{protocol}" portid="{port}">{state_xml}'
+            f'<service name="service-{port}"/></port>'
+        )
+    return (
+        f'<nmaprun scanner="nmap" args="nmap -n {address}" start="{start}">'
+        f'<host starttime="{start}" endtime="{finish}"><status state="up"/>'
+        f'<address addr="{address}" addrtype="ipv4"/><ports>{"".join(ports)}</ports>'
+        f'</host><runstats><finished time="{finish}"/></runstats></nmaprun>'
+    ).encode()
 
 
 def scope(db, label):
@@ -60,6 +77,24 @@ def process(db, assignment, parser_version="nmap-endpoints:1"):
         expected_assignment_id=assignment["assignment_id"],
         linked_by="analyst",
         parser_version=parser_version,
+    )
+
+
+def comparison_ids(receipt):
+    return {
+        "assignment_id": receipt["assignment"]["assignment_id"],
+        "assessment_id": receipt["assessment"]["assessment_id"],
+    }
+
+
+def compare_records(db, scope_id, entity_id, record_a, record_b, **page):
+    return compare_foundation_receipt_services(
+        db, scope_id, entity_id,
+        record_a_assignment_id=record_a["assignment_id"],
+        record_a_assessment_id=record_a["assessment_id"],
+        record_b_assignment_id=record_b["assignment_id"],
+        record_b_assessment_id=record_b["assessment_id"],
+        **page,
     )
 
 
@@ -214,13 +249,32 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
     )
     lab = scope(db, "Lab")
     process(db, assign(db, observation(db), lab))
+    process(db, assign(db, observation(db, "upload:route-second"), lab))
+    scoped_view = get_foundation_scope_evidence(db, lab["scope_id"])
+    entity_id = scoped_view["endpoints"][0]["entity_id"]
+    receipt_detail = get_foundation_endpoint_evidence(db, lab["scope_id"], entity_id)
+    record_a, record_b = [
+        comparison_ids(item) for item in receipt_detail["current_assignment_receipts"][:2]
+    ]
     with TestClient(main.app) as client:
         scopes = client.get("/api/foundation-evidence/scopes")
         detail = client.get(f"/api/foundation-evidence/scopes/{lab['scope_id']}")
+        comparison = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}"
+            f"/endpoints/{entity_id}/service-comparison",
+            params={
+                "record_a_assignment_id": record_a["assignment_id"],
+                "record_a_assessment_id": record_a["assessment_id"],
+                "record_b_assignment_id": record_b["assignment_id"],
+                "record_b_assessment_id": record_b["assessment_id"],
+            },
+        )
         missing = client.get("/api/foundation-evidence/scopes/missing")
         rejected = client.post("/api/foundation-evidence/scopes")
     assert scopes.status_code == 200
     assert detail.status_code == 200
+    assert comparison.status_code == 200
+    assert comparison.json()["read_only"] is True
     assert missing.status_code == 404
     # The shared viewer guard rejects all non-read methods before route matching.
     assert rejected.status_code == 403
@@ -232,6 +286,7 @@ def test_read_model_opens_database_read_only(tmp_path, monkeypatch):
     db = tmp_path / "nct.db"
     lab = scope(db, "Lab")
     process(db, assign(db, observation(db), lab))
+    process(db, assign(db, observation(db, "upload:read-only-second"), lab))
     calls = []
     original = evidence.connect_database
 
@@ -242,11 +297,18 @@ def test_read_model_opens_database_read_only(tmp_path, monkeypatch):
     monkeypatch.setattr(evidence, "connect_database", checked)
     catalog = evidence.list_foundation_evidence_scopes(db)
     scoped = evidence.get_foundation_scope_evidence(db, lab["scope_id"])
-    evidence.get_foundation_endpoint_evidence(
+    detail = evidence.get_foundation_endpoint_evidence(
         db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
     )
+    record_a, record_b = [
+        comparison_ids(item) for item in detail["current_assignment_receipts"][:2]
+    ]
+    compare_records(
+        db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
+        record_a, record_b,
+    )
     assert catalog["read_only"] is True
-    assert calls == [True, True, True]
+    assert calls == [True, True, True, True]
 
 
 def test_scope_read_is_one_snapshot_when_a_correction_commits_mid_read(tmp_path, monkeypatch):
@@ -418,3 +480,215 @@ def test_invalid_file_times_remain_unknown_with_raw_source_values(tmp_path):
     assert receipt["endpoint_facts"]["evidence_time"]["host_start"] == {
         "raw": "also-invalid", "valid": False, "utc": None,
     }
+
+
+def test_service_comparison_uses_neutral_evidence_labels_and_preserves_sources(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    first_xml = comparison_xml([
+        ("tcp", 22, "open"), ("tcp", 53, "open"),
+        ("udp", 53, "open|filtered"), ("tcp", 80, "closed"),
+        ("tcp", 999, None),
+    ])
+    second_xml = comparison_xml([
+        ("tcp", 53, "open"), ("udp", 53, "unknown"),
+        ("tcp", 80, "filtered"), ("tcp", 443, "open"),
+        ("tcp", 999, None),
+    ], start="200", finish="210")
+    first_item = observation(db, "upload:record-a", content=first_xml)
+    second_item = observation(db, "upload:record-b", content=second_xml)
+    first_assignment, second_assignment = assign(db, first_item, lab), assign(db, second_item, lab)
+    first_processing, second_processing = process(db, first_assignment), process(db, second_assignment)
+    scoped = get_foundation_scope_evidence(db, lab["scope_id"])
+    entity_id = scoped["endpoints"][0]["entity_id"]
+    result = compare_records(
+        db, lab["scope_id"], entity_id,
+        {"assignment_id": first_assignment["assignment_id"],
+         "assessment_id": first_processing["assessment_id"]},
+        {"assignment_id": second_assignment["assignment_id"],
+         "assessment_id": second_processing["assessment_id"]},
+    )
+    by_service = {
+        (item["protocol"], item["port"]): item for item in result["services"]
+    }
+    assert by_service[("tcp", 22)]["comparison"] == "recorded_only_in_a"
+    assert by_service[("tcp", 443)]["comparison"] == "recorded_only_in_b"
+    assert by_service[("tcp", 53)]["comparison"] == "same_reported_state"
+    assert by_service[("udp", 53)]["comparison"] == "different_reported_state"
+    assert by_service[("tcp", 80)]["comparison"] == "different_reported_state"
+    assert by_service[("tcp", 999)]["comparison"] == "comparison_unavailable"
+    assert by_service[("udp", 53)]["record_a"]["reported_state"] == "open|filtered"
+    assert by_service[("udp", 53)]["record_b"]["reported_state"] == "unknown"
+    assert result["record_a"]["source"]["observation_id"] == first_item["observation_id"]
+    assert result["record_b"]["assessment"]["collection_window"]["start"]["utc"] == (
+        "1970-01-01T00:03:20+00:00"
+    )
+    assert result["claims"] == {
+        "record_order_or_current_truth": False,
+        "new_or_no_longer_observed": False,
+        "last_seen": False,
+        "absence_or_disappearance": False,
+    }
+    archive_network_scope(
+        db, lab["scope_id"], expected_version=1,
+        archived_by="admin", reason="Retained history",
+    )
+    assert compare_records(
+        db, lab["scope_id"], entity_id,
+        {"assignment_id": first_assignment["assignment_id"],
+         "assessment_id": first_processing["assessment_id"]},
+        {"assignment_id": second_assignment["assignment_id"],
+         "assessment_id": second_processing["assessment_id"]},
+    )["scope"]["active"] is False
+
+
+def test_service_comparison_rejects_stale_cross_scope_parser_and_same_record(tmp_path):
+    db = tmp_path / "nct.db"
+    first_scope, second_scope = scope(db, "First"), scope(db, "Second")
+    first_item = observation(db, "upload:first-compare")
+    second_item = observation(db, "upload:second-compare")
+    other_scope_item = observation(db, "upload:other-scope")
+    unsupported_item = observation(db, "upload:unsupported")
+    first_assignment, second_assignment = (
+        assign(db, first_item, first_scope), assign(db, second_item, first_scope),
+    )
+    first_processing, second_processing = process(db, first_assignment), process(db, second_assignment)
+    other_assignment = assign(db, other_scope_item, second_scope)
+    other_processing = process(db, other_assignment)
+    unsupported_assignment = assign(db, unsupported_item, first_scope)
+    unsupported_processing = process(db, unsupported_assignment, parser_version="nmap-endpoints:2")
+    scoped = get_foundation_scope_evidence(db, first_scope["scope_id"])
+    entity_id = scoped["endpoints"][0]["entity_id"]
+    first_record = {
+        "assignment_id": first_assignment["assignment_id"],
+        "assessment_id": first_processing["assessment_id"],
+    }
+    second_record = {
+        "assignment_id": second_assignment["assignment_id"],
+        "assessment_id": second_processing["assessment_id"],
+    }
+    with pytest.raises(ValueError):
+        compare_records(db, first_scope["scope_id"], entity_id, first_record, first_record)
+    with pytest.raises(KeyError):
+        compare_records(
+            db, first_scope["scope_id"], entity_id, first_record,
+            {"assignment_id": other_assignment["assignment_id"],
+             "assessment_id": other_processing["assessment_id"]},
+        )
+    with pytest.raises(KeyError):
+        compare_records(
+            db, first_scope["scope_id"], entity_id, first_record,
+            {"assignment_id": unsupported_assignment["assignment_id"],
+             "assessment_id": unsupported_processing["assessment_id"]},
+        )
+    corrected = correct_artifact_scope(
+        db, expected_assignment_id=first_assignment["assignment_id"],
+        destination_scope_id=second_scope["scope_id"], actor="analyst",
+        reason="Corrected to second", whole_artifact_confirmed=True,
+    )
+    process(db, corrected)
+    returned = correct_artifact_scope(
+        db, expected_assignment_id=corrected["assignment_id"],
+        destination_scope_id=first_scope["scope_id"], actor="analyst",
+        reason="Returned after review", whole_artifact_confirmed=True,
+    )
+    returned_processing = process(db, returned)
+    with pytest.raises(KeyError):
+        compare_records(db, first_scope["scope_id"], entity_id, first_record, second_record)
+    assert compare_records(
+        db, first_scope["scope_id"], entity_id,
+        {"assignment_id": returned["assignment_id"],
+         "assessment_id": returned_processing["assessment_id"]},
+        second_record,
+    )["pagination"]["total"] == 2
+
+
+def test_service_comparison_pages_union_without_missing_or_repeated_rows(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    first_xml = comparison_xml([("tcp", port, "open") for port in range(1, 301)])
+    second_xml = comparison_xml([("tcp", port, "closed") for port in range(151, 451)])
+    first_assignment = assign(db, observation(db, "upload:page-a", content=first_xml), lab)
+    second_assignment = assign(db, observation(db, "upload:page-b", content=second_xml), lab)
+    first_processing, second_processing = process(db, first_assignment), process(db, second_assignment)
+    entity_id = get_foundation_scope_evidence(db, lab["scope_id"])["endpoints"][0]["entity_id"]
+    record_a = {"assignment_id": first_assignment["assignment_id"],
+                "assessment_id": first_processing["assessment_id"]}
+    record_b = {"assignment_id": second_assignment["assignment_id"],
+                "assessment_id": second_processing["assessment_id"]}
+    first = compare_records(db, lab["scope_id"], entity_id, record_a, record_b, limit=250)
+    second = compare_records(
+        db, lab["scope_id"], entity_id, record_a, record_b, limit=250, offset=250,
+    )
+    keys = [(item["protocol"], item["port"]) for item in first["services"] + second["services"]]
+    assert first["pagination"] == {
+        "limit": 250, "offset": 0, "total": 450, "has_more": True,
+    }
+    assert second["pagination"] == {
+        "limit": 250, "offset": 250, "total": 450, "has_more": False,
+    }
+    assert len(keys) == len(set(keys)) == 450
+    assert keys[0] == ("tcp", 1)
+    assert keys[-1] == ("tcp", 450)
+
+
+def test_service_comparison_is_one_read_only_snapshot_during_correction(tmp_path, monkeypatch):
+    import app.foundation_evidence as evidence
+
+    db = tmp_path / "nct.db"
+    first_scope, second_scope = scope(db, "First"), scope(db, "Second")
+    first_assignment = assign(db, observation(db, "upload:snapshot-a"), first_scope)
+    second_assignment = assign(db, observation(db, "upload:snapshot-b"), first_scope)
+    first_processing, second_processing = process(db, first_assignment), process(db, second_assignment)
+    entity_id = get_foundation_scope_evidence(db, first_scope["scope_id"])["endpoints"][0]["entity_id"]
+    original = evidence.connect_database
+    correction = []
+
+    class ConnectionProxy:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def __setattr__(self, name, value):
+            if name == "connection":
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self.connection, name, value)
+
+        def execute(self, sql, values=()):
+            if "SELECT assignment.assignment_id" in sql and not correction:
+                correction.append(correct_artifact_scope(
+                    db, expected_assignment_id=first_assignment["assignment_id"],
+                    destination_scope_id=second_scope["scope_id"], actor="analyst",
+                    reason="Concurrent correction", whole_artifact_confirmed=True,
+                ))
+            return self.connection.execute(sql, values)
+
+    monkeypatch.setattr(
+        evidence, "connect_database",
+        lambda path, *, read_only=False: ConnectionProxy(original(path, read_only=read_only)),
+    )
+    during = evidence.compare_foundation_receipt_services(
+        db, first_scope["scope_id"], entity_id,
+        record_a_assignment_id=first_assignment["assignment_id"],
+        record_a_assessment_id=first_processing["assessment_id"],
+        record_b_assignment_id=second_assignment["assignment_id"],
+        record_b_assessment_id=second_processing["assessment_id"],
+    )
+    assert correction
+    assert during["pagination"]["total"] == 2
+    monkeypatch.setattr(evidence, "connect_database", original)
+    with pytest.raises(KeyError):
+        evidence.compare_foundation_receipt_services(
+            db, first_scope["scope_id"], entity_id,
+            record_a_assignment_id=first_assignment["assignment_id"],
+            record_a_assessment_id=first_processing["assessment_id"],
+            record_b_assignment_id=second_assignment["assignment_id"],
+            record_b_assessment_id=second_processing["assessment_id"],
+        )

@@ -43,8 +43,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Viewer accounts can read shared evidence" in html
     assert "Current scan and device-configuration comparisons are available" in html
     assert "Processed evidence by Network Scope" in html
-    assert "Inspect the processed receipts" in html
-    assert "does not yet compare two foundation observations" in html
+    assert "Inspect and compare processed receipts" in html
+    assert "neutral Record A and Record B" in html
+    assert "Read-only source-record service-state comparison" in html
+    assert "not proof that it appeared or disappeared" in html
     assert "does not treat the most recently processed file as automatic truth" in html
     assert "Planned: passive activity summaries" in html
     assert "Build details · version" in html

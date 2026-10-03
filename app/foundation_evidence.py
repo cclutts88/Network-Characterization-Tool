@@ -757,3 +757,230 @@ def get_foundation_receipt_services(
         },
         "read_only": True,
     }
+
+
+_COMPARISON_RECORD_SQL = """
+SELECT assignment.assignment_id, assignment.revision, assignment.event_kind,
+       assignment.assigned_at, assignment.actor AS assignment_actor, assignment.reason,
+       assessment.assessment_id, assessment.parser_version, assessment.assessed_at,
+       assessment.recorded_at,
+       json_extract(assessment.payload_json, '$.time_basis') AS time_basis,
+       json_extract(assessment.payload_json, '$.facts.scan_start') AS scan_start_json,
+       json_extract(assessment.payload_json, '$.facts.scan_end') AS scan_end_json,
+       json_extract(assessment.payload_json, '$.facts.coverage') AS coverage_json,
+       observation.observation_id, observation.sha256, observation.source_kind,
+       observation.source_ref, observation.observed_at, observation.original_filename,
+       observation.actor AS observation_actor,
+       (SELECT COUNT(*) FROM service_receipts service
+        JOIN service_entities entity ON entity.entity_id = service.service_id
+        WHERE service.assessment_id = assessment.assessment_id
+          AND entity.host_id = receipt.host_id) AS service_count
+FROM artifact_scope_assignments assignment
+JOIN assessment_scope_assignment_links link
+  ON link.assignment_id = assignment.assignment_id
+JOIN entity_assessments assessment ON assessment.assessment_id = link.assessment_id
+JOIN endpoint_receipts receipt
+  ON receipt.assessment_id = assessment.assessment_id AND receipt.host_id = ?
+JOIN artifact_observations observation
+  ON observation.observation_id = assessment.artifact_observation_id
+WHERE assignment.assignment_id = ?
+  AND assessment.assessment_id = ?
+  AND assignment.scope_id = ?
+  AND assessment.scope_id = ?
+  AND assessment.parser_version = ?
+  AND NOT EXISTS (
+      SELECT 1 FROM artifact_scope_assignments successor
+      WHERE successor.supersedes_assignment_id = assignment.assignment_id
+  )
+"""
+
+
+_SERVICE_COMPARISON_SQL = """
+WITH record_a AS (
+    SELECT entity.entity_id AS service_id, entity.protocol, entity.port,
+           receipt.facts_json
+    FROM service_receipts receipt
+    JOIN service_entities entity ON entity.entity_id = receipt.service_id
+    WHERE receipt.assessment_id = ? AND entity.host_id = ?
+), record_b AS (
+    SELECT entity.entity_id AS service_id, entity.protocol, entity.port,
+           receipt.facts_json
+    FROM service_receipts receipt
+    JOIN service_entities entity ON entity.entity_id = receipt.service_id
+    WHERE receipt.assessment_id = ? AND entity.host_id = ?
+), service_keys AS (
+    SELECT protocol, port FROM record_a
+    UNION
+    SELECT protocol, port FROM record_b
+), compared AS (
+    SELECT service_keys.protocol, service_keys.port,
+           record_a.service_id AS record_a_service_id,
+           record_a.facts_json AS record_a_facts_json,
+           record_b.service_id AS record_b_service_id,
+           record_b.facts_json AS record_b_facts_json
+    FROM service_keys
+    LEFT JOIN record_a
+      ON record_a.protocol = service_keys.protocol AND record_a.port = service_keys.port
+    LEFT JOIN record_b
+      ON record_b.protocol = service_keys.protocol AND record_b.port = service_keys.port
+)
+SELECT *, COUNT(*) OVER() AS total_count
+FROM compared
+ORDER BY protocol, port
+LIMIT ? OFFSET ?
+"""
+
+
+def _comparison_record(row: sqlite3.Row) -> dict:
+    return {
+        "assignment": {
+            "assignment_id": row["assignment_id"],
+            "revision": int(row["revision"]),
+            "event": row["event_kind"],
+            "assigned_at": row["assigned_at"],
+            "actor": row["assignment_actor"],
+            "reason": row["reason"],
+        },
+        "assessment": {
+            "assessment_id": row["assessment_id"],
+            "parser_version": row["parser_version"],
+            "assessed_at": row["assessed_at"],
+            "time_basis": row["time_basis"],
+            "processed_at": row["recorded_at"],
+            "collection_window": {
+                "start": _json(row["scan_start_json"]),
+                "end": _json(row["scan_end_json"]),
+            },
+            "coverage": _json(row["coverage_json"]),
+        },
+        "source": _source(row),
+        "service_count": int(row["service_count"]),
+    }
+
+
+def _reported_state(facts: dict | None) -> str | None:
+    if not isinstance(facts, dict):
+        return None
+    state = facts.get("state")
+    if not isinstance(state, dict):
+        return None
+    value = state.get("state")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _service_side(service_id: str | None, facts_raw: str | None) -> dict | None:
+    if service_id is None:
+        return None
+    facts = _json(facts_raw)
+    service = facts.get("service") if isinstance(facts.get("service"), dict) else {}
+    return {
+        "service_id": service_id,
+        "reported_state": _reported_state(facts),
+        "service_name": service.get("name"),
+        "extraction_locator": facts.get("extraction_locator"),
+    }
+
+
+def _comparison_kind(record_a: dict | None, record_b: dict | None) -> str:
+    if record_a is None:
+        return "recorded_only_in_b"
+    if record_b is None:
+        return "recorded_only_in_a"
+    state_a, state_b = record_a["reported_state"], record_b["reported_state"]
+    if state_a is None or state_b is None:
+        return "comparison_unavailable"
+    if state_a == state_b:
+        return "same_reported_state"
+    return "different_reported_state"
+
+
+def compare_foundation_receipt_services(
+    db_path: Path, scope_id: str, entity_id: str, *,
+    record_a_assignment_id: str, record_a_assessment_id: str,
+    record_b_assignment_id: str, record_b_assessment_id: str,
+    limit: int = 100, offset: int = 0,
+) -> dict:
+    """Compare explicit service states in two selected current source records."""
+    limit, offset = _page(limit, offset, MAX_SERVICE_PAGE)
+    if (record_a_assignment_id, record_a_assessment_id) == (
+        record_b_assignment_id, record_b_assessment_id,
+    ):
+        raise ValueError("Record A and Record B must be different source records")
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        scope_row = db.execute(
+            """SELECT scope_id, label, description, version, active
+               FROM network_scopes WHERE scope_id = ?""",
+            (scope_id,),
+        ).fetchone()
+        endpoint = db.execute(
+            """SELECT entity_id, address FROM endpoint_entities
+               WHERE entity_id = ? AND scope_id = ?""",
+            (entity_id, scope_id),
+        ).fetchone()
+        if scope_row is None or endpoint is None:
+            raise KeyError("Processed endpoint not found in this Network Scope")
+        record_a_row = db.execute(
+            _COMPARISON_RECORD_SQL,
+            (entity_id, record_a_assignment_id, record_a_assessment_id,
+             scope_id, scope_id, NMAP_ENDPOINT_PARSER),
+        ).fetchone()
+        record_b_row = db.execute(
+            _COMPARISON_RECORD_SQL,
+            (entity_id, record_b_assignment_id, record_b_assessment_id,
+             scope_id, scope_id, NMAP_ENDPOINT_PARSER),
+        ).fetchone()
+        if record_a_row is None or record_b_row is None:
+            raise KeyError(
+                "A selected source record is unavailable, superseded, or uses an unsupported parser"
+            )
+        rows = db.execute(
+            _SERVICE_COMPARISON_SQL,
+            (record_a_assessment_id, entity_id,
+             record_b_assessment_id, entity_id, limit, offset),
+        ).fetchall()
+        if rows:
+            total = int(rows[0]["total_count"])
+        elif offset:
+            first = db.execute(
+                _SERVICE_COMPARISON_SQL,
+                (record_a_assessment_id, entity_id,
+                 record_b_assessment_id, entity_id, 1, 0),
+            ).fetchone()
+            total = int(first["total_count"]) if first else 0
+        else:
+            total = 0
+        comparisons = []
+        for row in rows:
+            record_a = _service_side(
+                row["record_a_service_id"], row["record_a_facts_json"],
+            )
+            record_b = _service_side(
+                row["record_b_service_id"], row["record_b_facts_json"],
+            )
+            comparisons.append({
+                "protocol": row["protocol"],
+                "port": int(row["port"]),
+                "comparison": _comparison_kind(record_a, record_b),
+                "record_a": record_a,
+                "record_b": record_b,
+            })
+    return {
+        "scope": _scope(scope_row),
+        "endpoint": {"entity_id": endpoint["entity_id"], "address": endpoint["address"]},
+        "record_a": _comparison_record(record_a_row),
+        "record_b": _comparison_record(record_b_row),
+        "services": comparisons,
+        "pagination": {
+            "limit": limit, "offset": offset, "total": total,
+            "has_more": offset + len(rows) < total,
+        },
+        "read_only": True,
+        "claims": {
+            "record_order_or_current_truth": False,
+            "new_or_no_longer_observed": False,
+            "last_seen": False,
+            "absence_or_disappearance": False,
+        },
+    }

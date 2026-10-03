@@ -1759,6 +1759,18 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "/api/foundation-evidence/scopes" in html
     assert "Open saved source records" in html
     assert "Open ${serviceCount} reported service" in html
+    assert "Processed source records for this scope" in html
+    assert "Use as Record A" in html
+    assert "Use as Record B" in html
+    assert "Compare reported service states" in html
+    assert "/service-comparison?${params}" in html
+    assert "Recorded only in A or B means the other file did not report that service" in html
+    assert "processedEvidenceSelectionSignature" in html
+    assert "const comparison=historical?'':" in html
+    assert "if(!run)return" in html
+    assert "if(allowComparison)bindProcessedEvidenceComparisonRecords" in html
+    assert "className='processed-evidence-comparison-status status good'" in html
+    assert "className='processed-evidence-comparison-status status bad'" in html
     assert "Source reported presence" in html
     assert "File-reported coverage" in html
     assert "aggregate timing and does not precisely date every service observation" in html

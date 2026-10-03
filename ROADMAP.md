@@ -123,6 +123,7 @@ A roadmap item should only be marked complete when:
 | 2026-09-27 | Phase 1 | Nmap imports remain readable through the existing `/data/imports` path model while Artifact Registry is introduced | New imports are stored in the canonical content-addressed artifact store; the raw-download guard was revised to trust either a verified legacy import path or the exact path registered for that SHA-256 | CI exposed that the legacy download endpoint intentionally rejected paths outside `/data/imports` | Preserves existing download behavior while enabling deduplicated storage; legacy imports remain supported during migration |
 
 | 2026-09-27 | Phase 1 | Introduce Artifact Registry without changing existing import behavior | Artifact Registry integration initially caused the existing raw Nmap download test to reject canonical artifact paths; compatibility validation was updated and the subsequent full CI run passed | Legacy endpoint assumed all imported XML lived directly under `/data/imports` | Treat legacy file-layout assumptions as migration compatibility requirements; no Phase 1 item marked complete until green CI |
+| 2026-10-03 | Phase 1 delta detection | Classify evidence as `new`, `changed`, `unchanged`, `no longer observed`, or `not assessed` | Begin with an explicit Record A / Record B comparison of reported service states for one scoped address; label one-sided receipts `recorded only in A/B` | Current Nmap receipts preserve reported protocol/port states, but target and port coverage may be unknown or incomplete and processing order does not establish observation chronology | Keep Phase 1 delta detection incomplete. One-sided receipts remain missing evidence, not disappearance or a newly present service. Current-state selection, Last Seen, automatic baselines and coverage-backed lifecycle labels remain separate gates |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -815,12 +816,37 @@ foundational changes.
    independent reviewer passed **72 focused tests**, and `git diff --check` passed. Current
    state inference, Last Seen, disappearance detection and Range deployment remain later
    gates.
-4. Delta detection:
-   - new
-   - changed
-   - unchanged
-   - no longer observed
-   - not assessed
+4. [~] Delta detection:
+   - [x] Explicit source-record comparison: compare reported transport state for
+     one address in two analyst-selected, current unsuperseded assessments within one
+     exact Network Scope. Use neutral Record A / Record B labels and never infer order
+     from processing time. Compare only explicit protocol, port and reported state;
+     separately show source, collection-window and coverage uncertainty. Results are
+     `same reported state`, `different reported state`, `recorded only in A`, `recorded
+     only in B`, or `comparison unavailable`. One-sided records are missing evidence,
+     not lifecycle `new`, `no longer observed`, or proof of disappearance. Validate both
+     selections together in one read-only snapshot, reject stale corrections and page
+     the service union. See `docs/FOUNDATION_EVIDENCE_COMPARISON.md`.
+     2026-10-03 completion: Processed Evidence now lets an operator open one address,
+     choose two distinct current source records as neutral Record A and Record B, review
+     each file's collection window, coverage and provenance, and compare the bounded
+     protocol/port union. Results are evidence-only and never convert one-sided records
+     into appearance or disappearance. The implementation rejects cross-scope, stale,
+     superseded and unsupported-parser selections; retains identical-byte encounters;
+     keeps TCP and UDP distinct; remains viewer-readable and read-only; and pages large
+     comparisons without repeated rows. Live browser checks covered two-record selection,
+     same-state and one-sided results, contextual Operator Guide help and a clean final
+     browser console. They also caught and corrected historical-card shared selection and
+     second-selection status lookup defects before completion. The novice operator passed
+     the workflow after one plain-language warning refinement. **QUALITY GATE: CLEAR —
+     DOCUMENTED DEVIATION**; the full Docker suite passed **711 tests**, the independent
+     reviewer passed **76 focused tests**, and `git diff --check` passed. Coverage-backed
+     lifecycle categories, current truth, Last Seen and disappearance remain unfinished.
+   - [ ] new
+   - [ ] changed
+   - [ ] unchanged
+   - [ ] no longer observed
+   - [ ] not assessed
 5. [x] Searchsploit cache redesign.
 6. [~] Persistent derived results.
    - [x] Searchsploit query results are now persisted and reused across requests.
