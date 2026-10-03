@@ -57,7 +57,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "registered Nmap and device artifacts" in html
     assert "operator hostname upload" in html
     assert "does not retain the uploaded file bytes as an Artifact Registry artifact" in html
-    assert "common analysis versioning is planned" in html
+    assert "reuse its reading of an identical saved Nmap file" in html
+    assert "does not change scan results or add a new button or operator action today" in html
+    assert "Existing pages continue to work as before" in html
     assert "foundation/evidence-engine-v2" in html
     assert 'href="/settings/system-health"' in html
     assert 'href="/settings/network-scopes"' in html

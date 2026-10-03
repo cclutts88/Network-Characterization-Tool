@@ -63,6 +63,7 @@ from app.device_analysis import (
     init_device_analysis_storage,
     router as device_analysis_router,
 )
+from app.derived_results import init_derived_result_storage
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting import (
@@ -1221,6 +1222,7 @@ async def lifespan(_: FastAPI):
     init_storage()
     init_poc_storage()
     init_device_analysis_storage(DB_PATH)
+    init_derived_result_storage(DB_PATH)
     init_auth_storage(DB_PATH)
     init_achievement_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
