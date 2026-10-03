@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+from typing import Callable
 
 from app.artifacts import init_artifact_storage, utc_now
 from app.database import connect_database, initialize_once_per_database
@@ -256,6 +257,7 @@ def _validate_observation_links(
 
 def publish_derived_result(
     db_path: Path, prepared: PreparedDerivedResult, *, observation_links: list[dict] | None = None,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict:
     init_derived_result_storage(db_path)
     _validated_prepared(prepared)
@@ -274,6 +276,8 @@ def publish_derived_result(
     )
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
+        if transaction_guard is not None:
+            transaction_guard(db)
         declared_inputs = {
             item["role"]: item for item in json.loads(identity.inputs_json)
         }
@@ -382,23 +386,23 @@ def associate_derived_result_observation(
         )
 
 
-def load_derived_result(db_path: Path, identity: DerivedResultIdentity) -> dict | None:
-    _validated_identity(identity)
-    with connect_database(db_path, read_only=True) as db:
-        row = db.execute(
-            """SELECT result_id, family, analysis_version, payload_schema_version,
-                      parameters_json, inputs_json, result_json, result_sha256,
-                      generated_at
-               FROM derived_results WHERE computation_key = ?""",
-            (identity.computation_key,),
-        ).fetchone()
-        if row is None:
-            return None
-        inputs = db.execute(
-            """SELECT input_role, input_kind, input_identity, input_metadata_json
-               FROM derived_result_inputs WHERE result_id = ? ORDER BY input_role""",
-            (identity.result_id,),
-        ).fetchall()
+def _load_derived_result(
+    db: sqlite3.Connection, identity: DerivedResultIdentity,
+) -> dict | None:
+    row = db.execute(
+        """SELECT result_id, family, analysis_version, payload_schema_version,
+                  parameters_json, inputs_json, result_json, result_sha256,
+                  generated_at
+           FROM derived_results WHERE computation_key = ?""",
+        (identity.computation_key,),
+    ).fetchone()
+    if row is None:
+        return None
+    inputs = db.execute(
+        """SELECT input_role, input_kind, input_identity, input_metadata_json
+           FROM derived_result_inputs WHERE result_id = ? ORDER BY input_role""",
+        (identity.result_id,),
+    ).fetchall()
     if tuple(row[:6]) != (
         identity.result_id,
         identity.family,
@@ -428,3 +432,37 @@ def load_derived_result(db_path: Path, identity: DerivedResultIdentity) -> dict 
         "generated_at": row[8],
         "payload": payload,
     }
+
+
+def load_derived_result(db_path: Path, identity: DerivedResultIdentity) -> dict | None:
+    _validated_identity(identity)
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        return _load_derived_result(db, identity)
+
+
+def load_linked_derived_result(
+    db_path: Path,
+    identity: DerivedResultIdentity,
+    *,
+    role: str,
+    observation_id: str,
+    read_guard: Callable[[sqlite3.Connection], None] | None = None,
+) -> dict | None:
+    """Read one result and its provenance link from the same read-only snapshot."""
+    _validated_identity(identity)
+    role = _text(role, "link role", 100)
+    observation_id = _text(observation_id, "observation_id", 200)
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        if read_guard is not None:
+            read_guard(db)
+        retained = _load_derived_result(db, identity)
+        if retained is None:
+            return None
+        linked = db.execute(
+            """SELECT 1 FROM derived_result_observation_links
+               WHERE result_id = ? AND input_role = ? AND observation_id = ?""",
+            (identity.result_id, role, observation_id),
+        ).fetchone()
+        return retained if linked is not None else None

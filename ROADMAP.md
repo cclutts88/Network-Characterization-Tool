@@ -126,6 +126,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 delta detection | Classify evidence as `new`, `changed`, `unchanged`, `no longer observed`, or `not assessed` | Begin with an explicit Record A / Record B comparison of reported service states for one scoped address; label one-sided receipts `recorded only in A/B` | Current Nmap receipts preserve reported protocol/port states, but target and port coverage may be unknown or incomplete and processing order does not establish observation chronology | Keep Phase 1 delta detection incomplete. One-sided receipts remain missing evidence, not disappearance or a newly present service. Current-state selection, Last Seen, automatic baselines and coverage-backed lifecycle labels remain separate gates |
 | 2026-10-03 | Phase 1 delta coverage | Add lifecycle labels directly from existing Nmap assessment receipts | Add a versioned coverage-receipt contract first; keep lifecycle labels blocked until records prove successful completion, non-overlapping collection order, confirmed host response, exact protocol/port inclusion and complete omitted-port accounting | Review found that requested `scaninfo` ports alone do not prove probe completion, host-level `extraports` were not retained, and multi-phase aggregate XML can mix host timing from one phase with completion time from another | Existing `nmap-endpoints:1` assessments remain readable as historical evidence and do not silently gain stronger claims. Reprocess a current assignment with `nmap-endpoints:2` to create coverage receipts. Ambiguous, incomplete and combined-phase evidence must explain why it is ineligible and resolve to `not assessed` when lifecycle classification is added |
 | 2026-10-03 | Phase 1 persistent derived results | Introduce the common derived-result model after persisting additional analysis families | Establish a minimal immutable result store and one verified Nmap base-analysis adapter before replacing any production cache read | Existing scan analysis reuse is keyed by file size, modification time and a local integer version. Device summaries and exposure reports have broader dependency and retention contracts that are not yet safe to generalize. Exact computation identity and atomic publication must be proved before migration | This deliberately introduces family/version identity and immutable input manifests ahead of the broader dependency-graph and analysis-versioning milestones. The first adapter contains only `parse_xml()` output for one verified artifact; run grouping, scope, provenance, overrides, enrichment and current-state claims remain outside. Existing production cache paths remain unchanged pending a separate quality gate |
+| 2026-10-03 | Phase 1 production Nmap result migration | Replace the legacy size/modified-time scan-analysis cache in one step | Migrate only authoritative finalized `nmap_scan` observations for each run's exact `scan.xml`; parse unregistered historical scan XML directly without caching until explicit backfill registers it | Finalized run-local XML may be a separate copy from canonical artifact storage, historical scans may have no registry observation, and page reads must not create evidence or perform implicit backfill | Every registered terminal-run analysis verifies both run-local and canonical bytes. Ambiguous, missing, changed or corrupt registered evidence fails explicitly. Per the user's direction that the verified store is the new supported method, disposable legacy cache rows and their table are removed during storage initialization; rollback code can recreate an empty table. Historical scan XML and provenance are not deleted. Unregistered historical files remain usable at the temporary cost of repeated full parsing and verification. Run grouping, scope, overrides, enrichment, provenance, current-state claims and foundation explorer reads remain outside this migration |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -892,13 +893,42 @@ foundational changes.
      observation keeps separate provenance. Publication is short, atomic and idempotent;
      corrupt payloads, forged identities, mismatched observations and unverifiable inputs
      fail closed without changing source evidence. The built-in README explains that
-     this adds no new button or operator action yet. Existing `scan_analysis_cache` reads
-     remain unchanged until a separate migration gate. **QUALITY GATE: CLEAR - DOCUMENTED
+     this adds no new button or operator action yet. At that foundation gate,
+     `scan_analysis_cache` reads remained unchanged; the production migration below now
+     retires them. **QUALITY GATE: CLEAR - DOCUMENTED
      DEVIATION**; the full Docker suite passed **769 tests**, the final focused suite
      passed **72 tests**, the browser showed the updated guide in the restarted local
      preview, the novice operator passed the wording, and the independent reviewer
      reproduced and verified rejection of both alternate-parser and forged-provenance
      attempts.
+   - [x] Migrate production Nmap scan analysis to verified reusable file readings.
+     Work started 2026-10-03 with an explicit compatibility boundary: only the unique
+     finalized `nmap_scan` observation for a run's `scan.xml` may reuse a result. The
+     run-local file must still match the registered canonical bytes. Unregistered legacy
+     scans parse their current XML without using the old size/time cache; page reads do
+     not register or backfill evidence. The user designated the verified store as the new
+     supported method, so the disposable legacy cache table is removed during storage
+     initialization while historical scan XML and provenance remain intact. Older code
+     can recreate an empty cache after rollback. Grouping, warnings, overrides,
+     enrichment and operator-facing evidence links remain outside the reusable reading.
+     Completed 2026-10-03. Analyze, Hunt, Reach and scan-comparison paths now reuse only
+     exact verified terminal-run evidence. A nonterminal run can still be read from a
+     stable run-local XML snapshot, but it cannot publish or reuse a result; a status
+     change during calculation also blocks publication. Every registered terminal-run
+     analysis verifies both the run-local and canonical copies. Changed bytes, missing or
+     ambiguous observations, deleted runs and corrupt retained results fail explicitly. Warm reads
+     use a consistent read-only snapshot and make no database write. The old disposable
+     table is removed once at startup in an atomic, retryable migration; interruption
+     rolls back the removal, historical scans and provenance remain untouched, and an
+     older rollback can rebuild an empty cache from retained XML. Map and device-topology
+     processing retain their specialized reader and remain a later migration step. An
+     isolated 4-file, 1,000-host-per-file benchmark measured 0.4517 seconds cold and
+     0.1606 seconds warm while retaining exact-file checks. The restarted preview showed
+     the final built-in guide and the preview database retained its artifact observations
+     with no legacy cache table. The novice operator passed the wording. **QUALITY GATE:
+     CLEAR - DOCUMENTED DEVIATION**; the full Docker suite passed **785 tests**, the
+     final focused suite passed **82 tests**, the reviewer independently passed **95
+     tests**, and Python compilation plus `git diff --check` passed.
    - [ ] Persist remaining analysis families under the common derived-result model.
 7. [ ] Dirty-state tracking.
 8. [ ] Dependency graph.

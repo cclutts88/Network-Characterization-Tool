@@ -1381,19 +1381,6 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                     (latest_no_strike[1], latest_no_strike[2], latest_no_strike[3]),
                 )
             db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS scan_analysis_cache (
-                    run_id TEXT PRIMARY KEY,
-                    analysis_version INTEGER NOT NULL,
-                    evidence_size INTEGER NOT NULL,
-                    evidence_modified_ns INTEGER NOT NULL,
-                    analysis_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (run_id) REFERENCES scan_runs(run_id) ON DELETE CASCADE
-                )
-                """
-            )
-            db.execute(
                 "CREATE INDEX IF NOT EXISTS scan_runs_status_created "
                 "ON scan_runs(status, created_at)"
             )

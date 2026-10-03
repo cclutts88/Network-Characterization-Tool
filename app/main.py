@@ -64,6 +64,10 @@ from app.device_analysis import (
     router as device_analysis_router,
 )
 from app.derived_results import init_derived_result_storage
+from app.nmap_base_analysis import (
+    analyze_scan_run_nmap_base,
+    retire_legacy_scan_analysis_cache,
+)
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting import (
@@ -255,7 +259,6 @@ PACKAGE_DIR = DATA_DIR / "packages"
 DB_PATH = DATA_DIR / "analyzer.db"
 MAX_EXPANDED_ADDRESSES = 65536
 MAX_HOSTNAME_EVIDENCE_BYTES = 50 * 1024 * 1024
-SCAN_ANALYSIS_VERSION = 2
 _DEVICE_EVIDENCE_CACHE_LOCK = threading.Lock()
 _DEVICE_EVIDENCE_CACHE_KEY: tuple | None = None
 _DEVICE_EVIDENCE_CACHE_VALUE: list[dict] = []
@@ -1221,6 +1224,7 @@ async def lifespan(_: FastAPI):
     configure_database(DB_PATH)
     init_storage()
     init_poc_storage()
+    retire_legacy_scan_analysis_cache(DB_PATH)
     init_device_analysis_storage(DB_PATH)
     init_derived_result_storage(DB_PATH)
     init_auth_storage(DB_PATH)
@@ -2458,45 +2462,18 @@ def _run_group_analysis(manifests: list[dict]) -> dict:
         xml_path = run_directory(manifest["run_id"]) / "scan.xml"
         if not xml_path.is_file():
             raise FileNotFoundError(manifest["run_id"])
-        stat = xml_path.stat()
-        with connect_database(DB_PATH) as db:
-            row = db.execute(
-                """
-                SELECT analysis_json FROM scan_analysis_cache
-                WHERE run_id = ? AND analysis_version = ?
-                  AND evidence_size = ? AND evidence_modified_ns = ?
-                """,
-                (
-                    manifest["run_id"], SCAN_ANALYSIS_VERSION,
-                    stat.st_size, stat.st_mtime_ns,
-                ),
-            ).fetchone()
-        if row:
-            analyses.append(json.loads(row[0]))
-            continue
-        parsed = parse_xml(xml_path.read_bytes())
-        with connect_database(DB_PATH) as db:
-            db.execute(
-                """
-                INSERT INTO scan_analysis_cache (
-                    run_id, analysis_version, evidence_size,
-                    evidence_modified_ns, analysis_json, updated_at
-                ) SELECT ?, ?, ?, ?, ?, ?
-                WHERE EXISTS (SELECT 1 FROM scan_runs WHERE run_id = ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    analysis_version = excluded.analysis_version,
-                    evidence_size = excluded.evidence_size,
-                    evidence_modified_ns = excluded.evidence_modified_ns,
-                    analysis_json = excluded.analysis_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    manifest["run_id"], SCAN_ANALYSIS_VERSION,
-                    stat.st_size, stat.st_mtime_ns,
-                    json.dumps(parsed, separators=(",", ":")), utc_now(), manifest["run_id"],
-                ),
-            )
-        analyses.append(parsed)
+        registry = manifest.get("artifact_registry") or {}
+        registration_expected = any(
+            isinstance(item, dict) and item.get("filename") == "scan.xml"
+            for item in (registry.get("files") or [])
+        )
+        result = analyze_scan_run_nmap_base(
+            DB_PATH,
+            manifest["run_id"],
+            xml_path,
+            registration_expected=registration_expected,
+        )
+        analyses.append(result["payload"])
     merged = merge_analyses(analyses)
     partial_notes = [
         str(manifest.get("execution_note") or "A scan phase did not complete.")

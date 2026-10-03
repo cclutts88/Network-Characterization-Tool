@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app import device_analysis, device_configs, main, poc
+from app import device_analysis, device_configs, main, nmap_base_analysis, poc
 from app.database import configure_database, connect_database
 from app.host_identities import apply_analysis_host_identities, apply_topology_host_identities, select_host_identity
 
@@ -362,7 +362,9 @@ def test_scan_history_does_not_parse_xml_and_pages_beyond_old_limit(tmp_path, mo
     assert all('commands' not in row and 'artifacts' not in row for row in result)
 
 
-def test_scan_analysis_cache_reparses_results_after_presence_logic_changes(tmp_path, monkeypatch):
+def test_legacy_scan_analysis_cache_is_removed_without_removing_scan_evidence(
+    tmp_path, monkeypatch,
+):
     path = tmp_path / 'test.db'
     poc.init_poc_storage(path)
     run_id = 'a' * 32
@@ -385,6 +387,12 @@ def test_scan_analysis_cache_reparses_results_after_presence_logic_changes(tmp_p
     }
     with connect_database(path) as db:
         db.execute(
+            '''CREATE TABLE scan_analysis_cache (
+                   run_id TEXT PRIMARY KEY, analysis_version INTEGER NOT NULL,
+                   evidence_size INTEGER NOT NULL, evidence_modified_ns INTEGER NOT NULL,
+                   analysis_json TEXT NOT NULL, updated_at TEXT NOT NULL)'''
+        )
+        db.execute(
             'INSERT INTO scan_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (run_id, record['created_at'], 'completed', 'operator', '', 'test', 'eth0', 'profile', json.dumps(record)),
         )
@@ -394,6 +402,15 @@ def test_scan_analysis_cache_reparses_results_after_presence_logic_changes(tmp_p
                VALUES (?, 1, ?, ?, ?, ?)''',
             (run_id, stat.st_size, stat.st_mtime_ns, json.dumps({'host_count': 1, 'hosts': [{'ip': '192.0.2.10'}]}), 'old'),
         )
+        db.execute(
+            "INSERT INTO scan_run_audit (run_id, event, actor, changed_at, details) "
+            "VALUES (?, 'completed', 'operator', ?, 'retained')",
+            (run_id, record['created_at']),
+        )
+    original_xml = xml_path.read_bytes()
+
+    nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
     monkeypatch.setattr(main, 'DB_PATH', path)
     monkeypatch.setattr(main, 'run_directory', lambda _run_id: folder)
 
@@ -401,12 +418,116 @@ def test_scan_analysis_cache_reparses_results_after_presence_logic_changes(tmp_p
 
     assert analysis['host_count'] == 0
     assert analysis['assumed_up_count'] == 1
+    with connect_database(path, read_only=True) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_analysis_cache'"
+        ).fetchone() is None
+        assert db.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM scan_run_audit").fetchone()[0] == 1
+    assert xml_path.read_bytes() == original_xml
+
+    # An older rollback can recreate an empty disposable cache and rebuild it from XML.
     with connect_database(path) as db:
-        row = db.execute(
-            'SELECT analysis_version FROM scan_analysis_cache WHERE run_id = ?',
-            (run_id,),
-        ).fetchone()
-    assert row == (main.SCAN_ANALYSIS_VERSION,)
+        db.execute(
+            '''CREATE TABLE scan_analysis_cache (
+                   run_id TEXT PRIMARY KEY, analysis_version INTEGER NOT NULL,
+                   evidence_size INTEGER NOT NULL, evidence_modified_ns INTEGER NOT NULL,
+                   analysis_json TEXT NOT NULL, updated_at TEXT NOT NULL)'''
+        )
+        db.execute(
+            "INSERT INTO scan_analysis_cache VALUES (?, 2, ?, ?, ?, 'rollback')",
+            (
+                run_id, stat.st_size, stat.st_mtime_ns,
+                json.dumps(analysis, separators=(',', ':')),
+            ),
+        )
+        rebuilt = json.loads(db.execute(
+            "SELECT analysis_json FROM scan_analysis_cache WHERE run_id = ?", (run_id,),
+        ).fetchone()[0])
+    assert rebuilt == analysis
+
+
+def test_legacy_cache_retirement_retries_after_failure(tmp_path, monkeypatch):
+    path = tmp_path / 'retry.db'
+    poc.init_poc_storage(path)
+    with connect_database(path) as db:
+        db.execute('CREATE TABLE scan_analysis_cache (run_id TEXT PRIMARY KEY)')
+    original = nmap_base_analysis.connect_database
+    attempts = {'count': 0}
+
+    def fail_once(db_path, **kwargs):
+        attempts['count'] += 1
+        if attempts['count'] == 1:
+            raise RuntimeError('migration interrupted')
+        return original(db_path, **kwargs)
+
+    monkeypatch.setattr(nmap_base_analysis, 'connect_database', fail_once)
+    with pytest.raises(RuntimeError, match='migration interrupted'):
+        nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    with original(path, read_only=True) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_analysis_cache'"
+        ).fetchone() is None
+
+
+def test_legacy_cache_retirement_rolls_back_an_interrupted_drop_and_retries(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / 'rollback-retry.db'
+    poc.init_poc_storage(path)
+    with connect_database(path) as db:
+        db.execute('CREATE TABLE scan_analysis_cache (run_id TEXT PRIMARY KEY)')
+        db.execute("INSERT INTO scan_analysis_cache VALUES ('retained-on-failure')")
+
+    original = nmap_base_analysis.connect_database
+    attempts = {'count': 0}
+
+    class FailAfterDrop:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def execute(self, statement, parameters=()):
+            result = self.connection.execute(statement, parameters)
+            if statement.startswith('DROP TABLE') and attempts['count'] == 0:
+                attempts['count'] += 1
+                raise RuntimeError('migration interrupted after drop')
+            return result
+
+    def interrupt_once(db_path, **kwargs):
+        return FailAfterDrop(original(db_path, **kwargs))
+
+    monkeypatch.setattr(nmap_base_analysis, 'connect_database', interrupt_once)
+    with pytest.raises(RuntimeError, match='interrupted after drop'):
+        nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    with original(path, read_only=True) as db:
+        assert db.execute(
+            "SELECT run_id FROM scan_analysis_cache"
+        ).fetchone()[0] == 'retained-on-failure'
+
+    nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    with original(path, read_only=True) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_analysis_cache'"
+        ).fetchone() is None
+
+
+def test_legacy_cache_retirement_is_safe_when_table_is_already_absent(tmp_path):
+    path = tmp_path / 'already-absent.db'
+    poc.init_poc_storage(path)
+    nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    nmap_base_analysis.retire_legacy_scan_analysis_cache(path)
+    with connect_database(path, read_only=True) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_analysis_cache'"
+        ).fetchone() is None
 
 
 def test_sqlite_lock_error_returns_retryable_json(monkeypatch):

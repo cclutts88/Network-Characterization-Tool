@@ -57,9 +57,13 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "registered Nmap and device artifacts" in html
     assert "operator hostname upload" in html
     assert "does not retain the uploaded file bytes as an Artifact Registry artifact" in html
-    assert "reuse its reading of an identical saved Nmap file" in html
-    assert "does not change scan results or add a new button or operator action today" in html
-    assert "Existing pages continue to work as before" in html
+    assert "byte-for-byte identical saved Nmap files" in html
+    assert "if the contents changed or no longer match" in html
+    assert "does not reuse or skip a network scan" in html
+    assert "Map and device-topology processing still use their existing reader" in html
+    assert "every file encounter keeps its own source details" in html
+    assert "Older unregistered scan files are still read directly" in html
+    assert "There is no new operator action or button" in html
     assert "foundation/evidence-engine-v2" in html
     assert 'href="/settings/system-health"' in html
     assert 'href="/settings/network-scopes"' in html

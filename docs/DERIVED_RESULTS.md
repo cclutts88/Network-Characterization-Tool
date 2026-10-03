@@ -1,8 +1,8 @@
 # Derived Result Foundation Contract
 
-NCT now has an internal store for completed, reusable computations. This first slice is
-foundation infrastructure. Existing Analyze, Hunt, Reach, Map, device-analysis and
-SearchSploit cache paths are unchanged.
+NCT has an internal store for completed, reusable computations. Production Nmap views
+now use its verified file-reading result. Device-analysis and SearchSploit retain their
+existing result paths.
 
 ## Identity and reuse
 
@@ -44,16 +44,47 @@ deleting source evidence. Observation links disappear if the corresponding obser
 is removed, while the reusable result may remain. A missing observation cannot authorize
 a new link or result publication.
 
+## Production Nmap use
+
+Analyze, Hunt, Reach and scan-comparison paths use the shared Nmap file reading for
+terminal scans that have exactly one registered `nmap_scan` observation for the run's
+aggregate `scan.xml`. NCT verifies the run-local file and canonical retained file against
+the same exact-content identity on every read. A warm result with its encounter already
+linked uses one consistent read-only database snapshot and performs no database write.
+
+The Map topology loader and device-analysis topology enrichment retain their existing
+specialized Nmap parser in this milestone. They do not yet use this shared reading.
+Nonterminal runs may still be read directly from a stable run-local XML snapshot, but
+their analysis is neither published nor reused. If a run stops being terminal while a
+new reusable result is being calculated, publication is rejected.
+
+Run grouping, partial-result warnings, Network Scope, source links, analyst overrides,
+topology enrichment and presentation remain outside the reusable result. Reusing the
+file reading never starts, skips or changes a network scan and never combines separate
+evidence encounters.
+
+Historical scan XML without a registered observation remains readable by directly
+parsing its current bytes on each request. Page reads do not register it or perform
+backfill. After explicit storage backfill creates the exact observation, later reads may
+use verified reuse. Ambiguous observations, missing registered evidence, changed
+run-local copies, corrupt canonical bytes and deleted runs fail explicitly.
+
+The old size-and-modification-time `scan_analysis_cache` contained disposable calculated
+data and is removed by an idempotent startup migration. Historical scan XML, manifests,
+audit records and artifact observations are not removed. Older rollback code can create
+an empty legacy cache and rebuild it from the retained XML. All application processes
+sharing a database must be restarted together for this migration; mixed old and new
+processes are not supported during the transition.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already
 completed for the same verified bytes. It does not mean the result is current, latest,
 fresh, or still true on the network.
 
-Production scan-analysis reads still use the existing cache. Migrating that path requires
-a separate quality gate. Device summaries, exposure reports, SearchSploit results,
-coverage comparisons and other analysis families retain their existing storage. Their
-full dependency and retention contracts must be defined before migration.
+Device summaries, exposure reports, SearchSploit results, coverage comparisons and other
+analysis families retain their existing storage. Their full dependency and retention
+contracts must be defined before migration.
 
 Dirty-state propagation, dependency scheduling, global analysis versioning, persistent
 jobs, workers and operator-facing saved-result controls remain later milestones.

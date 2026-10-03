@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from app.hunting import (
@@ -10,7 +12,9 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.main import _hunting_subnets, app
+from app.database import connect_database
 from app.identity import enrich_analysis_macs
+from app.poc import init_poc_storage
 
 
 def host(ip: str, ports: list[dict]) -> dict:
@@ -423,6 +427,8 @@ def test_hunting_comparison_reports_added_removed_and_changed_capabilities():
 
 
 def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
+    db_path = tmp_path / "analyzer.db"
+    init_poc_storage(db_path)
     before_id, after_id = "a" * 32, "b" * 32
     manifests = [
         {
@@ -454,6 +460,16 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
             f'<nmaprun args="nmap 10.0.0.10"><host><status state="up"/><address addr="10.0.0.10" addrtype="ipv4"/><ports>{ports}</ports></host><host><status state="up" reason="user-set"/><address addr="10.0.0.11" addrtype="ipv4"/></host><runstats><hosts up="2" down="0" total="2"/></runstats></nmaprun>',
             encoding="utf-8",
         )
+        with connect_database(db_path) as connection:
+            connection.execute(
+                "INSERT INTO scan_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    manifest["run_id"], manifest["created_at"], manifest["status"],
+                    "analyst", "test", "host", "eth0", manifest["profile"],
+                    json.dumps(manifest, sort_keys=True),
+                ),
+            )
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
     monkeypatch.setattr("app.main.list_scan_run_plans", lambda limit=5000: manifests)
     monkeypatch.setattr("app.main.run_directory", lambda run_id: tmp_path / run_id)
     monkeypatch.setattr("app.network_map.build_topology", lambda: {"nodes": []})
