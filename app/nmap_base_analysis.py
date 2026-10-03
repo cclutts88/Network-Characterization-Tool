@@ -89,21 +89,20 @@ def _verified_observation_bytes(db_path: Path, observation_id: str) -> tuple[byt
     }
 
 
-def analyze_registered_nmap_base(
-    db_path: Path, observation_id: str, *,
-    analysis_version: str | None = None,
-    parameters: dict | None = None,
+def analyze_registered_nmap_result(
+    db_path: Path,
+    observation_id: str,
+    *,
+    family: str,
+    analysis_version: str,
+    payload_schema_version: int,
+    parameters: dict,
+    parser: Callable[[bytes], object],
     authority_guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict:
-    """Reuse or publish base parsing for verified bytes without run/scope provenance."""
+    """Reuse or publish one declared Nmap calculation for verified exact bytes."""
     init_derived_result_storage(db_path)
-    analysis_version = analysis_version or NMAP_BASE_ANALYSIS_VERSION
     content, observation = _verified_observation_bytes(db_path, observation_id)
-    requested_parameters = dict(parameters or {})
-    for key, value in NMAP_BASE_PARAMETERS.items():
-        if key in requested_parameters and requested_parameters[key] != value:
-            raise ValueError(f"{key} is fixed by the Nmap base-analysis contract")
-    parameters = {**NMAP_BASE_PARAMETERS, **requested_parameters}
     inputs = [{
         "role": "nmap_xml",
         "kind": "artifact_sha256",
@@ -111,9 +110,9 @@ def analyze_registered_nmap_base(
         "metadata": {"media_family": "nmap_xml"},
     }]
     identity = derived_result_identity(
-        family=NMAP_BASE_ANALYSIS_FAMILY,
+        family=family,
         analysis_version=analysis_version,
-        payload_schema_version=NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+        payload_schema_version=payload_schema_version,
         parameters=parameters,
         inputs=inputs,
     )
@@ -128,15 +127,15 @@ def analyze_registered_nmap_base(
         return {**linked, "reused": True, "observation": observation}
     retained = load_derived_result(db_path, identity)
     if retained is None:
-        parsed = _parse_nmap_xml(content)
+        parsed = parser(content)
         reused = False
     else:
         parsed = retained["payload"]
         reused = True
     prepared = prepare_derived_result(
-        family=NMAP_BASE_ANALYSIS_FAMILY,
+        family=family,
         analysis_version=analysis_version,
-        payload_schema_version=NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+        payload_schema_version=payload_schema_version,
         parameters=parameters,
         inputs=inputs,
         payload=parsed,
@@ -160,14 +159,38 @@ def analyze_registered_nmap_base(
         return {**retained, "reused": True, "observation": observation}
     return {
         "result_id": publication["result_id"],
-        "family": NMAP_BASE_ANALYSIS_FAMILY,
+        "family": family,
         "analysis_version": analysis_version,
-        "payload_schema_version": NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+        "payload_schema_version": payload_schema_version,
         "generated_at": prepared.generated_at,
         "payload": json.loads(prepared.result_json),
         "reused": False,
         "observation": observation,
     }
+
+
+def analyze_registered_nmap_base(
+    db_path: Path, observation_id: str, *,
+    analysis_version: str | None = None,
+    parameters: dict | None = None,
+    authority_guard: Callable[[sqlite3.Connection], None] | None = None,
+) -> dict:
+    """Reuse or publish base parsing for verified bytes without run/scope provenance."""
+    init_derived_result_storage(db_path)
+    requested_parameters = dict(parameters or {})
+    for key, value in NMAP_BASE_PARAMETERS.items():
+        if key in requested_parameters and requested_parameters[key] != value:
+            raise ValueError(f"{key} is fixed by the Nmap base-analysis contract")
+    return analyze_registered_nmap_result(
+        db_path,
+        observation_id,
+        family=NMAP_BASE_ANALYSIS_FAMILY,
+        analysis_version=analysis_version or NMAP_BASE_ANALYSIS_VERSION,
+        payload_schema_version=NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+        parameters={**NMAP_BASE_PARAMETERS, **requested_parameters},
+        parser=_parse_nmap_xml,
+        authority_guard=authority_guard,
+    )
 
 
 def _scan_xml_rows(db: sqlite3.Connection, run_id: str) -> list[tuple]:
@@ -181,6 +204,13 @@ def _scan_xml_rows(db: sqlite3.Connection, run_id: str) -> list[tuple]:
            ORDER BY observation.observation_id""",
         (run_id,),
     ).fetchall()
+
+
+def scan_run_has_registered_nmap_xml(db_path: Path, run_id: str) -> bool:
+    """Return whether the registry, rather than a manifest marker, claims scan.xml."""
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        return bool(_scan_xml_rows(db, run_id))
 
 
 def _require_scan_run(
@@ -215,15 +245,19 @@ def _verify_run_local_artifact(path: Path, expected_sha256: str, expected_size: 
     return content
 
 
-def analyze_scan_run_nmap_base(
+def analyze_scan_run_nmap_result(
     db_path: Path,
     run_id: str,
     run_local_path: Path,
     *,
+    family: str,
+    analysis_version: str,
+    payload_schema_version: int,
+    parameters: dict,
+    parser: Callable[[bytes], object],
     registration_expected: bool = False,
-    analysis_version: str | None = None,
 ) -> dict:
-    """Analyze one run's exact aggregate XML without doing evidence work on page reads."""
+    """Analyze one run's exact aggregate XML under a declared result contract."""
     init_derived_result_storage(db_path)
     with connect_database(db_path, read_only=True) as db:
         db.execute("BEGIN")
@@ -235,7 +269,7 @@ def analyze_scan_run_nmap_base(
         if registration_expected:
             raise ValueError("The registered scan.xml observation is missing")
         content = _stable_file_bytes(run_local_path, "Historical run-local Nmap evidence")
-        parsed = _parse_nmap_xml(content)
+        parsed = parser(content)
         with connect_database(db_path, read_only=True) as db:
             db.execute("BEGIN")
             _require_scan_run(db, run_id)
@@ -248,7 +282,7 @@ def analyze_scan_run_nmap_base(
 
     if status not in NMAP_ANALYSIS_TERMINAL_STATES:
         content = _stable_file_bytes(run_local_path, "In-progress run-local Nmap evidence")
-        parsed = _parse_nmap_xml(content)
+        parsed = parser(content)
         with connect_database(db_path, read_only=True) as db:
             db.execute("BEGIN")
             _require_scan_run(db, run_id)
@@ -262,11 +296,37 @@ def analyze_scan_run_nmap_base(
     observation_id, digest, size_bytes = rows[0]
     _verify_run_local_artifact(run_local_path, digest, int(size_bytes))
     guard = _scan_authority_guard(run_id, observation_id)
-    result = analyze_registered_nmap_base(
+    result = analyze_registered_nmap_result(
         db_path,
         observation_id,
+        family=family,
         analysis_version=analysis_version,
+        payload_schema_version=payload_schema_version,
+        parameters=parameters,
+        parser=parser,
         authority_guard=guard,
     )
     _verify_run_local_artifact(run_local_path, digest, int(size_bytes))
     return {**result, "registered": True}
+
+
+def analyze_scan_run_nmap_base(
+    db_path: Path,
+    run_id: str,
+    run_local_path: Path,
+    *,
+    registration_expected: bool = False,
+    analysis_version: str | None = None,
+) -> dict:
+    """Analyze one run's base payload without doing evidence work on page reads."""
+    return analyze_scan_run_nmap_result(
+        db_path,
+        run_id,
+        run_local_path,
+        family=NMAP_BASE_ANALYSIS_FAMILY,
+        analysis_version=analysis_version or NMAP_BASE_ANALYSIS_VERSION,
+        payload_schema_version=NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+        parameters=dict(NMAP_BASE_PARAMETERS),
+        parser=_parse_nmap_xml,
+        registration_expected=registration_expected,
+    )

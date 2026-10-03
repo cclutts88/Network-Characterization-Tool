@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.artifacts import register_artifact_file
+from app.database import connect_database
 from app.device_analysis import (
     _wan_interface_candidates,
     analyze_device_collection,
@@ -13,6 +15,7 @@ from app.device_analysis import (
 from app.main import app
 from app.poc import RUNS_DIR_NAME, insert_scan_run_manifest
 from app.saved_networks import SavedNetworkCreate, create_saved_network
+from app.storage_health import backfill_storage
 
 
 def make_collection(config_dir: Path, run_id: str, config: str) -> None:
@@ -93,6 +96,34 @@ def add_nmap_run(db_path: Path, data_dir: Path) -> str:
     return run_id
 
 
+def register_nmap_run(db_path: Path, data_dir: Path, run_id: str) -> dict:
+    xml_path = data_dir / RUNS_DIR_NAME / run_id / "scan.xml"
+    artifact = register_artifact_file(
+        db_path=db_path,
+        source_path=xml_path,
+        source_kind="nmap_scan",
+        source_ref=run_id,
+        original_filename="scan.xml",
+        actor="analyst",
+        observation_key=f"nmap_scan:{run_id}:scan.xml",
+    )
+    with connect_database(db_path) as db:
+        row = db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        manifest = json.loads(row[0])
+        manifest["artifact_registry"] = {
+            "status": "complete",
+            "files": [{"filename": "scan.xml", "sha256": artifact["sha256"]}],
+            "errors": [],
+        }
+        db.execute(
+            "UPDATE scan_runs SET manifest_json = ? WHERE run_id = ?",
+            (json.dumps(manifest, sort_keys=True), run_id),
+        )
+    return artifact
+
+
 def test_device_analysis_summarizes_and_correlates_retained_evidence(tmp_path):
     config_dir = tmp_path / "device-configs"
     data_dir = tmp_path / "data"
@@ -133,6 +164,72 @@ def test_device_analysis_summarizes_and_correlates_retained_evidence(tmp_path):
     assert any("default route" in reason for reason in suggested["reasons"])
     assert any("NAT evidence" in reason for reason in suggested["reasons"])
     assert suggested["evidence"]
+
+
+def test_device_correlation_reuses_verified_topology_and_surfaces_integrity_warning(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "nct.db"
+    collection_id = "b" * 32
+    make_collection(config_dir, collection_id, CURRENT_CONFIG)
+    nmap_run_id = add_nmap_run(db_path, data_dir)
+    register_nmap_run(db_path, data_dir, nmap_run_id)
+
+    first = analyze_device_collection(
+        collection_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    )
+    second = analyze_device_collection(
+        collection_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    )
+    assert first["nmap_host_correlations"] == second["nmap_host_correlations"]
+    assert first["nmap_host_correlations"][0]["ip"] == "10.80.0.10"
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_results WHERE family = 'nmap_topology_hosts'"
+        ).fetchone()[0] == 1
+
+    xml_path = data_dir / RUNS_DIR_NAME / nmap_run_id / "scan.xml"
+    xml_path.write_text("<nmaprun></nmaprun>", encoding="utf-8")
+    warned = analyze_device_collection(
+        collection_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    )
+    assert warned["nmap_host_correlations"] == []
+    integrity = [
+        item for item in warned["review_items"]
+        if item["category"] == "Nmap correlation"
+    ]
+    assert len(integrity) == 1
+    assert integrity[0]["title"] == "Retained Nmap evidence could not be verified"
+    assert "does not match its registered artifact" in integrity[0]["detail"]
+
+
+def test_device_correlation_warns_when_backfilled_run_local_xml_is_missing(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "nct.db"
+    collection_id = "d" * 32
+    make_collection(config_dir, collection_id, CURRENT_CONFIG)
+    nmap_run_id = add_nmap_run(db_path, data_dir)
+    with connect_database(db_path, read_only=True) as db:
+        manifest_json = db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (nmap_run_id,)
+        ).fetchone()[0]
+    (data_dir / RUNS_DIR_NAME / nmap_run_id / "manifest.json").write_text(
+        manifest_json, encoding="utf-8"
+    )
+    assert backfill_storage(db_path)["completed"] >= 1
+    (data_dir / RUNS_DIR_NAME / nmap_run_id / "scan.xml").unlink()
+
+    result = analyze_device_collection(
+        collection_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    )
+    assert result["nmap_host_correlations"] == []
+    integrity = [
+        item for item in result["review_items"]
+        if item["category"] == "Nmap correlation"
+    ]
+    assert len(integrity) == 1
+    assert "Run-local Nmap evidence is unavailable" in integrity[0]["detail"]
 
 
 def test_reach_analysis_can_skip_presentation_correlations_without_losing_routes(

@@ -60,7 +60,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "byte-for-byte identical saved Nmap files" in html
     assert "if the contents changed or no longer match" in html
     assert "does not reuse or skip a network scan" in html
-    assert "Map and device-topology processing still use their existing reader" in html
+    assert "Map and Network Devices also interpret host relationships and traceroute paths" in html
+    assert "view may be incomplete and shows a warning" in html
     assert "every file encounter keeps its own source details" in html
     assert "Older unregistered scan files are still read directly" in html
     assert "There is no new operator action or button" in html

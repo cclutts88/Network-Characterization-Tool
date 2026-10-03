@@ -127,6 +127,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 delta coverage | Add lifecycle labels directly from existing Nmap assessment receipts | Add a versioned coverage-receipt contract first; keep lifecycle labels blocked until records prove successful completion, non-overlapping collection order, confirmed host response, exact protocol/port inclusion and complete omitted-port accounting | Review found that requested `scaninfo` ports alone do not prove probe completion, host-level `extraports` were not retained, and multi-phase aggregate XML can mix host timing from one phase with completion time from another | Existing `nmap-endpoints:1` assessments remain readable as historical evidence and do not silently gain stronger claims. Reprocess a current assignment with `nmap-endpoints:2` to create coverage receipts. Ambiguous, incomplete and combined-phase evidence must explain why it is ineligible and resolve to `not assessed` when lifecycle classification is added |
 | 2026-10-03 | Phase 1 persistent derived results | Introduce the common derived-result model after persisting additional analysis families | Establish a minimal immutable result store and one verified Nmap base-analysis adapter before replacing any production cache read | Existing scan analysis reuse is keyed by file size, modification time and a local integer version. Device summaries and exposure reports have broader dependency and retention contracts that are not yet safe to generalize. Exact computation identity and atomic publication must be proved before migration | This deliberately introduces family/version identity and immutable input manifests ahead of the broader dependency-graph and analysis-versioning milestones. The first adapter contains only `parse_xml()` output for one verified artifact; run grouping, scope, provenance, overrides, enrichment and current-state claims remain outside. Existing production cache paths remain unchanged pending a separate quality gate |
 | 2026-10-03 | Phase 1 production Nmap result migration | Replace the legacy size/modified-time scan-analysis cache in one step | Migrate only authoritative finalized `nmap_scan` observations for each run's exact `scan.xml`; parse unregistered historical scan XML directly without caching until explicit backfill registers it | Finalized run-local XML may be a separate copy from canonical artifact storage, historical scans may have no registry observation, and page reads must not create evidence or perform implicit backfill | Every registered terminal-run analysis verifies both run-local and canonical bytes. Ambiguous, missing, changed or corrupt registered evidence fails explicitly. Per the user's direction that the verified store is the new supported method, disposable legacy cache rows and their table are removed during storage initialization; rollback code can recreate an empty table. Historical scan XML and provenance are not deleted. Unregistered historical files remain usable at the temporary cost of repeated full parsing and verification. Run grouping, scope, overrides, enrichment, provenance, current-state claims and foundation explorer reads remain outside this migration |
+| 2026-10-03 | Phase 1 topology result migration | Reuse the production Nmap base-analysis payload in Map and device correlations | Preserve the existing topology reader as a separate immutable result family while sharing exact scan-source verification and publication safeguards | The topology reader intentionally differs from Analyze presence semantics: directly substituting the base payload would remove assumed, down, or otherwise legacy-visible host records and change missing-value handling, ordering, and service defaults | Migrate only automated Map and device-correlation XML reads. Keep graph assembly, source context, device correlation, imports and existing record limits outside the reusable payload. Correcting legacy topology interpretation requires a separate evidence-semantics gate. Device-summary caching remains deferred until its multi-file and command-history dependency contract is defined |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -921,7 +922,8 @@ foundational changes.
      table is removed once at startup in an atomic, retryable migration; interruption
      rolls back the removal, historical scans and provenance remain untouched, and an
      older rollback can rebuild an empty cache from retained XML. Map and device-topology
-     processing retain their specialized reader and remain a later migration step. An
+     processing retained their specialized reader at this gate; the topology migration
+     immediately below now connects that compatible interpretation to verified reuse. An
      isolated 4-file, 1,000-host-per-file benchmark measured 0.4517 seconds cold and
      0.1606 seconds warm while retaining exact-file checks. The restarted preview showed
      the final built-in guide and the preview database retained its artifact observations
@@ -929,7 +931,32 @@ foundational changes.
      CLEAR - DOCUMENTED DEVIATION**; the full Docker suite passed **785 tests**, the
      final focused suite passed **82 tests**, the reviewer independently passed **95
      tests**, and Python compilation plus `git diff --check` passed.
-   - [ ] Persist remaining analysis families under the common derived-result model.
+   - [~] Persist remaining analysis families under the common derived-result model.
+     - [x] Migrate the automated Map and device-correlation Nmap topology reader.
+       Work started 2026-10-03 under a documented compatibility boundary. The existing
+       bytes-to-topology-host calculation will keep its current host, port, trace,
+       missing-value and ordering behavior in a separate versioned result family while
+       reusing the verified scan-source selection, terminal-state, integrity,
+       provenance-link and publication safeguards. Map graph assembly, device interface
+       matching, source labels and times, imports and the existing 200-record limits stay
+       outside. Device summaries remain deferred until ordered multi-file selection,
+       explicit missing inputs, semantic manifest fields, truncation parameters and
+       command-history retention have a reviewed dependency contract.
+       Completed 2026-10-03. Map and Network Devices now share the same registered-scan
+       authority, exact run-local and canonical-content verification, immutable result
+       publication and separate observation links as the base Nmap reader, while the
+       topology payload remains independently versioned to preserve existing behavior.
+       Older unregistered files remain directly readable until explicit backfill. After
+       backfill, actual registry authority is checked even when a legacy manifest has no
+       registry marker, so missing or changed retained evidence produces a visible Map
+       warning or Network Devices review item instead of being silently skipped. The
+       operator guide explains the distinct purposes and warning meaning. The isolated
+       preview displayed the registered sample host and traceroute gateway; a second Map
+       load kept one topology result and one evidence link. **QUALITY GATE: CLEAR -
+       DOCUMENTED DEVIATION**; the full Docker suite passed **792 tests**, the final
+       focused suite passed **44 tests**, the reviewer independently passed **49 tests**,
+       the novice operator passed the revised wording, and Python compilation plus
+       `git diff --check` passed.
 7. [ ] Dirty-state tracking.
 8. [ ] Dependency graph.
 9. [ ] Analysis versioning.

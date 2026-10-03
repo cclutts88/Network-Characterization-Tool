@@ -1,7 +1,7 @@
 # Derived Result Foundation Contract
 
 NCT has an internal store for completed, reusable computations. Production Nmap views
-now use its verified file-reading result. Device-analysis and SearchSploit retain their
+now use verified file-reading results. Device summaries and SearchSploit retain their
 existing result paths.
 
 ## Identity and reuse
@@ -52,16 +52,27 @@ aggregate `scan.xml`. NCT verifies the run-local file and canonical retained fil
 the same exact-content identity on every read. A warm result with its encounter already
 linked uses one consistent read-only database snapshot and performs no database write.
 
-The Map topology loader and device-analysis topology enrichment retain their existing
-specialized Nmap parser in this milestone. They do not yet use this shared reading.
-Nonterminal runs may still be read directly from a stable run-local XML snapshot, but
-their analysis is neither published nor reused. If a run stops being terminal while a
-new reusable result is being calculated, publication is rejected.
+Map and Network Devices use a separate `nmap_topology_hosts` family because their
+established topology interpretation intentionally differs from the base Analyze
+payload. It preserves the existing host order and duplicates, assumed, down and
+status-missing host records, open or state-missing ports, service defaults, MAC/vendor,
+operating-system label and traceroute details. It shares the same exact scan selection,
+terminal-state, run-local and canonical-content checks, atomic publication, and
+per-observation provenance links as the base family. Reusing the base family here would
+silently remove information that Map and device correlations already show.
+
+Map continues to consider its current newest 200 scan records, while device correlation
+continues to consider only completed scans from that same bounded set. Nonterminal Map
+runs may still be read directly from a stable run-local XML snapshot, but their topology
+reading is neither published nor reused. If a run stops being terminal while a new
+reusable result is being calculated, publication is rejected. A registered scan that
+cannot be verified is omitted and produces a visible Map warning or Network Devices
+review item instead of being silently trusted.
 
 Run grouping, partial-result warnings, Network Scope, source links, analyst overrides,
-topology enrichment and presentation remain outside the reusable result. Reusing the
-file reading never starts, skips or changes a network scan and never combines separate
-evidence encounters.
+Map graph assembly, device-interface correlation, imports and presentation remain
+outside the reusable results. Reusing a file reading never starts, skips or changes a
+network scan and never combines separate evidence encounters.
 
 Historical scan XML without a registered observation remains readable by directly
 parsing its current bytes on each request. Page reads do not register it or perform

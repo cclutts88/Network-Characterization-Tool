@@ -5,7 +5,6 @@ import ipaddress
 import json
 import re
 import sqlite3
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +22,11 @@ from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.ip_sort import ip_sort_key
 from app.identity_overrides import apply_inference_reviews, apply_os_overrides
 from app.host_identities import apply_topology_host_identities
+from app.nmap_base_analysis import scan_run_has_registered_nmap_xml
+from app.nmap_topology_analysis import (
+    analyze_scan_run_nmap_topology,
+    parse_nmap_topology_bytes,
+)
 from app.os_inference import infer_os_identity, os_display
 from app.switching import interface_key, merge_switch_interfaces, parse_switch_evidence
 from app.topology_neighbors import parse_topology_neighbors
@@ -615,67 +619,9 @@ def imported_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> 
 
 def parse_nmap_xml(path: Path) -> list[dict]:
     try:
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError):
+        return parse_nmap_topology_bytes(path.read_bytes())
+    except OSError:
         return []
-    hosts = []
-    for element in root.findall("host"):
-        addresses = {
-            item.get("addrtype"): item.get("addr")
-            for item in element.findall("address")
-        }
-        ip = valid_ip(addresses.get("ipv4"))
-        if not ip:
-            continue
-        hostname_el = element.find("hostnames/hostname")
-        status_el = element.find("status")
-        os_el = element.find("os/osmatch")
-        ports = []
-        for port_el in element.findall("ports/port"):
-            state_el = port_el.find("state")
-            if state_el is not None and state_el.get("state") != "open":
-                continue
-            service_el = port_el.find("service")
-            ports.append(
-                {
-                    "port": int(port_el.get("portid", "0")),
-                    "protocol": port_el.get("protocol"),
-                    "service": service_el.get("name") if service_el is not None else None,
-                    "product": service_el.get("product") if service_el is not None else None,
-                    "version": service_el.get("version") if service_el is not None else None,
-                }
-            )
-        hosts.append(
-            {
-                "ip": ip,
-                "hostname": hostname_el.get("name") if hostname_el is not None else None,
-                "state": status_el.get("state") if status_el is not None else None,
-                "mac": addresses.get("mac"),
-                "vendor": next(
-                    (item.get("vendor") for item in element.findall("address") if item.get("vendor")),
-                    None,
-                ),
-                "os": os_el.get("name") if os_el is not None else None,
-                "ports": ports,
-                "trace": {
-                    "port": element.find("trace").get("port", ""),
-                    "protocol": element.find("trace").get("proto", ""),
-                    "hops": [
-                        {
-                            "ttl": int(hop.get("ttl", "0") or 0),
-                            "rtt": hop.get("rtt", ""),
-                            "ip": hop.get("ipaddr", ""),
-                            "hostname": hop.get("host", ""),
-                        }
-                        for hop in element.findall("trace/hop")
-                        if hop.get("ipaddr")
-                    ],
-                }
-                if element.find("trace") is not None
-                else None,
-            }
-        )
-    return hosts
 
 
 def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
@@ -696,7 +642,27 @@ def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str
         if not run_id:
             continue
         path = DATA_DIR / RUNS_DIR_NAME / run_id / "scan.xml"
-        hosts = parse_nmap_xml(path)
+        registry = manifest.get("artifact_registry") or {}
+        manifest_registration = any(
+            isinstance(item, dict) and item.get("filename") == "scan.xml"
+            for item in (registry.get("files") or [])
+        )
+        try:
+            registration_expected = manifest_registration or scan_run_has_registered_nmap_xml(
+                DB_PATH, run_id
+            )
+            if not path.is_file() and not registration_expected:
+                continue
+            result = analyze_scan_run_nmap_topology(
+                DB_PATH,
+                run_id,
+                path,
+                registration_expected=registration_expected,
+            )
+        except (KeyError, OSError, sqlite3.Error, ValueError) as exc:
+            warnings.append(f"Could not verify automated scan {run_id[:8]}: {exc}")
+            continue
+        hosts = result["payload"]
         if not hosts:
             continue
         source = source_record(

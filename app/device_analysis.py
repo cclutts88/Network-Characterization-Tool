@@ -13,7 +13,8 @@ from fastapi import APIRouter, HTTPException
 
 from app.device_configs import CONFIG_DIR, device_collection_directory, device_collection_summary
 from app.database import configure_database, connect_database
-from app.network_map import parse_nmap_xml
+from app.nmap_base_analysis import scan_run_has_registered_nmap_xml
+from app.nmap_topology_analysis import analyze_scan_run_nmap_topology
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.saved_networks import list_saved_networks
 
@@ -481,19 +482,20 @@ def _saved_network_correlations(
 
 def _nmap_correlations(
     interfaces: list[dict], policy_items: list[dict], *, db_path: Path, data_dir: Path
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
     networks = [network for item in interfaces if (network := _interface_network(item))]
     if not networks or not db_path.is_file():
-        return []
+        return [], []
     try:
         with connect_database(db_path) as db:
             rows = db.execute(
                 "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
             ).fetchall()
     except sqlite3.Error:
-        return []
+        return [], []
     policy_networks = _evidence_networks(policy_items)
     observed: dict[str, dict] = {}
+    warnings: list[str] = []
     for (manifest_json,) in rows:
         try:
             manifest = json.loads(manifest_json)
@@ -501,8 +503,29 @@ def _nmap_correlations(
             continue
         if manifest.get("status") != "completed" or not manifest.get("run_id"):
             continue
-        xml_path = data_dir / RUNS_DIR_NAME / manifest["run_id"] / "scan.xml"
-        for host in parse_nmap_xml(xml_path):
+        run_id = manifest["run_id"]
+        xml_path = data_dir / RUNS_DIR_NAME / run_id / "scan.xml"
+        registry = manifest.get("artifact_registry") or {}
+        manifest_registration = any(
+            isinstance(item, dict) and item.get("filename") == "scan.xml"
+            for item in (registry.get("files") or [])
+        )
+        try:
+            registration_expected = manifest_registration or scan_run_has_registered_nmap_xml(
+                db_path, run_id
+            )
+            if not xml_path.is_file() and not registration_expected:
+                continue
+            analysis = analyze_scan_run_nmap_topology(
+                db_path,
+                run_id,
+                xml_path,
+                registration_expected=registration_expected,
+            )
+        except (KeyError, OSError, sqlite3.Error, ValueError) as exc:
+            warnings.append(f"Could not verify automated scan {run_id[:8]}: {exc}")
+            continue
+        for host in analysis["payload"]:
             try:
                 address = ipaddress.ip_address(host.get("ip") or "")
             except ValueError:
@@ -541,7 +564,7 @@ def _nmap_correlations(
         if item["policy_evidence"]:
             item["provenance"].append("parsed policy, NAT, or object evidence")
         result.append(item)
-    return sorted(result, key=lambda item: ipaddress.ip_address(item["ip"]))
+    return sorted(result, key=lambda item: ipaddress.ip_address(item["ip"])), warnings
 
 
 def analyze_device_collection(
@@ -714,18 +737,26 @@ def analyze_device_collection(
     ]
     # Reach consumes the complete route and policy evidence below, but it does
     # not use the Device Analysis presentation correlations. Let that caller
-    # skip the expensive all-routes-by-Saved-Network pass and repeated Nmap XML
-    # parsing while preserving the full Device Analysis response by default.
+    # skip the expensive all-routes-by-Saved-Network pass and Nmap correlation
+    # reads while preserving the full Device Analysis response by default.
     if include_correlations:
         saved_matches = _saved_network_correlations(
             interfaces, routes, policy_items, db_path
         )
-        nmap_matches = _nmap_correlations(
+        nmap_matches, nmap_warnings = _nmap_correlations(
             interfaces, policy_items, db_path=db_path, data_dir=data_dir
         )
     else:
         saved_matches = []
         nmap_matches = []
+        nmap_warnings = []
+    for warning in nmap_warnings:
+        review_items.append({
+            "severity": "warning",
+            "category": "Nmap correlation",
+            "title": "Retained Nmap evidence could not be verified",
+            "detail": warning,
+        })
     evidence = []
     for filename, label in (
         (summary.get("source_filename"), "Configuration evidence"),
