@@ -23,7 +23,7 @@ def collection(tmp_path, text=None):
         'run_id': run_id, 'vendor': 'cisco', 'device_type': 'router',
         'device_address': '10.80.0.1', 'status': 'uploaded',
         'created_at': '2026-09-25T12:00:00Z', 'operation': 'manual_upload',
-        'commands': ['show history', 'show running-config', 'show startup-config'],
+        'commands': ['show history all', 'show running-config', 'show startup-config'],
     }))
     (folder / 'uploaded-config.txt').write_text(text or '''===== show running-config =====
 interface Ethernet1
