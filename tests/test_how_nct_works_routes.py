@@ -58,15 +58,16 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "operator hostname upload" in html
     assert "does not retain the uploaded file bytes as an Artifact Registry artifact" in html
     assert "byte-for-byte identical saved Nmap files" in html
-    assert "if the contents changed or no longer match" in html
-    assert "does not reuse or skip a network scan" in html
-    assert "Map and Network Devices also interpret host relationships and traceroute paths" in html
-    assert "view may be incomplete and shows a warning" in html
-    assert "Network Devices still uses its existing results" in html
-    assert "The page has not changed, and there is no new operator action" in html
-    assert "every file encounter keeps its own source details" in html
-    assert "Older unregistered scan files are still read directly" in html
-    assert "There is no new operator action or button" in html
+    assert "If the contents changed or the details no longer match" in html
+    assert "Reusing a saved reading never skips or starts a network scan" in html
+    assert "Map and Network Devices use a separate verified topology reading" in html
+    assert "NCT withholds the summary and tells the analyst" in html
+    assert "automatically receive a protected tracking record" in html
+    assert "Deleting that collection cannot be undone" in html
+    assert "These safeguards work automatically" in html
+    assert "Every file encounter keeps its own source" in html
+    assert "Previously saved unregistered scan files remain readable" in html
+    assert "add no operator action or button" in html
     assert "foundation/evidence-engine-v2" in html
     assert 'href="/settings/system-health"' in html
     assert 'href="/settings/network-scopes"' in html

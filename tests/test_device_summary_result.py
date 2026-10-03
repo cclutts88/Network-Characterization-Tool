@@ -9,6 +9,13 @@ import pytest
 import app.device_summary_result as device_result
 from app.artifacts import register_artifact_file
 from app.database import connect_database
+from app.device_collection_authority import (
+    AUTHORITY_MARKER,
+    DeviceCollectionIntegrityError,
+    activate_manual_upload_authority,
+    authority_manifest_marker,
+    begin_manual_upload_authority,
+)
 from app.device_configs import (
     calculate_device_collection_summary,
     device_collection_summary,
@@ -38,6 +45,7 @@ def manual_upload(
     run_dir.mkdir(parents=True)
     evidence_path = run_dir / retained_filename
     evidence_path.write_bytes(content)
+    begin_manual_upload_authority(db_path, run_id)
     artifact = register_artifact_file(
         db_path=db_path,
         source_path=evidence_path,
@@ -63,9 +71,18 @@ def manual_upload(
         "artifact_observation_id": artifact["observation_id"],
         "output_complete": True,
         "commands": [],
+        AUTHORITY_MARKER: authority_manifest_marker(),
     }
     (run_dir / "manifest.json").write_text(
         json.dumps(manifest, sort_keys=True), encoding="utf-8"
+    )
+    activate_manual_upload_authority(
+        db_path,
+        run_id,
+        observation_id=artifact["observation_id"],
+        artifact_sha256=artifact["sha256"],
+        retained_filename=retained_filename,
+        manifest=manifest,
     )
     return run_dir, manifest
 
@@ -95,6 +112,8 @@ def test_frozen_calculation_matches_file_wrapper_and_preserves_history_lines(tmp
 
     assert calculated == expected
     assert calculated["command_history"]["entries"][1]["line_number"] == 2
+    verified = device_result.analyze_manual_upload_summary(db_path, run_id, run_dir)
+    assert {**verified["payload"], **verified["source_content"]} == expected
 
 
 def test_verified_manual_upload_adapter_reuses_exact_bytes_across_encounters(
@@ -163,8 +182,8 @@ def test_presentation_metadata_does_not_change_identity_but_semantics_do(tmp_pat
 
     manifest["vendor"] = "juniper"
     (run_dir / "manifest.json").write_text(json.dumps(manifest, sort_keys=True))
-    semantic = device_result.analyze_manual_upload_summary(db_path, run_id, run_dir)
-    assert semantic["result_id"] != first["result_id"]
+    with pytest.raises(DeviceCollectionIntegrityError, match="authority changed"):
+        device_result.analyze_manual_upload_summary(db_path, run_id, run_dir)
 
 
 def test_changed_run_local_bytes_and_unreviewed_selection_shape_fail_closed(tmp_path):

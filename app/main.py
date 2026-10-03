@@ -63,6 +63,12 @@ from app.device_analysis import (
     init_device_analysis_storage,
     router as device_analysis_router,
 )
+from app.device_collection_authority import (
+    DeviceCollectionDeleted,
+    DeviceCollectionIncomplete,
+    DeviceCollectionIntegrityError,
+    init_device_collection_authority_storage,
+)
 from app.derived_results import init_derived_result_storage
 from app.nmap_base_analysis import (
     analyze_scan_run_nmap_base,
@@ -1226,6 +1232,7 @@ async def lifespan(_: FastAPI):
     init_poc_storage()
     retire_legacy_scan_analysis_cache(DB_PATH)
     init_device_analysis_storage(DB_PATH)
+    init_device_collection_authority_storage(DB_PATH)
     init_derived_result_storage(DB_PATH)
     init_auth_storage(DB_PATH)
     init_achievement_storage(DB_PATH)
@@ -3049,6 +3056,10 @@ def analyze_network_control_routes(
     if analysis is None:
         try:
             analysis = analyze_device_collection(run_id)
+        except DeviceCollectionDeleted:
+            raise HTTPException(status_code=404, detail="Device collection was deleted") from None
+        except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
         except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
             raise HTTPException(status_code=404, detail="Device collection was not found") from None
     return {

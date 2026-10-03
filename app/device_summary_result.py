@@ -1,9 +1,4 @@
-"""Internal verified adapter for frozen manual device-upload summaries.
-
-This module is intentionally not wired into production reads yet. Publication and
-collection deletion need a durable shared authority record before the legacy cache can
-be replaced safely.
-"""
+"""Verified reusable summaries for finalized manual device uploads."""
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +21,15 @@ from app.device_configs import (
     MAX_SUMMARY_TEXT_BYTES,
     _configuration_source_names,
     _labeled_command_sections,
+    active_configuration_text,
     calculate_device_collection_summary,
+)
+from app.device_collection_authority import (
+    DeviceCollectionIntegrityError,
+    MANUAL_UPLOAD_SELECTION_CONTRACT,
+    manual_upload_manifest_semantics,
+    require_active_snapshot,
+    require_available_collection,
 )
 
 
@@ -94,23 +97,6 @@ def _manual_upload_observation(
     }
 
 
-def _manifest_semantics(manifest: dict, *, history_exists: bool) -> dict:
-    commands = manifest.get("commands") or []
-    if not isinstance(commands, list):
-        raise ValueError("Device upload commands must be a list")
-    return {
-        "vendor": str(manifest.get("vendor") or "").lower(),
-        "commands": [str(value) for value in commands],
-        "history_command": str(manifest.get("history_command") or "show history"),
-        "history_attempted": bool(
-            history_exists
-            or manifest.get("command_history_status")
-            or manifest.get("history_command")
-        ),
-        "output_complete_is_false": manifest.get("output_complete") is False,
-    }
-
-
 def capture_manual_upload_snapshot(db_path: Path, run_id: str, run_dir: Path) -> dict:
     """Freeze and verify the reviewed single-file manual-upload selection shape."""
     manifest_path = run_dir / "manifest.json"
@@ -159,7 +145,7 @@ def capture_manual_upload_snapshot(db_path: Path, run_id: str, run_dir: Path) ->
     prefix = run_local[:MAX_SUMMARY_TEXT_BYTES]
     configuration_text = prefix.decode("utf-8", errors="replace")
     configuration_truncated = len(run_local) > MAX_SUMMARY_TEXT_BYTES
-    semantics = _manifest_semantics(manifest, history_exists=False)
+    semantics = manual_upload_manifest_semantics(manifest, history_exists=False)
     sections = _labeled_command_sections(configuration_text)
     history_present = semantics["history_command"] in sections
     history_text = sections.get(semantics["history_command"], "")
@@ -181,6 +167,17 @@ def capture_manual_upload_snapshot(db_path: Path, run_id: str, run_dir: Path) ->
         "raw_truncated": configuration_truncated,
         "history_text": history_text,
         "manifest_semantics": semantics,
+        "manifest_presentation": {
+            key: manifest.get(key)
+            for key in (
+                "run_id", "created_at", "completed_at", "operator", "reason",
+                "originating_host", "vendor", "device_type", "device_types",
+                "device_name", "device_address", "operation", "status",
+                "output_truncated", "retained_filename", "artifact_sha256",
+                "artifact_observation_id", "summary_authority",
+            )
+        },
+        "authority_manifest": manifest,
         "selection_shape": selection_shape,
         "observation_id": observation_id,
         "sha256": observation["sha256"],
@@ -226,15 +223,26 @@ def _inputs(snapshot: dict) -> list[dict]:
     ]
 
 
-def _authority_guard(run_id: str, observation_id: str, digest: str):
+def _authority_guard(run_id: str, snapshot: dict, authority: dict):
     def require_observation(db: sqlite3.Connection) -> None:
         row = db.execute(
             """SELECT sha256, source_kind, source_ref
                FROM artifact_observations WHERE observation_id = ?""",
-            (observation_id,),
+            (snapshot["observation_id"],),
         ).fetchone()
-        if row is None or tuple(row) != (digest, "device_config_upload", run_id):
+        if row is None or tuple(row) != (
+            snapshot["sha256"], "device_config_upload", run_id,
+        ):
             raise ValueError("Device upload artifact authority changed during analysis")
+        require_active_snapshot(
+            db,
+            run_id=run_id,
+            revision=authority["revision"],
+            observation_id=snapshot["observation_id"],
+            artifact_sha256=snapshot["sha256"],
+            retained_filename=snapshot["source_filename"],
+            semantic_manifest_sha256=_json_digest(snapshot["manifest_semantics"]),
+        )
     return require_observation
 
 
@@ -272,6 +280,11 @@ def _attach_context(payload: dict, snapshot: dict, **metadata: object) -> dict:
             "raw_filename": snapshot["raw_filename"],
         },
         "observation_id": snapshot["observation_id"],
+        "manifest": dict(snapshot["manifest_presentation"]),
+        "source_content": {
+            "configuration_text": active_configuration_text(snapshot["configuration_text"]),
+            "raw_output": snapshot["raw_output"],
+        },
     }
 
 
@@ -279,9 +292,20 @@ def analyze_manual_upload_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
 ) -> dict:
-    """Exercise verified reuse internally; production reads are not wired to this yet."""
+    """Reuse one immutable result only while upload authority remains active."""
     init_derived_result_storage(db_path)
     snapshot = capture_manual_upload_snapshot(db_path, run_id, run_dir)
+    authority = require_available_collection(
+        db_path, run_id, manifest=snapshot["authority_manifest"]
+    )
+    if authority is None:
+        raise DeviceCollectionIntegrityError(
+            "Manual upload has no verified collection authority"
+        )
+    if authority.get("selection_contract") != MANUAL_UPLOAD_SELECTION_CONTRACT:
+        raise DeviceCollectionIntegrityError(
+            "Manual upload selection contract is not supported"
+        )
     inputs = _inputs(snapshot)
     identity = derived_result_identity(
         family=DEVICE_SUMMARY_FAMILY,
@@ -290,7 +314,7 @@ def analyze_manual_upload_summary(
         parameters=dict(DEVICE_SUMMARY_PARAMETERS),
         inputs=inputs,
     )
-    guard = _authority_guard(run_id, snapshot["observation_id"], snapshot["sha256"])
+    guard = _authority_guard(run_id, snapshot, authority)
     linked_configuration = load_linked_derived_result(
         db_path,
         identity,

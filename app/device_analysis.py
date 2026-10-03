@@ -12,6 +12,16 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from app.device_configs import CONFIG_DIR, device_collection_directory, device_collection_summary
+from app.device_collection_authority import (
+    DeviceCollectionDeleted,
+    DeviceCollectionIncomplete,
+    DeviceCollectionIntegrityError,
+    get_device_collection_authority,
+    require_available_collection,
+    require_not_deleted_in_transaction,
+    tombstone_device_collection,
+)
+from app.device_summary_result import analyze_manual_upload_summary
 from app.database import configure_database, connect_database
 from app.nmap_base_analysis import scan_run_has_registered_nmap_xml
 from app.nmap_topology_analysis import analyze_scan_run_nmap_topology
@@ -103,8 +113,7 @@ def init_device_analysis_storage(db_path: Path = DB_PATH) -> None:
 
 def delete_device_analysis_storage(run_id: str, db_path: Path = DB_PATH) -> None:
     init_device_analysis_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute("DELETE FROM device_collections WHERE run_id = ?", (run_id,))
+    tombstone_device_collection(db_path, run_id)
 
 
 def _device_evidence_fingerprint(run_dir: Path) -> str:
@@ -117,10 +126,15 @@ def _device_evidence_fingerprint(run_dir: Path) -> str:
     return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest()
 
 
-def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
+def _legacy_cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
     init_device_analysis_storage(db_path)
     run_dir = device_collection_directory(run_id, config_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    authority = require_available_collection(db_path, run_id, manifest=manifest)
+    if authority is not None:
+        raise DeviceCollectionIntegrityError(
+            "Verified device uploads cannot use the legacy summary cache"
+        )
     fingerprint = _device_evidence_fingerprint(run_dir)
     with connect_database(db_path) as db:
         row = db.execute(
@@ -155,6 +169,8 @@ def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict
     cached.pop("raw_output", None)
     observations = list((cached.get("command_history") or {}).pop("entries", []))
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        require_not_deleted_in_transaction(db, run_id)
         db.execute(
             """
             INSERT INTO device_collections (
@@ -207,6 +223,37 @@ def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict
         )
     cached.setdefault("command_history", {})["entries"] = observations
     return cached
+
+
+def _device_summary_snapshot(
+    run_id: str, config_dir: Path, db_path: Path,
+) -> tuple[dict, dict]:
+    run_dir = device_collection_directory(run_id, config_dir)
+    lifecycle = get_device_collection_authority(db_path, run_id)
+    if lifecycle is not None and lifecycle["state"] == "deleted":
+        raise DeviceCollectionDeleted("Device collection was deleted")
+    if lifecycle is not None and lifecycle["state"] == "preparing":
+        raise DeviceCollectionIncomplete("Device upload did not finish activation")
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    authority = require_available_collection(db_path, run_id, manifest=manifest)
+    if authority is None:
+        return _legacy_cached_device_summary(run_id, config_dir, db_path), manifest
+    try:
+        verified = analyze_manual_upload_summary(db_path, run_id, run_dir)
+    except (DeviceCollectionDeleted, DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
+        raise
+    except (KeyError, ValueError, RuntimeError, OSError) as exc:
+        raise DeviceCollectionIntegrityError(
+            f"Verified device evidence could not be used: {exc}"
+        ) from exc
+    summary = dict(verified["payload"])
+    summary.update(verified["source_content"])
+    return summary, dict(verified["manifest"])
+
+
+def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
+    """Compatibility wrapper while historical collections remain readable."""
+    return _device_summary_snapshot(run_id, config_dir, db_path)[0]
 
 
 def _route_protocol(route: dict) -> str:
@@ -578,9 +625,8 @@ def analyze_device_collection(
     config_dir = CONFIG_DIR if config_dir is None else config_dir
     db_path = DB_PATH if db_path is None else db_path
     data_dir = DATA_DIR if data_dir is None else data_dir
-    summary = _cached_device_summary(run_id, config_dir, db_path)
+    summary, manifest = _device_summary_snapshot(run_id, config_dir, db_path)
     run_dir = device_collection_directory(run_id, config_dir)
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     manifest.pop("key_path", None)
     interfaces = [
         {
@@ -936,6 +982,10 @@ def compare_device_collections(before: str, after: str) -> dict:
         return compare_device_analyses(
             analyze_device_collection(before), analyze_device_collection(after)
         )
+    except DeviceCollectionDeleted:
+        raise HTTPException(status_code=404, detail="One or both device collections were deleted") from None
+    except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
         raise HTTPException(status_code=404, detail="One or both device collections were not found") from None
 
@@ -946,5 +996,11 @@ def device_analysis(run_id: str, include_correlations: bool = True) -> dict:
         return analyze_device_collection(
             run_id, include_correlations=include_correlations
         )
+    except DeviceCollectionDeleted:
+        raise HTTPException(status_code=404, detail="Device collection was deleted") from None
+    except DeviceCollectionIncomplete as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except DeviceCollectionIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
         raise HTTPException(status_code=404, detail="Device collection was not found") from None

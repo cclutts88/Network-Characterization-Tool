@@ -25,6 +25,18 @@ from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.artifacts import link_artifact, register_artifact_file, register_finalized_files
+from app.device_collection_authority import (
+    AUTHORITY_MARKER,
+    DeviceCollectionDeleted,
+    DeviceCollectionIncomplete,
+    DeviceCollectionIntegrityError,
+    activate_manual_upload_authority,
+    authority_manifest_marker,
+    begin_manual_upload_authority,
+    get_device_collection_authority,
+    require_available_collection,
+    tombstone_device_collection,
+)
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
@@ -64,6 +76,29 @@ READ_ONLY_FILTER_PREFIXES = {
     "include", "exclude", "match", "display", "grep", "egrep",
     "head", "tail", "count", "no-more",
 }
+
+
+def _write_json_atomic(path: Path, value: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(value, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _abandon_manual_upload(db_path: Path, run_id: str, run_dir: Path) -> None:
+    try:
+        tombstone_device_collection(db_path, run_id)
+    except Exception:
+        pass
+    try:
+        shutil.rmtree(run_dir)
+    except OSError:
+        pass
 
 VENDORS = ("vyos", "cisco", "juniper", "pfsense", "unifi")
 DEVICE_TYPES = ("router", "firewall", "switch")
@@ -2197,11 +2232,22 @@ def calculate_device_collection_summary(
 
 
 def delete_device_collection(
-    run_id: str, confirmation: str, config_dir: Path | None = None
+    run_id: str,
+    confirmation: str,
+    config_dir: Path | None = None,
+    db_path: Path | None = None,
 ) -> dict:
     """Delete exactly one inactive collection after a valid short-lived challenge."""
     run_dir = device_collection_directory(run_id, config_dir)
-    if not (run_dir / "manifest.json").is_file():
+    authority = get_device_collection_authority(
+        DB_PATH if db_path is None else db_path, run_id
+    )
+    retrying_cleanup = bool(
+        authority is not None
+        and authority["state"] == "deleted"
+        and run_dir.is_dir()
+    )
+    if not retrying_cleanup and not (run_dir / "manifest.json").is_file():
         raise FileNotFoundError("Device collection was not found")
     with _INTERACTIVE_SESSIONS_LOCK:
         if any(session.preview.get("run_id") == run_id for session in _INTERACTIVE_SESSIONS.values()):
@@ -2211,9 +2257,13 @@ def delete_device_collection(
     if not consume_delete_challenge("device-collection", run_id, confirmation):
         raise PermissionError("The confirmation code is invalid or expired")
     from app.device_analysis import delete_device_analysis_storage
-    from app.poc import DB_PATH
-    delete_device_analysis_storage(run_id, DB_PATH)
-    shutil.rmtree(run_dir)
+    delete_device_analysis_storage(run_id, DB_PATH if db_path is None else db_path)
+    try:
+        shutil.rmtree(run_dir)
+    except OSError as exc:
+        raise RuntimeError(
+            "The collection is marked deleted, but local file cleanup did not finish. Retry deletion."
+        ) from exc
     return {"deleted": True, "run_id": run_id}
 
 
@@ -2696,59 +2746,75 @@ async def upload_result(
         stored_path.unlink(missing_ok=True)
         run_dir.rmdir()
         raise HTTPException(status_code=422, detail="Choose a non-empty result file")
-
-    completed_at = utc_now()
-    artifact = register_artifact_file(
-        db_path=DB_PATH,
-        source_path=stored_path,
-        source_kind="device_config_upload",
-        source_ref=run_id,
-        original_filename=original_name[:255],
-        media_type=result_file.content_type or "application/octet-stream",
-        actor=values["operator"],
-        metadata={
-            "relative_path": str(stored_path.relative_to(DB_PATH.parent)),
+    try:
+        begin_manual_upload_authority(DB_PATH, run_id)
+        completed_at = utc_now()
+        artifact = register_artifact_file(
+            db_path=DB_PATH,
+            source_path=stored_path,
+            source_kind="device_config_upload",
+            source_ref=run_id,
+            original_filename=original_name[:255],
+            media_type=result_file.content_type or "application/octet-stream",
+            actor=values["operator"],
+            metadata={
+                "relative_path": str(stored_path.relative_to(DB_PATH.parent)),
+                "vendor": vendor,
+                "device_type": device_type,
+                "device_address": values["device_address"],
+                "device_name": clean_device_name or None,
+            },
+            observed_at=completed_at,
+        )
+        artifact_storage_mode = link_artifact(artifact, stored_path)
+        manifest = {
+            "application_version": APP_VERSION,
+            "build_id": BUILD_ID,
+            "build_commit": BUILD_COMMIT,
+            "run_id": run_id,
+            "created_at": completed_at,
+            "completed_at": completed_at,
+            "operator": values["operator"],
+            "reason": values["reason"],
+            "originating_host": values["originating_host"],
             "vendor": vendor,
             "device_type": device_type,
             "device_address": values["device_address"],
             "device_name": clean_device_name or None,
-        },
-        observed_at=completed_at,
-    )
-    artifact_storage_mode = link_artifact(artifact, stored_path)
-    manifest = {
-        "application_version": APP_VERSION,
-        "build_id": BUILD_ID,
-        "build_commit": BUILD_COMMIT,
-        "run_id": run_id,
-        "created_at": completed_at,
-        "completed_at": completed_at,
-        "operator": values["operator"],
-        "reason": values["reason"],
-        "originating_host": values["originating_host"],
-        "vendor": vendor,
-        "device_type": device_type,
-        "device_address": values["device_address"],
-        "device_name": clean_device_name or None,
-        "operation": "manual_upload",
-        "status": "uploaded",
-        "capture_required": False,
-        "network_contacted": False,
-        "source_filename": original_name[:255],
-        "retained_filename": stored_name,
-        "source_content_type": result_file.content_type or "application/octet-stream",
-        "uploaded_size": uploaded_size,
-        "artifact_sha256": artifact["sha256"],
-        "artifact_observation_id": artifact["observation_id"],
-        "artifact_duplicate": artifact["duplicate"],
-        "artifact_storage_mode": artifact_storage_mode,
-        "output_complete": True,
-        "retained_output_bytes": uploaded_size,
-        "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
-        "commands": [],
-    }
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    return {**manifest, "artifacts": artifact_records(run_id, run_dir)}
+            "operation": "manual_upload",
+            "status": "uploaded",
+            "capture_required": False,
+            "network_contacted": False,
+            "source_filename": original_name[:255],
+            "retained_filename": stored_name,
+            "source_content_type": result_file.content_type or "application/octet-stream",
+            "uploaded_size": uploaded_size,
+            "artifact_sha256": artifact["sha256"],
+            "artifact_observation_id": artifact["observation_id"],
+            "artifact_duplicate": artifact["duplicate"],
+            "artifact_storage_mode": artifact_storage_mode,
+            "output_complete": True,
+            "retained_output_bytes": uploaded_size,
+            "output_limit_bytes": MAX_RETAINED_COLLECTION_BYTES,
+            "commands": [],
+            AUTHORITY_MARKER: authority_manifest_marker(),
+        }
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        activate_manual_upload_authority(
+            DB_PATH,
+            run_id,
+            observation_id=artifact["observation_id"],
+            artifact_sha256=artifact["sha256"],
+            retained_filename=stored_name,
+            manifest=manifest,
+        )
+        return {**manifest, "artifacts": artifact_records(run_id, run_dir)}
+    except DeviceCollectionIntegrityError as exc:
+        _abandon_manual_upload(DB_PATH, run_id, run_dir)
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except Exception:
+        _abandon_manual_upload(DB_PATH, run_id, run_dir)
+        raise
 
 
 @router.get("")
@@ -2764,6 +2830,20 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
             value = json.loads(path.read_text())
             if value.get("operation") == "ssh_preflight":
                 continue
+            authority = get_device_collection_authority(DB_PATH, str(value.get("run_id") or ""))
+            if authority is not None and authority["state"] == "deleted":
+                continue
+            if authority is not None and authority["state"] == "preparing":
+                value["status"] = "incomplete"
+            else:
+                try:
+                    require_available_collection(
+                        DB_PATH, str(value.get("run_id") or ""), manifest=value
+                    )
+                except DeviceCollectionDeleted:
+                    continue
+                except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
+                    value["status"] = "integrity_conflict"
             if skipped < offset:
                 skipped += 1
                 continue
@@ -2798,7 +2878,30 @@ def network_candidates() -> dict:
 @router.get("/{run_id}/summary")
 def collection_summary(run_id: str) -> dict:
     try:
-        return device_collection_summary(run_id)
+        run_dir = device_collection_directory(run_id)
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        authority = require_available_collection(DB_PATH, run_id, manifest=manifest)
+        if authority is None:
+            return device_collection_summary(run_id)
+        from app.device_summary_result import analyze_manual_upload_summary
+        try:
+            verified = analyze_manual_upload_summary(DB_PATH, run_id, run_dir)
+        except (DeviceCollectionDeleted, DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
+            raise
+        except (KeyError, ValueError, RuntimeError, OSError) as exc:
+            raise DeviceCollectionIntegrityError(
+                f"Verified device evidence could not be used: {exc}"
+            ) from exc
+        return {
+            **verified["payload"],
+            **verified["source_content"],
+        }
+    except DeviceCollectionDeleted:
+        raise HTTPException(status_code=404, detail="Device collection was deleted") from None
+    except DeviceCollectionIncomplete as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except DeviceCollectionIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
         raise HTTPException(status_code=404, detail="Device collection was not found") from None
 
@@ -2809,7 +2912,13 @@ def collection_delete_challenge(run_id: str) -> dict:
         run_dir = device_collection_directory(run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Device collection was not found") from None
-    if not (run_dir / "manifest.json").is_file():
+    authority = get_device_collection_authority(DB_PATH, run_id)
+    retrying_cleanup = bool(
+        authority is not None
+        and authority["state"] == "deleted"
+        and run_dir.is_dir()
+    )
+    if not retrying_cleanup and not (run_dir / "manifest.json").is_file():
         raise HTTPException(status_code=404, detail="Device collection was not found")
     from app.poc import issue_delete_challenge
 
@@ -2838,6 +2947,19 @@ def download_artifact(run_id: str, filename: str) -> FileResponse:
     )
     if not RUN_ID_RE.fullmatch(run_id) or not allowed_name:
         raise HTTPException(status_code=404, detail="Collection artifact was not found")
+    manifest_path = CONFIG_DIR / run_id / "manifest.json"
+    try:
+        manifest = (
+            json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest_path.is_file() else None
+        )
+        require_available_collection(DB_PATH, run_id, manifest=manifest)
+    except DeviceCollectionDeleted:
+        raise HTTPException(status_code=404, detail="Collection artifact was deleted") from None
+    except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(status_code=422, detail="The retained collection manifest is unreadable") from None
     path = CONFIG_DIR / run_id / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Collection artifact was not found")
@@ -2866,6 +2988,12 @@ def collection_detail(run_id: str) -> dict:
         value = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         raise HTTPException(status_code=422, detail="The retained collection manifest is unreadable") from None
+    try:
+        require_available_collection(DB_PATH, run_id, manifest=value)
+    except DeviceCollectionDeleted:
+        raise HTTPException(status_code=404, detail="Device collection was deleted") from None
+    except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     value.pop("key_path", None)
     value["artifacts"] = artifact_records(run_id, run_dir)
     return value
