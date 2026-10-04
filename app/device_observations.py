@@ -626,12 +626,19 @@ def extract_device_interface_addresses(text: str) -> dict:
     for line_number, raw in enumerate(lines, 1):
         if line_number in recognized_lines:
             continue
+        stripped = raw.strip()
         if "address" in raw.lower() and _IP_TOKEN.search(raw):
             unsupported.append({"line_number": line_number, "source_line": raw})
-        if (
-            line_number not in recognized_lines
-            and ("vrf" in raw.lower() or "routing-instance" in raw.lower())
-        ):
+        # Combined SSH output can contain informational text such as Cisco's
+        # "Bindings from all pools not associated with VRF:".  Treat only lines
+        # shaped like configuration syntax as unresolved routing-context evidence.
+        routing_context_syntax = re.match(
+            r"^(?:(?:ip\s+)?vrf\b|routing-instances?\b|routing-instance\b|"
+            r"set\s+(?:routing-instances?\b|vrf\b|interfaces\b.*\bvrf\b))",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        if line_number not in recognized_lines and routing_context_syntax:
             unsupported_context.append({"line_number": line_number, "source_line": raw})
     unsupported_context = list({
         (item["line_number"], item["source_line"]): item

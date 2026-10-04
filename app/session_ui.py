@@ -6,6 +6,21 @@ SESSION_SCRIPT = r"""
 (() => {
   const exportStamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const exportName = value => String(value || 'Export').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '').slice(0, 54) || 'Export';
+  const exportStatus = filename => {
+    let status = document.getElementById('nct-export-status');
+    if (!status) {
+      status = document.createElement('div');
+      status.id = 'nct-export-status';
+      status.setAttribute('role', 'status');
+      status.setAttribute('aria-live', 'polite');
+      status.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:2200;max-width:min(420px,calc(100vw - 36px));padding:11px 14px;border:1px solid #57d6bf;border-radius:8px;background:#102833;color:#edf6fb;box-shadow:0 10px 28px rgba(0,0,0,.35);font:600 14px/1.35 system-ui';
+      document.body.append(status);
+    }
+    status.textContent = `Download started: ${filename}. Check your browser downloads if it does not appear.`;
+    status.hidden = false;
+    clearTimeout(status._nctHideTimer);
+    status._nctHideTimer = setTimeout(() => { status.hidden = true; }, 8000);
+  };
   window.NCTExport = {
     stamp: exportStamp,
     download(prefix, extension, content, type = 'application/octet-stream') {
@@ -13,8 +28,13 @@ SESSION_SCRIPT = r"""
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
       link.download = `${exportName(prefix)}_${exportStamp()}.${extension}`;
+      document.body.append(link);
       link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 0);
+      link.remove();
+      exportStatus(link.download);
+      window.dispatchEvent(new CustomEvent('nct:export-started', {detail: {filename: link.download}}));
+      setTimeout(() => URL.revokeObjectURL(link.href), 30000);
+      return link.download;
     },
     json(prefix, data) { this.download(prefix, 'json', JSON.stringify(data, null, 2), 'application/json'); },
     csv(prefix, rows) {

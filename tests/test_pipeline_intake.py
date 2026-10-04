@@ -18,6 +18,7 @@ from app.pipeline_intake import (
     MANUAL_NMAP_INTENT,
     NMAP_INGESTION_POLICY_VERSION,
     get_admission_intent,
+    recover_missing_automated_nmap_intents,
 )
 from app.poc import (
     ScanRunRequest,
@@ -426,6 +427,81 @@ def test_completed_marked_scan_creates_intent_and_dispatches_once(tmp_path):
         ).fetchone()[0] == 1
 
 
+def test_completed_progress_before_xml_registration_waits_for_finalized_source(tmp_path):
+    db_path, run, _, observation = completed_automated_run(tmp_path, finalize=False)
+    with connect_database(db_path) as db:
+        db.execute(
+            "DELETE FROM artifact_observations WHERE observation_id = ?",
+            (observation["observation_id"],),
+        )
+
+    # A scan can set its terminal status while writing merge/analysis progress.
+    # That progress save must not freeze a missing-source admission contract.
+    update_scan_run_manifest(run, db_path)
+    assert get_admission_intent(
+        db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],
+    ) is None
+
+    xml_path = tmp_path / "finalized-scan.xml"
+    xml_path.write_bytes(XML)
+    finalized = register_artifact_file(
+        db_path=db_path,
+        source_path=xml_path,
+        source_kind="nmap_scan",
+        source_ref=run["run_id"],
+        original_filename="scan.xml",
+        actor="analyst",
+        observed_at=run["completed_at"],
+        observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+        run_id=run["run_id"],
+        scope_context=get_run_scope_context(db_path, run["run_id"]),
+    )
+    update_scan_run_manifest(run, db_path)
+
+    intent = get_admission_intent(
+        db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],
+    )
+    assert intent["state"] == "pending"
+    assert intent["observation_id"] == finalized["observation_id"]
+
+
+def test_restart_recovers_intent_after_final_xml_registration_crash_window(tmp_path):
+    db_path, run, _, observation = completed_automated_run(tmp_path, finalize=False)
+    with connect_database(db_path) as db:
+        db.execute(
+            "DELETE FROM artifact_observations WHERE observation_id = ?",
+            (observation["observation_id"],),
+        )
+
+    update_scan_run_manifest(run, db_path)
+    xml_path = tmp_path / "restart-finalized-scan.xml"
+    xml_path.write_bytes(XML)
+    finalized = register_artifact_file(
+        db_path=db_path,
+        source_path=xml_path,
+        source_kind="nmap_scan",
+        source_ref=run["run_id"],
+        original_filename="scan.xml",
+        actor="analyst",
+        observed_at=run["completed_at"],
+        observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+        run_id=run["run_id"],
+        scope_context=get_run_scope_context(db_path, run["run_id"]),
+    )
+    assert get_admission_intent(
+        db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],
+    ) is None
+
+    assert recover_missing_automated_nmap_intents(db_path) == [run["run_id"]]
+    intent = get_admission_intent(
+        db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],
+    )
+    assert intent["state"] == "pending"
+    assert intent["observation_id"] == finalized["observation_id"]
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    assert recover_missing_automated_nmap_intents(db_path) == []
+
+
 def test_completed_run_metadata_updates_do_not_rewrite_admission_identity(tmp_path):
     db_path, run, _, _ = completed_automated_run(tmp_path)
     before = get_admission_intent(
@@ -467,6 +543,11 @@ def test_marked_completed_scan_without_registered_xml_is_visible_and_blocked(tmp
             "DELETE FROM artifact_observations WHERE source_ref = ?",
             (run["run_id"],),
         )
+    run["artifact_registry"] = {
+        "files": [],
+        "errors": [{"filename": "scan.xml", "error": "missing"}],
+        "status": "partial",
+    }
     update_scan_run_manifest(run, db_path)
 
     intent = get_admission_intent(
@@ -537,7 +618,23 @@ def test_unmarked_historical_completed_run_is_not_automatically_adopted(tmp_path
         "manual_targets": [],
     }
     insert_scan_run_manifest(run, db_path)
+    xml_path = tmp_path / "historical-scan.xml"
+    xml_path.write_bytes(XML)
+    register_artifact_file(
+        db_path=db_path,
+        source_path=xml_path,
+        source_kind="nmap_scan",
+        source_ref=run["run_id"],
+        original_filename="scan.xml",
+        actor="historical",
+        observed_at=run["completed_at"],
+        observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+        run_id=run["run_id"],
+        scope_context=None,
+    )
     update_scan_run_manifest(run, db_path)
+
+    assert recover_missing_automated_nmap_intents(db_path) == []
 
     assert get_admission_intent(
         db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],

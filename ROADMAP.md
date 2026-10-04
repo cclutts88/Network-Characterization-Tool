@@ -1622,6 +1622,52 @@ high-volume passive evidence.
    live browser reload, retained-scope, guide and console checks passed. No architecture
    deviation; No-Strike behavior and current Analyze, Hunt, Reach and Map views remain
    unchanged.
+   2026-10-04 novice end-to-end operator-validation start: an entry-level network
+   analyst is using only the built-in Operator Guide in an isolated Docker lab to
+   create scope and Saved Network context, run authorized Nmap evidence collection,
+   perform a real password-prompt SSH configuration pull, and follow the retained
+   evidence through Current Network, Network Devices, Changes Over Time, Hunt, Reach,
+   Map, exports, and System Health. The gate requires each main workflow to be used at
+   least once, exact instruction gaps to be corrected, a clean reload/console check,
+   independent quality review, and a novice retest. The first finding is a wording
+   contradiction: loopback-only local development is deliberately accepted as a secure
+   browser context, while the page stated that every plain-HTTP address was disabled.
+   2026-10-04 novice end-to-end operator-validation complete (foundation):
+   the novice completed the normal analyst path with only the live UI and Operator
+   Guide against an isolated `172.30.77.10/32` lab target: scope and Saved Network
+   setup, No-Strike/profile review, direct Nmap scanning, a real password-prompt SSH
+   configuration pull, retained history and source files, scoped device receipts,
+   Current Network, Network Devices, Changes Over Time, Hunt, Reach, Map, exports, and
+   System Health. Findings corrected explicit analyzer-interface selection, the local
+   loopback secure-context explanation, an informational Cisco VRF line that had been
+   mistaken for unsupported configuration syntax, and automated intake being frozen
+   before the aggregate `scan.xml` was registered. Independent review then reproduced
+   the remaining restart window between final XML registration and intent creation.
+   Startup recovery now closes only that bounded case: the run must have the new immutable
+   intake marker, completed status, exactly one registered aggregate `scan.xml`, intact
+   canonical content, and no existing intent. Unmarked historical runs remain untouched.
+   Run
+   `041f8c6a1b5e46e8938d295a4f259a5d` then completed on `eth1` with one directly
+   responsive host; automatic processing required no manual queue action, Scan History
+   showed Scoped evidence ready, and System Health simultaneously showed Ready with all
+   three stages complete. The guide and page wording now explain repeated running/startup
+   address receipts, saved-scan confirmation limits, missing source-time ordering,
+   unrelated retained evidence in Current Network and Map, and the single-scan HTML
+   report. Shared exports provide an accessible visible download-start confirmation.
+   The novice used every main workflow and passed the final browser retest. The left
+   selector remained usable, with a non-blocking follow-up to consider a clearer linear
+   preparation path because Network Scopes and Saved Network/scan-safety setup currently
+   require backtracking and `Scan Details` can sound like results rather than setup.
+   Final full Docker suite **1006 passed, 4 skipped**; updated focused suite **128
+   passed**; crash-window/explicit-route suite **20 passed**; all four
+   browser-runtime regression scripts passed; `git diff --check` passed. **QUALITY GATE:
+   CLEAR - DOCUMENTED DEVIATION**. Instead of widening final artifact registration into
+   a cross-module atomic admission transaction, the accepted restart-safe design uses a
+   narrowly bounded startup reconciliation over immutable new-run markers and exact
+   finalized aggregate authority. This preserves existing registry transaction boundaries
+   while excluding unmarked history and incomplete or ambiguous aggregate evidence. This
+   clearance is foundation-development only; it is not Range, mission, or stable-main
+   acceptance.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled

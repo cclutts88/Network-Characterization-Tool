@@ -517,6 +517,57 @@ def record_automated_nmap_intent(
     )
 
 
+def recover_missing_automated_nmap_intents(db_path: Path) -> list[str]:
+    """Close the finalized-artifact crash window for explicitly marked scan runs."""
+    init_pipeline_intake_storage(db_path)
+    recovered: list[str] = []
+    with connect_database(db_path) as db:
+        required_tables = {
+            "scan_runs", "artifact_observations", "artifact_registry",
+            "pipeline_intake_sources", "pipeline_admission_intents",
+        }
+        available_tables = {
+            str(row[0]) for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if not required_tables.issubset(available_tables):
+            return recovered
+        db.execute("BEGIN IMMEDIATE")
+        rows = db.execute(
+            """SELECT run.run_id
+                 FROM scan_runs run
+                 JOIN pipeline_intake_sources source
+                   ON source.source_kind = ?
+                  AND source.source_id = run.run_id
+                  AND source.policy_version = ?
+                 JOIN artifact_observations observation
+                   ON observation.source_kind = 'nmap_scan'
+                  AND observation.source_ref = run.run_id
+                  AND observation.original_filename = 'scan.xml'
+                 JOIN artifact_registry artifact
+                   ON artifact.sha256 = observation.sha256
+                 LEFT JOIN pipeline_admission_intents intent
+                   ON intent.intent_kind = ?
+                  AND intent.source_id = run.run_id
+                WHERE run.status = 'completed'
+                  AND intent.intent_id IS NULL
+                GROUP BY run.run_id
+               HAVING COUNT(observation.observation_id) = 1
+                ORDER BY run.run_id""",
+            (
+                AUTOMATED_NMAP_SOURCE,
+                NMAP_INGESTION_POLICY_VERSION,
+                AUTOMATED_NMAP_INTENT,
+            ),
+        ).fetchall()
+        for row in rows:
+            intent = record_automated_nmap_intent(db, str(row[0]))
+            if intent is not None:
+                recovered.append(str(row[0]))
+    return recovered
+
+
 def _device_authority_contract(
     db: sqlite3.Connection, run_id: str, *, intent_kind: str,
 ) -> tuple[dict, tuple]:

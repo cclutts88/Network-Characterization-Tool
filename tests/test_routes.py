@@ -775,6 +775,8 @@ def test_device_page_has_one_time_password_dialog_and_history_presets():
     assert "Choose a device found by Nmap" in response.text
     assert "loadDiscoveredDevices" in response.text
     assert "credentials_stored" not in response.text
+    assert "Secure password transport is mandatory" in response.text
+    assert "loopback-only development address" in response.text
 
 
 def test_config_candidate_can_be_added_to_saved_networks_and_then_disappears(

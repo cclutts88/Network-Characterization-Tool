@@ -203,6 +203,7 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "creates traceable interface-address receipts" in SHELL_SCRIPT
     assert "[data-device-scope-receipts]" in SHELL_SCRIPT
     assert "configuration statements, not live checks or exact Last Seen times" in SHELL_SCRIPT
+    assert "running and startup configuration each report it" in SHELL_SCRIPT
     assert "Builds and downloads a certified ZIP" in SHELL_SCRIPT
     assert "It does not run Nmap or add evidence to NCT" in SHELL_SCRIPT
     assert "import the completed XML files" in SHELL_SCRIPT
@@ -214,12 +215,16 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "It changes no device and sends no traffic" in SHELL_SCRIPT
     assert "This is destructive" in SHELL_SCRIPT
     assert "The action is not complete until the page reports success" in SHELL_SCRIPT
+    assert "Export scan report" in SHELL_SCRIPT
+    assert "currently open scan analysis and its active host filters" in SHELL_SCRIPT
     assert "A portable run becomes retained NCT evidence only after its completed XML files" in SHELL_SCRIPT
     assert "choose Active Scans, and review the held run" in SHELL_SCRIPT
 
 
 def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
     html = device_config_page().body.decode()
+    assert "same address can appear more than once" in html
+    assert "each row keeps its own source line" in html
     assert "An address missing here is not proof that it was removed." in html
     assert "Refresh scoped address receipts" in html
     assert "approve the Nmap fallback, finish without Nmap, or cancel the run" in SHELL_SCRIPT
@@ -327,6 +332,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert '<option value="fping" selected>FPING pre-scan</option>' in html
     assert 'id="fpingNote" class="hint"' in html
     assert "$('fpingNote').classList.toggle('hidden',!useFping)" in html
+    assert "NCT does not guess when more than one interface is available" in html
+    assert '<option value="">Choose an analyzer interface</option>' in html
+    assert "interfaces.map(i=>" in html
     assert "Collect traceroute paths" in html
     assert "normalizeCombinedScopes" not in html
     assert 'id="fallbackApproval"' in html
@@ -1104,6 +1112,9 @@ def test_every_analysis_stage_has_a_local_export_path_including_map():
     map_html = network_map_page().body.decode()
 
     assert "window.NCTExport" in SESSION_SCRIPT
+    assert "Download started:" in SESSION_SCRIPT
+    assert "nct:export-started" in SESSION_SCRIPT
+    assert "document.body.append(link)" in SESSION_SCRIPT
     assert "Export report HTML" in analyze
     assert "function exportHtml()" in analyze
     assert 'id="exportDeviceAnalysis"' in device
@@ -1219,6 +1230,9 @@ def test_primary_navigation_follows_the_operator_workflow():
     assert "href:'/analysis#nmapScopeAssignments'" not in nmap_group
     assert "href:'/analysis#xmlImport'" not in current_network_group
     assert "upload authorized nmap xml, analyze the current view" in SHELL_SCRIPT.lower()
+    assert "loopback-only development address on the same computer" in SHELL_SCRIPT
+    assert "unrelated-scope evidence from the same installation" in SHELL_SCRIPT
+    assert "does not mean every object belongs to the last scan you opened" in SHELL_SCRIPT
 
 
 def test_manual_nmap_scope_assignment_ui_is_explicit_accessible_and_recoverable():
@@ -1893,7 +1907,11 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "/latest-observations?${params}" in html
     assert "Last confirmed observation" in html
     assert "Latest supported observation" in html
-    assert "Successful records with uncertain source time" in html
+    assert "Successful records whose order is uncertain" in html
+    assert "At least one successful record has no trustworthy collection window" in html
+    assert "That missing time could fall before, between, or after the displayed rows" in html
+    assert "this does not prove the device joined or left the live network" in html
+    assert "newly confirmed hosts" in html
     assert "Saved evidence windows, not live status" in html
     assert "processedEvidenceSource(record.source)" in html
     assert "data-latest-page" in html

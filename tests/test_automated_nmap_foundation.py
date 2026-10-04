@@ -227,6 +227,9 @@ def test_route_roles_status_and_server_owned_actor(tmp_path, monkeypatch):
     db_path, run, _, _ = scoped_run(tmp_path)
     monkeypatch.setattr(main, "DB_PATH", db_path)
     monkeypatch.setattr(poc, "DB_PATH", db_path)
+    # This route test verifies the signed-in requester on an explicit action.
+    # The separate intake tests cover startup recovery and automatic admission.
+    monkeypatch.setattr(main, "recover_missing_automated_nmap_intents", lambda *args: [])
     monkeypatch.setattr(main, "auth_enabled", lambda: True)
     monkeypatch.setattr(
         main, "session_identity",

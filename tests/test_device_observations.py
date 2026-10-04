@@ -136,6 +136,19 @@ set interfaces ethernet 'eth2' address '10.2.0.1/24'
     assert result["coverage"]["unsupported_context_line_count"] == 2
 
 
+def test_informational_vrf_text_from_collection_output_is_not_configuration_syntax():
+    result = extract_device_interface_addresses("""
+interface GigabitEthernet0/0
+ ip address 172.30.77.10 255.255.255.0
+Bindings from all pools not associated with VRF:
+IP address      Client-ID/Hardware address  Lease expiration
+172.30.77.50    0102.004d.4354.50           Oct 05 2026 12:00 PM
+""".strip())
+
+    assert result["coverage"]["reported_address_count"] == 1
+    assert result["coverage"]["unsupported_context_line_count"] == 0
+
+
 def test_scope_required_after_summary_and_durable_stage_publishes_traceable_receipts(
     tmp_path, monkeypatch,
 ):

@@ -6,6 +6,7 @@ from app.nmap_evidence import nmap_xml_coverage
 from app.pipeline_intake import (
     NMAP_INGESTION_POLICY_VERSION,
     init_pipeline_intake_storage,
+    recover_missing_automated_nmap_intents,
 )
 from app.assigned_nmap_ingestion import AssignedNmapConflict
 from app.automated_nmap_foundation import (
@@ -1313,6 +1314,7 @@ async def lifespan(_: FastAPI):
     init_exposure_report_storage(DB_PATH)
     init_evidence_scope_assignment_storage(DB_PATH)
     init_automated_nmap_foundation_storage(DB_PATH)
+    recover_missing_automated_nmap_intents(DB_PATH)
     compaction_recovery = recover_incomplete_compactions(DB_PATH)
     background_workers_started = not compaction_recovery.get("recovery_required")
     scheduler_stop = None

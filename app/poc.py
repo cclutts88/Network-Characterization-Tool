@@ -2058,9 +2058,6 @@ def insert_reviewed_scan_run(
 def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
     init_pipeline_intake_storage(db_path)
     with connect_database(db_path) as db:
-        previous = db.execute(
-            "SELECT status FROM scan_runs WHERE run_id = ?", (manifest["run_id"],)
-        ).fetchone()
         db.execute(
             """
             UPDATE scan_runs SET status = ?, manifest_json = ? WHERE run_id = ?
@@ -2071,10 +2068,18 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
                 manifest["run_id"],
             ),
         )
+        registered_aggregate_count = int(db.execute(
+            """SELECT COUNT(*) FROM artifact_observations
+               WHERE source_kind = 'nmap_scan' AND source_ref = ?
+                 AND original_filename = 'scan.xml'""",
+            (manifest["run_id"],),
+        ).fetchone()[0])
+        artifact_registration_finished = isinstance(
+            manifest.get("artifact_registry"), dict,
+        )
         if (
             manifest["status"] == "completed"
-            and previous is not None
-            and previous[0] != "completed"
+            and (registered_aggregate_count > 0 or artifact_registration_finished)
         ):
             record_automated_nmap_intent(db, manifest["run_id"])
 
