@@ -10,6 +10,7 @@ from app.network_scope_ui import network_scope_page
 from app.reachability_ui import reachability_page
 from app.session_ui import SESSION_SCRIPT
 from app.shell_ui import SHELL_SCRIPT
+from app.storage_ui import storage_page
 from app.ui import operator_page
 
 
@@ -24,6 +25,19 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert ".nct-note-panel.personal,body.nct-nav-closed .nct-note-panel.personal{left:0}" in SESSION_SCRIPT
     assert "body.nct-notes-personal-open>main" in SESSION_SCRIPT
     assert "body.nct-notes-shared-open>main" in SESSION_SCRIPT
+
+
+def test_system_health_explains_bounded_calculation_status():
+    html = storage_page().body.decode()
+    assert "Reusable analysis status" in html
+    assert "does not mean the source evidence is recent, intact, or still true" in html
+    assert "/api/system/analysis-status?limit=${analysisLimit}&offset=${requestedOffset}" in html
+    assert "Showing ${start}-${end} of ${data.total} saved results" in html
+    assert "item.reasons.join(' ')" in html
+    assert "saved rule version identifies the exact analysis instructions" in html
+    assert "requestId!==analysisRequestId" in html
+    assert "analysisDisplayedOffset=data.offset" in html
+    assert "analysisOffset=analysisDisplayedOffset+analysisLimit" in html
     assert "document.body.classList.toggle(side==='personal'?'nct-notes-personal-open':'nct-notes-shared-open',open)" in SESSION_SCRIPT
 
 

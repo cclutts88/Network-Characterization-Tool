@@ -5,16 +5,13 @@ import ipaddress
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+from app.derived_contracts import (
+    NMAP_TOPOLOGY_FAMILY,
+    NMAP_TOPOLOGY_PARAMETERS,
+    NMAP_TOPOLOGY_PAYLOAD_SCHEMA_VERSION,
+    NMAP_TOPOLOGY_VERSION,
+)
 from app.nmap_base_analysis import analyze_scan_run_nmap_result
-
-
-NMAP_TOPOLOGY_FAMILY = "nmap_topology_hosts"
-NMAP_TOPOLOGY_VERSION = "nmap-topology-hosts:1"
-NMAP_TOPOLOGY_PAYLOAD_SCHEMA_VERSION = 1
-NMAP_TOPOLOGY_PARAMETERS = {
-    "parser": "nct.network_map.parse_nmap_xml",
-    "legacy_topology_contract": 1,
-}
 
 
 def _valid_ip(value: object) -> str | None:

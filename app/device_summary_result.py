@@ -7,6 +7,12 @@ from pathlib import Path
 import sqlite3
 
 from app.database import connect_database
+from app.derived_contracts import (
+    DEVICE_SUMMARY_FAMILY,
+    DEVICE_SUMMARY_PARAMETERS,
+    DEVICE_SUMMARY_SCHEMA_VERSION,
+    DEVICE_SUMMARY_VERSION,
+)
 from app.derived_results import (
     derived_result_identity,
     init_derived_result_storage,
@@ -33,21 +39,6 @@ from app.device_collection_authority import (
     require_active_snapshot,
     require_available_collection,
 )
-
-
-DEVICE_SUMMARY_FAMILY = "device_collection_summary"
-DEVICE_SUMMARY_VERSION = "device-collection-summary:1"
-DEVICE_SUMMARY_SCHEMA_VERSION = 1
-DEVICE_SUMMARY_PARAMETERS = {
-    "snapshot_contract": 1,
-    "configuration_selection": "sorted-uploaded_then_sorted-collected_then-stdout",
-    "raw_selection": "stdout_then_configuration-order",
-    "utf8_errors": "replace",
-    "max_summary_text_bytes": MAX_SUMMARY_TEXT_BYTES,
-    "max_history_text_chars": MAX_RESPONSE_OUTPUT_CHARS,
-    "max_summary_items": MAX_SUMMARY_ITEMS,
-    "parser_bundle": "device-summary-parsers:1",
-}
 
 
 def _canonical_json(value: object) -> str:

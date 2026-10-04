@@ -32,6 +32,7 @@ from app.nmap_assignment_workflow import (
 )
 from app.storage_health import storage_status, start_storage_job
 from app.storage_ui import storage_page
+from app.derived_result_status import list_derived_result_status
 from app.how_nct_works_ui import how_nct_works_page
 from app.network_scope_ui import network_scope_page
 from app.network_scopes import (
@@ -1337,6 +1338,16 @@ def how_nct_works_readme() -> HTMLResponse:
 def system_storage_status(request: Request) -> dict:
     require_storage_admin(request)
     return storage_status(DB_PATH)
+
+
+@app.get("/api/system/analysis-status")
+def system_analysis_status(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_storage_admin(request)
+    return list_derived_result_status(DB_PATH, limit=limit, offset=offset)
 
 
 @app.post("/api/system/storage/{mode}", status_code=202)

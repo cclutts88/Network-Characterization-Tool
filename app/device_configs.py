@@ -48,6 +48,13 @@ from app.device_collection_authority import (
     require_available_collection,
     tombstone_device_collection,
 )
+from app.device_limits import (
+    MAX_RESPONSE_OUTPUT_CHARS,
+    MAX_RETAINED_COLLECTION_BYTES,
+    MAX_SUMMARY_ITEMS,
+    MAX_SUMMARY_TEXT_BYTES,
+    MAX_UPLOAD_BYTES,
+)
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
@@ -70,11 +77,6 @@ ARTIFACT_NAMES = (
 )
 UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
-MAX_SUMMARY_ITEMS = 500
-MAX_RETAINED_COLLECTION_BYTES = 100 * 1024 * 1024
-MAX_UPLOAD_BYTES = MAX_RETAINED_COLLECTION_BYTES
-MAX_SUMMARY_TEXT_BYTES = MAX_RETAINED_COLLECTION_BYTES
-MAX_RESPONSE_OUTPUT_CHARS = 200_000
 COLLECTION_COPY_CHUNK_BYTES = 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
 CISCO_COLLECTION_TIMEOUT_SECONDS = 600

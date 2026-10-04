@@ -8,6 +8,12 @@ import sqlite3
 from typing import Callable
 
 from app.database import connect_database, initialize_once_per_database
+from app.derived_contracts import (
+    NMAP_BASE_ANALYSIS_FAMILY,
+    NMAP_BASE_ANALYSIS_VERSION,
+    NMAP_BASE_PARAMETERS,
+    NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+)
 from app.derived_results import (
     derived_result_identity,
     init_derived_result_storage,
@@ -18,9 +24,6 @@ from app.derived_results import (
 )
 
 
-NMAP_BASE_ANALYSIS_FAMILY = "nmap_base_analysis"
-NMAP_BASE_ANALYSIS_VERSION = "nmap-base-analysis:1"
-NMAP_BASE_PAYLOAD_SCHEMA_VERSION = 1
 NMAP_ANALYSIS_TERMINAL_STATES = {
     "completed",
     "completed_without_nmap",
@@ -28,12 +31,6 @@ NMAP_ANALYSIS_TERMINAL_STATES = {
     "cancelled",
     "timed_out",
 }
-NMAP_BASE_PARAMETERS = {
-    "parser": "nct.parse_xml",
-    "coverage_presence_os_inference_contract": 1,
-}
-
-
 @initialize_once_per_database
 def retire_legacy_scan_analysis_cache(db_path: Path) -> None:
     """Remove disposable legacy results during startup, never from a page read."""

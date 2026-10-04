@@ -1,8 +1,8 @@
 # Derived Result Foundation Contract
 
 NCT has an internal store for completed, reusable computations. Production Nmap views
-now use verified file-reading results. Device summaries and SearchSploit retain their
-existing result paths.
+and every supported new device collection use verified reusable results. SearchSploit
+retains its existing result path.
 
 ## Identity and reuse
 
@@ -87,21 +87,45 @@ an empty legacy cache and rebuild it from the retained XML. All application proc
 sharing a database must be restarted together for this migration; mixed old and new
 processes are not supported during the transition.
 
+## Calculation compatibility status
+
+System Health shows a read-only, paged status for the three reusable result families
+currently governed by this contract: Nmap analysis, Nmap topology and device summaries.
+The status is calculated from each retained result every time it is requested; NCT does
+not store or update a mutable status flag.
+
+- **Current** means the saved calculation version, output format and declared settings
+  exactly match the rules supported by the running build.
+- **Stale** means NCT recognizes the result family, but one or more of those calculation
+  rules differ. The retained result and its evidence are not deleted.
+- **Unknown** means this build cannot safely interpret the saved family or its contract
+  metadata. Unknown results never default to Current.
+
+This status describes calculation compatibility only. It does not prove that the source
+evidence is recent or intact, that the result is still true on the network, or that it
+applies to a different collection. Existing source-byte, authority and provenance checks
+remain mandatory whenever a result is consumed. Rolling back to a build whose exact
+contract matches a retained result makes that result Current again without rewriting it.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already
 completed for the same verified bytes. It does not mean the result is current, latest,
 fresh, or still true on the network.
 
-Device summaries, exposure reports, SearchSploit results, coverage comparisons and other
-analysis families retain their existing production storage. Device-summary foundation
-work now has a pure calculation from one frozen source snapshot and an internal verified
-manual-upload adapter. The adapter declares exact configuration/raw inputs, embedded
-history presence, semantic manifest fields, selection shape, parser limits and separate
-artifact-observation links. It is deliberately not called by Network Devices yet. The
-existing device cache remains authoritative until a durable database authority record
-can prevent publication from racing collection deletion or semantic manifest changes;
-broader multi-file collections need their own production gate.
+New manual uploads and new completed, untruncated SSH collections use the verified device
+summary result path. Their exact configuration, raw output and command-history roles,
+selection order, parser limits, semantic manifest fields and artifact observations are
+frozen before activation. Failed, incomplete and truncated collections keep their files
+but cannot publish analysis. Historical device collections remain reviewable and
+downloadable; they require a separate adoption migration before verified analysis is
+available. Legacy device-cache tables and rows remain only for rollback safety and are
+not read or written by new production analysis.
 
-Dirty-state propagation, dependency scheduling, global analysis versioning, persistent
-jobs, workers and operator-facing saved-result controls remain later milestones.
+Exposure reports, SearchSploit results, coverage comparisons and other analysis families
+retain their existing production storage and do not appear in calculation compatibility
+status yet.
+
+Input freshness, dirty-state propagation across dependencies, dependency scheduling,
+automatic rebuilding, global analysis versioning, persistent jobs and workers remain
+later milestones. Calculation compatibility status does not schedule or perform work.
