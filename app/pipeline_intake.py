@@ -32,12 +32,14 @@ MANUAL_DEVICE_SOURCE = "device_manual_upload_authority"
 COLLECTED_DEVICE_SOURCE = "device_collected_authority"
 MANUAL_DEVICE_INTENT = "manual_device_summary"
 COLLECTED_DEVICE_INTENT = "collected_device_summary"
+DEVICE_OBSERVATION_INTENT = "device_interface_observation"
 
 _INTENT_KINDS = (
     MANUAL_NMAP_INTENT,
     AUTOMATED_NMAP_INTENT,
     MANUAL_DEVICE_INTENT,
     COLLECTED_DEVICE_INTENT,
+    DEVICE_OBSERVATION_INTENT,
 )
 _INTENT_COLUMNS = (
     "intent_id", "intent_kind", "source_kind", "source_id", "policy_version",
@@ -149,6 +151,7 @@ def _migrate_intent_table(db: sqlite3.Connection) -> None:
         set(_INTENT_COLUMNS).issubset(columns)
         and MANUAL_DEVICE_INTENT in current_sql
         and COLLECTED_DEVICE_INTENT in current_sql
+        and DEVICE_OBSERVATION_INTENT in current_sql
     ):
         return
     retained_columns = [name for name in _INTENT_COLUMNS if name in columns]
@@ -626,6 +629,50 @@ def record_device_summary_intent(
         contract=contract,
         state="pending",
         created_at=activated_at,
+    )
+
+
+def record_device_observation_intent(
+    db: sqlite3.Connection, assignment_id: str,
+) -> dict | None:
+    """Freeze one explicit device-scope decision for durable normalization."""
+    from app.device_observations import assignment_contract_on_connection
+
+    contract = assignment_contract_on_connection(db, assignment_id)
+    assignment = contract["assignment"]
+    source_kind = (
+        MANUAL_DEVICE_SOURCE
+        if contract["intent_kind"] == MANUAL_DEVICE_INTENT
+        else COLLECTED_DEVICE_SOURCE
+    )
+    policy = source_policy_version(db, source_kind, assignment["run_id"])
+    if policy is None:
+        return None
+    if policy != DEVICE_INGESTION_POLICY_VERSION:
+        raise ValueError("Device intake policy version is not supported")
+    configuration = next(
+        (
+            item for item in contract["authority"]["authority_inputs"]
+            if item["role"] in {"configuration", "configuration_and_raw_output"}
+            and item["source_kind"] == "artifact_file"
+        ),
+        None,
+    )
+    if configuration is None:
+        raise ValueError("Device authority has no selected configuration artifact")
+    return _insert_intent(
+        db,
+        intent_kind=DEVICE_OBSERVATION_INTENT,
+        source_kind=source_kind,
+        source_id=assignment_id,
+        policy_version=policy,
+        observation_id=configuration["observation_id"],
+        assignment_id=assignment_id,
+        scope_id=assignment["scope_id"],
+        actor=assignment["actor"],
+        contract=contract,
+        state="pending",
+        created_at=assignment["assigned_at"],
     )
 
 

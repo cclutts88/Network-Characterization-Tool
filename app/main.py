@@ -85,6 +85,14 @@ from app.device_collection_authority import (
     DeviceCollectionIntegrityError,
     init_device_collection_authority_storage,
 )
+from app.device_observations import (
+    DeviceObservationConflict,
+    assign_device_scope,
+    correct_device_scope,
+    get_device_interface_receipts,
+    get_device_observation_status,
+    init_device_observation_storage,
+)
 from app.derived_results import init_derived_result_storage
 from app.derived_jobs import (
     DerivedJobConflict,
@@ -496,6 +504,22 @@ class NmapScopeCorrectionRequest(BaseModel):
     destination_scope_id: str = Field(min_length=1, max_length=200)
     reason: str = Field(min_length=1, max_length=500)
     whole_artifact_confirmed: bool
+
+
+class DeviceScopeAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=500)
+    whole_collection_confirmed: bool
+
+
+class DeviceScopeCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    destination_scope_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=500)
+    whole_collection_confirmed: bool
 
 
 class AnalystUserRequest(BaseModel):
@@ -1272,6 +1296,7 @@ async def lifespan(_: FastAPI):
     retire_legacy_scan_analysis_cache(DB_PATH)
     init_device_analysis_storage(DB_PATH)
     init_device_collection_authority_storage(DB_PATH)
+    init_device_observation_storage(DB_PATH)
     init_derived_result_storage(DB_PATH)
     init_pipeline_intake_storage(DB_PATH)
     init_derived_job_storage(DB_PATH)
@@ -1891,6 +1916,78 @@ def automated_scan_foundation_process(
         if isinstance(exc, AutomatedNmapFoundationConflict):
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         raise _nmap_assignment_error(exc) from exc
+
+
+def _device_observation_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    if isinstance(exc, DeviceObservationConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    message = str(exc)
+    status = 409 if any(
+        word in message.lower()
+        for word in ("already", "archived", "changed", "complete before")
+    ) else 422
+    return HTTPException(status_code=status, detail=message)
+
+
+@app.get("/api/device-configs/{run_id}/scope-observations")
+def device_scope_observation_status(run_id: str) -> dict:
+    try:
+        return get_device_observation_status(DB_PATH, run_id)
+    except (KeyError, ValueError) as exc:
+        raise _device_observation_error(exc) from exc
+
+
+@app.post("/api/device-configs/{run_id}/scope-observations", status_code=201)
+def device_scope_observation_assign(
+    run_id: str, request: Request, payload: DeviceScopeAssignmentRequest,
+) -> dict:
+    actor = require_nmap_assignment_mutator(request)
+    try:
+        assign_device_scope(
+            DB_PATH, run_id=run_id, scope_id=payload.scope_id, actor=actor,
+            reason=payload.reason,
+            whole_collection_confirmed=payload.whole_collection_confirmed,
+        )
+        start_derived_job_worker(DB_PATH, DATA_DIR)
+        return get_device_observation_status(DB_PATH, run_id)
+    except (KeyError, ValueError) as exc:
+        raise _device_observation_error(exc) from exc
+
+
+@app.post(
+    "/api/device-scope-assignments/{assignment_id}/corrections", status_code=201,
+)
+def device_scope_observation_correct(
+    assignment_id: str, request: Request, payload: DeviceScopeCorrectionRequest,
+) -> dict:
+    actor = require_nmap_assignment_mutator(request)
+    try:
+        assignment = correct_device_scope(
+            DB_PATH,
+            expected_assignment_id=assignment_id,
+            destination_scope_id=payload.destination_scope_id,
+            actor=actor,
+            reason=payload.reason,
+            whole_collection_confirmed=payload.whole_collection_confirmed,
+        )
+        start_derived_job_worker(DB_PATH, DATA_DIR)
+        return get_device_observation_status(DB_PATH, assignment["run_id"])
+    except (KeyError, ValueError) as exc:
+        raise _device_observation_error(exc) from exc
+
+
+@app.get("/api/device-configs/{run_id}/scope-observations/receipts")
+def device_scope_observation_receipts(
+    run_id: str,
+    limit: int = Query(default=100, ge=1, le=250),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_device_interface_receipts(DB_PATH, run_id, limit=limit, offset=offset)
+    except (KeyError, ValueError) as exc:
+        raise _device_observation_error(exc) from exc
 
 
 @app.get("/health")

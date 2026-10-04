@@ -2502,6 +2502,14 @@ def delete_device_collection(
         and authority["state"] == "deleted"
         and run_dir.is_dir()
     )
+    from app.device_observations import collection_has_device_scope_assignment
+
+    if collection_has_device_scope_assignment(
+        DB_PATH if db_path is None else db_path, run_id,
+    ):
+        raise RuntimeError(
+            "This collection supports retained scoped address receipts and cannot be deleted"
+        )
     if not retrying_cleanup and not (run_dir / "manifest.json").is_file():
         raise FileNotFoundError("Device collection was not found")
     with _INTERACTIVE_SESSIONS_LOCK:
@@ -3176,6 +3184,14 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
             record["summary_processing_state"] = processing_state
             record["summary_processing_detail"] = processing_detail
             record["summary_job_id"] = job.get("job_id") if job else None
+            from app.device_observations import get_device_observation_status
+
+            observation_status = get_device_observation_status(DB_PATH, record["run_id"])
+            record["device_observation_state"] = observation_status["state"]
+            record["device_scope_assignment"] = observation_status.get("assignment")
+            record["device_observation_assessment"] = observation_status.get("assessment")
+            record["device_observation_job_id"] = observation_status.get("job_id")
+            record["device_observation_error"] = observation_status.get("error")
             records.append(record)
         except (OSError, ValueError):
             continue
@@ -3320,6 +3336,15 @@ def collection_delete_challenge(run_id: str) -> dict:
         and authority["state"] == "deleted"
         and run_dir.is_dir()
     )
+    from app.device_observations import collection_has_device_scope_assignment
+
+    if collection_has_device_scope_assignment(DB_PATH, run_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This collection supports retained scoped address receipts and cannot be deleted"
+            ),
+        )
     if not retrying_cleanup and not (run_dir / "manifest.json").is_file():
         raise HTTPException(status_code=404, detail="Device collection was not found")
     from app.poc import issue_delete_challenge

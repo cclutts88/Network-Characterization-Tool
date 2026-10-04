@@ -762,6 +762,9 @@ def analyze_device_collection(
             "filename": "command-history.txt",
             "url": f"/api/device-configs/{run_id}/files/command-history.txt",
         })
+    from app.device_observations import get_device_observation_status
+
+    scope_observation = get_device_observation_status(db_path, run_id)
     return {
         "run_id": run_id,
         "status": "analysis_complete",
@@ -782,6 +785,7 @@ def analyze_device_collection(
             "created_at": manifest.get("created_at"),
             "completed_at": manifest.get("completed_at"),
         },
+        "scope_observation": scope_observation,
         "counts": {
             **summary.get("counts", {}),
             "default_routes": len(default_routes),

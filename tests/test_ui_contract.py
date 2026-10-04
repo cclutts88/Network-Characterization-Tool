@@ -192,6 +192,10 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "[data-latest-observations]" in SHELL_SCRIPT
     assert "last confirmed positive observation, with direct evidence links" in SHELL_SCRIPT
     assert "This is not a live check or an exact Last Seen time" in SHELL_SCRIPT
+    assert "[data-device-scope-assignment]" in SHELL_SCRIPT
+    assert "creates traceable interface-address receipts" in SHELL_SCRIPT
+    assert "[data-device-scope-receipts]" in SHELL_SCRIPT
+    assert "configuration statements, not live checks or exact Last Seen times" in SHELL_SCRIPT
     assert "Builds and downloads a certified ZIP" in SHELL_SCRIPT
     assert "It does not run Nmap or add evidence to NCT" in SHELL_SCRIPT
     assert "import the completed XML files" in SHELL_SCRIPT
@@ -205,6 +209,12 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "The action is not complete until the page reports success" in SHELL_SCRIPT
     assert "A portable run becomes retained NCT evidence only after its completed XML files" in SHELL_SCRIPT
     assert "choose Active Scans, and review the held run" in SHELL_SCRIPT
+
+
+def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
+    html = device_config_page().body.decode()
+    assert "An address missing here is not proof that it was removed." in html
+    assert "Refresh scoped address receipts" in html
     assert "approve the Nmap fallback, finish without Nmap, or cancel the run" in SHELL_SCRIPT
     assert "reports assumed targets separately from confirmed responsive hosts" in SHELL_SCRIPT
     assert "A held run also prevents maintenance or an upgrade from starting" in SHELL_SCRIPT
