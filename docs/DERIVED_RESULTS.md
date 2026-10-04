@@ -154,6 +154,27 @@ relationships only. It does not inspect source files, multiply relationships for
 duplicate observations, determine evidence freshness, predict invalidation, mark results
 stale, traverse indirect dependencies or rerun analysis.
 
+## Saved calculation version inventory
+
+System Health groups retained reusable calculations by their exact saved family, rule
+version, output schema and settings. Settings that differ remain separate groups even
+when their family and version match. Each group reports its compatibility with the
+running build, number of saved calculation results, and earliest and latest calculation
+creation time. An operator can open a separately paged list of the exact results in the
+group.
+
+The group and result pages use read-only database snapshots. Unfamiliar families and
+malformed contract metadata remain visible as Unknown rather than being dropped or
+merged. Counts come from calculation rows only, so multiple evidence encounters linked
+to one shared result do not inflate them. Page status counts describe only the displayed
+groups; NCT does not claim database-wide compatibility totals without evaluating every
+group.
+
+This is a saved-version inventory. A Stale group may already have a Current replacement,
+and its result count is not a count of jobs required. The inventory does not inspect
+source bytes, determine evidence freshness, mark results stale, invalidate dependents,
+schedule work or rebuild analysis.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already

@@ -33,6 +33,10 @@ from app.nmap_assignment_workflow import (
 from app.storage_health import storage_status, start_storage_job
 from app.storage_ui import storage_page
 from app.derived_result_status import list_derived_result_status
+from app.derived_version_inventory import (
+    list_version_group_results,
+    list_version_groups,
+)
 from app.derived_dependencies import (
     DerivedDependencyIntegrityError,
     UnsupportedDerivedDependency,
@@ -1355,6 +1359,39 @@ def system_analysis_status(
 ) -> dict:
     require_storage_admin(request)
     return list_derived_result_status(DB_PATH, limit=limit, offset=offset)
+
+
+@app.get("/api/system/analysis-versions")
+def system_analysis_versions(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_storage_admin(request)
+    return list_version_groups(DB_PATH, limit=limit, offset=offset)
+
+
+@app.get("/api/system/analysis-versions/{group_id}/results")
+def system_analysis_version_results(
+    group_id: str,
+    request: Request,
+    representative_result_id: str = Query(min_length=1, max_length=256),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_storage_admin(request)
+    try:
+        return list_version_group_results(
+            DB_PATH,
+            group_id,
+            representative_result_id,
+            limit=limit,
+            offset=offset,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _dependency_response(operation):

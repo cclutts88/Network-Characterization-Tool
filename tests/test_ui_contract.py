@@ -61,6 +61,22 @@ def test_system_health_explains_bounded_calculation_status():
     assert "page_unsupported_candidate_count" in html
     assert "manifest_semantics:'Collection details'" in html
     assert "selection_shape:'Evidence file choices'" in html
+    assert "Saved calculation versions" in html
+    assert "not scans, evidence encounters, or jobs that need to run" in html
+    assert "matching fingerprints mean the stored settings match exactly" in html
+    assert "Show settings fingerprint" in html
+    assert "/api/system/analysis-versions?limit=${versionLimit}&offset=${requestedOffset}" in html
+    assert "representative_result_id=${encodeURIComponent(representative)}" in html
+    assert "requestId!==versionRequestId" in html
+    assert "requestId!==versionResultsRequestId" in html
+    assert "button.dataset.analysisVersions=''" in html
+    assert "These are page counts, not database-wide totals" in html
+    assert "closeVersionResults();versionOffset" in html
+    assert "function openVersionResults(item){closeDependencies();" in html
+    assert "byId('versionResultRows').replaceChildren();byId('versionResultsPage').textContent='Loading exact saved results'" in html
+    assert "'view saved results':['View results for this exact saved version'" in SHELL_SCRIPT
+    assert "'show settings fingerprint':['Saved settings fingerprint'" in SHELL_SCRIPT
+    assert "button,input,select,textarea,a,summary" in SHELL_SCRIPT
     assert "byId('dependencyRows').replaceChildren();byId('dependencyPage').textContent='Loading declared inputs'" in html
     assert "byId('dependencyPrevious').disabled=true;byId('dependencyNext').disabled=true" in html
     assert "byId('sourceRows').replaceChildren();byId('sourcePage').textContent='Loading retained source records'" in html

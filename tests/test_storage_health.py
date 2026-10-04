@@ -308,6 +308,7 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
     client = TestClient(main.app)
     assert client.get("/api/system/storage").status_code == expected
     assert client.get("/api/system/analysis-status").status_code == expected
+    assert client.get("/api/system/analysis-versions").status_code == expected
     if role != "admin":
         assert client.get("/api/system/analysis-status/missing/inputs").status_code == expected
         assert client.get(
@@ -316,10 +317,17 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
         assert client.get(
             "/api/system/analysis-status/missing/inputs/nmap_xml/saved-calculations"
         ).status_code == expected
+        assert client.get(
+            "/api/system/analysis-versions/bad/results?representative_result_id=result"
+        ).status_code == expected
         assert client.post("/api/system/storage/backfill").status_code == expected
     else:
         assert client.get("/settings/system-health").status_code == 200
         assert client.get("/api/system/analysis-status?limit=101").status_code == 422
+        assert client.get("/api/system/analysis-versions?limit=101").status_code == 422
+        assert client.get(
+            "/api/system/analysis-versions/bad/results?representative_result_id=result"
+        ).status_code == 400
         assert client.get("/api/system/analysis-status/missing/inputs").status_code == 404
         assert client.get(
             "/api/system/analysis-status/missing/inputs/nmap_xml/source-records?limit=101"

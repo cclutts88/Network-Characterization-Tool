@@ -34,6 +34,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Automatic compaction remains disabled" in html
     assert "saved reusable analyses as <strong>Current</strong>, <strong>Stale</strong>, or <strong>Unknown</strong>" in html
     assert "Current means only that the saved calculation rules match this build" in html
+    assert "<strong>Saved calculation versions</strong> groups exact retained families" in html
+    assert "version inventory counts, not counts of scans, evidence encounters, jobs" in html
     assert "These labels and views do not delete evidence or automatically rerun analysis" in html
     assert "<strong>View inputs</strong> shows the direct inputs declared by one calculation" in html
     assert "they are provenance, not extra analysis steps" in html

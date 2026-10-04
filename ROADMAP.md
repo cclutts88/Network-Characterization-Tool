@@ -133,6 +133,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 dirty-state tracking | Persist a mutable current/stale flag and propagate invalidation before dependency tracking exists | Begin with a read-only calculation-contract status for the three reusable families already in production. Compare retained analysis version, output schema and declared settings to the running build's shared trusted contracts; label exact matches current, known mismatches stale and unknown or unreadable contracts unknown | A mutable flag can drift from immutable result metadata, and there is no reviewed dependency graph or worker capable of safely propagating or rebuilding dependent work yet | This is a partial Step 7 implementation and an early limited Step 9 dependency. Current means only that the calculation contract matches this build; it does not claim that evidence is recent, intact or current on the network. Dependency propagation, input freshness, scheduling and stale-only recomputation remain open |
 | 2026-10-03 | Phase 1 dependency graph | Add graph tables and invalidation propagation before a worker and rebuild contract exist | Begin with a read-only Inputs and source records drill-down derived from the existing immutable result manifest, input rows and exact artifact-observation links | The three production reusable families already retain direct input edges and provenance links. Copying them into a second graph can drift, while propagation has no reviewed scheduling or failure behavior yet | Treat a declared input as a direct calculation dependency and an observation link as provenance for that exact role, not another dependency. Verify the saved identity and rows before display; page roles and source encounters separately. Do not infer deleted provenance, inspect source bytes, mark results dirty or schedule rebuilding. This is partial Step 8; reverse impact, result-to-result edges, propagation and scheduling remain open |
 | 2026-10-03 | Phase 1 reverse dependency lookup | Predict invalidation impact and propagate dirty state | Add a read-only, indexed lookup from one verified input role to saved calculation records that declare the same input kind and exact identity | Automatic invalidation has no reviewed result-to-result graph, scheduling or rebuild behavior. Existing immutable input rows can safely expose recorded direct relationships without creating mutable graph state | Show verified direct relationships separately from unsupported saved-record candidates. Preserve repeated roles, page candidates deterministically, and validate each supported relationship against its saved computation identity and manifest. This does not predict that a changed file would invalidate an immutable result, inspect source bytes, traverse indirect dependencies, mark work stale or schedule rebuilding. Step 8 remains partial |
+| 2026-10-03 | Phase 1 analysis versioning | Add global invalidation and selective rebuild behavior | Add a read-only saved-calculation version inventory for the three migrated reusable families before defining durable rebuild jobs | Exact family, rule version, output schema and settings are already retained and classified, but no reviewed persistent-job contract can safely turn compatibility differences into scheduled work | Group exact retained contracts without merging differing settings, show Current/Stale/Unknown and bounded result drill-down, and keep malformed or unfamiliar groups visible. Counts describe saved calculations, not scans, observations, evidence freshness or jobs required. Other analysis families, invalidation, upgrade handling and selective rebuilding remain open, so Step 9 is partial |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -1103,7 +1104,30 @@ foundational changes.
      and descriptor inputs, result/role switching, opening result inputs, contextual
      help, direct-relationship counts and a clean console. Result-to-result dependencies,
      invalidation, scheduling and rebuilding remain open.
-9. [ ] Analysis versioning.
+9. [~] Analysis versioning.
+   - [x] Saved-calculation version inventory for migrated reusable families.
+     Completed 2026-10-03 after the read-only direct dependency views. System Health now
+     groups exact retained family, rule version, output format and settings; keeps
+     malformed and unfamiliar contracts visible as Unknown; shows saved-result counts
+     and earliest/latest calculation times; and pages the exact results in a selected
+     group. Group and result reads use bounded read-only snapshots, differing settings
+     never merge, and page counts describe only the displayed groups. A settings
+     fingerprint is explicitly identified as an internal exact-match identifier rather
+     than a readable settings summary. Live testing found and fixed a misleading stale
+     input panel when switching groups. **QUALITY GATE: CLEAR - DOCUMENTED DEVIATION**;
+     the full Docker suite passed **853 tests**, the final focused inventory, storage,
+     interface and guide suite passed **97 tests**, and the reviewer independently passed
+     **97 checks** before separately clearing the final expandable-guide delta. Those
+     checks included malformed values, exact group selection and delayed-response
+     replacement. A 20,000-result/200-group disposable check returned the first group
+     page in about **37 ms** and an exact result page in about **7 ms**; this is a
+     synthetic development check, not a production benchmark. The novice operator
+     passed the live workflow after the settings-fingerprint wording was clarified.
+     Browser checks covered exact group/result switching, opening inputs, automatic
+     closure of old inputs, contextual help, layout and a clean console. This remains an
+     inventory, not an invalidation forecast or rebuild queue; it writes no status and
+     does not inspect evidence freshness. Other analysis families, upgrade handling,
+     selective rebuilding and durable jobs remain open, so Step 9 remains partial.
 10. [ ] Persistent jobs and partial failure.
 11. [ ] Lightweight worker.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
