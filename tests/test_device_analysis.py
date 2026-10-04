@@ -3,14 +3,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.artifacts import register_artifact_file
 from app.database import connect_database
+from app import device_configs
 from app.device_analysis import (
     _wan_interface_candidates,
     analyze_device_collection,
     compare_device_analyses,
+)
+from app.device_collection_authority import (
+    AUTHORITY_MARKER,
+    DeviceCollectionIncomplete,
+    activate_manual_upload_authority,
+    authority_manifest_marker,
+    begin_manual_upload_authority,
 )
 from app.main import app
 from app.poc import RUNS_DIR_NAME, insert_scan_run_manifest
@@ -18,29 +27,51 @@ from app.saved_networks import SavedNetworkCreate, create_saved_network
 from app.storage_health import backfill_storage
 
 
-def make_collection(config_dir: Path, run_id: str, config: str) -> None:
+def make_collection(config_dir: Path, db_path: Path, run_id: str, config: str) -> None:
     run_dir = config_dir / run_id
     run_dir.mkdir(parents=True)
-    (run_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "run_id": run_id,
-                "status": "uploaded",
-                "operation": "manual_upload",
-                "device_name": "Edge Firewall",
-                "device_address": "192.0.2.10",
-                "vendor": "cisco",
-                "device_type": "firewall",
-                "operator": "analyst",
-                "reason": "authorized test",
-                "originating_host": "nct-test",
-                "created_at": "2026-09-11T12:00:00+00:00",
-                "completed_at": "2026-09-11T12:01:00+00:00",
-            }
-        ),
-        encoding="utf-8",
+    retained_filename = "uploaded-edge-config.txt"
+    retained_path = run_dir / retained_filename
+    retained_path.write_text(config, encoding="utf-8")
+    begin_manual_upload_authority(db_path, run_id)
+    artifact = register_artifact_file(
+        db_path=db_path,
+        source_path=retained_path,
+        source_kind="device_config_upload",
+        source_ref=run_id,
+        original_filename="edge-config.txt",
+        actor="analyst",
+        observation_key=f"device_config_upload:{run_id}:{retained_filename}",
     )
-    (run_dir / "uploaded-edge-config.txt").write_text(config, encoding="utf-8")
+    manifest = {
+        "run_id": run_id,
+        "status": "uploaded",
+        "operation": "manual_upload",
+        "device_name": "Edge Firewall",
+        "device_address": "192.0.2.10",
+        "vendor": "cisco",
+        "device_type": "firewall",
+        "operator": "analyst",
+        "reason": "authorized test",
+        "originating_host": "nct-test",
+        "created_at": "2026-09-11T12:00:00+00:00",
+        "completed_at": "2026-09-11T12:01:00+00:00",
+        "retained_filename": retained_filename,
+        "artifact_sha256": artifact["sha256"],
+        "artifact_observation_id": artifact["observation_id"],
+        "output_complete": True,
+        "commands": [],
+        AUTHORITY_MARKER: authority_manifest_marker(),
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    activate_manual_upload_authority(
+        db_path,
+        run_id,
+        observation_id=artifact["observation_id"],
+        artifact_sha256=artifact["sha256"],
+        retained_filename=retained_filename,
+        manifest=manifest,
+    )
 
 
 CURRENT_CONFIG = """interface GigabitEthernet0/0
@@ -129,7 +160,7 @@ def test_device_analysis_summarizes_and_correlates_retained_evidence(tmp_path):
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     run_id = "a" * 32
-    make_collection(config_dir, run_id, CURRENT_CONFIG)
+    make_collection(config_dir, db_path, run_id, CURRENT_CONFIG)
     create_saved_network(
         SavedNetworkCreate(
             name="Users LAN", cidr="10.80.0.0/24", created_by="analyst"
@@ -171,7 +202,7 @@ def test_device_correlation_reuses_verified_topology_and_surfaces_integrity_warn
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     collection_id = "b" * 32
-    make_collection(config_dir, collection_id, CURRENT_CONFIG)
+    make_collection(config_dir, db_path, collection_id, CURRENT_CONFIG)
     nmap_run_id = add_nmap_run(db_path, data_dir)
     register_nmap_run(db_path, data_dir, nmap_run_id)
 
@@ -208,7 +239,7 @@ def test_device_correlation_warns_when_backfilled_run_local_xml_is_missing(tmp_p
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     collection_id = "d" * 32
-    make_collection(config_dir, collection_id, CURRENT_CONFIG)
+    make_collection(config_dir, db_path, collection_id, CURRENT_CONFIG)
     nmap_run_id = add_nmap_run(db_path, data_dir)
     with connect_database(db_path, read_only=True) as db:
         manifest_json = db.execute(
@@ -239,7 +270,7 @@ def test_reach_analysis_can_skip_presentation_correlations_without_losing_routes
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     run_id = "e" * 32
-    make_collection(config_dir, run_id, CURRENT_CONFIG)
+    make_collection(config_dir, db_path, run_id, CURRENT_CONFIG)
 
     def unexpected_correlation(*args, **kwargs):
         raise AssertionError("presentation correlations should be skipped")
@@ -273,6 +304,7 @@ def test_wan_inference_recommends_each_interface_with_a_default_route(tmp_path):
     run_id = "f" * 32
     make_collection(
         config_dir,
+        db_path,
         run_id,
         """interface GigabitEthernet0/0
  description ISP_A
@@ -344,8 +376,8 @@ def test_device_collection_comparison_covers_interface_route_and_policy_changes(
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     before_id, after_id = "b" * 32, "a" * 32
-    make_collection(config_dir, before_id, BASELINE_CONFIG)
-    make_collection(config_dir, after_id, CURRENT_CONFIG)
+    make_collection(config_dir, db_path, before_id, BASELINE_CONFIG)
+    make_collection(config_dir, db_path, after_id, CURRENT_CONFIG)
 
     before = analyze_device_collection(
         before_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
@@ -366,25 +398,33 @@ def test_device_collection_comparison_covers_interface_route_and_policy_changes(
     assert result["policy_changes"]["network_objects_removed"]
 
 
-def test_failed_switch_collection_is_explicitly_partial_and_requests_rerun(tmp_path):
+def test_failed_switch_collection_is_ineligible_for_analysis(tmp_path, monkeypatch):
     config_dir = tmp_path / "device-configs"
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     run_id = "d" * 32
-    make_collection(config_dir, run_id, "default via 10.80.0.1 dev eth0\nbridge link show\n")
-    manifest_path = config_dir / run_id / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest.update({"status": "failed", "device_type": "switch", "device_name": "Access Switch"})
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    result = analyze_device_collection(
-        run_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+    run_dir = config_dir / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "router-config.txt").write_text(
+        "default via 10.80.0.1 dev eth0\nbridge link show\n"
     )
+    manifest = {
+        "run_id": run_id, "status": "failed", "operation": "configuration_pull",
+        "device_type": "switch", "device_name": "Access Switch",
+        "vendor": "linux", "operator": "analyst",
+        "created_at": "2026-09-11T12:00:00+00:00",
+        "completed_at": "2026-09-11T12:01:00+00:00",
+        "output_complete": False, "output_truncated": False,
+        "command_history_truncated": False,
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(device_configs, "DB_PATH", db_path)
+    assert device_configs._finalize_device_collection(run_dir, manifest) is False
 
-    titles = {item["title"] for item in result["review_items"]}
-    assert "Collection status is failed" in titles
-    assert "No structured switch forwarding evidence was parsed" in titles
-    assert result["device"]["role_label"] == "Switch"
+    with pytest.raises(DeviceCollectionIncomplete, match="not eligible"):
+        analyze_device_collection(
+            run_id, config_dir=config_dir, db_path=db_path, data_dir=data_dir
+        )
 
 
 def test_device_analysis_routes_use_runtime_storage_paths(tmp_path, monkeypatch):
@@ -392,7 +432,7 @@ def test_device_analysis_routes_use_runtime_storage_paths(tmp_path, monkeypatch)
     data_dir = tmp_path / "data"
     db_path = data_dir / "nct.db"
     run_id = "a" * 32
-    make_collection(config_dir, run_id, CURRENT_CONFIG)
+    make_collection(config_dir, db_path, run_id, CURRENT_CONFIG)
     monkeypatch.setattr("app.device_analysis.CONFIG_DIR", config_dir)
     monkeypatch.setattr("app.device_analysis.DATA_DIR", data_dir)
     monkeypatch.setattr("app.device_analysis.DB_PATH", db_path)

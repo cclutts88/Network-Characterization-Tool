@@ -11,6 +11,10 @@ import pytest
 
 from app import device_analysis, device_configs, main, nmap_base_analysis, poc
 from app.database import configure_database, connect_database
+from app.device_collection_authority import (
+    DeviceCollectionIncomplete,
+    get_device_collection_authority,
+)
 from app.host_identities import apply_analysis_host_identities, apply_topology_host_identities, select_host_identity
 
 
@@ -141,35 +145,13 @@ def test_application_database_calls_use_shared_lock_policy():
     assert offenders == []
 
 
-def test_device_cache_reuses_and_invalidates_evidence_and_version(tmp_path, monkeypatch):
+def test_historical_device_collection_requires_verified_conversion(tmp_path):
     run_id, root, folder = collection(tmp_path)
     db_path = tmp_path/'test.db'
-    original = device_analysis.device_collection_summary
-    calls = []
-    def parse(*args, **kwargs):
-        calls.append(1)
-        return original(*args, **kwargs)
-    monkeypatch.setattr(device_analysis, 'device_collection_summary', parse)
-    first = device_analysis._cached_device_summary(run_id, root, db_path)
-    second = device_analysis._cached_device_summary(run_id, root, db_path)
-    assert first['routes'] == second['routes']
-    assert len(calls) == 1
-    assert 'configuration_text' not in second
-    (folder/'command-history.txt').write_text('1 show version\n2 reload\n')
-    third = device_analysis._cached_device_summary(run_id, root, db_path)
-    assert third['command_history']['entries'][-1]['command'] == 'reload'
-    assert len(calls) == 2
-    monkeypatch.setattr(
-        device_analysis,
-        'DEVICE_SUMMARY_VERSION',
-        device_analysis.DEVICE_SUMMARY_VERSION + 1,
-    )
-    device_analysis._cached_device_summary(run_id, root, db_path)
-    assert len(calls) == 3
-    device_analysis.delete_device_analysis_storage(run_id, db_path)
-    with connect_database(db_path) as db:
-        assert db.execute('SELECT COUNT(*) FROM device_analysis_cache').fetchone()[0] == 0
-        assert db.execute('SELECT COUNT(*) FROM device_command_observations').fetchone()[0] == 0
+    with pytest.raises(DeviceCollectionIncomplete, match='has not been converted'):
+        device_analysis._device_summary_snapshot(run_id, root, db_path)
+    assert folder.is_dir()
+    assert not db_path.exists()
 
 
 def test_saved_config_and_history_never_become_active_routes(tmp_path):
@@ -278,14 +260,11 @@ def test_custom_collection_command_is_labeled_as_nct_activity():
     assert result['entries'][1]['classification'] == 'nct_collection'
 
 
-def test_device_cache_preserves_command_history_line_numbers(tmp_path):
+def test_uncached_summary_parser_preserves_command_history_line_numbers(tmp_path):
     run_id, root, folder = collection(tmp_path)
     (folder/'command-history.txt').write_text('10 show version\n11 configure terminal\n')
-    db_path = tmp_path/'test.db'
-    first = device_analysis._cached_device_summary(run_id, root, db_path)
-    second = device_analysis._cached_device_summary(run_id, root, db_path)
-    assert first['command_history']['entries'][1]['line_number'] == 2
-    assert second['command_history']['entries'][1]['line_number'] == 2
+    result = device_configs.device_collection_summary(run_id, config_dir=root)
+    assert result['command_history']['entries'][1]['line_number'] == 2
 
 
 def test_device_history_defers_artifact_lookup(tmp_path, monkeypatch):
@@ -318,6 +297,7 @@ def test_selected_dns_names_visible_without_losing_scanner_evidence(tmp_path):
 def test_cisco_key_collection_retains_history_first(tmp_path, monkeypatch):
     from starlette.requests import Request
     monkeypatch.setattr(device_configs, 'CONFIG_DIR', tmp_path/'device-configs')
+    monkeypatch.setattr(device_configs, 'DB_PATH', tmp_path/'analyzer.db')
     monkeypatch.setattr(device_configs, 'key_preflight', lambda _: {'status': 'ready'})
     monkeypatch.setattr(device_configs, 'start_accountability_capture', lambda *args: (None, None, None))
     monkeypatch.setattr(device_configs, 'stop_accountability_capture', lambda *args: None)
@@ -331,6 +311,10 @@ def test_cisco_key_collection_retains_history_first(tmp_path, monkeypatch):
     result = device_configs.execute(plan, Request({'type': 'http', 'headers': []}))
     assert result['status'] == 'completed'
     assert result['command_history_status'] == 'captured'
+    assert result['summary_verification_status'] == 'verified'
+    assert get_device_collection_authority(
+        tmp_path/'analyzer.db', result['run_id']
+    )['state'] == 'active'
     assert (tmp_path/'device-configs'/result['run_id']/'command-history.txt').is_file()
 
 

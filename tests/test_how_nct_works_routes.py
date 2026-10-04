@@ -46,6 +46,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Inspect and compare processed receipts" in html
     assert "neutral Record A and Record B" in html
     assert "Coverage-aware historical service classification" in html
+    assert "Retry local verification" in html
+    assert "does not reconnect to the device" in html
+    assert "conversion is required" in html
+    assert "do not use or write that old processing route" in html
     assert "outside the other record's selected ports is Not assessed" in html
     assert "unambiguous closed result" in html
     assert "does not say the service is gone now" in html

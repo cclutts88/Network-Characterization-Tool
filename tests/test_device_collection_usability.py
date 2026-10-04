@@ -481,8 +481,8 @@ def test_collection_summary_and_delete_routes(tmp_path, monkeypatch):
             json={"confirmation": challenge.json()["challenge"]},
         )
 
-    assert summary.status_code == 200
-    assert summary.json()["counts"]["routes"] == 1
+    assert summary.status_code == 409
+    assert "has not been converted" in summary.json()["detail"]
     assert challenge.status_code == 200
     assert rejected.status_code == 400
     assert run_dir.is_dir() is False

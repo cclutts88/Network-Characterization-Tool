@@ -587,6 +587,9 @@ def test_device_evidence_downloads_use_authenticated_page_fetch():
     assert 'id="continueCandidateToNmap"' in html
     assert "showCompletionActions(data)" in html
     assert "Analyze collection" in html
+    assert "Analysis readiness" in html
+    assert "Retry local verification" in html
+    assert "retry-summary-verification" in html
     assert "Continue to Nmap" in html
     assert "/device-analysis?run=" in html
     assert "const orderedGroups=[...groups.entries()].sort" in html

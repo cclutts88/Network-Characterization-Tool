@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ipaddress
-import hashlib
 import json
 import re
 import sqlite3
@@ -11,17 +10,21 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from app.device_configs import CONFIG_DIR, device_collection_directory, device_collection_summary
+from app.device_configs import CONFIG_DIR, device_collection_directory
 from app.device_collection_authority import (
+    COLLECTED_DEVICE_SELECTION_CONTRACT,
+    MANUAL_UPLOAD_SELECTION_CONTRACT,
     DeviceCollectionDeleted,
     DeviceCollectionIncomplete,
     DeviceCollectionIntegrityError,
     get_device_collection_authority,
     require_available_collection,
-    require_not_deleted_in_transaction,
     tombstone_device_collection,
 )
-from app.device_summary_result import analyze_manual_upload_summary
+from app.device_summary_result import (
+    analyze_collected_device_summary,
+    analyze_manual_upload_summary,
+)
 from app.database import configure_database, connect_database
 from app.nmap_base_analysis import scan_run_has_registered_nmap_xml
 from app.nmap_topology_analysis import analyze_scan_run_nmap_topology
@@ -116,115 +119,6 @@ def delete_device_analysis_storage(run_id: str, db_path: Path = DB_PATH) -> None
     tombstone_device_collection(db_path, run_id)
 
 
-def _device_evidence_fingerprint(run_dir: Path) -> str:
-    records = []
-    for path in sorted(item for item in run_dir.iterdir() if item.is_file()):
-        if path.name == "accountability.pcap":
-            continue
-        stat = path.stat()
-        records.append((path.name, stat.st_size, stat.st_mtime_ns))
-    return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest()
-
-
-def _legacy_cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
-    init_device_analysis_storage(db_path)
-    run_dir = device_collection_directory(run_id, config_dir)
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    authority = require_available_collection(db_path, run_id, manifest=manifest)
-    if authority is not None:
-        raise DeviceCollectionIntegrityError(
-            "Verified device uploads cannot use the legacy summary cache"
-        )
-    fingerprint = _device_evidence_fingerprint(run_dir)
-    with connect_database(db_path) as db:
-        row = db.execute(
-            """
-            SELECT summary_json FROM device_analysis_cache
-            WHERE run_id = ? AND analysis_version = ? AND evidence_fingerprint = ?
-            """,
-            (run_id, DEVICE_SUMMARY_VERSION, fingerprint),
-        ).fetchone()
-        if row:
-            summary = json.loads(row[0])
-            observations = db.execute(
-                """
-                SELECT position, line_number, command, classification, label
-                FROM device_command_observations
-                WHERE run_id = ? ORDER BY position
-                """,
-                (run_id,),
-            ).fetchall()
-            summary.setdefault("command_history", {})["entries"] = [
-                {
-                    "position": item[0], "line_number": item[1],
-                    "command": item[2], "classification": item[3],
-                    "label": item[4],
-                }
-                for item in observations
-            ]
-            return summary
-    summary = device_collection_summary(run_id, config_dir=config_dir)
-    cached = json.loads(json.dumps(summary))
-    cached.pop("configuration_text", None)
-    cached.pop("raw_output", None)
-    observations = list((cached.get("command_history") or {}).pop("entries", []))
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
-        require_not_deleted_in_transaction(db, run_id)
-        db.execute(
-            """
-            INSERT INTO device_collections (
-                run_id, created_at, completed_at, device_address, device_name,
-                vendor, device_type, status, evidence_fingerprint
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
-                completed_at = excluded.completed_at,
-                device_address = excluded.device_address,
-                device_name = excluded.device_name,
-                vendor = excluded.vendor,
-                device_type = excluded.device_type,
-                status = excluded.status,
-                evidence_fingerprint = excluded.evidence_fingerprint
-            """,
-            (
-                run_id, manifest.get("created_at"), manifest.get("completed_at"),
-                manifest.get("device_address"), manifest.get("device_name"),
-                manifest.get("vendor"), manifest.get("device_type"),
-                manifest.get("status"), fingerprint,
-            ),
-        )
-        db.execute("DELETE FROM device_command_observations WHERE run_id = ?", (run_id,))
-        db.executemany(
-            """
-            INSERT INTO device_command_observations (
-                run_id, position, line_number, command, classification, label
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    run_id, item["position"], item.get("line_number"), item["command"],
-                    item["classification"], item["label"],
-                )
-                for item in observations
-            ],
-        )
-        db.execute(
-            """
-            INSERT INTO device_analysis_cache (
-                run_id, analysis_version, evidence_fingerprint, summary_json, updated_at
-            ) VALUES (?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(run_id) DO UPDATE SET
-                analysis_version = excluded.analysis_version,
-                evidence_fingerprint = excluded.evidence_fingerprint,
-                summary_json = excluded.summary_json,
-                updated_at = excluded.updated_at
-            """,
-            (run_id, DEVICE_SUMMARY_VERSION, fingerprint, json.dumps(cached, separators=(",", ":"))),
-        )
-    cached.setdefault("command_history", {})["entries"] = observations
-    return cached
-
-
 def _device_summary_snapshot(
     run_id: str, config_dir: Path, db_path: Path,
 ) -> tuple[dict, dict]:
@@ -237,9 +131,18 @@ def _device_summary_snapshot(
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     authority = require_available_collection(db_path, run_id, manifest=manifest)
     if authority is None:
-        return _legacy_cached_device_summary(run_id, config_dir, db_path), manifest
+        from app.device_configs import _unavailable_summary_detail
+
+        raise DeviceCollectionIncomplete(_unavailable_summary_detail(manifest))
     try:
-        verified = analyze_manual_upload_summary(db_path, run_id, run_dir)
+        if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT:
+            verified = analyze_manual_upload_summary(db_path, run_id, run_dir)
+        elif authority.get("selection_contract") == COLLECTED_DEVICE_SELECTION_CONTRACT:
+            verified = analyze_collected_device_summary(db_path, run_id, run_dir)
+        else:
+            raise DeviceCollectionIntegrityError(
+                "Verified device collection uses an unsupported analysis contract"
+            )
     except (DeviceCollectionDeleted, DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
         raise
     except (KeyError, ValueError, RuntimeError, OSError) as exc:
@@ -249,11 +152,6 @@ def _device_summary_snapshot(
     summary = dict(verified["payload"])
     summary.update(verified["source_content"])
     return summary, dict(verified["manifest"])
-
-
-def _cached_device_summary(run_id: str, config_dir: Path, db_path: Path) -> dict:
-    """Compatibility wrapper while historical collections remain readable."""
-    return _device_summary_snapshot(run_id, config_dir, db_path)[0]
 
 
 def _route_protocol(route: dict) -> str:

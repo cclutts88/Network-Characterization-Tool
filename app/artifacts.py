@@ -264,10 +264,17 @@ def register_artifact_file(
     observation_key: str | None = None,
     run_id: str | None = None,
     scope_context: dict | None = None,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     before = source_path.stat()
     digest, size_bytes = sha256_file(source_path)
+    if (
+        expected_sha256 is not None
+        and (digest != expected_sha256 or size_bytes != expected_size_bytes)
+    ):
+        raise ValueError("Evidence does not match the frozen verification contract")
     canonical_path = canonical_artifact_path(artifact_root, digest)
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     physical_created = False
@@ -328,13 +335,26 @@ def link_artifact(record: dict, destination: Path) -> str:
 
 
 def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
-                             source_kind: str, filenames) -> None:
+                             source_kind: str, filenames,
+                             expected_files: dict[str, dict] | None = None) -> None:
     """Called after writers close, never from history/read endpoints."""
     records, errors = [], []
     scope_context = get_run_scope_context(db_path, manifest["run_id"])
     for filename in dict.fromkeys(filenames):
         path = run_dir / filename
         if filename == "manifest.json" or not path.is_file() or path.is_symlink():
+            if expected_files is not None and filename != "manifest.json":
+                errors.append({
+                    "filename": filename,
+                    "error": "Expected retained evidence is unavailable",
+                })
+            continue
+        expected = (expected_files or {}).get(filename)
+        if expected_files is not None and expected is None:
+            errors.append({
+                "filename": filename,
+                "error": "Retained evidence is outside the frozen verification contract",
+            })
             continue
         try:
             record = register_artifact_file(
@@ -345,12 +365,26 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                 observation_key=f"{source_kind}:{manifest['run_id']}:{filename}",
                 metadata={"relative_path": str(path.relative_to(db_path.parent))},
                 run_id=manifest["run_id"], scope_context=scope_context,
+                expected_sha256=(expected or {}).get("sha256"),
+                expected_size_bytes=(expected or {}).get("size_bytes"),
             )
             record["storage_mode"] = link_artifact(record, path)
-            records.append({"filename": filename, "sha256": record["sha256"],
-                            "storage_mode": record["storage_mode"]})
+            records.append({
+                "filename": filename,
+                "sha256": record["sha256"],
+                "size_bytes": record["size_bytes"],
+                "observation_id": record["observation_id"],
+                "storage_mode": record["storage_mode"],
+            })
         except (OSError, ValueError, sqlite3.Error) as exc:
             errors.append({"filename": filename, "error": str(exc)})
+    if expected_files is not None:
+        attempted = {name for name in dict.fromkeys(filenames) if name != "manifest.json"}
+        for filename in sorted(set(expected_files) - attempted):
+            errors.append({
+                "filename": filename,
+                "error": "Frozen retained evidence was not selected for registration",
+            })
     manifest["artifact_registry"] = {"files": records, "errors": errors,
                                      "status": "partial" if errors else "complete"}
 

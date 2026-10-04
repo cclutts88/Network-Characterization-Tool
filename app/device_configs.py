@@ -7,6 +7,7 @@ import re
 import select
 import shlex
 import shutil
+import sqlite3
 import socket
 import subprocess
 import tempfile
@@ -24,15 +25,25 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
-from app.artifacts import link_artifact, register_artifact_file, register_finalized_files
+from app.artifacts import (
+    link_artifact,
+    register_artifact_file,
+    register_finalized_files,
+    sha256_file,
+)
 from app.device_collection_authority import (
     AUTHORITY_MARKER,
+    COLLECTED_DEVICE_SELECTION_CONTRACT,
+    MANUAL_UPLOAD_SELECTION_CONTRACT,
     DeviceCollectionDeleted,
     DeviceCollectionIncomplete,
     DeviceCollectionIntegrityError,
+    activate_collected_device_authority,
     activate_manual_upload_authority,
     authority_manifest_marker,
+    begin_collected_device_authority,
     begin_manual_upload_authority,
+    collected_device_manifest_semantics,
     get_device_collection_authority,
     require_available_collection,
     tombstone_device_collection,
@@ -1070,9 +1081,7 @@ def _finish_interactive_session(
     session.manifest["output_complete"] = (
         status == "completed" and not bool(session.manifest.get("output_truncated"))
     )
-    register_finalized_files(DB_PATH, session.run_dir, session.manifest, "device_collection",
-                             [item["name"] for item in artifact_records(session.preview["run_id"], session.run_dir)])
-    (session.run_dir / "manifest.json").write_text(json.dumps(session.manifest, indent=2) + "\n")
+    _finalize_device_collection(session.run_dir, session.manifest)
     stdout = stdout_path.read_text(errors="replace")[:200_000]
     return {
         **session.manifest,
@@ -1641,6 +1650,203 @@ def artifact_records(run_id: str, run_dir: Path) -> list[dict]:
         for name in names
         if (run_dir / name).is_file()
     ]
+
+
+def _verified_collection_eligible(manifest: dict) -> bool:
+    return bool(
+        manifest.get("operation") in {
+            "configuration_pull", "interactive_configuration_pull",
+        }
+        and manifest.get("status") == "completed"
+        and manifest.get("output_complete") is True
+        and not manifest.get("output_truncated")
+        and not manifest.get("command_history_truncated")
+    )
+
+
+def _collection_verification_contract(
+    run_dir: Path, manifest: dict, filenames: list[str],
+) -> dict:
+    files = []
+    for filename in filenames:
+        # The manifest carries verification progress and registry links, so its bytes
+        # legitimately change during activation. Freeze its analysis semantics and
+        # provenance below; freeze every retained evidence file by exact content here.
+        if filename == "manifest.json":
+            continue
+        path = run_dir / filename
+        if not path.is_file() or path.is_symlink():
+            raise DeviceCollectionIntegrityError(
+                f"Expected retained file is unavailable: {filename}"
+            )
+        before = path.stat()
+        digest, size_bytes = sha256_file(path)
+        after = path.stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+        ):
+            raise DeviceCollectionIntegrityError(
+                f"Expected retained file changed during verification: {filename}"
+            )
+        files.append({
+            "filename": filename,
+            "sha256": digest,
+            "size_bytes": size_bytes,
+        })
+    configuration_candidates = [
+        name for name in _configuration_source_names(run_dir)
+        if (run_dir / name).is_file()
+    ]
+    raw_candidates = [
+        name for name in dict.fromkeys(["stdout.txt", *configuration_candidates])
+        if (run_dir / name).is_file()
+    ]
+    if not configuration_candidates or not raw_candidates:
+        raise DeviceCollectionIntegrityError(
+            "Device collection has no retained configuration evidence"
+        )
+    return {
+        "schema_version": 1,
+        "files": files,
+        "selection": {
+            "configuration": configuration_candidates[0],
+            "configuration_candidates": configuration_candidates,
+            "raw_output": raw_candidates[0],
+            "raw_candidates": raw_candidates,
+            "command_history": (
+                "command-history.txt"
+                if (run_dir / "command-history.txt").is_file()
+                else None
+            ),
+        },
+        "semantics": collected_device_manifest_semantics(manifest),
+        "provenance": {
+            key: manifest.get(key)
+            for key in ("run_id", "created_at", "completed_at", "operator")
+        },
+    }
+
+
+def _unavailable_summary_detail(manifest: dict) -> str:
+    if manifest.get("summary_verification_status") == "not_available":
+        return (
+            "This collection is not eligible for verified analysis because it did not "
+            "complete with untruncated evidence. Its retained files remain available "
+            "for review and download in Device History."
+        )
+    return (
+        "This historical collection has not been converted to verified analysis. "
+        "There is no conversion action yet. Its retained files remain available "
+        "for review and download in Device History."
+    )
+
+
+def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
+    """Register and activate a completed collection without invalidating evidence on failure."""
+    filenames = [item["name"] for item in artifact_records(manifest["run_id"], run_dir)]
+    if not _verified_collection_eligible(manifest):
+        register_finalized_files(
+            DB_PATH, run_dir, manifest, "device_collection", filenames
+        )
+        manifest["summary_verification_status"] = "not_available"
+        manifest["summary_verification_detail"] = (
+            "Verified analysis requires a completed, untruncated collection. "
+            "The retained files remain available for review."
+        )
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        return False
+    try:
+        current_contract = _collection_verification_contract(
+            run_dir, manifest, filenames
+        )
+        frozen_contract = manifest.get("summary_verification_contract")
+        if frozen_contract is not None and frozen_contract != current_contract:
+            raise DeviceCollectionIntegrityError(
+                "Retained files or analysis inputs changed after verification began"
+            )
+        manifest["summary_verification_contract"] = current_contract
+        manifest[AUTHORITY_MARKER] = authority_manifest_marker(
+            COLLECTED_DEVICE_SELECTION_CONTRACT
+        )
+        manifest["summary_verification_status"] = "preparing"
+        manifest["summary_verification_detail"] = (
+            "NCT is verifying the exact retained files used for analysis."
+        )
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        begin_collected_device_authority(DB_PATH, manifest["run_id"])
+        expected_files = {
+            item["filename"]: item for item in current_contract["files"]
+        }
+        register_finalized_files(
+            DB_PATH, run_dir, manifest, "device_collection", filenames,
+            expected_files=expected_files,
+        )
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        from app.device_summary_result import capture_collected_device_snapshot
+
+        post_filenames = [
+            item["name"] for item in artifact_records(manifest["run_id"], run_dir)
+        ]
+        if _collection_verification_contract(
+            run_dir, manifest, post_filenames
+        ) != current_contract:
+            raise DeviceCollectionIntegrityError(
+                "Registered evidence does not match the frozen verification contract"
+            )
+        snapshot = capture_collected_device_snapshot(
+            DB_PATH, manifest["run_id"], run_dir
+        )
+        selection = current_contract["selection"]
+        snapshot_selection = snapshot["selection_shape"]
+        if (
+            snapshot_selection["configuration"]["filename"]
+            != selection["configuration"]
+            or snapshot_selection["configuration"]["metadata"].get("candidates")
+            != selection["configuration_candidates"]
+            or snapshot_selection["raw_output"]["filename"]
+            != selection["raw_output"]
+            or snapshot_selection["raw_output"]["metadata"].get("candidates")
+            != selection["raw_candidates"]
+            or snapshot_selection["command_history"]["filename"]
+            != selection["command_history"]
+        ):
+            raise DeviceCollectionIntegrityError(
+                "Registered analysis inputs do not match the frozen selection"
+            )
+        for item in snapshot["authority_inputs"]:
+            if item["source_kind"] != "artifact_file":
+                continue
+            expected = expected_files.get(item["filename"])
+            if expected is None or (
+                item["sha256"], item["size_bytes"]
+            ) != (expected["sha256"], expected["size_bytes"]):
+                raise DeviceCollectionIntegrityError(
+                    "Registered analysis input does not match frozen evidence"
+                )
+        activate_collected_device_authority(
+            DB_PATH,
+            manifest["run_id"],
+            manifest=manifest,
+            inputs=snapshot["authority_inputs"],
+        )
+        manifest["summary_verification_status"] = "verified"
+        manifest["summary_verification_detail"] = (
+            "The exact retained files are verified and ready for reusable analysis."
+        )
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        return True
+    except (DeviceCollectionIntegrityError, OSError, ValueError, sqlite3.Error) as exc:
+        manifest[AUTHORITY_MARKER] = authority_manifest_marker(
+            COLLECTED_DEVICE_SELECTION_CONTRACT
+        )
+        manifest["summary_verification_status"] = "conflict"
+        manifest["summary_verification_detail"] = (
+            "The collection completed, but NCT could not verify the retained files for "
+            "analysis. Retry verification locally; the device will not be contacted again."
+        )
+        manifest["summary_verification_error"] = str(exc)[:500]
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        return False
 
 
 def device_collection_directory(run_id: str, config_dir: Path | None = None) -> Path:
@@ -2535,9 +2741,7 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
         "exit_code": exit_code,
         "failure_class": result.get("failure_class"),
     })
-    register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
-                             [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    _finalize_device_collection(run_dir, manifest)
     result["accountability_run_id"] = preview_data["run_id"]
     result["accountability_artifacts"] = artifact_records(preview_data["run_id"], run_dir)
     return result
@@ -2573,9 +2777,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         (run_dir / "stdout.txt").write_text("")
         (run_dir / "stderr.txt").write_text(stderr)
         manifest.update({"status": status, "completed_at": utc_now(), "exit_code": exit_code, "failure_class": failure_class})
-        register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
-                                 [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
-        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        _finalize_device_collection(run_dir, manifest)
         return {**manifest, "stdout": stdout, "stderr": stderr, "scp_command": preview_data["scp_command"], "artifacts": artifact_records(preview_data["run_id"], run_dir)}
     try:
         process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
@@ -2666,9 +2868,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         "command_history_truncated": history_truncated,
         "command_history_artifact": "command-history.txt",
     })
-    register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
-                             [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    _finalize_device_collection(run_dir, manifest)
     return {
         **manifest,
         "stdout": stdout[:MAX_RESPONSE_OUTPUT_CHARS],
@@ -2858,6 +3058,7 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                     "originating_host", "reason", "exit_code", "failure_class",
                     "source_filename", "additional_commands", "remote_temp_created",
                     "remote_cleanup_status", "command_history_status",
+                    "summary_verification_status", "summary_verification_detail",
                 )
             })
         except (OSError, ValueError):
@@ -2882,10 +3083,20 @@ def collection_summary(run_id: str) -> dict:
         manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
         authority = require_available_collection(DB_PATH, run_id, manifest=manifest)
         if authority is None:
-            return device_collection_summary(run_id)
-        from app.device_summary_result import analyze_manual_upload_summary
+            raise DeviceCollectionIncomplete(_unavailable_summary_detail(manifest))
+        from app.device_summary_result import (
+            analyze_collected_device_summary,
+            analyze_manual_upload_summary,
+        )
         try:
-            verified = analyze_manual_upload_summary(DB_PATH, run_id, run_dir)
+            if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT:
+                verified = analyze_manual_upload_summary(DB_PATH, run_id, run_dir)
+            elif authority.get("selection_contract") == COLLECTED_DEVICE_SELECTION_CONTRACT:
+                verified = analyze_collected_device_summary(DB_PATH, run_id, run_dir)
+            else:
+                raise DeviceCollectionIntegrityError(
+                    "Verified device collection uses an unsupported analysis contract"
+                )
         except (DeviceCollectionDeleted, DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
             raise
         except (KeyError, ValueError, RuntimeError, OSError) as exc:
@@ -2895,6 +3106,41 @@ def collection_summary(run_id: str) -> dict:
         return {
             **verified["payload"],
             **verified["source_content"],
+        }
+    except DeviceCollectionDeleted:
+        raise HTTPException(status_code=404, detail="Device collection was deleted") from None
+    except DeviceCollectionIncomplete as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except DeviceCollectionIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
+        raise HTTPException(status_code=404, detail="Device collection was not found") from None
+
+
+@router.post("/{run_id}/retry-summary-verification")
+def retry_summary_verification(run_id: str) -> dict:
+    """Retry local exact-file verification without contacting the source device."""
+    try:
+        run_dir = device_collection_directory(run_id)
+        manifest_path = run_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        authority = get_device_collection_authority(DB_PATH, run_id)
+        if authority is not None and authority["state"] == "deleted":
+            raise DeviceCollectionDeleted("Device collection was deleted")
+        if not _verified_collection_eligible(manifest):
+            raise DeviceCollectionIncomplete(
+                "Only a completed, untruncated SSH collection can be verified"
+            )
+        verified = _finalize_device_collection(run_dir, manifest)
+        if not verified:
+            raise DeviceCollectionIntegrityError(
+                str(manifest.get("summary_verification_detail") or "Verification did not complete")
+            )
+        return {
+            "run_id": run_id,
+            "status": "verified",
+            "network_contacted": False,
+            "detail": manifest["summary_verification_detail"],
         }
     except DeviceCollectionDeleted:
         raise HTTPException(status_code=404, detail="Device collection was deleted") from None

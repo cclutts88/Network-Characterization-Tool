@@ -10,6 +10,7 @@ from app.database import connect_database
 from app.device_collection_authority import (
     AUTHORITY_MARKER,
     DeviceCollectionDeleted,
+    DeviceCollectionIncomplete,
     DeviceCollectionIntegrityError,
     activate_manual_upload_authority,
     authority_manifest_marker,
@@ -189,9 +190,7 @@ def test_deletion_tombstone_blocks_analysis_and_can_retry_file_cleanup(
     assert not run_dir.exists()
 
 
-def test_legacy_cache_writer_cannot_resurrect_collection_deleted_mid_analysis(
-    tmp_path, monkeypatch,
-):
+def test_historical_collection_cannot_enter_retired_analysis_path(tmp_path):
     from app import device_analysis
 
     db_path = tmp_path / "analyzer.db"
@@ -206,20 +205,12 @@ def test_legacy_cache_writer_cannot_resurrect_collection_deleted_mid_analysis(
         "commands": [],
     }))
     (run_dir / "uploaded-router.txt").write_text(CONFIG)
-    original = device_analysis.device_collection_summary
-
-    def calculate(*args, **kwargs):
-        result = original(*args, **kwargs)
-        tombstone_device_collection(db_path, run_id)
-        return result
-
-    monkeypatch.setattr(device_analysis, "device_collection_summary", calculate)
-    with pytest.raises(DeviceCollectionDeleted, match="during analysis"):
-        device_analysis._cached_device_summary(run_id, config_dir, db_path)
-    with connect_database(db_path, read_only=True) as db:
-        assert db.execute(
-            "SELECT COUNT(*) FROM device_collections WHERE run_id = ?", (run_id,)
-        ).fetchone()[0] == 0
+    with pytest.raises(DeviceCollectionIncomplete, match="has not been converted"):
+        device_analysis._device_summary_snapshot(run_id, config_dir, db_path)
+    assert not db_path.exists()
+    tombstone_device_collection(db_path, run_id)
+    with pytest.raises(DeviceCollectionDeleted):
+        device_analysis._device_summary_snapshot(run_id, config_dir, db_path)
 
 
 def test_expected_authority_missing_is_not_treated_as_legacy(tmp_path):
