@@ -38,6 +38,23 @@ def test_system_health_explains_bounded_calculation_status():
     assert "requestId!==analysisRequestId" in html
     assert "analysisDisplayedOffset=data.offset" in html
     assert "analysisOffset=analysisDisplayedOffset+analysisLimit" in html
+    assert "Inputs and source records" in html
+    assert "Source records are provenance, not additional calculation steps" in html
+    assert "It does not inspect source files, determine freshness, mark work stale, or rerun analysis" in html
+    assert "button.textContent='View inputs'" in html
+    assert "detailIdentifier(item.identity)" in html
+    assert "textContent=item.source_kind" not in html
+    assert "source.textContent=`${item.source_kind} · ${item.source_ref}`" in html
+    assert "requestId!==dependencyRequestId" in html
+    assert "requestId!==sourceRequestId" in html
+    assert "button.dataset.analysisInputs=''" in html
+    assert "button.dataset.analysisSources=''" in html
+    assert "'view inputs':['View calculation inputs'" in SHELL_SCRIPT
+    assert "'view source records':['View retained source records'" in SHELL_SCRIPT
+    assert "byId('dependencyRows').replaceChildren();byId('dependencyPage').textContent='Loading declared inputs'" in html
+    assert "byId('dependencyPrevious').disabled=true;byId('dependencyNext').disabled=true" in html
+    assert "byId('sourceRows').replaceChildren();byId('sourcePage').textContent='Loading retained source records'" in html
+    assert "byId('sourcePrevious').disabled=true;byId('sourceNext').disabled=true" in html
     assert "document.body.classList.toggle(side==='personal'?'nct-notes-personal-open':'nct-notes-shared-open',open)" in SESSION_SCRIPT
 
 

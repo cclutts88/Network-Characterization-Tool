@@ -19,6 +19,7 @@ class DerivedResultContract:
     analysis_version: str
     payload_schema_version: int
     parameters: Mapping[str, object]
+    input_kinds: Mapping[str, tuple[str, ...]]
 
 
 NMAP_BASE_ANALYSIS_FAMILY = "nmap_base_analysis"
@@ -59,6 +60,7 @@ SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
         analysis_version=NMAP_BASE_ANALYSIS_VERSION,
         payload_schema_version=NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
         parameters=NMAP_BASE_PARAMETERS,
+        input_kinds=MappingProxyType({"nmap_xml": ("artifact_sha256",)}),
     ),
     NMAP_TOPOLOGY_FAMILY: DerivedResultContract(
         family=NMAP_TOPOLOGY_FAMILY,
@@ -66,6 +68,7 @@ SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
         analysis_version=NMAP_TOPOLOGY_VERSION,
         payload_schema_version=NMAP_TOPOLOGY_PAYLOAD_SCHEMA_VERSION,
         parameters=NMAP_TOPOLOGY_PARAMETERS,
+        input_kinds=MappingProxyType({"nmap_xml": ("artifact_sha256",)}),
     ),
     DEVICE_SUMMARY_FAMILY: DerivedResultContract(
         family=DEVICE_SUMMARY_FAMILY,
@@ -73,5 +76,14 @@ SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
         analysis_version=DEVICE_SUMMARY_VERSION,
         payload_schema_version=DEVICE_SUMMARY_SCHEMA_VERSION,
         parameters=DEVICE_SUMMARY_PARAMETERS,
+        input_kinds=MappingProxyType({
+            "configuration": ("artifact_sha256",),
+            "raw_output": ("artifact_sha256",),
+            "command_history": (
+                "artifact_sha256", "embedded_config_section", "absence_descriptor",
+            ),
+            "manifest_semantics": ("canonical_json_sha256",),
+            "selection_shape": ("canonical_json_sha256",),
+        }),
     ),
 })

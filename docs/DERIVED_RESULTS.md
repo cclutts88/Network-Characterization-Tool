@@ -107,6 +107,30 @@ applies to a different collection. Existing source-byte, authority and provenanc
 remain mandatory whenever a result is consumed. Rolling back to a build whose exact
 contract matches a retained result makes that result Current again without rewriting it.
 
+## Direct inputs and source records
+
+The first dependency view is a read-only drill-down from one saved result. A result is
+the calculation node. Every declared input role is a separate direct edge into that
+calculation, even when two roles use identical bytes. An Artifact Registry observation
+linked to a role is a source encounter that supplied those exact bytes; it is provenance
+for that role, not another calculation dependency.
+
+NCT derives this view from each immutable saved input manifest, its retained input rows
+and exact observation links. It verifies that the computation identity, manifest and
+rows agree before showing them as trustworthy. Input roles and source encounters are
+paged separately, and the interface summarizes descriptor metadata rather than dumping
+full semantic manifests or command text. Missing command history, an embedded history
+section and a dedicated empty history file remain different recorded input types. If an
+observation was deleted, the input remains but the view says that no retained source
+record is linked; NCT does not invent provenance.
+
+This relationship check does not rehash or inspect source files, verify result payload
+bytes, determine freshness, mark anything dirty or schedule rebuilding. The first view
+supports only exact reviewed family, version, output-format and settings combinations;
+unknown or changed contracts are shown as unsupported rather than inferred from familiar
+names or roles. No graph table or data migration is needed,
+so rollback uses the same retained immutable records.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already

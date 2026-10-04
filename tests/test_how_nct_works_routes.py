@@ -34,7 +34,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Automatic compaction remains disabled" in html
     assert "saved reusable analyses as <strong>Current</strong>, <strong>Stale</strong>, or <strong>Unknown</strong>" in html
     assert "Current means only that the saved calculation rules match this build" in html
-    assert "These labels do not delete evidence or automatically rerun analysis" in html
+    assert "These labels and views do not delete evidence or automatically rerun analysis" in html
+    assert "<strong>View inputs</strong> shows the direct inputs declared by one calculation" in html
+    assert "they are provenance, not extra analysis steps" in html
+    assert "does not open or rehash source files" in html
     assert "A dry run reports only" in html
     assert "Nmap scan — active network contact" in html
     assert "password is used only for the short-lived SSH session" in html
