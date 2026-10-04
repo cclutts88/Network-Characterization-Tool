@@ -203,8 +203,32 @@ bounded and read-only.
 
 This first runner assumes one NCT application process for a database. It has no bulk
 requests, cancellation, automatic retries, automatic stale scheduling, cross-process
-leases, progress checkpoints, topology jobs or device-summary jobs. Stop the worker
-before rolling back; older builds ignore the additive job tables.
+leases, progress checkpoints, topology jobs or device-summary jobs.
+
+### Pipeline queue cutover and rollback boundary
+
+The supported-ingestion work moves saved-analysis requests into additive pipeline job,
+request and attempt tables before adding more stage types. At startup, before any worker
+starts, NCT copies any retained legacy job history in one transaction. Job IDs, request
+tokens, attempts, attribution, timing, errors, result links and the frozen calculation
+contract remain exact. Counts, relationships and deterministic content fingerprints must
+match before a migration marker is written. A partial schema, orphan, missing request,
+missing attempt, interrupted copy or mismatched retry chain blocks startup and leaves no
+completed migration.
+
+After a successful copy, database triggers freeze all retained legacy queue tables against
+inserts, updates and deletes. This prevents an old worker claim from publishing a result
+and then marking obsolete queue state complete. Queued replacement attempts remain queued;
+replacement attempts left running are marked Interrupted by normal startup recovery and
+must be explicitly retried. All current routes, claims, retries, status reads and completion
+writes use only the pipeline tables. There are no dual writes or fallback reads.
+
+This cutover is not compatible with an ordinary rollback to older application code. Older
+code cannot see post-cutover requests and its retained queue is deliberately read-only.
+All NCT processes using the database must be stopped and upgraded together. Preserve the
+database, stop every worker, and roll forward if recovery is needed. A future rollback tool
+would have to reconcile post-cutover history explicitly before older code could run; none
+is currently provided.
 
 ## Current limits
 

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -65,7 +66,7 @@ def test_request_tokens_are_idempotent_and_separate_from_job_identity(tmp_path, 
     assert first["job_id"] == repeated["job_id"] == second_request["job_id"]
     assert first["attempt_count"] == 1
     with connect_database(db, read_only=True) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM derived_analysis_job_requests").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_requests").fetchone()[0] == 2
     make_run(db, data, "b" * 32, XML.replace(b"443", b"444"))
     with pytest.raises(DerivedJobConflict, match="different work"):
         enqueue_nmap_base_job(db, "b" * 32, request_token="request-one", requested_by="alice")
@@ -103,14 +104,14 @@ def test_lost_claim_rolls_back_new_result_and_success(tmp_path, queue_only):
     claim = claim_next_derived_job(db)
     with connect_database(db) as connection:
         connection.execute(
-            "UPDATE derived_analysis_job_attempts SET claim_token = 'replacement' WHERE attempt_id = ?",
+            "UPDATE pipeline_job_attempts SET claim_token = 'replacement' WHERE attempt_id = ?",
             (claim["attempt_id"],),
         )
     with pytest.raises(DerivedJobConflict, match="no longer owns|lost its claim"):
         execute_claimed_derived_job(db, claim, path)
     with connect_database(db, read_only=True) as connection:
         assert connection.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
-        assert connection.execute("SELECT state FROM derived_analysis_job_attempts").fetchone()[0] == "running"
+        assert connection.execute("SELECT state FROM pipeline_job_attempts").fetchone()[0] == "running"
 
 
 def test_restart_preserves_queued_and_interrupts_only_running_work(tmp_path, queue_only):
@@ -259,7 +260,7 @@ def test_claim_loss_during_calculation_cannot_publish(tmp_path, queue_only, monk
         parsed = original(content)
         with connect_database(db) as connection:
             connection.execute(
-                "UPDATE derived_analysis_job_attempts SET claim_token = 'other' WHERE attempt_id = ?",
+                "UPDATE pipeline_job_attempts SET claim_token = 'other' WHERE attempt_id = ?",
                 (claim["attempt_id"],),
             )
         return parsed
@@ -354,7 +355,7 @@ def test_status_reads_never_create_storage_and_use_committed_snapshot(tmp_path, 
     writer = connect_database(db)
     try:
         writer.execute("BEGIN IMMEDIATE")
-        writer.execute("UPDATE derived_analysis_job_attempts SET state = 'running'")
+        writer.execute("UPDATE pipeline_job_attempts SET state = 'running'")
         during = list_derived_jobs(db)["items"][0]
         assert during["latest_attempt"]["state"] == "queued"
         writer.commit()
@@ -362,3 +363,335 @@ def test_status_reads_never_create_storage_and_use_committed_snapshot(tmp_path, 
         writer.close()
     after = list_derived_jobs(db)["items"][0]
     assert after["latest_attempt"]["state"] == "running"
+
+
+
+def _create_legacy_queue(db: Path, *, orphan_request: bool = False) -> None:
+    configure_database(db)
+    with connect_database(db) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE derived_analysis_jobs (
+                job_id TEXT PRIMARY KEY,
+                job_key TEXT NOT NULL UNIQUE,
+                job_type TEXT NOT NULL,
+                source_run_id TEXT NOT NULL,
+                source_observation_id TEXT NOT NULL,
+                source_status TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL,
+                source_size_bytes INTEGER NOT NULL,
+                target_family TEXT NOT NULL,
+                target_analysis_version TEXT NOT NULL,
+                target_payload_schema_version INTEGER NOT NULL,
+                target_parameters_json TEXT NOT NULL,
+                target_computation_key TEXT NOT NULL,
+                target_result_id TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                requested_at TEXT NOT NULL
+            );
+            CREATE TABLE derived_analysis_job_requests (
+                request_token TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                request_kind TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                requested_at TEXT NOT NULL
+            );
+            CREATE TABLE derived_analysis_job_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                claim_token TEXT,
+                requested_by TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                outcome TEXT,
+                result_id TEXT,
+                error TEXT,
+                UNIQUE(job_id, attempt_number)
+            );
+            """
+        )
+        states = ("queued", "running", "completed", "failed", "interrupted")
+        for index, state in enumerate(states, start=1):
+            job_id = f"legacy-job-{index}"
+            connection.execute(
+                "INSERT INTO derived_analysis_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id, f"legacy-key-{index}", jobs.JOB_TYPE, f"{index:x}" * 32,
+                    f"legacy-observation-{index}", "completed", f"{index:x}" * 64,
+                    index, "nmap_base_analysis", "nmap-base-analysis:1", 1,
+                    "{}", f"legacy-computation-{index}", f"legacy-result-{index}",
+                    "legacy-operator", f"2030-01-01T00:00:0{index}+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO derived_analysis_job_requests VALUES (?, ?, 'initial', ?, ?)",
+                (
+                    f"legacy-request-{index}",
+                    "missing-job" if orphan_request and index == 1 else job_id,
+                    "legacy-operator", f"2030-01-01T00:00:0{index}+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO derived_analysis_job_attempts VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"legacy-attempt-{index}", job_id, state,
+                    "old-claim" if state == "running" else None,
+                    "legacy-operator", f"2030-01-01T00:00:0{index}+00:00",
+                    f"2030-01-01T00:01:0{index}+00:00" if state != "queued" else None,
+                    f"2030-01-01T00:02:0{index}+00:00" if state in {"completed", "failed", "interrupted"} else None,
+                    "created" if state == "completed" else None,
+                    f"legacy-result-{index}" if state == "completed" else None,
+                    "retained failure" if state in {"failed", "interrupted"} else None,
+                ),
+            )
+        connection.execute(
+            "INSERT INTO derived_analysis_job_requests VALUES (?, ?, 'retry', ?, ?)",
+            ("legacy-retry", "legacy-job-5", "second-operator", "2030-01-02T00:00:00+00:00"),
+        )
+        connection.execute(
+            """INSERT INTO derived_analysis_job_attempts
+               VALUES (?, ?, 2, 'queued', NULL, ?, ?, NULL, NULL, NULL, NULL, NULL)""",
+            ("legacy-attempt-5-retry", "legacy-job-5", "second-operator",
+             "2030-01-02T00:00:00+00:00"),
+        )
+
+
+def _queue_projection(connection, table: str, columns: str, order: str) -> list[tuple]:
+    return connection.execute(f"SELECT {columns} FROM {table} ORDER BY {order}").fetchall()
+
+
+def test_pipeline_migration_preserves_complete_legacy_history_and_freezes_archive(tmp_path):
+    db = tmp_path / "legacy.db"
+    _create_legacy_queue(db)
+    init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        legacy_jobs = _queue_projection(
+            connection, "derived_analysis_jobs", ", ".join(jobs._LEGACY_TABLES["jobs"][1]), "job_id"
+        )
+        migrated_jobs = _queue_projection(
+            connection, "pipeline_jobs", ", ".join(jobs._LEGACY_TABLES["jobs"][1]), "job_id"
+        )
+        legacy_requests = _queue_projection(
+            connection, "derived_analysis_job_requests",
+            ", ".join(jobs._LEGACY_TABLES["requests"][1]), "request_token",
+        )
+        migrated_requests = _queue_projection(
+            connection, "pipeline_job_requests",
+            ", ".join(jobs._LEGACY_TABLES["requests"][1]), "request_token",
+        )
+        legacy_attempts = _queue_projection(
+            connection, "derived_analysis_job_attempts",
+            ", ".join(jobs._LEGACY_TABLES["attempts"][1]), "attempt_id",
+        )
+        migrated_attempts = _queue_projection(
+            connection, "pipeline_job_attempts",
+            ", ".join(jobs._LEGACY_TABLES["attempts"][1]), "attempt_id",
+        )
+        assert migrated_jobs == legacy_jobs
+        assert migrated_requests == legacy_requests
+        assert migrated_attempts == legacy_attempts
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 1
+        output = connection.execute(
+            "SELECT output_kind, output_id FROM pipeline_job_attempts WHERE state = 'completed'"
+        ).fetchone()
+        assert output == ("derived_result", "legacy-result-3")
+
+    assert recover_interrupted_derived_jobs(db) == 1
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT state, claim_token FROM derived_analysis_job_attempts WHERE state = 'running'"
+        ).fetchone() == ("running", "old-claim")
+        assert connection.execute(
+            "SELECT state FROM pipeline_job_attempts WHERE attempt_id = 'legacy-attempt-2'"
+        ).fetchone()[0] == "interrupted"
+
+
+def test_pipeline_migration_rejects_orphans_without_partial_copy(tmp_path):
+    db = tmp_path / "orphan.db"
+    _create_legacy_queue(db, orphan_request=True)
+    with pytest.raises(RuntimeError, match="missing job relationship"):
+        init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_requests").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_attempts").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 0
+
+
+def test_pipeline_migration_rolls_back_mid_copy_and_restarts(tmp_path, monkeypatch):
+    db = tmp_path / "retry.db"
+    _create_legacy_queue(db)
+    original = jobs._projected_rows
+
+    def fail_during_verification(connection, table, columns, order):
+        if table == "pipeline_jobs":
+            raise RuntimeError("injected migration interruption")
+        return original(connection, table, columns, order)
+
+    monkeypatch.setattr(jobs, "_projected_rows", fail_during_verification)
+    with pytest.raises(RuntimeError, match="injected migration interruption"):
+        init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 0
+
+    monkeypatch.setattr(jobs, "_projected_rows", original)
+    init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 5
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 1
+
+
+def test_pipeline_migration_rejects_unmarked_partial_v2_data(tmp_path):
+    db, data = tmp_path / "partial.db", tmp_path / "data"
+    make_run(db, data, "f1" * 16)
+    init_derived_job_storage(db)
+    with connect_database(db) as connection:
+        connection.execute("DELETE FROM pipeline_job_migrations")
+        connection.execute(
+            """INSERT INTO pipeline_jobs (
+                   job_id, job_key, job_type, source_run_id, source_observation_id,
+                   source_status, source_sha256, source_size_bytes, target_family,
+                   target_analysis_version, target_payload_schema_version,
+                   target_parameters_json, target_computation_key, target_result_id,
+                   requested_by, requested_at
+               ) VALUES ('partial', 'partial', 'nmap_base_analysis', ?, 'observation',
+                         'completed', ?, 1, 'family', 'version', 1, '{}', 'key',
+                         'result', 'operator', '2030-01-01T00:00:00+00:00')""",
+            ("f1" * 16, "f" * 64),
+        )
+    with connect_database(db) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        with pytest.raises(RuntimeError, match="without a completed migration marker"):
+            jobs._migrate_legacy_derived_jobs(connection)
+
+
+def test_pipeline_migration_blocks_archive_mutation_and_detects_missing_freeze(tmp_path):
+    db = tmp_path / "mutated.db"
+    _create_legacy_queue(db)
+    init_derived_job_storage(db)
+    with pytest.raises(sqlite3.IntegrityError, match="legacy saved-analysis queue is frozen"):
+        with connect_database(db) as connection:
+            connection.execute(
+                "UPDATE derived_analysis_job_attempts SET error = 'changed after migration' "
+                "WHERE attempt_id = 'legacy-attempt-4'"
+            )
+    with connect_database(db) as connection:
+        connection.execute("DROP TRIGGER pipeline_freeze_legacy_queue_attempts_update")
+    with connect_database(db) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        with pytest.raises(RuntimeError, match="freeze triggers are incomplete"):
+            jobs._migrate_legacy_derived_jobs(connection)
+
+
+
+def test_pipeline_migration_repeats_after_database_file_replacement(tmp_path):
+    db = tmp_path / "replaced.db"
+    init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 1
+    replacement = tmp_path / "replacement.db"
+    _create_legacy_queue(replacement)
+    replacement.replace(db)
+    init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 5
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_requests").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_attempts").fetchone()[0] == 6
+
+
+
+def test_pipeline_migration_rejects_missing_legacy_history_table(tmp_path):
+    db = tmp_path / "missing-table.db"
+    _create_legacy_queue(db)
+    with connect_database(db) as connection:
+        connection.execute("DROP TABLE derived_analysis_job_attempts")
+    with pytest.raises(RuntimeError, match="incomplete schema; missing attempts"):
+        init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 0
+
+
+def test_pipeline_migration_rejects_job_with_missing_attempt_history(tmp_path):
+    db = tmp_path / "missing-attempt.db"
+    _create_legacy_queue(db)
+    with connect_database(db) as connection:
+        connection.execute(
+            "DELETE FROM derived_analysis_job_attempts WHERE job_id = 'legacy-job-1'"
+        )
+    with pytest.raises(RuntimeError, match="legacy-job-1 has no execution attempt"):
+        init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_attempts").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 0
+
+
+def test_pipeline_migration_rejects_job_with_missing_initial_request(tmp_path):
+    db = tmp_path / "missing-request.db"
+    _create_legacy_queue(db)
+    with connect_database(db) as connection:
+        connection.execute(
+            "DELETE FROM derived_analysis_job_requests WHERE job_id = 'legacy-job-1'"
+        )
+    with pytest.raises(RuntimeError, match="legacy-job-1 has no initial request"):
+        init_derived_job_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_requests").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM pipeline_job_migrations").fetchone()[0] == 0
+
+
+
+def test_pipeline_migration_freezes_every_legacy_queue_table(tmp_path):
+    db = tmp_path / "frozen.db"
+    _create_legacy_queue(db)
+    init_derived_job_storage(db)
+    operations = (
+        "INSERT INTO derived_analysis_job_requests VALUES ('late', 'legacy-job-1', 'initial', 'old', '2030-01-03T00:00:00+00:00')",
+        "UPDATE derived_analysis_jobs SET source_status = 'failed' WHERE job_id = 'legacy-job-1'",
+        "DELETE FROM derived_analysis_job_attempts WHERE attempt_id = 'legacy-attempt-1'",
+    )
+    for statement in operations:
+        with pytest.raises(sqlite3.IntegrityError, match="legacy saved-analysis queue is frozen"):
+            with connect_database(db) as connection:
+                connection.execute(statement)
+    with connect_database(db, read_only=True) as connection:
+        triggers = connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+            "AND name LIKE 'pipeline_freeze_legacy_queue%'"
+        ).fetchone()[0]
+        assert triggers == 9
+
+
+def test_stale_legacy_worker_cannot_publish_when_queue_completion_is_frozen(tmp_path):
+    db = tmp_path / "stale-worker.db"
+    _create_legacy_queue(db)
+    init_derived_job_storage(db)
+    with pytest.raises(sqlite3.IntegrityError, match="legacy saved-analysis queue is frozen"):
+        with connect_database(db) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """INSERT INTO derived_results VALUES (
+                       'stale-publication', 'stale-computation', 'test-family', 'test:1',
+                       1, '{}', '[]', '{}', ?, '2030-01-04T00:00:00+00:00'
+                   )""",
+                (jobs.hashlib.sha256(b"{}").hexdigest(),),
+            )
+            connection.execute(
+                """UPDATE derived_analysis_job_attempts
+                   SET state = 'completed', finished_at = '2030-01-04T00:00:00+00:00'
+                   WHERE attempt_id = 'legacy-attempt-2'"""
+            )
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT 1 FROM derived_results WHERE result_id = 'stale-publication'"
+        ).fetchone() is None
+        assert connection.execute(
+            "SELECT state, claim_token FROM derived_analysis_job_attempts "
+            "WHERE attempt_id = 'legacy-attempt-2'"
+        ).fetchone() == ("running", "old-claim")

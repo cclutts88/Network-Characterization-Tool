@@ -87,34 +87,37 @@ def init_derived_job_storage(db_path: Path) -> None:
     with connect_database(db_path) as db:
         db.executescript(
             """
-            CREATE TABLE IF NOT EXISTS derived_analysis_jobs (
+            CREATE TABLE IF NOT EXISTS pipeline_jobs (
                 job_id TEXT PRIMARY KEY,
                 job_key TEXT NOT NULL UNIQUE,
-                job_type TEXT NOT NULL CHECK(job_type = 'nmap_base_analysis'),
-                source_run_id TEXT NOT NULL,
+                job_type TEXT NOT NULL,
+                source_run_id TEXT,
                 source_observation_id TEXT NOT NULL,
                 source_status TEXT NOT NULL,
                 source_sha256 TEXT NOT NULL,
                 source_size_bytes INTEGER NOT NULL CHECK(source_size_bytes >= 0),
-                target_family TEXT NOT NULL,
-                target_analysis_version TEXT NOT NULL,
-                target_payload_schema_version INTEGER NOT NULL,
-                target_parameters_json TEXT NOT NULL,
-                target_computation_key TEXT NOT NULL,
-                target_result_id TEXT NOT NULL,
+                target_family TEXT,
+                target_analysis_version TEXT,
+                target_payload_schema_version INTEGER,
+                target_parameters_json TEXT,
+                target_computation_key TEXT,
+                target_result_id TEXT,
+                source_kind TEXT NOT NULL DEFAULT 'scan_run',
+                source_ref TEXT,
+                definition_json TEXT NOT NULL DEFAULT '{}',
                 requested_by TEXT NOT NULL,
                 requested_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS derived_analysis_job_requests (
+            CREATE TABLE IF NOT EXISTS pipeline_job_requests (
                 request_token TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
+                job_id TEXT NOT NULL REFERENCES pipeline_jobs(job_id) ON DELETE RESTRICT,
                 request_kind TEXT NOT NULL CHECK(request_kind IN ('initial', 'retry')),
                 requested_by TEXT NOT NULL,
                 requested_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS derived_analysis_job_attempts (
+            CREATE TABLE IF NOT EXISTS pipeline_job_attempts (
                 attempt_id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
+                job_id TEXT NOT NULL REFERENCES pipeline_jobs(job_id) ON DELETE RESTRICT,
                 attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),
                 state TEXT NOT NULL CHECK(state IN (
                     'queued', 'running', 'completed', 'failed', 'interrupted'
@@ -126,18 +129,273 @@ def init_derived_job_storage(db_path: Path) -> None:
                 finished_at TEXT,
                 outcome TEXT CHECK(outcome IS NULL OR outcome IN ('created', 'reused')),
                 result_id TEXT,
+                output_kind TEXT,
+                output_id TEXT,
                 error TEXT,
                 UNIQUE(job_id, attempt_number)
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS derived_job_one_active_attempt
-                ON derived_analysis_job_attempts(job_id)
+            CREATE UNIQUE INDEX IF NOT EXISTS pipeline_job_one_active_attempt
+                ON pipeline_job_attempts(job_id)
                 WHERE state IN ('queued', 'running');
-            CREATE INDEX IF NOT EXISTS derived_job_attempt_queue
-                ON derived_analysis_job_attempts(state, requested_at, attempt_id);
-            CREATE INDEX IF NOT EXISTS derived_job_run_lookup
-                ON derived_analysis_jobs(source_run_id, requested_at DESC);
+            CREATE INDEX IF NOT EXISTS pipeline_job_attempt_queue
+                ON pipeline_job_attempts(state, requested_at, attempt_id);
+            CREATE INDEX IF NOT EXISTS pipeline_job_run_lookup
+                ON pipeline_jobs(source_run_id, requested_at DESC);
+            CREATE INDEX IF NOT EXISTS pipeline_job_source_lookup
+                ON pipeline_jobs(source_kind, source_ref, requested_at DESC);
+            CREATE TABLE IF NOT EXISTS pipeline_job_migrations (
+                migration_id TEXT PRIMARY KEY,
+                legacy_jobs_count INTEGER NOT NULL,
+                legacy_requests_count INTEGER NOT NULL,
+                legacy_attempts_count INTEGER NOT NULL,
+                legacy_jobs_digest TEXT NOT NULL,
+                legacy_requests_digest TEXT NOT NULL,
+                legacy_attempts_digest TEXT NOT NULL,
+                completed_at TEXT NOT NULL
+            );
             """
         )
+        db.execute("BEGIN IMMEDIATE")
+        _migrate_legacy_derived_jobs(db)
+
+
+_LEGACY_MIGRATION_ID = "derived-analysis-jobs-to-pipeline-v1"
+_LEGACY_TABLES = {
+    "jobs": (
+        "derived_analysis_jobs",
+        ("job_id", "job_key", "job_type", "source_run_id",
+         "source_observation_id", "source_status", "source_sha256",
+         "source_size_bytes", "target_family", "target_analysis_version",
+         "target_payload_schema_version", "target_parameters_json",
+         "target_computation_key", "target_result_id", "requested_by",
+         "requested_at"),
+        "job_id",
+    ),
+    "requests": (
+        "derived_analysis_job_requests",
+        ("request_token", "job_id", "request_kind", "requested_by",
+         "requested_at"),
+        "request_token",
+    ),
+    "attempts": (
+        "derived_analysis_job_attempts",
+        ("attempt_id", "job_id", "attempt_number", "state",
+         "claim_token", "requested_by", "requested_at", "started_at",
+         "finished_at", "outcome", "result_id", "error"),
+        "attempt_id",
+    ),
+}
+
+
+def _table_exists(db: sqlite3.Connection, name: str) -> bool:
+    return db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone() is not None
+
+
+def _projected_rows(
+    db: sqlite3.Connection, table: str, columns: tuple[str, ...], order: str,
+) -> list[tuple]:
+    if not _table_exists(db, table):
+        return []
+    available = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+    if not set(columns).issubset(available):
+        raise RuntimeError(f"Legacy queue table {table} has an unexpected schema")
+    selected = ", ".join(columns)
+    return db.execute(f"SELECT {selected} FROM {table} ORDER BY {order}").fetchall()
+
+
+def _rows_digest(rows: list[tuple]) -> str:
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update(_canonical_json(list(row)).encode())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _legacy_snapshot(db: sqlite3.Connection) -> dict[str, tuple[list[tuple], str]]:
+    present = {
+        label: _table_exists(db, table)
+        for label, (table, _columns, _order) in _LEGACY_TABLES.items()
+    }
+    if any(present.values()) and not all(present.values()):
+        missing = ", ".join(label for label, available in present.items() if not available)
+        raise RuntimeError(
+            f"Legacy saved-analysis queue has an incomplete schema; missing {missing}"
+        )
+    snapshot = {}
+    for label, (table, columns, order) in _LEGACY_TABLES.items():
+        rows = _projected_rows(db, table, columns, order)
+        snapshot[label] = (rows, _rows_digest(rows))
+    return snapshot
+
+
+def _validate_legacy_job_histories(
+    jobs: list[tuple], requests: list[tuple], attempts: list[tuple],
+) -> None:
+    requests_by_job: dict[str, list[tuple]] = {}
+    attempts_by_job: dict[str, list[tuple]] = {}
+    for row in requests:
+        requests_by_job.setdefault(row[1], []).append(row)
+    for row in attempts:
+        attempts_by_job.setdefault(row[1], []).append(row)
+    for job in jobs:
+        job_id = job[0]
+        job_requests = requests_by_job.get(job_id, [])
+        job_attempts = sorted(attempts_by_job.get(job_id, []), key=lambda row: row[2])
+        initial = [row for row in job_requests if row[2] == "initial"]
+        retries = [row for row in job_requests if row[2] == "retry"]
+        if not initial:
+            raise RuntimeError(f"Legacy saved-analysis job {job_id} has no initial request")
+        if not job_attempts:
+            raise RuntimeError(f"Legacy saved-analysis job {job_id} has no execution attempt")
+        numbers = [int(row[2]) for row in job_attempts]
+        if numbers != list(range(1, len(job_attempts) + 1)):
+            raise RuntimeError(
+                f"Legacy saved-analysis job {job_id} has an incomplete attempt sequence"
+            )
+        first = job_attempts[0]
+        if not any(row[3] == first[5] and row[4] == first[6] for row in initial):
+            raise RuntimeError(
+                f"Legacy saved-analysis job {job_id} initial request does not match its first attempt"
+            )
+        retry_events = sorted((row[3], row[4]) for row in retries)
+        attempt_events = sorted((row[5], row[6]) for row in job_attempts[1:])
+        if retry_events != attempt_events:
+            raise RuntimeError(
+                f"Legacy saved-analysis job {job_id} retry history does not match its attempts"
+            )
+
+
+_LEGACY_FREEZE_TRIGGER_PREFIX = "pipeline_freeze_legacy_queue"
+
+
+def _legacy_freeze_triggers() -> list[tuple[str, str, str]]:
+    return [
+        (f"{_LEGACY_FREEZE_TRIGGER_PREFIX}_{label}_{action.lower()}", table, action)
+        for label, (table, _columns, _order) in _LEGACY_TABLES.items()
+        for action in ("INSERT", "UPDATE", "DELETE")
+    ]
+
+
+def _freeze_legacy_archive(db: sqlite3.Connection) -> None:
+    if not all(_table_exists(db, item[0]) for item in _LEGACY_TABLES.values()):
+        return
+    for name, table, action in _legacy_freeze_triggers():
+        db.execute(
+            f"""CREATE TRIGGER {name}
+                BEFORE {action} ON {table}
+                BEGIN
+                    SELECT RAISE(ABORT,
+                        'legacy saved-analysis queue is frozen after pipeline migration');
+                END"""
+        )
+
+
+def _validate_legacy_freeze(db: sqlite3.Connection) -> None:
+    legacy_present = all(_table_exists(db, item[0]) for item in _LEGACY_TABLES.values())
+    expected = {item[0] for item in _legacy_freeze_triggers()} if legacy_present else set()
+    retained = {
+        row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE ?",
+            (f"{_LEGACY_FREEZE_TRIGGER_PREFIX}%",),
+        )
+    }
+    if retained != expected:
+        raise RuntimeError("Legacy saved-analysis queue freeze triggers are incomplete")
+
+
+def _validate_frozen_legacy_archive(db: sqlite3.Connection, marker: tuple) -> None:
+    snapshot = _legacy_snapshot(db)
+    expected_counts = marker[:3]
+    expected_digests = marker[3:]
+    labels = ("jobs", "requests", "attempts")
+    actual_counts = tuple(len(snapshot[label][0]) for label in labels)
+    actual_digests = tuple(snapshot[label][1] for label in labels)
+    if actual_counts != expected_counts or actual_digests != expected_digests:
+        raise RuntimeError(
+            "The frozen legacy saved-analysis queue changed after pipeline migration"
+        )
+    _validate_legacy_freeze(db)
+
+
+def _migrate_legacy_derived_jobs(db: sqlite3.Connection) -> None:
+    marker = db.execute(
+        """SELECT legacy_jobs_count, legacy_requests_count, legacy_attempts_count,
+                  legacy_jobs_digest, legacy_requests_digest, legacy_attempts_digest
+           FROM pipeline_job_migrations WHERE migration_id = ?""",
+        (_LEGACY_MIGRATION_ID,),
+    ).fetchone()
+    if marker is not None:
+        _validate_frozen_legacy_archive(db, marker)
+        return
+
+    for table in ("pipeline_job_requests", "pipeline_job_attempts", "pipeline_jobs"):
+        if db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None:
+            raise RuntimeError(
+                "Pipeline job storage contains data without a completed migration marker"
+            )
+
+    snapshot = _legacy_snapshot(db)
+    jobs = snapshot["jobs"][0]
+    requests = snapshot["requests"][0]
+    attempts = snapshot["attempts"][0]
+    job_ids = {row[0] for row in jobs}
+    if any(row[1] not in job_ids for row in requests):
+        raise RuntimeError("Legacy saved-analysis requests contain a missing job relationship")
+    if any(row[1] not in job_ids for row in attempts):
+        raise RuntimeError("Legacy saved-analysis attempts contain a missing job relationship")
+    _validate_legacy_job_histories(jobs, requests, attempts)
+
+    if jobs:
+        db.executemany(
+            """INSERT INTO pipeline_jobs (
+                   job_id, job_key, job_type, source_run_id, source_observation_id,
+                   source_status, source_sha256, source_size_bytes, target_family,
+                   target_analysis_version, target_payload_schema_version,
+                   target_parameters_json, target_computation_key, target_result_id,
+                   source_kind, source_ref, definition_json, requested_by, requested_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                         'scan_run', ?, '{}', ?, ?)""",
+            [row[:14] + (row[3],) + row[14:] for row in jobs],
+        )
+    if requests:
+        db.executemany(
+            """INSERT INTO pipeline_job_requests
+                   (request_token, job_id, request_kind, requested_by, requested_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            requests,
+        )
+    if attempts:
+        db.executemany(
+            """INSERT INTO pipeline_job_attempts (
+                   attempt_id, job_id, attempt_number, state, claim_token,
+                   requested_by, requested_at, started_at, finished_at,
+                   outcome, result_id, error, output_kind, output_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [row + (("derived_result" if row[10] else None), row[10]) for row in attempts],
+        )
+
+    projections = {
+        "jobs": ("pipeline_jobs", _LEGACY_TABLES["jobs"][1], "job_id"),
+        "requests": ("pipeline_job_requests", _LEGACY_TABLES["requests"][1], "request_token"),
+        "attempts": ("pipeline_job_attempts", _LEGACY_TABLES["attempts"][1], "attempt_id"),
+    }
+    for label, (table, columns, order) in projections.items():
+        copied = _projected_rows(db, table, columns, order)
+        if copied != snapshot[label][0]:
+            raise RuntimeError(f"Legacy saved-analysis {label} did not copy exactly")
+
+    _freeze_legacy_archive(db)
+    _validate_legacy_freeze(db)
+    db.execute(
+        """INSERT INTO pipeline_job_migrations VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            _LEGACY_MIGRATION_ID, len(jobs), len(requests), len(attempts),
+            snapshot["jobs"][1], snapshot["requests"][1],
+            snapshot["attempts"][1], utc_now(),
+        ),
+    )
 
 
 def _source_snapshot(db: sqlite3.Connection, run_id: str) -> dict:
@@ -196,12 +454,12 @@ def _job_dict(db: sqlite3.Connection, row) -> dict:
     latest = db.execute(
         """SELECT attempt_id, attempt_number, state, requested_by, requested_at,
                   started_at, finished_at, outcome, result_id, error
-           FROM derived_analysis_job_attempts WHERE job_id = ?
+           FROM pipeline_job_attempts WHERE job_id = ?
            ORDER BY attempt_number DESC LIMIT 1""",
         (row[0],),
     ).fetchone()
     attempts = db.execute(
-        "SELECT COUNT(*) FROM derived_analysis_job_attempts WHERE job_id = ?", (row[0],)
+        "SELECT COUNT(*) FROM pipeline_job_attempts WHERE job_id = ?", (row[0],)
     ).fetchone()[0]
     return {
         "job_id": row[0], "job_type": row[1], "source_run_id": row[2],
@@ -232,49 +490,49 @@ def enqueue_nmap_base_job(
         db.execute("BEGIN IMMEDIATE")
         frozen = _source_snapshot(db, run_id)
         prior = db.execute(
-            "SELECT job_id, request_kind FROM derived_analysis_job_requests WHERE request_token = ?",
+            "SELECT job_id, request_kind FROM pipeline_job_requests WHERE request_token = ?",
             (token,),
         ).fetchone()
         if prior is not None:
             job = db.execute(
-                f"SELECT {_JOB_COLUMNS} FROM derived_analysis_jobs WHERE job_id = ?", (prior[0],)
+                f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (prior[0],)
             ).fetchone()
             if job is None or prior[1] != "initial" or job[2] != run_id or job[3] != frozen["source_observation_id"]:
                 raise DerivedJobConflict("That request token is already used for different work")
             return _job_dict(db, job)
         existing = db.execute(
-            f"SELECT {_JOB_COLUMNS} FROM derived_analysis_jobs WHERE job_key = ?",
+            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_key = ?",
             (frozen["job_key"],),
         ).fetchone()
         if existing is None:
             job_id = f"analysis_job_{uuid.uuid4().hex}"
             db.execute(
-                """INSERT INTO derived_analysis_jobs (
+                """INSERT INTO pipeline_jobs (
                        job_id, job_key, job_type, source_run_id, source_observation_id,
                        source_status, source_sha256, source_size_bytes, target_family,
                        target_analysis_version, target_payload_schema_version,
                        target_parameters_json, target_computation_key, target_result_id,
-                       requested_by, requested_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       source_kind, source_ref, definition_json, requested_by, requested_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scan_run', ?, '{}', ?, ?)""",
                 (job_id, frozen["job_key"], frozen["job_type"], run_id,
                  frozen["source_observation_id"], frozen["source_status"],
                  frozen["source_sha256"], frozen["source_size_bytes"],
                  frozen["target_family"], frozen["target_analysis_version"],
                  frozen["target_payload_schema_version"], frozen["target_parameters_json"],
                  frozen["target_computation_key"], frozen["target_result_id"],
-                 requested_by, now),
+                 run_id, requested_by, now),
             )
             db.execute(
-                """INSERT INTO derived_analysis_job_attempts (
+                """INSERT INTO pipeline_job_attempts (
                        attempt_id, job_id, attempt_number, state, requested_by, requested_at
                    ) VALUES (?, ?, 1, 'queued', ?, ?)""",
                 (f"analysis_attempt_{uuid.uuid4().hex}", job_id, requested_by, now),
             )
             existing = db.execute(
-                f"SELECT {_JOB_COLUMNS} FROM derived_analysis_jobs WHERE job_id = ?", (job_id,)
+                f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (job_id,)
             ).fetchone()
         db.execute(
-            """INSERT INTO derived_analysis_job_requests (
+            """INSERT INTO pipeline_job_requests (
                    request_token, job_id, request_kind, requested_by, requested_at
                ) VALUES (?, ?, 'initial', ?, ?)""",
             (token, existing[0], requested_by, now),
@@ -293,12 +551,12 @@ def retry_derived_job(
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         job = db.execute(
-            f"SELECT {_JOB_COLUMNS} FROM derived_analysis_jobs WHERE job_id = ?", (job_id,)
+            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (job_id,)
         ).fetchone()
         if job is None:
             raise KeyError("Saved-analysis job not found")
         prior = db.execute(
-            "SELECT job_id, request_kind FROM derived_analysis_job_requests WHERE request_token = ?",
+            "SELECT job_id, request_kind FROM pipeline_job_requests WHERE request_token = ?",
             (token,),
         ).fetchone()
         if prior is not None:
@@ -306,7 +564,7 @@ def retry_derived_job(
                 raise DerivedJobConflict("That request token is already used for different work")
             return _job_dict(db, job)
         latest = db.execute(
-            """SELECT attempt_number, state FROM derived_analysis_job_attempts
+            """SELECT attempt_number, state FROM pipeline_job_attempts
                WHERE job_id = ? ORDER BY attempt_number DESC LIMIT 1""",
             (job_id,),
         ).fetchone()
@@ -314,13 +572,13 @@ def retry_derived_job(
             raise DerivedJobConflict("Only failed or interrupted work can be retried")
         attempt_id = f"analysis_attempt_{uuid.uuid4().hex}"
         db.execute(
-            """INSERT INTO derived_analysis_job_attempts (
+            """INSERT INTO pipeline_job_attempts (
                    attempt_id, job_id, attempt_number, state, requested_by, requested_at
                ) VALUES (?, ?, ?, 'queued', ?, ?)""",
             (attempt_id, job_id, int(latest[0]) + 1, requested_by, now),
         )
         db.execute(
-            """INSERT INTO derived_analysis_job_requests (
+            """INSERT INTO pipeline_job_requests (
                    request_token, job_id, request_kind, requested_by, requested_at
                ) VALUES (?, ?, 'retry', ?, ?)""",
             (token, job_id, requested_by, now),
@@ -337,13 +595,13 @@ def claim_next_derived_job(db_path: Path) -> dict | None:
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
-            """SELECT attempt_id, job_id FROM derived_analysis_job_attempts
+            """SELECT attempt_id, job_id FROM pipeline_job_attempts
                WHERE state = 'queued' ORDER BY requested_at, attempt_id LIMIT 1"""
         ).fetchone()
         if row is None:
             return None
         changed = db.execute(
-            """UPDATE derived_analysis_job_attempts
+            """UPDATE pipeline_job_attempts
                SET state = 'running', claim_token = ?, started_at = ?
                WHERE attempt_id = ? AND state = 'queued'""",
             (claim, now, row[0]),
@@ -370,8 +628,8 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
                       job.target_family, job.target_analysis_version,
                       job.target_payload_schema_version, job.target_parameters_json,
                       job.target_computation_key, job.target_result_id
-               FROM derived_analysis_jobs job
-               JOIN derived_analysis_job_attempts attempt ON attempt.job_id = job.job_id
+               FROM pipeline_jobs job
+               JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
                WHERE job.job_id = ? AND attempt.attempt_id = ?
                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
             (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
@@ -399,7 +657,7 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
     def guard(db: sqlite3.Connection) -> None:
         source_guard(db)
         owned = db.execute(
-            """SELECT 1 FROM derived_analysis_job_attempts
+            """SELECT 1 FROM pipeline_job_attempts
                WHERE attempt_id = ? AND job_id = ? AND state = 'running' AND claim_token = ?""",
             (claim["attempt_id"], claim["job_id"], claim["claim_token"]),
         ).fetchone()
@@ -408,11 +666,12 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
 
     def finalize(db: sqlite3.Connection, created: bool) -> None:
         changed = db.execute(
-            """UPDATE derived_analysis_job_attempts
-               SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?, error = NULL
+            """UPDATE pipeline_job_attempts
+               SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?,
+                   output_kind = 'derived_result', output_id = ?, error = NULL
                WHERE attempt_id = ? AND job_id = ? AND state = 'running' AND claim_token = ?""",
-            (utc_now(), "created" if created else "reused", row[11], claim["attempt_id"],
-             claim["job_id"], claim["claim_token"]),
+            (utc_now(), "created" if created else "reused", row[11], row[11],
+             claim["attempt_id"], claim["job_id"], claim["claim_token"]),
         ).rowcount
         if changed != 1:
             raise DerivedJobConflict("The saved-analysis worker lost its claim")
@@ -434,7 +693,7 @@ def fail_claimed_derived_job(db_path: Path, claim: dict, error: Exception) -> No
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         db.execute(
-            """UPDATE derived_analysis_job_attempts
+            """UPDATE pipeline_job_attempts
                SET state = 'failed', finished_at = ?, error = ?
                WHERE attempt_id = ? AND job_id = ? AND state = 'running' AND claim_token = ?""",
             (utc_now(), message[:2000], claim["attempt_id"], claim["job_id"], claim["claim_token"]),
@@ -449,7 +708,7 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
         run_id = None
         with connect_database(db_path, read_only=True) as db:
             found = db.execute(
-                "SELECT source_run_id FROM derived_analysis_jobs WHERE job_id = ?", (claim["job_id"],)
+                "SELECT source_run_id FROM pipeline_jobs WHERE job_id = ?", (claim["job_id"],)
             ).fetchone()
             run_id = found[0] if found else None
         if not run_id:
@@ -475,7 +734,7 @@ def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
             if not stop.is_set():
                 with connect_database(path, read_only=True) as db:
                     queued = db.execute(
-                        "SELECT 1 FROM derived_analysis_job_attempts WHERE state = 'queued' LIMIT 1"
+                        "SELECT 1 FROM pipeline_job_attempts WHERE state = 'queued' LIMIT 1"
                     ).fetchone()
                 if queued:
                     start_derived_job_worker(path, data_dir)
@@ -511,7 +770,7 @@ def recover_interrupted_derived_jobs(db_path: Path) -> int:
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         return db.execute(
-            """UPDATE derived_analysis_job_attempts
+            """UPDATE pipeline_job_attempts
                SET state = 'interrupted', finished_at = ?,
                    error = 'Application stopped while this attempt was running'
                WHERE state = 'running'""",
@@ -528,14 +787,14 @@ def list_derived_jobs(db_path: Path, *, limit: int = 25, offset: int = 0) -> dic
     with connect_database(db_path, read_only=True) as db:
         db.execute("BEGIN")
         available = db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'derived_analysis_jobs'"
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
         ).fetchone()
         if available is None:
             return {"items": [], "total": 0, "limit": limit, "offset": offset,
                     "has_more": False}
-        total = db.execute("SELECT COUNT(*) FROM derived_analysis_jobs").fetchone()[0]
+        total = db.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0]
         rows = db.execute(
-            f"""SELECT {_JOB_COLUMNS} FROM derived_analysis_jobs
+            f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
                 ORDER BY requested_at DESC, job_id DESC LIMIT ? OFFSET ?""",
             (limit, offset),
         ).fetchall()
@@ -551,7 +810,7 @@ def scan_run_job_statuses(db_path: Path, run_ids: list[str], data_dir: Path) -> 
     with connect_database(db_path, read_only=True) as db:
         db.execute("BEGIN")
         jobs_available = db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'derived_analysis_jobs'"
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
         ).fetchone() is not None
         for run_id in run_ids:
             try:
@@ -564,7 +823,7 @@ def scan_run_job_statuses(db_path: Path, run_ids: list[str], data_dir: Path) -> 
             row = None
             if jobs_available:
                 row = db.execute(
-                    f"""SELECT {_JOB_COLUMNS} FROM derived_analysis_jobs
+                    f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
                         WHERE source_run_id = ? ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
                     (run_id,),
                 ).fetchone()

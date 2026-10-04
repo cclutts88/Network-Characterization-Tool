@@ -137,6 +137,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 persistent analysis jobs | Begin with bulk rebuilding from saved-version groups and automatic stale scheduling | Begin with one explicitly requested durable job for the current Nmap base analysis of one authoritative finalized scan encounter | A version group can contain several encounters, an old result does not by itself authorize current processing, and bulk/automatic rebuilding needs dependency selection, batching, cancellation and partial-success rules that are not yet reviewed | Resolve the exact run, observation, digest, size and current calculation contract on the server; keep request identity separate from calculation reuse and encounter provenance; use durable attempt history, restart recovery, short atomic claims, source/authority rechecks and atomic job-result completion. Initially exclude topology, device summaries, historical unregistered files, bulk requests, cancellation, automatic retries and automatic stale scheduling. This is a bounded Step 10 implementation and an early limited Step 11 runner |
 | 2026-10-03 | Scan History subnet grouping | Keep the global newest-25 record window and page older records outside subnet dropdowns | Build a read-only catalog across retained scan metadata, group by each exact recorded canonical CIDR, and page scan rows inside that subnet's dropdown | Operators could not find older scans after global history paging, and Saved Network IDs could split the same subnet after rename, archive or recreation | This is a user-directed presentation and pagination correction, not canonical identity merging. Different prefixes stay distinct; scope, Saved Network snapshots, attribution, provenance and exact run actions remain per scan. Multi-subnet scans may appear under each exact recorded subnet with an explicit cross-target note. Host lists and invalid or missing legacy targets remain honestly labelled fallback groups. Catalog and row requests stay bounded and never open XML or artifact files |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
+| 2026-10-04 | Phase 1 supported ingestion completion | Treat separate completed foundation features as a complete ingestion pipeline | Finish one durable staged pipeline for currently supported Nmap and device evidence; keep scope-free calculations separate from scoped observations and require explicit scope where needed | Existing operator actions use different persistence, retry and status models, and planned passive collectors or physical-device reconciliation would expand this gate without a safe identity contract | Missing scope is Needs scope, never inferred. Preserve every completed stage when another fails. Generalize the existing single-process worker through additive, preservation-tested pipeline tables, then connect intake, current-state/Last Seen receipts and acceptance benchmarks. The copied legacy queue becomes a trigger-enforced read-only audit archive. All processes must cut over together; ordinary rollback is unsafe because older code cannot see post-cutover work and cannot write the frozen queue. Historical adoption stays explicit and passive collectors remain later phases. See `docs/DERIVED_RESULTS.md` |
 | 2026-10-04 | Phase 1 storage | Enable optional exact-content compaction after verified backfill | Add a separate administrator-confirmed action that replaces only reviewed exact copies with hard links to canonical content while preserving every logical evidence path and record | Independent adversarial review reproduced unsafe crash, journal, queue, path-substitution, recovery-integrity and confirmation-ownership cases during implementation; each case was corrected and retained as a regression | This is single-process maintenance. No second NCT process or external evidence edit may use the data directory during inspection, compaction or recovery. Files must share a filesystem and compatible security metadata; shared paths use canonical filesystem timestamps while recorded evidence timestamps remain. A durable recovery block stops all guarded evidence changes when safe repair cannot be proved. Estimated and measured savings are reported separately; automatic pruning stays disabled. See `docs/EXACT_CONTENT_COMPACTION.md` |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -579,6 +580,21 @@ foundational changes.
 # PHASE 1 — Persistent Data & Analysis Engine v2
 
 **Purpose:** Stop repeated analysis and create the foundation for all later features.
+
+2026-10-04 supported-ingestion completion start: finish one durable, operator-visible
+pipeline for the evidence sources NCT currently supports: manual and automated Nmap
+evidence, manual device uploads, and eligible completed device collections. Completion
+means each supported source has a clear retained-source status, any required explicit
+Network Scope decision, durable processing with restart-safe pending/failed/retry
+states, verified normalized or reusable outputs, and direct evidence receipts in the UI.
+Scope-free calculations and scoped observations remain separate processing stages.
+Missing scope must remain **Needs scope** and must never be inferred. Historical adoption
+remains explicit and non-destructive. Passive collectors and physical-device identity are
+later roadmap phases and are outside this Phase 1 completion boundary. The first gate is
+to generalize the reviewed saved-analysis worker without weakening its existing authority,
+claim, publication, or restart safeguards; subsequent gates connect intake, normalized
+device evidence, current-state/Last Seen views, automatic affected-work selection, and
+acceptance benchmarks.
 
 ## Steps
 
@@ -1207,6 +1223,26 @@ foundational changes.
       is development-ready on the foundation branch only. The novice operator passed the
       completed/reused workflow and restart/retry guidance. Queued, interrupted and failed
       transitions are covered by deterministic tests but were not staged as live examples.
+
+
+   2026-10-04 additive pipeline-queue migration completion: saved Nmap base-analysis
+   jobs now run entirely from additive pipeline job, request and attempt tables. Startup
+   copies any legacy queue in one transaction before workers start, preserving exact IDs,
+   request tokens, attempts, attribution, timing, errors, output links and frozen contracts.
+   Deterministic fingerprints, relationship and per-job history validation reject partial
+   schemas, orphaned rows, missing initial requests or attempts, broken attempt sequences,
+   mismatched retries and interrupted copies without writing a completion marker. Nine
+   database triggers freeze retained legacy tables against inserts, updates and deletes;
+   a stale old-worker publication therefore rolls back with its obsolete completion write.
+   Current routes, status reads, claims, retries and completion writes use only the new
+   tables. This is a partial Steps 10-11 migration and adds no new operator action yet.
+   **QUALITY GATE: CLEAR - DOCUMENTED DEVIATION**; the reviewer independently passed
+   **75 tests**, the focused migration suite passed **27 tests**, the broader startup,
+   status, interface and guide gate passed **138 tests**, and the complete Docker suite
+   passed **918 tests with 2 expected skips**. All NCT processes sharing a database must
+   cut over together. Ordinary rollback is unsafe because older code cannot see
+   post-cutover work and cannot write the frozen queue; preserve the database and roll
+   forward. See [the derived-result and queue contract](docs/DERIVED_RESULTS.md).
 
    Scan History presentation correction completed 2026-10-03. Every retained scan is
    now catalogued under each exact recorded canonical CIDR instead of allowing older
