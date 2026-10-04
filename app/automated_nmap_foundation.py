@@ -11,6 +11,7 @@ from app.database import connect_database, initialize_once_per_database
 from app.evidence_scope_assignments import init_evidence_scope_assignment_storage
 from app.network_scopes import utc_now
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
+from app.pipeline_intake import AUTOMATED_NMAP_INTENT, admission_intent_on_connection
 from app.saved_network_scope_associations import init_scan_scope_context_storage
 
 
@@ -125,6 +126,7 @@ def _run_evidence(db: sqlite3.Connection, run_id: str) -> dict:
         raise AutomatedNmapFoundationConflict("The retained scan record is unreadable") from exc
     observations = db.execute(
         """SELECT observation.observation_id, observation.sha256,
+                  artifact.size_bytes,
                   artifact_context.scope_id, artifact_context.scope_label,
                   artifact_context.scope_version, artifact_context.recorded_at,
                   scope.active,
@@ -135,6 +137,8 @@ def _run_evidence(db: sqlite3.Connection, run_id: str) -> dict:
              ON observation.source_kind = 'nmap_scan'
             AND observation.source_ref = run.run_id
             AND observation.original_filename = 'scan.xml'
+           JOIN artifact_registry artifact
+             ON artifact.sha256 = observation.sha256
            JOIN artifact_observation_scope_contexts artifact_context
              ON artifact_context.observation_id = observation.observation_id
             AND artifact_context.run_id = run.run_id
@@ -165,6 +169,7 @@ def _run_evidence(db: sqlite3.Connection, run_id: str) -> dict:
         "eligibility_reasons": reasons,
         "observation_id": observation["observation_id"] if observation else None,
         "sha256": observation["sha256"] if observation else None,
+        "size_bytes": int(observation["size_bytes"]) if observation else None,
         "scope_id": observation["scope_id"] if observation else None,
         "scope_label": observation["scope_label"] if observation else None,
         "scope_version": int(observation["scope_version"]) if observation else None,
@@ -218,6 +223,9 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
     with connect_database(db_path, read_only=True) as db:
         evidence = _run_evidence(db, run_id)
         assignment = _assignment_state(db, evidence)
+        admission_intent = admission_intent_on_connection(
+            db, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run_id,
+        )
         historical_attempt = db.execute(
             """SELECT status, started_at, finished_at, error, actor
                FROM scan_foundation_processing_attempts
@@ -255,6 +263,7 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
         **assignment,
         "state": state,
         "processing_job": job,
+        "admission_intent": admission_intent,
         "latest_attempt": (
             {
                 "status": attempt["state"], "started_at": attempt["started_at"],

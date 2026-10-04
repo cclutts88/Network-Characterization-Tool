@@ -138,6 +138,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Scan History subnet grouping | Keep the global newest-25 record window and page older records outside subnet dropdowns | Build a read-only catalog across retained scan metadata, group by each exact recorded canonical CIDR, and page scan rows inside that subnet's dropdown | Operators could not find older scans after global history paging, and Saved Network IDs could split the same subnet after rename, archive or recreation | This is a user-directed presentation and pagination correction, not canonical identity merging. Different prefixes stay distinct; scope, Saved Network snapshots, attribution, provenance and exact run actions remain per scan. Multi-subnet scans may appear under each exact recorded subnet with an explicit cross-target note. Host lists and invalid or missing legacy targets remain honestly labelled fallback groups. Catalog and row requests stay bounded and never open XML or artifact files |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-10-04 | Phase 1 supported ingestion completion | Treat separate completed foundation features as a complete ingestion pipeline | Finish one durable staged pipeline for currently supported Nmap and device evidence; keep scope-free calculations separate from scoped observations and require explicit scope where needed | Existing operator actions use different persistence, retry and status models, and planned passive collectors or physical-device reconciliation would expand this gate without a safe identity contract | Missing scope is Needs scope, never inferred. Preserve every completed stage when another fails. Generalize the existing single-process worker through additive, preservation-tested pipeline tables, then connect intake, current-state/Last Seen receipts and acceptance benchmarks. The copied legacy queue becomes a trigger-enforced read-only audit archive. All processes must cut over together; ordinary rollback is unsafe because older code cannot see post-cutover work and cannot write the frozen queue. Historical adoption stays explicit and passive collectors remain later phases. See `docs/DERIVED_RESULTS.md` |
+| 2026-10-04 | Phase 1 automatic Nmap admission | Find new eligible work by scanning timestamps or all retained evidence after startup | Mark only new participating manual Nmap observations and scan runs, then commit a frozen admission intent with the authoritative assignment or eligible scan finalization before the durable worker creates a job | Timestamp selection can silently adopt historical evidence, miss work across clock changes, or switch a retry to a corrected assignment or newer parser. Making immediate job creation part of evidence retention would also make a successful import, assignment or scan depend on queue availability | Admission intents preserve the exact source, scope decision, actor and processing contract while allowing queue admission after the source transaction. Startup and worker recovery examine only pending intents from explicitly marked sources. Historical rows keep the explicit Queue action; missing scope remains Needs scope; corrections create new intents and cannot redirect older work. This gate covers new manual and automated Nmap evidence only. Device intake, processing retries, current-state selection and Last Seen remain separate gates. |
 | 2026-10-04 | Phase 1 storage | Enable optional exact-content compaction after verified backfill | Add a separate administrator-confirmed action that replaces only reviewed exact copies with hard links to canonical content while preserving every logical evidence path and record | Independent adversarial review reproduced unsafe crash, journal, queue, path-substitution, recovery-integrity and confirmation-ownership cases during implementation; each case was corrected and retained as a regression | This is single-process maintenance. No second NCT process or external evidence edit may use the data directory during inspection, compaction or recovery. Files must share a filesystem and compatible security metadata; shared paths use canonical filesystem timestamps while recorded evidence timestamps remain. A durable recovery block stops all guarded evidence changes when safe repair cannot be proved. Estimated and measured savings are reported separately; automatic pruning stays disabled. See `docs/EXACT_CONTENT_COMPACTION.md` |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -1272,6 +1273,38 @@ acceptance benchmarks.
    The novice operator returned **CLEAR WITH NON-BLOCKING FEEDBACK**; its wording request
    was incorporated and rechecked live. This scoped-Nmap stage is development-ready on the
    foundation branch only.
+
+   2026-10-04 automatic supported-Nmap admission start: connect new manual Nmap
+   observations and new scan runs to the durable worker without scanning timestamps or
+   adopting historical evidence. New sources receive an explicit ingestion-policy marker.
+   A scope assignment/correction or eligible completed-scan finalization commits a frozen
+   admission intent with the authoritative source change; job creation happens afterward
+   and can recover after restart. Historical unmarked evidence keeps the explicit Queue
+   action. Missing scope remains Needs scope, corrections create new immutable intents,
+   and an older intent may not switch to a corrected assignment or newer parser. This gate
+   does not add device intake, automatic processing retries, current-state selection or
+   Last Seen behavior.
+
+   Automatic supported-Nmap admission completed 2026-10-04. New manual upload
+   observations and reviewed scan runs receive an immutable policy marker, and their
+   authoritative scope decision or eligible completion commits a frozen handoff before
+   job creation. Startup and later worker starts recover only those marked handoffs;
+   historical evidence retains its explicit Queue action, missing scope stays Needs
+   scope, corrections cannot redirect older work, and failed or interrupted attempts are
+   never retried automatically. A retained activity state distinguishes Waiting,
+   Retrying and Paused, allowing Analyze and Scan History to refresh through bounded
+   temporary storage retries and stop after a true pause. The reviewer halted the gate
+   for an automatic retry collision, a hot worker-respawn loop, and two polling gaps;
+   each reproduced case was corrected and retained as a regression. **QUALITY GATE:
+   CLEAR - DOCUMENTED DEVIATION**. The complete Docker suite passed **944 tests with 2
+   expected skips**, the final focused suite passed **78 tests**, the reviewer passed
+   **126 independent tests**, and actual browser-handler regressions passed under Node.
+   Isolated live acceptance proved a new scoped manual upload processed without Queue,
+   a newly completed scan recovered its pending handoff after restart, the existing
+   database gained the activity-state migration, and Scan History showed Scoped evidence
+   ready with a clean browser console. The novice operator returned **CLEAR**. This
+   automatic Nmap stage is development-ready on the foundation branch only; device
+   intake, current-state selection and Last Seen remain separate gates.
 
    Scan History presentation correction completed 2026-10-03. Every retained scan is
    now catalogued under each exact recorded canonical CIDR instead of allowing older

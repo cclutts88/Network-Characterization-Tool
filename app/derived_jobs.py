@@ -28,14 +28,21 @@ from app.nmap_base_analysis import (
     analyze_registered_nmap_result,
 )
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
+from app.pipeline_intake import (
+    AUTOMATED_NMAP_INTENT,
+    MANUAL_NMAP_INTENT,
+    NMAP_INGESTION_POLICY_VERSION,
+    NMAP_SCOPE_JOB_TYPE,
+    NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION,
+    NMAP_SCOPE_TARGET_FAMILY,
+    init_pipeline_intake_storage,
+)
 
 
 JOB_TYPE = "nmap_base_analysis"
-NMAP_SCOPE_JOB_TYPE = "nmap_scope_assessment"
-NMAP_SCOPE_TARGET_FAMILY = "scoped_nmap_assessment"
-NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION = 1
 _ACTIVE_STATES = {"queued", "running"}
 _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
+_INTAKE_RETRY_DELAYS = (0.25, 1.0, 5.0)
 _WORKERS: dict[Path, tuple[threading.Event, threading.Thread]] = {}
 _WORKERS_LOCK = threading.RLock()
 
@@ -88,6 +95,7 @@ def _validate_supplied_run_path(path: Path, run_id: str) -> Path:
 
 @initialize_once_per_database
 def init_derived_job_storage(db_path: Path) -> None:
+    init_pipeline_intake_storage(db_path)
     init_derived_result_storage(db_path)
     with connect_database(db_path) as db:
         db.executescript(
@@ -621,6 +629,7 @@ def _enqueue_scope_snapshot(
     *,
     request_token: str,
     requested_by: str,
+    allow_retry: bool = True,
 ) -> dict:
     now = utc_now()
     prior = db.execute(
@@ -678,6 +687,8 @@ def _enqueue_scope_snapshot(
         ).fetchone()
         if latest is None:
             raise DerivedJobConflict("The retained processing job has no attempt history")
+        if not allow_retry:
+            return _job_dict(db, job)
         if latest[1] in {"failed", "interrupted"}:
             request_kind = "retry"
             db.execute(
@@ -707,11 +718,8 @@ def enqueue_manual_nmap_scope_job(
     token = _request_token(request_token)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        frozen = _nmap_scope_snapshot(
-            db, assignment_id, required_source_kind="nmap_import",
-        )
-        result = _enqueue_scope_snapshot(
-            db, frozen, request_token=token, requested_by=requested_by,
+        result = _enqueue_manual_nmap_scope_job(
+            db, assignment_id, request_token=token, requested_by=requested_by,
         )
     start_derived_job_worker(db_path)
     return result
@@ -724,39 +732,197 @@ def enqueue_automated_nmap_scope_job(
     request_token: str,
     requested_by: str,
 ) -> dict:
-    from app.automated_nmap_foundation import (
-        _ensure_inherited_assignment,
-        _run_evidence,
-        init_automated_nmap_foundation_storage,
-    )
+    from app.automated_nmap_foundation import init_automated_nmap_foundation_storage
 
     init_automated_nmap_foundation_storage(db_path)
     init_derived_job_storage(db_path)
     token = _request_token(request_token)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        evidence = _run_evidence(db, run_id)
-        assignment_id = _ensure_inherited_assignment(db, evidence, requested_by)
-        context = {
-            "run_id": run_id,
-            "scope_id": evidence["scope_id"],
-            "scope_label": evidence["scope_label"],
-            "scope_version": evidence["scope_version"],
-            "scope_recorded_at": evidence["scope_recorded_at"],
-        }
-        frozen = _nmap_scope_snapshot(
-            db,
-            assignment_id,
-            required_source_kind="nmap_scan",
-            automated_context=context,
-        )
-        if frozen["source_run_id"] != run_id or frozen["source_observation_id"] != evidence["observation_id"]:
-            raise DerivedJobConflict("The inherited scan assignment changed before it was queued")
-        result = _enqueue_scope_snapshot(
-            db, frozen, request_token=token, requested_by=requested_by,
+        result, _ = _enqueue_automated_nmap_scope_job(
+            db, run_id, request_token=token, requested_by=requested_by,
         )
     start_derived_job_worker(db_path)
     return result
+
+
+def _enqueue_manual_nmap_scope_job(
+    db: sqlite3.Connection,
+    assignment_id: str,
+    *,
+    request_token: str,
+    requested_by: str,
+) -> dict:
+    frozen = _nmap_scope_snapshot(
+        db, assignment_id, required_source_kind="nmap_import",
+    )
+    return _enqueue_scope_snapshot(
+        db, frozen, request_token=request_token, requested_by=requested_by,
+    )
+
+
+def _enqueue_automated_nmap_scope_job(
+    db: sqlite3.Connection,
+    run_id: str,
+    *,
+    request_token: str,
+    requested_by: str,
+    allow_retry: bool = True,
+) -> tuple[dict, str]:
+    from app.automated_nmap_foundation import _ensure_inherited_assignment, _run_evidence
+
+    evidence = _run_evidence(db, run_id)
+    assignment_id = _ensure_inherited_assignment(db, evidence, requested_by)
+    context = {
+        "run_id": run_id,
+        "scope_id": evidence["scope_id"],
+        "scope_label": evidence["scope_label"],
+        "scope_version": evidence["scope_version"],
+        "scope_recorded_at": evidence["scope_recorded_at"],
+    }
+    frozen = _nmap_scope_snapshot(
+        db,
+        assignment_id,
+        required_source_kind="nmap_scan",
+        automated_context=context,
+    )
+    if frozen["source_run_id"] != run_id or frozen["source_observation_id"] != evidence["observation_id"]:
+        raise DerivedJobConflict("The inherited scan assignment changed before it was queued")
+    return (
+        _enqueue_scope_snapshot(
+            db, frozen, request_token=request_token, requested_by=requested_by,
+            allow_retry=allow_retry,
+        ),
+        assignment_id,
+    )
+
+
+def _manual_contract_from_frozen(frozen: dict) -> dict:
+    definition = json.loads(frozen["definition_json"] or "{}")
+    return {
+        "intent_kind": MANUAL_NMAP_INTENT,
+        "source_kind": frozen["source_kind"],
+        "source_ref": frozen["source_ref"],
+        "observation_id": frozen["source_observation_id"],
+        "source_sha256": frozen["source_sha256"],
+        "source_size_bytes": int(frozen["source_size_bytes"]),
+        "assignment_id": definition.get("assignment_id"),
+        "scope_id": definition.get("scope_id"),
+        "assignment_revision": definition.get("assignment_revision"),
+        "assignment_event_kind": definition.get("assignment_event_kind"),
+        "assignment_mode": definition.get("assignment_mode"),
+        "target_family": frozen["target_family"],
+        "target_analysis_version": frozen["target_analysis_version"],
+        "target_payload_schema_version": frozen["target_payload_schema_version"],
+        "target_parameters": json.loads(frozen["target_parameters_json"] or "{}"),
+    }
+
+
+def _automated_contract_from_evidence(evidence: dict) -> dict:
+    return {
+        "intent_kind": AUTOMATED_NMAP_INTENT,
+        "source_kind": "nmap_scan",
+        "run_id": evidence["run_id"],
+        "source_status": evidence["run_status"],
+        "observation_id": evidence["observation_id"],
+        "source_sha256": evidence["sha256"],
+        "source_size_bytes": evidence["size_bytes"],
+        "scope_id": evidence["scope_id"],
+        "scope_label": evidence["scope_label"],
+        "scope_version": evidence["scope_version"],
+        "scope_recorded_at": evidence["scope_recorded_at"],
+        "target_family": NMAP_SCOPE_TARGET_FAMILY,
+        "target_analysis_version": NMAP_ENDPOINT_PARSER,
+        "target_payload_schema_version": NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION,
+        "target_parameters": {},
+        "eligibility_reasons": [],
+    }
+
+
+def dispatch_next_pipeline_intake(db_path: Path) -> bool:
+    """Admit one explicitly marked pending source without scanning historical rows."""
+    from app.automated_nmap_foundation import (
+        AutomatedNmapFoundationConflict,
+        _run_evidence,
+        init_automated_nmap_foundation_storage,
+    )
+
+    init_automated_nmap_foundation_storage(db_path)
+    init_derived_job_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            """SELECT intent_id, intent_kind, source_id, policy_version,
+                      assignment_id, actor, request_token, contract_json
+               FROM pipeline_admission_intents
+               WHERE state = 'pending'
+               ORDER BY created_at, intent_id LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            return False
+        intent_id, intent_kind, source_id = row[0], row[1], row[2]
+        db.execute(
+            """UPDATE pipeline_admission_intents
+               SET activity_state = 'waiting', updated_at = ?, last_error = NULL
+               WHERE intent_id = ? AND state = 'pending'""",
+            (utc_now(), intent_id),
+        )
+        db.execute("SAVEPOINT pipeline_admission")
+        try:
+            if int(row[3]) != NMAP_INGESTION_POLICY_VERSION:
+                raise DerivedJobConflict("The intake policy version is no longer supported")
+            retained_contract = json.loads(row[7] or "{}")
+            if intent_kind == MANUAL_NMAP_INTENT:
+                assignment_id = row[4]
+                if not assignment_id:
+                    raise DerivedJobConflict("The manual intake assignment is unavailable")
+                frozen = _nmap_scope_snapshot(
+                    db, assignment_id, required_source_kind="nmap_import",
+                )
+                if _manual_contract_from_frozen(frozen) != retained_contract:
+                    raise DerivedJobConflict("The manual intake contract changed before admission")
+                job = _enqueue_scope_snapshot(
+                    db, frozen, request_token=row[6], requested_by=row[5],
+                    allow_retry=False,
+                )
+                resolved_assignment_id = assignment_id
+            elif intent_kind == AUTOMATED_NMAP_INTENT:
+                evidence = _run_evidence(db, source_id)
+                if not evidence["eligible"]:
+                    raise AutomatedNmapFoundationConflict(
+                        "; ".join(evidence["eligibility_reasons"])
+                    )
+                if _automated_contract_from_evidence(evidence) != retained_contract:
+                    raise DerivedJobConflict("The automated intake contract changed before admission")
+                job, resolved_assignment_id = _enqueue_automated_nmap_scope_job(
+                    db,
+                    source_id,
+                    request_token=row[6],
+                    requested_by=row[5],
+                    allow_retry=False,
+                )
+            else:
+                raise DerivedJobConflict("The intake intent type is unsupported")
+            db.execute("RELEASE pipeline_admission")
+            db.execute(
+                """UPDATE pipeline_admission_intents
+                   SET state = 'admitted', updated_at = ?, admitted_job_id = ?,
+                       resolved_assignment_id = ?, activity_state = 'complete',
+                       last_error = NULL
+                   WHERE intent_id = ? AND state = 'pending'""",
+                (utc_now(), job["job_id"], resolved_assignment_id, intent_id),
+            )
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            db.execute("ROLLBACK TO pipeline_admission")
+            db.execute("RELEASE pipeline_admission")
+            db.execute(
+                """UPDATE pipeline_admission_intents
+                   SET state = 'blocked', updated_at = ?,
+                       activity_state = 'blocked', last_error = ?
+                   WHERE intent_id = ? AND state = 'pending'""",
+                (utc_now(), (str(exc).strip() or exc.__class__.__name__)[:2000], intent_id),
+            )
+    return True
 
 
 def retry_derived_job(
@@ -1123,22 +1289,79 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
     return True
 
 
+def _record_pipeline_intake_error(
+    db_path: Path, error: Exception, *, paused: bool,
+) -> None:
+    prefix = (
+        "Automatic admission paused after repeated queue storage errors"
+        if paused else "Automatic admission delayed by a queue storage error"
+    )
+    message = f"{prefix}: {str(error).strip() or error.__class__.__name__}"[:2000]
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            """SELECT intent_id FROM pipeline_admission_intents
+               WHERE state = 'pending' ORDER BY created_at, intent_id LIMIT 1"""
+        ).fetchone()
+        if row is not None:
+            db.execute(
+                """UPDATE pipeline_admission_intents
+                   SET updated_at = ?, activity_state = ?, last_error = ?
+                   WHERE intent_id = ? AND state = 'pending'""",
+                (utc_now(), "paused" if paused else "retrying", message, row[0]),
+            )
+
+
 def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
+    paused_after_error = False
+    intake_failures = 0
+    admission_enabled = True
     try:
-        while not stop.is_set() and run_next_derived_job(db_path, data_dir):
-            pass
+        while not stop.is_set():
+            admitted = False
+            retry_delay = None
+            if admission_enabled:
+                try:
+                    admitted = dispatch_next_pipeline_intake(db_path)
+                    intake_failures = 0
+                except sqlite3.OperationalError as exc:
+                    intake_failures += 1
+                    if intake_failures > len(_INTAKE_RETRY_DELAYS):
+                        paused_after_error = True
+                        admission_enabled = False
+                    else:
+                        retry_delay = _INTAKE_RETRY_DELAYS[intake_failures - 1]
+                    try:
+                        _record_pipeline_intake_error(
+                            db_path, exc, paused=not admission_enabled,
+                        )
+                    except sqlite3.Error:
+                        pass
+            ran = run_next_derived_job(db_path, data_dir)
+            if retry_delay is not None:
+                if stop.wait(retry_delay):
+                    break
+                continue
+            if not admitted and not ran:
+                break
+    except Exception:
+        paused_after_error = True
+        raise
     finally:
         path = Path(db_path).resolve()
         with _WORKERS_LOCK:
             current = _WORKERS.get(path)
             if current and current[0] is stop:
                 _WORKERS.pop(path, None)
-            if not stop.is_set():
+            if not stop.is_set() and not paused_after_error:
                 with connect_database(path, read_only=True) as db:
                     queued = db.execute(
                         "SELECT 1 FROM pipeline_job_attempts WHERE state = 'queued' LIMIT 1"
                     ).fetchone()
-                if queued:
+                    pending_intake = db.execute(
+                        "SELECT 1 FROM pipeline_admission_intents WHERE state = 'pending' LIMIT 1"
+                    ).fetchone()
+                if queued or pending_intake:
                     start_derived_job_worker(path, data_dir)
 
 
@@ -1149,6 +1372,15 @@ def start_derived_job_worker(db_path: Path, data_dir: Path | None = None) -> Non
         current = _WORKERS.get(path)
         if current and current[1].is_alive():
             return
+        init_pipeline_intake_storage(path)
+        with connect_database(path) as db:
+            db.execute(
+                """UPDATE pipeline_admission_intents
+                   SET activity_state = 'waiting', updated_at = ?, last_error = NULL
+                   WHERE state = 'pending'
+                     AND activity_state IN ('retrying', 'paused')""",
+                (utc_now(),),
+            )
         stop = threading.Event()
         thread = threading.Thread(
             target=_worker_loop, args=(path, root, stop), daemon=True,

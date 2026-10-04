@@ -117,8 +117,13 @@ def _register_record(
     observation_key: str | None = None,
     run_id: str | None = None,
     scope_context: dict | None = None,
+    pipeline_policy_version: int | None = None,
 ) -> dict:
     init_artifact_storage(db_path, artifact_root)
+    if pipeline_policy_version is not None:
+        from app.pipeline_intake import init_pipeline_intake_storage
+
+        init_pipeline_intake_storage(db_path)
     observed_at = observed_at or utc_now()
     canonical_path = canonical_artifact_path(artifact_root, digest)
     observation_id = hashlib.sha256(f"{observation_key}:{digest}".encode()).hexdigest() if observation_key else uuid.uuid4().hex
@@ -190,6 +195,19 @@ def _register_record(
                 run_id=run_id,
                 context=scope_context,
             )
+        if pipeline_policy_version is not None:
+            from app.pipeline_intake import MANUAL_NMAP_SOURCE, mark_pipeline_source
+
+            if source_kind != "nmap_import":
+                raise ValueError("Pipeline upload policy applies only to manual Nmap evidence")
+            mark_pipeline_source(
+                db,
+                source_kind=MANUAL_NMAP_SOURCE,
+                source_id=observation_id,
+                marked_by=actor or "local-operator",
+                marked_at=observed_at,
+                policy_version=pipeline_policy_version,
+            )
         first_seen_at, last_seen_at = db.execute(
             "SELECT first_seen_at, last_seen_at FROM artifact_registry WHERE sha256 = ?", (digest,)
         ).fetchone()
@@ -220,6 +238,7 @@ def register_artifact_bytes(
     metadata: dict | None = None,
     observed_at: str | None = None,
     artifact_root: Path | None = None,
+    pipeline_policy_version: int | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     digest = hashlib.sha256(content).hexdigest()
@@ -246,6 +265,7 @@ def register_artifact_bytes(
         actor=actor,
         metadata=metadata,
         observed_at=observed_at,
+        pipeline_policy_version=pipeline_policy_version,
     )
     record["physical_created"] = not record["duplicate"]
     return record
@@ -269,6 +289,7 @@ def register_artifact_file(
     scope_context: dict | None = None,
     expected_sha256: str | None = None,
     expected_size_bytes: int | None = None,
+    pipeline_policy_version: int | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     before = source_path.stat()
@@ -312,6 +333,7 @@ def register_artifact_file(
         observation_key=observation_key,
         run_id=run_id,
         scope_context=scope_context,
+        pipeline_policy_version=pipeline_policy_version,
     )
     record["physical_created"] = physical_created
     return record

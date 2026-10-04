@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../app/ui.py", import.meta.url), "utf8");
+const analysisSource = fs.readFileSync(new URL("../app/analysis_ui.py", import.meta.url), "utf8");
 
 function handler(name) {
   const match = source.match(new RegExp(`^async function ${name}\\(.*$`, "m"));
@@ -15,10 +16,16 @@ function syncHandler(name) {
   return match[0];
 }
 
+function analysisSyncHandler(name) {
+  const match = analysisSource.match(new RegExp(`^\\s*function ${name}\\(.*$`, "m"));
+  assert.ok(match, `Could not find ${name} in app/analysis_ui.py`);
+  return match[0];
+}
+
 await eval(`(async () => {
   let historyGroups=[{group_id:'g',runs:[{
     run_id:'scoped',
-    foundation_status:{processing_job:{latest_attempt:{state:'queued'}}},
+    foundation_status:{admission_intent:{state:'pending',activity_state:'waiting'}},
     analysis_job_status:{current_job:null}
   }]}],historyRefreshRevision=0,historyJobTimer=null;
   let scheduled=0,refreshes=0,scheduledCallback=null;
@@ -29,23 +36,26 @@ await eval(`(async () => {
   const status=message=>{throw new Error(message)};
   const historyJSON=async()=>{
     refreshes+=1;
-    const state=refreshes===1?'running':'completed';
     return {runs:[{
       run_id:'scoped',
-      foundation_status:{processing_job:{latest_attempt:{state}}},
+      foundation_status:refreshes===1
+        ? {admission_intent:{state:'admitted',activity_state:'complete'},processing_job:{latest_attempt:{state:'queued'}}}
+        : {state:'foundation_complete',admission_intent:{state:'admitted',activity_state:'complete'},processing_job:{latest_attempt:{state:'completed'}}},
       analysis_job_status:{current_job:null}
     }]};
   };
+  ${syncHandler("admissionRefreshActive")}
   ${syncHandler("scheduleHistoryJobRefresh")}
   ${handler("refreshVisibleHistoryRuns")}
   scheduleHistoryJobRefresh();
   assert.equal(scheduled,1);
   await scheduledCallback();
   assert.equal(refreshes,1);
-  assert.equal(historyGroups[0].runs[0].foundation_status.processing_job.latest_attempt.state,'running');
+  assert.equal(historyGroups[0].runs[0].foundation_status.processing_job.latest_attempt.state,'queued');
   assert.equal(scheduled,2);
   await scheduledCallback();
   assert.equal(refreshes,2);
+  assert.equal(historyGroups[0].runs[0].foundation_status.state,'foundation_complete');
   assert.equal(historyGroups[0].runs[0].foundation_status.processing_job.latest_attempt.state,'completed');
   assert.equal(scheduled,2);
 })()`);
@@ -168,6 +178,42 @@ await eval(`(async () => {
   assert.equal(oldestLoaded.runs[0].run_id,'fresh-0');
   assert.ok(requested.includes('/api/scan-history-groups?limit=1&offset=100'));
   assert.deepEqual([...renderedOpenGroups],['g100']);
+})()`);
+
+await eval(`(async () => {
+  let authenticatedAnalyst=null,activeAssignmentScopes=[],nmapAssignmentPoll=null;
+  const controls=new Map();
+  const $=id=>{if(!controls.has(id))controls.set(id,{innerHTML:'',textContent:'',className:'',classList:{toggle:()=>{}}});return controls.get(id)};
+  const esc=value=>String(value??'');
+  const assignmentState=()=>['Automatic processing retrying','pending'];
+  const assignmentWhen=value=>String(value||'now');
+  const assignmentForm=()=>'';
+  const assignmentHistory=()=>'';
+  const bindNmapAssignmentActions=()=>{};
+  const setStatus=()=>{};
+  const clearTimeout=()=>{};
+  let scheduled=0,scheduledCallback=null,loads=0;
+  const setTimeout=callback=>{scheduled+=1;scheduledCallback=callback;return scheduled};
+  let renderNmapAssignments;
+  const loadNmapAssignments=()=>{loads+=1;renderNmapAssignments([{
+    observation_id:'o',original_filename:'source.xml',observed_at:'now',actor:'analyst',sha256:'abcdef123456',
+    processing_state:'completed',assignment_state:'foundation_complete',admission_intent:{state:'admitted',activity_state:'complete'}
+  }],'o')};
+  ${analysisSyncHandler("assignmentAdmissionActive")}
+  renderNmapAssignments=${analysisSyncHandler("renderNmapAssignments")};
+  renderNmapAssignments([{
+    observation_id:'o',original_filename:'source.xml',observed_at:'now',actor:'analyst',sha256:'abcdef123456',
+    processing_state:null,admission_intent:{state:'pending',activity_state:'retrying',last_error:'temporary queue error'}
+  }],'o');
+  assert.equal(scheduled,1);
+  scheduledCallback();
+  assert.equal(loads,1);
+  assert.equal(scheduled,1);
+  renderNmapAssignments([{
+    observation_id:'paused',original_filename:'paused.xml',observed_at:'now',actor:'analyst',sha256:'abcdef123456',
+    processing_state:null,admission_intent:{state:'pending',activity_state:'paused',last_error:'storage unavailable'}
+  }],'paused');
+  assert.equal(scheduled,1);
 })()`);
 
 console.log("Scan History UI runtime regressions passed");

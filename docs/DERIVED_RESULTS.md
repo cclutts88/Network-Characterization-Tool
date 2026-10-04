@@ -254,6 +254,36 @@ was. Startup therefore marks any old Running row Interrupted once, then database
 freeze the table against inserts, updates and deletes. Those rows remain historical only;
 all new manual and automated scoped processing uses the pipeline tables.
 
+### Automatic admission for new Nmap evidence
+
+Automatic admission applies only to Nmap evidence created under the current ingestion
+policy. A new manual upload observation or reviewed scan run receives an immutable policy
+marker in the same database transaction that creates its authoritative source record.
+Historical rows have no marker and are never selected by timestamp, startup scan or broad
+backfill; their existing Queue action remains available.
+
+For a marked manual upload, assignment or correction commits a frozen admission intent in
+the same transaction as the append-only scope decision. For a marked automated run, the
+completed run record and frozen intent commit together after the aggregate `scan.xml` is
+registered with its retained Network Scope. An interrupted, failed or unscoped run cannot
+be silently promoted to successful scoped evidence. Manual targets or missing authoritative
+scope remain **Needs scope**.
+
+The worker reads only pending intents. It rechecks the exact observation, digest, size,
+assignment or run context, scope, parser and processing contract before creating or reusing
+the durable job. Job creation and the intent's Admitted state commit together. If queue
+storage is temporarily unavailable, the intent stays Pending and restart recovery can try
+again. A separate retained activity state distinguishes Waiting, Retrying and Paused so
+operator pages keep refreshing through temporary retry delays and stop only after the
+bounded retries have actually paused. The worker uses bounded, stop-aware delays for a
+queue-storage error and then pauses automatic admission with the concrete error visible on
+the retained intent; it does not spin or continuously restart. A later worker start or
+application restart can recover the same handoff. If authority or the frozen contract changed, the intent becomes Blocked with
+a visible reason. A correction creates a new intent; the older intent cannot redirect to
+the new assignment. If the same job already failed or was interrupted, admission attaches
+that job without creating a retry attempt. Automatic admission does not automatically retry
+a failed processing attempt and does not contact the network.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already

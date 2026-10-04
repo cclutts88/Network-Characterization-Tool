@@ -3,6 +3,10 @@ from __future__ import annotations
 from app.database import configure_database, connect_database
 from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
 from app.nmap_evidence import nmap_xml_coverage
+from app.pipeline_intake import (
+    NMAP_INGESTION_POLICY_VERSION,
+    init_pipeline_intake_storage,
+)
 from app.assigned_nmap_ingestion import AssignedNmapConflict
 from app.automated_nmap_foundation import (
     AutomatedNmapFoundationConflict,
@@ -1268,6 +1272,7 @@ async def lifespan(_: FastAPI):
     init_device_analysis_storage(DB_PATH)
     init_device_collection_authority_storage(DB_PATH)
     init_derived_result_storage(DB_PATH)
+    init_pipeline_intake_storage(DB_PATH)
     init_derived_job_storage(DB_PATH)
     init_auth_storage(DB_PATH)
     init_achievement_storage(DB_PATH)
@@ -1783,6 +1788,7 @@ def nmap_observation_scope_assign(
             reason=payload.reason,
             whole_artifact_confirmed=payload.whole_artifact_confirmed,
         )
+        start_derived_job_worker(DB_PATH, DATA_DIR)
         return get_manual_nmap_assignment_status(DB_PATH, observation_id)
     except (KeyError, ValueError) as exc:
         raise _nmap_assignment_error(exc) from exc
@@ -1803,6 +1809,7 @@ def nmap_observation_scope_correct(
             reason=payload.reason,
             whole_artifact_confirmed=payload.whole_artifact_confirmed,
         )
+        start_derived_job_worker(DB_PATH, DATA_DIR)
         return get_manual_nmap_assignment_status(
             DB_PATH, eligible["artifact_observation_id"],
         )
@@ -2611,6 +2618,7 @@ async def import_xml(request: Request, file: Annotated[UploadFile, File()]) -> d
             "duplicate_import": existing is not None,
         },
         observed_at=observed_at,
+        pipeline_policy_version=NMAP_INGESTION_POLICY_VERSION,
     )
     stored_path = Path(artifact["canonical_path"])
 

@@ -1,11 +1,11 @@
 # Evidence scope assignment and correction
 
 This internal foundation records an operator's explicit network context for one
-Artifact Registry observation. Manual Nmap uploads now have an explicit operator
-workflow that records or corrects the assignment and separately asks the coordinator
-to verify the retained artifact and save all scoped assessment records as one
-operation. Existing Analyze, Hunt, Reach and Map results continue to use their current
-read paths while this foundation is expanded.
+Artifact Registry observation. For new supported Nmap uploads, recording or correcting
+the assignment also saves a durable automatic-admission intent. The coordinator then
+verifies the retained artifact and saves all scoped assessment records as one operation.
+Historical uploads keep the explicit Queue action. Existing Analyze, Hunt, Reach and Map
+results continue to use their current read paths while this foundation is expanded.
 
 ## Identity and assignment
 
@@ -56,9 +56,10 @@ read paths while this foundation is expanded.
 ## Manual upload operator workflow
 
 - The workflow is limited to exact observations created by manual Nmap XML imports.
-  Upload and legacy analysis still complete first. Assignment and foundation processing
-  are deliberate follow-up actions in the same Import Nmap Evidence workspace, so a
-  refresh or lost response can be recovered.
+  Upload and legacy analysis still complete first. Scope assignment remains a deliberate
+  operator decision in the same Import Nmap Evidence workspace. New marked uploads then
+  enter processing automatically; a refresh, restart or lost response cannot lose the
+  retained admission handoff. Historical unmarked uploads keep the explicit Queue action.
 - Recent observation status and immutable assignment history are read-only queries.
   They do not reparse the XML or initialize storage on the request path.
 - A scope is never preselected. The operator must choose an active scope, record a
@@ -68,13 +69,15 @@ read paths while this foundation is expanded.
   status and history. Network Scope creation and archival remain administrator actions.
   Authentication-disabled installations attribute actions to the local operator.
 - Processing failure retains the assignment and reports that it can be retried. A
-  correction is a separate append-only decision and must then be processed explicitly.
+  correction is a separate append-only decision and creates its own automatic admission
+  intent for a new marked upload; it never redirects older work.
 - The workflow does not contact the network, grant scan authority, require an analyst
   to be tasked or change the current Analyze, Hunt, Reach or Map results.
 
 ## Remaining gate
 
-Automated scan artifacts, device evidence and other imports do not enter this workflow.
-Saved Network or CIDR inference, mixed-scope and per-host partitioning, migration of old
-records, job processing, current-state/Last Seen views and a general read-model switch
+Eligible new automated Nmap scans use the same durable admission and processing job
+family from their retained run scope. Device evidence and other imports do not enter this
+workflow. Saved Network or CIDR inference, mixed-scope and per-host partitioning,
+migration of old records, current-state/Last Seen views and a general read-model switch
 remain separately reviewed roadmap work.

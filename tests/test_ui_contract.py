@@ -458,6 +458,16 @@ def test_scan_queue_polling_stops_when_the_session_is_rejected():
     assert "Sign in again to resume queue updates." in html
 
 
+def test_manual_nmap_admission_polling_stops_after_a_visible_storage_pause():
+    html = analysis_page().body.decode()
+
+    assert html.count("function pipelineRequestToken()") == 1
+    assert "function assignmentAdmissionActive(intake)" in html
+    assert "['waiting','retrying'].includes(intake.activity_state)" in html
+    assert "Automatic processing paused" in html
+    assert "Automatic processing retrying" in html
+
+
 def test_enterprise_shell_replaces_legacy_navigation_on_every_primary_page():
     pages = [operator_page(), analysis_page(), device_analysis_page(), hunting_page(), device_config_page(), hostname_page(), reachability_page(), network_map_page()]
     for page in pages:

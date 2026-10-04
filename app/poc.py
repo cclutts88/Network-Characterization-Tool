@@ -81,8 +81,15 @@ from app.saved_network_scope_associations import (
     resolve_schedule_scope_context_in_transaction,
 )
 from app.request_identity import bind_signed_in_actor
+from app.pipeline_intake import (
+    AUTOMATED_NMAP_SOURCE,
+    NMAP_INGESTION_POLICY_VERSION,
+    init_pipeline_intake_storage,
+    mark_pipeline_source,
+    record_automated_nmap_intent,
+)
 from app.automated_nmap_foundation import get_automated_scan_foundation_status
-from app.derived_jobs import scan_run_job_statuses
+from app.derived_jobs import scan_run_job_statuses, start_derived_job_worker
 from app.scan_history import build_scan_history_catalog, scan_history_group_page
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
@@ -1986,6 +1993,7 @@ def insert_reviewed_scan_run(
 ) -> None:
     """Atomically recheck reviewed context, retain the run, and snapshot context."""
     init_poc_storage(db_path)
+    init_pipeline_intake_storage(db_path)
     reviewed = [item.model_dump() for item in plan.reviewed_scope_associations]
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -2019,6 +2027,17 @@ def insert_reviewed_scan_run(
             ),
         )
         insert_run_scope_context(db, manifest["run_id"], context)
+        mark_pipeline_source(
+            db,
+            source_kind=AUTOMATED_NMAP_SOURCE,
+            source_id=manifest["run_id"],
+            marked_by=(
+                manifest.get("requested_by") or manifest.get("created_by")
+                or manifest.get("operator") or "system"
+            ),
+            marked_at=manifest["created_at"],
+            policy_version=NMAP_INGESTION_POLICY_VERSION,
+        )
         if audit_event:
             db.execute(
                 """
@@ -2037,7 +2056,11 @@ def insert_reviewed_scan_run(
 
 
 def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
+    init_pipeline_intake_storage(db_path)
     with connect_database(db_path) as db:
+        previous = db.execute(
+            "SELECT status FROM scan_runs WHERE run_id = ?", (manifest["run_id"],)
+        ).fetchone()
         db.execute(
             """
             UPDATE scan_runs SET status = ?, manifest_json = ? WHERE run_id = ?
@@ -2048,6 +2071,12 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
                 manifest["run_id"],
             ),
         )
+        if (
+            manifest["status"] == "completed"
+            and previous is not None
+            and previous[0] != "completed"
+        ):
+            record_automated_nmap_intent(db, manifest["run_id"])
 
 
 class NoScannableTargetsError(RuntimeError):
@@ -3418,6 +3447,7 @@ def execute_scan_run(
                                  [item[0] for item in ARTIFACT_FILES.values()])
         collect_artifacts(manifest, data_dir)
         update_scan_run_manifest(manifest, db_path)
+        start_derived_job_worker(db_path, data_dir)
         append_scan_audit(
             db_path,
             run_id=run_id,

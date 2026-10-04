@@ -7,6 +7,7 @@ import sqlite3
 
 from app.database import connect_database
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
+from app.pipeline_intake import MANUAL_NMAP_INTENT, admission_intent_on_connection
 
 
 def _observation_row(db: sqlite3.Connection, observation_id: str):
@@ -105,6 +106,13 @@ def _status_on_connection(db: sqlite3.Connection, observation_id: str) -> dict:
             "processing": links,
         })
     current = next((item for item in assignments if item["current"]), None)
+    admission_intent = (
+        admission_intent_on_connection(
+            db, intent_kind=MANUAL_NMAP_INTENT,
+            source_id=current["assignment_id"],
+        )
+        if current is not None else None
+    )
     processing_job = None
     if current is not None and db.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
@@ -158,6 +166,7 @@ def _status_on_connection(db: sqlite3.Connection, observation_id: str) -> dict:
         "current_assignment": current,
         "assignments": assignments,
         "processing_job": processing_job,
+        "admission_intent": admission_intent,
         "processing_state": (
             processing_job["latest_attempt"]["state"] if processing_job else None
         ),

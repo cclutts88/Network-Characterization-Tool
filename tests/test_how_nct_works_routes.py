@@ -21,8 +21,11 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "associate a Saved Network with one active Network Scope" in html
     assert "Mixed, combined, manual, and unassociated scan targets" in html
     assert "New schedules pin the reviewed context" in html
-    assert "Assign and queue manual Nmap context" in html
-    assert "Queue automated scan evidence" in html
+    assert "Assign manual Nmap context" in html
+    assert "Follow automatic scan processing" in html
+    assert "New uploads then enter background processing automatically" in html
+    assert "Older retained scans keep Queue retained evidence" in html
+    assert "records an automatic admission decision before the background job" in html
     assert "Unscoped or mixed-context scans remain unavailable" in html
     assert "Several subnets may share one scope" in html
     assert "saves the analysis and its source and scope links all at once" in html

@@ -12,6 +12,10 @@ import uuid
 from app.database import connect_database, initialize_once_per_database
 from app.entities import init_entity_storage
 from app.network_scopes import utc_now
+from app.pipeline_intake import (
+    init_pipeline_intake_storage,
+    record_manual_nmap_intent,
+)
 
 
 class EvidenceScopeConflict(ValueError):
@@ -191,6 +195,7 @@ def assign_artifact_scope(
     if whole_artifact_confirmed is not True:
         raise ValueError("Whole-artifact scope confirmation is required")
     init_evidence_scope_assignment_storage(db_path)
+    init_pipeline_intake_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         if not db.execute(
@@ -219,6 +224,7 @@ def assign_artifact_scope(
                ) VALUES (?, ?, ?, 1, 'assigned', NULL, 'whole_artifact', ?, ?, ?)""",
             (assignment_id, observation_id, scope_id, actor, reason, utc_now()),
         )
+        record_manual_nmap_intent(db, assignment_id)
         db.row_factory = sqlite3.Row
         return _row(db.execute(
             "SELECT * FROM artifact_scope_assignments WHERE assignment_id = ?",
@@ -238,6 +244,7 @@ def correct_artifact_scope(
     if whole_artifact_confirmed is not True:
         raise ValueError("Whole-artifact scope confirmation is required")
     init_evidence_scope_assignment_storage(db_path)
+    init_pipeline_intake_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         db.row_factory = sqlite3.Row
@@ -270,6 +277,7 @@ def correct_artifact_scope(
             raise EvidenceScopeConflict(
                 "Artifact scope assignment changed in another session"
             ) from exc
+        record_manual_nmap_intent(db, assignment_id)
         return _row(db.execute(
             "SELECT * FROM artifact_scope_assignments WHERE assignment_id = ?",
             (assignment_id,),
