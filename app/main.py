@@ -22,6 +22,7 @@ from app.evidence_scope_assignments import (
 from app.foundation_evidence import (
     compare_foundation_receipt_services,
     get_foundation_endpoint_evidence,
+    get_foundation_latest_observations,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
     list_foundation_evidence_scopes,
@@ -1709,6 +1710,28 @@ def foundation_evidence_endpoint_detail(
     try:
         return get_foundation_endpoint_evidence(
             DB_PATH, scope_id, entity_id, limit=limit, offset=offset,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get(
+    "/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}"
+    "/latest-observations"
+)
+def foundation_evidence_latest_observations(
+    scope_id: str, entity_id: str,
+    limit: int = Query(default=10, ge=1, le=25),
+    latest_offset: int = Query(default=0, ge=0),
+    confirmed_offset: int = Query(default=0, ge=0),
+    unknown_offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_foundation_latest_observations(
+            DB_PATH, scope_id, entity_id, limit=limit,
+            latest_offset=latest_offset,
+            confirmed_offset=confirmed_offset,
+            unknown_offset=unknown_offset,
         )
     except (KeyError, ValueError) as exc:
         raise _network_scope_error(exc) from exc

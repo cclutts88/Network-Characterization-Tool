@@ -103,6 +103,9 @@ service union is ordered and paged;
 the API never loads an entire assessment payload, reparses XML, hashes files, writes to
 storage, contacts a network, or changes existing scan-comparison behavior.
 
-Current-state selection, Last Seen, proof of disappearance, automatic baselines,
-cross-parser comparisons, software/version deltas and persistent comparison caching
-remain separate gates.
+The separate `latest-supported-nmap-observations:1` read model can now identify the
+latest supported source window and the last confirmed positive source window for one
+scoped address. It does not change these pairwise comparison rules. Broader
+current-state selection, exact Last Seen behavior, proof of service disappearance,
+automatic baselines, cross-parser comparisons, software/version deltas and persistent
+comparison caching remain separate gates.

@@ -14,6 +14,8 @@ MAX_SCOPE_PAGE = 100
 MAX_ENDPOINT_PAGE = 100
 MAX_RECEIPT_PAGE = 25
 MAX_SERVICE_PAGE = 250
+MAX_LATEST_SELECTION_CANDIDATES = 5000
+LATEST_OBSERVATION_SELECTION_CONTRACT = "latest-supported-nmap-observations:1"
 
 
 def _page(limit: int, offset: int, maximum: int) -> tuple[int, int]:
@@ -757,6 +759,266 @@ def get_foundation_receipt_services(
             "has_more": offset + len(rows) < total,
         },
         "read_only": True,
+    }
+
+
+_LATEST_OBSERVATION_CANDIDATES_SQL = """
+WITH current_assignments AS (
+    SELECT assignment.*
+    FROM artifact_scope_assignments assignment
+    WHERE assignment.scope_id = ?
+      AND NOT EXISTS (
+          SELECT 1 FROM artifact_scope_assignments successor
+          WHERE successor.supersedes_assignment_id = assignment.assignment_id
+      )
+)
+SELECT assignment.assignment_id, assignment.revision, assignment.event_kind,
+       assignment.assigned_at, assignment.actor AS assignment_actor, assignment.reason,
+       assessment.assessment_id, assessment.parser_version, assessment.assessed_at,
+       assessment.recorded_at,
+       CASE
+           WHEN json_valid(assessment.payload_json)
+           THEN CASE
+               WHEN json_type(
+                   assessment.payload_json,
+                   '$.facts.coverage.completion.successful'
+               ) = 'true'
+               THEN 1
+               ELSE 0
+           END
+           ELSE NULL
+       END AS completion_successful,
+       receipt.facts_json AS endpoint_facts_json,
+       observation.observation_id, observation.sha256, observation.source_kind,
+       observation.source_ref, observation.observed_at, observation.original_filename,
+       observation.actor AS observation_actor,
+       (SELECT COUNT(*) FROM service_receipts service
+        JOIN service_entities entity ON entity.entity_id = service.service_id
+        WHERE service.assessment_id = assessment.assessment_id
+          AND entity.host_id = receipt.host_id) AS service_count
+FROM current_assignments assignment
+JOIN assessment_scope_assignment_links link
+  ON link.assignment_id = assignment.assignment_id
+JOIN entity_assessments assessment
+  ON assessment.assessment_id = link.assessment_id
+ AND assessment.scope_id = assignment.scope_id
+JOIN endpoint_receipts receipt
+  ON receipt.assessment_id = assessment.assessment_id AND receipt.host_id = ?
+JOIN artifact_observations observation
+  ON observation.observation_id = assessment.artifact_observation_id
+WHERE assessment.parser_version = ?
+ORDER BY assessment.assessment_id, assignment.assignment_id
+LIMIT ?
+"""
+
+
+def _supported_observation_candidate(row: sqlite3.Row) -> tuple[dict, tuple[Decimal, Decimal] | None, bool]:
+    completed = row["completion_successful"] == 1
+    endpoint_facts = _json(row["endpoint_facts_json"])
+    presence = endpoint_facts.get("presence")
+    presence = presence if isinstance(presence, dict) else {}
+    port_coverage = endpoint_facts.get("port_coverage")
+    port_coverage = port_coverage if isinstance(port_coverage, dict) else {}
+    interval = port_coverage.get("collection_interval")
+    interval = interval if isinstance(interval, dict) else {}
+    start = interval.get("start") if isinstance(interval.get("start"), dict) else {}
+    end = interval.get("end") if isinstance(interval.get("end"), dict) else {}
+    numeric_interval = None
+    if completed and interval.get("eligible") is True:
+        try:
+            start_value, end_value = Decimal(start["raw"]), Decimal(end["raw"])
+            if (start_value.is_finite() and end_value.is_finite()
+                    and start_value >= 0 and start_value < end_value
+                    and start.get("valid") is True and end.get("valid") is True
+                    and isinstance(start.get("utc"), str) and isinstance(end.get("utc"), str)):
+                numeric_interval = (start_value, end_value)
+        except (InvalidOperation, KeyError, TypeError):
+            pass
+    record = {
+        "assignment": {
+            "assignment_id": row["assignment_id"],
+            "revision": int(row["revision"]),
+            "event": row["event_kind"],
+            "assigned_at": row["assigned_at"],
+            "actor": row["assignment_actor"],
+            "reason": row["reason"],
+        },
+        "assessment": {
+            "assessment_id": row["assessment_id"],
+            "parser_version": row["parser_version"],
+            "assessed_at": row["assessed_at"],
+            "processed_at": row["recorded_at"],
+        },
+        "source": _source(row),
+        "presence": {
+            "classification": presence.get("classification") or "unknown",
+            "detail": presence.get("detail"),
+        },
+        "collection_window": {"start": start, "end": end},
+        "service_count": int(row["service_count"]),
+    }
+    return record, numeric_interval, completed
+
+
+def _latest_observation_group(candidates: list[dict], unknown_count: int) -> dict:
+    if not candidates:
+        if unknown_count:
+            return {
+                "status": "time_uncertain",
+                "reason": (
+                    "Successful current records exist, but none has a valid source "
+                    "collection window, so NCT cannot claim which is latest overall"
+                ),
+                "records": [],
+                "record_count": 0,
+            }
+        return {
+            "status": "unavailable",
+            "reason": "No successful record has a valid host collection window",
+            "records": [],
+            "record_count": 0,
+        }
+    max_end = max(item["interval"][1] for item in candidates)
+    anchors = [item for item in candidates if item["interval"][1] == max_end]
+    anchor_start = min(item["interval"][0] for item in anchors)
+    while True:
+        group = [
+            item for item in candidates
+            if item["interval"][0] <= max_end and item["interval"][1] >= anchor_start
+        ]
+        expanded_start = min(item["interval"][0] for item in group)
+        if expanded_start == anchor_start:
+            break
+        anchor_start = expanded_start
+    group.sort(key=lambda item: (
+        -item["interval"][1], -item["interval"][0],
+        item["record"]["assessment"]["assessment_id"],
+        item["record"]["assignment"]["assignment_id"],
+    ))
+    if unknown_count:
+        status = "time_uncertain"
+        reason = (
+            "A successful current record has no valid source collection window, so "
+            "NCT cannot claim which supported observation is latest overall"
+        )
+    elif len(group) > 1:
+        status = "overlapping"
+        reason = (
+            "The latest-ending supported observations overlap or share the same source "
+            "collection time; NCT keeps them together"
+        )
+    else:
+        status = "ordered"
+        reason = "This supported observation has the latest non-overlapping source window"
+    return {
+        "status": status,
+        "reason": reason,
+        "records": [item["record"] for item in group],
+        "record_count": len(group),
+    }
+
+
+def _slice_observation_group(group: dict, *, limit: int, offset: int) -> dict:
+    records = group.pop("records")
+    group["records"] = records[offset:offset + limit]
+    group["pagination"] = {
+        "limit": limit,
+        "offset": offset,
+        "total": len(records),
+        "has_more": offset + len(group["records"]) < len(records),
+    }
+    return group
+
+
+def get_foundation_latest_observations(
+    db_path: Path, scope_id: str, entity_id: str, *,
+    limit: int = 10, latest_offset: int = 0,
+    confirmed_offset: int = 0, unknown_offset: int = 0,
+) -> dict:
+    """Derive latest supported and last-confirmed Nmap evidence without current-truth claims."""
+    limit, latest_offset = _page(limit, latest_offset, MAX_RECEIPT_PAGE)
+    _, confirmed_offset = _page(limit, confirmed_offset, MAX_RECEIPT_PAGE)
+    _, unknown_offset = _page(limit, unknown_offset, MAX_RECEIPT_PAGE)
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        scope_row = db.execute(
+            """SELECT scope_id, label, description, version, active
+               FROM network_scopes WHERE scope_id = ?""",
+            (scope_id,),
+        ).fetchone()
+        endpoint = db.execute(
+            """SELECT entity_id, address FROM endpoint_entities
+               WHERE entity_id = ? AND scope_id = ?""",
+            (entity_id, scope_id),
+        ).fetchone()
+        if scope_row is None or endpoint is None:
+            raise KeyError("Processed endpoint not found in this Network Scope")
+        rows = db.execute(
+            _LATEST_OBSERVATION_CANDIDATES_SQL,
+            (scope_id, entity_id, NMAP_ENDPOINT_PARSER,
+             MAX_LATEST_SELECTION_CANDIDATES + 1),
+        ).fetchall()
+    if len(rows) > MAX_LATEST_SELECTION_CANDIDATES:
+        raise ValueError(
+            "Latest-observation selection exceeds the reviewed per-address safety bound"
+        )
+    timed = []
+    confirmed = []
+    unknown_records = []
+    incomplete_count = 0
+    confirmed_unknown_count = 0
+    for row in rows:
+        record, interval, completed = _supported_observation_candidate(row)
+        if not completed:
+            incomplete_count += 1
+            continue
+        if interval is None:
+            unknown_records.append(record)
+            if record["presence"]["classification"] == "confirmed":
+                confirmed_unknown_count += 1
+            continue
+        candidate = {"record": record, "interval": interval}
+        timed.append(candidate)
+        if record["presence"]["classification"] == "confirmed":
+            confirmed.append(candidate)
+    unknown_records.sort(key=lambda item: (
+        item["assessment"]["assessment_id"], item["assignment"]["assignment_id"],
+    ))
+    latest = _slice_observation_group(
+        _latest_observation_group(timed, len(unknown_records)),
+        limit=limit, offset=latest_offset,
+    )
+    last_confirmed = _slice_observation_group(
+        _latest_observation_group(confirmed, confirmed_unknown_count),
+        limit=limit, offset=confirmed_offset,
+    )
+    unknown_page = unknown_records[unknown_offset:unknown_offset + limit]
+    return {
+        "contract": LATEST_OBSERVATION_SELECTION_CONTRACT,
+        "scope": _scope(scope_row),
+        "endpoint": {"entity_id": endpoint["entity_id"], "address": endpoint["address"]},
+        "latest_supported_observations": latest,
+        "last_confirmed_observations": last_confirmed,
+        "unknown_time_records": unknown_page,
+        "unknown_time_pagination": {
+            "limit": limit,
+            "offset": unknown_offset,
+            "total": len(unknown_records),
+            "has_more": unknown_offset + len(unknown_page) < len(unknown_records),
+        },
+        "incomplete_record_count": incomplete_count,
+        "read_only": True,
+        "claims": {
+            "live_or_current_truth": False,
+            "physical_device_identity": False,
+            "exact_last_seen_timestamp": False,
+            "last_confirmed_source_window": bool(
+                last_confirmed["record_count"]
+                and last_confirmed["status"] in {"ordered", "overlapping"}
+            ),
+            "service_disappearance": False,
+        },
     }
 
 

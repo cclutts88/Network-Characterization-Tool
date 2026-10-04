@@ -71,7 +71,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "does not say the service is gone now" in html
     assert "does not create a service change" in html
     assert "Versioned coverage receipts retain successful completion" in html
-    assert "does not treat the most recently processed file as automatic truth" in html
+    assert "Latest supported and last confirmed Nmap source windows" in html
+    assert "last confirmed positive observation" in html
+    assert "never treats processing time as observation time" in html
     assert "Planned: passive activity summaries" in html
     assert "Build details · version" in html
     assert "registered Nmap and device artifacts" in html

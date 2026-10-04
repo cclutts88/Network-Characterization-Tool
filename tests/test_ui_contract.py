@@ -189,6 +189,9 @@ def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
 def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "const actionGuideHints=" in SHELL_SCRIPT
     assert "function actionGuideFor(control)" in SHELL_SCRIPT
+    assert "[data-latest-observations]" in SHELL_SCRIPT
+    assert "last confirmed positive observation, with direct evidence links" in SHELL_SCRIPT
+    assert "This is not a live check or an exact Last Seen time" in SHELL_SCRIPT
     assert "Builds and downloads a certified ZIP" in SHELL_SCRIPT
     assert "It does not run Nmap or add evidence to NCT" in SHELL_SCRIPT
     assert "import the completed XML files" in SHELL_SCRIPT
@@ -1869,6 +1872,14 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="loadProcessedEvidence"' in html
     assert "/api/foundation-evidence/scopes" in html
     assert "Open saved source records" in html
+    assert "Open latest supported observations" in html
+    assert "/latest-observations?${params}" in html
+    assert "Last confirmed observation" in html
+    assert "Latest supported observation" in html
+    assert "Successful records with uncertain source time" in html
+    assert "Saved evidence windows, not live status" in html
+    assert "processedEvidenceSource(record.source)" in html
+    assert "data-latest-page" in html
     assert "Open ${serviceCount} reported service" in html
     assert "Processed source records for this scope" in html
     assert "Use as Record A" in html
@@ -1885,7 +1896,7 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "does not prove the service is gone now" in html
     assert "Coverage-aware historical comparison complete" in html
     assert "processedEvidenceSelectionSignature" in html
-    assert "const comparison=historical?'':" in html
+    assert "comparison=historical?'':" in html
     assert "if(!run)return" in html
     assert "if(allowComparison)bindProcessedEvidenceComparisonRecords" in html
     assert "className='processed-evidence-comparison-status status good'" in html
@@ -1899,7 +1910,7 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "Addresses with separate history" in html
     assert 'id="loadMoreProcessedScopes"' in html
     assert "request!==processedEvidenceRequest" in html
-    assert "does not select the latest network truth" in html
+    assert "do not claim live network truth" in html
     assert "loadProcessedEvidenceScopes" in html
     assert 'id="networkControlsPanel"' not in html
     assert '<span>Routes and policy</span>' not in html

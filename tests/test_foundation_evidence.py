@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import sqlite3
 import pytest
 
 from app.artifacts import register_artifact_bytes
@@ -8,6 +9,7 @@ from app.evidence_scope_assignments import assign_artifact_scope, correct_artifa
 from app.foundation_evidence import (
     compare_foundation_receipt_services,
     get_foundation_endpoint_evidence,
+    get_foundation_latest_observations,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
     list_foundation_evidence_scopes,
@@ -70,6 +72,27 @@ def lifecycle_xml(
         f'<host starttime="{host_start}" endtime="{host_end}"><status state="up" reason="syn-ack"/>'
         f'<address addr="{address}" addrtype="ipv4"/><ports>{extras}{"".join(ports)}</ports>'
         f'</host><runstats><finished time="{finish}" exit="success"/></runstats></nmaprun>'
+    ).encode()
+
+
+def large_assessment_xml(host_count=1000):
+    hosts = []
+    for index in range(host_count):
+        third, fourth = divmod(index, 250)
+        address = f"10.20.{third}.{fourth + 1}"
+        hosts.append(
+            f'<host starttime="101" endtime="109"><status state="up" '
+            f'reason="syn-ack"/><address addr="{address}" addrtype="ipv4"/>'
+            f'<ports><port protocol="tcp" portid="22"><state state="open" '
+            f'reason="syn-ack"/><service name="ssh"/></port></ports></host>'
+        )
+    return (
+        '<nmaprun scanner="nmap" args="nmap -n -p22 10.20.0.0/16" start="100">'
+        '<scaninfo type="syn" protocol="tcp" numservices="1" services="22"/>'
+        + "".join(hosts)
+        + '<runstats><finished time="110" exit="success"/>'
+        f'<hosts up="{host_count}" down="0" total="{host_count}"/>'
+        '</runstats></nmaprun>'
     ).encode()
 
 
@@ -301,12 +324,18 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
                 "record_b_assessment_id": record_b["assessment_id"],
             },
         )
+        latest = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}"
+            f"/endpoints/{entity_id}/latest-observations"
+        )
         missing = client.get("/api/foundation-evidence/scopes/missing")
         rejected = client.post("/api/foundation-evidence/scopes")
     assert scopes.status_code == 200
     assert detail.status_code == 200
     assert comparison.status_code == 200
     assert comparison.json()["read_only"] is True
+    assert latest.status_code == 200
+    assert latest.json()["contract"] == "latest-supported-nmap-observations:1"
     assert missing.status_code == 404
     # The shared viewer guard rejects all non-read methods before route matching.
     assert rejected.status_code == 403
@@ -339,8 +368,12 @@ def test_read_model_opens_database_read_only(tmp_path, monkeypatch):
         db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
         record_a, record_b,
     )
+    latest = evidence.get_foundation_latest_observations(
+        db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
+    )
     assert catalog["read_only"] is True
-    assert calls == [True, True, True, True]
+    assert latest["read_only"] is True
+    assert calls == [True, True, True, True, True]
 
 
 def test_scope_read_is_one_snapshot_when_a_correction_commits_mid_read(tmp_path, monkeypatch):
@@ -906,3 +939,446 @@ def test_service_comparison_is_one_read_only_snapshot_during_correction(tmp_path
             record_b_assignment_id=second_assignment["assignment_id"],
             record_b_assessment_id=second_processing["assessment_id"],
         )
+
+
+def _latest_for(db, destination):
+    scoped = get_foundation_scope_evidence(db, destination["scope_id"])
+    assert len(scoped["endpoints"]) == 1
+    return get_foundation_latest_observations(
+        db, destination["scope_id"], scoped["endpoints"][0]["entity_id"],
+    )
+
+
+def test_latest_observation_uses_source_windows_not_import_or_processing_order(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    later_source = observation(
+        db, "upload:later-source", observed_at="2029-01-01T00:00:00+00:00",
+        content=lifecycle_xml([22], [("tcp", 22, "open")], start=200),
+    )
+    earlier_source = observation(
+        db, "upload:earlier-source", observed_at="2031-01-01T00:00:00+00:00",
+        content=lifecycle_xml([22], [("tcp", 22, "open")], start=100),
+    )
+    process(db, assign(db, later_source, lab))
+    process(db, assign(db, earlier_source, lab))
+
+    result = _latest_for(db, lab)
+    latest = result["latest_supported_observations"]
+    confirmed = result["last_confirmed_observations"]
+    assert latest["status"] == confirmed["status"] == "ordered"
+    assert latest["records"][0]["source"]["observation_id"] == later_source["observation_id"]
+    assert confirmed["records"][0]["collection_window"]["end"]["raw"] == "209"
+    assert result["claims"]["last_confirmed_source_window"] is True
+    assert result["claims"]["live_or_current_truth"] is False
+    assert result["claims"]["exact_last_seen_timestamp"] is False
+
+
+def test_latest_observation_keeps_overlapping_and_duplicate_encounters(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    overlapping = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=100,
+        host_start=105, host_end=114, finish=115,
+    )
+    latest = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=105,
+        host_start=108, host_end=114, finish=115,
+    )
+    items = [
+        observation(db, "upload:overlap", content=overlapping),
+        observation(db, "upload:duplicate-one", content=latest),
+        observation(db, "upload:duplicate-two", content=latest),
+    ]
+    for item in items:
+        process(db, assign(db, item, lab))
+
+    result = _latest_for(db, lab)
+    group = result["last_confirmed_observations"]
+    assert group["status"] == "overlapping"
+    assert group["record_count"] == 3
+    assert {item["source"]["observation_id"] for item in group["records"]} == {
+        item["observation_id"] for item in items
+    }
+    assert all(item["source"]["source_url"] for item in group["records"])
+
+
+def test_latest_observation_keeps_transitively_overlapping_windows_together(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    windows = [(100, 120), (90, 105), (80, 95), (10, 20)]
+    items = []
+    for index, (host_start, host_end) in enumerate(windows):
+        item = observation(
+            db, f"upload:chain-{index}", content=lifecycle_xml(
+                [22], [("tcp", 22, "open")], start=host_start - 1,
+                host_start=host_start, host_end=host_end, finish=host_end + 1,
+            ),
+        )
+        process(db, assign(db, item, lab))
+        items.append(item)
+
+    result = _latest_for(db, lab)
+    group = result["last_confirmed_observations"]
+    assert group["status"] == "overlapping"
+    assert group["record_count"] == 3
+    assert {record["source"]["observation_id"] for record in group["records"]} == {
+        item["observation_id"] for item in items[:3]
+    }
+
+
+def test_unknown_source_time_blocks_latest_claim_and_remains_visible(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    valid = observation(
+        db, "upload:timed", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=100,
+        ),
+    )
+    unknown_xml = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=200,
+    ).replace(b' starttime="201" endtime="209"', b'')
+    unknown = observation(db, "upload:unknown-time", content=unknown_xml)
+    process(db, assign(db, valid, lab))
+    process(db, assign(db, unknown, lab))
+
+    result = _latest_for(db, lab)
+    assert result["latest_supported_observations"]["status"] == "time_uncertain"
+    assert result["last_confirmed_observations"]["status"] == "time_uncertain"
+    assert result["unknown_time_pagination"]["total"] == 1
+    assert result["unknown_time_records"][0]["source"]["observation_id"] == unknown["observation_id"]
+    assert result["claims"]["last_confirmed_source_window"] is False
+
+
+def test_only_unknown_source_times_report_uncertainty_instead_of_no_evidence(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    unknown_xml = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=200,
+    ).replace(b' starttime="201" endtime="209"', b'')
+    process(db, assign(db, observation(
+        db, "upload:only-unknown-time", content=unknown_xml,
+    ), lab))
+
+    result = _latest_for(db, lab)
+    assert result["latest_supported_observations"]["status"] == "time_uncertain"
+    assert result["last_confirmed_observations"]["status"] == "time_uncertain"
+    assert result["unknown_time_pagination"]["total"] == 1
+
+
+def test_later_assumed_or_incomplete_record_does_not_erase_confirmed_evidence(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    confirmed = observation(
+        db, "upload:confirmed", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=100,
+        ),
+    )
+    assumed_xml = lifecycle_xml(
+        [22], [], start=200, omitted_state="open|filtered",
+    ).replace(
+        b'<status state="up" reason="syn-ack"/>',
+        b'<status state="up" reason="user-set"/>',
+    )
+    assumed = observation(db, "upload:assumed", content=assumed_xml)
+    incomplete_xml = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=300,
+    ).replace(b'exit="success"', b'exit="error"')
+    incomplete = observation(db, "upload:incomplete", content=incomplete_xml)
+    for item in (confirmed, assumed, incomplete):
+        process(db, assign(db, item, lab))
+
+    result = _latest_for(db, lab)
+    assert result["latest_supported_observations"]["records"][0]["presence"]["classification"] == "assumed"
+    assert result["last_confirmed_observations"]["records"][0]["source"]["observation_id"] == confirmed["observation_id"]
+    assert result["incomplete_record_count"] == 1
+    assert result["claims"]["service_disappearance"] is False
+
+
+def test_pending_failed_and_older_parser_records_do_not_replace_supported_latest(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    supported = observation(
+        db, "upload:supported", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=100,
+        ),
+    )
+    supported_assignment = assign(db, supported, lab)
+    process(db, supported_assignment, parser_version="nmap-endpoints:legacy")
+    process(db, supported_assignment)
+    pending = observation(
+        db, "upload:pending", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=200,
+        ),
+    )
+    assign(db, pending, lab)
+    failed = observation(db, "upload:failed", content=b"<not-nmap />")
+    failed_assignment = assign(db, failed, lab)
+    with pytest.raises(ValueError):
+        process(db, failed_assignment)
+
+    result = _latest_for(db, lab)
+    records = result["latest_supported_observations"]["records"]
+    assert len(records) == 1
+    assert records[0]["source"]["observation_id"] == supported["observation_id"]
+    assert records[0]["assessment"]["parser_version"] == "nmap-endpoints:2"
+
+
+def test_latest_observation_groups_and_unknown_times_have_independent_pages(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    overlapping_ids = []
+    unknown_ids = []
+    for index in range(12):
+        item = observation(
+            db, f"upload:overlap-page-{index}", content=lifecycle_xml(
+                [22], [("tcp", 22, "open")], start=100,
+                host_start=101 + index, host_end=120, finish=121,
+            ),
+        )
+        process(db, assign(db, item, lab))
+        overlapping_ids.append(item["observation_id"])
+    for index in range(12):
+        content = lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=200 + index,
+        ).replace(
+            f' starttime="{201 + index}" endtime="{209 + index}"'.encode(), b"",
+        )
+        item = observation(db, f"upload:unknown-page-{index}", content=content)
+        process(db, assign(db, item, lab))
+        unknown_ids.append(item["observation_id"])
+
+    scoped = get_foundation_scope_evidence(db, lab["scope_id"])
+    entity_id = scoped["endpoints"][0]["entity_id"]
+    first = get_foundation_latest_observations(
+        db, lab["scope_id"], entity_id, limit=5,
+    )
+    second = get_foundation_latest_observations(
+        db, lab["scope_id"], entity_id, limit=5,
+        latest_offset=5, confirmed_offset=5, unknown_offset=5,
+    )
+    assert first["latest_supported_observations"]["pagination"] == {
+        "limit": 5, "offset": 0, "total": 12, "has_more": True,
+    }
+    assert second["last_confirmed_observations"]["pagination"] == {
+        "limit": 5, "offset": 5, "total": 12, "has_more": True,
+    }
+    assert first["unknown_time_pagination"] == {
+        "limit": 5, "offset": 0, "total": 12, "has_more": True,
+    }
+    selected = {
+        item["source"]["observation_id"]
+        for result in (first, second)
+        for item in result["unknown_time_records"]
+    }
+    assert len(selected) == 10
+    assert selected.issubset(set(unknown_ids))
+
+
+def test_latest_observation_preserves_scope_address_identity_and_corrections(tmp_path):
+    db = tmp_path / "nct.db"
+    first, second = scope(db, "First"), scope(db, "Second")
+    ipv4_first = observation(
+        db, "upload:first", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], address="192.0.2.10", start=100,
+        ),
+    )
+    ipv4_second = observation(
+        db, "upload:second", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], address="192.0.2.10", start=200,
+        ),
+    )
+    ipv6_xml = lifecycle_xml(
+        [22], [("tcp", 22, "open")], address="2001:db8::10", start=300,
+    ).replace(b'addrtype="ipv4"', b'addrtype="ipv6"')
+    ipv6 = observation(db, "upload:ipv6", content=ipv6_xml)
+    root = assign(db, ipv4_first, first)
+    process(db, root)
+    moved = correct_artifact_scope(
+        db, expected_assignment_id=root["assignment_id"],
+        destination_scope_id=second["scope_id"], actor="analyst",
+        reason="Corrected context", whole_artifact_confirmed=True,
+    )
+    process(db, moved)
+    returned = correct_artifact_scope(
+        db, expected_assignment_id=moved["assignment_id"],
+        destination_scope_id=first["scope_id"], actor="analyst",
+        reason="Confirmed original context", whole_artifact_confirmed=True,
+    )
+    process(db, returned)
+    process(db, assign(db, ipv4_second, second))
+    process(db, assign(db, ipv6, first))
+
+    first_scope = get_foundation_scope_evidence(db, first["scope_id"])
+    second_scope = get_foundation_scope_evidence(db, second["scope_id"])
+    assert {item["address"] for item in first_scope["endpoints"]} == {
+        "192.0.2.10", "2001:db8::10",
+    }
+    assert {item["address"] for item in second_scope["endpoints"]} == {"192.0.2.10"}
+    first_v4 = next(item for item in first_scope["endpoints"] if item["address"] == "192.0.2.10")
+    second_v4 = second_scope["endpoints"][0]
+    assert first_v4["entity_id"] != second_v4["entity_id"]
+    first_latest = get_foundation_latest_observations(
+        db, first["scope_id"], first_v4["entity_id"],
+    )
+    assert first_latest["last_confirmed_observations"]["record_count"] == 1
+    assert first_latest["last_confirmed_observations"]["records"][0]["assignment"]["assignment_id"] == returned["assignment_id"]
+    archive_network_scope(
+        db, first["scope_id"], expected_version=1,
+        archived_by="admin", reason="Retained historical scope",
+    )
+    assert get_foundation_latest_observations(
+        db, first["scope_id"], first_v4["entity_id"],
+    )["scope"]["active"] is False
+
+
+def test_latest_observation_is_one_read_only_snapshot_during_correction(tmp_path, monkeypatch):
+    import app.foundation_evidence as evidence
+
+    db = tmp_path / "nct.db"
+    first, second = scope(db, "First"), scope(db, "Second")
+    root = assign(db, observation(
+        db, "upload:latest-snapshot", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=100,
+        ),
+    ), first)
+    process(db, root)
+    entity_id = get_foundation_scope_evidence(
+        db, first["scope_id"],
+    )["endpoints"][0]["entity_id"]
+    original = evidence.connect_database
+    correction = []
+
+    class ConnectionProxy:
+        def __init__(self, connection):
+            object.__setattr__(self, "connection", connection)
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def __setattr__(self, name, value):
+            setattr(self.connection, name, value)
+
+        def execute(self, sql, values=()):
+            if "WITH current_assignments AS (" in sql and not correction:
+                correction.append(correct_artifact_scope(
+                    db, expected_assignment_id=root["assignment_id"],
+                    destination_scope_id=second["scope_id"], actor="analyst",
+                    reason="Concurrent latest correction",
+                    whole_artifact_confirmed=True,
+                ))
+            return self.connection.execute(sql, values)
+
+    monkeypatch.setattr(
+        evidence, "connect_database",
+        lambda path, *, read_only=False: ConnectionProxy(
+            original(path, read_only=read_only)
+        ),
+    )
+    during = evidence.get_foundation_latest_observations(
+        db, first["scope_id"], entity_id,
+    )
+    assert correction
+    assert during["last_confirmed_observations"]["record_count"] == 1
+
+    monkeypatch.setattr(evidence, "connect_database", original)
+    after = evidence.get_foundation_latest_observations(
+        db, first["scope_id"], entity_id,
+    )
+    assert after["last_confirmed_observations"]["record_count"] == 0
+
+
+def test_latest_observation_projects_small_metadata_from_large_assessment(tmp_path, monkeypatch):
+    import app.foundation_evidence as evidence
+
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Large Lab")
+    process(db, assign(db, observation(
+        db, "upload:large-assessment", content=large_assessment_xml(),
+    ), lab))
+    with sqlite3.connect(db) as connection:
+        payload_size = connection.execute(
+            "SELECT length(payload_json) FROM entity_assessments"
+        ).fetchone()[0]
+    assert payload_size > 500_000
+
+    scoped = get_foundation_scope_evidence(db, lab["scope_id"], limit=1)
+    entity_id = scoped["endpoints"][0]["entity_id"]
+    projected_sizes = []
+    original = evidence._supported_observation_candidate
+
+    def checked(row):
+        assert "payload_json" not in row.keys()
+        projected_sizes.append(sum(
+            len(str(row[key])) for key in row.keys() if row[key] is not None
+        ))
+        return original(row)
+
+    monkeypatch.setattr(evidence, "_supported_observation_candidate", checked)
+    result = evidence.get_foundation_latest_observations(
+        db, lab["scope_id"], entity_id,
+    )
+    assert result["last_confirmed_observations"]["record_count"] == 1
+    assert projected_sizes and max(projected_sizes) < 20_000
+
+
+def test_latest_observation_treats_malformed_assessment_payload_as_incomplete(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    process(db, assign(db, observation(
+        db, "upload:malformed-payload", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=100,
+        ),
+    ), lab))
+    scoped = get_foundation_scope_evidence(db, lab["scope_id"])
+    with sqlite3.connect(db) as connection:
+        connection.execute("DROP TRIGGER entity_assessments_no_update")
+        connection.execute("UPDATE entity_assessments SET payload_json = '{'")
+        connection.commit()
+
+    result = get_foundation_latest_observations(
+        db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
+    )
+    assert result["latest_supported_observations"]["status"] == "unavailable"
+    assert result["incomplete_record_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("replacement", "label"),
+    [("1", "integer"), ("1.0", "decimal"), ('"true"', "true string"),
+     ('"1"', "one string")],
+)
+def test_latest_observation_requires_boolean_true_completion(
+    tmp_path, replacement, label,
+):
+    db = tmp_path / f"{label.replace(' ', '-')}.db"
+    lab = scope(db, "Lab")
+    process(db, assign(db, observation(
+        db, f"upload:{label}", content=lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=100,
+        ),
+    ), lab))
+    scoped = get_foundation_scope_evidence(db, lab["scope_id"])
+    entity_id = scoped["endpoints"][0]["entity_id"]
+    accepted = get_foundation_latest_observations(db, lab["scope_id"], entity_id)
+    assert accepted["last_confirmed_observations"]["status"] == "ordered"
+
+    with sqlite3.connect(db) as connection:
+        connection.execute("DROP TRIGGER entity_assessments_no_update")
+        connection.execute(
+            """UPDATE entity_assessments
+               SET payload_json = json_set(
+                   payload_json,
+                   '$.facts.coverage.completion.successful',
+                   json(?)
+               )""",
+            (replacement,),
+        )
+        connection.commit()
+    rejected = get_foundation_latest_observations(db, lab["scope_id"], entity_id)
+    assert rejected["latest_supported_observations"]["status"] == "unavailable"
+    assert rejected["incomplete_record_count"] == 1

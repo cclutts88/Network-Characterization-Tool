@@ -45,7 +45,35 @@ All entity and receipt writes for one assessment commit together. A failed write
 rolls back the entire assessment. Initial schema setup is guarded once per database.
 Facts are preserved without promoting assumed host presence, filtered ports or
 missing observations into positive presence/absence claims. There is deliberately
-no latest/current-state selection or Last Seen calculation in this layer.
+no mutable current-host row or automatic disappearance calculation in this layer.
+
+## Latest supported observations
+
+`latest-supported-nmap-observations:1` is the first bounded read-only selection
+contract. It applies only to one exact `(Network Scope, IP address)` endpoint and
+derives its answer from immutable Nmap assessments, endpoint receipts and current,
+unsuperseded scope assignments in one database snapshot.
+
+The selector includes only the current supported parser and source records that prove
+successful completion. It orders them by validated host collection intervals written
+inside the evidence, never by upload, assignment, processing or job time. Records whose
+source window is missing or invalid remain visible and prevent an unqualified
+latest-overall claim. Equal and transitively overlapping latest windows remain grouped
+so database row order cannot break an evidentiary tie.
+
+The output deliberately separates:
+
+- **Latest supported observation**: the latest eligible source window, regardless of
+  whether presence was confirmed or merely assumed.
+- **Last confirmed observation**: the latest eligible source window that positively
+  confirmed the address, with direct links to every supporting retained source.
+
+These are evidence-window statements, not live status or an exact `Last Seen`
+timestamp. A later assumed record, incomplete scan, omitted address or unassessed port
+does not erase earlier positive evidence. The selector does not merge addresses into a
+physical device, infer service disappearance, adopt an older parser, rewrite receipts,
+or contact a network. Device-configuration addresses remain collection facts until a
+separate scoped-device observation contract is reviewed.
 
 ## Remaining gates
 
@@ -69,8 +97,9 @@ no latest/current-state selection or Last Seen calculation in this layer.
   precision matters. NCT's combined `scan.xml` keeps the last phase's scan-finished
   time but does not attach a phase timestamp to each merged port observation.
 - Physical Host/Device reconciliation and normalized network/interface entities.
-- Typed evidence read models now include a read-only scoped explorer and coverage-aware
-  historical service lifecycle labels. Automatic current-state selection remains open.
+- Typed evidence read models now include a read-only scoped explorer, latest supported
+  Nmap evidence windows, last confirmed positive source windows, and coverage-aware
+  historical service lifecycle labels. Broader current-state selection remains open.
 - The first bounded comparison slice is specified in
   [FOUNDATION_EVIDENCE_COMPARISON.md](FOUNDATION_EVIDENCE_COMPARISON.md). It compares
   two selected source records and uses versioned coverage receipts to label supported
@@ -78,5 +107,5 @@ no latest/current-state selection or Last Seen calculation in this layer.
 - Parser-result caching, processing jobs, failure status and source-change validation.
 - Broader production-consumer integration, migration and operator acceptance.
 
-The storage contract alone does not complete canonical entities, evidence receipts,
-Last Seen, delta detection or the broader roadmap.
+The storage and first selection contracts do not complete physical-device identity,
+an exact Last Seen model, automatic service absence, or the broader roadmap.
