@@ -29,6 +29,13 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
 
 def test_system_health_explains_bounded_calculation_status():
     html = storage_page().body.decode()
+    assert "Evidence intake status" in html
+    assert "Processing is local and never starts a scan or contacts a device" in html
+    assert "/api/system/ingestion-status?limit=${ingestionLimit}&offset=${requestedOffset}" in html
+    assert "requestId!==ingestionRequestId" in html
+    assert "in original history and" in html
+    assert "not included in this processing view" in html
+    assert "byId('ingestionNext').onclick" in html
     assert "Saved analysis work" in html
     assert "Queued work resumes automatically after restart" in html
     assert "actively running is marked Interrupted" in html

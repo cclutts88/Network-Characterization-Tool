@@ -600,6 +600,19 @@ claim, publication, or restart safeguards; subsequent gates connect intake, norm
 device evidence, current-state/Last Seen views, automatic affected-work selection, and
 acceptance benchmarks.
 
+**2026-10-04 supported-ingestion acceptance view start:** add one paged System
+Health view derived from authoritative intake markers, scope decisions, queue attempts
+and exact saved outputs in a single read-only SQLite snapshot. It must keep separate
+encounters separate even when their bytes match, expose missing scope, waiting, queued,
+running, failed, interrupted, blocked and completed stages, retain historical unadopted
+evidence as an explicit count, and link back to the source workflow. Page loads must not
+open or hash evidence files, initialize schema, enqueue work, parse source content or
+publish results. Completion requires all four supported intake paths through the real
+coordinator and worker, delayed-response pagination tests, restart/partial-failure and
+missing-output checks, a disposable end-to-end benchmark, independent review and novice
+operator browser acceptance. This gate is development acceptance for the foundation
+branch; it is not Range, mission, stable-main or production-scale acceptance.
+
 ## Steps
 
 1. [~] Artifact hashing and deduplication.

@@ -36,6 +36,7 @@ from app.nmap_assignment_workflow import (
 from app.storage_health import recover_incomplete_compactions, storage_status, start_storage_job
 from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
+from app.ingestion_status import list_ingestion_status
 from app.derived_result_status import list_derived_result_status
 from app.derived_version_inventory import (
     list_version_group_results,
@@ -1455,6 +1456,16 @@ def system_analysis_jobs(
 ) -> dict:
     require_storage_admin(request)
     return list_derived_jobs(DB_PATH, limit=limit, offset=offset)
+
+
+@app.get("/api/system/ingestion-status")
+def system_ingestion_status(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_storage_admin(request)
+    return list_ingestion_status(DB_PATH, limit=limit, offset=offset)
 
 
 @app.post("/api/scan-runs/{run_id}/analysis-jobs", status_code=202)
