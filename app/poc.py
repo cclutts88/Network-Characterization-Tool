@@ -77,6 +77,7 @@ from app.saved_network_scope_associations import (
 )
 from app.request_identity import bind_signed_in_actor
 from app.automated_nmap_foundation import get_automated_scan_foundation_status
+from app.derived_jobs import scan_run_job_statuses
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -4772,12 +4773,15 @@ def grouped_scan_run_history(
         "network_scope_context",
     }
     for group in groups:
+        run_ids = [run["run_id"] for run in group.get("runs", [])]
+        analysis_jobs = scan_run_job_statuses(DB_PATH, run_ids, DATA_DIR)
         group["runs"] = [
             {
                 **{key: value for key, value in run.items() if key in fields},
                 "foundation_status": get_automated_scan_foundation_status(
                     DB_PATH, run["run_id"]
                 ),
+                "analysis_job_status": analysis_jobs.get(run["run_id"], {}),
             }
             for run in group.get("runs", [])
         ]

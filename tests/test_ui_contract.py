@@ -29,6 +29,12 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
 
 def test_system_health_explains_bounded_calculation_status():
     html = storage_page().body.decode()
+    assert "Saved analysis work" in html
+    assert "Queued work resumes automatically after restart" in html
+    assert "actively running is marked Interrupted" in html
+    assert "/api/system/analysis-jobs?limit=${jobLimit}&offset=${requestedOffset}" in html
+    assert "Use Scan History to prepare or retry saved analysis" in html
+    assert "'saved analysis work':['Saved analysis work'" in SHELL_SCRIPT
     assert "Reusable analysis status" in html
     assert "does not mean the source evidence is recent, intact, or still true" in html
     assert "/api/system/analysis-status?limit=${analysisLimit}&offset=${requestedOffset}" in html
@@ -84,6 +90,26 @@ def test_system_health_explains_bounded_calculation_status():
     assert "byId('impactRows').replaceChildren();byId('impactPage').textContent='Loading saved calculation records'" in html
     assert "byId('impactPrevious').disabled=true;byId('impactNext').disabled=true" in html
     assert "document.body.classList.toggle(side==='personal'?'nct-notes-personal-open':'nct-notes-shared-open',open)" in SESSION_SCRIPT
+
+
+def test_scan_history_offers_durable_local_saved_analysis_work():
+    html = operator_page().body.decode()
+    assert "Prepare saved analysis" in html
+    assert "Retry saved analysis" in html
+    assert "It will resume automatically after a restart" in html
+    assert "A retry uses the retained scan.xml and does not rescan" in html
+    assert "/analysis-jobs`" in html
+    assert "/retry`" in html
+    assert "'prepare saved analysis':['Prepare saved analysis'" in SHELL_SCRIPT
+    assert "'retry saved analysis':['Retry saved analysis'" in SHELL_SCRIPT
+    assert "function analysisRequestToken()" in html
+    assert "Math.random().toString(36).slice(2)" in html
+    assert "request_token:analysisRequestToken()" in html
+    assert "historyJobTimer=setTimeout(()=>loadHistory(true,true),1500)" in html
+    assert "loadedTarget=refreshLoaded?Math.max(historyOffset,25):25" in html
+    assert "for(let pageOffset=0;pageOffset<loadedTarget;pageOffset+=200)" in html
+    assert "historyOffset=refreshLoaded?count:offset+count" in html
+    assert "item.open=openGroups.has(item.dataset.historyGroup)" in html
 
 
 def test_theme_cards_and_navigation_icons_match_their_actions():

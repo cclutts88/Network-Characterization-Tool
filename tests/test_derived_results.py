@@ -139,6 +139,26 @@ def test_publication_is_atomic_when_observation_disappears(tmp_path):
         assert connection.execute("SELECT COUNT(*) FROM derived_result_inputs").fetchone()[0] == 0
 
 
+def test_publication_finalize_failure_rolls_back_result_inputs_and_links(tmp_path):
+    db = tmp_path / "nct.db"
+    source = observation(db)
+    item = prepared(source["sha256"])
+
+    def reject(_db, _created):
+        raise RuntimeError("job claim was lost")
+
+    with pytest.raises(RuntimeError, match="claim was lost"):
+        publish_derived_result(
+            db, item,
+            observation_links=[{"role": "source", "observation_id": source["observation_id"]}],
+            transaction_finalize=reject,
+        )
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM derived_result_inputs").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM derived_result_observation_links").fetchone()[0] == 0
+
+
 def test_concurrent_duplicate_publication_is_idempotent(tmp_path):
     db = tmp_path / "nct.db"
     source = observation(db)

@@ -309,6 +309,7 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
     assert client.get("/api/system/storage").status_code == expected
     assert client.get("/api/system/analysis-status").status_code == expected
     assert client.get("/api/system/analysis-versions").status_code == expected
+    assert client.get("/api/system/analysis-jobs").status_code == expected
     if role != "admin":
         assert client.get("/api/system/analysis-status/missing/inputs").status_code == expected
         assert client.get(
@@ -325,6 +326,7 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
         assert client.get("/settings/system-health").status_code == 200
         assert client.get("/api/system/analysis-status?limit=101").status_code == 422
         assert client.get("/api/system/analysis-versions?limit=101").status_code == 422
+        assert client.get("/api/system/analysis-jobs?limit=101").status_code == 422
         assert client.get(
             "/api/system/analysis-versions/bad/results?representative_result_id=result"
         ).status_code == 400
@@ -337,3 +339,39 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
         ).status_code == 422
         assert client.post("/api/system/storage/delete").status_code == 400
         assert client.post("/api/system/storage/dry-run", headers={"Origin": "https://unrelated.example"}).status_code == 403
+
+
+@pytest.mark.parametrize("role,expected", [("viewer", 403), ("analyst", 202), ("admin", 202)])
+def test_saved_analysis_mutation_roles_origin_and_server_actor(
+    tmp_path, monkeypatch, role, expected,
+):
+    import app.main as main
+
+    calls = []
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "analyzer.db")
+    monkeypatch.setattr(main, "auth_enabled", lambda: True)
+    monkeypatch.setattr(
+        main, "session_identity",
+        lambda *args: {"username": "alice", "display_name": "Alice", "role": role},
+    )
+    monkeypatch.setattr(
+        main, "enqueue_nmap_base_job",
+        lambda db, run_id, **kwargs: calls.append(("initial", run_id, kwargs)) or {"job_id": "job"},
+    )
+    monkeypatch.setattr(
+        main, "retry_derived_job",
+        lambda db, job_id, **kwargs: calls.append(("retry", job_id, kwargs)) or {"job_id": job_id},
+    )
+    client = TestClient(main.app)
+    body = {"request_token": "browser-request"}
+    initial = client.post("/api/scan-runs/" + "a" * 32 + "/analysis-jobs", json=body)
+    retry = client.post("/api/system/analysis-jobs/job/retry", json=body)
+    assert initial.status_code == expected
+    assert retry.status_code == expected
+    if expected == 202:
+        assert [call[2]["requested_by"] for call in calls] == ["alice", "alice"]
+        blocked = client.post(
+            "/api/scan-runs/" + "a" * 32 + "/analysis-jobs",
+            json=body, headers={"Origin": "https://outside.example"},
+        )
+        assert blocked.status_code == 403

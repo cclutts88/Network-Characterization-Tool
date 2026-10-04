@@ -175,6 +175,37 @@ and its result count is not a count of jobs required. The inventory does not ins
 source bytes, determine evidence freshness, mark results stale, invalidate dependents,
 schedule work or rebuild analysis.
 
+## Operator-requested saved analysis jobs
+
+From Scan History, an analyst can explicitly choose **Prepare saved analysis** for one
+finalized scan that has exactly one authoritative registered aggregate `scan.xml` and
+an intact run-local copy. The first job type runs only the current Nmap base-analysis
+contract. It reads retained files and never starts Nmap or contacts the network.
+
+The durable request freezes the scan encounter, artifact observation, digest, size,
+calculation family, rule version, output schema, settings and expected computation
+identity. A request token makes browser retries idempotent without merging separate
+scan encounters. Identical bytes from separate encounters may reuse one verified result,
+while both jobs and both provenance links remain visible.
+
+Queued work survives a restart and resumes automatically. A restart does not attempt to
+continue halfway through parsing: any attempt that was running is marked Interrupted.
+The analyst can explicitly retry it from Scan History, which adds another attributed
+attempt and starts the local calculation again from the verified retained file. Missing,
+changed or ambiguous evidence fails visibly and does not recommend or start a rescan.
+
+Workers claim queued attempts in short database transactions. File verification and
+parsing happen outside the writer transaction. Before publication, NCT rechecks the
+authoritative scan observation, finalized run state and worker claim. The result, input
+rows, observation link and successful attempt outcome commit together. Losing the claim
+or encountering a corrupt retained result rolls back publication. Job-status reads are
+bounded and read-only.
+
+This first runner assumes one NCT application process for a database. It has no bulk
+requests, cancellation, automatic retries, automatic stale scheduling, cross-process
+leases, progress checkpoints, topology jobs or device-summary jobs. Stop the worker
+before rolling back; older builds ignore the additive job tables.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already
@@ -194,6 +225,6 @@ Exposure reports, SearchSploit results, coverage comparisons and other analysis 
 retain their existing production storage and do not appear in calculation compatibility
 status yet.
 
-Input freshness, dirty-state propagation across dependencies, dependency scheduling,
-automatic rebuilding, global analysis versioning, persistent jobs and workers remain
-later milestones. Calculation compatibility status does not schedule or perform work.
+Input freshness, dirty-state propagation across dependencies, transitive scheduling,
+automatic rebuilding, global analysis versioning and broader job families remain later
+milestones. Calculation compatibility status itself does not schedule or perform work.

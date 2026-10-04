@@ -96,6 +96,8 @@ def analyze_registered_nmap_result(
     parameters: dict,
     parser: Callable[[bytes], object],
     authority_guard: Callable[[sqlite3.Connection], None] | None = None,
+    before_publish: Callable[[], None] | None = None,
+    transaction_finalize: Callable[[sqlite3.Connection, bool], None] | None = None,
 ) -> dict:
     """Reuse or publish one declared Nmap calculation for verified exact bytes."""
     init_derived_result_storage(db_path)
@@ -120,7 +122,7 @@ def analyze_registered_nmap_result(
         observation_id=observation_id,
         read_guard=authority_guard,
     )
-    if linked is not None:
+    if linked is not None and transaction_finalize is None:
         return {**linked, "reused": True, "observation": observation}
     retained = load_derived_result(db_path, identity)
     if retained is None:
@@ -137,12 +139,28 @@ def analyze_registered_nmap_result(
         inputs=inputs,
         payload=parsed,
     )
+    if before_publish is not None:
+        before_publish()
     publication = publish_derived_result(
         db_path,
         prepared,
         observation_links=[{"role": "nmap_xml", "observation_id": observation_id}],
         transaction_guard=authority_guard,
+        transaction_finalize=transaction_finalize,
     )
+    if transaction_finalize is not None and retained is not None:
+        return {**retained, "reused": True, "observation": observation}
+    if transaction_finalize is not None and not publication["created"]:
+        return {
+            "result_id": publication["result_id"],
+            "family": family,
+            "analysis_version": analysis_version,
+            "payload_schema_version": payload_schema_version,
+            "generated_at": publication["generated_at"],
+            "payload": json.loads(prepared.result_json),
+            "reused": True,
+            "observation": observation,
+        }
     if reused or not publication["created"]:
         retained = load_linked_derived_result(
             db_path,

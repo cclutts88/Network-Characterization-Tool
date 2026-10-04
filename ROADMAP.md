@@ -134,6 +134,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 dependency graph | Add graph tables and invalidation propagation before a worker and rebuild contract exist | Begin with a read-only Inputs and source records drill-down derived from the existing immutable result manifest, input rows and exact artifact-observation links | The three production reusable families already retain direct input edges and provenance links. Copying them into a second graph can drift, while propagation has no reviewed scheduling or failure behavior yet | Treat a declared input as a direct calculation dependency and an observation link as provenance for that exact role, not another dependency. Verify the saved identity and rows before display; page roles and source encounters separately. Do not infer deleted provenance, inspect source bytes, mark results dirty or schedule rebuilding. This is partial Step 8; reverse impact, result-to-result edges, propagation and scheduling remain open |
 | 2026-10-03 | Phase 1 reverse dependency lookup | Predict invalidation impact and propagate dirty state | Add a read-only, indexed lookup from one verified input role to saved calculation records that declare the same input kind and exact identity | Automatic invalidation has no reviewed result-to-result graph, scheduling or rebuild behavior. Existing immutable input rows can safely expose recorded direct relationships without creating mutable graph state | Show verified direct relationships separately from unsupported saved-record candidates. Preserve repeated roles, page candidates deterministically, and validate each supported relationship against its saved computation identity and manifest. This does not predict that a changed file would invalidate an immutable result, inspect source bytes, traverse indirect dependencies, mark work stale or schedule rebuilding. Step 8 remains partial |
 | 2026-10-03 | Phase 1 analysis versioning | Add global invalidation and selective rebuild behavior | Add a read-only saved-calculation version inventory for the three migrated reusable families before defining durable rebuild jobs | Exact family, rule version, output schema and settings are already retained and classified, but no reviewed persistent-job contract can safely turn compatibility differences into scheduled work | Group exact retained contracts without merging differing settings, show Current/Stale/Unknown and bounded result drill-down, and keep malformed or unfamiliar groups visible. Counts describe saved calculations, not scans, observations, evidence freshness or jobs required. Other analysis families, invalidation, upgrade handling and selective rebuilding remain open, so Step 9 is partial |
+| 2026-10-03 | Phase 1 persistent analysis jobs | Begin with bulk rebuilding from saved-version groups and automatic stale scheduling | Begin with one explicitly requested durable job for the current Nmap base analysis of one authoritative finalized scan encounter | A version group can contain several encounters, an old result does not by itself authorize current processing, and bulk/automatic rebuilding needs dependency selection, batching, cancellation and partial-success rules that are not yet reviewed | Resolve the exact run, observation, digest, size and current calculation contract on the server; keep request identity separate from calculation reuse and encounter provenance; use durable attempt history, restart recovery, short atomic claims, source/authority rechecks and atomic job-result completion. Initially exclude topology, device summaries, historical unregistered files, bulk requests, cancellation, automatic retries and automatic stale scheduling. This is a bounded Step 10 implementation and an early limited Step 11 runner |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -1128,8 +1129,48 @@ foundational changes.
      inventory, not an invalidation forecast or rebuild queue; it writes no status and
      does not inspect evidence freshness. Other analysis families, upgrade handling,
      selective rebuilding and durable jobs remain open, so Step 9 remains partial.
-10. [ ] Persistent jobs and partial failure.
-11. [ ] Lightweight worker.
+10. [~] Persistent jobs and partial failure.
+    - [x] Durable operator-requested Nmap base-analysis job for one finalized scan.
+      Started 2026-10-03 after the saved-version inventory and the documented
+      architecture gate. The request freezes one authoritative scan encounter, exact
+      artifact identity and current calculation contract; request tokens are separate
+      from shared calculation identity and encounter provenance. Attempts retain queued,
+      running, completed, failed and interrupted history. Result publication, inputs,
+      source link and successful outcome commit together. The operator action reads
+      retained files only and never starts a scan. Queued work resumes after restart;
+      work interrupted while running requires an explicit local retry from the beginning,
+      without a rescan when the retained evidence remains intact. Bulk requests,
+      cancellation, automatic retries, automatic stale scheduling, topology jobs,
+      device-summary jobs and dependency-driven rebuilds remain separate gates.
+      Completed 2026-10-03. Scan History now offers Prepare saved analysis for one
+      eligible finalized scan and shows queued, running, completed, failed and
+      interrupted outcomes without implying collection success. System Health shows a
+      bounded read-only request and attempt history. Queued work resumes after restart;
+      an abandoned running attempt is retained as Interrupted and an explicit retry adds
+      a new attributed attempt. The runner rejects changed, missing, ambiguous or
+      symlinked sources, frozen-contract changes, lost source authority and lost worker
+      claims. Exact result/input/provenance publication and successful job completion
+      are atomic; verified results may be reused across separate encounters without
+      merging their jobs or source links. The independent review initially **HALTED FOR
+      REVIEW** on publication races, false warm-reuse failures, request-path writes,
+      inconsistent status snapshots and symlink traversal. All findings were corrected
+      with deterministic regressions. **QUALITY GATE: CLEAR - DOCUMENTED DEVIATION**;
+      the reviewer independently passed **139 tests**, the complete Docker suite passed
+      **874 tests**, and the final job/storage/interface/guide suite passed **126 tests**.
+      Live isolated-preview checks covered the operator action, local-only wording,
+      successful verified-result reuse, System Health history and a clean console. Live
+      testing also found that a fast completion could remain visually Running until a
+      manual refresh; active jobs now refresh the complete history window already loaded
+      by the analyst, while preserving older records and open scan groups. This capability
+      is development-ready on the foundation branch only. The novice operator passed the
+      completed/reused workflow and restart/retry guidance. Queued, interrupted and failed
+      transitions are covered by deterministic tests but were not staged as live examples.
+11. [~] Lightweight worker.
+    - [x] Single-process saved-analysis runner with short atomic claims, startup recovery,
+      read-only bounded status and lost-claim publication protection. This first runner
+      intentionally has no cross-process lease or mid-calculation checkpoint. Broader
+      multi-family scheduling, cross-process leases, progress checkpoints, cancellation,
+      dependency ordering and automatic retries remain open, so Step 11 stays partial.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

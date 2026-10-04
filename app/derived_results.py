@@ -262,6 +262,7 @@ def _validate_observation_links(
 def publish_derived_result(
     db_path: Path, prepared: PreparedDerivedResult, *, observation_links: list[dict] | None = None,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    transaction_finalize: Callable[[sqlite3.Connection, bool], None] | None = None,
 ) -> dict:
     init_derived_result_storage(db_path)
     _validated_prepared(prepared)
@@ -302,12 +303,12 @@ def publish_derived_result(
         retained = db.execute(
             """SELECT result_id, computation_key, family, analysis_version,
                       payload_schema_version, parameters_json, inputs_json,
-                      result_json, result_sha256
+                      result_json, result_sha256, generated_at
                FROM derived_results WHERE computation_key = ?""",
             (identity.computation_key,),
         ).fetchone()
         expected = row_values[:-1]
-        if retained is None or tuple(retained) != expected:
+        if retained is None or tuple(retained[:-1]) != expected:
             raise DerivedResultConflict(
                 "Exact derived-result identity produced different retained content"
             )
@@ -334,10 +335,13 @@ def publish_derived_result(
                ) VALUES (?, ?, ?, ?)""",
             links,
         )
+        if transaction_finalize is not None:
+            transaction_finalize(db, created)
     return {
         "result_id": identity.result_id,
         "computation_key": identity.computation_key,
         "created": created,
+        "generated_at": retained[-1],
     }
 
 

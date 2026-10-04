@@ -82,6 +82,16 @@ from app.device_collection_authority import (
     init_device_collection_authority_storage,
 )
 from app.derived_results import init_derived_result_storage
+from app.derived_jobs import (
+    DerivedJobConflict,
+    enqueue_nmap_base_job,
+    init_derived_job_storage,
+    list_derived_jobs,
+    recover_interrupted_derived_jobs,
+    retry_derived_job,
+    start_derived_job_worker,
+    stop_derived_job_worker,
+)
 from app.nmap_base_analysis import (
     analyze_scan_run_nmap_base,
     retire_legacy_scan_analysis_cache,
@@ -435,6 +445,11 @@ class OsInferenceReviewRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
+
+
+class SavedAnalysisJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_token: str = Field(min_length=1, max_length=200)
 
 
 class NetworkScopeCreateRequest(BaseModel):
@@ -1246,6 +1261,7 @@ async def lifespan(_: FastAPI):
     init_device_analysis_storage(DB_PATH)
     init_device_collection_authority_storage(DB_PATH)
     init_derived_result_storage(DB_PATH)
+    init_derived_job_storage(DB_PATH)
     init_auth_storage(DB_PATH)
     init_achievement_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
@@ -1259,6 +1275,8 @@ async def lifespan(_: FastAPI):
     init_evidence_scope_assignment_storage(DB_PATH)
     init_automated_nmap_foundation_storage(DB_PATH)
     recover_interrupted_automated_scan_foundation(DB_PATH)
+    recover_interrupted_derived_jobs(DB_PATH)
+    start_derived_job_worker(DB_PATH, DATA_DIR)
     recover_scheduler_state()
     scheduler_stop = threading.Event()
     scheduler_thread = threading.Thread(
@@ -1271,6 +1289,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        stop_derived_job_worker(DB_PATH)
         scheduler_stop.set()
         scheduler_thread.join(timeout=2)
 
@@ -1332,6 +1351,15 @@ def require_storage_admin(request: Request) -> None:
         require_admin(request)
 
 
+def require_saved_analysis_operator(request: Request) -> str:
+    analyst = request.state.analyst
+    if auth_enabled():
+        if analyst is None or analyst.get("role") not in {"analyst", "admin"}:
+            raise HTTPException(status_code=403, detail="Analyst or administrator role required")
+        return analyst["username"]
+    return "local-operator"
+
+
 @app.get("/settings/system-health", response_class=HTMLResponse)
 def system_health_page(request: Request) -> HTMLResponse:
     require_storage_admin(request)
@@ -1369,6 +1397,46 @@ def system_analysis_versions(
 ) -> dict:
     require_storage_admin(request)
     return list_version_groups(DB_PATH, limit=limit, offset=offset)
+
+
+@app.get("/api/system/analysis-jobs")
+def system_analysis_jobs(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_storage_admin(request)
+    return list_derived_jobs(DB_PATH, limit=limit, offset=offset)
+
+
+@app.post("/api/scan-runs/{run_id}/analysis-jobs", status_code=202)
+def prepare_scan_analysis_job(
+    run_id: str, payload: SavedAnalysisJobRequest, request: Request,
+) -> dict:
+    actor = require_saved_analysis_operator(request)
+    try:
+        return enqueue_nmap_base_job(
+            DB_PATH, run_id, request_token=payload.request_token, requested_by=actor,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except (DerivedJobConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/system/analysis-jobs/{job_id}/retry", status_code=202)
+def retry_saved_analysis_job(
+    job_id: str, payload: SavedAnalysisJobRequest, request: Request,
+) -> dict:
+    actor = require_saved_analysis_operator(request)
+    try:
+        return retry_derived_job(
+            DB_PATH, job_id, request_token=payload.request_token, requested_by=actor,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except (DerivedJobConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/system/analysis-versions/{group_id}/results")
