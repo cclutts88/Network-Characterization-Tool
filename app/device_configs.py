@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pty
@@ -25,6 +26,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.database import connect_database
 from app.evidence_maintenance import guarded_evidence_mutation
 from app.artifacts import (
     link_artifact,
@@ -46,6 +48,7 @@ from app.device_collection_authority import (
     begin_manual_upload_authority,
     collected_device_manifest_semantics,
     get_device_collection_authority,
+    require_active_snapshot,
     require_available_collection,
     tombstone_device_collection,
 )
@@ -1828,19 +1831,56 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
                 raise DeviceCollectionIntegrityError(
                     "Registered analysis input does not match frozen evidence"
                 )
+        manifest["summary_verification_status"] = "verified"
+        manifest["summary_verification_detail"] = (
+            "The exact retained files are verified and queued for reusable analysis."
+        )
+        _write_json_atomic(run_dir / "manifest.json", manifest)
         activate_collected_device_authority(
             DB_PATH,
             manifest["run_id"],
             manifest=manifest,
             inputs=snapshot["authority_inputs"],
         )
-        manifest["summary_verification_status"] = "verified"
-        manifest["summary_verification_detail"] = (
-            "The exact retained files are verified and ready for reusable analysis."
-        )
-        _write_json_atomic(run_dir / "manifest.json", manifest)
+        from app.derived_jobs import start_derived_job_worker
+
+        try:
+            start_derived_job_worker(DB_PATH, DB_PATH.parent)
+        except Exception:
+            # The durable pending intent survives a local worker-start failure.
+            # Startup or a later explicit retry can resume it without recollection.
+            pass
         return True
     except (DeviceCollectionIntegrityError, OSError, ValueError, sqlite3.Error) as exc:
+        authority = get_device_collection_authority(DB_PATH, manifest["run_id"])
+        if authority is not None and authority.get("state") == "active" and "snapshot" in locals():
+            try:
+                with connect_database(DB_PATH, read_only=True) as db:
+                    require_active_snapshot(
+                        db,
+                        run_id=manifest["run_id"],
+                        revision=authority["revision"],
+                        observation_id=snapshot["observation_id"],
+                        artifact_sha256=snapshot["sha256"],
+                        retained_filename=snapshot["source_filename"],
+                        semantic_manifest_sha256=hashlib.sha256(
+                            json.dumps(
+                                snapshot["manifest_semantics"], sort_keys=True,
+                                separators=(",", ":"), allow_nan=False,
+                            ).encode()
+                        ).hexdigest(),
+                        selection_contract=COLLECTED_DEVICE_SELECTION_CONTRACT,
+                        authority_inputs=snapshot["authority_inputs"],
+                    )
+                from app.derived_jobs import start_derived_job_worker
+
+                try:
+                    start_derived_job_worker(DB_PATH, DB_PATH.parent)
+                except Exception:
+                    pass
+                return True
+            except (DeviceCollectionIntegrityError, sqlite3.Error):
+                pass
         manifest[AUTHORITY_MARKER] = authority_manifest_marker(
             COLLECTED_DEVICE_SELECTION_CONTRACT
         )
@@ -3021,6 +3061,14 @@ async def upload_result(
             retained_filename=stored_name,
             manifest=manifest,
         )
+        from app.derived_jobs import start_derived_job_worker
+
+        try:
+            start_derived_job_worker(DB_PATH, DB_PATH.parent)
+        except Exception:
+            # Activation and the admission intent already committed atomically.
+            # Keep the upload and let normal worker recovery resume the intent.
+            pass
         return {**manifest, "artifacts": artifact_records(run_id, run_dir)}
     except DeviceCollectionIntegrityError as exc:
         _abandon_manual_upload(DB_PATH, run_id, run_dir)
@@ -3048,6 +3096,11 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                 continue
             if authority is not None and authority["state"] == "preparing":
                 value["status"] = "incomplete"
+                value["summary_verification_status"] = "preparing"
+                value["summary_verification_detail"] = (
+                    "The database authority is still preparing. Retry local verification; "
+                    "NCT will not trust a manifest-only Verified label."
+                )
             else:
                 try:
                     require_available_collection(
@@ -3061,7 +3114,7 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                 skipped += 1
                 continue
             value.pop("key_path", None)
-            records.append({
+            record = {
                 key: value.get(key)
                 for key in (
                     "run_id", "created_at", "completed_at", "status", "operation",
@@ -3073,7 +3126,57 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                     "remote_cleanup_status", "command_history_status",
                     "summary_verification_status", "summary_verification_detail",
                 )
-            })
+            }
+            from app.derived_jobs import device_summary_job_for_run
+            from app.pipeline_intake import (
+                COLLECTED_DEVICE_INTENT,
+                MANUAL_DEVICE_INTENT,
+                get_admission_intent,
+            )
+
+            intent_kind = (
+                MANUAL_DEVICE_INTENT
+                if value.get("operation") == "manual_upload"
+                else COLLECTED_DEVICE_INTENT
+            )
+            intent = get_admission_intent(
+                DB_PATH, intent_kind=intent_kind, source_id=record["run_id"],
+            )
+            job = device_summary_job_for_run(DB_PATH, record["run_id"])
+            if value.get("status") in {"incomplete", "integrity_conflict"}:
+                processing_state = "incomplete"
+                processing_detail = value.get("summary_verification_detail") or (
+                    "Local evidence verification is incomplete."
+                )
+            elif intent is None:
+                processing_state = "historical"
+                processing_detail = (
+                    "This earlier record keeps its established on-demand analysis behavior."
+                )
+            elif intent["state"] == "blocked":
+                processing_state = "blocked"
+                processing_detail = intent.get("last_error") or "Processing is blocked."
+            elif intent["state"] == "pending":
+                processing_state = intent.get("activity_state") or "waiting"
+                processing_detail = intent.get("last_error") or (
+                    "Waiting for the local processing worker."
+                )
+            elif job and job.get("latest_attempt"):
+                processing_state = job["latest_attempt"]["state"]
+                processing_detail = job["latest_attempt"].get("error") or {
+                    "queued": "Reusable analysis is queued.",
+                    "running": "Reusable analysis is running locally.",
+                    "completed": "Reusable analysis is complete.",
+                    "failed": "Reusable analysis failed and can be retried locally.",
+                    "interrupted": "Processing was interrupted and can be retried locally.",
+                }.get(processing_state, "Reusable analysis status is available.")
+            else:
+                processing_state = "waiting"
+                processing_detail = "The durable processing job is being prepared."
+            record["summary_processing_state"] = processing_state
+            record["summary_processing_detail"] = processing_detail
+            record["summary_job_id"] = job.get("job_id") if job else None
+            records.append(record)
         except (OSError, ValueError):
             continue
         if len(records) >= limit:
@@ -3101,14 +3204,53 @@ def collection_summary(run_id: str) -> dict:
             analyze_collected_device_summary,
             analyze_manual_upload_summary,
         )
+        from app.pipeline_intake import (
+            COLLECTED_DEVICE_INTENT,
+            MANUAL_DEVICE_INTENT,
+            get_admission_intent,
+        )
+        intent_kind = (
+            MANUAL_DEVICE_INTENT
+            if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT
+            else COLLECTED_DEVICE_INTENT
+        )
+        marked = get_admission_intent(
+            DB_PATH, intent_kind=intent_kind, source_id=run_id,
+        ) is not None
+        expected_result_id = None
+        if marked:
+            from app.derived_jobs import device_summary_job_for_run
+
+            job = device_summary_job_for_run(DB_PATH, run_id)
+            attempt = job.get("latest_attempt") if job else None
+            if (
+                attempt is None
+                or attempt.get("state") != "completed"
+                or attempt.get("output_kind") != "derived_result"
+                or not attempt.get("output_id")
+            ):
+                state = attempt.get("state") if attempt else "waiting"
+                raise DeviceCollectionIncomplete(
+                    f"Reusable device analysis is {state}; wait for completion or use "
+                    "the local retry shown in Device History"
+                )
+            expected_result_id = attempt["output_id"]
         try:
             if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT:
-                verified = analyze_manual_upload_summary(DB_PATH, run_id, run_dir)
+                verified = analyze_manual_upload_summary(
+                    DB_PATH, run_id, run_dir, allow_create=not marked,
+                )
             elif authority.get("selection_contract") == COLLECTED_DEVICE_SELECTION_CONTRACT:
-                verified = analyze_collected_device_summary(DB_PATH, run_id, run_dir)
+                verified = analyze_collected_device_summary(
+                    DB_PATH, run_id, run_dir, allow_create=not marked,
+                )
             else:
                 raise DeviceCollectionIntegrityError(
                     "Verified device collection uses an unsupported analysis contract"
+                )
+            if expected_result_id and verified.get("result_id") != expected_result_id:
+                raise DeviceCollectionIntegrityError(
+                    "The completed device processing job points to a different result"
                 )
         except (DeviceCollectionDeleted, DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
             raise

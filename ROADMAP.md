@@ -139,6 +139,7 @@ A roadmap item should only be marked complete when:
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-10-04 | Phase 1 supported ingestion completion | Treat separate completed foundation features as a complete ingestion pipeline | Finish one durable staged pipeline for currently supported Nmap and device evidence; keep scope-free calculations separate from scoped observations and require explicit scope where needed | Existing operator actions use different persistence, retry and status models, and planned passive collectors or physical-device reconciliation would expand this gate without a safe identity contract | Missing scope is Needs scope, never inferred. Preserve every completed stage when another fails. Generalize the existing single-process worker through additive, preservation-tested pipeline tables, then connect intake, current-state/Last Seen receipts and acceptance benchmarks. The copied legacy queue becomes a trigger-enforced read-only audit archive. All processes must cut over together; ordinary rollback is unsafe because older code cannot see post-cutover work and cannot write the frozen queue. Historical adoption stays explicit and passive collectors remain later phases. See `docs/DERIVED_RESULTS.md` |
 | 2026-10-04 | Phase 1 automatic Nmap admission | Find new eligible work by scanning timestamps or all retained evidence after startup | Mark only new participating manual Nmap observations and scan runs, then commit a frozen admission intent with the authoritative assignment or eligible scan finalization before the durable worker creates a job | Timestamp selection can silently adopt historical evidence, miss work across clock changes, or switch a retry to a corrected assignment or newer parser. Making immediate job creation part of evidence retention would also make a successful import, assignment or scan depend on queue availability | Admission intents preserve the exact source, scope decision, actor and processing contract while allowing queue admission after the source transaction. Startup and worker recovery examine only pending intents from explicitly marked sources. Historical rows keep the explicit Queue action; missing scope remains Needs scope; corrections create new intents and cannot redirect older work. This gate covers new manual and automated Nmap evidence only. Device intake, processing retries, current-state selection and Last Seen remain separate gates. |
+| 2026-10-04 | Phase 1 automatic device-summary admission | Calculate verified device summaries while opening a page or silently adopt every active authority after upgrade | Mark only new participating manual uploads and eligible SSH collections, freeze an admission intent when exact device authority activates, then calculate through the shared durable worker | Page-time calculation can race authority changes and makes navigation perform expensive work. Broad startup adoption would silently change historical processing behavior | Device summaries are scope-free reusable calculations. Their intents retain the authority revision, selection contract, semantic manifest and ordered exact inputs. Historical unmarked authorities keep their established on-demand behavior until a separate adoption gate. Failed or interrupted calculation requires explicit local retry and never contacts the device. Normalized device observations, Network Scope assignment, physical-device identity, current-state selection and Last Seen remain later gates. |
 | 2026-10-04 | Phase 1 storage | Enable optional exact-content compaction after verified backfill | Add a separate administrator-confirmed action that replaces only reviewed exact copies with hard links to canonical content while preserving every logical evidence path and record | Independent adversarial review reproduced unsafe crash, journal, queue, path-substitution, recovery-integrity and confirmation-ownership cases during implementation; each case was corrected and retained as a regression | This is single-process maintenance. No second NCT process or external evidence edit may use the data directory during inspection, compaction or recovery. Files must share a filesystem and compatible security metadata; shared paths use canonical filesystem timestamps while recorded evidence timestamps remain. A durable recovery block stops all guarded evidence changes when safe repair cannot be proved. Estimated and measured savings are reported separately; automatic pruning stays disabled. See `docs/EXACT_CONTENT_COMPACTION.md` |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
@@ -1305,6 +1306,44 @@ acceptance benchmarks.
    ready with a clean browser console. The novice operator returned **CLEAR**. This
    automatic Nmap stage is development-ready on the foundation branch only; device
    intake, current-state selection and Last Seen remain separate gates.
+
+   2026-10-04 automatic device-summary admission start: move new verified manual
+   device uploads and eligible completed SSH collections from page-time calculation into
+   the shared durable worker. Only authorities explicitly marked under the new policy
+   participate. Authority activation freezes the revision, selection contract, semantic
+   manifest and ordered exact inputs in a recoverable admission intent before job
+   creation. The worker must atomically publish the reusable summary, provenance and
+   successful attempt; failed or interrupted calculations require an explicit local
+   retry and never contact the device. Device History must distinguish local source
+   verification from summary processing and show waiting, retrying, paused, queued,
+   running, completed, failed and interrupted states. Historical unmarked authorities
+   retain their established on-demand behavior until a separate adoption gate. This
+   scope-free calculation does not infer Network Scope or physical-device identity and
+   does not yet create current-state or Last Seen observations.
+
+   Automatic device-summary admission completed 2026-10-04. Every new participating
+   manual upload and eligible completed SSH collection records an immutable policy
+   marker, freezes its exact active authority and ordered inputs in a durable handoff,
+   and is processed by the shared background worker without waiting for an analyst to
+   open a page. Result publication, input records, encounter provenance and successful
+   completion commit together. Duplicate content reuses one calculation while retaining
+   separate encounter links. Page reads cannot calculate or attach an unrelated duplicate
+   result; failed or interrupted work requires the separate local retry and never contacts
+   the device. Device History reports local verification separately from background
+   processing, preserves older loaded records while polling, and carries open history
+   panels through refresh. The reviewer halted the gate after reproducing a pending
+   duplicate that could borrow an earlier encounter's result and polling that dropped a
+   26th active record; both paths were corrected and retained as actual-handler and
+   end-to-end regressions. **QUALITY GATE: CLEAR - DOCUMENTED DEVIATION**. The complete
+   Docker suite passed **957 tests with 3 expected skips**, the final focused suite passed
+   **24 tests**, the reviewer independently passed **93 tests** plus the actual Device
+   History handler regression, the host Node regression passed, and the novice operator
+   returned **CLEAR**. An isolated live
+   upload reached Reusable analysis complete, opened its retained Device Overview with
+   two interfaces and one route, and produced no browser warnings or errors. This stage is
+   development-ready on the foundation branch only. Historical adoption, Network Scope
+   assignment for device evidence, normalized device observations, physical-device
+   reconciliation, current-state selection and Last Seen remain separate reviewed gates.
 
    Scan History presentation correction completed 2026-10-03. Every retained scan is
    now catalogued under each exact recorded canonical CIDR instead of allowing older

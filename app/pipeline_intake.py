@@ -7,6 +7,12 @@ from pathlib import Path
 import sqlite3
 
 from app.database import connect_database, initialize_once_per_database
+from app.derived_contracts import (
+    DEVICE_SUMMARY_FAMILY,
+    DEVICE_SUMMARY_PARAMETERS,
+    DEVICE_SUMMARY_SCHEMA_VERSION,
+    DEVICE_SUMMARY_VERSION,
+)
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
 
 
@@ -20,6 +26,26 @@ AUTOMATED_NMAP_SOURCE = "nmap_scan_run"
 MANUAL_NMAP_INTENT = "manual_nmap_scope"
 AUTOMATED_NMAP_INTENT = "automated_nmap_scope"
 
+DEVICE_INGESTION_POLICY_VERSION = 1
+DEVICE_SUMMARY_JOB_TYPE = "device_summary"
+MANUAL_DEVICE_SOURCE = "device_manual_upload_authority"
+COLLECTED_DEVICE_SOURCE = "device_collected_authority"
+MANUAL_DEVICE_INTENT = "manual_device_summary"
+COLLECTED_DEVICE_INTENT = "collected_device_summary"
+
+_INTENT_KINDS = (
+    MANUAL_NMAP_INTENT,
+    AUTOMATED_NMAP_INTENT,
+    MANUAL_DEVICE_INTENT,
+    COLLECTED_DEVICE_INTENT,
+)
+_INTENT_COLUMNS = (
+    "intent_id", "intent_kind", "source_kind", "source_id", "policy_version",
+    "observation_id", "assignment_id", "scope_id", "actor", "request_token",
+    "contract_json", "state", "created_at", "updated_at", "admitted_job_id",
+    "resolved_assignment_id", "activity_state", "last_error",
+)
+
 
 def _canonical_json(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -30,24 +56,12 @@ def _intent_id(intent_kind: str, source_id: str) -> str:
     return f"intake_intent_{digest}"
 
 
-@initialize_once_per_database
-def init_pipeline_intake_storage(db_path: Path) -> None:
-    with connect_database(db_path) as db:
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS pipeline_intake_sources (
-                source_kind TEXT NOT NULL,
-                source_id TEXT NOT NULL,
-                policy_version INTEGER NOT NULL,
-                marked_by TEXT NOT NULL,
-                marked_at TEXT NOT NULL,
-                PRIMARY KEY (source_kind, source_id)
-            );
-            CREATE TABLE IF NOT EXISTS pipeline_admission_intents (
+def _create_intent_table(db: sqlite3.Connection, name: str) -> None:
+    allowed = ", ".join(f"'{value}'" for value in _INTENT_KINDS)
+    db.execute(
+        f"""CREATE TABLE {name} (
                 intent_id TEXT PRIMARY KEY,
-                intent_kind TEXT NOT NULL CHECK (
-                    intent_kind IN ('manual_nmap_scope', 'automated_nmap_scope')
-                ),
+                intent_kind TEXT NOT NULL CHECK (intent_kind IN ({allowed})),
                 source_kind TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 policy_version INTEGER NOT NULL,
@@ -72,66 +86,148 @@ def init_pipeline_intake_storage(db_path: Path) -> None:
                 ),
                 last_error TEXT,
                 UNIQUE (intent_kind, source_id)
-            );
-            CREATE INDEX IF NOT EXISTS pipeline_admission_intents_state
-                ON pipeline_admission_intents(state, created_at, intent_id);
-            CREATE TRIGGER IF NOT EXISTS pipeline_intake_sources_no_update
-                BEFORE UPDATE ON pipeline_intake_sources
-                BEGIN SELECT RAISE(ABORT, 'pipeline intake source markers are immutable'); END;
-            CREATE TRIGGER IF NOT EXISTS pipeline_intake_sources_no_delete
-                BEFORE DELETE ON pipeline_intake_sources
-                BEGIN SELECT RAISE(ABORT, 'pipeline intake source markers are immutable'); END;
-            CREATE TRIGGER IF NOT EXISTS pipeline_admission_intents_identity_immutable
-                BEFORE UPDATE ON pipeline_admission_intents
-                WHEN OLD.intent_kind != NEW.intent_kind
-                  OR OLD.source_kind != NEW.source_kind
-                  OR OLD.source_id != NEW.source_id
-                  OR OLD.policy_version != NEW.policy_version
-                  OR IFNULL(OLD.observation_id, '') != IFNULL(NEW.observation_id, '')
-                  OR IFNULL(OLD.assignment_id, '') != IFNULL(NEW.assignment_id, '')
-                  OR IFNULL(OLD.scope_id, '') != IFNULL(NEW.scope_id, '')
-                  OR OLD.actor != NEW.actor
-                  OR OLD.request_token != NEW.request_token
-                  OR OLD.contract_json != NEW.contract_json
-                  OR OLD.created_at != NEW.created_at
-                BEGIN SELECT RAISE(ABORT, 'pipeline admission intent identity is immutable'); END;
-            CREATE TRIGGER IF NOT EXISTS pipeline_admission_intents_state_guard
-                BEFORE UPDATE ON pipeline_admission_intents
-                WHEN OLD.state != NEW.state
-                 AND NOT (
-                    OLD.state = 'pending'
-                    AND NEW.state IN ('admitted', 'blocked')
-                 )
-                BEGIN SELECT RAISE(ABORT, 'invalid pipeline admission transition'); END;
-            CREATE TRIGGER IF NOT EXISTS pipeline_admission_intents_no_delete
-                BEFORE DELETE ON pipeline_admission_intents
-                BEGIN SELECT RAISE(ABORT, 'pipeline admission intents are retained'); END;
-            """
+            )"""
+    )
+
+
+def _create_intent_guards(db: sqlite3.Connection) -> None:
+    db.execute(
+        """CREATE INDEX pipeline_admission_intents_state
+               ON pipeline_admission_intents(state, created_at, intent_id)"""
+    )
+    db.execute(
+        """CREATE TRIGGER pipeline_admission_intents_identity_immutable
+               BEFORE UPDATE ON pipeline_admission_intents
+               WHEN OLD.intent_kind != NEW.intent_kind
+                 OR OLD.source_kind != NEW.source_kind
+                 OR OLD.source_id != NEW.source_id
+                 OR OLD.policy_version != NEW.policy_version
+                 OR IFNULL(OLD.observation_id, '') != IFNULL(NEW.observation_id, '')
+                 OR IFNULL(OLD.assignment_id, '') != IFNULL(NEW.assignment_id, '')
+                 OR IFNULL(OLD.scope_id, '') != IFNULL(NEW.scope_id, '')
+                 OR OLD.actor != NEW.actor
+                 OR OLD.request_token != NEW.request_token
+                 OR OLD.contract_json != NEW.contract_json
+                 OR OLD.created_at != NEW.created_at
+               BEGIN SELECT RAISE(ABORT, 'pipeline admission intent identity is immutable'); END"""
+    )
+    db.execute(
+        """CREATE TRIGGER pipeline_admission_intents_state_guard
+               BEFORE UPDATE ON pipeline_admission_intents
+               WHEN OLD.state != NEW.state
+                AND NOT (
+                   OLD.state = 'pending'
+                   AND NEW.state IN ('admitted', 'blocked')
+                )
+               BEGIN SELECT RAISE(ABORT, 'invalid pipeline admission transition'); END"""
+    )
+    db.execute(
+        """CREATE TRIGGER pipeline_admission_intents_no_delete
+               BEFORE DELETE ON pipeline_admission_intents
+               BEGIN SELECT RAISE(ABORT, 'pipeline admission intents are retained'); END"""
+    )
+
+
+def _after_intent_migration_copy(db: sqlite3.Connection) -> None:
+    """Test hook for proving that a failed table replacement rolls back."""
+
+
+def _migrate_intent_table(db: sqlite3.Connection) -> None:
+    table = db.execute(
+        """SELECT sql FROM sqlite_master
+           WHERE type = 'table' AND name = 'pipeline_admission_intents'"""
+    ).fetchone()
+    if table is None:
+        _create_intent_table(db, "pipeline_admission_intents")
+        _create_intent_guards(db)
+        return
+    columns = [
+        row[1] for row in db.execute("PRAGMA table_info(pipeline_admission_intents)")
+    ]
+    current_sql = str(table[0] or "")
+    if (
+        set(_INTENT_COLUMNS).issubset(columns)
+        and MANUAL_DEVICE_INTENT in current_sql
+        and COLLECTED_DEVICE_INTENT in current_sql
+    ):
+        return
+    retained_columns = [name for name in _INTENT_COLUMNS if name in columns]
+    select_expressions = []
+    for name in _INTENT_COLUMNS:
+        if name in retained_columns:
+            select_expressions.append(name)
+        elif name == "activity_state":
+            select_expressions.append(
+                "CASE WHEN state = 'admitted' THEN 'complete' "
+                "WHEN state = 'needs_scope' THEN 'needs_scope' "
+                "WHEN state = 'blocked' THEN 'blocked' "
+                "WHEN last_error IS NOT NULL THEN 'paused' ELSE 'waiting' END"
+            )
+        else:
+            select_expressions.append("NULL")
+    before = db.execute(
+        f"SELECT {', '.join(retained_columns)} FROM pipeline_admission_intents "
+        "ORDER BY intent_id"
+    ).fetchall()
+    _create_intent_table(db, "pipeline_admission_intents_replacement")
+    db.execute(
+        f"""INSERT INTO pipeline_admission_intents_replacement
+               ({', '.join(_INTENT_COLUMNS)})
+             SELECT {', '.join(select_expressions)}
+               FROM pipeline_admission_intents"""
+    )
+    copied = db.execute(
+        f"SELECT {', '.join(retained_columns)} "
+        "FROM pipeline_admission_intents_replacement ORDER BY intent_id"
+    ).fetchall()
+    if copied != before:
+        raise RuntimeError("Pipeline admission intents did not copy exactly")
+    _after_intent_migration_copy(db)
+    for name in (
+        "pipeline_admission_intents_identity_immutable",
+        "pipeline_admission_intents_state_guard",
+        "pipeline_admission_intents_no_delete",
+    ):
+        db.execute(f"DROP TRIGGER IF EXISTS {name}")
+    db.execute("DROP TABLE pipeline_admission_intents")
+    db.execute(
+        "ALTER TABLE pipeline_admission_intents_replacement "
+        "RENAME TO pipeline_admission_intents"
+    )
+    _create_intent_guards(db)
+    after = db.execute(
+        f"SELECT {', '.join(retained_columns)} FROM pipeline_admission_intents "
+        "ORDER BY intent_id"
+    ).fetchall()
+    if after != before:
+        raise RuntimeError("Pipeline admission intent replacement changed retained values")
+
+
+@initialize_once_per_database
+def init_pipeline_intake_storage(db_path: Path) -> None:
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS pipeline_intake_sources (
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                policy_version INTEGER NOT NULL,
+                marked_by TEXT NOT NULL,
+                marked_at TEXT NOT NULL,
+                PRIMARY KEY (source_kind, source_id)
+            )"""
         )
-        columns = {
-            row[1] for row in db.execute(
-                "PRAGMA table_info(pipeline_admission_intents)"
-            ).fetchall()
-        }
-        if "activity_state" not in columns:
-            db.execute(
-                """ALTER TABLE pipeline_admission_intents
-                   ADD COLUMN activity_state TEXT NOT NULL DEFAULT 'waiting'
-                   CHECK (activity_state IN (
-                       'waiting', 'retrying', 'paused', 'complete',
-                       'needs_scope', 'blocked'
-                   ))"""
-            )
-            db.execute(
-                """UPDATE pipeline_admission_intents
-                   SET activity_state = CASE
-                       WHEN state = 'admitted' THEN 'complete'
-                       WHEN state = 'needs_scope' THEN 'needs_scope'
-                       WHEN state = 'blocked' THEN 'blocked'
-                       WHEN last_error IS NOT NULL THEN 'paused'
-                       ELSE 'waiting'
-                   END"""
-            )
+        db.execute(
+            """CREATE TRIGGER IF NOT EXISTS pipeline_intake_sources_no_update
+                BEFORE UPDATE ON pipeline_intake_sources
+                BEGIN SELECT RAISE(ABORT, 'pipeline intake source markers are immutable'); END"""
+        )
+        db.execute(
+            """CREATE TRIGGER IF NOT EXISTS pipeline_intake_sources_no_delete
+                BEFORE DELETE ON pipeline_intake_sources
+                BEGIN SELECT RAISE(ABORT, 'pipeline intake source markers are immutable'); END"""
+        )
+        _migrate_intent_table(db)
 
 
 def mark_pipeline_source(
@@ -164,6 +260,12 @@ def mark_pipeline_source(
 def source_policy_version(
     db: sqlite3.Connection, source_kind: str, source_id: str,
 ) -> int | None:
+    table_exists = db.execute(
+        """SELECT 1 FROM sqlite_master
+           WHERE type = 'table' AND name = 'pipeline_intake_sources'"""
+    ).fetchone()
+    if table_exists is None:
+        return None
     row = db.execute(
         """SELECT policy_version FROM pipeline_intake_sources
            WHERE source_kind = ? AND source_id = ?""",
@@ -409,6 +511,121 @@ def record_automated_nmap_intent(
         state=state,
         created_at=completed_at,
         last_error="; ".join(reasons) if reasons else None,
+    )
+
+
+def _device_authority_contract(
+    db: sqlite3.Connection, run_id: str, *, intent_kind: str,
+) -> tuple[dict, tuple]:
+    authority = db.execute(
+        """SELECT authority.run_id, authority.state, authority.revision,
+                  authority.artifact_observation_id, authority.artifact_sha256,
+                  authority.retained_filename, authority.selection_contract,
+                  authority.semantic_manifest_sha256, authority.activated_at,
+                  observation.source_kind, observation.source_ref,
+                  observation.actor, observation.observed_at, artifact.size_bytes
+           FROM device_collection_authority authority
+           JOIN artifact_observations observation
+             ON observation.observation_id = authority.artifact_observation_id
+           JOIN artifact_registry artifact ON artifact.sha256 = authority.artifact_sha256
+           WHERE authority.run_id = ?""",
+        (run_id,),
+    ).fetchone()
+    if authority is None or authority[1] != "active":
+        raise ValueError("Device summary admission requires active evidence authority")
+    expected = {
+        MANUAL_DEVICE_INTENT: (
+            MANUAL_DEVICE_SOURCE, "device_config_upload", "manual-upload-single-file:1",
+        ),
+        COLLECTED_DEVICE_INTENT: (
+            COLLECTED_DEVICE_SOURCE, "device_collection", "collected-device-multi-file:1",
+        ),
+    }.get(intent_kind)
+    if expected is None:
+        raise ValueError("Device summary intent type is unsupported")
+    source_kind, observation_kind, selection_contract = expected
+    if (
+        authority[6] != selection_contract
+        or authority[9] != observation_kind
+        or authority[10] != run_id
+    ):
+        raise ValueError("Device evidence authority does not match its intake type")
+    rows = db.execute(
+        """SELECT input_role, position, source_kind, identity, filename,
+                  artifact_observation_id, artifact_sha256, size_bytes, metadata_json
+           FROM device_collection_authority_inputs
+           WHERE run_id = ? ORDER BY input_role, position""",
+        (run_id,),
+    ).fetchall()
+    authority_inputs = [
+        {
+            "role": row[0], "position": int(row[1]), "source_kind": row[2],
+            "identity": row[3], "filename": row[4], "observation_id": row[5],
+            "sha256": row[6], "size_bytes": row[7],
+            "metadata": json.loads(row[8]),
+        }
+        for row in rows
+    ]
+    if intent_kind == MANUAL_DEVICE_INTENT:
+        if authority_inputs:
+            raise ValueError("Manual device authority contains unexpected frozen inputs")
+        authority_inputs = [{
+            "role": "configuration_and_raw_output",
+            "position": 0,
+            "source_kind": "artifact_file",
+            "identity": authority[4],
+            "filename": authority[5],
+            "observation_id": authority[3],
+            "sha256": authority[4],
+            "size_bytes": int(authority[13]),
+            "metadata": {"selection_rule": selection_contract},
+        }]
+    contract = {
+        "intent_kind": intent_kind,
+        "run_id": run_id,
+        "authority_revision": int(authority[2]),
+        "selection_contract": selection_contract,
+        "semantic_manifest_sha256": authority[7],
+        "authority_inputs": authority_inputs,
+        "source_observation_id": authority[3],
+        "source_sha256": authority[4],
+        "source_size_bytes": int(authority[13]),
+        "target_family": DEVICE_SUMMARY_FAMILY,
+        "target_analysis_version": DEVICE_SUMMARY_VERSION,
+        "target_payload_schema_version": DEVICE_SUMMARY_SCHEMA_VERSION,
+        "target_parameters": dict(DEVICE_SUMMARY_PARAMETERS),
+    }
+    return contract, (
+        source_kind, authority[3], str(authority[11] or "local-operator"),
+        str(authority[8] or authority[12]),
+    )
+
+
+def record_device_summary_intent(
+    db: sqlite3.Connection, run_id: str, *, intent_kind: str,
+) -> dict | None:
+    contract, context = _device_authority_contract(
+        db, run_id, intent_kind=intent_kind,
+    )
+    source_kind, observation_id, actor, activated_at = context
+    policy = source_policy_version(db, source_kind, run_id)
+    if policy is None:
+        return None
+    if policy != DEVICE_INGESTION_POLICY_VERSION:
+        raise ValueError("Device intake policy version is not supported")
+    return _insert_intent(
+        db,
+        intent_kind=intent_kind,
+        source_kind=source_kind,
+        source_id=run_id,
+        policy_version=policy,
+        observation_id=observation_id,
+        assignment_id=None,
+        scope_id=None,
+        actor=actor,
+        contract=contract,
+        state="pending",
+        created_at=activated_at,
     )
 
 

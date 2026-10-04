@@ -173,8 +173,19 @@ def init_device_collection_authority_storage(db_path: Path) -> None:
         )
 
 
-def begin_manual_upload_authority(db_path: Path, run_id: str) -> dict:
+def begin_manual_upload_authority(
+    db_path: Path, run_id: str, *, pipeline_policy_version: int | None = 1,
+) -> dict:
     init_device_collection_authority_storage(db_path)
+    from app.pipeline_intake import (
+        DEVICE_INGESTION_POLICY_VERSION,
+        MANUAL_DEVICE_SOURCE,
+        init_pipeline_intake_storage,
+        mark_pipeline_source,
+    )
+
+    if pipeline_policy_version is not None:
+        init_pipeline_intake_storage(db_path)
     created_at = utc_now()
     try:
         with connect_database(db_path) as db:
@@ -185,6 +196,19 @@ def begin_manual_upload_authority(db_path: Path, run_id: str) -> dict:
                    ) VALUES (?, 'preparing', 1, ?)""",
                 (run_id, created_at),
             )
+            if pipeline_policy_version is not None:
+                if pipeline_policy_version != DEVICE_INGESTION_POLICY_VERSION:
+                    raise DeviceCollectionIntegrityError(
+                        "Device intake policy version is not supported"
+                    )
+                mark_pipeline_source(
+                    db,
+                    source_kind=MANUAL_DEVICE_SOURCE,
+                    source_id=run_id,
+                    marked_by="local-operator",
+                    marked_at=created_at,
+                    policy_version=pipeline_policy_version,
+                )
     except sqlite3.IntegrityError as exc:
         raise DeviceCollectionIntegrityError(
             "Device collection identity is already in use"
@@ -195,6 +219,14 @@ def begin_manual_upload_authority(db_path: Path, run_id: str) -> dict:
 def begin_collected_device_authority(db_path: Path, run_id: str) -> dict:
     """Create or resume the preparation record for one successful collection."""
     init_device_collection_authority_storage(db_path)
+    from app.pipeline_intake import (
+        COLLECTED_DEVICE_SOURCE,
+        DEVICE_INGESTION_POLICY_VERSION,
+        init_pipeline_intake_storage,
+        mark_pipeline_source,
+    )
+
+    init_pipeline_intake_storage(db_path)
     created_at = utc_now()
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -205,6 +237,14 @@ def begin_collected_device_authority(db_path: Path, run_id: str) -> dict:
                        run_id, state, revision, created_at
                    ) VALUES (?, 'preparing', 1, ?)""",
                 (run_id, created_at),
+            )
+            mark_pipeline_source(
+                db,
+                source_kind=COLLECTED_DEVICE_SOURCE,
+                source_id=run_id,
+                marked_by="local-operator",
+                marked_at=created_at,
+                policy_version=DEVICE_INGESTION_POLICY_VERSION,
             )
         elif authority["state"] == "deleted":
             raise DeviceCollectionDeleted("Device collection was deleted")
@@ -408,7 +448,7 @@ def activate_manual_upload_authority(
             raise DeviceCollectionIntegrityError(
                 "Device upload observation does not match the retained evidence"
             )
-        db.execute(
+        updated = db.execute(
             """UPDATE device_collection_authority
                SET state = 'active', artifact_observation_id = ?,
                    artifact_sha256 = ?, retained_filename = ?,
@@ -420,6 +460,13 @@ def activate_manual_upload_authority(
                 MANUAL_UPLOAD_SELECTION_CONTRACT, semantics_json,
                 semantics_sha256, activated_at, run_id,
             ),
+        )
+        if updated.rowcount != 1:
+            raise DeviceCollectionIntegrityError("Device upload activation lost its authority")
+        from app.pipeline_intake import MANUAL_DEVICE_INTENT, record_device_summary_intent
+
+        record_device_summary_intent(
+            db, run_id, intent_kind=MANUAL_DEVICE_INTENT,
         )
     return get_device_collection_authority(db_path, run_id) or {}
 
@@ -519,6 +566,11 @@ def activate_collected_device_authority(
         )
         if updated.rowcount != 1:
             raise DeviceCollectionIntegrityError("Device collection activation lost its authority")
+        from app.pipeline_intake import COLLECTED_DEVICE_INTENT, record_device_summary_intent
+
+        record_device_summary_intent(
+            db, run_id, intent_kind=COLLECTED_DEVICE_INTENT,
+        )
     return get_device_collection_authority(db_path, run_id) or {}
 
 

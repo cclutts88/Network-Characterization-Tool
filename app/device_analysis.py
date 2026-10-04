@@ -135,13 +135,52 @@ def _device_summary_snapshot(
 
         raise DeviceCollectionIncomplete(_unavailable_summary_detail(manifest))
     try:
+        from app.pipeline_intake import (
+            COLLECTED_DEVICE_INTENT,
+            MANUAL_DEVICE_INTENT,
+            get_admission_intent,
+        )
+        intent_kind = (
+            MANUAL_DEVICE_INTENT
+            if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT
+            else COLLECTED_DEVICE_INTENT
+        )
+        marked = get_admission_intent(
+            db_path, intent_kind=intent_kind, source_id=run_id,
+        ) is not None
+        expected_result_id = None
+        if marked:
+            from app.derived_jobs import device_summary_job_for_run
+
+            job = device_summary_job_for_run(db_path, run_id)
+            attempt = job.get("latest_attempt") if job else None
+            if (
+                attempt is None
+                or attempt.get("state") != "completed"
+                or attempt.get("output_kind") != "derived_result"
+                or not attempt.get("output_id")
+            ):
+                state = attempt.get("state") if attempt else "waiting"
+                raise DeviceCollectionIncomplete(
+                    f"Reusable device analysis is {state}; wait for completion or use "
+                    "the local retry shown in Device History"
+                )
+            expected_result_id = attempt["output_id"]
         if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT:
-            verified = analyze_manual_upload_summary(db_path, run_id, run_dir)
+            verified = analyze_manual_upload_summary(
+                db_path, run_id, run_dir, allow_create=not marked,
+            )
         elif authority.get("selection_contract") == COLLECTED_DEVICE_SELECTION_CONTRACT:
-            verified = analyze_collected_device_summary(db_path, run_id, run_dir)
+            verified = analyze_collected_device_summary(
+                db_path, run_id, run_dir, allow_create=not marked,
+            )
         else:
             raise DeviceCollectionIntegrityError(
                 "Verified device collection uses an unsupported analysis contract"
+            )
+        if expected_result_id and verified.get("result_id") != expected_result_id:
+            raise DeviceCollectionIntegrityError(
+                "The completed device processing job points to a different result"
             )
     except (DeviceCollectionDeleted, DeviceCollectionIncomplete, DeviceCollectionIntegrityError):
         raise

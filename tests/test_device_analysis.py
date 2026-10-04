@@ -33,7 +33,9 @@ def make_collection(config_dir: Path, db_path: Path, run_id: str, config: str) -
     retained_filename = "uploaded-edge-config.txt"
     retained_path = run_dir / retained_filename
     retained_path.write_text(config, encoding="utf-8")
-    begin_manual_upload_authority(db_path, run_id)
+    begin_manual_upload_authority(
+        db_path, run_id, pipeline_policy_version=None,
+    )
     artifact = register_artifact_file(
         db_path=db_path,
         source_path=retained_path,

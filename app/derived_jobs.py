@@ -13,6 +13,10 @@ from app.artifacts import get_artifact_observation, sha256_file, utc_now
 from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
 from app.database import connect_database, initialize_once_per_database
 from app.derived_contracts import (
+    DEVICE_SUMMARY_FAMILY,
+    DEVICE_SUMMARY_PARAMETERS,
+    DEVICE_SUMMARY_SCHEMA_VERSION,
+    DEVICE_SUMMARY_VERSION,
     NMAP_BASE_ANALYSIS_FAMILY,
     NMAP_BASE_ANALYSIS_VERSION,
     NMAP_BASE_PARAMETERS,
@@ -30,11 +34,16 @@ from app.nmap_base_analysis import (
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
 from app.pipeline_intake import (
     AUTOMATED_NMAP_INTENT,
+    COLLECTED_DEVICE_INTENT,
+    DEVICE_INGESTION_POLICY_VERSION,
+    DEVICE_SUMMARY_JOB_TYPE,
     MANUAL_NMAP_INTENT,
+    MANUAL_DEVICE_INTENT,
     NMAP_INGESTION_POLICY_VERSION,
     NMAP_SCOPE_JOB_TYPE,
     NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION,
     NMAP_SCOPE_TARGET_FAMILY,
+    _device_authority_contract,
     init_pipeline_intake_storage,
 )
 
@@ -640,7 +649,7 @@ def _enqueue_scope_snapshot(
         job = db.execute(
             f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (prior[0],)
         ).fetchone()
-        if job is None or job[1] != NMAP_SCOPE_JOB_TYPE or job[3] != frozen["source_observation_id"]:
+        if job is None or job[1] != frozen["job_type"] or job[3] != frozen["source_observation_id"]:
             raise DerivedJobConflict("That request token is already used for different work")
         if job[15] != frozen["definition_json"]:
             raise DerivedJobConflict("That request token is already used for different work")
@@ -839,6 +848,37 @@ def _automated_contract_from_evidence(evidence: dict) -> dict:
     }
 
 
+def _device_summary_snapshot(
+    db: sqlite3.Connection, run_id: str, *, intent_kind: str,
+) -> tuple[dict, dict]:
+    contract, _context = _device_authority_contract(
+        db, run_id, intent_kind=intent_kind,
+    )
+    observation_kind = (
+        "device_config_upload"
+        if intent_kind == MANUAL_DEVICE_INTENT else "device_collection"
+    )
+    frozen = {
+        "job_type": DEVICE_SUMMARY_JOB_TYPE,
+        "source_run_id": run_id,
+        "source_observation_id": contract["source_observation_id"],
+        "source_status": "active",
+        "source_sha256": contract["source_sha256"],
+        "source_size_bytes": int(contract["source_size_bytes"]),
+        "target_family": DEVICE_SUMMARY_FAMILY,
+        "target_analysis_version": DEVICE_SUMMARY_VERSION,
+        "target_payload_schema_version": DEVICE_SUMMARY_SCHEMA_VERSION,
+        "target_parameters_json": _canonical_json(dict(DEVICE_SUMMARY_PARAMETERS)),
+        "target_computation_key": None,
+        "target_result_id": None,
+        "source_kind": observation_kind,
+        "source_ref": run_id,
+        "definition_json": _canonical_json(contract),
+    }
+    frozen["job_key"] = _job_key(frozen)
+    return frozen, contract
+
+
 def dispatch_next_pipeline_intake(db_path: Path) -> bool:
     """Admit one explicitly marked pending source without scanning historical rows."""
     from app.automated_nmap_foundation import (
@@ -869,7 +909,10 @@ def dispatch_next_pipeline_intake(db_path: Path) -> bool:
         )
         db.execute("SAVEPOINT pipeline_admission")
         try:
-            if int(row[3]) != NMAP_INGESTION_POLICY_VERSION:
+            if (
+                intent_kind in {MANUAL_NMAP_INTENT, AUTOMATED_NMAP_INTENT}
+                and int(row[3]) != NMAP_INGESTION_POLICY_VERSION
+            ):
                 raise DerivedJobConflict("The intake policy version is no longer supported")
             retained_contract = json.loads(row[7] or "{}")
             if intent_kind == MANUAL_NMAP_INTENT:
@@ -901,6 +944,23 @@ def dispatch_next_pipeline_intake(db_path: Path) -> bool:
                     requested_by=row[5],
                     allow_retry=False,
                 )
+            elif intent_kind in {MANUAL_DEVICE_INTENT, COLLECTED_DEVICE_INTENT}:
+                if int(row[3]) != DEVICE_INGESTION_POLICY_VERSION:
+                    raise DerivedJobConflict(
+                        "The device intake policy version is no longer supported"
+                    )
+                frozen, current_contract = _device_summary_snapshot(
+                    db, source_id, intent_kind=intent_kind,
+                )
+                if current_contract != retained_contract:
+                    raise DerivedJobConflict(
+                        "The device summary intake contract changed before admission"
+                    )
+                job = _enqueue_scope_snapshot(
+                    db, frozen, request_token=row[6], requested_by=row[5],
+                    allow_retry=False,
+                )
+                resolved_assignment_id = None
             else:
                 raise DerivedJobConflict("The intake intent type is unsupported")
             db.execute("RELEASE pipeline_admission")
@@ -1249,6 +1309,113 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
     )
 
 
+def execute_claimed_device_summary_job(
+    db_path: Path, claim: dict, data_dir: Path,
+) -> dict:
+    job_columns = (
+        "job_id", "job_key", "job_type", "source_run_id", "source_observation_id",
+        "source_status", "source_sha256", "source_size_bytes", "target_family",
+        "target_analysis_version", "target_payload_schema_version",
+        "target_parameters_json", "target_computation_key", "target_result_id",
+        "source_kind", "source_ref", "definition_json",
+    )
+    selected = ", ".join(f"job.{name}" for name in job_columns)
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            f"""SELECT {selected} FROM pipeline_jobs job
+                JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                WHERE job.job_id = ? AND attempt.attempt_id = ?
+                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+    if row is None:
+        raise DerivedJobConflict("The device summary worker no longer owns this attempt")
+    frozen_job = tuple(row[name] for name in job_columns)
+    definition = json.loads(row["definition_json"] or "{}")
+    intent_kind = definition.get("intent_kind")
+    if intent_kind not in {MANUAL_DEVICE_INTENT, COLLECTED_DEVICE_INTENT}:
+        raise DerivedJobConflict("The device summary intake definition is unsupported")
+    if (
+        row["job_type"] != DEVICE_SUMMARY_JOB_TYPE
+        or row["source_status"] != "active"
+        or row["target_family"] != DEVICE_SUMMARY_FAMILY
+        or row["target_analysis_version"] != DEVICE_SUMMARY_VERSION
+        or int(row["target_payload_schema_version"]) != DEVICE_SUMMARY_SCHEMA_VERSION
+        or row["target_parameters_json"] != _canonical_json(dict(DEVICE_SUMMARY_PARAMETERS))
+        or row["target_computation_key"] is not None
+        or row["target_result_id"] is not None
+        or row["source_run_id"] != row["source_ref"]
+    ):
+        raise DerivedJobConflict("The device summary job contract is inconsistent")
+
+    def validate_authority(db: sqlite3.Connection) -> None:
+        current, _context = _device_authority_contract(
+            db, row["source_run_id"], intent_kind=intent_kind,
+        )
+        if current != definition:
+            raise DerivedJobConflict(
+                "The queued device evidence authority changed before analysis"
+            )
+        if (
+            current["source_observation_id"] != row["source_observation_id"]
+            or current["source_sha256"] != row["source_sha256"]
+            or int(current["source_size_bytes"]) != int(row["source_size_bytes"])
+        ):
+            raise DerivedJobConflict("The queued device evidence identity changed")
+
+    with connect_database(db_path, read_only=True) as db:
+        validate_authority(db)
+
+    def guard(db: sqlite3.Connection) -> None:
+        db.row_factory = sqlite3.Row
+        owned = db.execute(
+            f"""SELECT {selected} FROM pipeline_jobs job
+                JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                WHERE job.job_id = ? AND attempt.attempt_id = ?
+                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+        if owned is None:
+            raise DerivedJobConflict("The device summary worker lost its claim")
+        if tuple(owned[name] for name in job_columns) != frozen_job:
+            raise DerivedJobConflict("The device summary job changed while processing")
+        validate_authority(db)
+
+    def finalize(db: sqlite3.Connection, created: bool, result_id: str) -> None:
+        changed = db.execute(
+            """UPDATE pipeline_job_attempts
+               SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?,
+                   output_kind = 'derived_result', output_id = ?, error = NULL
+               WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                 AND claim_token = ?""",
+            (utc_now(), "created" if created else "reused", result_id, result_id,
+             claim["attempt_id"], claim["job_id"], claim["claim_token"]),
+        ).rowcount
+        if changed != 1:
+            raise DerivedJobConflict("The device summary worker lost its claim")
+
+    from app.device_configs import device_collection_directory
+    from app.device_summary_result import (
+        analyze_collected_device_summary,
+        analyze_manual_upload_summary,
+    )
+
+    run_dir = device_collection_directory(
+        row["source_run_id"], Path(data_dir) / "device-configs",
+    )
+    analyze = (
+        analyze_manual_upload_summary
+        if intent_kind == MANUAL_DEVICE_INTENT else analyze_collected_device_summary
+    )
+    return analyze(
+        db_path, row["source_run_id"], run_dir,
+        analysis_version=row["target_analysis_version"],
+        transaction_guard=guard,
+        transaction_finalize=finalize,
+    )
+
+
 def fail_claimed_derived_job(db_path: Path, claim: dict, error: Exception) -> None:
     message = str(error).strip() or error.__class__.__name__
     with connect_database(db_path) as db:
@@ -1282,6 +1449,8 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
             )
         elif job_type == NMAP_SCOPE_JOB_TYPE:
             execute_claimed_nmap_scope_job(db_path, claim)
+        elif job_type == DEVICE_SUMMARY_JOB_TYPE:
+            execute_claimed_device_summary_job(db_path, claim, data_dir)
         else:
             raise DerivedJobConflict("The pipeline job type is not supported by this worker")
     except Exception as exc:
@@ -1477,6 +1646,24 @@ def nmap_scope_job_for_run(db_path: Path, run_id: str) -> dict | None:
                 WHERE job_type = ? AND source_run_id = ?
                 ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
             (NMAP_SCOPE_JOB_TYPE, run_id),
+        ).fetchone()
+        return _job_dict(db, row) if row is not None else None
+
+
+def device_summary_job_for_run(db_path: Path, run_id: str) -> dict | None:
+    if not Path(db_path).is_file():
+        return None
+    with connect_database(db_path, read_only=True) as db:
+        available = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
+        ).fetchone()
+        if available is None:
+            return None
+        row = db.execute(
+            f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
+                WHERE job_type = ? AND source_run_id = ?
+                ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
+            (DEVICE_SUMMARY_JOB_TYPE, run_id),
         ).fetchone()
         return _job_dict(db, row) if row is not None else None
 

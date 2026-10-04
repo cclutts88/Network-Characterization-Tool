@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -63,6 +64,24 @@ def test_new_uploads_use_active_authority_and_reuse_one_verified_result(
     assert get_device_collection_authority(db_path, first_id)["state"] == "active"
     assert get_device_collection_authority(db_path, second_id)["state"] == "active"
 
+    from app.derived_jobs import device_summary_job_for_run
+
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        prepared = [
+            device_summary_job_for_run(db_path, run_id)
+            for run_id in (first_id, second_id)
+        ]
+        if all(
+            item and item["latest_attempt"]["state"] == "completed"
+            for item in prepared
+        ):
+            break
+        time.sleep(0.01)
+    assert all(
+        item["latest_attempt"]["state"] == "completed" for item in prepared
+    )
+
     first_analysis = device_analysis.analyze_device_collection(
         first_id,
         config_dir=config_dir,
@@ -116,6 +135,16 @@ def test_presentation_change_is_visible_but_semantic_change_is_rejected(
         response = _upload(client)
     run_id = response.json()["run_id"]
     run_dir = config_dir / run_id
+
+    from app.derived_jobs import device_summary_job_for_run
+
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        prepared = device_summary_job_for_run(db_path, run_id)
+        if prepared and prepared["latest_attempt"]["state"] == "completed":
+            break
+        time.sleep(0.01)
+    assert prepared["latest_attempt"]["state"] == "completed"
 
     initial = device_analysis.analyze_device_collection(
         run_id, config_dir=config_dir, db_path=db_path, data_dir=tmp_path,
@@ -227,7 +256,7 @@ def test_expected_authority_missing_is_not_treated_as_legacy(tmp_path):
 def test_changed_registered_bytes_return_integrity_conflict_from_both_summary_routes(
     tmp_path, monkeypatch,
 ):
-    from app import device_analysis, device_configs
+    from app import derived_jobs, device_analysis, device_configs
 
     db_path = tmp_path / "analyzer.db"
     config_dir = tmp_path / "device-configs"
@@ -235,9 +264,14 @@ def test_changed_registered_bytes_return_integrity_conflict_from_both_summary_ro
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(device_analysis, "DB_PATH", db_path)
     monkeypatch.setattr(device_analysis, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(
+        derived_jobs, "start_derived_job_worker", lambda *args, **kwargs: None,
+    )
     with TestClient(app) as client:
         response = _upload(client)
         run_id = response.json()["run_id"]
+        assert derived_jobs.dispatch_next_pipeline_intake(db_path) is True
+        assert derived_jobs.run_next_derived_job(db_path, tmp_path) is True
         manifest = json.loads((config_dir / run_id / "manifest.json").read_text())
         evidence = config_dir / run_id / manifest["retained_filename"]
         evidence.write_bytes(evidence.read_bytes().replace(b"10.80.0.1", b"10.81.0.1"))

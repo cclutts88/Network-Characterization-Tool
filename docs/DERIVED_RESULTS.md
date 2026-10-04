@@ -201,9 +201,10 @@ rows, observation link and successful attempt outcome commit together. Losing th
 or encountering a corrupt retained result rolls back publication. Job-status reads are
 bounded and read-only.
 
-This first runner assumes one NCT application process for a database. It has no bulk
-requests, cancellation, automatic retries, automatic stale scheduling, cross-process
-leases, progress checkpoints, topology jobs or device-summary jobs.
+This runner assumes one NCT application process for a database. It has no bulk requests,
+cancellation, automatic processing retries, automatic stale scheduling, cross-process
+leases, progress checkpoints or topology jobs. Device-summary work now uses the same
+durable job and attempt records described below.
 
 ### Pipeline queue cutover and rollback boundary
 
@@ -283,6 +284,38 @@ a visible reason. A correction creates a new intent; the older intent cannot red
 the new assignment. If the same job already failed or was interrupted, admission attaches
 that job without creating a retry attempt. Automatic admission does not automatically retry
 a failed processing attempt and does not contact the network.
+
+### Automatic device-summary admission
+
+New manual device uploads and new eligible completed, untruncated SSH collections receive
+an immutable intake marker when their database authority begins. Historical authorities
+have no marker, are not scanned or adopted at startup, and keep their established
+on-demand behavior until a separate migration is reviewed.
+
+For an SSH collection, NCT atomically replaces the final manifest with its Verified state
+before the active database authority and admission intent become visible together. The
+database remains decisive: a restart after the manifest write but before activation still
+shows Incomplete and offers local verification retry. After an uncertain activation
+error, NCT verifies whether the exact authority and ordered inputs actually committed
+before it changes the manifest to Conflict.
+
+Activation freezes the authority revision, selection contract, semantic-manifest digest,
+complete ordered exact inputs, result family, rule version, output schema and settings in
+the admission intent. The worker rechecks that contract without parsing while it creates
+the durable job. Parsing remains outside the writer transaction. The result, provenance
+links and Completed attempt state commit together for both a new calculation and reuse of
+an existing exact result.
+
+Device History reports Waiting, Retrying, Paused, Queued, Running, Complete, Failed,
+Interrupted, Blocked or Incomplete. New marked evidence cannot calculate while a page is
+opening. Failed or interrupted attempts require **Retry reusable analysis**, which reads
+the same retained evidence and never contacts the device. **Retry local verification** is
+a separate action for the earlier file-authority gate. A restart resumes queued work;
+work abandoned while Running becomes Interrupted and awaits explicit local retry.
+
+Device summaries are scope-free reusable calculations at this gate. They do not infer a
+Network Scope, merge physical-device identities, select current truth or establish Last
+Seen. Those remain later ingestion and correlation gates.
 
 ## Current limits
 

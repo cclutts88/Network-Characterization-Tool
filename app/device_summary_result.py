@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+from typing import Callable
 
 from app.database import connect_database
 from app.derived_contracts import (
@@ -32,6 +33,7 @@ from app.device_configs import (
 )
 from app.device_collection_authority import (
     COLLECTED_DEVICE_SELECTION_CONTRACT,
+    DeviceCollectionIncomplete,
     DeviceCollectionIntegrityError,
     MANUAL_UPLOAD_SELECTION_CONTRACT,
     collected_device_manifest_semantics,
@@ -286,9 +288,23 @@ def _attach_context(payload: dict, snapshot: dict, **metadata: object) -> dict:
     }
 
 
+def _combined_guard(
+    authority_guard: Callable[[sqlite3.Connection], None],
+    transaction_guard: Callable[[sqlite3.Connection], None] | None,
+) -> Callable[[sqlite3.Connection], None]:
+    def guard(db: sqlite3.Connection) -> None:
+        authority_guard(db)
+        if transaction_guard is not None:
+            transaction_guard(db)
+    return guard
+
+
 def analyze_manual_upload_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
+    allow_create: bool = True,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Reuse one immutable result only while upload authority remains active."""
     init_derived_result_storage(db_path)
@@ -330,18 +346,23 @@ def analyze_manual_upload_summary(
     if linked_configuration is not None and linked_raw is not None:
         if linked_configuration["result_id"] != linked_raw["result_id"]:
             raise RuntimeError("Device summary provenance links disagree")
-        verified = capture_manual_upload_snapshot(db_path, run_id, run_dir)
-        if verified != snapshot:
+        if capture_manual_upload_snapshot(db_path, run_id, run_dir) != snapshot:
             raise ValueError("Device upload snapshot changed during analysis")
-        return _attach_context(
-            linked_configuration["payload"], snapshot,
-            result_id=linked_configuration["result_id"],
-            family=DEVICE_SUMMARY_FAMILY,
-            analysis_version=analysis_version,
-            reused=True,
-        )
-
-    retained = load_derived_result(db_path, identity)
+        if transaction_finalize is None and transaction_guard is None:
+            return _attach_context(
+                linked_configuration["payload"], snapshot,
+                result_id=linked_configuration["result_id"],
+                family=DEVICE_SUMMARY_FAMILY,
+                analysis_version=analysis_version,
+                reused=True,
+            )
+        retained = linked_configuration
+    else:
+        if not allow_create:
+            raise DeviceCollectionIncomplete(
+                "Reusable device analysis is still being prepared"
+            )
+        retained = load_derived_result(db_path, identity)
     payload = retained["payload"] if retained is not None else _summary_payload(snapshot)
     if capture_manual_upload_snapshot(db_path, run_id, run_dir) != snapshot:
         raise ValueError("Device upload snapshot changed during analysis")
@@ -360,10 +381,13 @@ def analyze_manual_upload_summary(
             {"role": "configuration", "observation_id": snapshot["observation_id"]},
             {"role": "raw_output", "observation_id": snapshot["observation_id"]},
         ],
-        transaction_guard=guard,
+        transaction_guard=_combined_guard(guard, transaction_guard),
+        transaction_finalize=(
+            (lambda db, created: transaction_finalize(
+                db, created, prepared.identity.result_id,
+            )) if transaction_finalize is not None else None
+        ),
     )
-    if capture_manual_upload_snapshot(db_path, run_id, run_dir) != snapshot:
-        raise ValueError("Device upload snapshot changed during analysis")
     return _attach_context(
         payload,
         snapshot,
@@ -621,6 +645,9 @@ def _collected_authority_guard(run_id: str, snapshot: dict, authority: dict):
 def analyze_collected_device_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
+    allow_create: bool = True,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Analyze a finalized SSH collection only through its verified frozen inputs."""
     init_derived_result_storage(db_path)
@@ -655,12 +682,19 @@ def analyze_collected_device_summary(
             raise RuntimeError("Device summary provenance links disagree")
         if capture_collected_device_snapshot(db_path, run_id, run_dir) != snapshot:
             raise ValueError("Device collection snapshot changed during analysis")
-        return _attach_context(
-            linked[0]["payload"], snapshot,
-            result_id=linked[0]["result_id"], family=DEVICE_SUMMARY_FAMILY,
-            analysis_version=analysis_version, reused=True,
-        )
-    retained = load_derived_result(db_path, identity)
+        if transaction_finalize is None and transaction_guard is None:
+            return _attach_context(
+                linked[0]["payload"], snapshot,
+                result_id=linked[0]["result_id"], family=DEVICE_SUMMARY_FAMILY,
+                analysis_version=analysis_version, reused=True,
+            )
+        retained = linked[0]
+    else:
+        if not allow_create:
+            raise DeviceCollectionIncomplete(
+                "Reusable device analysis is still being prepared"
+            )
+        retained = load_derived_result(db_path, identity)
     payload = retained["payload"] if retained is not None else _summary_payload(snapshot)
     if capture_collected_device_snapshot(db_path, run_id, run_dir) != snapshot:
         raise ValueError("Device collection snapshot changed during analysis")
@@ -676,10 +710,13 @@ def analyze_collected_device_summary(
             {"role": item["role"], "observation_id": item["observation_id"]}
             for item in file_inputs
         ],
-        transaction_guard=guard,
+        transaction_guard=_combined_guard(guard, transaction_guard),
+        transaction_finalize=(
+            (lambda db, created: transaction_finalize(
+                db, created, prepared.identity.result_id,
+            )) if transaction_finalize is not None else None
+        ),
     )
-    if capture_collected_device_snapshot(db_path, run_id, run_dir) != snapshot:
-        raise ValueError("Device collection snapshot changed during analysis")
     return _attach_context(
         payload, snapshot, result_id=publication["result_id"],
         family=DEVICE_SUMMARY_FAMILY, analysis_version=analysis_version,
