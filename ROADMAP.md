@@ -613,6 +613,45 @@ missing-output checks, a disposable end-to-end benchmark, independent review and
 operator browser acceptance. This gate is development acceptance for the foundation
 branch; it is not Range, mission, stable-main or production-scale acceptance.
 
+**2026-10-04 currently supported ingestion development acceptance complete:** the
+four participating source paths now meet the bounded completion contract: manual Nmap
+uploads, eligible completed Nmap scans, manual device uploads and eligible completed
+device collections. System Health follows each separate encounter through retained
+authority, explicit Network Scope where required, local durable processing and its exact
+saved output. Ready, Processing, Needs scope and Needs attention stay distinct; failed,
+interrupted, missing, malformed, mismatched and partially completed records remain visible
+without weakening an earlier completed stage. Duplicate content may reuse one verified
+calculation while every encounter keeps its own provenance. Older records stay in their
+original history and are not included in this processing view. The status request is a
+single read-only saved-metadata snapshot and does not open or hash files, initialize
+storage, enqueue work, parse evidence, contact a network or publish results.
+
+The independent gate is **CLEAR - DOCUMENTED DEVIATION** after two halts corrected
+cross-encounter result borrowing, incomplete device provenance, terminal scan-state
+presentation, malformed-record isolation, legitimate shared-result handling and changed
+descriptor detection. Independent validation passed **59 tests**; the focused integrity
+suite passed **15 tests**; UI and delayed-response checks passed **62 tests** plus the
+actual Node handler; and the complete Docker suite passed **1,003 tests with 4 expected
+skips**. The isolated live preview displayed all three present supported examples as
+Ready with exact source/history links, the plainer historical-record boundary, expandable
+encounter identity and contextual Operator Guide. The novice operator gate is **CLEAR**;
+the operator understood the present Ready examples and the tested Needs scope, Processing
+and Needs attention guidance without mistaking saved evidence for live network truth. The
+three-repeat disposable benchmark
+for exact revision `9e5b1f5` preserved separate duplicate encounters, reused their shared
+device calculation, recorded 600 receipts and verified the first and last 100-row pages,
+completed concurrent status reads
+without errors, and kept median first/last status pages near 0.0043/0.0028 seconds. See
+[the acceptance record](docs/SUPPORTED_INGESTION_ACCEPTANCE_2026-10-04.md) and
+[raw benchmark](docs/supported_ingestion_benchmark_2026-10-04.json).
+
+This completes the **currently supported ingestion development-acceptance milestone** on
+the foundation branch. Steps 10-14 remain partial at their documented broader boundaries;
+Step 15's representative Phase 0 comparison remains open. Historical bulk adoption,
+general dependency rebuilding, multi-process leases/checkpoints, passive collectors,
+physical-device reconciliation, broad current truth, exact device Last Seen, production
+scale, Range, mission and stable-main acceptance remain later reviewed gates.
+
 ## Steps
 
 1. [~] Artifact hashing and deduplication.

@@ -1,0 +1,210 @@
+{
+  "benchmark": "currently-supported-ingestion-development-acceptance",
+  "limitations": [
+    "Synthetic disposable evidence only",
+    "Single-process worker only",
+    "Not a production, Range, mission, or stable-main benchmark",
+    "Phase 0 representative production datasets remain unavailable"
+  ],
+  "repeats": 3,
+  "revision": "9e5b1f5",
+  "runs": [
+    {
+      "all_disposable_files_bytes": 3833321,
+      "concurrent_status_errors": [],
+      "concurrent_status_reads": 38,
+      "cpu_seconds": {
+        "large_device_cold": 1.771445167,
+        "large_device_repeated_content": 0.1709063340000001,
+        "large_nmap_cold": 0.410439666,
+        "receipts_first_page": 0.003906800999999849,
+        "receipts_last_page": 0.003855338999999791,
+        "small_device_cold": 0.05338485600000009,
+        "small_nmap_cold": 0.053909364000000015,
+        "status_first_page": 0.0046742149999996485,
+        "status_last_page": 0.002873917000000059
+      },
+      "database_bytes": 3600384,
+      "dataset": {
+        "large_device_bytes": 35592,
+        "large_device_interfaces": 600,
+        "large_nmap_bytes": 89994,
+        "large_nmap_hosts": 400,
+        "repeated_status_encounters": 53,
+        "small_device_bytes": 194,
+        "small_device_interfaces": 3,
+        "small_nmap_bytes": 875,
+        "small_nmap_hosts": 3
+      },
+      "memory_peak_bytes": 105067318,
+      "preservation": {
+        "receipt_first_page_count": 100,
+        "receipt_last_page_count": 100,
+        "receipt_total": 600,
+        "repeated_device_content_reused_summary": true,
+        "separate_device_encounters": true,
+        "status_last_page_count": 3
+      },
+      "repeat": 0,
+      "revision": "9e5b1f5",
+      "timings_seconds": {
+        "large_device_cold": 1.9572293980018003,
+        "large_device_repeated_content": 0.19924619900120888,
+        "large_nmap_cold": 0.3652411250077421,
+        "receipts_first_page": 0.003914261003956199,
+        "receipts_last_page": 0.003854188005789183,
+        "small_device_cold": 0.08126018699840643,
+        "small_nmap_cold": 0.1757222640007967,
+        "status_first_page": 0.004674400013755076,
+        "status_last_page": 0.0028729319892590865
+      }
+    },
+    {
+      "all_disposable_files_bytes": 3833321,
+      "concurrent_status_errors": [],
+      "concurrent_status_reads": 36,
+      "cpu_seconds": {
+        "large_device_cold": 0.5437715799999996,
+        "large_device_repeated_content": 0.1595966010000005,
+        "large_nmap_cold": 0.4463046720000001,
+        "receipts_first_page": 0.003768408000000001,
+        "receipts_last_page": 0.003797558999999673,
+        "small_device_cold": 0.05432376499999947,
+        "small_nmap_cold": 0.054683620000000044,
+        "status_first_page": 0.0036743320000001134,
+        "status_last_page": 0.002845827000000689
+      },
+      "database_bytes": 3600384,
+      "dataset": {
+        "large_device_bytes": 35592,
+        "large_device_interfaces": 600,
+        "large_nmap_bytes": 89994,
+        "large_nmap_hosts": 400,
+        "repeated_status_encounters": 53,
+        "small_device_bytes": 194,
+        "small_device_interfaces": 3,
+        "small_nmap_bytes": 875,
+        "small_nmap_hosts": 3
+      },
+      "memory_peak_bytes": 105020687,
+      "preservation": {
+        "receipt_first_page_count": 100,
+        "receipt_last_page_count": 100,
+        "receipt_total": 600,
+        "repeated_device_content_reused_summary": true,
+        "separate_device_encounters": true,
+        "status_last_page_count": 3
+      },
+      "repeat": 1,
+      "revision": "9e5b1f5",
+      "timings_seconds": {
+        "large_device_cold": 0.5945107739971718,
+        "large_device_repeated_content": 0.18714202599949203,
+        "large_nmap_cold": 0.39024286600761116,
+        "receipts_first_page": 0.003767333007999696,
+        "receipts_last_page": 0.0037964950024615973,
+        "small_device_cold": 0.08014074100356083,
+        "small_nmap_cold": 0.17519916300079785,
+        "status_first_page": 0.0036748940037796274,
+        "status_last_page": 0.002844190996256657
+      }
+    },
+    {
+      "all_disposable_files_bytes": 3829225,
+      "concurrent_status_errors": [],
+      "concurrent_status_reads": 36,
+      "cpu_seconds": {
+        "large_device_cold": 0.5341727269999996,
+        "large_device_repeated_content": 0.16716291500000047,
+        "large_nmap_cold": 0.3931738210000004,
+        "receipts_first_page": 0.0037001669999998654,
+        "receipts_last_page": 0.0037345879999994835,
+        "small_device_cold": 0.0587885349999997,
+        "small_nmap_cold": 0.05365656200000046,
+        "status_first_page": 0.004307504999999878,
+        "status_last_page": 0.002812896000000009
+      },
+      "database_bytes": 3596288,
+      "dataset": {
+        "large_device_bytes": 35592,
+        "large_device_interfaces": 600,
+        "large_nmap_bytes": 89994,
+        "large_nmap_hosts": 400,
+        "repeated_status_encounters": 53,
+        "small_device_bytes": 194,
+        "small_device_interfaces": 3,
+        "small_nmap_bytes": 875,
+        "small_nmap_hosts": 3
+      },
+      "memory_peak_bytes": 105017256,
+      "preservation": {
+        "receipt_first_page_count": 100,
+        "receipt_last_page_count": 100,
+        "receipt_total": 600,
+        "repeated_device_content_reused_summary": true,
+        "separate_device_encounters": true,
+        "status_last_page_count": 3
+      },
+      "repeat": 2,
+      "revision": "9e5b1f5",
+      "timings_seconds": {
+        "large_device_cold": 0.5861789209884591,
+        "large_device_repeated_content": 0.19529657599923667,
+        "large_nmap_cold": 0.34855313699517865,
+        "receipts_first_page": 0.003704761009430513,
+        "receipts_last_page": 0.0037333219952415675,
+        "small_device_cold": 0.08777591399848461,
+        "small_nmap_cold": 0.16911965899635106,
+        "status_first_page": 0.004307968003558926,
+        "status_last_page": 0.002811049998854287
+      }
+    }
+  ],
+  "timing_variability_seconds": {
+    "large_device_cold": {
+      "max": 1.9572293980018003,
+      "median": 0.5945107739971718,
+      "min": 0.5861789209884591
+    },
+    "large_device_repeated_content": {
+      "max": 0.19924619900120888,
+      "median": 0.19529657599923667,
+      "min": 0.18714202599949203
+    },
+    "large_nmap_cold": {
+      "max": 0.39024286600761116,
+      "median": 0.3652411250077421,
+      "min": 0.34855313699517865
+    },
+    "receipts_first_page": {
+      "max": 0.003914261003956199,
+      "median": 0.003767333007999696,
+      "min": 0.003704761009430513
+    },
+    "receipts_last_page": {
+      "max": 0.003854188005789183,
+      "median": 0.0037964950024615973,
+      "min": 0.0037333219952415675
+    },
+    "small_device_cold": {
+      "max": 0.08777591399848461,
+      "median": 0.08126018699840643,
+      "min": 0.08014074100356083
+    },
+    "small_nmap_cold": {
+      "max": 0.1757222640007967,
+      "median": 0.17519916300079785,
+      "min": 0.16911965899635106
+    },
+    "status_first_page": {
+      "max": 0.004674400013755076,
+      "median": 0.004307968003558926,
+      "min": 0.0036748940037796274
+    },
+    "status_last_page": {
+      "max": 0.0028729319892590865,
+      "median": 0.002844190996256657,
+      "min": 0.002811049998854287
+    }
+  }
+}
