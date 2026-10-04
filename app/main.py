@@ -30,7 +30,8 @@ from app.nmap_assignment_workflow import (
     list_manual_nmap_assignment_statuses,
     manual_nmap_assignment_for_processing,
 )
-from app.storage_health import storage_status, start_storage_job
+from app.storage_health import recover_incomplete_compactions, storage_status, start_storage_job
+from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
 from app.derived_result_status import list_derived_result_status
 from app.derived_version_inventory import (
@@ -450,6 +451,12 @@ class LoginRequest(BaseModel):
 class SavedAnalysisJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_token: str = Field(min_length=1, max_length=200)
+
+
+class StorageCompactionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation: str = Field(min_length=1, max_length=100)
 
 
 class NetworkScopeCreateRequest(BaseModel):
@@ -1274,24 +1281,30 @@ async def lifespan(_: FastAPI):
     init_exposure_report_storage(DB_PATH)
     init_evidence_scope_assignment_storage(DB_PATH)
     init_automated_nmap_foundation_storage(DB_PATH)
-    recover_interrupted_automated_scan_foundation(DB_PATH)
-    recover_interrupted_derived_jobs(DB_PATH)
-    start_derived_job_worker(DB_PATH, DATA_DIR)
-    recover_scheduler_state()
-    scheduler_stop = threading.Event()
-    scheduler_thread = threading.Thread(
-        target=schedule_worker,
-        args=(scheduler_stop,),
-        daemon=True,
-        name="scan-scheduler",
-    )
-    scheduler_thread.start()
+    compaction_recovery = recover_incomplete_compactions(DB_PATH)
+    background_workers_started = not compaction_recovery.get("recovery_required")
+    scheduler_stop = None
+    scheduler_thread = None
+    if background_workers_started:
+        recover_interrupted_automated_scan_foundation(DB_PATH)
+        recover_interrupted_derived_jobs(DB_PATH)
+        start_derived_job_worker(DB_PATH, DATA_DIR)
+        recover_scheduler_state()
+        scheduler_stop = threading.Event()
+        scheduler_thread = threading.Thread(
+            target=schedule_worker,
+            args=(scheduler_stop,),
+            daemon=True,
+            name="scan-scheduler",
+        )
+        scheduler_thread.start()
     try:
         yield
     finally:
-        stop_derived_job_worker(DB_PATH)
-        scheduler_stop.set()
-        scheduler_thread.join(timeout=2)
+        if background_workers_started:
+            stop_derived_job_worker(DB_PATH)
+            scheduler_stop.set()
+            scheduler_thread.join(timeout=2)
 
 
 app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifespan)
@@ -1308,6 +1321,11 @@ async def database_error_response(request: Request, exc: sqlite3.OperationalErro
         {"detail": "The database is busy with another operation. Please retry shortly."},
         status_code=503, headers={"Retry-After": "2"},
     )
+
+
+@app.exception_handler(EvidenceMaintenanceBlocked)
+async def evidence_maintenance_response(request: Request, exc: EvidenceMaintenanceBlocked):
+    return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
 @app.middleware("http")
@@ -1514,6 +1532,20 @@ def system_analysis_input_dependents(
             DB_PATH, result_id, role, limit=limit, offset=offset,
         )
     )
+
+
+@app.post("/api/system/storage/compact", status_code=202)
+def system_storage_compact(body: StorageCompactionRequest, request: Request) -> dict:
+    require_storage_admin(request)
+    try:
+        return start_storage_job(
+            DB_PATH, "compact", plan_id=body.plan_id, confirmation=body.confirmation,
+        )
+    except (ValueError, EvidenceMaintenanceBlocked) as exc:
+        raise HTTPException(
+            status_code=409 if "running" in str(exc).lower() or isinstance(exc, EvidenceMaintenanceBlocked) else 400,
+            detail=str(exc),
+        ) from exc
 
 
 @app.post("/api/system/storage/{mode}", status_code=202)
@@ -2499,6 +2531,7 @@ def preview_commands(spec: CampaignSpec) -> dict:
 
 
 @app.post("/api/import")
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 async def import_xml(request: Request, file: Annotated[UploadFile, File()]) -> dict:
     content = await file.read()
     if not content:

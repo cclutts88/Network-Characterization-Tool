@@ -137,6 +137,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-03 | Phase 1 persistent analysis jobs | Begin with bulk rebuilding from saved-version groups and automatic stale scheduling | Begin with one explicitly requested durable job for the current Nmap base analysis of one authoritative finalized scan encounter | A version group can contain several encounters, an old result does not by itself authorize current processing, and bulk/automatic rebuilding needs dependency selection, batching, cancellation and partial-success rules that are not yet reviewed | Resolve the exact run, observation, digest, size and current calculation contract on the server; keep request identity separate from calculation reuse and encounter provenance; use durable attempt history, restart recovery, short atomic claims, source/authority rechecks and atomic job-result completion. Initially exclude topology, device summaries, historical unregistered files, bulk requests, cancellation, automatic retries and automatic stale scheduling. This is a bounded Step 10 implementation and an early limited Step 11 runner |
 | 2026-10-03 | Scan History subnet grouping | Keep the global newest-25 record window and page older records outside subnet dropdowns | Build a read-only catalog across retained scan metadata, group by each exact recorded canonical CIDR, and page scan rows inside that subnet's dropdown | Operators could not find older scans after global history paging, and Saved Network IDs could split the same subnet after rename, archive or recreation | This is a user-directed presentation and pagination correction, not canonical identity merging. Different prefixes stay distinct; scope, Saved Network snapshots, attribution, provenance and exact run actions remain per scan. Multi-subnet scans may appear under each exact recorded subnet with an explicit cross-target note. Host lists and invalid or missing legacy targets remain honestly labelled fallback groups. Catalog and row requests stay bounded and never open XML or artifact files |
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
+| 2026-10-04 | Phase 1 storage | Enable optional exact-content compaction after verified backfill | Add a separate administrator-confirmed action that replaces only reviewed exact copies with hard links to canonical content while preserving every logical evidence path and record | Independent adversarial review reproduced unsafe crash, journal, queue, path-substitution, recovery-integrity and confirmation-ownership cases during implementation; each case was corrected and retained as a regression | This is single-process maintenance. No second NCT process or external evidence edit may use the data directory during inspection, compaction or recovery. Files must share a filesystem and compatible security metadata; shared paths use canonical filesystem timestamps while recorded evidence timestamps remain. A durable recovery block stops all guarded evidence changes when safe repair cannot be proved. Estimated and measured savings are reported separately; automatic pruning stays disabled. See `docs/EXACT_CONTENT_COMPACTION.md` |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
 | 2026-09-27 | Phase 1 reliability | Read-only storage inventory connection | Extended the shared database helper with read-only mode | Full regression testing caught the initial inventory bypassing the shared lock policy | Inventory now retains the common timeout and connection handling; no inventory-time schema writes |
 ---
@@ -592,7 +593,7 @@ foundational changes.
    - [x] Existing-data backfill for retained imports and finalized scan/device evidence (upload provenance corrected; independently reviewed; 530 Linux tests passing).
    - [x] Dry-run duplicate/storage analysis and Settings / System Health storage view.
    - [x] Dry-run verification of known historical paths and registered content hashes (upload integrity and observation-backed references corrected and independently reviewed).
-   - [ ] Optional exact-content compaction.
+   - [x] Optional exact-content compaction.
    - [x] Restart-safe/resumable backfill checkpoints and persistent storage-job reports.
 
    2026-09-27 start: extend registration to finalized collection evidence; add
@@ -614,6 +615,46 @@ foundational changes.
    sample evidence. Production mission data was not migrated. Optional compaction,
    pin/retention enforcement, cross-process jobs and formal scale benchmarks remain
    future gates; this does not mark Phase 1 as a whole complete.
+
+   2026-10-03 exact-content compaction start: implement the user-requested,
+   administrator-controlled storage action in Settings / System Health. The action
+   must run a fresh reference and content verification, refuse all changes while
+   evidence is active or any verification issue remains, and replace only a verified
+   historical copy with an atomic hard link to the exact SHA-256 canonical artifact.
+   Every retained path, evidence reference, filename, observation, attribution and
+   logical timestamp must remain available. Non-identical content, unsafe paths,
+   unsupported filesystems and changed evidence remain untouched. Interruption,
+   idempotent retry, rollback-on-validation-failure, operator confirmation, guide
+   wording and isolated browser proof are part of this gate. Architecture review was
+   CLEAR — DOCUMENTED DEVIATION for optional single-process maintenance, with the
+   operating boundary recorded in
+   [the compaction contract](docs/EXACT_CONTENT_COMPACTION.md). During implementation,
+   independent adversarial review halted the gate after reproducing four unsafe
+   interruption cases: post-verification content changes, journal write failure,
+   queued-scan dispatch during a recovery block, and substituted symbolic-link paths.
+   The corrections now have exact regression coverage and passed the final gate.
+
+   2026-10-04 exact-content compaction completion: System Health now exposes the
+   confirmed **Remove verified duplicate copies** action after a fresh clean dry run.
+   Only exact SHA-256 matches on the same filesystem with compatible ownership,
+   permissions and security attributes qualify. Paths, filenames, scan/collection
+   history, observations, attribution and recorded timestamps remain; the eligible
+   paths share the canonical physical file and its filesystem timestamps. The UI
+   freezes the displayed plan through confirmation and reports estimated file-length
+   savings separately from measured free-space change. Durable per-file recovery,
+   startup recovery, mutation exclusion, queued-scan deferral, strict journal-owned
+   paths, symlink rejection and hash checks for every recovery state keep uncertain
+   cases blocked. Automatic pruning remains disabled.
+
+   Validation: independent reviewer **CLEAR — DOCUMENTED DEVIATION** after replaying
+   the adversarial interruption cases; novice operator **PASS** before and after the
+   action; full Docker suite **907 passed, 2 skipped** (the container lacks Node.js);
+   host Node actual-handler confirmation regression passed. The isolated browser
+   demonstration compacted two 2 MiB copies, estimated 4.0 MiB, measured 3.9 MiB,
+   preserved two observations and both collection paths/manifests, and left no
+   eligible duplicates. This is committed development readiness on the foundation
+   branch only; it is not available on `main`, Range-ready or mission-ready. See the
+   [exact-content compaction operating contract](docs/EXACT_CONTENT_COMPACTION.md).
 2. [~] Canonical host/service/network/device entities.
    2026-09-27 start: implement the internal host/service storage contract with
    explicit network scope and immutable artifact-backed receipts. Address endpoints

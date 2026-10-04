@@ -11,6 +11,7 @@ import threading
 import uuid
 
 from app.database import configure_database, connect_database
+from app.evidence_maintenance import guarded_evidence_mutation
 from app.saved_network_scope_associations import (
     get_run_scope_context,
     insert_artifact_observation_scope_context,
@@ -206,6 +207,7 @@ def _register_record(
     }
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs["db_path"])
 def register_artifact_bytes(
     *,
     db_path: Path,
@@ -249,6 +251,7 @@ def register_artifact_bytes(
     return record
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs["db_path"])
 def register_artifact_file(
     *,
     db_path: Path,
@@ -334,6 +337,7 @@ def link_artifact(record: dict, destination: Path) -> str:
         temporary.unlink(missing_ok=True)
 
 
+@guarded_evidence_mutation(lambda db_path, *args, **kwargs: db_path)
 def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                              source_kind: str, filenames,
                              expected_files: dict[str, dict] | None = None) -> None:

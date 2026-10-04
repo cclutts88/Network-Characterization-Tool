@@ -25,6 +25,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.evidence_maintenance import guarded_evidence_mutation
 from app.artifacts import (
     link_artifact,
     register_artifact_file,
@@ -1048,6 +1049,7 @@ def _close_interactive_resources(session: InteractiveSshSession) -> None:
     shutil.rmtree(session.control_dir, ignore_errors=True)
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def _finish_interactive_session(
     session: InteractiveSshSession,
     *,
@@ -1474,6 +1476,7 @@ def _run_cisco_command_sequence_to_file(
     return transport_error or "", exit_code, failed_commands, fatal_error, output_truncated
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def _run_interactive_collection(session: InteractiveSshSession) -> dict:
     plan = session.plan
     preview = session.preview
@@ -2439,6 +2442,10 @@ def calculate_device_collection_summary(
     return result
 
 
+@guarded_evidence_mutation(
+    lambda *args, **kwargs: kwargs.get("db_path")
+    or (args[3] if len(args) > 3 and args[3] is not None else DB_PATH)
+)
 def delete_device_collection(
     run_id: str,
     confirmation: str,
@@ -2513,6 +2520,7 @@ def preview(plan: DeviceConfigPlan, request: Request) -> dict:
 
 
 @router.post("/interactive/start")
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     """Open a short-lived SSH control session and stop at the device password prompt."""
     _require_secure_password_transport(request)
@@ -2691,6 +2699,7 @@ def cancel_interactive_session(session_id: str) -> dict:
 
 
 @router.post("/preflight")
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     """Validate the key and capture every non-interactive SSH access check."""
     plan = bind_signed_in_actor(request, plan, "operator")
@@ -2750,6 +2759,7 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
 
 
 @router.post("/execute")
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     plan = bind_signed_in_actor(request, plan, "operator")
     if plan.authentication_mode != "key":
@@ -2881,6 +2891,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
 
 
 @router.post("/upload")
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 async def upload_result(
     request: Request,
     operator: str = Form(...),
@@ -3120,6 +3131,7 @@ def collection_summary(run_id: str) -> dict:
 
 
 @router.post("/{run_id}/retry-summary-verification")
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def retry_summary_verification(run_id: str) -> dict:
     """Retry local exact-file verification without contacting the source device."""
     try:

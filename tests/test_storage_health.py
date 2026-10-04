@@ -322,6 +322,13 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
             "/api/system/analysis-versions/bad/results?representative_result_id=result"
         ).status_code == expected
         assert client.post("/api/system/storage/backfill").status_code == expected
+        assert client.post(
+            "/api/system/storage/compact",
+            json={
+                "plan_id": "a" * 64,
+                "confirmation": "REMOVE VERIFIED DUPLICATE COPIES",
+            },
+        ).status_code == expected
     else:
         assert client.get("/settings/system-health").status_code == 200
         assert client.get("/api/system/analysis-status?limit=101").status_code == 422
@@ -338,6 +345,10 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
             "/api/system/analysis-status/missing/inputs/nmap_xml/saved-calculations?limit=101"
         ).status_code == 422
         assert client.post("/api/system/storage/delete").status_code == 400
+        assert client.post(
+            "/api/system/storage/compact",
+            json={"plan_id": "a" * 64, "confirmation": "wrong phrase"},
+        ).status_code == 400
         assert client.post("/api/system/storage/dry-run", headers={"Origin": "https://unrelated.example"}).status_code == 403
 
 

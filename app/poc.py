@@ -29,6 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.comparison import compare_analyses, coverage_warnings
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import configure_database, connect_database
+from app.evidence_maintenance import (
+    EvidenceMaintenanceBlocked,
+    evidence_mutations_blocked,
+    guarded_evidence_mutation,
+)
 from app.artifacts import init_artifact_storage, register_finalized_files
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
@@ -2724,6 +2729,9 @@ def scan_data_root(data_dir: Path = DATA_DIR) -> Path:
     return root
 
 
+@guarded_evidence_mutation(
+    lambda *args, **kwargs: kwargs.get("db_path", args[2] if len(args) > 2 else DB_PATH)
+)
 def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
                      data_dir: Path = DATA_DIR) -> dict:
     if get_scan_run_plan(run_id, db_path) is None:
@@ -2747,6 +2755,9 @@ def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
     return {"deleted": True, "run_id": run_id}
 
 
+@guarded_evidence_mutation(
+    lambda *args, **kwargs: kwargs.get("db_path", args[1] if len(args) > 1 else DB_PATH)
+)
 def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
                          data_dir: Path = DATA_DIR) -> dict:
     with ACTIVE_RUNS_LOCK:
@@ -2965,6 +2976,7 @@ def artifact_path(
     return path, media_type
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
 def execute_scan_run(
     run_id: str,
     control: RunControl,
@@ -3419,6 +3431,7 @@ def execute_scan_run(
         dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
 def launch_scan_run(
     request: ScanRunRequest,
     *,
@@ -3442,6 +3455,10 @@ def _scan_worker_entry(
     """Keep an unexpected worker error from wedging the shared queue."""
     try:
         execute_scan_run(run_id, control, db_path=db_path, data_dir=data_dir)
+    except EvidenceMaintenanceBlocked:
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        return
     except Exception as exc:
         manifest = get_scan_run_plan(run_id, db_path)
         if manifest is not None and manifest.get("status") in {
@@ -3477,6 +3494,8 @@ def dispatch_next_queued_run(
     *, db_path: Path = DB_PATH, data_dir: Path = DATA_DIR
 ) -> dict | None:
     """Start the oldest queued run if the analyzer has free scan capacity."""
+    if evidence_mutations_blocked(db_path):
+        return None
     with ACTIVE_RUNS_LOCK:
         if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
             return None
@@ -3577,6 +3596,7 @@ def _scheduled_request(
     )
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
 def execute_schedule_batch(
     schedule_id: str,
     batch_id: str,
@@ -3747,6 +3767,7 @@ def execute_schedule_batch(
             ACTIVE_SCHEDULE_BATCHES.discard(schedule_id)
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
 def queue_scan_schedule_batch(
     schedule_id: str,
     *,
@@ -3844,6 +3865,7 @@ def record_schedule_conflict(
     return _store_scan_schedule(schedule, db_path)
 
 
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", args[0] if args else DB_PATH))
 def recover_scheduler_state(
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
@@ -4023,6 +4045,7 @@ def dispatch_due_schedules(
 def schedule_worker(stop_event: threading.Event, interval_seconds: float = 15.0) -> None:
     while not stop_event.is_set():
         try:
+            dispatch_next_queued_run()
             dispatch_due_schedules()
         except Exception:
             # One malformed or unavailable schedule must not stop future checks.
@@ -4544,6 +4567,7 @@ def delete_saved_scan_schedule(schedule_id: str, confirmation: DeleteConfirmatio
 
 
 @router.post("/scan-runs/plans", status_code=201)
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def create_scan_run_plan(plan: ScanRunPlan, http_request: Request) -> dict:
     try:
         actor_fields = ["operator", "created_by", "executed_by"]
@@ -4558,6 +4582,7 @@ def create_scan_run_plan(plan: ScanRunPlan, http_request: Request) -> dict:
 
 
 @router.post("/scan-runs", status_code=202)
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
     try:
         actor_fields = ["operator", "created_by", "executed_by"]

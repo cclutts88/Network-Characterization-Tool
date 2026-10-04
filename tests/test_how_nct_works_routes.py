@@ -31,7 +31,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "require every scan to be assigned first" in html
     assert "Planned optional tasking will help a lead coordinate work" in html
     assert "not observed in this collection" in html
-    assert "Automatic compaction remains disabled" in html
+    assert "Optional exact-content compaction" in html
+    assert "administrator-confirmed" in html
+    assert "automatic pruning remains disabled" in html
     assert "saved reusable analyses as <strong>Current</strong>, <strong>Stale</strong>, or <strong>Unknown</strong>" in html
     assert "Current means only that the saved calculation rules match this build" in html
     assert "<strong>Saved calculation versions</strong> groups exact retained families" in html

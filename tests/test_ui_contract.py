@@ -217,6 +217,8 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "storedGuidePreference===null||storedGuidePreference==='1'" in SHELL_SCRIPT
     assert "hasOwnProperty.call(snapshot,'guide_enabled'))setGuideEnabled" in SHELL_SCRIPT
     assert '<summary>Using this guide</summary>' in SHELL_SCRIPT
+    assert "Remove verified duplicate copies" in SHELL_SCRIPT
+    assert "Recovery records protect interrupted replacements" in SHELL_SCRIPT
     assert 'id="nct-guide-name" tabindex="0"' in SHELL_SCRIPT
     assert 'temporary overlay when you hover over or focus the exact words Operator Guide' in SHELL_SCRIPT
     assert '#nct-guide-help:not([open]){display:none}' in SHELL_SCRIPT
