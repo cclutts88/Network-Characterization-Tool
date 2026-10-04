@@ -131,6 +131,29 @@ unknown or changed contracts are shown as unsupported rather than inferred from 
 names or roles. No graph table or data migration is needed,
 so rollback uses the same retained immutable records.
 
+## Saved calculations using an input
+
+The reverse lookup starts from one verified result and input role. NCT resolves that
+role's input kind and exact identity on the server, then pages saved input rows that
+record the same pair. Matching only an identity is insufficient because an artifact
+digest and a calculation descriptor can use the same text while representing different
+input types. Separate roles remain separate recorded relationships even when they use
+the same bytes.
+
+For a calculation contract supported by the running build, NCT verifies the saved
+computation identity, manifest, complete input rows and provenance links before calling
+the candidate a verified direct relationship. Older, changed or unknown contracts stay
+visible as unsupported saved-record candidates; their input-row relationship is not
+interpreted as trusted. A conflicting supported record fails visibly. Candidate totals
+and verified relationships on the current page are reported separately, so an empty or
+partly unsupported page is not presented as a database-wide integrity audit.
+
+An additive startup index on input kind, exact identity, result and role keeps the
+bounded lookup deterministic without writing during requests. The lookup reads retained
+relationships only. It does not inspect source files, multiply relationships for
+duplicate observations, determine evidence freshness, predict invalidation, mark results
+stale, traverse indirect dependencies or rerun analysis.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already

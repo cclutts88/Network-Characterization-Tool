@@ -313,6 +313,9 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
         assert client.get(
             "/api/system/analysis-status/missing/inputs/nmap_xml/source-records"
         ).status_code == expected
+        assert client.get(
+            "/api/system/analysis-status/missing/inputs/nmap_xml/saved-calculations"
+        ).status_code == expected
         assert client.post("/api/system/storage/backfill").status_code == expected
     else:
         assert client.get("/settings/system-health").status_code == 200
@@ -320,6 +323,9 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
         assert client.get("/api/system/analysis-status/missing/inputs").status_code == 404
         assert client.get(
             "/api/system/analysis-status/missing/inputs/nmap_xml/source-records?limit=101"
+        ).status_code == 422
+        assert client.get(
+            "/api/system/analysis-status/missing/inputs/nmap_xml/saved-calculations?limit=101"
         ).status_code == 422
         assert client.post("/api/system/storage/delete").status_code == 400
         assert client.post("/api/system/storage/dry-run", headers={"Origin": "https://unrelated.example"}).status_code == 403

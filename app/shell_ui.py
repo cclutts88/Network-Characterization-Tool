@@ -704,7 +704,9 @@ SHELL_SCRIPT = r"""
     const actionTextGuideHints={
       '/settings/system-health':{
         'view inputs':['View calculation inputs','Shows the separate input roles that this saved calculation declared after NCT verifies that the immutable manifest and saved input rows still agree.','This reads saved relationship records only. It does not open or rehash source files, decide whether evidence is fresh, mark work stale, or rerun analysis.'],
-        'view source records':['View retained source records','Shows a bounded page of separate evidence encounters linked to this exact registered-file input role.','A source record explains provenance for the input. It is not another calculation step, and NCT does not reconstruct a record after it is deleted.']
+        'view source records':['View retained source records','Shows a bounded page of separate evidence encounters linked to this exact registered-file input role.','A source record explains provenance for the input. It is not another calculation step, and NCT does not reconstruct a record after it is deleted.'],
+        'show calculations using this input':['Saved calculations using this input','Shows saved records that directly declare the same exact input type and identity. Supported records are verified before their relationship is trusted.','This reports recorded direct relationships only. It does not prove freshness, predict invalidation, mark results stale, follow indirect dependencies, or rerun analysis.'],
+        'open result inputs':['Open saved calculation inputs','Opens the verified input roles for this supported saved calculation.','Opening details reads retained relationship records only and performs no analysis.']
       },
       '/settings/network-scopes':{
         'manage':['Manage network scope','Loads this scope into the editor and opens its permanent change history. You can update an active scope or inspect an archived one.','Managing changes only scope metadata. Evidence assignment is not available on this page, and archived scopes cannot currently be restored.']

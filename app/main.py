@@ -36,6 +36,7 @@ from app.derived_result_status import list_derived_result_status
 from app.derived_dependencies import (
     DerivedDependencyIntegrityError,
     UnsupportedDerivedDependency,
+    list_input_dependents,
     list_input_observations,
     list_result_inputs,
 )
@@ -1389,6 +1390,22 @@ def system_analysis_input_sources(
     require_storage_admin(request)
     return _dependency_response(
         lambda: list_input_observations(
+            DB_PATH, result_id, role, limit=limit, offset=offset,
+        )
+    )
+
+
+@app.get("/api/system/analysis-status/{result_id}/inputs/{role}/saved-calculations")
+def system_analysis_input_dependents(
+    result_id: str,
+    role: str,
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_storage_admin(request)
+    return _dependency_response(
+        lambda: list_input_dependents(
             DB_PATH, result_id, role, limit=limit, offset=offset,
         )
     )

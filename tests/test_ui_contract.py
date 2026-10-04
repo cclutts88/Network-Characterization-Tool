@@ -47,14 +47,26 @@ def test_system_health_explains_bounded_calculation_status():
     assert "source.textContent=`${item.source_kind} · ${item.source_ref}`" in html
     assert "requestId!==dependencyRequestId" in html
     assert "requestId!==sourceRequestId" in html
+    assert "requestId!==impactRequestId" in html
     assert "button.dataset.analysisInputs=''" in html
     assert "button.dataset.analysisSources=''" in html
+    assert "impactButton.dataset.analysisImpact=''" in html
     assert "'view inputs':['View calculation inputs'" in SHELL_SCRIPT
     assert "'view source records':['View retained source records'" in SHELL_SCRIPT
+    assert "'show calculations using this input':['Saved calculations using this input'" in SHELL_SCRIPT
+    assert "direct recorded links only" in html
+    assert "It does not change status, mark results stale, or rerun analysis" in html
+    assert "Unsupported saved record · recorded role" in html
+    assert "page_verified_relationship_count" in html
+    assert "page_unsupported_candidate_count" in html
+    assert "manifest_semantics:'Collection details'" in html
+    assert "selection_shape:'Evidence file choices'" in html
     assert "byId('dependencyRows').replaceChildren();byId('dependencyPage').textContent='Loading declared inputs'" in html
     assert "byId('dependencyPrevious').disabled=true;byId('dependencyNext').disabled=true" in html
     assert "byId('sourceRows').replaceChildren();byId('sourcePage').textContent='Loading retained source records'" in html
     assert "byId('sourcePrevious').disabled=true;byId('sourceNext').disabled=true" in html
+    assert "byId('impactRows').replaceChildren();byId('impactPage').textContent='Loading saved calculation records'" in html
+    assert "byId('impactPrevious').disabled=true;byId('impactNext').disabled=true" in html
     assert "document.body.classList.toggle(side==='personal'?'nct-notes-personal-open':'nct-notes-shared-open',open)" in SESSION_SCRIPT
 
 

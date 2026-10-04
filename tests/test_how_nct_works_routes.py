@@ -37,6 +37,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "These labels and views do not delete evidence or automatically rerun analysis" in html
     assert "<strong>View inputs</strong> shows the direct inputs declared by one calculation" in html
     assert "they are provenance, not extra analysis steps" in html
+    assert "<strong>Show calculations using this input</strong> lists saved records" in html
+    assert "older or unknown calculation contracts remain visible as unsupported candidates" in html
+    assert "not a prediction that changing a file would invalidate a result" in html
     assert "does not open or rehash source files" in html
     assert "A dry run reports only" in html
     assert "Nmap scan — active network contact" in html

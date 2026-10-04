@@ -294,3 +294,107 @@ def list_input_observations(
         "items": items, "total": total, "limit": limit, "offset": offset,
         "has_more": offset + len(items) < total,
     }
+
+
+def list_input_dependents(
+    db_path: Path, result_id: str, role: str, *, limit: int = 25, offset: int = 0,
+) -> dict:
+    """Return saved input-row candidates that record the same exact typed input."""
+    _validated_limit_offset(limit, offset)
+    if not db_path.is_file():
+        raise KeyError("Saved calculation is not available.")
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        source_manifest = _load_verified_manifest(db, result_id)
+        source_inputs = {item["role"]: item for item in source_manifest.pop("inputs")}
+        source_manifest.pop("observation_counts")
+        selected = source_inputs.get(role)
+        if selected is None:
+            raise KeyError("Saved calculation input is not available.")
+
+        kind = selected["kind"]
+        identity = selected["identity"]
+        totals = db.execute(
+            """SELECT COUNT(*), COUNT(DISTINCT input.result_id),
+                      COALESCE(SUM(CASE WHEN result.result_id IS NULL THEN 1 ELSE 0 END), 0)
+               FROM derived_result_inputs input
+               LEFT JOIN derived_results result ON result.result_id = input.result_id
+               WHERE input.input_kind = ? AND input.input_identity = ?""",
+            (kind, identity),
+        ).fetchone()
+        total_candidates = int(totals[0])
+        calculation_count = int(totals[1])
+        if int(totals[2]):
+            raise DerivedDependencyIntegrityError(
+                "A recorded reverse relationship has no saved calculation."
+            )
+        rows = db.execute(
+            """SELECT input.result_id, input.input_role, result.family,
+                      result.analysis_version, result.payload_schema_version,
+                      result.parameters_json, result.generated_at
+               FROM derived_result_inputs input
+               LEFT JOIN derived_results result ON result.result_id = input.result_id
+               WHERE input.input_kind = ? AND input.input_identity = ?
+               ORDER BY result.generated_at DESC, input.result_id, input.input_role
+               LIMIT ? OFFSET ?""",
+            (kind, identity, limit, offset),
+        ).fetchall()
+
+        items = []
+        verified_count = 0
+        unsupported_count = 0
+        for row in rows:
+            status = classify_calculation_contract(
+                family=row[2],
+                analysis_version=row[3],
+                payload_schema_version=row[4],
+                parameters_json=row[5],
+            )
+            relationship_state = "UNSUPPORTED"
+            verified_role = None
+            if status["state"] == "CURRENT":
+                candidate = _load_verified_manifest(db, row[0])
+                candidate_inputs = {
+                    item["role"]: item for item in candidate.pop("inputs")
+                }
+                candidate.pop("observation_counts")
+                candidate_input = candidate_inputs.get(row[1])
+                if candidate_input is None or (
+                    candidate_input["kind"] != kind
+                    or candidate_input["identity"] != identity
+                ):
+                    raise DerivedDependencyIntegrityError(
+                        "A saved reverse relationship conflicts with its input manifest."
+                    )
+                relationship_state = "VERIFIED"
+                verified_role = row[1]
+                verified_count += 1
+            else:
+                unsupported_count += 1
+            items.append({
+                "result_id": row[0],
+                "family": row[2],
+                "label": status["label"],
+                "analysis_version": row[3],
+                "generated_at": row[6],
+                "calculation_state": status["state"],
+                "calculation_reasons": status["reasons"],
+                "relationship_state": relationship_state,
+                "role": verified_role,
+                "recorded_role": row[1],
+            })
+
+    return {
+        **source_manifest,
+        "source_role": role,
+        "input_kind": kind,
+        "input_identity": identity,
+        "items": items,
+        "total_recorded_candidates": total_candidates,
+        "calculation_count": calculation_count,
+        "page_verified_relationship_count": verified_count,
+        "page_unsupported_candidate_count": unsupported_count,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total_candidates,
+    }

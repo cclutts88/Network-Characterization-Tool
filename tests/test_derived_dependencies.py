@@ -7,16 +7,19 @@ from app.database import connect_database
 from app.derived_contracts import (
     DEVICE_SUMMARY_FAMILY,
     NMAP_BASE_ANALYSIS_FAMILY,
+    NMAP_TOPOLOGY_FAMILY,
     SUPPORTED_DERIVED_RESULT_CONTRACTS,
 )
 from app.derived_dependencies import (
     DerivedDependencyIntegrityError,
     UnsupportedDerivedDependency,
+    list_input_dependents,
     list_input_observations,
     list_result_inputs,
 )
 from app.derived_results import (
     associate_derived_result_observation,
+    init_derived_result_storage,
     prepare_derived_result,
     publish_derived_result,
 )
@@ -347,8 +350,183 @@ def test_dependency_reads_are_read_only_and_work_with_pending_writer(tmp_path, m
         assert list_input_observations(
             db_path, prepared.identity.result_id, "nmap_xml",
         )["total"] == 1
+        assert list_input_dependents(
+            db_path, prepared.identity.result_id, "nmap_xml",
+        )["total_recorded_candidates"] == 1
     finally:
         writer.rollback()
         writer.close()
 
-    assert calls == [True, True]
+    assert calls == [True, True, True]
+
+
+def test_reverse_lookup_preserves_families_roles_and_ignores_observation_count(tmp_path):
+    db_path = tmp_path / "nct.db"
+    first = observation(db_path, b"shared evidence", source_ref="upload:first")
+    second = observation(db_path, b"shared evidence", source_ref="upload:second")
+    base = nmap_result(db_path, first)
+    associate_derived_result_observation(
+        db_path, base.identity, role="nmap_xml", observation_id=second["observation_id"],
+    )
+    publish_result(
+        db_path,
+        NMAP_TOPOLOGY_FAMILY,
+        [{
+            "role": "nmap_xml", "kind": "artifact_sha256",
+            "identity": first["sha256"], "metadata": {"media_family": "nmap_xml"},
+        }],
+        links=[{"role": "nmap_xml", "observation_id": first["observation_id"]}],
+    )
+    publish_result(
+        db_path,
+        DEVICE_SUMMARY_FAMILY,
+        device_inputs(first, {
+            "kind": "absence_descriptor", "identity": "d" * 64,
+            "metadata": {"present": False},
+        }),
+        links=[
+            {"role": "configuration", "observation_id": first["observation_id"]},
+            {"role": "raw_output", "observation_id": first["observation_id"]},
+        ],
+    )
+
+    result = list_input_dependents(db_path, base.identity.result_id, "nmap_xml")
+
+    assert result["total_recorded_candidates"] == 4
+    assert result["calculation_count"] == 3
+    assert result["page_verified_relationship_count"] == 4
+    assert result["page_unsupported_candidate_count"] == 0
+    assert {(item["family"], item["role"]) for item in result["items"]} == {
+        (NMAP_BASE_ANALYSIS_FAMILY, "nmap_xml"),
+        (NMAP_TOPOLOGY_FAMILY, "nmap_xml"),
+        (DEVICE_SUMMARY_FAMILY, "configuration"),
+        (DEVICE_SUMMARY_FAMILY, "raw_output"),
+    }
+
+
+def test_reverse_lookup_matches_input_kind_and_identity_together(tmp_path):
+    db_path = tmp_path / "nct.db"
+    source = observation(db_path, b"nmap bytes")
+    other = observation(db_path, b"device bytes")
+    base = nmap_result(db_path, source)
+    inputs = device_inputs(other, {
+        "kind": "embedded_config_section", "identity": source["sha256"],
+        "metadata": {"present": True},
+    })
+    publish_result(
+        db_path, DEVICE_SUMMARY_FAMILY, inputs,
+        links=[
+            {"role": "configuration", "observation_id": other["observation_id"]},
+            {"role": "raw_output", "observation_id": other["observation_id"]},
+        ],
+    )
+
+    result = list_input_dependents(db_path, base.identity.result_id, "nmap_xml")
+
+    assert result["total_recorded_candidates"] == 1
+    assert result["items"][0]["result_id"] == base.identity.result_id
+
+
+def test_reverse_lookup_pages_unsupported_candidates_without_hiding_them(tmp_path):
+    db_path = tmp_path / "nct.db"
+    source = observation(db_path)
+    current = nmap_result(db_path, source)
+    for version in ("nmap-base-analysis:old", "nmap-base-analysis:future"):
+        publish_result(
+            db_path,
+            NMAP_BASE_ANALYSIS_FAMILY,
+            [{
+                "role": "nmap_xml", "kind": "artifact_sha256",
+                "identity": source["sha256"], "metadata": {"media_family": "nmap_xml"},
+            }],
+            links=[{"role": "nmap_xml", "observation_id": source["observation_id"]}],
+            analysis_version=version,
+        )
+
+    pages = [
+        list_input_dependents(
+            db_path, current.identity.result_id, "nmap_xml", limit=1, offset=offset,
+        )
+        for offset in range(3)
+    ]
+    items = [page["items"][0] for page in pages]
+
+    assert all(page["total_recorded_candidates"] == 3 for page in pages)
+    assert all(page["calculation_count"] == 3 for page in pages)
+    assert {item["relationship_state"] for item in items} == {"VERIFIED", "UNSUPPORTED"}
+    assert sum(page["page_unsupported_candidate_count"] for page in pages) == 2
+    unsupported = [item for item in items if item["relationship_state"] == "UNSUPPORTED"]
+    assert all(item["role"] is None for item in unsupported)
+    assert all(item["recorded_role"] == "nmap_xml" for item in unsupported)
+
+
+def test_reverse_lookup_conflicting_supported_candidate_fails_visibly(tmp_path):
+    db_path = tmp_path / "nct.db"
+    selected_source = observation(db_path, b"selected")
+    other_source = observation(db_path, b"other")
+    selected = nmap_result(db_path, selected_source)
+    other = nmap_result(db_path, other_source)
+    with connect_database(db_path) as db:
+        db.execute(
+            "DELETE FROM derived_result_inputs WHERE result_id = ?",
+            (other.identity.result_id,),
+        )
+        db.execute(
+            """INSERT INTO derived_result_inputs VALUES (?, ?, ?, ?, ?)""",
+            (
+                other.identity.result_id, "nmap_xml", "artifact_sha256",
+                selected_source["sha256"],
+                json.dumps({"media_family": "nmap_xml"}, separators=(",", ":")),
+            ),
+        )
+
+    with pytest.raises(DerivedDependencyIntegrityError, match="do not match"):
+        list_input_dependents(db_path, selected.identity.result_id, "nmap_xml")
+
+
+def test_reverse_lookup_dangling_candidate_fails_instead_of_breaking_pagination(tmp_path):
+    db_path = tmp_path / "nct.db"
+    source = observation(db_path)
+    selected = nmap_result(db_path, source)
+    with connect_database(db_path) as db:
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute(
+            """INSERT INTO derived_result_inputs VALUES (?, ?, ?, ?, ?)""",
+            (
+                "missing-result", "nmap_xml", "artifact_sha256", source["sha256"],
+                json.dumps({"media_family": "nmap_xml"}, separators=(",", ":")),
+            ),
+        )
+
+    with pytest.raises(DerivedDependencyIntegrityError, match="no saved calculation"):
+        list_input_dependents(
+            db_path, selected.identity.result_id, "nmap_xml", limit=1,
+        )
+
+
+def test_reverse_lookup_index_is_idempotent_and_used_for_candidates(tmp_path):
+    db_path = tmp_path / "nct.db"
+    source = observation(db_path)
+    nmap_result(db_path, source)
+
+    init_derived_result_storage.__wrapped__(db_path)
+    init_derived_result_storage.__wrapped__(db_path)
+    with connect_database(db_path, read_only=True) as db:
+        indexes = db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index'"
+        ).fetchall()
+        plan = db.execute(
+            """EXPLAIN QUERY PLAN
+               SELECT input.result_id, input.input_role, result.family,
+                      result.analysis_version, result.payload_schema_version,
+                      result.parameters_json, result.generated_at
+               FROM derived_result_inputs input
+               LEFT JOIN derived_results result ON result.result_id = input.result_id
+               WHERE input.input_kind = ? AND input.input_identity = ?
+               ORDER BY result.generated_at DESC, input.result_id, input.input_role
+               LIMIT 25 OFFSET 0""",
+            ("artifact_sha256", source["sha256"]),
+        ).fetchall()
+
+    assert ("derived_result_input_reverse_lookup",) in indexes
+    assert "derived_result_input_reverse_lookup" in " ".join(str(row) for row in plan)

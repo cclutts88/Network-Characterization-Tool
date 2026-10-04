@@ -203,6 +203,10 @@ def init_derived_result_storage(db_path: Path) -> None:
             );
             CREATE INDEX IF NOT EXISTS derived_results_family_generated
                 ON derived_results(family, generated_at DESC);
+            CREATE INDEX IF NOT EXISTS derived_result_input_reverse_lookup
+                ON derived_result_inputs(
+                    input_kind, input_identity, result_id, input_role
+                );
             CREATE INDEX IF NOT EXISTS derived_result_observation_lookup
                 ON derived_result_observation_links(observation_id, result_id);
             CREATE TRIGGER IF NOT EXISTS derived_results_no_update
