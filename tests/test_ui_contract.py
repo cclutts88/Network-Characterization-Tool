@@ -105,11 +105,18 @@ def test_scan_history_offers_durable_local_saved_analysis_work():
     assert "function analysisRequestToken()" in html
     assert "Math.random().toString(36).slice(2)" in html
     assert "request_token:analysisRequestToken()" in html
-    assert "historyJobTimer=setTimeout(()=>loadHistory(true,true),1500)" in html
-    assert "loadedTarget=refreshLoaded?Math.max(historyOffset,25):25" in html
-    assert "for(let pageOffset=0;pageOffset<loadedTarget;pageOffset+=200)" in html
-    assert "historyOffset=refreshLoaded?count:offset+count" in html
-    assert "item.open=openGroups.has(item.dataset.historyGroup)" in html
+    assert "Load 25 older scans for this subnet" in html
+    assert "/api/scan-history-groups?limit=100&offset=${offset}" in html
+    assert "/runs?limit=25${suffix}" in html
+    assert "cursor=${encodeURIComponent(group.next_cursor)}" in html
+    assert "/api/scan-history-visible-runs?${params}" in html
+    assert "history_also_covers:run.history_also_covers||[]" in html
+    assert "!requested.has(run.run_id)||byId.has(run.run_id)" in html
+    assert "revision!==historyRefreshRevision" in html
+    assert "historyGroupWindow(group.group_id,loadedTargets.get(group.group_id)||25)" in html
+    assert "historyCatalogWindow(catalogTarget)" in html
+    assert "item.open=openGroups.has(id)" in html
+    assert "Also covers:" in html
 
 
 def test_theme_cards_and_navigation_icons_match_their_actions():
@@ -410,7 +417,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "saved_network_ids" in html
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
-    assert "/api/scan-runs-grouped?limit=25&offset=" in html
+    assert "/api/scan-runs-grouped?limit=25&offset=0" in html
+    assert "Load more subnet groups" in html
+    assert "Every retained scan stays inside the dropdown for its exact recorded subnet" in html
     assert 'class="history-group"' in html
     assert "localeCompare(NCTScanReference.humanize(b.name||'')" in html
     assert "function newestFirst(runs)" in html

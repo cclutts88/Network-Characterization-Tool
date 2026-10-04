@@ -83,6 +83,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "<strong>Prepare saved analysis</strong> is the first durable rebuild action" in html
     assert "Queued work resumes automatically after an application restart" in html
     assert "does not silently continue a half-finished calculation" in html
+    assert "every retained scan remains inside the dropdown for its exact recorded subnet" in html
+    assert "Host lists or unusable legacy target metadata" in html
     assert "System Health shows the request, source scan status, requester, attempts, outcome" in html
     assert "Every file encounter keeps its own source" in html
     assert "Previously saved unregistered scan files remain readable" in html

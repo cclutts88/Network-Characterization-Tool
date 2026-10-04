@@ -78,6 +78,7 @@ from app.saved_network_scope_associations import (
 from app.request_identity import bind_signed_in_actor
 from app.automated_nmap_foundation import get_automated_scan_foundation_status
 from app.derived_jobs import scan_run_job_statuses
+from app.scan_history import build_scan_history_catalog, scan_history_group_page
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -2224,11 +2225,18 @@ def prepare_scan_run(
     return manifest
 
 
+SCAN_HISTORY_METADATA_EXPRESSION = (
+    "json_remove(manifest_json, '$.artifacts', '$.commands', '$.execution_steps', "
+    "'$.stdout', '$.stderr', '$.profile_settings', '$.command', "
+    "'$.exact_execution_command')"
+)
+
+
 def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int = 0, metadata_only: bool = False) -> list[dict]:
     init_poc_storage(db_path)
     with connect_database(db_path) as db:
         # Lightweight history never opens scan XML or enumerates artifacts.
-        expression = "json_remove(manifest_json, '$.artifacts', '$.commands', '$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', '$.command', '$.exact_execution_command')" if metadata_only else "manifest_json"
+        expression = SCAN_HISTORY_METADATA_EXPRESSION if metadata_only else "manifest_json"
         rows = db.execute(
             f"SELECT {expression} FROM scan_runs ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
             (limit, offset),
@@ -2240,6 +2248,50 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int
         with_queue_state(with_host_count(json.loads(row[0])), db_path, queued_ids)
         for row in rows
     ]
+
+
+def list_all_scan_history_metadata(db_path: Path = DB_PATH) -> list[dict]:
+    """Read one consistent metadata-only snapshot without opening evidence files."""
+    if not Path(db_path).is_file():
+        return []
+    try:
+        with connect_database(db_path, read_only=True) as db:
+            db.execute("BEGIN")
+            rows = db.execute(
+                f"SELECT {SCAN_HISTORY_METADATA_EXPRESSION} FROM scan_runs "
+                "ORDER BY created_at DESC, rowid DESC"
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+    return [json.loads(row[0]) for row in rows]
+
+
+def list_scan_history_metadata_by_ids(
+    run_ids: list[str], db_path: Path = DB_PATH
+) -> list[dict]:
+    if not run_ids:
+        return []
+    if len(run_ids) > 100 or any(not RUN_ID_RE.fullmatch(run_id) for run_id in run_ids):
+        raise ValueError("At most 100 valid scan identifiers may be refreshed")
+    if not Path(db_path).is_file():
+        return []
+    placeholders = ",".join("?" for _ in run_ids)
+    try:
+        with connect_database(db_path, read_only=True) as db:
+            db.execute("BEGIN")
+            rows = db.execute(
+                f"SELECT run_id, {SCAN_HISTORY_METADATA_EXPRESSION} FROM scan_runs "
+                f"WHERE run_id IN ({placeholders})",
+                tuple(run_ids),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+    records = {row[0]: json.loads(row[1]) for row in rows}
+    return [records[run_id] for run_id in run_ids if run_id in records]
 
 
 def group_scan_runs_by_saved_network(runs: list[dict]) -> list[dict]:
@@ -4751,6 +4803,78 @@ def scan_run_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]
     return list_scan_run_plans(limit=limit)
 
 
+SCAN_HISTORY_FIELDS = {
+    "run_id", "status", "partial_results", "execution_note", "display_name",
+    "name", "created_at", "completed_at", "profile", "profile_id",
+    "profile_version", "profile_settings", "saved_network_ids",
+    "saved_networks", "target_selection", "manual_targets", "targets",
+    "host_count", "interface", "created_by", "operator", "scheduled_by",
+    "executed_by", "execution_method", "coverage", "scheduled",
+    "timeout_seconds", "progress", "discovery_mode", "fallback_decision",
+    "nmap_reported_host_count", "nmap_assumed_host_count",
+    "network_scope_context", "history_also_covers",
+}
+
+
+def _enrich_scan_history_runs(runs: list[dict]) -> list[dict]:
+    run_ids = [run["run_id"] for run in runs]
+    analysis_jobs = scan_run_job_statuses(DB_PATH, run_ids, DATA_DIR)
+    return [
+        {
+            **{key: value for key, value in run.items() if key in SCAN_HISTORY_FIELDS},
+            "foundation_status": get_automated_scan_foundation_status(
+                DB_PATH, run["run_id"]
+            ),
+            "analysis_job_status": analysis_jobs.get(run["run_id"], {}),
+        }
+        for run in runs
+    ]
+
+
+@router.get("/scan-history-groups")
+def scan_history_group_catalog(
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    catalog = build_scan_history_catalog(list_all_scan_history_metadata(DB_PATH))
+    return {
+        "groups": catalog[offset : offset + limit],
+        "total": len(catalog),
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < len(catalog),
+    }
+
+
+@router.get("/scan-history-groups/{group_id}/runs")
+def scan_history_group_runs(
+    group_id: str,
+    limit: int = Query(default=25, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=512),
+) -> dict:
+    try:
+        page = scan_history_group_page(
+            list_all_scan_history_metadata(DB_PATH), group_id, limit=limit, cursor=cursor
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if page is None:
+        raise HTTPException(status_code=404, detail="Scan history group not found")
+    page["runs"] = _enrich_scan_history_runs(page["runs"])
+    return page
+
+
+@router.get("/scan-history-visible-runs")
+def scan_history_visible_runs(
+    run_id: list[str] = Query(default=[]),
+) -> dict:
+    try:
+        runs = list_scan_history_metadata_by_ids(run_id, DB_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"runs": _enrich_scan_history_runs(runs)}
+
+
 @router.get("/scan-runs-grouped")
 def grouped_scan_run_history(
     limit: int = Query(default=25, ge=1, le=200),
@@ -4761,30 +4885,8 @@ def grouped_scan_run_history(
     groups = group_scan_runs_by_saved_network(
         list_scan_run_plans(DB_PATH, limit=limit, offset=offset, metadata_only=True)
     )
-    fields = {
-        "run_id", "status", "partial_results", "execution_note", "display_name",
-        "name", "created_at", "completed_at", "profile", "profile_id",
-        "profile_version", "profile_settings", "saved_network_ids",
-        "saved_networks", "target_selection", "manual_targets", "targets",
-        "host_count", "interface", "created_by", "operator", "scheduled_by",
-        "executed_by", "execution_method", "coverage", "scheduled",
-        "timeout_seconds", "progress", "discovery_mode", "fallback_decision",
-        "nmap_reported_host_count", "nmap_assumed_host_count",
-        "network_scope_context",
-    }
     for group in groups:
-        run_ids = [run["run_id"] for run in group.get("runs", [])]
-        analysis_jobs = scan_run_job_statuses(DB_PATH, run_ids, DATA_DIR)
-        group["runs"] = [
-            {
-                **{key: value for key, value in run.items() if key in fields},
-                "foundation_status": get_automated_scan_foundation_status(
-                    DB_PATH, run["run_id"]
-                ),
-                "analysis_job_status": analysis_jobs.get(run["run_id"], {}),
-            }
-            for run in group.get("runs", [])
-        ]
+        group["runs"] = _enrich_scan_history_runs(group.get("runs", []))
     return groups
 
 
