@@ -1,5 +1,6 @@
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 from fastapi.testclient import TestClient
 
@@ -50,6 +51,21 @@ def assignment_payload(destination, reason="Confirmed whole-file context"):
     }
 
 
+def wait_for_assignment(client, observation_id, expected_state="foundation_complete"):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        response = client.get(
+            f"/api/nmap-observations/{observation_id}/scope-assignment"
+        )
+        data = response.json()
+        if data.get("assignment_state") == expected_state:
+            return data
+        if data.get("processing_state") in {"failed", "interrupted"}:
+            return data
+        time.sleep(0.01)
+    return data
+
+
 def test_local_operator_can_assign_then_process_with_recoverable_status(
     tmp_path, monkeypatch,
 ):
@@ -70,10 +86,13 @@ def test_local_operator_can_assign_then_process_with_recoverable_status(
             f"/api/nmap-observations/{observation_id}/scope-assignment"
         )
         processed = client.post(
-            f"/api/nmap-scope-assignments/{assignment_id}/process"
+            f"/api/nmap-scope-assignments/{assignment_id}/process",
+            json={"request_token": "manual-first"},
         )
+        completed = wait_for_assignment(client, observation_id)
         replay = client.post(
-            f"/api/nmap-scope-assignments/{assignment_id}/process"
+            f"/api/nmap-scope-assignments/{assignment_id}/process",
+            json={"request_token": "manual-replay"},
         )
 
     assert unassigned.status_code == 200
@@ -82,10 +101,11 @@ def test_local_operator_can_assign_then_process_with_recoverable_status(
     assert assigned.json()["assignment_state"] == "assigned_pending"
     assert assigned.json()["current_assignment"]["actor"] == "local-operator"
     assert refreshed.json()["current_assignment_id"] == assignment_id
-    assert processed.status_code == 200
-    assert processed.json()["status"]["assignment_state"] == "foundation_complete"
-    assert processed.json()["status"]["current_views_changed"] is False
-    assert replay.json()["processing"]["completed_replay"] is True
+    assert processed.status_code == 202
+    assert completed["assignment_state"] == "foundation_complete"
+    assert completed["current_views_changed"] is False
+    assert replay.status_code == 202
+    assert replay.json()["job"]["latest_attempt"]["state"] == "completed"
 
 
 def test_status_and_recent_list_are_observation_level_and_hide_filesystem_paths(
@@ -170,13 +190,17 @@ def test_body_cannot_supply_actor_or_processing_parser(tmp_path, monkeypatch):
         )
         parser_rejected = client.post(
             f"/api/nmap-scope-assignments/{assigned.json()['current_assignment_id']}/process",
-            json={"parser_version": "caller-controlled"},
+            json={"request_token": "parser-rejected", "parser_version": "caller-controlled"},
+        )
+        accepted = client.post(
+            f"/api/nmap-scope-assignments/{assigned.json()['current_assignment_id']}/process",
+            json={"request_token": "server-parser"},
         )
     assert rejected.status_code == 422
     assert assigned.json()["current_assignment"]["actor"] == "alice"
-    # This endpoint has no request body contract; supplied parser data cannot affect it.
-    assert parser_rejected.status_code == 200
-    assert parser_rejected.json()["processing"]["parser_version"] == "nmap-endpoints:2"
+    assert parser_rejected.status_code == 422
+    assert accepted.status_code == 202
+    assert accepted.json()["job"]["target_analysis_version"] == "nmap-endpoints:2"
 
 
 def test_viewer_reads_status_but_cannot_assign_process_or_correct(tmp_path, monkeypatch):
@@ -247,11 +271,10 @@ def test_failed_processing_retains_assignment_without_partial_foundation_rows(
         original = canonical.read_bytes()
         canonical.write_bytes(b"corrupted")
         failed = client.post(
-            f"/api/nmap-scope-assignments/{assignment_id}/process"
+            f"/api/nmap-scope-assignments/{assignment_id}/process",
+            json={"request_token": "corrupt-first"},
         )
-        pending = client.get(
-            f"/api/nmap-observations/{observation_id}/scope-assignment"
-        )
+        pending = wait_for_assignment(client, observation_id)
         with connect_database(db) as connection:
             assert connection.execute(
                 "SELECT COUNT(*) FROM entity_assessments"
@@ -261,18 +284,21 @@ def test_failed_processing_retains_assignment_without_partial_foundation_rows(
             ).fetchone()[0] == 0
         canonical.write_bytes(original)
         retried = client.post(
-            f"/api/nmap-scope-assignments/{assignment_id}/process"
+            f"/api/nmap-scope-assignments/{assignment_id}/process",
+            json={"request_token": "corrupt-retry"},
         )
+        completed = wait_for_assignment(client, observation_id)
 
-    assert failed.status_code == 422
-    assert pending.json()["assignment_state"] == "assigned_pending"
+    assert failed.status_code == 202
+    assert pending["assignment_state"] == "assigned_pending"
+    assert pending["processing_state"] == "failed"
     with connect_database(db) as connection:
         assert connection.execute("SELECT COUNT(*) FROM entity_assessments").fetchone()[0] == 1
         assert connection.execute(
             "SELECT COUNT(*) FROM assessment_scope_assignment_links"
         ).fetchone()[0] == 1
-    assert retried.status_code == 200
-    assert retried.json()["status"]["assignment_state"] == "foundation_complete"
+    assert retried.status_code == 202
+    assert completed["assignment_state"] == "foundation_complete"
 
 
 def test_correction_is_append_only_and_requires_separate_processing(tmp_path, monkeypatch):
@@ -287,7 +313,11 @@ def test_correction_is_append_only_and_requires_separate_processing(tmp_path, mo
             json=assignment_payload(first_scope),
         ).json()
         first_id = first["current_assignment_id"]
-        client.post(f"/api/nmap-scope-assignments/{first_id}/process")
+        client.post(
+            f"/api/nmap-scope-assignments/{first_id}/process",
+            json={"request_token": "correction-first"},
+        )
+        wait_for_assignment(client, observation_id)
         corrected = client.post(
             f"/api/nmap-scope-assignments/{first_id}/corrections",
             json={
@@ -298,15 +328,18 @@ def test_correction_is_append_only_and_requires_separate_processing(tmp_path, mo
         )
         second_id = corrected.json()["current_assignment_id"]
         completed = client.post(
-            f"/api/nmap-scope-assignments/{second_id}/process"
+            f"/api/nmap-scope-assignments/{second_id}/process",
+            json={"request_token": "correction-second"},
         )
+        final = wait_for_assignment(client, observation_id)
 
     assert corrected.status_code == 201
     assert corrected.json()["assignment_state"] == "correction_pending"
     assert len(corrected.json()["assignments"]) == 2
     assert corrected.json()["assignments"][0]["processing_complete"] is True
-    assert completed.json()["status"]["assignment_state"] == "foundation_complete"
-    assert len(completed.json()["status"]["assignments"]) == 2
+    assert completed.status_code == 202
+    assert final["assignment_state"] == "foundation_complete"
+    assert len(final["assignments"]) == 2
 
 
 def test_competing_route_corrections_leave_one_current_history_entry(
@@ -360,7 +393,8 @@ def test_assignment_does_not_change_legacy_import_analysis(tmp_path, monkeypatch
             json=assignment_payload(destination),
         ).json()
         client.post(
-            f"/api/nmap-scope-assignments/{assigned['current_assignment_id']}/process"
+            f"/api/nmap-scope-assignments/{assigned['current_assignment_id']}/process",
+            json={"request_token": "legacy-unchanged"},
         )
         with connect_database(db) as connection:
             after = connection.execute(

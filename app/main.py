@@ -3,13 +3,11 @@ from __future__ import annotations
 from app.database import configure_database, connect_database
 from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
 from app.nmap_evidence import nmap_xml_coverage
-from app.assigned_nmap_ingestion import AssignedNmapConflict, ingest_assigned_nmap_observation
+from app.assigned_nmap_ingestion import AssignedNmapConflict
 from app.automated_nmap_foundation import (
     AutomatedNmapFoundationConflict,
     get_automated_scan_foundation_status,
     init_automated_nmap_foundation_storage,
-    process_automated_scan_foundation,
-    recover_interrupted_automated_scan_foundation,
 )
 from app.evidence_scope_assignments import (
     EvidenceScopeConflict,
@@ -85,6 +83,8 @@ from app.device_collection_authority import (
 from app.derived_results import init_derived_result_storage
 from app.derived_jobs import (
     DerivedJobConflict,
+    enqueue_automated_nmap_scope_job,
+    enqueue_manual_nmap_scope_job,
     enqueue_nmap_base_job,
     init_derived_job_storage,
     list_derived_jobs,
@@ -1286,7 +1286,6 @@ async def lifespan(_: FastAPI):
     scheduler_stop = None
     scheduler_thread = None
     if background_workers_started:
-        recover_interrupted_automated_scan_foundation(DB_PATH)
         recover_interrupted_derived_jobs(DB_PATH)
         start_derived_job_worker(DB_PATH, DATA_DIR)
         recover_scheduler_state()
@@ -1811,16 +1810,21 @@ def nmap_observation_scope_correct(
         raise _nmap_assignment_error(exc) from exc
 
 
-@app.post("/api/nmap-scope-assignments/{assignment_id}/process")
-def nmap_observation_scope_process(assignment_id: str, request: Request) -> dict:
+@app.post("/api/nmap-scope-assignments/{assignment_id}/process", status_code=202)
+def nmap_observation_scope_process(
+    assignment_id: str, payload: SavedAnalysisJobRequest, request: Request,
+) -> dict:
     actor = require_nmap_assignment_mutator(request)
     try:
         eligible = manual_nmap_assignment_for_processing(DB_PATH, assignment_id)
-        processing = ingest_assigned_nmap_observation(
-            DB_PATH, expected_assignment_id=assignment_id, linked_by=actor,
+        job = enqueue_manual_nmap_scope_job(
+            DB_PATH,
+            assignment_id,
+            request_token=payload.request_token,
+            requested_by=actor,
         )
         return {
-            "processing": processing,
+            "job": job,
             "status": get_manual_nmap_assignment_status(
                 DB_PATH, eligible["artifact_observation_id"],
             ),
@@ -1837,11 +1841,22 @@ def automated_scan_foundation_status(run_id: str) -> dict:
         raise _nmap_assignment_error(exc) from exc
 
 
-@app.post("/api/scan-runs/{run_id}/foundation-process")
-def automated_scan_foundation_process(run_id: str, request: Request) -> dict:
+@app.post("/api/scan-runs/{run_id}/foundation-process", status_code=202)
+def automated_scan_foundation_process(
+    run_id: str, payload: SavedAnalysisJobRequest, request: Request,
+) -> dict:
     actor = require_nmap_assignment_mutator(request)
     try:
-        return process_automated_scan_foundation(DB_PATH, run_id, actor)
+        job = enqueue_automated_nmap_scope_job(
+            DB_PATH,
+            run_id,
+            request_token=payload.request_token,
+            requested_by=actor,
+        )
+        return {
+            "job": job,
+            "status": get_automated_scan_foundation_status(DB_PATH, run_id),
+        }
     except (KeyError, ValueError) as exc:
         if isinstance(exc, AutomatedNmapFoundationConflict):
             raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -417,4 +417,4 @@ def test_coordinator_is_only_imported_by_reviewed_processing_boundaries():
             continue
         if "assigned_nmap_ingestion" in source.read_text(encoding="utf-8"):
             importers.append(source.name)
-    assert importers == ["automated_nmap_foundation.py", "main.py"]
+    assert importers == ["derived_jobs.py", "main.py"]

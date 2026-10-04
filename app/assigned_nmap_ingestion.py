@@ -6,6 +6,7 @@ this coordinator; ordinary analysis consumers do not.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 import sqlite3
 
@@ -39,6 +40,9 @@ def _assignment(db: sqlite3.Connection, assignment_id: str):
 def ingest_assigned_nmap_observation(
     db_path: Path, *, expected_assignment_id: str, linked_by: str,
     parser_version: str = NMAP_ENDPOINT_PARSER,
+    before_publish: Callable[[], None] | None = None,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Process one reviewed assignment and atomically publish all derived records.
 
@@ -65,6 +69,8 @@ def ingest_assigned_nmap_observation(
         scope_id=scope_id,
         parser_version=parser_version,
     )
+    if before_publish is not None:
+        before_publish()
 
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -73,6 +79,9 @@ def ingest_assigned_nmap_observation(
             raise AssignedNmapConflict("Expected assignment does not exist")
         if current[1] != observation_id or current[2] != scope_id:
             raise AssignedNmapConflict("Expected assignment changed unexpectedly")
+
+        if transaction_guard is not None:
+            transaction_guard(db)
 
         linked = db.execute(
             """SELECT assessment.assessment_id, assessment.payload_json
@@ -87,38 +96,42 @@ def ingest_assigned_nmap_observation(
                 raise ValueError(
                     "Completed assignment replay has different facts; use a new parser version"
                 )
-            return {
+            if transaction_finalize is not None:
+                transaction_finalize(db, False, linked[0])
+            replay = {
                 **result,
                 "assignment_id": assignment_id,
                 "assessment_created": False,
                 "link_created": False,
                 "completed_replay": True,
             }
-
-        if db.execute(
-            "SELECT 1 FROM artifact_scope_assignments WHERE supersedes_assignment_id = ?",
-            (assignment_id,),
-        ).fetchone():
-            raise AssignedNmapConflict("Expected assignment is no longer current")
-        active = db.execute(
-            "SELECT active FROM network_scopes WHERE scope_id = ?", (scope_id,)
-        ).fetchone()
-        if active is None or not bool(active[0]):
-            raise AssignedNmapConflict("Expected assignment scope is archived")
-
-        assessment_id, assessment_created = record_prepared_assessment_on_connection(
-            db, prepared,
-        )
-        db.execute(
-            """INSERT INTO assessment_scope_assignment_links
-               (assignment_id, assessment_id, linked_at, linked_by)
-               VALUES (?, ?, ?, ?)""",
-            (assignment_id, assessment_id, utc_now(), linked_by),
-        )
-    return {
-        **result,
-        "assignment_id": assignment_id,
-        "assessment_created": assessment_created,
-        "link_created": True,
-        "completed_replay": False,
-    }
+        else:
+            if db.execute(
+                "SELECT 1 FROM artifact_scope_assignments WHERE supersedes_assignment_id = ?",
+                (assignment_id,),
+            ).fetchone():
+                raise AssignedNmapConflict("Expected assignment is no longer current")
+            active = db.execute(
+                "SELECT active FROM network_scopes WHERE scope_id = ?", (scope_id,)
+            ).fetchone()
+            if active is None or not bool(active[0]):
+                raise AssignedNmapConflict("Expected assignment scope is archived")
+            assessment_id, assessment_created = record_prepared_assessment_on_connection(
+                db, prepared,
+            )
+            db.execute(
+                """INSERT INTO assessment_scope_assignment_links
+                   (assignment_id, assessment_id, linked_at, linked_by)
+                   VALUES (?, ?, ?, ?)""",
+                (assignment_id, assessment_id, utc_now(), linked_by),
+            )
+            if transaction_finalize is not None:
+                transaction_finalize(db, assessment_created, assessment_id)
+            replay = {
+                **result,
+                "assignment_id": assignment_id,
+                "assessment_created": assessment_created,
+                "link_created": True,
+                "completed_replay": False,
+            }
+    return replay

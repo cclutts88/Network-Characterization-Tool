@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import time
 import uuid
 
-from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
 from app.database import connect_database, initialize_once_per_database
 from app.evidence_scope_assignments import init_evidence_scope_assignment_storage
 from app.network_scopes import utc_now
@@ -84,19 +84,32 @@ def init_automated_nmap_foundation_storage(db_path: Path) -> None:
                 BEGIN SELECT RAISE(ABORT, 'inherited scan assignment is immutable'); END;
             """
         )
+        db.execute(
+            """UPDATE scan_foundation_processing_attempts
+               SET status = 'interrupted', finished_at = COALESCE(finished_at, ?),
+                   error = COALESCE(error, 'Processing stopped during the durable pipeline cutover; the retained source can be queued again.')
+               WHERE status = 'running'""",
+            (utc_now(),),
+        )
+        db.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS scan_foundation_attempt_no_insert
+                BEFORE INSERT ON scan_foundation_processing_attempts
+                BEGIN SELECT RAISE(ABORT, 'legacy scan processing history is read-only'); END;
+            CREATE TRIGGER IF NOT EXISTS scan_foundation_attempt_no_update
+                BEFORE UPDATE ON scan_foundation_processing_attempts
+                BEGIN SELECT RAISE(ABORT, 'legacy scan processing history is read-only'); END;
+            CREATE TRIGGER IF NOT EXISTS scan_foundation_attempt_no_delete
+                BEFORE DELETE ON scan_foundation_processing_attempts
+                BEGIN SELECT RAISE(ABORT, 'legacy scan processing history is read-only'); END;
+            """
+        )
 
 
 def recover_interrupted_automated_scan_foundation(db_path: Path) -> int:
-    """Mark work left running by a stopped application as safely retryable."""
-    with connect_database(db_path) as db:
-        recovered = db.execute(
-            """UPDATE scan_foundation_processing_attempts
-               SET status = 'interrupted', finished_at = ?,
-                   error = 'Processing stopped before completion; safe to retry.'
-               WHERE status = 'running'""",
-            (utc_now(),),
-        ).rowcount
-    return int(recovered)
+    """Compatibility no-op: cutover freezes old attempts during initialization."""
+    init_automated_nmap_foundation_storage(db_path)
+    return 0
 
 
 def _run_evidence(db: sqlite3.Connection, run_id: str) -> dict:
@@ -205,12 +218,23 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
     with connect_database(db_path, read_only=True) as db:
         evidence = _run_evidence(db, run_id)
         assignment = _assignment_state(db, evidence)
-        attempt = db.execute(
+        historical_attempt = db.execute(
             """SELECT status, started_at, finished_at, error, actor
                FROM scan_foundation_processing_attempts
                WHERE run_id = ? ORDER BY rowid DESC LIMIT 1""",
             (run_id,),
         ).fetchone()
+    from app.derived_jobs import nmap_scope_job_for_run
+
+    job = nmap_scope_job_for_run(db_path, run_id)
+    attempt = job.get("latest_attempt") if job else None
+    if (
+        attempt is not None
+        and attempt["state"] == "completed"
+        and not assignment["processing_complete"]
+    ):
+        with connect_database(db_path, read_only=True) as db:
+            assignment = _assignment_state(db, evidence)
     state = "ineligible"
     if evidence["eligible"]:
         state = "ready"
@@ -218,11 +242,11 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
             state = "review_required"
         elif assignment["processing_complete"]:
             state = "foundation_complete"
-        elif attempt is not None and attempt[0] == "error":
+        elif attempt is not None and attempt["state"] == "failed":
             state = "processing_error"
-        elif attempt is not None and attempt[0] == "running":
+        elif attempt is not None and attempt["state"] in {"queued", "running"}:
             state = "processing_running"
-        elif attempt is not None and attempt[0] == "interrupted":
+        elif attempt is not None and attempt["state"] == "interrupted":
             state = "processing_interrupted"
         elif assignment["current_assignment_id"]:
             state = "foundation_pending"
@@ -230,10 +254,21 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
         **evidence,
         **assignment,
         "state": state,
-        "latest_attempt": None if attempt is None else {
-            "status": attempt[0], "started_at": attempt[1], "finished_at": attempt[2],
-            "error": attempt[3], "actor": attempt[4],
-        },
+        "processing_job": job,
+        "latest_attempt": (
+            {
+                "status": attempt["state"], "started_at": attempt["started_at"],
+                "finished_at": attempt["finished_at"], "error": attempt["error"],
+                "actor": attempt["requested_by"],
+            }
+            if attempt is not None else (
+                None if historical_attempt is None else {
+                    "status": historical_attempt[0], "started_at": historical_attempt[1],
+                    "finished_at": historical_attempt[2], "error": historical_attempt[3],
+                    "actor": historical_attempt[4], "historical": True,
+                }
+            )
+        ),
         "current_views_changed": False,
         "network_contact": False,
     }
@@ -281,46 +316,44 @@ def _ensure_inherited_assignment(db: sqlite3.Connection, evidence: dict, actor: 
 
 
 def process_automated_scan_foundation(db_path: Path, run_id: str, actor: str) -> dict:
-    """Create/reuse the inherited assignment, then run the atomic coordinator."""
+    """Compatibility helper that executes the same durable job used by the API."""
     actor = str(actor or "").strip()
     if not actor or len(actor) > 100:
         raise ValueError("A valid server-owned operator identity is required")
-    init_automated_nmap_foundation_storage(db_path)
-    attempt_id = uuid.uuid4().hex
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
-        evidence = _run_evidence(db, run_id)
-        assignment_id = _ensure_inherited_assignment(db, evidence, actor)
-        db.execute(
-            """INSERT INTO scan_foundation_processing_attempts
-               (attempt_id, run_id, observation_id, assignment_id, actor,
-                started_at, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'running')""",
-            (attempt_id, run_id, evidence["observation_id"], assignment_id,
-             actor, utc_now()),
-        )
-    try:
-        processing = ingest_assigned_nmap_observation(
-            db_path, expected_assignment_id=assignment_id, linked_by=actor,
-        )
-    except Exception as exc:
-        try:
-            with connect_database(db_path) as db:
-                db.execute(
-                    """UPDATE scan_foundation_processing_attempts
-                       SET status = 'error', finished_at = ?, error = ?
-                       WHERE attempt_id = ? AND status = 'running'""",
-                    (utc_now(), str(exc)[:1000], attempt_id),
-                )
-        except sqlite3.Error:
-            pass
-        raise
-    with connect_database(db_path) as db:
-        db.execute(
-            """UPDATE scan_foundation_processing_attempts
-               SET status = 'complete', finished_at = ?, error = NULL
-               WHERE attempt_id = ? AND status = 'running'""",
-            (utc_now(), attempt_id),
-        )
-    return {"processing": processing,
-            "status": get_automated_scan_foundation_status(db_path, run_id)}
+    from app.derived_jobs import (
+        enqueue_automated_nmap_scope_job,
+    )
+
+    status_before = get_automated_scan_foundation_status(db_path, run_id)
+    if status_before.get("state") == "foundation_complete":
+        return {
+            "processing": {
+                "completed_replay": True,
+                "assignment_id": status_before.get("current_assignment_id"),
+            },
+            "status": status_before,
+        }
+    job = enqueue_automated_nmap_scope_job(
+        db_path,
+        run_id,
+        request_token=f"compat-automated-{uuid.uuid4().hex}",
+        requested_by=actor,
+    )
+    deadline = time.monotonic() + 5.0
+    status = get_automated_scan_foundation_status(db_path, run_id)
+    while (
+        status.get("latest_attempt", {}).get("status") in {"queued", "running"}
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+        status = get_automated_scan_foundation_status(db_path, run_id)
+    latest = status.get("latest_attempt") or {}
+    if latest.get("status") in {"failed", "interrupted"}:
+        raise ValueError(latest.get("error") or "Retained evidence processing failed")
+    return {
+        "processing": {
+            "completed_replay": status_before.get("state") == "foundation_complete",
+            "assignment_id": status.get("current_assignment_id"),
+        },
+        "status": status,
+    }

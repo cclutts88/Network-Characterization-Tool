@@ -1244,6 +1244,35 @@ acceptance benchmarks.
    post-cutover work and cannot write the frozen queue; preserve the database and roll
    forward. See [the derived-result and queue contract](docs/DERIVED_RESULTS.md).
 
+   2026-10-04 durable scoped-Nmap stage start and implementation completion: manual
+   Nmap assignments and eligible completed automated scans now enter the shared pipeline
+   queue instead of parsing inside the browser request. Each request freezes the exact
+   encounter, artifact identity, assignment, Network Scope, parser rules and authenticated
+   requester. The worker rechecks source bytes, assignment authority, active scope,
+   automated run context, parser compatibility and claim ownership. Scoped entities,
+   assessment, receipts, assignment link, output reference and successful attempt state
+   commit together. The Analyze and Scan History interfaces show queued, running, failed,
+   interrupted and completed work, refresh while work is active, and explain that local
+   retry does not start a scan or contact the network. Historical automated-processing
+   attempts had no trustworthy request/job identity, so startup marks any old Running row
+   Interrupted once and trigger-locks that table as a read-only audit record instead of
+   inventing modern jobs. New work uses only the pipeline tables. Duplicate request,
+   separate encounter, stale correction, archived scope, parser-change, corrupt evidence,
+   publication rollback, restart/retry, access-control and legacy-history checks pass in
+   the focused Docker suites. Live acceptance exposed and corrected one cross-job status
+   lookup that briefly displayed completed scoped processing as the separate saved-analysis
+   result; base-analysis status now filters by its exact job type, and the interface states
+   plainly when scoped evidence is ready while saved analysis is unavailable. **QUALITY
+   GATE: CLEAR - DOCUMENTED DEVIATION**. The reviewer independently passed the original
+   **79-test** gate and the final **48-test** status-separation gate. The complete Docker
+   suite passed **925 tests with 2 expected skips**, the final focused suite passed **81
+   tests**, and the actual Scan History browser-handler regression passed under Node. An
+   isolated live preview completed manual upload assignment and queued processing plus the
+   completed-scan Scan History flow without network contact or browser warnings/errors.
+   The novice operator returned **CLEAR WITH NON-BLOCKING FEEDBACK**; its wording request
+   was incorporated and rechecked live. This scoped-Nmap stage is development-ready on the
+   foundation branch only.
+
    Scan History presentation correction completed 2026-10-03. Every retained scan is
    now catalogued under each exact recorded canonical CIDR instead of allowing older
    scans to move into a separate global history page. Opening a subnet loads its newest

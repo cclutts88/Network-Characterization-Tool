@@ -9,6 +9,47 @@ function handler(name) {
   return match[0];
 }
 
+function syncHandler(name) {
+  const match = source.match(new RegExp(`^function ${name}\\(.*$`, "m"));
+  assert.ok(match, `Could not find ${name} in app/ui.py`);
+  return match[0];
+}
+
+await eval(`(async () => {
+  let historyGroups=[{group_id:'g',runs:[{
+    run_id:'scoped',
+    foundation_status:{processing_job:{latest_attempt:{state:'queued'}}},
+    analysis_job_status:{current_job:null}
+  }]}],historyRefreshRevision=0,historyJobTimer=null;
+  let scheduled=0,refreshes=0,scheduledCallback=null;
+  const clearTimeout=()=>{};
+  const setTimeout=callback=>{scheduled+=1;scheduledCallback=callback;return scheduled};
+  const currentOpenHistoryGroups=()=>new Set(['g']);
+  const renderHistory=()=>{};
+  const status=message=>{throw new Error(message)};
+  const historyJSON=async()=>{
+    refreshes+=1;
+    const state=refreshes===1?'running':'completed';
+    return {runs:[{
+      run_id:'scoped',
+      foundation_status:{processing_job:{latest_attempt:{state}}},
+      analysis_job_status:{current_job:null}
+    }]};
+  };
+  ${syncHandler("scheduleHistoryJobRefresh")}
+  ${handler("refreshVisibleHistoryRuns")}
+  scheduleHistoryJobRefresh();
+  assert.equal(scheduled,1);
+  await scheduledCallback();
+  assert.equal(refreshes,1);
+  assert.equal(historyGroups[0].runs[0].foundation_status.processing_job.latest_attempt.state,'running');
+  assert.equal(scheduled,2);
+  await scheduledCallback();
+  assert.equal(refreshes,2);
+  assert.equal(historyGroups[0].runs[0].foundation_status.processing_job.latest_attempt.state,'completed');
+  assert.equal(scheduled,2);
+})()`);
+
 await eval(`(async () => {
   let historyGroups=[{group_id:'g',runs:[{run_id:'old'}]}],historyRefreshRevision=0;
   let resolveHistoryJSON;

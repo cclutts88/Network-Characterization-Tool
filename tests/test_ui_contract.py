@@ -1208,7 +1208,9 @@ def test_manual_nmap_scope_assignment_ui_is_explicit_accessible_and_recoverable(
     assert "card.querySelector('.assignment-process-status')" in html
     assert "creates scoped address, service, assessment, and evidence-receipt records" in html
     assert "Completion appears in this history" in html
-    assert "The scope decision is retained, but processing did not complete" in html
+    assert "The scope decision is retained, but processing could not be queued" in html
+    assert "Queued and safe to leave" in html
+    assert "Retry scoped processing" in html
     assert "it does not change current analysis views" in html.lower()
     assert "does not change the current Analyze, Hunt, Reach, or Map results" in html
     assert "does not grant scan authority, require analysts to be tasked" in SHELL_SCRIPT
@@ -1956,6 +1958,13 @@ def test_collapsible_workspaces_shrink_to_the_available_width():
     assert ".comparison-body-panel .table-wrap,.comparison-body .table-wrap{min-width:0;max-width:100%;overflow-x:auto" in analyze
     assert "body.nct-shell>main,body.nct-shell>main>*{min-width:0;max-width:100%}" in SHELL_SCRIPT
     assert "body.nct-shell main details>summary{box-sizing:border-box;min-width:0;max-width:100%;overflow-wrap:anywhere}" in SHELL_SCRIPT
+
+
+def test_scan_history_distinguishes_scoped_evidence_from_saved_analysis():
+    html = operator_page().body.decode()
+
+    assert "This is separate from scoped evidence, which is ready." in html
+    assert "run.foundation_status?.state==='foundation_complete'" in html
 
 
 def test_nmap_advanced_operations_are_collapsed_without_removing_capability():

@@ -9,7 +9,8 @@ import sqlite3
 import threading
 import uuid
 
-from app.artifacts import utc_now
+from app.artifacts import get_artifact_observation, sha256_file, utc_now
+from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
 from app.database import connect_database, initialize_once_per_database
 from app.derived_contracts import (
     NMAP_BASE_ANALYSIS_FAMILY,
@@ -26,9 +27,13 @@ from app.nmap_base_analysis import (
     _verify_run_local_artifact,
     analyze_registered_nmap_result,
 )
+from app.nmap_evidence import NMAP_ENDPOINT_PARSER
 
 
 JOB_TYPE = "nmap_base_analysis"
+NMAP_SCOPE_JOB_TYPE = "nmap_scope_assessment"
+NMAP_SCOPE_TARGET_FAMILY = "scoped_nmap_assessment"
+NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION = 1
 _ACTIVE_STATES = {"queued", "running"}
 _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _WORKERS: dict[Path, tuple[threading.Event, threading.Thread]] = {}
@@ -445,7 +450,8 @@ def _attempt_dict(row) -> dict | None:
         return None
     keys = (
         "attempt_id", "attempt_number", "state", "requested_by", "requested_at",
-        "started_at", "finished_at", "outcome", "result_id", "error",
+        "started_at", "finished_at", "outcome", "result_id", "output_kind",
+        "output_id", "error",
     )
     return dict(zip(keys, row))
 
@@ -453,7 +459,8 @@ def _attempt_dict(row) -> dict | None:
 def _job_dict(db: sqlite3.Connection, row) -> dict:
     latest = db.execute(
         """SELECT attempt_id, attempt_number, state, requested_by, requested_at,
-                  started_at, finished_at, outcome, result_id, error
+                  started_at, finished_at, outcome, result_id, output_kind,
+                  output_id, error
            FROM pipeline_job_attempts WHERE job_id = ?
            ORDER BY attempt_number DESC LIMIT 1""",
         (row[0],),
@@ -468,6 +475,8 @@ def _job_dict(db: sqlite3.Connection, row) -> dict:
         "target_family": row[7], "target_analysis_version": row[8],
         "target_payload_schema_version": row[9], "target_result_id": row[10],
         "requested_by": row[11], "requested_at": row[12],
+        "source_kind": row[13], "source_ref": row[14],
+        "definition": json.loads(row[15] or "{}"),
         "attempt_count": attempts, "latest_attempt": _attempt_dict(latest),
     }
 
@@ -475,7 +484,7 @@ def _job_dict(db: sqlite3.Connection, row) -> dict:
 _JOB_COLUMNS = """job_id, job_type, source_run_id, source_observation_id,
  source_status, source_sha256, source_size_bytes, target_family,
  target_analysis_version, target_payload_schema_version, target_result_id,
- requested_by, requested_at"""
+ requested_by, requested_at, source_kind, source_ref, definition_json"""
 
 
 def enqueue_nmap_base_job(
@@ -538,6 +547,214 @@ def enqueue_nmap_base_job(
             (token, existing[0], requested_by, now),
         )
         result = _job_dict(db, existing)
+    start_derived_job_worker(db_path)
+    return result
+
+
+def _nmap_scope_snapshot(
+    db: sqlite3.Connection,
+    assignment_id: str,
+    *,
+    required_source_kind: str,
+    automated_context: dict | None = None,
+) -> dict:
+    row = db.execute(
+        """SELECT assignment.artifact_observation_id, assignment.scope_id,
+                  assignment.revision, assignment.event_kind,
+                  assignment.assignment_mode, observation.sha256,
+                  observation.source_kind, observation.source_ref,
+                  artifact.size_bytes, scope.active
+           FROM artifact_scope_assignments assignment
+           JOIN artifact_observations observation
+             ON observation.observation_id = assignment.artifact_observation_id
+           JOIN artifact_registry artifact ON artifact.sha256 = observation.sha256
+           JOIN network_scopes scope ON scope.scope_id = assignment.scope_id
+           WHERE assignment.assignment_id = ?""",
+        (assignment_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError("Eligible Nmap scope assignment does not exist")
+    if row[6] != required_source_kind:
+        raise DerivedJobConflict("The assignment is not for the expected Nmap evidence source")
+    if db.execute(
+        "SELECT 1 FROM artifact_scope_assignments WHERE supersedes_assignment_id = ?",
+        (assignment_id,),
+    ).fetchone():
+        raise DerivedJobConflict("The selected scope assignment is no longer current")
+    if not bool(row[9]):
+        raise DerivedJobConflict("The selected Network Scope is archived")
+    definition = {
+        "assignment_id": assignment_id,
+        "scope_id": row[1],
+        "assignment_revision": int(row[2]),
+        "assignment_event_kind": row[3],
+        "assignment_mode": row[4],
+        "parser_version": NMAP_ENDPOINT_PARSER,
+    }
+    if automated_context is not None:
+        definition["automated_scope_context"] = automated_context
+    source_run_id = row[7] if required_source_kind == "nmap_scan" else None
+    frozen = {
+        "job_type": NMAP_SCOPE_JOB_TYPE,
+        "source_run_id": source_run_id,
+        "source_observation_id": row[0],
+        "source_status": "completed" if source_run_id else "assigned",
+        "source_sha256": row[5],
+        "source_size_bytes": int(row[8]),
+        "target_family": NMAP_SCOPE_TARGET_FAMILY,
+        "target_analysis_version": NMAP_ENDPOINT_PARSER,
+        "target_payload_schema_version": NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION,
+        "target_parameters_json": "{}",
+        "target_computation_key": None,
+        "target_result_id": None,
+        "source_kind": row[6],
+        "source_ref": row[7],
+        "definition_json": _canonical_json(definition),
+    }
+    frozen["job_key"] = _job_key(frozen)
+    return frozen
+
+
+def _enqueue_scope_snapshot(
+    db: sqlite3.Connection,
+    frozen: dict,
+    *,
+    request_token: str,
+    requested_by: str,
+) -> dict:
+    now = utc_now()
+    prior = db.execute(
+        "SELECT job_id, request_kind FROM pipeline_job_requests WHERE request_token = ?",
+        (request_token,),
+    ).fetchone()
+    if prior is not None:
+        job = db.execute(
+            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (prior[0],)
+        ).fetchone()
+        if job is None or job[1] != NMAP_SCOPE_JOB_TYPE or job[3] != frozen["source_observation_id"]:
+            raise DerivedJobConflict("That request token is already used for different work")
+        if job[15] != frozen["definition_json"]:
+            raise DerivedJobConflict("That request token is already used for different work")
+        return _job_dict(db, job)
+
+    job = db.execute(
+        f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_key = ?",
+        (frozen["job_key"],),
+    ).fetchone()
+    request_kind = "initial"
+    if job is None:
+        job_id = f"pipeline_job_{uuid.uuid4().hex}"
+        db.execute(
+            """INSERT INTO pipeline_jobs (
+                   job_id, job_key, job_type, source_run_id, source_observation_id,
+                   source_status, source_sha256, source_size_bytes, target_family,
+                   target_analysis_version, target_payload_schema_version,
+                   target_parameters_json, target_computation_key, target_result_id,
+                   source_kind, source_ref, definition_json, requested_by, requested_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, frozen["job_key"], frozen["job_type"], frozen["source_run_id"],
+             frozen["source_observation_id"], frozen["source_status"],
+             frozen["source_sha256"], frozen["source_size_bytes"],
+             frozen["target_family"], frozen["target_analysis_version"],
+             frozen["target_payload_schema_version"], frozen["target_parameters_json"],
+             frozen["target_computation_key"], frozen["target_result_id"],
+             frozen["source_kind"], frozen["source_ref"], frozen["definition_json"],
+             requested_by, now),
+        )
+        db.execute(
+            """INSERT INTO pipeline_job_attempts (
+                   attempt_id, job_id, attempt_number, state, requested_by, requested_at
+               ) VALUES (?, ?, 1, 'queued', ?, ?)""",
+            (f"pipeline_attempt_{uuid.uuid4().hex}", job_id, requested_by, now),
+        )
+        job = db.execute(
+            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+    else:
+        latest = db.execute(
+            """SELECT attempt_number, state FROM pipeline_job_attempts
+               WHERE job_id = ? ORDER BY attempt_number DESC LIMIT 1""",
+            (job[0],),
+        ).fetchone()
+        if latest is None:
+            raise DerivedJobConflict("The retained processing job has no attempt history")
+        if latest[1] in {"failed", "interrupted"}:
+            request_kind = "retry"
+            db.execute(
+                """INSERT INTO pipeline_job_attempts (
+                       attempt_id, job_id, attempt_number, state, requested_by, requested_at
+                   ) VALUES (?, ?, ?, 'queued', ?, ?)""",
+                (f"pipeline_attempt_{uuid.uuid4().hex}", job[0], int(latest[0]) + 1,
+                 requested_by, now),
+            )
+    db.execute(
+        """INSERT INTO pipeline_job_requests (
+               request_token, job_id, request_kind, requested_by, requested_at
+           ) VALUES (?, ?, ?, ?, ?)""",
+        (request_token, job[0], request_kind, requested_by, now),
+    )
+    return _job_dict(db, job)
+
+
+def enqueue_manual_nmap_scope_job(
+    db_path: Path,
+    assignment_id: str,
+    *,
+    request_token: str,
+    requested_by: str,
+) -> dict:
+    init_derived_job_storage(db_path)
+    token = _request_token(request_token)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        frozen = _nmap_scope_snapshot(
+            db, assignment_id, required_source_kind="nmap_import",
+        )
+        result = _enqueue_scope_snapshot(
+            db, frozen, request_token=token, requested_by=requested_by,
+        )
+    start_derived_job_worker(db_path)
+    return result
+
+
+def enqueue_automated_nmap_scope_job(
+    db_path: Path,
+    run_id: str,
+    *,
+    request_token: str,
+    requested_by: str,
+) -> dict:
+    from app.automated_nmap_foundation import (
+        _ensure_inherited_assignment,
+        _run_evidence,
+        init_automated_nmap_foundation_storage,
+    )
+
+    init_automated_nmap_foundation_storage(db_path)
+    init_derived_job_storage(db_path)
+    token = _request_token(request_token)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        evidence = _run_evidence(db, run_id)
+        assignment_id = _ensure_inherited_assignment(db, evidence, requested_by)
+        context = {
+            "run_id": run_id,
+            "scope_id": evidence["scope_id"],
+            "scope_label": evidence["scope_label"],
+            "scope_version": evidence["scope_version"],
+            "scope_recorded_at": evidence["scope_recorded_at"],
+        }
+        frozen = _nmap_scope_snapshot(
+            db,
+            assignment_id,
+            required_source_kind="nmap_scan",
+            automated_context=context,
+        )
+        if frozen["source_run_id"] != run_id or frozen["source_observation_id"] != evidence["observation_id"]:
+            raise DerivedJobConflict("The inherited scan assignment changed before it was queued")
+        result = _enqueue_scope_snapshot(
+            db, frozen, request_token=token, requested_by=requested_by,
+        )
     start_derived_job_worker(db_path)
     return result
 
@@ -688,6 +905,184 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
     return result
 
 
+def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
+    job_columns = (
+        "job_id", "job_key", "job_type", "source_run_id", "source_observation_id",
+        "source_status", "source_sha256", "source_size_bytes", "target_family",
+        "target_analysis_version", "target_payload_schema_version",
+        "target_parameters_json", "target_computation_key", "target_result_id",
+        "source_kind", "source_ref", "definition_json",
+    )
+    select_columns = ", ".join(f"job.{name}" for name in job_columns)
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            f"""SELECT {select_columns}, attempt.requested_by AS attempt_requested_by
+                FROM pipeline_jobs job
+                JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                WHERE job.job_id = ? AND attempt.attempt_id = ?
+                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+    if row is None:
+        raise DerivedJobConflict("The Nmap scope worker no longer owns this attempt")
+    frozen_job = tuple(row[name] for name in job_columns)
+    try:
+        definition = json.loads(row["definition_json"] or "{}")
+    except json.JSONDecodeError as exc:
+        raise DerivedJobConflict("The scoped Nmap job definition is unreadable") from exc
+    assignment_id = definition.get("assignment_id") if isinstance(definition, dict) else None
+    identity_payload = {
+        "job_type": row["job_type"],
+        "source_run_id": row["source_run_id"],
+        "source_observation_id": row["source_observation_id"],
+        "source_status": row["source_status"],
+        "source_sha256": row["source_sha256"],
+        "source_size_bytes": int(row["source_size_bytes"]),
+        "target_family": row["target_family"],
+        "target_analysis_version": row["target_analysis_version"],
+        "target_payload_schema_version": row["target_payload_schema_version"],
+        "target_parameters_json": row["target_parameters_json"],
+        "target_computation_key": row["target_computation_key"],
+        "target_result_id": row["target_result_id"],
+        "source_kind": row["source_kind"],
+        "source_ref": row["source_ref"],
+        "definition_json": row["definition_json"],
+    }
+    if (
+        row["job_type"] != NMAP_SCOPE_JOB_TYPE
+        or row["target_family"] != NMAP_SCOPE_TARGET_FAMILY
+        or row["target_analysis_version"] != NMAP_ENDPOINT_PARSER
+        or int(row["target_payload_schema_version"]) != NMAP_SCOPE_PAYLOAD_SCHEMA_VERSION
+        or row["target_parameters_json"] != "{}"
+        or row["target_computation_key"] is not None
+        or row["target_result_id"] is not None
+        or definition.get("parser_version") != NMAP_ENDPOINT_PARSER
+        or _canonical_json(definition) != row["definition_json"]
+        or _job_key(identity_payload) != row["job_key"]
+        or not assignment_id
+    ):
+        raise DerivedJobConflict("The scoped Nmap job identity or processing rules changed before this job ran")
+
+    def validate_authority(db: sqlite3.Connection) -> None:
+        assignment = db.execute(
+            """SELECT assignment.artifact_observation_id, assignment.scope_id,
+                      assignment.revision, assignment.event_kind,
+                      assignment.assignment_mode, observation.sha256,
+                      observation.source_kind, observation.source_ref,
+                      artifact.size_bytes, scope.active
+               FROM artifact_scope_assignments assignment
+               JOIN artifact_observations observation
+                 ON observation.observation_id = assignment.artifact_observation_id
+               JOIN artifact_registry artifact ON artifact.sha256 = observation.sha256
+               JOIN network_scopes scope ON scope.scope_id = assignment.scope_id
+               WHERE assignment.assignment_id = ?""",
+            (assignment_id,),
+        ).fetchone()
+        expected_assignment = (
+            row["source_observation_id"], definition.get("scope_id"),
+            definition.get("assignment_revision"), definition.get("assignment_event_kind"),
+            definition.get("assignment_mode"), row["source_sha256"],
+            row["source_kind"], row["source_ref"], int(row["source_size_bytes"]),
+        )
+        if assignment is None or tuple(assignment[:9]) != expected_assignment:
+            raise DerivedJobConflict("The queued assignment no longer matches the frozen job")
+        if not bool(assignment[9]):
+            raise DerivedJobConflict("The queued assignment scope is archived")
+        if db.execute(
+            "SELECT 1 FROM artifact_scope_assignments WHERE supersedes_assignment_id = ?",
+            (assignment_id,),
+        ).fetchone():
+            raise DerivedJobConflict("The queued assignment is no longer current")
+        automated = definition.get("automated_scope_context")
+        if automated is None:
+            if row["source_kind"] != "nmap_import" or row["source_run_id"] is not None:
+                raise DerivedJobConflict("The manual Nmap source contract changed")
+            if row["source_status"] != "assigned":
+                raise DerivedJobConflict("The manual Nmap source state changed")
+        else:
+            from app.automated_nmap_foundation import _run_evidence
+
+            current = _run_evidence(db, automated.get("run_id"))
+            if not current["eligible"]:
+                raise DerivedJobConflict("The retained scan is no longer eligible for processing")
+            expected_context = {
+                "run_id": current["run_id"],
+                "scope_id": current["scope_id"],
+                "scope_label": current["scope_label"],
+                "scope_version": current["scope_version"],
+                "scope_recorded_at": current["scope_recorded_at"],
+            }
+            if (
+                expected_context != automated
+                or current["observation_id"] != row["source_observation_id"]
+                or row["source_run_id"] != current["run_id"]
+                or row["source_ref"] != current["run_id"]
+                or row["source_kind"] != "nmap_scan"
+                or row["source_status"] != "completed"
+            ):
+                raise DerivedJobConflict("The retained scan scope authority changed")
+
+    def verify_source_bytes() -> None:
+        observation = get_artifact_observation(db_path, row["source_observation_id"])
+        if observation is None:
+            raise DerivedJobConflict("The queued Nmap evidence observation is unavailable")
+        if (
+            observation["sha256"] != row["source_sha256"]
+            or int(observation["size_bytes"]) != int(row["source_size_bytes"])
+            or observation["source_kind"] != row["source_kind"]
+            or observation["source_ref"] != row["source_ref"]
+        ):
+            raise DerivedJobConflict("The queued Nmap evidence identity changed")
+        canonical = Path(observation["canonical_path"])
+        if canonical.is_symlink() or sha256_file(canonical) != (
+            row["source_sha256"], int(row["source_size_bytes"]),
+        ):
+            raise DerivedJobConflict("The queued Nmap evidence failed exact-content verification")
+
+    with connect_database(db_path, read_only=True) as db:
+        validate_authority(db)
+    verify_source_bytes()
+
+    def guard(db: sqlite3.Connection) -> None:
+        db.row_factory = sqlite3.Row
+        owned = db.execute(
+            f"""SELECT {select_columns} FROM pipeline_jobs job
+                JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                WHERE job.job_id = ? AND attempt.attempt_id = ?
+                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+        if owned is None:
+            raise DerivedJobConflict("The Nmap scope worker lost its claim")
+        if tuple(owned[name] for name in job_columns) != frozen_job:
+            raise DerivedJobConflict("The scoped Nmap job definition changed while processing")
+        validate_authority(db)
+
+    def finalize(db: sqlite3.Connection, created: bool, assessment_id: str) -> None:
+        changed = db.execute(
+            """UPDATE pipeline_job_attempts
+               SET state = 'completed', finished_at = ?, outcome = ?, result_id = NULL,
+                   output_kind = 'entity_assessment', output_id = ?, error = NULL
+               WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                 AND claim_token = ?""",
+            (utc_now(), "created" if created else "reused", assessment_id,
+             claim["attempt_id"], claim["job_id"], claim["claim_token"]),
+        ).rowcount
+        if changed != 1:
+            raise DerivedJobConflict("The Nmap scope worker lost its claim")
+
+    return ingest_assigned_nmap_observation(
+        db_path,
+        expected_assignment_id=assignment_id,
+        linked_by=row["attempt_requested_by"],
+        parser_version=row["target_analysis_version"],
+        before_publish=verify_source_bytes,
+        transaction_guard=guard,
+        transaction_finalize=finalize,
+    )
+
+
 def fail_claimed_derived_job(db_path: Path, claim: dict, error: Exception) -> None:
     message = str(error).strip() or error.__class__.__name__
     with connect_database(db_path) as db:
@@ -708,14 +1103,21 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
         run_id = None
         with connect_database(db_path, read_only=True) as db:
             found = db.execute(
-                "SELECT source_run_id FROM pipeline_jobs WHERE job_id = ?", (claim["job_id"],)
+                "SELECT job_type, source_run_id FROM pipeline_jobs WHERE job_id = ?",
+                (claim["job_id"],),
             ).fetchone()
-            run_id = found[0] if found else None
-        if not run_id:
-            raise DerivedJobConflict("The saved-analysis job definition is unavailable")
-        execute_claimed_derived_job(
-            db_path, claim, _run_local_path(data_dir, run_id),
-        )
+            job_type = found[0] if found else None
+            run_id = found[1] if found else None
+        if job_type == JOB_TYPE:
+            if not run_id:
+                raise DerivedJobConflict("The saved-analysis job definition is unavailable")
+            execute_claimed_derived_job(
+                db_path, claim, _run_local_path(data_dir, run_id),
+            )
+        elif job_type == NMAP_SCOPE_JOB_TYPE:
+            execute_claimed_nmap_scope_job(db_path, claim)
+        else:
+            raise DerivedJobConflict("The pipeline job type is not supported by this worker")
     except Exception as exc:
         fail_claimed_derived_job(db_path, claim, exc)
     return True
@@ -803,6 +1205,50 @@ def list_derived_jobs(db_path: Path, *, limit: int = 25, offset: int = 0) -> dic
             "has_more": offset + len(items) < total}
 
 
+def nmap_scope_job_for_assignment(
+    db_path: Path, assignment_id: str,
+) -> dict | None:
+    if not Path(db_path).is_file():
+        return None
+    with connect_database(db_path, read_only=True) as db:
+        available = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
+        ).fetchone()
+        if available is None:
+            return None
+        rows = db.execute(
+            f"""SELECT {_JOB_COLUMNS}
+                FROM pipeline_jobs job
+                JOIN artifact_scope_assignments assignment
+                  ON assignment.artifact_observation_id = job.source_observation_id
+                WHERE job.job_type = ? AND assignment.assignment_id = ?
+                ORDER BY job.requested_at DESC, job.job_id DESC""",
+            (NMAP_SCOPE_JOB_TYPE, assignment_id),
+        ).fetchall()
+        for row in rows:
+            if json.loads(row[15] or "{}").get("assignment_id") == assignment_id:
+                return _job_dict(db, row)
+    return None
+
+
+def nmap_scope_job_for_run(db_path: Path, run_id: str) -> dict | None:
+    if not Path(db_path).is_file():
+        return None
+    with connect_database(db_path, read_only=True) as db:
+        available = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
+        ).fetchone()
+        if available is None:
+            return None
+        row = db.execute(
+            f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
+                WHERE job_type = ? AND source_run_id = ?
+                ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
+            (NMAP_SCOPE_JOB_TYPE, run_id),
+        ).fetchone()
+        return _job_dict(db, row) if row is not None else None
+
+
 def scan_run_job_statuses(db_path: Path, run_ids: list[str], data_dir: Path) -> dict[str, dict]:
     result: dict[str, dict] = {}
     if not run_ids or not Path(db_path).is_file():
@@ -824,8 +1270,9 @@ def scan_run_job_statuses(db_path: Path, run_ids: list[str], data_dir: Path) -> 
             if jobs_available:
                 row = db.execute(
                     f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
-                        WHERE source_run_id = ? ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
-                    (run_id,),
+                        WHERE job_type = ? AND source_run_id = ?
+                        ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
+                    (JOB_TYPE, run_id),
                 ).fetchone()
             result[run_id] = {
                 "eligible": eligible, "eligibility_reason": reason,

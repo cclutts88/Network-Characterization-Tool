@@ -230,6 +230,30 @@ database, stop every worker, and roll forward if recovery is needed. A future ro
 would have to reconcile post-cutover history explicitly before older code could run; none
 is currently provided.
 
+### Durable scoped Nmap processing
+
+Manual Nmap assignments and eligible completed automated scans now use a second pipeline
+job type. Each job freezes the exact artifact observation, digest, size, source encounter,
+assignment identity and revision, Network Scope, parser contract and authenticated
+requester. Automated work additionally freezes the run's retained scope context. The
+worker rechecks current assignment authority, active scope, exact source bytes, automated
+run context, parser contract and its own claim before publication. A correction, archived
+scope, changed source, parser change or lost claim fails the attempt rather than following
+new context or publishing partial records.
+
+Parsing stays outside the writer transaction. Endpoint and service entities, the scoped
+assessment, evidence receipts, immutable assignment link, output reference and successful
+attempt state commit together. An existing assessment may be reused, but every distinct
+evidence encounter and assignment keeps its own job and provenance link. Failed and
+interrupted attempts retain attribution and require a new explicit retry request. Queued
+attempts resume after restart; attempts abandoned while running become Interrupted.
+
+The older `scan_foundation_processing_attempts` rows had no durable request tokens or job
+identities. Inventing those values would make the audit record look more precise than it
+was. Startup therefore marks any old Running row Interrupted once, then database triggers
+freeze the table against inserts, updates and deletes. Those rows remain historical only;
+all new manual and automated scoped processing uses the pipeline tables.
+
 ## Current limits
 
 An exact identity match means only that the same declared calculation was already

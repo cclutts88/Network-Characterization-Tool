@@ -17,6 +17,7 @@ from app.automated_nmap_foundation import (
     recover_interrupted_automated_scan_foundation,
 )
 from app.database import connect_database
+from app.derived_jobs import scan_run_job_statuses
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.poc import (
     ScanRunRequest,
@@ -132,6 +133,10 @@ def test_explicit_processing_uses_retained_scope_and_is_exactly_replayable(tmp_p
     assert first["status"]["state"] == "foundation_complete"
     assert first["status"]["network_contact"] is False
     assert replay["processing"]["completed_replay"] is True
+    analysis_status = scan_run_job_statuses(
+        db_path, [run["run_id"]], tmp_path,
+    )[run["run_id"]]
+    assert analysis_status["current_job"] is None
     with connect_database(db_path, read_only=True) as db:
         assert db.execute(
             "SELECT status FROM scan_runs WHERE run_id = ?", (run["run_id"],)
@@ -229,14 +234,18 @@ def test_route_roles_status_and_server_owned_actor(tmp_path, monkeypatch):
     )
     with TestClient(main.app) as client:
         status = client.get(f"/api/scan-runs/{run['run_id']}/foundation-status")
-        processed = client.post(f"/api/scan-runs/{run['run_id']}/foundation-process")
+        processed = client.post(
+            f"/api/scan-runs/{run['run_id']}/foundation-process",
+            json={"request_token": "route-process"},
+        )
         blocked = client.post(
             f"/api/scan-runs/{run['run_id']}/foundation-process",
+            json={"request_token": "route-blocked"},
             headers={"Origin": "https://outside.example"},
         )
     assert status.status_code == 200
-    assert processed.status_code == 200
-    assert processed.json()["status"]["latest_attempt"]["actor"] == "alice"
+    assert processed.status_code == 202
+    assert processed.json()["job"]["requested_by"] == "alice"
     assert blocked.status_code == 403
 
     monkeypatch.setattr(
@@ -245,7 +254,10 @@ def test_route_roles_status_and_server_owned_actor(tmp_path, monkeypatch):
     )
     with TestClient(main.app) as client:
         readable = client.get(f"/api/scan-runs/{run['run_id']}/foundation-status")
-        denied = client.post(f"/api/scan-runs/{run['run_id']}/foundation-process")
+        denied = client.post(
+            f"/api/scan-runs/{run['run_id']}/foundation-process",
+            json={"request_token": "viewer-denied"},
+        )
     assert readable.status_code == 200
     assert denied.status_code == 403
 
@@ -272,26 +284,37 @@ def test_grouped_history_keeps_retained_scope_beside_foundation_status(
     assert retained["foundation_status"]["scope_id"] == scope["scope_id"]
 
 
-def test_latest_attempt_uses_insertion_order_and_restart_marks_interrupted(tmp_path):
+def test_legacy_attempt_history_is_interrupted_at_cutover_then_frozen(tmp_path):
     db_path, run, _, observation = scoped_run(tmp_path)
     canonical = Path(
         get_artifact_observation(db_path, observation["observation_id"])["canonical_path"]
     )
-    original = canonical.read_bytes()
-    canonical.write_bytes(b"corrupt")
-    with pytest.raises(ValueError):
-        process_automated_scan_foundation(db_path, run["run_id"], "analyst")
-    canonical.write_bytes(original)
     with connect_database(db_path) as db:
-        observation_id, assignment_id = db.execute(
-            """SELECT observation_id, assignment_id
-               FROM scan_foundation_processing_attempts WHERE run_id = ? LIMIT 1""",
+        for name in (
+            "scan_foundation_attempt_no_insert",
+            "scan_foundation_attempt_no_update",
+            "scan_foundation_attempt_no_delete",
+        ):
+            db.execute(f"DROP TRIGGER {name}")
+        evidence = db.execute(
+            """SELECT observation.observation_id, assignment.assignment_id
+               FROM artifact_observations observation
+               JOIN scan_inherited_scope_assignments inherited
+                 ON inherited.observation_id = observation.observation_id
+               JOIN artifact_scope_assignments assignment
+                 ON assignment.assignment_id = inherited.assignment_id
+               WHERE observation.source_ref = ?""",
             (run["run_id"],),
         ).fetchone()
-        db.execute(
-            "DELETE FROM scan_foundation_processing_attempts WHERE run_id = ?",
-            (run["run_id"],),
-        )
+        if evidence is None:
+            current = __import__(
+                "app.automated_nmap_foundation", fromlist=["_run_evidence", "_ensure_inherited_assignment"]
+            )
+            details = current._run_evidence(db, run["run_id"])
+            assignment_id = current._ensure_inherited_assignment(db, details, "legacy")
+            observation_id = details["observation_id"]
+        else:
+            observation_id, assignment_id = evidence
         values = (run["run_id"], observation_id, assignment_id, "2030-01-01T00:00:00+00:00")
         db.execute(
             """INSERT INTO scan_foundation_processing_attempts
@@ -307,14 +330,19 @@ def test_latest_attempt_uses_insertion_order_and_restart_marks_interrupted(tmp_p
                VALUES ('aa-newer', ?, ?, ?, 'newer', ?, 'running')""",
             values,
         )
-    running = get_automated_scan_foundation_status(db_path, run["run_id"])
-    assert running["state"] == "processing_running"
-    assert running["latest_attempt"]["actor"] == "newer"
-    assert recover_interrupted_automated_scan_foundation(db_path) == 1
-    interrupted = get_automated_scan_foundation_status(db_path, run["run_id"])
-    assert interrupted["state"] == "processing_interrupted"
-    assert interrupted["latest_attempt"]["status"] == "interrupted"
-    assert "safe to retry" in interrupted["latest_attempt"]["error"]
+    init_automated_nmap_foundation_storage.__wrapped__(db_path)
+    with connect_database(db_path) as db:
+        latest = db.execute(
+            """SELECT status, error FROM scan_foundation_processing_attempts
+               WHERE attempt_id = 'aa-newer'"""
+        ).fetchone()
+        assert latest[0] == "interrupted"
+        assert "durable pipeline cutover" in latest[1]
+        with pytest.raises(Exception, match="read-only"):
+            db.execute(
+                "UPDATE scan_foundation_processing_attempts SET actor = 'changed' WHERE attempt_id = 'aa-newer'"
+            )
+    assert recover_interrupted_automated_scan_foundation(db_path) == 0
 
 
 @pytest.mark.parametrize("attempt_status", ["complete", "error", "running"])
@@ -325,15 +353,16 @@ def test_protected_scan_deletion_preserves_database_and_files(
     db_path, run, _, _ = scoped_run(tmp_path)
     process_automated_scan_foundation(db_path, run["run_id"], "analyst")
     with connect_database(db_path) as db:
+        mapped = {"complete": "completed", "error": "failed", "running": "running"}[attempt_status]
         db.execute(
-            """UPDATE scan_foundation_processing_attempts
-               SET status = ?, error = CASE WHEN ? = 'error' THEN 'test failure' END,
+            """UPDATE pipeline_job_attempts SET state = ?,
+                   error = CASE WHEN ? = 'failed' THEN 'test failure' END,
                    finished_at = CASE WHEN ? = 'running' THEN NULL ELSE started_at END
-               WHERE rowid = (
-                   SELECT rowid FROM scan_foundation_processing_attempts
-                   WHERE run_id = ? ORDER BY rowid DESC LIMIT 1
+               WHERE job_id = (
+                   SELECT job_id FROM pipeline_jobs WHERE source_run_id = ?
+                   ORDER BY requested_at DESC LIMIT 1
                )""",
-            (attempt_status, attempt_status, attempt_status, run["run_id"]),
+            (mapped, mapped, mapped, run["run_id"]),
         )
     data_dir = tmp_path / "data"
     retained = data_dir / "scan-runs" / run["run_id"] / "scan.xml"
@@ -365,7 +394,7 @@ def test_protected_scan_deletion_preserves_database_and_files(
 
 
 def test_delete_racing_active_processing_fails_closed(tmp_path, monkeypatch):
-    import app.automated_nmap_foundation as automated
+    import app.derived_jobs as jobs
 
     db_path, run, _, _ = scoped_run(tmp_path)
     data_dir = tmp_path / "data"
@@ -374,14 +403,14 @@ def test_delete_racing_active_processing_fails_closed(tmp_path, monkeypatch):
     retained.write_bytes(XML)
     entered = threading.Event()
     release = threading.Event()
-    original = automated.ingest_assigned_nmap_observation
+    original = jobs.ingest_assigned_nmap_observation
 
     def paused(*args, **kwargs):
         entered.set()
         assert release.wait(timeout=5)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(automated, "ingest_assigned_nmap_observation", paused)
+    monkeypatch.setattr(jobs, "ingest_assigned_nmap_observation", paused)
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
             process_automated_scan_foundation, db_path, run["run_id"], "analyst"

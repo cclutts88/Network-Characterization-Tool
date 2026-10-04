@@ -105,6 +105,44 @@ def _status_on_connection(db: sqlite3.Connection, observation_id: str) -> dict:
             "processing": links,
         })
     current = next((item for item in assignments if item["current"]), None)
+    processing_job = None
+    if current is not None and db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
+    ).fetchone():
+        job_rows = db.execute(
+            """SELECT job.job_id, job.definition_json, attempt.attempt_id,
+                      attempt.attempt_number, attempt.state, attempt.requested_by,
+                      attempt.requested_at, attempt.started_at, attempt.finished_at,
+                      attempt.error, attempt.output_kind, attempt.output_id
+               FROM pipeline_jobs job
+               JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+               WHERE job.job_type = 'nmap_scope_assessment'
+                 AND job.source_observation_id = ?
+                 AND attempt.attempt_number = (
+                     SELECT MAX(newest.attempt_number) FROM pipeline_job_attempts newest
+                     WHERE newest.job_id = job.job_id
+                 )
+               ORDER BY job.requested_at DESC, job.job_id DESC""",
+            (observation_id,),
+        ).fetchall()
+        for row in job_rows:
+            if json.loads(row["definition_json"] or "{}").get("assignment_id") == current["assignment_id"]:
+                processing_job = {
+                    "job_id": row["job_id"],
+                    "latest_attempt": {
+                        "attempt_id": row["attempt_id"],
+                        "attempt_number": int(row["attempt_number"]),
+                        "state": row["state"],
+                        "requested_by": row["requested_by"],
+                        "requested_at": row["requested_at"],
+                        "started_at": row["started_at"],
+                        "finished_at": row["finished_at"],
+                        "error": row["error"],
+                        "output_kind": row["output_kind"],
+                        "output_id": row["output_id"],
+                    },
+                }
+                break
     if current is None:
         state = "unassigned"
     elif current["processing_complete"]:
@@ -119,6 +157,10 @@ def _status_on_connection(db: sqlite3.Connection, observation_id: str) -> dict:
         "current_assignment_id": current["assignment_id"] if current else None,
         "current_assignment": current,
         "assignments": assignments,
+        "processing_job": processing_job,
+        "processing_state": (
+            processing_job["latest_attempt"]["state"] if processing_job else None
+        ),
         "current_views_changed": False,
     }
 
