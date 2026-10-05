@@ -1904,6 +1904,18 @@ high-volume passive evidence.
    candidate-only semantics and retained evidence are preserved. Stable `main` remains
    clean. This source is accepted for the next immutable package build; Range installation
    and operational acceptance remain pending.
+   2026-10-04 immutable offline package candidate complete: the local transfer bundle
+   `NCT-Air-Gapped-Range-Deployment-0.16.0-20261004-r1.zip` contains the exact
+   independently cleared source image from commit `479c332`, the locally retained
+   `caddy:2-alpine` image, the agreed Range scripts, an updated operator quickstart,
+   an internal SHA-256 checksum and a verification receipt. The exact-image smoke
+   reported the expected version, build ID and source commit; Hunt, System Health and
+   Analyze loaded successfully. Every packaged shell script passed syntax validation,
+   the package image tag was consistent, the extracted inner archive matched its
+   checksum, and the outer ZIP has its own adjacent SHA-256 file. This is a locally
+   verified transfer candidate only. It has not been pushed or installed on the Range;
+   Range HTTPS/login, password reset, offline Exploit-DB upload, live device fields and
+   operational acceptance remain pending.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled

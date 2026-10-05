@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Exercise-Range-0.16.0-20260927-r1.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261004-r1.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-unzip NCT-Air-Gapped-Exercise-Range-0.16.0-20260927-r1.zip
+unzip NCT-Air-Gapped-Range-Deployment-0.16.0-20261004-r1.zip
 cd /root/NCT-Air-Gapped-Range-Deployment
 ```
 
