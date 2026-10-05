@@ -1941,6 +1941,12 @@ high-volume passive evidence.
    verified transfer candidate only. It has not been pushed or installed on the Range;
    Range HTTPS/login, password reset, offline Exploit-DB upload, live device fields and
    operational acceptance remain pending.
+   2026-10-04 Range `r2` release-candidate preparation start: GitHub advanced the same
+   foundation branch with reviewed full Cisco history collection and multi-site roadmap
+   work before the local `r1` line was pushed. Reconcile both histories without force,
+   retain legacy `show history` readability, and issue a distinct `r2` image and transfer
+   bundle from the merged, fully tested commit. Preserve `r1` as a prior local candidate;
+   do not silently replace its recorded digest or checksum.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled
