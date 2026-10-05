@@ -122,7 +122,7 @@ DEVICE_TYPES = ("router", "firewall", "switch")
 
 COMMAND_HISTORY_COMMANDS = {
     "vyos": "show history",
-    "cisco": "show history",
+    "cisco": "show history all",
     "juniper": "show cli history | no-more",
     "pfsense": "cat ~/.history",
     "unifi": "cat ~/.bash_history ~/.ash_history ~/.history 2>/dev/null",
@@ -1309,8 +1309,14 @@ def _collect_cisco_command_outputs(
     pager_commands = {"terminal length 0", "terminal pager 0"}
     pager_command = next((command for command in commands if command in pager_commands), None)
     requested_commands = [command for command in commands if command not in pager_commands]
+    configured_history_command = COMMAND_HISTORY_COMMANDS["cisco"]
     history_command = next(
-        (command for command in requested_commands if command == "show history"), None
+        (
+            command
+            for command in requested_commands
+            if command == configured_history_command
+        ),
+        None,
     )
     send_commands = (
         ([history_command] if history_command else [])
@@ -2315,7 +2321,7 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         _read_text_prefix(history_path, MAX_RESPONSE_OUTPUT_CHARS)
         if history_path.is_file()
         else _labeled_command_sections(configuration_text).get(
-            str(manifest.get("history_command") or "show history"), ""
+            str(manifest.get("history_command") or "show history all"), ""
         )
     )
     return calculate_device_collection_summary(
