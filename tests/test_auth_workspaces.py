@@ -269,10 +269,10 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert account_script.text.index("Saved Networks") < account_script.text.index("New scan")
         assert "Interfaces and routes" in account_script.text
         assert "Exposure reports" in account_script.text
-        assert "Offline exploit matches" in account_script.text
+        assert "Offline exploit matches" not in account_script.text
         assert "Scan focus" not in account_script.text
         assert "title:'Filters'" not in account_script.text
-        assert "searchsploitPanel:['huntOverview','networkFiltersPanel']" in account_script.text
+        assert "huntOverview:['huntEvidenceOverview','networkFiltersPanel','systemsPanel']" in account_script.text
         assert "systemsPanel:['huntOverview','networkFiltersPanel']" in account_script.text
         assert "nct-task-focused" in account_script.text
         assert "Enable Operator Guide" in account_script.text

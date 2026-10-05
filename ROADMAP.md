@@ -1668,6 +1668,159 @@ high-volume passive evidence.
    while excluding unmarked history and incomplete or ambiguous aggregate evidence. This
    clearance is foundation-development only; it is not Range, mission, or stable-main
    acceptance.
+   2026-10-04 authorized home-network validation start (foundation): validate the
+   complete live workflow against the user-authorized `10.0.0.0/24` home subnet with
+   a dedicated Saved Network, immutable Network Scope association, and scan profile.
+   The exact coverage is Nmap top 1,000 TCP ports plus top 100 UDP ports, service
+   version detection, and traceroute. The preflight must confirm the analyzer route,
+   shared No-Strike state, effective target count, and split TCP/UDP command plan
+   before contact. Exploit-DB must be installed into NCT's offline read-only database
+   first. Completion requires retained source evidence, automatic foundation intake,
+   manual SearchSploit candidate enrichment from the new scan, a second identical
+   enrichment request proving persistent-cache reuse, browser review, and independent
+   quality review. No address outside `10.0.0.0/24` is authorized by this validation.
+   First-run deviation: profile v1 used normal `T3` timing and was cancelled cleanly
+   after 37 minutes when the TCP phase remained at 97 percent and projected beyond the
+   one-hour run limit, leaving insufficient time for UDP. Its audit record is retained.
+   Profile v2 kept the exact authorized targets, port coverage, service detection,
+   traceroute, scope and No-Strike state while using NCT's standard fast `T4` timing;
+   it was cancelled cleanly at approximately 24 percent after 12 minutes when the user
+   redirected local acceptance to common ports and reserved the full top-port run for
+   the Range analyzer. UDP retained its bounded retry and per-host timeout controls.
+   2026-10-04 Active Scans queue-presentation refinement start: keep the actively
+   executing scan as the default and only main progress detail. Waiting scans move to
+   a compact expandable list that exposes their retained settings and cancellation
+   control without replacing the live scan. When no scan is executing, the main panel
+   should clearly report analyzer availability while the waiting list remains usable.
+   Completion requires queue-order/cancellation regression coverage, guide updates,
+   live browser checks with active and pending work, and novice and independent review.
+   2026-10-04 authorized home-network development acceptance complete: the user-approved
+   local acceptance profile used common TCP and UDP ports, service detection, fast
+   timing and traceroute against only `10.0.0.0/24`. Run
+   `f3909b15395f4c0dbccc0dc25125be10` completed both protocol phases in approximately
+   nine minutes with exit code zero, retained the aggregate and per-protocol XML,
+   standard output/error, packet capture and manifest, and registered the aggregate
+   `scan.xml` with SHA-256
+   `604c66a1fd039bcbf4fea4a34283e56a78475cb93c5ea0b6865caedaa81ec8a2`.
+   Eighteen addresses answered discovery, sixteen returned direct Nmap response
+   evidence, and two `-Pn` assumed-up targets were retained without being counted as
+   confirmed hosts. Automatic foundation intake completed on its first attempt for the
+   explicit Home Network scope without manual processing. Offline SearchSploit then
+   searched 26 findings through 14 distinct product/version queries, skipped 14 findings
+   without a product, matched six systems to 132 analyst-review candidates, and returned
+   39 CVEs, 108 CVE-linked candidates, 24 candidates without CVEs and no warnings. An
+   identical repeat returned 14 cache hits and zero misses. The Hunt browser showed the
+   same totals and the candidate-not-vulnerability qualification with no browser errors.
+   The official Exploit-DB archive is retained as offline read-only version
+   `20261004T230037Z-04bbeb489265` with archive SHA-256
+   `04bbeb4892650d0332ae2b93c3e7c1187f4c74e6ca4f26cbcad1ae477c7005d0`.
+   The originally requested top 1,000 TCP plus top 100 UDP coverage is intentionally
+   deferred to the Range acceptance run; the two cancelled local attempts remain in
+   the audit history and are not represented as completed evidence.
+   2026-10-04 Active Scans queue-presentation refinement implementation complete:
+   the main panel follows only the run using the analyzer and otherwise reports that the
+   analyzer is available. Pending scans remain in a separate count-bearing dropdown;
+   each row exposes the saved target, profile version, protocol/port coverage, interface,
+   timeout, owner, requester, queue position and cancellation control. Queue refreshes
+   preserve an open row. An isolated live browser acceptance kept the active run visible
+   while a pending row remained open across multiple refreshes, cancelled the pending
+   scan without changing the active run, then cancelled the active test and returned to
+   the idle state. The page and contextual guide explain the separation. Focused UI
+   coverage passed **62 tests**. Novice review **PASS** identified one non-blocking
+   ambiguity when waiting work exists during an idle transition; the empty state now
+   says that waiting scans appear below and start in queue order. The full Docker suite
+   passed **1006 tests with 4
+   skipped**, all four browser-runtime scripts passed on the host, `git diff --check`
+   passed, and the Nmap and Hunt browser consoles remained clear. This is foundation
+   development acceptance only; it is not Range, mission, stable-main or production
+   acceptance.
+   2026-10-04 Active Scans independent-review halt and correction start: the reviewer
+   reproduced four gaps that normal-timing browser acceptance did not expose. A queue
+   refresh could close a waiting row opened while its request was in flight; an active
+   run could disappear after more than 200 newer history records; an older active-status
+   response could overwrite a newer response; and opening historical details replaced
+   the live Active Scan panel. Downstream completion remains halted until active work is
+   queried independently of history limits, asynchronous responses are generation-owned,
+   waiting-row state is captured immediately before rendering, and retained details open
+   inside Scan History. Actual-handler race regressions, large-history server coverage,
+   live browser validation, full-suite validation and independent re-review are required.
+   2026-10-04 Hunt exploit-reference consolidation start: remove the manual Find
+   potential matches action and the separate Offline exploit matches selector. Hunt
+   Network Evidence will automatically compare retained product/version fingerprints
+   with the active offline Exploit-DB index after network-wide or focused evidence loads.
+   Candidate filters, exposure context, cache behavior, candidate-not-vulnerability
+   wording and offline database management remain available in that workspace. A newer
+   evidence selection must own the enrichment response so stale results cannot replace
+   the current view. The built-in How NCT Works guide and contextual Operator Guide must
+   explain the automatic, offline, non-executing analysis.
+   2026-10-04 Active Scans correction validation complete, independent re-review
+   pending: the queue endpoint now selects every queued or active run before applying
+   any history limit. Queue and active-view requests use generation ownership so older
+   responses cannot replace newer state, open waiting rows are captured immediately
+   before rendering, and retained details expand inside their Scan History row without
+   replacing or stopping the live Active Scan view. Actual production-handler runtime
+   tests reproduce the in-flight row and response-order races; the server regression
+   places one running scan behind 205 newer completed records. Live browser validation
+   kept the idle Active Scan state unchanged while opening the completed home-scan
+   commands and evidence downloads inline. The earlier quality-gate halt remains in
+   force until the independent reviewer reproduces and clears these corrections.
+   2026-10-04 Hunt exploit-reference consolidation implementation validation complete,
+   independent re-review pending: Network Evidence automatically runs the local offline
+   candidate comparison after both network-wide and focused evidence loads. The manual
+   button and separate navigation entry are removed; all candidate, CVE, exposure and
+   database-management controls remain in Network Evidence. Generation ownership drops
+   obsolete enrichment responses. The focused home evidence and combined network view
+   each automatically returned the expected 14 queries, six matched systems, 132
+   candidates and candidate-not-vulnerability explanation, with no browser console
+   errors. The built-in guide and contextual guide describe the automatic local analysis.
+   Focused tests passed **78 with 2 skipped** because Node is not installed in the Linux
+   container; both production-handler JavaScript regressions passed directly on the host.
+   The full Docker suite passed **1007 with 6 skipped**, and `git diff --check` passed.
+   These changes remain foundation-development only and are not Range, mission or
+   stable-main acceptance.
+   Live user acceptance immediately found that the revised Network Evidence task rule
+   exposed the overview, filters and automatic candidates but omitted the Systems panel,
+   hiding the host rows even though their data had loaded. The task grouping now keeps
+   Systems visible with Network Evidence and keeps automatic candidate context visible
+   when Systems is selected. This presentation regression requires browser revalidation
+   and remains part of the pending independent gate.
+   The independent re-review then reproduced two cross-handler races that the first
+   generation tests did not cover: an older queue response could clear a newer active
+   lookup, and an older focused Hunt request could replace a newer evidence selection
+   before starting candidate analysis. Active-state reads now share applied-response
+   ownership across queue, lookup and polling while retaining separate poll continuity;
+   Hunt uses one evidence-selection generation from initial load through automatic
+   candidate association. Cross-handler production-code regressions are required before
+   the halt can clear.
+   2026-10-04 Hunt candidate-presentation revision start: user acceptance rejected a
+   separate candidate-results section. Keep hosts and services in the Systems bulk table,
+   associate CVE references with the exact host/service row, and expand titles and links
+   in place. Candidate filters and offline database management move under Network Filters.
+   Network Evidence must show the Systems table by default. This revision preserves
+   automatic offline analysis and candidate-only semantics while removing the extra
+   candidate workspace and navigation surface.
+   2026-10-04 Hunt candidate-presentation implementation complete, quality gate
+   pending: Network Evidence now keeps automatic offline candidate analysis inside
+   the Systems bulk tables. The combined Capabilities view has one expandable CVE
+   cell per matched host; filtered finding rows keep service-specific expansion, and
+   Inventory provides one host-level expansion. The former candidate-results section
+   and navigation entry are absent. Candidate and CVE filters plus offline database
+   maintenance remain collapsed under Network Filters. Browser validation loaded 18
+   systems, associated six matched systems from 14 product/version queries and 132
+   candidates, and showed a single combined 28-CVE/86-candidate expansion for the
+   multi-service test host. Reviewer-found corrections ensure that a newer no-op active
+   scan confirmation owns status over older queue responses, duplicate hostnames across
+   Network Scopes cannot share candidates, and CVE/year/status/exposure filters change
+   the visible candidate lists in both Capabilities and Inventory. Focused validation
+   passed **78 tests with 2 skipped**; the full Docker suite passed **1007 with 6
+   skipped**, both production-handler JavaScript regressions passed, browser checks and
+   the browser console were clean, and `git diff --check` passed. Novice operator review
+   **PASS** found the unified placement and navigation understandable; large candidate
+   lists remain deliberately collapsed and filterable. **QUALITY GATE: CLEAR —
+   DOCUMENTED DEVIATION.** Full top-port coverage remains deferred to Range acceptance,
+   and offline candidate associations remain review leads rather than confirmed
+   vulnerabilities. This is foundation development acceptance only; it is not Range,
+   mission, stable-main or production acceptance.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled

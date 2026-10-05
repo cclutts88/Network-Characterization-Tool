@@ -2289,6 +2289,25 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int
     ]
 
 
+def list_active_scan_run_plans(db_path: Path = DB_PATH) -> list[dict]:
+    """Return all queued or executing runs without applying a history window first."""
+    init_poc_storage(db_path)
+    active_states = ("queued", "running", "awaiting_fallback_approval")
+    placeholders = ",".join("?" for _ in active_states)
+    with connect_database(db_path) as db:
+        rows = db.execute(
+            "SELECT manifest_json FROM scan_runs "
+            f"WHERE json_extract(manifest_json, '$.status') IN ({placeholders}) "
+            "ORDER BY created_at ASC, rowid ASC",
+            active_states,
+        ).fetchall()
+    queued_ids = _queued_run_ids(db_path)
+    return [
+        with_queue_state(with_host_count(json.loads(row[0])), db_path, queued_ids)
+        for row in rows
+    ]
+
+
 def list_all_scan_history_metadata(db_path: Path = DB_PATH) -> list[dict]:
     """Read one consistent metadata-only snapshot without opening evidence files."""
     if not Path(db_path).is_file():
@@ -4787,12 +4806,7 @@ def change_scan_run_network_attribution(
 @router.get("/scan-runs/queue/status")
 def scan_queue_status(request: Request) -> dict:
     actor, role = _scan_actor(request)
-    active_states = {"queued", "running", "awaiting_fallback_approval"}
-    runs = [
-        item
-        for item in list_scan_run_plans(db_path=DB_PATH, limit=200)
-        if item.get("status") in active_states
-    ]
+    runs = list_active_scan_run_plans(db_path=DB_PATH)
     runs.sort(
         key=lambda item: (
             0 if item.get("status") in {"running", "awaiting_fallback_approval"} else 1,

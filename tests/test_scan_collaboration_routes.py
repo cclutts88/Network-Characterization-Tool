@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app import poc
@@ -22,7 +24,6 @@ def test_queue_control_roles_reassignment_and_personal_drafts(monkeypatch, tmp_p
     monkeypatch.setattr(poc, "DATA_DIR", data_dir)
     with poc.ACTIVE_RUNS_LOCK:
         poc.ACTIVE_RUNS.clear()
-
     with TestClient(app) as client:
         login(client, "nctadmin", "bootstrap password 123")
         for username in ("alpha", "bravo"):
@@ -90,3 +91,59 @@ def test_queue_control_roles_reassignment_and_personal_drafts(monkeypatch, tmp_p
 
     with poc.ACTIVE_RUNS_LOCK:
         poc.ACTIVE_RUNS.clear()
+
+
+def test_queue_status_finds_active_run_older_than_history_window(monkeypatch, tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
+    poc.init_poc_storage(db_path)
+
+    active = {
+        "run_id": "a" * 32,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "status": "running",
+        "operator": "analyst",
+        "owner": "analyst",
+        "reason": "Long-running retained scan",
+        "originating_host": "nct-test",
+        "interface": "eth0",
+        "profile": "standard",
+        "artifacts": [],
+    }
+    records = [active]
+    for index in range(205):
+        records.append(
+            {
+                **active,
+                "run_id": f"{index:032x}",
+                "created_at": f"2026-10-04T23:{index // 60:02d}:{index % 60:02d}+00:00",
+                "status": "completed",
+            }
+        )
+    with poc.connect_database(db_path) as db:
+        db.executemany(
+            """
+            INSERT INTO scan_runs (
+                run_id, created_at, status, operator_name, reason,
+                originating_host, interface_name, profile, manifest_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    item["run_id"], item["created_at"], item["status"],
+                    item["operator"], item["reason"], item["originating_host"],
+                    item["interface"], item["profile"], json.dumps(item),
+                )
+                for item in records
+            ],
+        )
+
+    with TestClient(app) as client:
+        response = client.get("/api/scan-runs/queue/status")
+
+    assert response.status_code == 200
+    queue = response.json()
+    assert queue["active_count"] == 1
+    assert queue["queued_count"] == 0
+    assert [item["run_id"] for item in queue["runs"]] == [active["run_id"]]

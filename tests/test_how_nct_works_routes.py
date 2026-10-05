@@ -55,7 +55,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Saved Network" in html and "Network Scope" in html
     assert "choose the Network Scope that gives future scans" in html
     assert "affects future scans only" in html
-    assert "offline Exploit-DB matches are candidates for analyst validation" in html
+    assert "Hunt automatically compares retained product and version fingerprints" in html
+    assert "candidates for analyst validation" in html
+    assert "never executes exploit code or contacts a scanned system" in html
     assert "Viewer accounts can read shared evidence" in html
     assert "Current scan and device-configuration comparisons are available" in html
     assert "Processed evidence by Network Scope" in html

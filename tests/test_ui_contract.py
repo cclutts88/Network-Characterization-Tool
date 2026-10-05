@@ -218,7 +218,11 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "Export scan report" in SHELL_SCRIPT
     assert "currently open scan analysis and its active host filters" in SHELL_SCRIPT
     assert "A portable run becomes retained NCT evidence only after its completed XML files" in SHELL_SCRIPT
-    assert "choose Active Scans, and review the held run" in SHELL_SCRIPT
+    assert "Waiting scans stay in the separate Pending Scans dropdown" in SHELL_SCRIPT
+    assert "Reviewing a waiting scan does not replace or change the active scan" in SHELL_SCRIPT
+    assert "Opens or closes the waiting-scan list" in SHELL_SCRIPT
+    assert "Shows the saved target, profile version" in SHELL_SCRIPT
+    assert "Removes this waiting scan before it begins network activity" in SHELL_SCRIPT
 
 
 def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
@@ -382,9 +386,18 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Chunks never overlap" in html
     assert 'id="currentProgress"' in html
     assert 'id="currentRunPanel"' in html
+    assert 'id="pendingScansPanel"' in html
+    assert "Waiting scans run in order after the active scan" in html
+    assert "Cancel pending scan" in html
+    assert "waiting=runs.filter(run=>run.status==='queued')" in html
+    assert "active=runs.find(run=>['running','awaiting_fallback_approval'].includes(run.status))" in html
+    assert "openWaiting=new Set" in html
+    assert "item.open=openWaiting.has(item.dataset.queueRun)" in html
+    assert "Waiting scans are shown below and will start in queue order." in html
+    assert "function showActiveEmpty" in html
     assert "currentLive=false" in html
-    assert "if(!currentLive)loadActiveRun()" in html
-    assert "$('currentRunPanel').classList.add('hidden')" in html
+    assert "currentLive=['running','awaiting_fallback_approval'].includes(state)" in html
+    assert "currentLive=['queued','running','awaiting_fallback_approval'].includes(state)" not in html
     assert 'role="progressbar"' in html
     assert 'id="currentHostsLabel">confirmed responsive hosts' in html
     assert "addresses in scope" in html
@@ -427,9 +440,14 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "timeout_seconds:timeoutSeconds()" in html
     assert "Live update" in html
     assert 'id="currentRunHeading"' in html
-    assert "'Active run':'Current run'" in html
+    assert "$('currentRunHeading').textContent='Active scan'" in html
     assert "async function loadActiveRun()" in html
-    assert "/api/scan-runs?limit=200" in html
+    assert "/api/scan-runs/queue/status" in html
+    assert "queueLoadRevision=0,activeViewRevision=0,activeStatusRequestRevision=0,activeStatusAppliedRevision=0" in html
+    assert "function claimActiveStatus(revision)" in html
+    assert "ownsActiveStatus=claimActiveStatus(statusRevision)" in html
+    assert "function startActiveView(run)" in html
+    assert "data-history-detail" in html
     assert "loadActiveRun()" in html
     assert "exact_execution_command" in html
     assert 'id="savedNetworkPanel"' in html
@@ -838,8 +856,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="osFilter"' in html
     assert 'id="subnetFilter"' in html
     assert 'id="deviceTypeFilter"' in html
-    assert html.index("Network filters") < html.index("SearchSploit enrichment")
-    assert "Filters apply to SearchSploit results" in html
+    assert html.index("Network filters") < html.index("CVE and candidate filters")
+    assert "Filters apply to the Systems table" in html
     assert 'id="networkFiltersPanel"' in html
     assert 'id="activeFilterSummary"' in html
     assert 'id="searchsploitFilterSummary"' in html
@@ -860,7 +878,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'class="panel evidence-guide"' in html
     assert '<details class="panel evidence-guide" data-workspace-card="evidence-guide" open>' in html
     assert '<details class="panel" data-workspace-card="capability-datasets" open><summary>Capability datasets</summary>' in html
-    assert "One active list at a time" in html
+    assert "Hosts and services stay in one bulk table" in html
     assert "function setSystemView(view)" in html
     assert "function renderHostInventoryRows()" in html
     assert "hosts:[],findings:[]" in html
@@ -914,8 +932,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "All datasets" in html
     assert "data.datasets||data.categories||[]" in html
     assert "Host dataset changes" in html
-    assert "SearchSploit enrichment" in html
-    assert 'id="searchsploitRun"' in html
+    assert "CVE and candidate filters" in html
+    assert 'id="searchsploitPanel"' not in html
+    assert 'id="searchsploitRun"' not in html
+    assert "automatically associates retained product and version fingerprints" in html
     assert 'id="matchedOnly"' in html
     assert 'id="cveFilter"' in html
     assert 'id="cveYearFilter"' in html
@@ -925,13 +945,23 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "Service exposure evidence" in html
     assert "data.exposure_disclaimer" in html
     assert 'id="cveSummary"' in html
-    assert "SearchSploit CVEs / common names" in html
-    assert "SearchSploit candidate title" in html
+    assert "Hosts and services stay in one bulk table" in html
+    assert "CVE candidates" in html
+    assert "candidateInlineMarkup" in html
+    assert "ensureCandidateColumns" in html
+    assert 'data-hostkey="${esc(item.host_key||\'\')}" data-ip=' in html
+    assert "slot.dataset.hostkey?matches.filter" in html
+    assert "inline-cve-detail" in html
     assert "configureCveFilters" in html
     assert "applySearchSploitFilters" in html
     assert "renderHostCveDropdowns" in html
     assert "/api/searchsploit/status" in html
     assert "/api/searchsploit/hunting/network" in html
+    assert "void runSearchSploit(null,revision)" in html
+    assert "void runSearchSploit(id,revision)" in html
+    assert "function beginHuntSelection()" in html
+    assert "searchsploitRevision" in html
+    assert "await loadSearchSploitStatus()" in html
     assert "function responseJson(response,label='Request')" in html
     assert "returned an empty server response" in html
     assert "returned an unreadable server response" in html
@@ -942,10 +972,11 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "/api/searchsploit/database/update-online" in html
     assert "/api/searchsploit/database/upload" in html
     assert "/api/searchsploit/database/rollback/" in html
-    assert "Potential product/version matches require analyst validation" in html
+    assert "analyst-review leads, not proof of a vulnerability" in html
     assert 'class="finding-match-slot"' in html
-    assert "Potential matches: ${Number(match.candidate_count||0)}" in html
-    assert "openSearchSploitMatch" in html
+    assert "finding-host-match-slot" in html
+    assert "Offline product/version associations for analyst review" in html
+    assert "openSearchSploitMatch" not in html
     assert "contains no specific product/version fingerprints to search" in html
     assert "Service/version detection enabled" in html
     assert '/hunting?run=${encodeURIComponent(runId)}' in analysis_html
@@ -1265,7 +1296,9 @@ def test_scan_history_uses_open_details_for_retained_evidence_files():
     assert ".history-run-actions{display:flex;flex-wrap:nowrap" in html
     assert '<div class="history-run-actions"><button class="secondary" data-preset=' in html
     assert '>Use preset</button><button class="secondary" data-network=' in html
-    assert 'title="Open run details and retained evidence files">Open details</button>' in html
+    assert 'title="Open retained run details and evidence files here">Open details</button>' in html
+    assert "async function selectRun(id,button)" in html
+    assert "It does not replace the live Active Scan view or rerun Nmap" in SHELL_SCRIPT
     assert "Load evidence files" not in html
     assert "data-evidence=" not in html
     assert "async function loadScanEvidence" not in html
