@@ -1947,6 +1947,27 @@ high-volume passive evidence.
    retain legacy `show history` readability, and issue a distinct `r2` image and transfer
    bundle from the merged, fully tested commit. Preserve `r1` as a prior local candidate;
    do not silently replace its recorded digest or checksum.
+   2026-10-04 Range `r2` release-candidate preparation and guarded installation complete:
+   the remote work was merged without rewriting history, legacy and full Cisco history
+   remain readable. The foundation branch was pushed at `d75fb67`; the exact
+   `0.16.0-range-20261004-r2` image from that commit was packaged, checksum-verified
+   and installed on the Range. The full suite
+   passed **1007 with 6 skipped**, the focused device-history recovery suite passed
+   **52 tests**, and the Range-script suite passed **9 tests**. The independent reviewer
+   returned **CLEAR — DOCUMENTED DEVIATION** for the dual Cisco-history compatibility
+   path and retained multi-site planning boundary. The guarded upgrade preserved the
+   `/var/lib/nct/data` bind mount, retained a checksum-backed data backup and the stopped
+   prior container for rollback, and reported the exact expected version, build and
+   source commit. Pre/post inventories matched at **47,950 files**, **6 analyst users**,
+   **12 Saved Networks**, **8 scan runs**, **9 scan profiles** and **1 schedule**; startup
+   logs contained no repeated error, and the separate legacy terrain containers remained
+   running. Read-only inspection found all eight historical scan runs complete and still
+   unregistered in the Artifact Registry. They remain visible and are parsed directly
+   from retained XML until the operator explicitly tests storage backfill; no backfill,
+   compaction or saved-analysis action was run during installation. Browser login and
+   operator feature acceptance remain pending by user direction, so this is an installed,
+   backend-verified Range build rather than completed operational acceptance or promotion
+   to `main`.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled
