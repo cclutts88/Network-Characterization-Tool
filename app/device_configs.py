@@ -2317,12 +2317,19 @@ def device_collection_summary(run_id: str, config_dir: Path | None = None) -> di
         run_dir, ["stdout.txt"] + _configuration_source_names(run_dir)
     )
     history_path = run_dir / "command-history.txt"
+    embedded_sections = _labeled_command_sections(configuration_text)
+    configured_history_command = str(manifest.get("history_command") or "")
+    embedded_history_text = (
+        embedded_sections.get(configured_history_command, "")
+        if configured_history_command
+        else embedded_sections.get(
+            "show history all", embedded_sections.get("show history", "")
+        )
+    )
     history_text = (
         _read_text_prefix(history_path, MAX_RESPONSE_OUTPUT_CHARS)
         if history_path.is_file()
-        else _labeled_command_sections(configuration_text).get(
-            str(manifest.get("history_command") or "show history all"), ""
-        )
+        else embedded_history_text
     )
     return calculate_device_collection_summary(
         run_id=run_id,

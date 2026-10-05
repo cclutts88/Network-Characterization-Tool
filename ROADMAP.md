@@ -1993,6 +1993,14 @@ high-volume passive evidence.
    - identity
 9. Device-config persistence/comparison/deletion.
    - [x] Cisco IOS/IOS XE collection uses `show history all` for retained command-history evidence rather than `show history`, which only reflects the current EXEC-session buffer. Keep vendor/platform history commands separate and preserve legacy collection readability.
+   - 2026-10-04 integration validation correction: after reconciling the remote
+     Cisco history work with the foundation pipeline branch, full-suite validation found
+     that replacing the missing-manifest fallback with only `show history all` broke
+     verified summaries for retained legacy evidence labeled `show history`. New
+     collections keep the explicit `show history all` command in their manifest. When an
+     older manifest has no command identity, the compatibility reader accepts either
+     embedded label, preferring `show history all` when both exist. This restores
+     file-wrapper/direct-calculation equivalence without reducing new collection coverage.
 10. Collapsible/filterable route/config displays.
 11. Consolidate TXT/IP-by-OS and related exports into Export Manager.
 
