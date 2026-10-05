@@ -843,6 +843,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     analysis_html = analysis_page().body.decode()
     device_html = device_analysis_page().body.decode()
     html = hunting_page().body.decode()
+    storage_html = storage_page().body.decode()
     assert '<a href="/hunting">Hunt</a>' not in analysis_html
     assert '<a href="/hunting">Hunt</a>' not in device_html
     assert "title:'Hunt',icon:'hunt'" in SHELL_SCRIPT
@@ -966,12 +967,27 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "returned an empty server response" in html
     assert "returned an unreadable server response" in html
     assert "await timedJson(endpoint,{method:'POST'},'SearchSploit enrichment',180000)" in html
-    assert 'id="searchsploitOnline"' in html
-    assert 'id="searchsploitUpload"' in html
-    assert 'id="searchsploitRollback"' in html
-    assert "/api/searchsploit/database/update-online" in html
-    assert "/api/searchsploit/database/upload" in html
-    assert "/api/searchsploit/database/rollback/" in html
+    assert 'id="manageExploitReferences"' in html
+    assert 'href="/settings/system-health#offlineExploitDb"' in html
+    assert "manageExploitReferences:['Manage offline exploit references'" in SHELL_SCRIPT
+    assert "'/hunting':{" in SHELL_SCRIPT
+    assert "This shortcut only opens settings" in SHELL_SCRIPT
+    assert 'id="searchsploitOnline"' not in html
+    assert 'id="searchsploitUpload"' not in html
+    assert 'id="searchsploitRollback"' not in html
+    assert 'id="offlineExploitDb"' in storage_html
+    assert 'id="searchsploitOnline"' in storage_html
+    assert 'id="searchsploitUpload"' in storage_html
+    assert 'id="searchsploitRollback"' in storage_html
+    assert "/api/searchsploit/database/update-online" in storage_html
+    assert "/api/searchsploit/database/upload" in storage_html
+    assert "/api/searchsploit/database/rollback/" in storage_html
+    assert "No rescan or device contact occurs" in storage_html
+    assert "searchsploitUploadFile:['Choose an offline Exploit-DB archive'" in SHELL_SCRIPT
+    assert "Choosing a file alone does not upload or activate it" in SHELL_SCRIPT
+    assert "searchsploitVersions:['Choose an earlier reference version'" in SHELL_SCRIPT
+    assert "Selection alone changes nothing" in SHELL_SCRIPT
+    assert "keeps earlier versions for rollback" in open("docs/AIR_GAPPED_RANGE_QUICKSTART.md", encoding="utf-8").read()
     assert "analyst-review leads, not proof of a vulnerability" in html
     assert 'class="finding-match-slot"' in html
     assert "finding-host-match-slot" in html

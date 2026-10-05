@@ -242,7 +242,7 @@ Replace `RANGE_IP` in the last command. Confirm all of the following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-20260927-r1`;
+- the build ID is `0.16.0-range-20261004-r1`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
@@ -295,6 +295,8 @@ account's earlier sessions, and returns NCT to its prior running state.
 
 ## Add offline SearchSploit data later
 
-Upload the unextracted official Exploit-DB archive from **Hunt -> SearchSploit
-enrichment -> Manage offline database**. NCT does not require Internet access
-for this import.
+Upload the unextracted official Exploit-DB archive from **Settings -> System
+Health -> Offline Exploit-DB references**. Hunt also provides a **Manage offline
+exploit references** shortcut beside **Refresh network view**. NCT validates and
+stages the archive before activation, keeps earlier versions for rollback, and
+does not require Internet access for this import.

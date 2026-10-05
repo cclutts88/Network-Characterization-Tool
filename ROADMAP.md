@@ -1821,6 +1821,34 @@ high-volume passive evidence.
    and offline candidate associations remain review leads rather than confirmed
    vulnerabilities. This is foundation development acceptance only; it is not Range,
    mission, stable-main or production acceptance.
+   2026-10-04 offline exploit-reference maintenance relocation and Range-package
+   preparation start: move full Exploit-DB update, air-gapped upload, saved-version
+   activation and rollback controls from Hunt filters to Settings / System Health.
+   Keep the active database readiness visible in Hunt and add an obvious shortcut beside
+   Refresh network view. The maintenance page must explain staging, activation, rollback,
+   and that reference updates neither rescan the network nor change retained evidence.
+   After browser, focused, full-suite, novice and independent review, build an immutable
+   air-gapped package with the exact tested NCT and Caddy images plus a SHA-256 checksum.
+   Package preparation does not establish Range readiness; target installation, HTTPS,
+   login, password reset, offline database upload and live device-field acceptance remain
+   separate checks on the Range.
+   2026-10-04 offline exploit-reference relocation implementation complete and package
+   source candidate validated: Hunt keeps database readiness beside its automatic CVE
+   filters and adds Manage offline exploit references beside Refresh network view. Full
+   online update, air-gapped archive upload, staged activation and saved-version rollback
+   now live in the first System Health section with a four-step operator explanation.
+   The built-in README, air-gapped guide and contextual Operator Guide use the new path.
+   Novice review initially found three generic hover topics; the archive selector,
+   previous-version selector and Hunt shortcut were corrected and rechecked **PASS**.
+   The independent gate is **CLEAR — DOCUMENTED DEVIATION** because System Health remains
+   administrator-only while the existing update API authorization contract is unchanged.
+   Focused checks passed **100 tests**, final script/UI/API checks passed **79 tests**, the
+   full Docker suite passed **1007 with 6 skipped**, the Hunt runtime regression and every
+   Range shell syntax check passed, browser navigation and installed-database status were
+   verified, the browser console was clean, and `git diff --check` passed. Included Range
+   scripts now agree on `network-characterization-tool:0.16.0-range-20261004-r1`.
+   Building and checksumming the immutable image bundle remains the next packaging step;
+   target-Range acceptance remains pending.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled
