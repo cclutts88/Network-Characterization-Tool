@@ -1849,6 +1849,61 @@ high-volume passive evidence.
    scripts now agree on `network-characterization-tool:0.16.0-range-20261004-r1`.
    Building and checksumming the immutable image bundle remains the next packaging step;
    target-Range acceptance remains pending.
+   2026-10-04 final operator-acceptance corrections start: before sealing the Range
+   package candidate, keep each Least Frequency Analysis table header above its first
+   result at every scroll position. Also remove the ambiguous Hunt `Port / source`
+   wording by labeling the column simply `Port` and naming the detected service and
+   product fingerprint separately, with an explanation visible in the Systems
+   workspace. Re-run browser, focused, full-suite, novice and independent quality gates
+   before packaging.
+   2026-10-04 Hunt Inventory CVE disclosure revision start: replace the expanded host's
+   flat CVE chips and candidate list with a compact hierarchy grouped first by observed
+   port/protocol, then by individual CVE. Keep the complete candidate set available,
+   retain candidates without a CVE in a labeled group under the related port, and keep
+   every port and CVE collapsed until the analyst chooses to open it. Each port must also
+   offer one control to show or collapse all of that port's CVEs at once.
+   2026-10-04 final operator-acceptance corrections implemented and independently
+   reviewed by the novice operator **PASS**, final quality gate pending: LFA peer-group
+   headers now remain in normal table order above their first result at initial load and
+   after scrolling. Hunt labels the two evidence columns `Port` and `Service / product
+   fingerprint`, explains both directly in Systems, and groups every host's candidate
+   references under collapsed port/protocol and CVE levels. A per-port control opens or
+   collapses every CVE for that port without opening other ports; candidate references
+   lacking a CVE remain in a separate collapsed group. The Operator Guide explains port,
+   CVE, show-all and collapse actions. Focused UI checks passed **62 tests**, the Hunt
+   runtime regression passed, the full Docker suite passed **1007 with 6 skipped**, live
+   browser interaction verified 28 CVEs and 86 candidates grouped across four ports with
+   14 CVEs under 80/tcp, both browser consoles were clean, and `git diff --check` passed.
+   These are foundation development checks; Range installation and acceptance remain
+   pending, and the air-gapped package will be rebuilt only after the final reviewer gate.
+   2026-10-04 final Hunt table acceptance revision start: user review found that the CVE
+   cell compressed into a narrow, tall column in the Capabilities view and that Dataset
+   badges required a trip back to the filter panel. Give candidate cells a readable
+   minimum width with controlled wrapping and horizontal table overflow, and make every
+   Dataset badge apply the existing Dataset filter in place. Selecting the active badge
+   again must clear that filter; the active badge and filter summary must stay in sync.
+   2026-10-04 final Hunt table acceptance revision implemented, novice recheck and final
+   quality gate pending: Dataset badges now apply or clear the existing filter and update
+   its visible summary and pressed state. Live interaction narrowed 18 combined host rows
+   to 12 individual Remote Access & Administration findings, then restored all 18 rows on
+   the second selection. Candidate cells now reserve at least 340 pixels, use a 1440-pixel
+   scrollable table floor, wrap long reference text within the cell, and stretch the
+   per-port control across the available width; the measured live example rendered at
+   about 400 pixels instead of the earlier narrow stack. The focused UI suite passed
+   **62 tests**, the expanded Hunt runtime regression passed, the full Docker suite passed
+   **1007 with 6 skipped**, the live browser console was clean, and `git diff --check`
+   passed. The Operator Guide explains that Dataset badges change the visible filter only.
+   2026-10-04 final operator-acceptance quality gate complete: novice operator recheck
+   **PASS** confirmed the Dataset apply/clear cycle, active state, guide explanation,
+   readable large and small candidate groups, horizontal scrolling, and clear Port and
+   Service / product fingerprint labels in both Capabilities and Inventory. The
+   independent reviewer returned **CLEAR — DOCUMENTED DEVIATION** after 67 independent
+   tests, the expanded Hunt runtime check and diff checks. The documented deviation is
+   the user-directed replacement of the prior flat candidate expansion with nested
+   port/CVE disclosure plus direct Dataset badge filtering; exact references, filters,
+   candidate-only semantics and retained evidence are preserved. Stable `main` remains
+   clean. This source is accepted for the next immutable package build; Range installation
+   and operational acceptance remain pending.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled

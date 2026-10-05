@@ -868,6 +868,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "after all active filters" in html
     assert 'id="hostRows"' in html
     assert 'id="systemsPanel" data-workspace-card="systems"' in html
+    assert '<th title="The observed port and protocol. Configuration-only findings say Device configuration instead of showing a port.">Port</th>' in html
+    assert '>Service / product fingerprint</th>' in html
+    assert "Port / source" not in html
     assert 'id="capabilityViewTab"' in html
     assert 'id="inventoryViewTab"' in html
     assert 'id="capabilityView" role="tabpanel"' in html
@@ -909,7 +912,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "content-visibility:auto" in html
     assert "finding${Number(item.finding_count||0)===1?'':'s'}" in html
     assert "capability classification${group.length===1?'':'s'} across" in html
-    assert "Apply a network filter to show one classification per row." in html
+    assert "Select a Dataset badge to filter, or use Network filters to show one classification per row." in html
     assert "Combined view · one entry per IP with all ports visible." in html
     assert "Filtered view · individual matching findings." in html
     assert "function osIdentity(item)" in html
@@ -953,6 +956,24 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'data-hostkey="${esc(item.host_key||\'\')}" data-ip=' in html
     assert "slot.dataset.hostkey?matches.filter" in html
     assert "inline-cve-detail" in html
+    assert "cve-port-group" in html
+    assert "cve-reference-group" in html
+    assert "Open a port, then a CVE" in html
+    assert "Candidates without CVE" in html
+    assert "candidatePortGroupMarkup" in html
+    assert "Show all CVEs for this port" in html
+    assert "Collapse all CVEs for this port" in html
+    assert "togglePortCves" in html
+    assert "event.target.closest?.('[data-cve-port-toggle]')" in html
+    assert "Review CVE candidates for one port" in SHELL_SCRIPT
+    assert "Review references for one CVE" in SHELL_SCRIPT
+    assert "function datasetFilterButton(value)" in html
+    assert "data-dataset-filter" in html
+    assert "function applyDatasetFilter(button)" in html
+    assert "syncDatasetFilterButtons" in html
+    assert "Select the active Dataset badge again to clear it" in SHELL_SCRIPT
+    assert ".finding-match-slot,.finding-host-match-slot,.host-cve-slot{min-width:340px}" in html
+    assert "#capabilityView table{min-width:1440px}" in html
     assert "configureCveFilters" in html
     assert "applySearchSploitFilters" in html
     assert "renderHostCveDropdowns" in html
@@ -1943,6 +1964,8 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "members.length*(threshold/100)" in html
     assert "$('lfaThreshold').oninput=updateLfaThreshold" in html
     assert "renderNetworkOutliers" in html
+    assert ".outlier-group thead th{position:static;top:auto}" in html
+    assert html.index("<thead><tr><th>Uncommon port</th>") < html.index("<tbody>${unusual.map")
     assert 'id="networkChangesPanel"' in html
     assert 'id="loadNetworkChanges"' in html
     assert "/api/analysis/network-changes" in html
