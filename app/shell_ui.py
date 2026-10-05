@@ -368,9 +368,8 @@ SHELL_SCRIPT = r"""
       ]},
       {label:'Investigate',items:[
         {title:'Hunt',icon:'hunt',children:[
-          {title:'Timeline',planned:true,description:'Planned time-sliced view of retained scans, device evidence, and future Arkime observations.'},
+          {title:'Timeline',planned:true,description:'When available, Timeline will show when retained observations first appeared or changed across saved scans and device collections. Network Evidence remains the view of what the selected evidence currently reports.'},
           {href:'/hunting#huntOverview',title:'Network evidence',description:'Review hosts and services in one table. NCT associates offline CVE candidates with the related row automatically; expand that row to inspect the references without leaving the network evidence.'},
-          {href:'/hunting#systemsPanel',title:'Systems',description:'Filter the retained evidence and review the systems supporting each finding.'},
           {href:'/device-analysis#activityEvidenceSection',title:'Configuration activity',description:'Hunt one retained device collection line by line: distinguish commands matching the NCT plan from other activity and compare running configuration with startup configuration.'}
         ]},
         {title:'Reach',icon:'reach',children:[
@@ -389,7 +388,7 @@ SHELL_SCRIPT = r"""
     for(const group of groups){const section=make('section');section.className='nct-nav-section';const heading=make('div',group.label);heading.className='nct-section-label';section.append(heading);for(const item of group.items)appendNavItem(section,item,group.label);sidebar.append(section);}document.body.prepend(sidebar);
     const main=document.querySelector('body>main');
     const context=make('section');context.id='nct-page-context';context.setAttribute('aria-live','polite');context.innerHTML='<div class="nct-breadcrumb"></div><h1></h1><p></p>';main?.prepend(context);
-    const huntTimelinePlanned=make('section');huntTimelinePlanned.id='nct-hunt-timeline-planned';huntTimelinePlanned.hidden=true;huntTimelinePlanned.setAttribute('aria-label','Timeline planned capability');huntTimelinePlanned.innerHTML='<strong>Timeline</strong><span>A planned time-sliced view will connect retained scans, device evidence, and summarized Arkime observations.</span><span class="nct-planned-badge">PLANNED</span>';context.after(huntTimelinePlanned);
+    const huntTimelinePlanned=make('section');huntTimelinePlanned.id='nct-hunt-timeline-planned';huntTimelinePlanned.hidden=true;huntTimelinePlanned.setAttribute('aria-label','Timeline planned capability');huntTimelinePlanned.innerHTML='<strong>Timeline</strong><span>When available, Timeline will show when retained observations first appeared or changed across saved scans and device collections. Network Evidence remains the view of what the selected evidence currently reports.</span><span class="nct-planned-badge">PLANNED</span>';context.after(huntTimelinePlanned);
     const activityBanner=header.querySelector('.activity-origin-banner');if(activityBanner&&main)huntTimelinePlanned.after(activityBanner);
     const landmarks={
       configurationUpload:'Upload existing configuration results',deviceHistory:'Previously collected network devices',scanHistory:'Scan history',
@@ -404,7 +403,7 @@ SHELL_SCRIPT = r"""
       '/hostnames':{candidates:'main > section.panel',support:{}},
       '/analysis':{candidates:'main > section.panel,main > details.panel',support:{networkOverview:['analysisPanel'],xmlImport:['analysisPanel']}},
       '/device-analysis':{candidates:'main > section.panel,#analysisPanel > section.panel,#analysisPanel > .two-column',support:{deviceEvidencePicker:['deviceOverviewSection'],activityEvidenceSection:['deviceEvidencePicker'],routingEvidenceSection:['deviceEvidencePicker'],policyEvidenceSection:['deviceEvidencePicker'],comparisonPanel:['deviceEvidencePicker']}},
-      '/hunting':{candidates:'main > section.panel,#huntPanel > .panel,main > details.panel',support:{huntOverview:['huntEvidenceOverview','networkFiltersPanel','systemsPanel'],systemsPanel:['huntOverview','networkFiltersPanel']}},
+      '/hunting':{candidates:'main > section.panel,#huntPanel > .panel,main > details.panel',support:{huntOverview:['huntEvidenceOverview','networkFiltersPanel','systemsPanel']}},
       '/reachability':{candidates:'main > section.panel,main > details.panel,main > section#result',support:{reachAssessment:['result','reachOutcomeGuide']}},
       '/network-map':{candidates:'main > #mapSummary,main > #mapLayoutPanel,main > #mapWorkspace,main > #mapFilesPanel',support:{mapWorkspace:['mapSummary','mapLayoutPanel']}}
     };

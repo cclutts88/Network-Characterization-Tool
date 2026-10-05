@@ -802,7 +802,8 @@ def test_planned_arkime_upload_and_hunt_timeline_are_visible_but_not_actionable(
     assert "if(task.planned)" in SHELL_SCRIPT
     assert "row.setAttribute('aria-disabled','true')" in SHELL_SCRIPT
     assert "huntTimelinePlanned.hidden=task?.parent!=='Hunt'" in SHELL_SCRIPT
-    assert "A planned time-sliced view will connect retained scans" in SHELL_SCRIPT
+    assert "Timeline will show when retained observations first appeared or changed" in SHELL_SCRIPT
+    assert "Network Evidence remains the view of what the selected evidence currently reports" in SHELL_SCRIPT
 
 
 def test_device_collections_uses_combined_router_firewall_icon():
@@ -858,7 +859,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="subnetFilter"' in html
     assert 'id="deviceTypeFilter"' in html
     assert html.index("Network filters") < html.index("CVE and candidate filters")
-    assert "Filters apply to the Systems table" in html
+    assert "Filters apply to the host and service tables below" in html
     assert 'id="networkFiltersPanel"' in html
     assert 'id="activeFilterSummary"' in html
     assert 'id="searchsploitFilterSummary"' in html
@@ -877,6 +878,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="inventoryView" role="tabpanel"' in html
     assert 'id="inventorySummary"' in html
     assert "Network evidence overview" in html
+    assert "<h2>Hosts and services</h2>" in html
     assert 'id="sources"' not in html
     assert "$('sources').innerHTML=sourceLinks(source)" not in html
     assert 'class="panel evidence-guide"' in html

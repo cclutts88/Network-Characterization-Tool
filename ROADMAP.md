@@ -1968,6 +1968,22 @@ high-volume passive evidence.
    operator feature acceptance remain pending by user direction, so this is an installed,
    backend-verified Range build rather than completed operational acceptance or promotion
    to `main`.
+   2026-10-04 Hunt navigation consolidation start: remove the redundant `Systems`
+   sidebar destination while retaining its complete Capabilities and Inventory tables
+   inside `Network evidence`. Keep the existing `systemsPanel` anchor for compatible
+   direct links. The planned Timeline will use related filters to explain when evidence
+   appeared or changed; it complements rather than replaces the current-evidence tables.
+   2026-10-04 Hunt navigation consolidation complete: the separate `Systems` sidebar
+   destination is removed, while the full Capabilities and Inventory views remain under
+   `Network evidence` as `Hosts and services`. Existing `#systemsPanel` links still open
+   the retained section. Timeline guidance now tells novice analysts that it will answer
+   when observations first appeared or changed, while Network Evidence answers what the
+   selected evidence currently reports. Validation: 71 focused UI tests and the full
+   suite (1007 passed, 6 skipped); browser checks covered both table views, the legacy
+   link, final explanatory text, and a clean console. Novice review passed after the
+   wording improvement. Independent quality gate: CLEAR (final recheck: 62 UI tests).
+   This is committed development work on `foundation/evidence-engine-v2`; the installed
+   Range image remains unchanged until the next deliberately packaged release.
 2. Preserve/fix global and scan-specific NO-STRIKE enforcement.
    2026-09-27 No-Strike enforcement review start: verify the shared and
    scan-specific exclusions across safety previews, direct queued scans, scheduled
