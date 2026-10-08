@@ -203,10 +203,20 @@ A roadmap item should only be marked complete when:
   skip**; complete Docker suite: **1,022 passed, 10 skipped**; host Hunt and Device
   History runtime suites and diff checks passed; disposable browser checks confirmed
   current wording and clean responses. This item remains foundation-only.
-- [ ] Complete the confirmed corrections, record each disposition in the field-feedback
-  register, pass the independent quality gate, and commit the tested foundation-only
-  changes. This cycle does not promote changes to `main` or replace the installed Range
-  image.
+- [x] Seventh correction audit completed for Hunt presentation reports #5, #9, #10,
+  #13, #14, and #37. Focused evidence identity remains visible without covering
+  results; Dataset badges preview the exact matching services and ports for that host;
+  MAC provenance remains linked to its retained source; nonstandard-port labels and
+  supporting ports share one visual marker; headings precede data; guidance and dataset
+  catalogs begin collapsed; and Exposure Reports group retained paths by source,
+  destination address, then numeric port/protocol without merging TCP and UDP or
+  implying a confirmed vulnerability. Report #14 is deliberately bounded to Hunt;
+  density on other large-data pages remains subject to their own audits. Novice
+  workflow: **CLEAR**; independent quality gate: **CLEAR** after two preview-fixture
+  integrity findings were corrected. Focused Docker suite: **86 passed, 2 skipped**;
+  complete Docker suite: **1,022 passed, 10 skipped**; both host runtime suites, browser
+  rendering and console checks, and diff validation passed. The changes remain
+  foundation-only; they are not on `main` and do not replace the installed Range image.
 
 ### Deviation history
 

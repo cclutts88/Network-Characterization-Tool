@@ -186,3 +186,58 @@ await eval(`(() => {
 })()`);
 
 console.log("Exposure Report UI runtime regressions passed");
+
+await eval(`(() => {
+  const esc=value=>String(value??'');
+  const outcomeClass=value=>String(value||'unknown');
+  const reportPath=()=>'<div class="path"></div>';
+  const reportEvidence=()=>'<div class="evidence"></div>';
+  const candidateMarkup=()=>'<p class="meta">saved candidates</p>';
+  ${handler("reportResult")}
+  ${handler("reportDestinationGroups")}
+  const services=new Map([
+    ['svc-443',{service_key:'svc-443',ip:'10.0.0.10',hostname:'web',port:443,protocol:'tcp',service:'https',searchsploit:{candidate_count:2}}],
+    ['svc-53-udp',{service_key:'svc-53-udp',ip:'10.0.0.10',hostname:'web',port:53,protocol:'udp',service:'domain'}],
+    ['svc-53-tcp',{service_key:'svc-53-tcp',ip:'10.0.0.11',hostname:'dns',port:53,protocol:'tcp',service:'domain'}]
+  ]);
+  const results=[
+    {service_key:'svc-443',outcome:'Allowed',retained_objects:{}},
+    {service_key:'svc-53-udp',outcome:'Routed',retained_objects:{}},
+    {service_key:'svc-53-tcp',outcome:'Blocked',retained_objects:{}}
+  ];
+  const html=reportDestinationGroups(results,services,'source-a');
+  assert.equal((html.match(/class="report-destination"/g)||[]).length,2,'results must group by exact destination address');
+  assert.equal((html.match(/class="report-result"/g)||[]).length,3,'every evaluated path must remain present');
+  assert.ok(html.indexOf('10.0.0.10')<html.indexOf('10.0.0.11'));
+  assert.ok(html.indexOf('53\/udp')<html.indexOf('443\/tcp'),'ports must sort numerically within a destination');
+  assert.match(html,/53\\/tcp/,'TCP and UDP identities must remain distinct');
+  assert.match(html,/data-reach-source="source-a"/);
+  assert.match(html,/data-reach-service="svc-443"/);
+})()`);
+
+await eval(`(() => {
+  const hiddenState=()=>{const values=new Set();return{toggle:(name,force)=>force?values.add(name):values.delete(name),contains:name=>values.has(name)}};
+  const row=(outcome,candidates)=>({dataset:{outcome,candidates},classList:hiddenState()});
+  const allowedCandidate=row('Allowed','yes'),blocked=row('Blocked','no'),otherSource=row('Allowed','no');
+  const destination=rows=>({classList:hiddenState(),querySelectorAll:selector=>selector==='.report-result'?rows:[]});
+  const destinationA=destination([allowedCandidate,blocked]),destinationB=destination([otherSource]);
+  const source=(id,destinations)=>{const count={textContent:''};return{dataset:{source:id},classList:hiddenState(),count,querySelectorAll:selector=>selector==='.report-destination'?destinations:[],querySelector:selector=>selector==='.visible-count'?count:null}};
+  const sourceA=source('source-a',[destinationA]),sourceB=source('source-b',[destinationB]);
+  const controls=new Map([
+    ['reportSource',{value:'source-a'}],['reportOutcome',{value:'Allowed'}],['reportCandidates',{checked:true}],['reportFilterCount',{textContent:''}]
+  ]);
+  const $=id=>controls.get(id);
+  const document={querySelectorAll:selector=>selector==='.report-source'?[sourceA,sourceB]:[]};
+  const exposureReport={evaluated_path_count:3};
+  ${handler("applyReportFilters")}
+  applyReportFilters();
+  assert.equal(allowedCandidate.classList.contains('hidden'),false);
+  assert.equal(blocked.classList.contains('hidden'),true);
+  assert.equal(otherSource.classList.contains('hidden'),true);
+  assert.equal(destinationA.classList.contains('hidden'),false);
+  assert.equal(destinationB.classList.contains('hidden'),true);
+  assert.equal(sourceA.classList.contains('hidden'),false);
+  assert.equal(sourceB.classList.contains('hidden'),true);
+  assert.equal(sourceA.count.textContent,'1 shown');
+  assert.equal(controls.get('reportFilterCount').textContent,'1 of 3 evaluated paths shown.');
+})()`);

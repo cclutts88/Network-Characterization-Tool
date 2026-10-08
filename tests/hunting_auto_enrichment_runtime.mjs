@@ -141,3 +141,37 @@ await eval(`(() => {
 })()`);
 
 console.log("Hunt saved candidate runtime regressions passed");
+
+await eval(`(() => {
+  const controls=new Map([['category',{value:''}],['datasetPreview',{innerHTML:''}]]);
+  const $=id=>controls.get(id);
+  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let datasetPreviewByName=new Map();
+  ${syncHandler("datasetPreviewKey")}
+  ${syncHandler("prepareDatasetPreview")}
+  ${syncHandler("datasetPreviewText")}
+  ${syncHandler("showDatasetPreview")}
+  ${syncHandler("resetDatasetPreview")}
+  ${syncHandler("datasetFilterButton")}
+  ${syncHandler("findingTransport")}
+  ${syncHandler("findingTransportMarkup")}
+  prepareDatasetPreview([
+    {host_key:'scope-a|10.0.0.1',category:'Web Applications & APIs',port:443,protocol:'tcp',service:'https',product:'nginx',version:'1.25'},
+    {host_key:'scope-b|10.0.0.2',category:'Web Applications & APIs',port:8080,protocol:'tcp',service:'http',product:'other-server'},
+    {host_key:'scope-a|10.0.0.1',category:'Remote Access',port:22,protocol:'tcp',service:'ssh',product:'OpenSSH'}
+  ]);
+  assert.equal(datasetPreviewText('Web Applications & APIs'),'Web Applications & APIs: 443/tcp · https · nginx 1.25; 8080/tcp · http · other-server');
+  assert.equal(datasetPreviewText('Web Applications & APIs',{host_key:'scope-a|10.0.0.1'}),'Web Applications & APIs: 443/tcp · https · nginx 1.25');
+  assert.equal(datasetPreviewText('Web Applications & APIs',{host_key:'scope-b|10.0.0.2'}),'Web Applications & APIs: 8080/tcp · http · other-server');
+  const button=datasetFilterButton('Web Applications & APIs',{host_key:'scope-a|10.0.0.1'});
+  assert.match(button,/aria-describedby="datasetPreview"/);
+  assert.match(button,/data-dataset-preview=/);
+  assert.match(button,/443\\/tcp/);
+  assert.doesNotMatch(button,/8080\\/tcp/,"a host badge must not disclose another host's matching service");
+  showDatasetPreview('Remote Access',datasetPreviewText('Remote Access',{host_key:'scope-a|10.0.0.1'}));
+  assert.match(controls.get('datasetPreview').innerHTML,/22\\/tcp/);
+  const marked=findingTransportMarkup({port:8443,protocol:'tcp',service:'https',nonstandard_port:true});
+  assert.match(marked,/nonstandard-port-evidence/);
+  assert.match(marked,/◆ 8443\\/tcp/);
+  assert.equal(findingTransportMarkup({port:443,protocol:'tcp',nonstandard_port:false}),'<code>443/tcp</code>');
+})()`);

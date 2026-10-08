@@ -896,8 +896,12 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="sources"' not in html
     assert "$('sources').innerHTML=sourceLinks(source)" not in html
     assert 'class="panel evidence-guide"' in html
-    assert '<details class="panel evidence-guide" data-workspace-card="evidence-guide" open>' in html
-    assert '<details class="panel" data-workspace-card="capability-datasets" open><summary>Capability datasets</summary>' in html
+    assert '<details class="panel evidence-guide" data-workspace-card="evidence-guide">' in html
+    assert '<details class="panel" data-workspace-card="capability-datasets">' in html
+    assert 'id="huntContextBar" class="hunt-context hidden"' in html
+    assert 'id="datasetPreview"' in html
+    assert 'prepareDatasetPreview' in html
+    assert '<details class="panel" data-workspace-card="capability-datasets"><summary>Capability datasets</summary>' in html
     assert "Hosts and services stay in one bulk table" in html
     assert "function setSystemView(view)" in html
     assert "function renderHostInventoryRows()" in html
@@ -907,8 +911,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "position:sticky;top:var(--hunt-header-offset)" in html
     assert "scroll-margin-top:var(--hunt-result-offset" in html
     assert "stickyOffsetObserver.observe(pageHeader)" in html
-    assert "stickyOffsetObserver.observe(evidenceGuide)" in html
-    assert "headerOffset+guideHeight+14" in html
+    assert "stickyOffsetObserver.observe(huntContextBar)" in html
+    assert "headerOffset+contextHeight" in html
     assert 'id="resetNetwork" class="source-links hidden"' in html
     assert "function setNetworkResetVisible(active)" in html
     assert "setNetworkResetVisible(!networkWide)" in html
@@ -984,13 +988,15 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "event.target.closest?.('[data-cve-port-toggle]')" in html
     assert "Review CVE candidates for one port" in SHELL_SCRIPT
     assert "Review references for one CVE" in SHELL_SCRIPT
-    assert "function datasetFilterButton(value)" in html
+    assert "function datasetFilterButton(value,item=null)" in html
+    assert "function datasetPreviewKey(value,item=null)" in html
+    assert "data-dataset-preview" in html
     assert "data-dataset-filter" in html
     assert "function applyDatasetFilter(button)" in html
     assert "syncDatasetFilterButtons" in html
     assert "Select the active Dataset badge again to clear it" in SHELL_SCRIPT
-    assert ".finding-match-slot,.finding-host-match-slot,.host-cve-slot{min-width:340px}" in html
-    assert "#capabilityView table{min-width:1440px}" in html
+    assert ".finding-match-slot,.finding-host-match-slot,.host-cve-slot{min-width:0;max-width:100%}" in html
+    assert "#capabilityView table{min-width:980px;table-layout:fixed}" in html
     assert "configureCveFilters" in html
     assert "applySearchSploitFilters" in html
     assert "renderHostCveDropdowns" in html
@@ -2125,7 +2131,9 @@ def test_expandable_sections_share_one_left_chevron_language():
     assert ".comparison-panel>summary::before,.comparison-host>summary::before" in pages["analyze"]
     assert "details>summary::before" in pages["device-analysis"]
     assert ".searchsploit-result>summary::before,.exposure-detail>summary::before" in pages["hunt"]
-    assert ".report-source>summary::before,.report-result>summary::before" in pages["reach"]
+    assert ".report-source>summary::before,.report-destination>summary::before,.report-result>summary::before" in pages["reach"]
+    assert 'class="report-destination"' in pages["reach"]
+    assert "reportDestinationGroups" in pages["reach"]
     assert ".hidden-objects>summary::before" in pages["map"]
     assert ".evidence-files-drawer>summary::before" in pages["map"]
 
