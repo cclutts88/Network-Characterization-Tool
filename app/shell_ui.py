@@ -369,8 +369,8 @@ SHELL_SCRIPT = r"""
       {label:'Investigate',items:[
         {title:'Hunt',icon:'hunt',children:[
           {title:'Timeline',planned:true,description:'When available, Timeline will show when retained observations first appeared or changed across saved scans and device collections. Network Evidence remains the view of what the selected evidence currently reports.'},
-          {href:'/hunting#huntOverview',title:'Network evidence',description:'Review hosts and services in one table. NCT associates offline CVE candidates with the related row automatically; expand that row to inspect the references without leaving the network evidence.'},
-          {href:'/device-analysis#activityEvidenceSection',title:'Configuration activity',description:'Hunt one retained device collection line by line: distinguish commands matching the NCT plan from other activity and compare running configuration with startup configuration.'}
+          {href:'/hunting#huntOverview',title:'Network evidence',description:'Review hosts and services in one table. NCT loads the saved offline CVE candidate assessment prepared during supported ingestion; expand a related row to inspect references without recalculating them.'},
+          {href:'/device-analysis#activityEvidenceSection',title:'Device command history and changes',description:'Open one exact retained device collection. Review command-history text as leads, then compare collected running configuration with saved startup configuration.'}
         ]},
         {title:'Reach',icon:'reach',children:[
           {href:'/reachability#reachAssessment',title:'Path assessment',description:'Evaluate a source, destination, and service using retained routes, policy, NAT, Saved Networks, and observed hosts.'},

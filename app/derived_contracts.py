@@ -52,6 +52,16 @@ DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
     "parser_bundle": "device-summary-parsers:1",
 })
 
+SEARCHSPLOIT_CANDIDATES_FAMILY = "nmap_searchsploit_candidates"
+SEARCHSPLOIT_CANDIDATES_VERSION = "nmap-searchsploit-candidates:1"
+SEARCHSPLOIT_CANDIDATES_SCHEMA_VERSION = 1
+SEARCHSPLOIT_CANDIDATES_PARAMETERS = MappingProxyType({
+    "matching_contract": 1,
+    "query_source": "retained_nmap_product_version_fingerprints",
+    "max_distinct_queries": 40,
+    "max_candidates_per_query": 25,
+})
+
 
 SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
     NMAP_BASE_ANALYSIS_FAMILY: DerivedResultContract(
@@ -84,6 +94,17 @@ SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
             ),
             "manifest_semantics": ("canonical_json_sha256",),
             "selection_shape": ("canonical_json_sha256",),
+        }),
+    ),
+    SEARCHSPLOIT_CANDIDATES_FAMILY: DerivedResultContract(
+        family=SEARCHSPLOIT_CANDIDATES_FAMILY,
+        label="Offline CVE candidate assessment",
+        analysis_version=SEARCHSPLOIT_CANDIDATES_VERSION,
+        payload_schema_version=SEARCHSPLOIT_CANDIDATES_SCHEMA_VERSION,
+        parameters=SEARCHSPLOIT_CANDIDATES_PARAMETERS,
+        input_kinds=MappingProxyType({
+            "nmap_xml": ("artifact_sha256",),
+            "offline_dataset": ("searchsploit_dataset_sha256",),
         }),
     ),
 })

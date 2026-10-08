@@ -58,11 +58,31 @@ def _provider_cache_key(status: dict) -> str | None:
         "archive_sha256": status.get("archive_sha256"),
         "database_updated_epoch": status.get("database_updated_epoch"),
         "database_path": status.get("database_path"),
+        "command_sha256": status.get("command_sha256"),
     }
     if not any(value not in {None, ""} for value in identity.values()):
         return None
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def searchsploit_provider_snapshot(status: dict | None = None) -> dict:
+    """Freeze the local offline dataset identity used by one assessment."""
+    status = dict(status or searchsploit_status())
+    return {
+        "available": bool(status.get("available")),
+        "provider": status.get("provider") or "SearchSploit / Exploit-DB",
+        "provider_key": _provider_cache_key(status),
+        "active_version": status.get("active_version"),
+        "archive_sha256": status.get("archive_sha256"),
+        "database_updated_epoch": status.get("database_updated_epoch"),
+        "database_path": status.get("database_path"),
+        "command_path": status.get("command_path"),
+        "command_sha256": status.get("command_sha256"),
+        "installed_at": status.get("installed_at"),
+        "source": status.get("source"),
+        "message": status.get("message"),
+    }
 
 
 def _init_query_cache(db_path: Path | None = None) -> Path:
@@ -191,14 +211,31 @@ def _database_path(command_path: str | None) -> Path | None:
     return None
 
 
+def _command_sha256(command_path: str | None) -> str | None:
+    if not command_path:
+        return None
+    try:
+        path = Path(command_path).resolve(strict=True)
+        if not path.is_file():
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
 def searchsploit_status() -> dict:
     command_path = _command_path()
     database_path = _database_path(command_path)
+    command_sha256 = _command_sha256(command_path)
     csv_files = list(database_path.glob("files_*.csv")) if database_path else []
     updated_at = None
     if csv_files:
         updated_at = max(path.stat().st_mtime for path in csv_files)
-    available = bool(command_path and database_path)
+    available = bool(command_path and command_sha256 and database_path)
     active_metadata = {}
     if database_path:
         try:
@@ -212,6 +249,7 @@ def searchsploit_status() -> dict:
         "available": available,
         "provider": "SearchSploit / Exploit-DB",
         "command_path": command_path,
+        "command_sha256": command_sha256,
         "database_path": str(database_path) if database_path else None,
         "database_files": len(csv_files),
         "database_updated_epoch": updated_at,
@@ -474,7 +512,11 @@ def _candidate(item: dict) -> dict:
     }
 
 
-def _search(command_path: str, query: str) -> tuple[list[dict], str | None]:
+def _search(
+    command_path: str,
+    query: str,
+    expected_database_path: str | None = None,
+) -> tuple[list[dict], str | None]:
     try:
         completed = subprocess.run(
             [command_path, "--json", "--title", "--disable-colour", query],
@@ -492,6 +534,22 @@ def _search(command_path: str, query: str) -> tuple[list[dict], str | None]:
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError:
         return [], f"SearchSploit returned unreadable JSON for {query}."
+    if expected_database_path:
+        reported_path = (
+            payload.get("DB_PATH_EXPLOITS") or payload.get("DB_PATH_EXPLOIT")
+        )
+        try:
+            matches_frozen_database = bool(
+                reported_path
+                and Path(str(reported_path)).resolve()
+                == Path(expected_database_path).resolve()
+            )
+        except OSError:
+            matches_frozen_database = False
+        if not matches_frozen_database:
+            return [], (
+                f"SearchSploit did not confirm the frozen offline database for {query}."
+            )
     results = [
         _candidate(item) for item in (
             payload.get("RESULTS_EXPLOIT") or payload.get("RESULTS_EXPLOITS") or []
@@ -501,8 +559,10 @@ def _search(command_path: str, query: str) -> tuple[list[dict], str | None]:
     return results[:MAX_RESULTS_PER_QUERY], None
 
 
-def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
-    status = searchsploit_status()
+def enrich_hunting_with_searchsploit(
+    hunting: dict, *, provider_status: dict | None = None,
+) -> dict:
+    status = dict(provider_status or searchsploit_status())
     if not status["available"]:
         return {
             "status": "searchsploit_unavailable",
@@ -519,12 +579,20 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
             "non_cve_candidate_count": 0,
             "cve_facets": [],
             "matches": [],
+            "coverage_complete": False,
+            "query_limit": MAX_QUERIES,
+            "candidate_limit_per_query": MAX_RESULTS_PER_QUERY,
+            "omitted_distinct_query_count": 0,
+            "omitted_finding_count": 0,
+            "candidate_limit_reached_query_count": 0,
             "warnings": [status["message"]],
             "disclaimer": "Potential product/version matches require analyst validation.",
         }
 
     query_findings: dict[str, dict[str, dict]] = {}
     skipped_no_product_count = 0
+    omitted_queries: set[str] = set()
+    omitted_finding_count = 0
     for finding in hunting.get("findings") or []:
         if finding.get("evidence_kind") == "device_configuration":
             continue
@@ -532,21 +600,29 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         if not query:
             skipped_no_product_count += 1
             continue
+        if query not in query_findings and len(query_findings) >= MAX_QUERIES:
+            omitted_queries.add(query)
+            omitted_finding_count += 1
+            continue
         query_findings.setdefault(query, {})[_finding_match_key(finding)] = finding
-        if len(query_findings) >= MAX_QUERIES:
-            break
 
     provider_key = _provider_cache_key(status)
     cached_results = _load_query_cache(provider_key, list(query_findings))
     query_results: dict[str, list[dict]] = dict(cached_results)
     missing_queries = [query for query in query_findings if query not in cached_results]
     warnings = []
+    failed_queries: set[str] = set()
     fresh_results: dict[str, list[dict]] = {}
     if missing_queries:
         workers = min(4, len(missing_queries))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
-                executor.submit(_search, status["command_path"], query): query
+                executor.submit(
+                    _search,
+                    status["command_path"],
+                    query,
+                    status.get("database_path"),
+                ): query
                 for query in missing_queries
             }
             for future in as_completed(futures):
@@ -555,9 +631,25 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
                 query_results[query] = candidates
                 if warning:
                     warnings.append(warning)
+                    failed_queries.add(query)
                 else:
                     fresh_results[query] = candidates
         _store_query_cache(provider_key, fresh_results)
+
+    limit_reached_queries = {
+        query for query, candidates in query_results.items()
+        if len(candidates) >= MAX_RESULTS_PER_QUERY
+    }
+    if omitted_queries:
+        warnings.append(
+            f"{len(omitted_queries)} additional distinct product/version queries were "
+            f"not assessed because the {MAX_QUERIES}-query safety limit was reached."
+        )
+    if limit_reached_queries:
+        warnings.append(
+            f"{len(limit_reached_queries)} query result set(s) reached the "
+            f"{MAX_RESULTS_PER_QUERY}-candidate display limit and may be incomplete."
+        )
 
     matches = []
     for query, keyed_findings in query_findings.items():
@@ -615,7 +707,9 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         for cve in sorted(cve_candidate_counts, reverse=True)
     ]
     return {
-        "status": "searchsploit_complete",
+        "status": (
+            "searchsploit_incomplete" if failed_queries else "searchsploit_complete"
+        ),
         "provider": status,
         "query_count": len(query_findings),
         "cache_hit_count": len(cached_results),
@@ -629,6 +723,15 @@ def enrich_hunting_with_searchsploit(hunting: dict) -> dict:
         "non_cve_candidate_count": non_cve_candidate_count,
         "cve_facets": cve_facets,
         "matches": matches,
-        "warnings": warnings,
+        "coverage_complete": (
+            not failed_queries and not omitted_queries and not limit_reached_queries
+        ),
+        "query_limit": MAX_QUERIES,
+        "candidate_limit_per_query": MAX_RESULTS_PER_QUERY,
+        "omitted_distinct_query_count": len(omitted_queries),
+        "omitted_finding_count": omitted_finding_count,
+        "candidate_limit_reached_query_count": len(limit_reached_queries),
+        "failed_query_count": len(failed_queries),
+        "warnings": sorted(warnings),
         "disclaimer": "Potential product/version matches require analyst validation.",
     }

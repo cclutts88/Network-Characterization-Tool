@@ -50,7 +50,7 @@ def test_searchsploit_enrichment_sanitizes_queries_and_returns_candidates(monkey
     })
     searches = []
 
-    def fake_search(command_path: str, query: str):
+    def fake_search(command_path: str, query: str, _database_path=None):
         searches.append((command_path, query))
         return [{
             "edb_id": "12345",
@@ -117,7 +117,7 @@ def test_searchsploit_enrichment_reuses_persistent_cache_until_database_changes(
     monkeypatch.setattr("app.searchsploit.searchsploit_status", lambda: dict(provider))
     searches = []
 
-    def fake_search(command_path: str, query: str):
+    def fake_search(command_path: str, query: str, _database_path=None):
         searches.append((command_path, query))
         return [{
             "edb_id": "12345",
@@ -175,6 +175,106 @@ def test_searchsploit_reports_when_no_product_fingerprints_are_searchable(monkey
     assert result["searched_finding_count"] == 0
     assert result["skipped_no_product_count"] == 2
     assert result["matches"] == []
+
+
+def test_searchsploit_reports_query_limits_without_dropping_in_limit_duplicates(monkeypatch):
+    monkeypatch.setattr("app.searchsploit.searchsploit_status", lambda: {
+        "available": True,
+        "command_path": "/opt/exploit-database/searchsploit",
+        "message": "ready",
+    })
+    monkeypatch.setattr("app.searchsploit._search", lambda *_: ([], None))
+    findings = [
+        {**finding(f"product-{index}", "1.0"), "port": 1000 + index}
+        for index in range(41)
+    ]
+    findings.append({**finding("product-0", "1.0"), "port": 8443})
+
+    result = enrich_hunting_with_searchsploit({"findings": findings})
+
+    assert result["query_count"] == 40
+    assert result["searched_finding_count"] == 41
+    assert result["omitted_distinct_query_count"] == 1
+    assert result["omitted_finding_count"] == 1
+    assert result["coverage_complete"] is False
+    assert "40-query safety limit" in result["warnings"][0]
+
+
+def test_searchsploit_failed_query_is_incomplete_and_retryable(monkeypatch):
+    monkeypatch.setattr("app.searchsploit.searchsploit_status", lambda: {
+        "available": True,
+        "command_path": "/opt/exploit-database/searchsploit",
+        "message": "ready",
+    })
+    monkeypatch.setattr(
+        "app.searchsploit._search",
+        lambda *_: ([], "SearchSploit command failed for nginx 1.24"),
+    )
+
+    result = enrich_hunting_with_searchsploit({
+        "findings": [finding("nginx", "1.24")]
+    })
+
+    assert result["status"] == "searchsploit_incomplete"
+    assert result["coverage_complete"] is False
+    assert result["failed_query_count"] == 1
+    assert result["warnings"] == ["SearchSploit command failed for nginx 1.24"]
+
+
+def test_searchsploit_rejects_results_from_a_different_database(monkeypatch):
+    monkeypatch.setattr("app.searchsploit.subprocess.run", lambda *args, **kwargs: (
+        subprocess.CompletedProcess(
+            args=args[0], returncode=0,
+            stdout=json.dumps({
+                "DB_PATH_EXPLOITS": "/offline/other",
+                "RESULTS_EXPLOITS": [{"EDB-ID": "12345", "Title": "Wrong data"}],
+            }),
+            stderr="",
+        )
+    ))
+
+    results, warning = _search(
+        "/offline/frozen/searchsploit", "nginx 1.24", "/offline/frozen",
+    )
+
+    assert results == []
+    assert warning == (
+        "SearchSploit did not confirm the frozen offline database for nginx 1.24."
+    )
+
+
+def test_hunt_network_read_loads_saved_candidates_without_running_searchsploit(monkeypatch):
+    import app.main as main
+
+    loaded = []
+    hunting = {
+        "source": {"scope_summaries": [
+            {"run_ids": ["a" * 32, "b" * 32]},
+            {"run_ids": ["c" * 32]},
+        ]},
+        "hosts": [], "findings": [],
+    }
+    saved = {"status": "retained_candidates_complete", "matches": []}
+    monkeypatch.setattr(main, "_latest_network_evidence", lambda: dict(hunting))
+    monkeypatch.setattr(
+        main, "load_retained_searchsploit_candidates",
+        lambda _db, run_ids: loaded.append(run_ids) or dict(saved),
+    )
+    monkeypatch.setattr(main, "list_saved_networks", lambda _db: [])
+    monkeypatch.setattr(main, "_latest_device_reachability_evidence", lambda: [])
+    monkeypatch.setattr(
+        main, "classify_searchsploit_exposure",
+        lambda value, **_kwargs: value,
+    )
+    monkeypatch.setattr(
+        main, "enrich_hunting_with_searchsploit",
+        lambda *_args, **_kwargs: pytest.fail("A Hunt read must not launch SearchSploit"),
+    )
+
+    result = main.analyze_hunting_network()
+
+    assert loaded == [["a" * 32, "b" * 32, "c" * 32]]
+    assert result["searchsploit"] == saved
 
 
 def database_archive(path, marker: str):

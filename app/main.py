@@ -178,6 +178,7 @@ from app.searchsploit import (
     searchsploit_status,
     update_searchsploit_from_internet,
 )
+from app.searchsploit_results import load_retained_searchsploit_candidates
 from app.identity import enrich_analysis_macs
 from app.identity_overrides import (
     apply_analysis_os_overrides,
@@ -3062,6 +3063,17 @@ def _latest_network_evidence() -> dict:
 def analyze_hunting_network() -> dict:
     result = _latest_network_evidence()
     result["status"] = "hunting_network_complete"
+    run_ids = [
+        run_id
+        for scope in (result.get("source") or {}).get("scope_summaries") or []
+        for run_id in scope.get("run_ids") or []
+    ]
+    result["searchsploit"] = classify_searchsploit_exposure(
+        load_retained_searchsploit_candidates(DB_PATH, run_ids),
+        hunting=result,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
     return result
 
 
@@ -3959,7 +3971,7 @@ def analyze_hunting_scan(run_id: str) -> dict:
 
     group = _hunting_group(run_id)
     description = describe_run_group(group)
-    return correlate_hunting_identity(build_hunting_analysis(
+    result = correlate_hunting_identity(build_hunting_analysis(
         _run_group_analysis_with_overrides(group),
         evidence={
             **description,
@@ -3968,6 +3980,15 @@ def analyze_hunting_scan(run_id: str) -> dict:
         },
         subnets=_hunting_subnets(group),
     ), build_topology())
+    result["searchsploit"] = classify_searchsploit_exposure(
+        load_retained_searchsploit_candidates(
+            DB_PATH, [str(item.get("run_id") or "") for item in group]
+        ),
+        hunting=result,
+        saved_networks=list_saved_networks(DB_PATH),
+        device_analyses=_latest_device_reachability_evidence(),
+    )
+    return result
 
 
 @app.get("/api/searchsploit/status")
@@ -4024,23 +4045,13 @@ def rollback_searchsploit_database_version(version_id: str) -> dict:
 @app.post("/api/searchsploit/hunting/network")
 def searchsploit_hunting_network() -> dict:
     hunting = analyze_hunting_network()
-    return classify_searchsploit_exposure(
-        enrich_hunting_with_searchsploit(hunting),
-        hunting=hunting,
-        saved_networks=list_saved_networks(DB_PATH),
-        device_analyses=_latest_device_reachability_evidence(),
-    )
+    return hunting["searchsploit"]
 
 
 @app.post("/api/searchsploit/hunting/{run_id}")
 def searchsploit_hunting_scan(run_id: str) -> dict:
     hunting = analyze_hunting_scan(run_id)
-    return classify_searchsploit_exposure(
-        enrich_hunting_with_searchsploit(hunting),
-        hunting=hunting,
-        saved_networks=list_saved_networks(DB_PATH),
-        device_analyses=_latest_device_reachability_evidence(),
-    )
+    return hunting["searchsploit"]
 
 
 @app.get("/api/scan-comparisons/candidates")

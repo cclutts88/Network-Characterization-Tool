@@ -17,23 +17,26 @@ function syncHandler(name) {
 await eval(`(async () => {
   let searchsploitRevision=0,huntRevision=0;
   const requests=[];
-  const controls=new Map();
-  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:''});return controls.get(id)};
+  const controls=new Map([['comparisonPanel',{classList:{add(){}}}]]);
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',classList:{add(){}}});return controls.get(id)};
   const encodeURIComponent=value=>String(value);
   const timedJson=(endpoint)=>new Promise(resolve=>requests.push({endpoint,resolve}));
-  const rendered=[];
-  const renderSearchSploit=data=>rendered.push(data.view);
-  ${handler("runSearchSploit")}
-  const older=runSearchSploit('older-run'),newer=runSearchSploit('newer-run');
-  assert.deepEqual(requests.map(item=>item.endpoint),[
-    '/api/searchsploit/hunting/older-run',
-    '/api/searchsploit/hunting/newer-run'
-  ]);
-  requests[1].resolve({response:{ok:true},data:{view:'newer'}});
+  const setStatus=()=>{};
+  const history={replaceState(){}};
+  const location={hash:'#huntOverview'};
+  const rendered=[],candidates=[];
+  const renderHunt=data=>rendered.push(data.view);
+  const renderSearchSploit=data=>candidates.push(data.view);
+  ${handler("beginHuntSelection", "function")}
+  ${handler("loadNetwork")}
+  const older=loadNetwork(),newer=loadNetwork();
+  assert.deepEqual(requests.map(item=>item.endpoint),['/api/hunting/network','/api/hunting/network']);
+  requests[1].resolve({response:{ok:true},data:{view:'newer',searchsploit:{view:'saved-newer'}}});
   await newer;
-  requests[0].resolve({response:{ok:true},data:{view:'older'}});
+  requests[0].resolve({response:{ok:true},data:{view:'older',searchsploit:{view:'saved-older'}}});
   await older;
-  assert.deepEqual(rendered,['newer'],'an obsolete candidate response must not replace the current Hunt evidence');
+  assert.deepEqual(rendered,['newer'],'an obsolete network response must not replace current Hunt evidence');
+  assert.deepEqual(candidates,['saved-newer'],'candidate results must come from the accepted saved response');
 })()`);
 
 await eval(`(async () => {
@@ -46,20 +49,20 @@ await eval(`(async () => {
   const encodeURIComponent=value=>String(value);
   const location={hash:'#huntOverview'};
   const history={replaceState(){}};
-  const rendered=[],enriched=[];
+  const rendered=[],candidates=[];
   const renderHunt=data=>rendered.push(data.view);
-  const runSearchSploit=(id,revision)=>enriched.push([id,revision]);
+  const renderSearchSploit=data=>candidates.push(data.view);
   ${handler("beginHuntSelection", "function")}
   ${handler("hunt")}
   const older=hunt();
   controls.get('currentRun').value='B';
   const newer=hunt();
-  requests[1].resolve({ok:true,json:async()=>({view:'B'})});
+  requests[1].resolve({ok:true,json:async()=>({view:'B',searchsploit:{view:'saved-B'}})});
   await newer;
-  requests[0].resolve({ok:true,json:async()=>({view:'A'})});
+  requests[0].resolve({ok:true,json:async()=>({view:'A',searchsploit:{view:'saved-A'}})});
   await older;
   assert.deepEqual(rendered,['B'],'an obsolete Hunt evidence response must not replace the newer selection');
-  assert.deepEqual(enriched,[['B',2]],'only the current evidence selection may start candidate enrichment');
+  assert.deepEqual(candidates,['saved-B'],'only the current evidence selection may render its saved candidate assessment');
 })()`);
 
 await eval(`(() => {
@@ -137,4 +140,4 @@ await eval(`(() => {
   assert.equal(enrichmentCalls,1,'active candidate filters must be reapplied with the Dataset selection');
 })()`);
 
-console.log("Hunt automatic enrichment runtime regressions passed");
+console.log("Hunt saved candidate runtime regressions passed");

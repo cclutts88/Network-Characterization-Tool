@@ -21,6 +21,10 @@ from app.derived_contracts import (
     NMAP_BASE_ANALYSIS_VERSION,
     NMAP_BASE_PARAMETERS,
     NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+    SEARCHSPLOIT_CANDIDATES_FAMILY,
+    SEARCHSPLOIT_CANDIDATES_PARAMETERS,
+    SEARCHSPLOIT_CANDIDATES_SCHEMA_VERSION,
+    SEARCHSPLOIT_CANDIDATES_VERSION,
 )
 from app.derived_results import derived_result_identity, init_derived_result_storage
 from app.nmap_base_analysis import (
@@ -52,6 +56,12 @@ from app.device_observations import (
     DEVICE_INTERFACE_JOB_TYPE,
     DEVICE_INTERFACE_SCHEMA_VERSION,
     DEVICE_INTERFACE_TARGET_FAMILY,
+)
+from app.searchsploit import searchsploit_provider_snapshot
+from app.searchsploit_results import (
+    SEARCHSPLOIT_CANDIDATE_JOB_TYPE,
+    candidate_result_identity,
+    generate_searchsploit_candidate_result,
 )
 
 
@@ -723,6 +733,104 @@ def _enqueue_scope_snapshot(
     return _job_dict(db, job)
 
 
+def _enqueue_searchsploit_candidate_job_on_connection(
+    db: sqlite3.Connection,
+    *,
+    source_run_id: str | None,
+    source_observation_id: str,
+    source_status: str,
+    source_sha256: str,
+    source_size_bytes: int,
+    source_kind: str,
+    source_ref: str,
+    provider: dict,
+    requested_by: str,
+) -> None:
+    """Atomically append the offline-candidate stage after scoped Nmap ingestion."""
+    now = utc_now()
+    ready = bool(provider.get("available") and provider.get("provider_key"))
+    identity = candidate_result_identity(source_sha256, provider) if ready else None
+    definition = {
+        "provider": provider,
+        "automatic_supported_intake": True,
+    }
+    frozen = {
+        "job_type": SEARCHSPLOIT_CANDIDATE_JOB_TYPE,
+        "source_run_id": source_run_id,
+        "source_observation_id": source_observation_id,
+        "source_status": source_status,
+        "source_sha256": source_sha256,
+        "source_size_bytes": int(source_size_bytes),
+        "target_family": SEARCHSPLOIT_CANDIDATES_FAMILY,
+        "target_analysis_version": SEARCHSPLOIT_CANDIDATES_VERSION,
+        "target_payload_schema_version": SEARCHSPLOIT_CANDIDATES_SCHEMA_VERSION,
+        "target_parameters_json": _canonical_json(
+            dict(SEARCHSPLOIT_CANDIDATES_PARAMETERS)
+        ),
+        "target_computation_key": identity.computation_key if identity else None,
+        "target_result_id": identity.result_id if identity else None,
+        "source_kind": source_kind,
+        "source_ref": source_ref,
+        "definition_json": _canonical_json(definition),
+    }
+    frozen["job_key"] = _job_key(frozen)
+    existing = db.execute(
+        "SELECT job_id FROM pipeline_jobs WHERE job_key = ?", (frozen["job_key"],)
+    ).fetchone()
+    if existing is not None:
+        return
+    job_id = f"pipeline_job_{uuid.uuid4().hex}"
+    db.execute(
+        """INSERT INTO pipeline_jobs (
+               job_id, job_key, job_type, source_run_id, source_observation_id,
+               source_status, source_sha256, source_size_bytes, target_family,
+               target_analysis_version, target_payload_schema_version,
+               target_parameters_json, target_computation_key, target_result_id,
+               source_kind, source_ref, definition_json, requested_by, requested_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            job_id, frozen["job_key"], frozen["job_type"], source_run_id,
+            source_observation_id, source_status, source_sha256,
+            int(source_size_bytes), frozen["target_family"],
+            frozen["target_analysis_version"],
+            frozen["target_payload_schema_version"],
+            frozen["target_parameters_json"], frozen["target_computation_key"],
+            frozen["target_result_id"], source_kind, source_ref,
+            frozen["definition_json"], requested_by, now,
+        ),
+    )
+    attempt_id = f"pipeline_attempt_{uuid.uuid4().hex}"
+    if ready:
+        db.execute(
+            """INSERT INTO pipeline_job_attempts (
+                   attempt_id, job_id, attempt_number, state, requested_by, requested_at
+               ) VALUES (?, ?, 1, 'queued', ?, ?)""",
+            (attempt_id, job_id, requested_by, now),
+        )
+    else:
+        db.execute(
+            """INSERT INTO pipeline_job_attempts (
+                   attempt_id, job_id, attempt_number, state, requested_by, requested_at,
+                   finished_at, error
+               ) VALUES (?, ?, 1, 'failed', ?, ?, ?, ?)""",
+            (
+                attempt_id, job_id, requested_by, now, now,
+                provider.get("message")
+                or "Offline Exploit-DB was unavailable when this evidence was processed.",
+            ),
+        )
+    db.execute(
+        """INSERT INTO pipeline_job_requests (
+               request_token, job_id, request_kind, requested_by, requested_at
+           ) VALUES (?, ?, 'initial', ?, ?)""",
+        (
+            f"automatic-searchsploit:{source_observation_id}:"
+            f"{provider.get('provider_key') or 'unavailable'}",
+            job_id, requested_by, now,
+        ),
+    )
+
+
 def enqueue_manual_nmap_scope_job(
     db_path: Path,
     assignment_id: str,
@@ -1352,6 +1460,7 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
     with connect_database(db_path, read_only=True) as db:
         validate_authority(db)
     verify_source_bytes()
+    candidate_provider = searchsploit_provider_snapshot()
 
     def guard(db: sqlite3.Connection) -> None:
         db.row_factory = sqlite3.Row
@@ -1380,6 +1489,18 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
         ).rowcount
         if changed != 1:
             raise DerivedJobConflict("The Nmap scope worker lost its claim")
+        _enqueue_searchsploit_candidate_job_on_connection(
+            db,
+            source_run_id=row["source_run_id"],
+            source_observation_id=row["source_observation_id"],
+            source_status=row["source_status"],
+            source_sha256=row["source_sha256"],
+            source_size_bytes=int(row["source_size_bytes"]),
+            source_kind=row["source_kind"],
+            source_ref=row["source_ref"],
+            provider=candidate_provider,
+            requested_by=row["attempt_requested_by"],
+        )
 
     return ingest_assigned_nmap_observation(
         db_path,
@@ -1611,6 +1732,123 @@ def execute_claimed_device_observation_job(
     )
 
 
+def execute_claimed_searchsploit_candidate_job(
+    db_path: Path, claim: dict,
+) -> dict:
+    columns = (
+        "job_id", "job_key", "job_type", "source_run_id", "source_observation_id",
+        "source_status", "source_sha256", "source_size_bytes", "target_family",
+        "target_analysis_version", "target_payload_schema_version",
+        "target_parameters_json", "target_computation_key", "target_result_id",
+        "source_kind", "source_ref", "definition_json",
+    )
+    selected = ", ".join(f"job.{name}" for name in columns)
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            f"""SELECT {selected}
+                FROM pipeline_jobs job
+                JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                WHERE job.job_id = ? AND attempt.attempt_id = ?
+                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+    if row is None:
+        raise DerivedJobConflict("The offline-candidate worker no longer owns this attempt")
+    definition = json.loads(row["definition_json"] or "{}")
+    provider = definition.get("provider")
+    if not isinstance(provider, dict):
+        raise DerivedJobConflict("The offline dataset identity is unavailable")
+    identity = candidate_result_identity(row["source_sha256"], provider)
+    frozen = {
+        "job_type": row["job_type"],
+        "source_run_id": row["source_run_id"],
+        "source_observation_id": row["source_observation_id"],
+        "source_status": row["source_status"],
+        "source_sha256": row["source_sha256"],
+        "source_size_bytes": int(row["source_size_bytes"]),
+        "target_family": row["target_family"],
+        "target_analysis_version": row["target_analysis_version"],
+        "target_payload_schema_version": row["target_payload_schema_version"],
+        "target_parameters_json": row["target_parameters_json"],
+        "target_computation_key": row["target_computation_key"],
+        "target_result_id": row["target_result_id"],
+        "source_kind": row["source_kind"],
+        "source_ref": row["source_ref"],
+        "definition_json": row["definition_json"],
+    }
+    if (
+        row["job_type"] != SEARCHSPLOIT_CANDIDATE_JOB_TYPE
+        or row["source_kind"] not in {"nmap_scan", "nmap_import"}
+        or row["target_family"] != SEARCHSPLOIT_CANDIDATES_FAMILY
+        or row["target_analysis_version"] != SEARCHSPLOIT_CANDIDATES_VERSION
+        or int(row["target_payload_schema_version"])
+        != SEARCHSPLOIT_CANDIDATES_SCHEMA_VERSION
+        or row["target_parameters_json"]
+        != _canonical_json(dict(SEARCHSPLOIT_CANDIDATES_PARAMETERS))
+        or row["target_computation_key"] != identity.computation_key
+        or row["target_result_id"] != identity.result_id
+        or _canonical_json(definition) != row["definition_json"]
+        or _job_key(frozen) != row["job_key"]
+    ):
+        raise DerivedJobConflict(
+            "The offline-candidate job identity or calculation rules changed"
+        )
+
+    def validate_source(db: sqlite3.Connection) -> None:
+        source = db.execute(
+            """SELECT observation.sha256, observation.source_kind,
+                      observation.source_ref, artifact.size_bytes
+               FROM artifact_observations observation
+               JOIN artifact_registry artifact ON artifact.sha256 = observation.sha256
+               WHERE observation.observation_id = ?""",
+            (row["source_observation_id"],),
+        ).fetchone()
+        if source is None or tuple(source) != (
+            row["source_sha256"], row["source_kind"], row["source_ref"],
+            int(row["source_size_bytes"]),
+        ):
+            raise DerivedJobConflict("The retained Nmap source identity changed")
+
+    with connect_database(db_path, read_only=True) as db:
+        validate_source(db)
+
+    def guard(db: sqlite3.Connection) -> None:
+        owned = db.execute(
+            """SELECT 1 FROM pipeline_job_attempts
+               WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                 AND claim_token = ?""",
+            (claim["attempt_id"], claim["job_id"], claim["claim_token"]),
+        ).fetchone()
+        if owned is None:
+            raise DerivedJobConflict("The offline-candidate worker lost its claim")
+        validate_source(db)
+
+    def finalize(db: sqlite3.Connection, created: bool) -> None:
+        changed = db.execute(
+            """UPDATE pipeline_job_attempts
+               SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?,
+                   output_kind = 'derived_result', output_id = ?, error = NULL
+               WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                 AND claim_token = ?""",
+            (
+                utc_now(), "created" if created else "reused", identity.result_id,
+                identity.result_id, claim["attempt_id"], claim["job_id"],
+                claim["claim_token"],
+            ),
+        ).rowcount
+        if changed != 1:
+            raise DerivedJobConflict("The offline-candidate worker lost its claim")
+
+    return generate_searchsploit_candidate_result(
+        db_path,
+        row["source_observation_id"],
+        provider=provider,
+        transaction_guard=guard,
+        transaction_finalize=finalize,
+    )
+
+
 def fail_claimed_derived_job(db_path: Path, claim: dict, error: Exception) -> None:
     message = str(error).strip() or error.__class__.__name__
     with connect_database(db_path) as db:
@@ -1648,6 +1886,8 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
             execute_claimed_device_summary_job(db_path, claim, data_dir)
         elif job_type == DEVICE_INTERFACE_JOB_TYPE:
             execute_claimed_device_observation_job(db_path, claim, data_dir)
+        elif job_type == SEARCHSPLOIT_CANDIDATE_JOB_TYPE:
+            execute_claimed_searchsploit_candidate_job(db_path, claim)
         else:
             raise DerivedJobConflict("The pipeline job type is not supported by this worker")
     except Exception as exc:

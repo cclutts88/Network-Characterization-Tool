@@ -784,7 +784,9 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "confidence" in html
     assert "Interfaces changed" in html
     assert "Firewall / ACL added" in html
-    assert "Configuration Activity Hunt" in html
+    assert "Device command history and changes" in html
+    assert 'id="loadOlderCollections"' in html
+    assert "HISTORY_PAGE_SIZE=100" in html
     assert "Running and startup line comparison" in html
     assert "Startup line" in html
     assert "Running line" in html
@@ -799,7 +801,7 @@ def test_configuration_activity_is_hunt_while_collection_comparison_stays_compar
     hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
 
     assert "href:'/device-analysis#activityEvidenceSection'" not in analyze_group
-    assert "href:'/device-analysis#activityEvidenceSection',title:'Configuration activity'" in hunt_group
+    assert "href:'/device-analysis#activityEvidenceSection',title:'Device command history and changes'" in hunt_group
     assert "href:'/device-analysis#comparisonPanel',title:'Device configurations'" in compare_group
     assert "body[data-nct-task=\"activityEvidenceSection\"] #baselineEvidenceControl" in device_analysis_page().body.decode()
 
@@ -953,7 +955,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "CVE and candidate filters" in html
     assert 'id="searchsploitPanel"' not in html
     assert 'id="searchsploitRun"' not in html
-    assert "automatically associates retained product and version fingerprints" in html
+    assert "candidate assessment saved during supported ingestion" in html
+    assert "Opening Hunt does not recalculate it" in html
     assert 'id="matchedOnly"' in html
     assert 'id="cveFilter"' in html
     assert 'id="cveYearFilter"' in html
@@ -992,16 +995,16 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "applySearchSploitFilters" in html
     assert "renderHostCveDropdowns" in html
     assert "/api/searchsploit/status" in html
-    assert "/api/searchsploit/hunting/network" in html
-    assert "void runSearchSploit(null,revision)" in html
-    assert "void runSearchSploit(id,revision)" in html
+    assert "/api/searchsploit/hunting/network" not in html
+    assert "renderSearchSploit(data.searchsploit" in html
+    assert "runSearchSploit" not in html
     assert "function beginHuntSelection()" in html
     assert "searchsploitRevision" in html
     assert "await loadSearchSploitStatus()" in html
     assert "function responseJson(response,label='Request')" in html
     assert "returned an empty server response" in html
     assert "returned an unreadable server response" in html
-    assert "await timedJson(endpoint,{method:'POST'},'SearchSploit enrichment',180000)" in html
+    assert "Historical evidence is not recalculated when Hunt opens" in html
     assert 'id="manageExploitReferences"' in html
     assert 'href="/settings/system-health#offlineExploitDb"' in html
     assert "manageExploitReferences:['Manage offline exploit references'" in SHELL_SCRIPT
@@ -1028,8 +1031,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "finding-host-match-slot" in html
     assert "Offline product/version associations for analyst review" in html
     assert "openSearchSploitMatch" not in html
-    assert "contains no specific product/version fingerprints to search" in html
-    assert "Service/version detection enabled" in html
+    assert "contains no specific product/version fingerprints" in html
+    assert "Service/version detection in the scan profile" in html
     assert '/hunting?run=${encodeURIComponent(runId)}' in analysis_html
     assert "function reachUrl(item)" in html
     assert "Evaluate host in Reach" in html

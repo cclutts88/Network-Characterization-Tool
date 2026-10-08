@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +19,14 @@ from app.automated_nmap_foundation import (
     recover_interrupted_automated_scan_foundation,
 )
 from app.database import connect_database
-from app.derived_jobs import scan_run_job_statuses
+from app.derived_jobs import (
+    claim_next_derived_job,
+    enqueue_automated_nmap_scope_job,
+    recover_interrupted_derived_jobs,
+    retry_derived_job,
+    run_next_derived_job,
+    scan_run_job_statuses,
+)
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.poc import (
     ScanRunRequest,
@@ -32,6 +41,12 @@ from app.saved_network_scope_associations import (
     change_saved_network_scope_association,
     get_run_scope_context,
 )
+from app.searchsploit_results import load_retained_searchsploit_candidates
+from app.searchsploit import searchsploit_provider_snapshot
+from app.searchsploit_results import (
+    candidate_result_identity,
+    generate_searchsploit_candidate_result,
+)
 
 
 XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10" start="100">
@@ -40,6 +55,33 @@ XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10" s
 <address addr="192.0.2.10" addrtype="ipv4"/><ports>
 <port protocol="tcp" portid="443"><state state="open"/><service name="https"/></port>
 </ports></host><runstats><finished time="110" timestr="done"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
+
+
+def candidate_payload(_hunting, **_kwargs):
+    candidate = {
+        "edb_id": "12345", "title": "Offline candidate", "platform": "linux",
+        "type": "remote", "codes": "CVE-2026-1234", "cves": ["CVE-2026-1234"],
+        "verified": True, "date_published": "2026-01-01", "path": "12345.py",
+        "url": "https://www.exploit-db.com/exploits/12345",
+    }
+    match = {
+        "match_key": "ip:192.0.2.10|tcp|443|example|1.0",
+        "host_key": "ip:192.0.2.10", "ip": "192.0.2.10", "hostname": None,
+        "port": 443, "protocol": "tcp", "service": "https",
+        "product": "example", "version": "1.0", "query": "example 1.0",
+        "candidate_count": 1, "candidates": [candidate], "cves": ["CVE-2026-1234"],
+    }
+    return {
+        "status": "searchsploit_complete", "provider": {}, "query_count": 1,
+        "cache_hit_count": 0, "cache_miss_count": 1, "searched_finding_count": 1,
+        "skipped_no_product_count": 0, "matched_host_count": 1, "match_count": 1,
+        "cve_count": 1, "cve_candidate_count": 1, "non_cve_candidate_count": 0,
+        "cve_facets": [], "matches": [match], "coverage_complete": True,
+        "query_limit": 40, "candidate_limit_per_query": 25,
+        "omitted_distinct_query_count": 0, "omitted_finding_count": 0,
+        "candidate_limit_reached_query_count": 0, "warnings": [],
+        "disclaimer": "Potential product/version matches require analyst validation.",
+    }
 
 
 def scoped_run(
@@ -148,6 +190,299 @@ def test_explicit_processing_uses_retained_scope_and_is_exactly_replayable(tmp_p
         assert db.execute(
             "SELECT COUNT(*) FROM entity_assessments WHERE artifact_observation_id = ?",
             (component["observation_id"],),
+        ).fetchone()[0] == 0
+
+
+def test_supported_intake_saves_candidates_and_reuses_exact_content_for_encounters(
+    tmp_path, monkeypatch,
+):
+    import app.derived_jobs as jobs
+    import app.searchsploit_results as results
+
+    provider = {
+        "available": True, "provider": "SearchSploit / Exploit-DB",
+        "provider_key": "a" * 64, "active_version": "dataset-a",
+        "archive_sha256": "b" * 64, "database_updated_epoch": 1000,
+        "database_path": "/offline/a", "command_path": "/offline/a/searchsploit",
+        "installed_at": "2030-01-01T00:00:00+00:00", "source": "test",
+        "message": "ready",
+    }
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jobs, "searchsploit_provider_snapshot", lambda: dict(provider))
+    monkeypatch.setattr(results, "searchsploit_provider_snapshot", lambda: dict(provider))
+    assessment_calls = []
+
+    def counted_candidate_payload(*args, **kwargs):
+        assessment_calls.append(True)
+        payload = candidate_payload(*args, **kwargs)
+        payload["cache_hit_count"] = len(assessment_calls) - 1
+        payload["cache_miss_count"] = 1 if len(assessment_calls) == 1 else 0
+        return payload
+
+    monkeypatch.setattr(
+        results, "enrich_hunting_with_searchsploit", counted_candidate_payload,
+    )
+    db_path = tmp_path / "analyzer.db"
+    (tmp_path / "first").mkdir()
+    (tmp_path / "second").mkdir()
+    first_db, first_run, _, first_observation = scoped_run(
+        tmp_path / "first", db_path=db_path,
+    )
+    second_db, second_run, _, second_observation = scoped_run(
+        tmp_path / "second", label="Second", cidr="198.51.100.0/24", db_path=db_path,
+    )
+
+    enqueue_automated_nmap_scope_job(
+        first_db, first_run["run_id"], request_token="first", requested_by="analyst",
+    )
+    assert run_next_derived_job(first_db, tmp_path)
+    assert run_next_derived_job(first_db, tmp_path)
+    enqueue_automated_nmap_scope_job(
+        second_db, second_run["run_id"], request_token="second", requested_by="analyst",
+    )
+    assert run_next_derived_job(second_db, tmp_path)
+    assert run_next_derived_job(second_db, tmp_path)
+
+    retained = load_retained_searchsploit_candidates(
+        db_path, [first_run["run_id"], second_run["run_id"]]
+    )
+    assert retained["status"] == "retained_candidates_complete"
+    assert len(assessment_calls) == 1
+    assert retained["match_count"] == 1
+    assert len(retained["encounters"]) == 2
+    assert {item["observation_id"] for item in retained["encounters"]} == {
+        first_observation["observation_id"], second_observation["observation_id"],
+    }
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_results WHERE family = ?",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0] == 1
+        assert db.execute(
+            """SELECT COUNT(*) FROM derived_result_observation_links link
+               JOIN derived_results result ON result.result_id = link.result_id
+               WHERE result.family = ?""",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0] == 2
+        stored_payload = json.loads(db.execute(
+            "SELECT result_json FROM derived_results WHERE family = ?",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0])
+        assert "cache_hit_count" not in stored_payload
+        assert "cache_miss_count" not in stored_payload
+
+    mixed = load_retained_searchsploit_candidates(
+        db_path, [first_run["run_id"], "legacy-unregistered-run"]
+    )
+    assert mixed["status"] == "retained_candidates_partial"
+    assert mixed["coverage_complete"] is False
+    assert len(mixed["source_states"]) == 2
+    assert mixed["source_states"][-1]["state"] == "historical_unassessed"
+    assert mixed["source_states"][-1]["run_id"] == "legacy-unregistered-run"
+
+
+def test_failed_candidate_query_records_retryable_attempt_without_result(
+    tmp_path, monkeypatch,
+):
+    import app.derived_jobs as jobs
+    import app.searchsploit_results as results
+
+    provider = {
+        "available": True, "provider": "SearchSploit / Exploit-DB",
+        "provider_key": "f" * 64, "active_version": "dataset-f",
+        "archive_sha256": "e" * 64, "database_updated_epoch": 1000,
+        "database_path": "/offline/f", "command_path": "/offline/f/searchsploit",
+        "message": "ready",
+    }
+    incomplete = candidate_payload({})
+    incomplete.update({
+        "status": "searchsploit_incomplete",
+        "coverage_complete": False,
+        "failed_query_count": 1,
+        "warnings": ["Local query failed."],
+    })
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jobs, "searchsploit_provider_snapshot", lambda: dict(provider))
+    monkeypatch.setattr(results, "searchsploit_provider_snapshot", lambda: dict(provider))
+    monkeypatch.setattr(
+        results, "enrich_hunting_with_searchsploit", lambda *_args, **_kwargs: dict(incomplete),
+    )
+    db_path, run, _, _ = scoped_run(tmp_path)
+    enqueue_automated_nmap_scope_job(
+        db_path, run["run_id"], request_token="scope", requested_by="analyst",
+    )
+
+    assert run_next_derived_job(db_path, tmp_path)
+    assert run_next_derived_job(db_path, tmp_path)
+
+    retained = load_retained_searchsploit_candidates(db_path, [run["run_id"]])
+    assert retained["status"] == "retained_candidates_not_available"
+    assert retained["coverage_complete"] is False
+    assert retained["source_states"][0]["state"] == "failed"
+    assert "could not complete every product/version query" in (
+        retained["source_states"][0]["detail"]
+    )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_results WHERE family = ?",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Uses a disposable POSIX SearchSploit stub")
+def test_candidate_generation_binds_executable_and_reported_database(
+    tmp_path, monkeypatch,
+):
+    import app.searchsploit_results as results
+
+    frozen_database = tmp_path / "frozen-db"
+    other_database = tmp_path / "other-db"
+    frozen_database.mkdir()
+    other_database.mkdir()
+
+    def executable(name: str, reported_database: Path) -> tuple[Path, str]:
+        path = tmp_path / name
+        output = json.dumps({
+            "DB_PATH_EXPLOITS": str(reported_database),
+            "RESULTS_EXPLOITS": [],
+        })
+        path.write_text(
+            "#!/bin/sh\ncat <<'NCT_SEARCHSPLOIT_JSON'\n"
+            f"{output}\nNCT_SEARCHSPLOIT_JSON\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    wrong_command, wrong_sha = executable("searchsploit-wrong", other_database)
+    correct_command, correct_sha = executable("searchsploit-correct", frozen_database)
+
+    def provider(command: Path, command_sha256: str) -> dict:
+        return searchsploit_provider_snapshot({
+            "available": True,
+            "provider": "SearchSploit / Exploit-DB",
+            "active_version": "same-dataset",
+            "archive_sha256": "a" * 64,
+            "database_updated_epoch": 1000,
+            "database_path": str(frozen_database),
+            "command_path": str(command),
+            "command_sha256": command_sha256,
+            "installed_at": "2030-01-01T00:00:00+00:00",
+            "source": "test",
+            "message": "ready",
+        })
+
+    wrong_provider = provider(wrong_command, wrong_sha)
+    correct_provider = provider(correct_command, correct_sha)
+    assert wrong_provider["provider_key"] != correct_provider["provider_key"]
+
+    content = XML.replace(
+        b'<service name="https"/>',
+        b'<service name="https" product="nginx" version="1.24"/>',
+    )
+    db_path, _, _, observation = scoped_run(tmp_path, content=content)
+    monkeypatch.setenv("ANALYZER_DATA_DIR", str(tmp_path / "data"))
+    active_provider = dict(wrong_provider)
+    monkeypatch.setattr(
+        results, "searchsploit_provider_snapshot", lambda: dict(active_provider),
+    )
+
+    with pytest.raises(RuntimeError, match="could not complete every"):
+        generate_searchsploit_candidate_result(
+            db_path, observation["observation_id"], provider=wrong_provider,
+        )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_results WHERE family = ?",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0] == 0
+
+    active_provider.clear()
+    active_provider.update(correct_provider)
+    completed = generate_searchsploit_candidate_result(
+        db_path, observation["observation_id"], provider=correct_provider,
+    )
+
+    assert completed["payload"]["coverage_complete"] is True
+    assert completed["payload"]["query_count"] == 1
+    assert completed["payload"]["matches"] == []
+    assert completed["payload"]["match_count"] == 0
+    assert candidate_result_identity(
+        observation["sha256"], wrong_provider,
+    ).result_id != completed["result_id"]
+
+
+def test_candidate_stage_records_unavailable_database_without_page_read_work(
+    tmp_path, monkeypatch,
+):
+    import app.derived_jobs as jobs
+
+    provider = {
+        "available": False, "provider": "SearchSploit / Exploit-DB",
+        "provider_key": None, "message": "Offline data not staged.",
+    }
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jobs, "searchsploit_provider_snapshot", lambda: dict(provider))
+    db_path, run, _, _ = scoped_run(tmp_path)
+    enqueue_automated_nmap_scope_job(
+        db_path, run["run_id"], request_token="scope", requested_by="analyst",
+    )
+    assert run_next_derived_job(db_path, tmp_path)
+
+    retained = load_retained_searchsploit_candidates(db_path, [run["run_id"]])
+    assert retained["status"] == "retained_candidates_not_available"
+    assert retained["matches"] == []
+    assert retained["source_states"][0]["state"] == "failed"
+    assert retained["source_states"][0]["detail"] == "Offline data not staged."
+    assert claim_next_derived_job(db_path) is None
+
+
+def test_candidate_stage_restart_retry_and_dataset_change_are_explicit(
+    tmp_path, monkeypatch,
+):
+    import app.derived_jobs as jobs
+    import app.searchsploit_results as results
+
+    first_provider = {
+        "available": True, "provider": "SearchSploit / Exploit-DB",
+        "provider_key": "c" * 64, "active_version": "dataset-c",
+        "archive_sha256": "d" * 64, "database_updated_epoch": 1000,
+        "database_path": "/offline/c", "command_path": "/offline/c/searchsploit",
+        "message": "ready",
+    }
+    active_provider = dict(first_provider)
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jobs, "searchsploit_provider_snapshot", lambda: dict(first_provider))
+    monkeypatch.setattr(results, "searchsploit_provider_snapshot", lambda: dict(active_provider))
+    monkeypatch.setattr(results, "enrich_hunting_with_searchsploit", candidate_payload)
+    db_path, run, _, _ = scoped_run(tmp_path)
+    enqueue_automated_nmap_scope_job(
+        db_path, run["run_id"], request_token="scope", requested_by="analyst",
+    )
+    assert run_next_derived_job(db_path, tmp_path)
+    claimed = claim_next_derived_job(db_path)
+    assert claimed is not None
+    assert recover_interrupted_derived_jobs(db_path) == 1
+    with connect_database(db_path, read_only=True) as db:
+        candidate_job_id = db.execute(
+            "SELECT job_id FROM pipeline_jobs WHERE job_type = ?",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0]
+    retry_derived_job(
+        db_path, candidate_job_id, request_token="retry-candidate", requested_by="analyst",
+    )
+    active_provider["provider_key"] = "e" * 64
+    active_provider["active_version"] = "dataset-e"
+    assert run_next_derived_job(db_path, tmp_path)
+
+    retained = load_retained_searchsploit_candidates(db_path, [run["run_id"]])
+    assert retained["status"] == "retained_candidates_not_available"
+    assert retained["source_states"][0]["state"] == "failed"
+    assert "dataset changed" in retained["source_states"][0]["detail"]
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_results WHERE family = ?",
+            ("nmap_searchsploit_candidates",),
         ).fetchone()[0] == 0
 
 
