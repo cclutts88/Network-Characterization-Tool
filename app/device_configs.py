@@ -26,6 +26,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
+from app.auth import auth_enabled
 from app.database import connect_database
 from app.evidence_maintenance import guarded_evidence_mutation
 from app.artifacts import (
@@ -59,7 +60,15 @@ from app.device_limits import (
     MAX_SUMMARY_TEXT_BYTES,
     MAX_UPLOAD_BYTES,
 )
+from app.device_collection_profiles import (
+    archive_device_collection_profile,
+    create_device_collection_profile,
+    create_device_collection_profile_version,
+    get_device_collection_profile,
+    list_device_collection_profiles,
+)
 from app.request_identity import bind_signed_in_actor, signed_in_username
+from app.network_scopes import get_network_scope
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -85,6 +94,10 @@ COLLECTION_COPY_CHUNK_BYTES = 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
 CISCO_COLLECTION_TIMEOUT_SECONDS = 600
 MAX_ADDITIONAL_COMMANDS = 20
+PROFILE_SETTING_FIELDS = (
+    "vendor", "device_type", "device_types", "device_address", "device_name",
+    "username", "ssh_port", "additional_commands", "preferred_scope_id",
+)
 READ_ONLY_COMMAND_PREFIXES = {
     "show", "display", "get", "ping", "traceroute", "mtr",
     "cat", "netstat", "sockstat", "uptime", "uname", "dmesg",
@@ -382,9 +395,14 @@ class DeviceConfigPlan(BaseModel):
     authentication_mode: Literal["password_prompt", "key"] = "key"
     accountability_interface: str = Field(min_length=1, max_length=64)
     additional_commands: list[str] = Field(default_factory=list, max_length=MAX_ADDITIONAL_COMMANDS)
+    preferred_scope_id: str | None = Field(default=None, max_length=200)
+    collection_profile_id: str | None = Field(default=None, max_length=80)
+    collection_profile_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_vendor_device_type(self) -> "DeviceConfigPlan":
+        if bool(self.collection_profile_id) != bool(self.collection_profile_version):
+            raise ValueError("Collection profile ID and version must be supplied together")
         selected = list(dict.fromkeys(self.device_types or [self.device_type]))
         unsupported = [item for item in selected if item not in TEMPLATES.get(self.vendor, {})]
         if unsupported:
@@ -413,6 +431,22 @@ class DeviceConfigPlan(BaseModel):
     @classmethod
     def clean_optional_reason(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("preferred_scope_id")
+    @classmethod
+    def clean_preferred_scope_id(cls, value: str | None) -> str | None:
+        value = (value or "").strip()
+        if value and not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+            raise ValueError("Choose a valid Network Scope")
+        return value or None
+
+    @field_validator("collection_profile_id")
+    @classmethod
+    def clean_collection_profile_id(cls, value: str | None) -> str | None:
+        value = (value or "").strip()
+        if value and not re.fullmatch(r"device_profile_[0-9a-f]{32}", value):
+            raise ValueError("Choose a valid device collection profile")
+        return value or None
 
     @field_validator("device_address")
     @classmethod
@@ -480,6 +514,110 @@ class DeviceConfigPlan(BaseModel):
             if command not in cleaned:
                 cleaned.append(command)
         return cleaned
+
+
+class DeviceCollectionProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    vendor: Literal["vyos", "cisco", "juniper", "pfsense", "unifi"]
+    device_type: Literal["router", "firewall", "switch"]
+    device_types: list[Literal["router", "firewall", "switch"]] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
+    device_address: str = Field(min_length=1, max_length=255)
+    device_name: str | None = Field(default=None, max_length=100)
+    username: str = Field(min_length=1, max_length=64)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    additional_commands: list[str] = Field(default_factory=list, max_length=MAX_ADDITIONAL_COMMANDS)
+    preferred_scope_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def clean_profile_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Profile name cannot be blank")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def clean_profile_description(cls, value: str) -> str:
+        return value.strip()
+
+    def validated_settings(self) -> dict:
+        plan = DeviceConfigPlan(
+            operator="profile-validator", originating_host="profile-validator",
+            reason="", accountability_interface="profile-validation",
+            authentication_mode="password_prompt", key_path=None,
+            **self.model_dump(exclude={"name", "description", "expected_version"}),
+        )
+        return {
+            key: getattr(plan, key)
+            for key in (
+                "vendor", "device_type", "device_types", "device_address",
+                "device_name", "username", "ssh_port", "additional_commands",
+                "preferred_scope_id",
+            )
+        }
+
+
+class DeviceCollectionProfileVersionRequest(DeviceCollectionProfileRequest):
+    expected_version: int = Field(ge=1)
+
+
+class DeviceCollectionProfileArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+
+
+def resolve_device_collection_profile_plan(
+    plan: DeviceConfigPlan,
+) -> tuple[DeviceConfigPlan, dict | None]:
+    profile = None
+    values = plan.model_dump()
+    if plan.collection_profile_id:
+        profile = get_device_collection_profile(
+            DB_PATH, plan.collection_profile_id, plan.collection_profile_version,
+        )
+        if profile is None:
+            raise ValueError("The selected device collection profile version does not exist")
+        if not profile["active"] or profile["version"] != profile["current_version"]:
+            raise ValueError("The device collection profile changed or was archived; review a fresh preview")
+        values.update({key: profile["settings"].get(key) for key in PROFILE_SETTING_FIELDS})
+        values["collection_profile_id"] = profile["profile_id"]
+        values["collection_profile_version"] = profile["version"]
+    scope_id = values.get("preferred_scope_id")
+    if scope_id:
+        scope = get_network_scope(DB_PATH, scope_id)
+        if scope is None or not scope["active"]:
+            if profile is None:
+                raise ValueError("The suggested Network Scope does not exist or is archived")
+            values["preferred_scope_id"] = None
+    return DeviceConfigPlan.model_validate(values), profile
+
+
+def _profile_preview_fields(profile: dict | None, plan: DeviceConfigPlan) -> dict:
+    if profile is None:
+        scope = get_network_scope(DB_PATH, plan.preferred_scope_id) if plan.preferred_scope_id else None
+        return {
+            "collection_profile": None,
+            "preferred_scope_label": scope["label"] if scope else None,
+            "preferred_scope_available": bool(scope and scope["active"]),
+        }
+    settings = profile["settings"]
+    stored_scope_id = settings.get("preferred_scope_id")
+    return {
+        "collection_profile": {
+            "profile_id": profile["profile_id"],
+            "version": profile["version"],
+            "name": profile["name"],
+        },
+        "profile_preferred_scope_id": stored_scope_id,
+        "preferred_scope_label": settings.get("preferred_scope_label"),
+        "preferred_scope_available": bool(stored_scope_id and plan.preferred_scope_id == stored_scope_id),
+    }
 
 
 def _control_ssh_args_for_plan(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
@@ -775,6 +913,9 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "device_name": plan.device_name,
         "username": plan.username,
         "accountability_interface": plan.accountability_interface,
+        "preferred_scope_id": plan.preferred_scope_id,
+        "collection_profile_id": plan.collection_profile_id,
+        "collection_profile_version": plan.collection_profile_version,
         "capture_command": next(
             step["command"] for step in execution_steps
             if step["phase"] == "Start accountability capture"
@@ -825,6 +966,13 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
         "authentication_mode": plan.authentication_mode,
         "credentials_stored": False,
         "accountability_interface": plan.accountability_interface,
+        "preferred_scope_id": plan.preferred_scope_id,
+        "collection_profile_id": plan.collection_profile_id,
+        "collection_profile_version": plan.collection_profile_version,
+        "collection_profile": preview.get("collection_profile"),
+        "profile_preferred_scope_id": preview.get("profile_preferred_scope_id"),
+        "preferred_scope_label": preview.get("preferred_scope_label"),
+        "preferred_scope_available": preview.get("preferred_scope_available", False),
         "capture_required": True,
         "capture_command": preview["capture_command"],
         "template_commands": preview["template_commands"],
@@ -2560,6 +2708,73 @@ def classify_ssh_failure(stderr: str, key_status: str) -> str:
     return "remote_command_failed"
 
 
+def _device_profile_actor(request: Request) -> str:
+    if auth_enabled():
+        analyst = getattr(request.state, "analyst", None)
+        if analyst is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if analyst.get("role") not in {"analyst", "admin"}:
+            raise HTTPException(status_code=403, detail="Analyst or administrator role required")
+        return str(analyst["username"])
+    return signed_in_username(request) or "local-operator"
+
+
+def _device_profile_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    message = str(exc)
+    status = 409 if any(word in message.lower() for word in (
+        "changed", "archived", "already uses", "already archived",
+    )) else 422
+    return HTTPException(status_code=status, detail=message)
+
+
+@router.get("/profiles")
+def collection_profiles(include_archived: bool = False) -> list[dict]:
+    return list_device_collection_profiles(DB_PATH, include_archived=include_archived)
+
+
+@router.post("/profiles", status_code=201)
+def save_collection_profile(payload: DeviceCollectionProfileRequest, request: Request) -> dict:
+    actor = _device_profile_actor(request)
+    try:
+        return create_device_collection_profile(
+            DB_PATH, name=payload.name, description=payload.description,
+            created_by=actor, settings=payload.validated_settings(),
+        )
+    except (KeyError, ValueError) as exc:
+        raise _device_profile_error(exc) from exc
+
+
+@router.post("/profiles/{profile_id}/versions", status_code=201)
+def save_collection_profile_version(
+    profile_id: str, payload: DeviceCollectionProfileVersionRequest, request: Request,
+) -> dict:
+    actor = _device_profile_actor(request)
+    try:
+        return create_device_collection_profile_version(
+            DB_PATH, profile_id=profile_id, expected_version=payload.expected_version,
+            name=payload.name, description=payload.description, created_by=actor,
+            settings=payload.validated_settings(),
+        )
+    except (KeyError, ValueError) as exc:
+        raise _device_profile_error(exc) from exc
+
+
+@router.post("/profiles/{profile_id}/archive")
+def archive_collection_profile(
+    profile_id: str, payload: DeviceCollectionProfileArchiveRequest, request: Request,
+) -> dict:
+    actor = _device_profile_actor(request)
+    try:
+        return archive_device_collection_profile(
+            DB_PATH, profile_id=profile_id, expected_version=payload.expected_version,
+            archived_by=actor,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _device_profile_error(exc) from exc
+
+
 @router.get("/vendors")
 def vendors() -> dict:
     return {
@@ -2578,7 +2793,12 @@ def vendors() -> dict:
 @router.post("/preview")
 def preview(plan: DeviceConfigPlan, request: Request) -> dict:
     plan = bind_signed_in_actor(request, plan, "operator")
+    try:
+        plan, profile = resolve_device_collection_profile_plan(plan)
+    except ValueError as exc:
+        raise _device_profile_error(exc) from exc
     value = build_plan(plan)
+    value.update(_profile_preview_fields(profile, plan))
     value.pop("ssh_args", None)
     value.pop("remote_input", None)
     return value
@@ -2590,9 +2810,14 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     """Open a short-lived SSH control session and stop at the device password prompt."""
     _require_secure_password_transport(request)
     plan = bind_signed_in_actor(request, plan, "operator")
+    try:
+        plan, profile = resolve_device_collection_profile_plan(plan)
+    except ValueError as exc:
+        raise _device_profile_error(exc) from exc
     if plan.authentication_mode != "password_prompt":
         raise HTTPException(status_code=422, detail="Choose password-prompt authentication for this workflow")
     preview_data = build_plan(plan)
+    preview_data.update(_profile_preview_fields(profile, plan))
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -2768,6 +2993,10 @@ def cancel_interactive_session(session_id: str) -> dict:
 def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     """Validate the key and capture every non-interactive SSH access check."""
     plan = bind_signed_in_actor(request, plan, "operator")
+    try:
+        plan, profile = resolve_device_collection_profile_plan(plan)
+    except ValueError as exc:
+        raise _device_profile_error(exc) from exc
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     key = key_preflight(plan.key_path)
@@ -2776,6 +3005,7 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
         result.update({"status": "blocked", "failure_class": "local_key_problem", "message": key["message"]})
         return result
     preview_data = build_plan(plan)
+    preview_data.update(_profile_preview_fields(profile, plan))
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -2827,9 +3057,14 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
 @guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     plan = bind_signed_in_actor(request, plan, "operator")
+    try:
+        plan, profile = resolve_device_collection_profile_plan(plan)
+    except ValueError as exc:
+        raise _device_profile_error(exc) from exc
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     preview_data = build_plan(plan)
+    preview_data.update(_profile_preview_fields(profile, plan))
     key = key_preflight(plan.key_path)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
@@ -2966,6 +3201,7 @@ async def upload_result(
     device_type: str = Form(...),
     device_address: str = Form(...),
     device_name: str = Form(""),
+    preferred_scope_id: str = Form(""),
     result_file: UploadFile = File(...),
 ) -> dict:
     """Import an existing router, firewall, or switch result without contacting a device."""
@@ -2987,6 +3223,19 @@ async def upload_result(
     clean_device_name = device_name.strip()
     if len(clean_device_name) > 100:
         raise HTTPException(status_code=422, detail="Device name is limited to 100 characters")
+    clean_preferred_scope_id = preferred_scope_id.strip()
+    if clean_preferred_scope_id and (
+        len(clean_preferred_scope_id) > 200
+        or not re.fullmatch(r"[A-Za-z0-9._:-]+", clean_preferred_scope_id)
+    ):
+        raise HTTPException(status_code=422, detail="Choose a valid Network Scope")
+    if clean_preferred_scope_id:
+        scope = get_network_scope(DB_PATH, clean_preferred_scope_id)
+        if scope is None or not scope["active"]:
+            raise HTTPException(
+                status_code=422,
+                detail="The suggested Network Scope does not exist or is archived",
+            )
     if (
         vendor not in VENDORS
         or device_type not in DEVICE_TYPES
@@ -3061,6 +3310,7 @@ async def upload_result(
             "device_type": device_type,
             "device_address": values["device_address"],
             "device_name": clean_device_name or None,
+            "preferred_scope_id": clean_preferred_scope_id or None,
             "operation": "manual_upload",
             "status": "uploaded",
             "capture_required": False,
@@ -3150,6 +3400,9 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                     "authentication_mode", "accountability_interface", "operator",
                     "originating_host", "reason", "exit_code", "failure_class",
                     "source_filename", "additional_commands", "remote_temp_created",
+                    "preferred_scope_id", "profile_preferred_scope_id",
+                    "preferred_scope_label", "preferred_scope_available", "collection_profile_id",
+                    "collection_profile_version", "collection_profile",
                     "remote_cleanup_status", "command_history_status",
                     "summary_verification_status", "summary_verification_detail",
                 )

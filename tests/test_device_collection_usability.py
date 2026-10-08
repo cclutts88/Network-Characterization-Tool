@@ -42,10 +42,14 @@ object network WEB_SERVER
 
 def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatch):
     from app import device_configs
+    from app.network_scopes import create_network_scope
 
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(device_configs, "DB_PATH", tmp_path / "analyzer.db")
+    scope = create_network_scope(
+        device_configs.DB_PATH, label="Device lab", created_by="analyst"
+    )
     with TestClient(app) as client:
         response = client.post(
             "/api/device-configs/upload",
@@ -55,6 +59,7 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
                 "vendor": "cisco",
                 "device_type": "router",
                 "device_address": "192.0.2.10",
+                "preferred_scope_id": scope["scope_id"],
             },
             files={"result_file": ("router.txt", SAMPLE_CONFIG, "text/plain")},
         )
@@ -66,14 +71,20 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
                 "vendor": "cisco",
                 "device_type": "router",
                 "device_address": "192.0.2.10",
+                "preferred_scope_id": scope["scope_id"],
             },
             files={"result_file": ("router-copy.txt", SAMPLE_CONFIG, "text/plain")},
         )
+        history = client.get("/api/device-configs?limit=25")
 
     assert response.status_code == 200
     assert response.json()["reason"] == ""
     assert response.json()["artifact_duplicate"] is False
     assert duplicate.status_code == 200
+    assert history.status_code == 200
+    assert response.json()["preferred_scope_id"] == scope["scope_id"]
+    assert duplicate.json()["preferred_scope_id"] == scope["scope_id"]
+    assert {item["preferred_scope_id"] for item in history.json()} == {scope["scope_id"]}
     assert duplicate.json()["artifact_duplicate"] is True
     assert response.json()["artifact_sha256"] == duplicate.json()["artifact_sha256"]
     first_path = (

@@ -707,6 +707,23 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "data.execution_steps" in html
     assert "step.location" in html
     assert "step.kind" in html
+    assert "How to read this preview" in html
+    assert 'id="preferredScope"' in html
+    assert "This carries the reviewed choice with the reusable collection profile" in html
+    assert "preferred_scope_id:$('preferredScope').value||null" in html
+    assert "Reusable collection profiles" in html
+    assert "Apply profile" in html
+    assert "Save as new profile" in html
+    assert "Save new version" in html
+    assert "Archive profile" in html
+    assert "Copy collection settings" in html
+    assert "The copy is not a named profile" in html
+    assert "collection_profile_id:collectionProfileExact" in html
+    assert "collectionProfile:['Saved device collection profile'" in SHELL_SCRIPT
+    assert "preferredScope:['Suggested Network Scope'" in SHELL_SCRIPT
+    assert "(run.additional_commands||[]).join('\\n')" in html
+    assert "run.device_scope_assignment?.scope_id||run.preferred_scope_id" in html
+    assert "still confirms that the whole new collection belongs in this scope" in html
     assert "VyOS and pfSense create a named temporary output file" in html
     assert "Cisco, Juniper, and UniFi devices return output directly through SSH and do not run SCP" in html
     assert '<option value="unifi">UniFi</option>' in html
@@ -716,7 +733,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "Router + Firewall selected" in html
     assert "supportsSwitch=['cisco','juniper','unifi'].includes(vendor)" in html
     assert "Switch collection is available for this vendor" in html
-    assert "$('type').onchange=updateVendorHint" in html
+    assert "$('type').onchange=()=>{updateVendorHint();markProfileDraftModified()}" in html
     assert "Current consoles and gateways normally use the root SSH account" in html
     assert "EdgeRouter devices should continue to use the VyOS template" in html
     assert 'id="captureCommand"' not in html

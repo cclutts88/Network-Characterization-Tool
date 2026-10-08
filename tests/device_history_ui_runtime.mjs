@@ -54,6 +54,66 @@ assert.ok(source.includes("card.dataset.runId=run.run_id"));
 assert.ok(source.includes("data-device-scope-assignment") || source.includes("dataset.deviceScopeAssignment"));
 assert.ok(source.includes("dataset.deviceScopeReceipts"));
 assert.ok(source.includes("Retained by scoped receipts"));
+assert.ok(source.includes("blank.selected=!preferredScope"));
+assert.ok(source.includes("The former suggestion"));
+assert.ok(source.includes("is archived or unavailable, so NCT selected nothing"));
+
+await eval(`(() => {
+  const copySettingsSource=source.match(/function copyCollectionSettings\\(run\\) \\{[\\s\\S]*?\\r?\\n\\}\\r?\\nfunction searchTerm/)[0].replace(/\\r?\\nfunction searchTerm$/, '');
+  const controls=new Map([
+    ['vendor',{value:''}],['type',{options:[{value:'router',selected:false},{value:'firewall',selected:false},{value:'switch',selected:false}]}],
+    ['deviceName',{value:''}],['address',{value:''}],['username',{value:''}],['port',{value:''}],
+    ['additionalCommands',{value:''}],['preferredScope',{value:''}],['startSsh',{disabled:false}],
+    ['collectionProfile',{value:''}],['collectionProfileName',{value:''}],['collectionProfileDescription',{value:''}],
+    ['saveCollectionProfileVersion',{disabled:false}],['archiveCollectionProfile',{disabled:false}],['collectionProfileStatus',{textContent:'',className:''}],
+    ['previewBox',{classList:{add:()=>{}}}],['empty',{classList:{remove:()=>{}}}]
+  ]);
+  const $=id=>controls.get(id);
+  let preferred='',message='';
+  const renderPreferredScopeOptions=value=>{preferred=value;controls.get('preferredScope').value=value};
+  const updateVendorHint=()=>{};
+  const notice=value=>{message=value};
+  const profileStatus=()=>{};
+  const document={querySelector:()=>({scrollIntoView:()=>{}})};
+  let activeCollectionProfile={profile_id:'old'},collectionProfileExact=true,current={run_id:'old'};
+  controls.get('vendor').focus=()=>{};
+  const copyCollectionSettings=eval('('+copySettingsSource.replace(/^function copyCollectionSettings/,'function')+')');
+  copyCollectionSettings({vendor:'cisco',device_types:['router','firewall'],device_name:'Edge',device_address:'10.0.0.1',username:'analyst',ssh_port:2222,additional_commands:['show arp','show lldp neighbors'],device_scope_assignment:{scope_id:'scope:edge'}});
+  assert.equal(controls.get('additionalCommands').value,'show arp\\nshow lldp neighbors');
+  assert.equal(preferred,'scope:edge');
+  assert.equal(controls.get('preferredScope').value,'scope:edge');
+  assert.deepEqual(controls.get('type').options.filter(item=>item.selected).map(item=>item.value),['router','firewall']);
+  assert.equal(activeCollectionProfile,null);
+  assert.equal(collectionProfileExact,false);
+  assert.match(message,/validated optional commands and a reviewed Network Scope suggestion/);
+})()`);
+
+await eval(`(async () => {
+  const archiveSource=source.match(/async function archiveCollectionProfile\\(\\)\\{[\\s\\S]*?\\r?\\nfunction scopeAssignmentEditor/)[0].replace(/\\r?\\nfunction scopeAssignmentEditor$/, '');
+  const states={previewHidden:false,emptyShown:false};
+  const controls=new Map([
+    ['startSsh',{disabled:false}],
+    ['previewBox',{classList:{add:value=>{states.previewHidden=value==='hidden'}}}],
+    ['empty',{classList:{remove:value=>{states.emptyShown=value==='hidden'}}}],
+    ['saveCollectionProfileVersion',{disabled:false}],['archiveCollectionProfile',{disabled:false}],
+    ['collectionProfileName',{value:'Profile'}],['collectionProfileDescription',{value:'Description'}]
+  ]);
+  const $=id=>controls.get(id);
+  let activeCollectionProfile={profile_id:'device_profile_0123456789abcdef0123456789abcdef',version:2,name:'QA profile'},collectionProfileExact=true,current={collection_profile:{version:2}},status='';
+  const fetch=async()=>({ok:true,json:async()=>({active:false})});
+  const apiError=()=>'';
+  const loadCollectionProfiles=async()=>{};
+  const profileStatus=message=>{status=message};
+  const archiveCollectionProfile=eval('('+archiveSource.replace(/^async function archiveCollectionProfile/,'async function')+')');
+  await archiveCollectionProfile();
+  assert.equal(activeCollectionProfile,null);
+  assert.equal(collectionProfileExact,false);
+  assert.equal(current,null);
+  assert.equal(controls.get('startSsh').disabled,true);
+  assert.equal(states.previewHidden,true);
+  assert.equal(states.emptyShown,true);
+  assert.match(status,/Generate a new preview before collecting/);
+})()`);
 
 await eval(`(async () => {
   const node=(tag,text='')=>({tag,textContent:text,children:[],disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=[...items]}});

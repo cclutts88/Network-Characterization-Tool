@@ -5,6 +5,7 @@ import json
 import zipfile
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import CampaignSpec, TerrainSegment, app, build_scan_plan
@@ -523,6 +524,31 @@ def test_device_collection_note_is_optional_and_trimmed():
     assert DeviceConfigPlan.model_validate(blank_note).reason == ""
 
 
+def test_device_preview_retains_scope_as_a_suggestion_without_assigning_evidence(tmp_path, monkeypatch):
+    import app.device_configs as device_configs
+    from app.network_scopes import create_network_scope
+
+    monkeypatch.setattr(device_configs, "DB_PATH", tmp_path / "analyzer.db")
+    scope = create_network_scope(device_configs.DB_PATH, label="Mission lab", created_by="analyst")
+    body = {
+        **device_password_plan(),
+        "preferred_scope_id": scope["scope_id"],
+        "additional_commands": ["show interfaces"],
+    }
+    with TestClient(app) as client:
+        response = client.post("/api/device-configs/preview", json=body)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["preferred_scope_id"] == scope["scope_id"]
+    assert data["additional_commands"] == ["show interfaces"]
+    assert "assignment" not in data
+
+    invalid = DeviceConfigPlan.model_validate
+    with pytest.raises(ValueError, match="valid Network Scope"):
+        invalid({**body, "preferred_scope_id": "scope id with spaces"})
+
+
 def test_interactive_device_preview_starts_with_plain_ssh_and_never_contains_a_password():
     with TestClient(app) as client:
         response = client.post("/api/device-configs/preview", json=device_password_plan())
@@ -761,14 +787,15 @@ def test_interactive_ssh_uses_the_pty_as_its_controlling_terminal():
     assert command[-1] == "admin@192.0.2.1"
 
 
-def test_device_page_has_one_time_password_dialog_and_history_presets():
+def test_device_page_has_one_time_password_dialog_and_reusable_collection_settings():
     with TestClient(app) as client:
         response = client.get("/device-config")
 
     assert response.status_code == 200
     assert 'autocomplete="new-password"' in response.text
     assert "Start SSH and collect" in response.text
-    assert "Use preset" in response.text
+    assert "Copy collection settings" in response.text
+    assert "Reusable collection profiles" in response.text
     assert "Additional read-only commands" in response.text
     assert "Cleanup status" in response.text
     assert "Device name (optional)" in response.text

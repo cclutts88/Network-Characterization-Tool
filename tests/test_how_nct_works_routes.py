@@ -51,6 +51,14 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "A dry run reports only" in html
     assert "Nmap scan — active network contact" in html
     assert "password is used only for the short-lived SSH session" in html
+    assert "preview lists every external command and where each action runs" in html
+    assert "immutable device collection profile versions" in html
+    assert "Device collection profiles and scope" in html
+    assert "It never stores a password, key path, collection note" in html
+    assert "Copy collection settings from history also creates only a draft" in html
+    assert "still requires a reason and confirmation" in html
+    assert "retains its historical label but selects nothing" in html
+    assert "Analysts and administrators can create, version, and archive" in html
     assert "Uploading existing Nmap XML" in html
     assert "Saved Network" in html and "Network Scope" in html
     assert "choose the Network Scope that gives future scans" in html

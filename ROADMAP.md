@@ -217,6 +217,31 @@ A roadmap item should only be marked complete when:
   complete Docker suite: **1,022 passed, 10 skipped**; both host runtime suites, browser
   rendering and console checks, and diff validation passed. The changes remain
   foundation-only; they are not on `main` and do not replace the installed Range image.
+- [x] Eighth correction audit completed for device-collection reports #23, #24, and
+  #33. Validated optional commands now remain visible as their own preview and inside
+  the complete device command set. The ordered execution preview identifies every
+  external command, local evidence action, cleanup step, and whether it runs on the NCT
+  host, the network device, or local evidence storage. Named device collection profiles
+  now preserve immutable versions of approved non-secret connection fields, ordered
+  roles, validated optional commands, and an optional suggested Network Scope. The
+  storage layer itself enforces the allowlist and read-only commands; database guards
+  protect immutable versions, root identity, forward-only current-version movement, and
+  one-way archival. Passwords, key paths, per-run notes, originating host, capture
+  interface, assignment reason, and confirmation are never profile fields. Editing an
+  applied profile detaches the working settings until the analyst saves a new immutable
+  version or separate profile. Historical **Copy collection settings** creates a draft,
+  not a profile. A changed or archived profile requires a fresh preview, and archiving
+  clears any already-rendered preview. A suggested Network Scope is accepted only while
+  active; if it is later archived, the historical ID and label remain visible while the
+  assignment selector defaults to no selection. Every new collection still requires a
+  reason and whole-collection confirmation after reusable analysis; no address, prior
+  collection, or profile silently assigns evidence. The built-in README and Operator
+  Guide describe profile storage, versioning, roles, preview locations, drafts, and scope
+  limits. Complete Docker suite: **1,030 passed, 10 skipped**; host Device History
+  runtime and diff validation passed; browser create/apply/version/preview/archive and
+  guide checks passed without console errors. Novice workflow: **CLEAR**; independent
+  quality gate: **CLEAR** after five adversarial findings were corrected. The capability
+  is foundation-only and is not yet available on `main` or the installed Range image.
 
 ### Deviation history
 

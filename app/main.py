@@ -76,6 +76,7 @@ from app.poc import (
     schedule_worker,
 )
 from app.device_configs import history as device_collection_history, router as device_config_router
+from app.device_collection_profiles import init_device_collection_profile_storage
 from app.device_analysis import (
     analyze_device_collection,
     init_device_analysis_storage,
@@ -1299,6 +1300,7 @@ async def lifespan(_: FastAPI):
     retire_legacy_scan_analysis_cache(DB_PATH)
     init_device_analysis_storage(DB_PATH)
     init_device_collection_authority_storage(DB_PATH)
+    init_device_collection_profile_storage(DB_PATH)
     init_device_observation_storage(DB_PATH)
     init_derived_result_storage(DB_PATH)
     init_pipeline_intake_storage(DB_PATH)
