@@ -624,6 +624,34 @@ def parse_nmap_xml(path: Path) -> list[dict]:
         return []
 
 
+def automated_scan_source_label(manifest: dict, run_id: str) -> str:
+    display_name = str(
+        manifest.get("display_name")
+        or manifest.get("scan_name")
+        or manifest.get("name")
+        or ""
+    ).strip()
+    if display_name:
+        display_name = re.sub(r"[_]+", " ", display_name)
+        display_name = re.sub(r"\s+", " ", display_name).strip()
+    if not display_name:
+        saved_networks = manifest.get("saved_networks") or []
+        network_labels = [
+            str(item.get("name") or item.get("cidr") or "").strip()
+            for item in saved_networks
+            if isinstance(item, dict)
+        ]
+        display_name = ", ".join(label for label in network_labels if label)
+    if not display_name:
+        targets = manifest.get("targets") or []
+        display_name = ", ".join(str(target).strip() for target in targets[:2] if target)
+        if len(targets) > 2:
+            display_name += f" +{len(targets) - 2} more"
+    if not display_name:
+        display_name = str(manifest.get("profile") or "Automated scan").strip()
+    return f"{display_name} · scan {run_id[:8]}"
+
+
 def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
     try:
         with connect_database(DB_PATH) as db:
@@ -667,7 +695,7 @@ def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str
             continue
         source = source_record(
             "automated_nmap",
-            f"Automated scan {run_id[:8]}",
+            automated_scan_source_label(manifest, run_id),
             manifest.get("completed_at") or manifest.get("created_at"),
             f"/api/scan-runs/{run_id}/artifacts/xml",
         )

@@ -1769,7 +1769,8 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "interfaceCount" in html
     assert 'class="map-inventory-bar" id="mapSummary"' in html
     assert 'id="summaryCompact"' in html
-    assert '.map-inventory-bar{position:sticky;top:calc(var(--nct-header-height,64px) + 8px)' in html
+    assert '.map-inventory-bar{position:relative' in html
+    assert '.map-inventory-bar{position:sticky' not in html
     assert '<summary>Network inventory' not in html
     assert 'id="edgeCount"' not in html
     assert 'id="sourceCount"' not in html
@@ -1807,6 +1808,22 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert ".map-layout-actions:empty{display:none}" in html
     assert "body[data-nct-task=mapWorkspace] #nct-page-context{display:none}" in SHELL_SCRIPT
     assert 'id="toggleDetails"' in html
+    assert 'id="selectedObjectSummary"' in html
+    assert "function renderSelectedObjectSummary(node)" in html
+    assert "Open full details" in html
+    assert "IP / network" in html
+    assert "Hostname" in html
+    assert "Ports" in html
+    assert "Operating system" in html
+    assert "Map object actions and WAN / Reach roles" in html
+    assert "Display only:" in html
+    assert "Use WAN Designation to choose the gateway used by Reach" in html
+    assert "object-evidence" in html
+    assert "Evidence (${(node?.sources||[]).length})" in html
+    assert "openSelectedDetails:['Open full object details'" in SHELL_SCRIPT
+    assert "control?.matches?.('.object-evidence > summary')" in SHELL_SCRIPT
+    assert "control?.matches?.('.map-role-controls > summary')" in SHELL_SCRIPT
+    assert "The counts stay in normal page flow" in SHELL_SCRIPT
     assert 'class="details-control"' in html
     assert ".details-control{display:none}.workspace.map-expanded .details-control{display:flex}" in html
     assert 'id="workspaceSize"' in html
@@ -1826,8 +1843,12 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "workspace.map-expanded" in html
     assert "workspace.map-expanded.details-collapsed" in html
     assert "workspace.map-expanded.details-collapsed .map-shell>#details" in html
+    assert ".workspace.map-expanded.details-collapsed .selected-object-summary{margin:var(--expanded-safe-top,70px) 12px 8px}" in html
     assert ".workspace.map-expanded .map-shell>#details" in html
     assert "function syncExpandedDetailsBounds" in html
+    assert "function expandedFloatingControlsSafeTop" in html
+    assert "scaleRect?scaleRect.bottom-shellRect.top+8:inset" in html
+    assert "--expanded-safe-top',`${expandedSafeTop}px`" in html
     assert "shell.appendChild(details)" in html
     assert "workspace.appendChild(details)" in html
     assert "function toggleDetailsVisibility" in html

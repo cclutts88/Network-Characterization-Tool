@@ -152,6 +152,20 @@ A roadmap item should only be marked complete when:
   **136 tests with 1 Node-only skip**. Novice workflow: **CLEAR**; independent quality
   gate: **CLEAR**. Evidence semantics were not relaxed and this item remains
   foundation-only.
+- [x] Fourth Map correction batch completed reports #2, #8, #12, #15, #16,
+  and #26. Inventory counts now remain in normal page flow; automated scan sources use
+  retained human labels with scan identity; selected-object evidence and shared
+  WAN/Reach role actions begin collapsed; and hiding full details leaves a compact IP,
+  hostname, ports, and operating-system summary with a direct full-details action.
+  The WAN presentation control now says that it changes drawing only and points to WAN
+  Designation for the role used by Reach. Existing evidence links, timestamps, source
+  downloads, and shared role meaning remain unchanged. Desktop and 700-pixel browser
+  checks found no content overlap or horizontal overflow. Repeated expanded-workspace
+  recalculation kept the summary and canvas at stable positions. Novice workflow:
+  **CLEAR**; independent quality gate: **CLEAR** with **117 tests passed** and one
+  container Node-only skip covered by a passing host runtime regression. Primary
+  focused Docker suite: **97 passed, 1 skipped**; complete Docker suite: **1,012
+  passed, 9 skipped**. This item remains foundation-only.
 - [ ] Complete the confirmed corrections, record each disposition in the field-feedback
   register, pass the independent quality gate, and commit the tested foundation-only
   changes. This cycle does not promote changes to `main` or replace the installed Range

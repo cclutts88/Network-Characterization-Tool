@@ -10,6 +10,7 @@ from app.network_map import (
     add_membership_edges,
     add_point_to_point_edges,
     annotate_subnet_scan_observations,
+    automated_scan_source_label,
     apply_saved_network_names,
     apply_subnet_zone,
     configuration_network_candidates,
@@ -60,6 +61,21 @@ def test_parser_surfaces_mac_hostname_protocol_and_coverage():
     assert host["trace"]["hops"][0]["ttl"] == 1
     assert len(host["observed_ports"]) == 2
     assert host["scan_coverages"] == [analysis["coverage"]]
+
+
+def test_automated_map_source_uses_retained_human_scan_identity():
+    assert automated_scan_source_label(
+        {
+            "display_name": "Users_LAN_verification",
+            "completed_at": "2026-09-29T08:46:00+00:00",
+        },
+        "1234567890abcdef",
+    ) == "Users LAN verification · scan 12345678"
+
+    assert automated_scan_source_label(
+        {"saved_networks": [{"name": "Operations", "cidr": "10.20.0.0/24"}]},
+        "abcdef1234567890",
+    ) == "Operations · scan abcdef12"
 
 
 def test_parser_warns_when_reset_responses_make_an_entire_subnet_look_online():
