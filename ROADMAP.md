@@ -133,6 +133,15 @@ A roadmap item should only be marked complete when:
   coverage. Disposable browser acceptance confirmed the System Health actor and scope
   path. Focused Docker suite: **135 passed, 1 skipped**; strict host Node runtime check
   passed. Independent quality gate: **CLEAR**.
+- [x] Second operator-clarity batch: make Reach results follow a stated reading order,
+  explain Nmap `-Pn` as assumed reachability without a direct response while retaining
+  the raw source reason, rename the manual Nmap workspace to Import & investigate and
+  keep the imported result visible, and rename historical local preparation to Prepare
+  from saved scan with explicit no-rescan wording. Disposable browser checks confirmed
+  the Import & investigate and completed Reach flows; the primary focused Docker suite
+  passed **101 tests**, the complete Docker suite passed **1,010 tests with 7 skipped**,
+  and the independent reviewer passed **169 tests**. Independent quality gate:
+  **CLEAR**. This item remains foundation-only.
 - [ ] Complete the confirmed corrections, record each disposition in the field-feedback
   register, pass the independent quality gate, and commit the tested foundation-only
   changes. This cycle does not promote changes to `main` or replace the installed Range

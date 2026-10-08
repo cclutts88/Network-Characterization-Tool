@@ -89,12 +89,12 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "automatically receive a protected tracking record" in html
     assert "Deleting that collection cannot be undone" in html
     assert "These safeguards work automatically" in html
-    assert "<strong>Prepare saved analysis</strong> is the first durable rebuild action" in html
+    assert "<strong>Prepare from saved scan</strong> is the first durable rebuild action" in html
     assert "Queued work resumes automatically after an application restart" in html
     assert "does not silently continue a half-finished calculation" in html
     assert "every retained scan remains inside the dropdown for its exact recorded subnet" in html
     assert "Host lists or unusable legacy target metadata" in html
-    assert "System Health shows the request, source scan status, requester, attempts, outcome" in html
+    assert "System Health provides the larger request history, source scan status, requester, attempts, outcome" in html
     assert "Every file encounter keeps its own source" in html
     assert "Previously saved unregistered scan files remain readable" in html
     assert "add no operator action or button" in html

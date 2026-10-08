@@ -40,7 +40,7 @@ def test_system_health_explains_bounded_calculation_status():
     assert "Queued work resumes automatically after restart" in html
     assert "actively running is marked Interrupted" in html
     assert "/api/system/analysis-jobs?limit=${jobLimit}&offset=${requestedOffset}" in html
-    assert "Use Scan History to prepare or retry saved analysis" in html
+    assert "Use Scan History to prepare analysis from a saved scan or retry it" in html
     assert "'saved analysis work':['Saved analysis work'" in SHELL_SCRIPT
     assert "Reusable analysis status" in html
     assert "does not mean the source evidence is recent, intact, or still true" in html
@@ -101,13 +101,16 @@ def test_system_health_explains_bounded_calculation_status():
 
 def test_scan_history_offers_durable_local_saved_analysis_work():
     html = operator_page().body.decode()
-    assert "Prepare saved analysis" in html
+    assert "Prepare from saved scan" in html
+    assert "does not rerun Nmap or contact the network" in html
+    assert "progress stays on this row" in html
     assert "Retry saved analysis" in html
     assert "It will resume automatically after a restart" in html
     assert "A retry uses the retained scan.xml and does not rescan" in html
     assert "/analysis-jobs`" in html
     assert "/retry`" in html
-    assert "'prepare saved analysis':['Prepare saved analysis'" in SHELL_SCRIPT
+    assert "'prepare from saved scan':['Prepare from saved scan'" in SHELL_SCRIPT
+    assert "The status stays on this Scan History row" in SHELL_SCRIPT
     assert "'retry saved analysis':['Retry saved analysis'" in SHELL_SCRIPT
     assert "function analysisRequestToken()" in html
     assert "Math.random().toString(36).slice(2)" in html
@@ -186,10 +189,18 @@ def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
 
     assert "confirmed responsive" in analyze
     assert "targets attempted" in analyze
-    assert "assumed by -Pn" in analyze
+    assert "assumed reachable by -Pn; no direct response" in analyze
+    assert "function presenceExplanation(host)" in analyze
+    assert "this status alone is not proof that the host responded" in analyze
+    assert "Presence explanation" in analyze
+    assert "Import and investigate Nmap evidence" in analyze
+    assert "Import and open this result" in analyze
+    assert "opens this exact result for review below" in analyze
+    assert "await loadNmapAssignments(data.artifact_observation_id);$('analysisPanel').scrollIntoView" in analyze
     assert "No target returned direct response evidence in this scan." in analyze
     assert "confirmed responsive hosts" in scans
     assert "run.nmap_assumed_host_count" in scans
+    assert "assumed reachable by -Pn · no direct response" in scans
     assert "Open Analyze to verify direct responses" in scans
 
 
@@ -1108,6 +1119,10 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "out of date" in html
     assert "Retained route, policy, and NAT objects" in html
     assert "function evidenceCard(item)" in html
+    assert "Read this assessment in order" in html
+    assert "network context, translation, selected routes, switching, ordered policy" in html
+    assert "function assessmentEvidence(items)" in html
+    assert "rank={source_network:0,destination_network:0,nat:1,route:2,switching:3,policy:4,service:5,coverage:5}" in html
     assert "View supporting evidence" in html
     assert "Open source in Analyze ↗" in html
     assert 'target="_blank" rel="noopener"' in html
@@ -1301,10 +1316,11 @@ def test_primary_navigation_follows_the_operator_workflow():
     assert "mapWorkspace:['mapSummary','mapLayoutPanel']" in SHELL_SCRIPT
     nmap_group = SHELL_SCRIPT.split("{title:'Nmap scans'", 1)[1].split("{label:'Identify'", 1)[0]
     current_network_group = SHELL_SCRIPT.split("{title:'Current network'", 1)[1].split("{title:'Network devices'", 1)[0]
-    assert "href:'/analysis#xmlImport',title:'Import Nmap evidence'" in nmap_group
+    assert "href:'/analysis#xmlImport',title:'Import & investigate'" in nmap_group
     assert "href:'/analysis#nmapScopeAssignments'" not in nmap_group
     assert "href:'/analysis#xmlImport'" not in current_network_group
-    assert "upload authorized nmap xml, analyze the current view" in SHELL_SCRIPT.lower()
+    assert "upload authorized nmap xml, open that exact result for review" in SHELL_SCRIPT.lower()
+    assert "opens that result for investigation below" in SHELL_SCRIPT.lower()
     assert "loopback-only development address on the same computer" in SHELL_SCRIPT
     assert "unrelated-scope evidence from the same installation" in SHELL_SCRIPT
     assert "does not mean every object belongs to the last scan you opened" in SHELL_SCRIPT
