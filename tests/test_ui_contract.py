@@ -246,8 +246,9 @@ def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
     assert "reports assumed targets separately from confirmed responsive hosts" in SHELL_SCRIPT
     assert "A held run also prevents maintenance or an upgrade from starting" in SHELL_SCRIPT
     assert "Step 1 defines the exact source, destination, protocol, port" in SHELL_SCRIPT
-    assert "A route normally selects a path by destination" in SHELL_SCRIPT
-    assert "Earlier matching rules can change the result" in SHELL_SCRIPT
+    assert "all three steps are required" in SHELL_SCRIPT
+    assert "route device must be connected to the selected source" in SHELL_SCRIPT
+    assert "An earlier matching rule can decide the traffic first" in SHELL_SCRIPT
     assert "Validation uses the written rule" in SHELL_SCRIPT
     assert 'id="nct-guide-pin"' in SHELL_SCRIPT
     assert "guidePinned||guide.contains(event.target)" in SHELL_SCRIPT
@@ -1059,6 +1060,18 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "function assessmentPathDevices" in html
     assert "scopeScenarioDevicesToAssessment(latestReachResult)" in html
     assert "Choose a device identified on this path" in html
+    assert "Complete all three steps" in html
+    assert "source-connected routing device" in html
+    assert "Where this rule is checked" in html
+    assert "Retained Rules In Checking Order" in html
+    assert "policyContextRequestRevision" in html
+    assert "policyTemplateRequestRevision" in html
+    assert "encounter!==JSON.stringify(policyTemplateBody())" in html
+    assert "function invalidateScenarioResult" in html
+    assert "scenarioRequestRevision" in html
+    assert "revision!==scenarioRequestRevision||encounter!==JSON.stringify" in html
+    assert "Scenario inputs changed. Validate the combined scenario again" in html
+    assert "invalidateScenarioResult();$('simulationRule').value=data.rule_text" in html
     assert "nct-reach-latest-assessment-v1" in html
     assert "function restoreLatestAssessment" in html
     assert "source:$('scenarioSource').value.trim()" in html
@@ -1085,6 +1098,7 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "changes no device configuration" in html
     assert "background:var(--nct-surface-subtle,var(--panel))" in html
     assert "background:var(--nct-control,#0b1520)" in html
+    assert ".result-head{align-items:stretch;flex-direction:column}" in html
     assert 'id="routeSimulationDevice"' in html
     assert 'id="routeSimulationNetwork"' in html
     assert 'id="routeSimulationInterface"' in html

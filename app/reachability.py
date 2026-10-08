@@ -3058,15 +3058,19 @@ def simulate_proposed_route_control(
     if selected_index is None or not _is_transit_device(device_analyses[selected_index]):
         raise ValueError("Choose a retained router or firewall for the proposed route")
     selected = device_analyses[selected_index]
-    source = parse_endpoint(source_text, external=source_external)
-    destination = parse_endpoint(destination_text)
-    if not _source_attached(source, selected):
-        raise ValueError("The selected device is not attached to the proposed source in retained evidence")
-    if not _destination_matches(str(network), destination):
-        raise ValueError("The proposed route network does not cover the selected destination")
     device = selected.get("device") or {}
     device_name = str(device.get("name") or device.get("address") or "Network device")
     device_address = str(device.get("address") or "") or None
+    source = parse_endpoint(source_text, external=source_external)
+    destination = parse_endpoint(destination_text)
+    if not _source_attached(source, selected):
+        raise ValueError(
+            f"{device_name} cannot be linked to source {source.entered} because its "
+            "retained interfaces do not cover that source. Choose a source-connected "
+            "routing device or refresh its retained interface evidence."
+        )
+    if not _destination_matches(str(network), destination):
+        raise ValueError("The proposed route network does not cover the selected destination")
     baseline = evaluate_reachability(
         source_text=source_text, destination_text=destination_text,
         protocol=protocol, port=port, hunting=hunting,

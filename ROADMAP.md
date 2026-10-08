@@ -142,6 +142,16 @@ A roadmap item should only be marked complete when:
   passed **101 tests**, the complete Docker suite passed **1,010 tests with 7 skipped**,
   and the independent reviewer passed **169 tests**. Independent quality gate:
   **CLEAR**. This item remains foundation-only.
+- [x] Third Reach correction batch covers the combined Proposed Change guidance,
+  retained-policy request ownership, a specific source-interface evidence error, and
+  desktop/narrow result alignment for field reports #3, #4, and #7. The valid browser
+  scenario passed all five checks; the missing-interface case gave a specific recovery
+  message; desktop and 700-pixel layouts had no horizontal overflow. The focused Docker
+  suite passed **131 tests with 1 Node-only skip**, the host runtime race suite passed,
+  the complete Docker suite passed **1,011 tests with 8 skips**, and the reviewer passed
+  **136 tests with 1 Node-only skip**. Novice workflow: **CLEAR**; independent quality
+  gate: **CLEAR**. Evidence semantics were not relaxed and this item remains
+  foundation-only.
 - [ ] Complete the confirmed corrections, record each disposition in the field-feedback
   register, pass the independent quality gate, and commit the tested foundation-only
   changes. This cycle does not promote changes to `main` or replace the installed Range

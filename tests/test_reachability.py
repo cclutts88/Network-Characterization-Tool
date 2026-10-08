@@ -474,6 +474,30 @@ def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
     assert "changes no device configuration" in result["disclaimer"]
 
 
+def test_proposed_route_missing_source_attachment_names_the_evidence_gap():
+    detached = {
+        **DEVICE,
+        "device": {"name": "Detached Edge", "address": "10.70.0.1", "type": "firewall"},
+        "interfaces": [{"name": "other", "network": "10.70.0.0/24", "role": "internal"}],
+        "route_analysis": {"routes": []},
+    }
+
+    with pytest.raises(ValueError) as exc:
+        simulate_proposed_route_control(
+            source_text="10.80.0.25", destination_text="10.90.0.10",
+            protocol="tcp", port=443, hunting=HUNTING,
+            saved_networks=SAVED, device_analyses=[detached],
+            action="add", device_key="10.70.0.1",
+            route_network="10.90.0.0/24", route_interface="other",
+        )
+
+    message = str(exc.value)
+    assert "Detached Edge" in message
+    assert "10.80.0.25" in message
+    assert "retained interfaces do not cover that source" in message
+    assert "source-connected routing device" in message
+
+
 def test_combined_change_applies_route_before_policy_and_confirms_intent():
     device = {**DEVICE, "route_analysis": {"routes": []}}
 
