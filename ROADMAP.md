@@ -166,6 +166,22 @@ A roadmap item should only be marked complete when:
   container Node-only skip covered by a passing host runtime regression. Primary
   focused Docker suite: **97 passed, 1 skipped**; complete Docker suite: **1,012
   passed, 9 skipped**. This item remains foundation-only.
+- [x] Fifth correction batch completed Map editing and save reliability from reports
+  #19, #20, and the save/markup/hidden-object portion of #22. Map text now opens its
+  editor by direct double-click; the current layout shows an explicit unsaved state;
+  and leaving or replacing it offers overwrite, save-as-new, discard, and stay choices.
+  Failed or stale saves retain the edits, a save in progress blocks competing layout
+  ownership changes, edits made during the save remain dirty, and deleting the active
+  saved copy no longer marks its remaining visible edits clean. Expanded workspace now
+  keeps save, markup, and hidden-object review actions available. Evidence-derived
+  device identity and shared WAN/Reach roles remain unchanged; device-icon presentation
+  override is retained for a separate reviewed decision. Disposable browser checks
+  covered direct editing, save-as-new, save-before-leaving, stay-without-loss, expanded
+  controls, 900-by-700 layout, and browser console. Novice workflow: **CLEAR**;
+  independent quality gate: **CLEAR** after two corrected race/loss findings. Focused
+  Docker suite: **77 passed, 1 skipped**; complete Docker suite: **1,013 passed, 9
+  skipped**; host runtime regression and diff checks passed. This item remains
+  foundation-only.
 - [ ] Complete the confirmed corrections, record each disposition in the field-feedback
   register, pass the independent quality gate, and commit the tested foundation-only
   changes. This cycle does not promote changes to `main` or replace the installed Range

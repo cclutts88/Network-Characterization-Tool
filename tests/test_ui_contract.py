@@ -2186,3 +2186,41 @@ def test_tcp_udp_top_scopes_are_allowed_and_split_by_the_backend():
         "refreshSchedules",
     ):
         assert f'id="{control_id}"' in html
+def test_map_editing_exposes_safe_save_choices_and_direct_text_editing():
+    html = network_map_page().body.decode()
+
+    assert 'id="layoutDirtyBar"' in html
+    assert 'id="saveCurrentLayout"' in html
+    assert 'id="discardLayoutChanges"' in html
+    assert 'id="unsavedLayoutDialog"' in html
+    assert 'id="unsavedOverwrite"' in html
+    assert 'id="unsavedSaveAsNew"' in html
+    assert 'id="unsavedDiscard"' in html
+    assert 'id="unsavedStay"' in html
+    assert "function presentationFingerprint" in html
+    assert "function layoutSaveBlocks" in html
+    assert "function syncLayoutDirtyState" in html
+    assert "function markLayoutClean" in html
+    assert "function persistNamedLayout" in html
+    assert "payload.layout_id=existing.layout_id" in html
+    assert "payload.expected_version=existing.version" in html
+    assert "newer map changes still need to be saved" in html
+    assert "Map changes were not saved" in html
+    assert "loading another layout" in html
+    assert "starting another save" in html
+    assert "visible map still has unsaved changes" in html
+    assert "function openUnsavedLayoutDialog" in html
+    assert "function saveBeforeLayoutTransition" in html
+    assert "window.addEventListener('beforeunload'" in html
+    assert "Leaving Map for" in html
+    assert "event.stopImmediatePropagation()" in html
+    assert 'id="expandedSaveCurrent"' in html
+    assert 'id="expandedSaveAsNew"' in html
+    assert 'id="expandedAddText"' in html
+    assert 'id="reviewHiddenObjects"' in html
+    assert "function beginAnnotationTextEdit" in html
+    assert "group.ondblclick" in html
+    assert "annotationClickRenderTimer=setTimeout" in html
+    assert "Enter saves; Escape cancels" in html
+    assert "event.key==='Escape'" in html
+    assert "Device icons are currently inferred from retained evidence" in SHELL_SCRIPT
