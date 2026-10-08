@@ -337,6 +337,38 @@ def test_duplicate_device_encounters_can_share_one_verified_summary(tmp_path, mo
     )
 
 
+def test_device_intake_reports_retained_operator_and_marks_new_source_with_it(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Ethernet0\n ip address 10.25.0.1 255.255.255.0\n",
+    )
+    with connect_database(db_path) as db:
+        assert db.execute(
+            "SELECT marked_by FROM pipeline_intake_sources WHERE source_id=?",
+            (run_id,),
+        ).fetchone()[0] == "observation-analyst"
+
+    item = _item(list_ingestion_status(db_path), "device_manual_upload_authority")
+    assert item["actor"] == "observation-analyst"
+    assert any(
+        link["label"] == "Assign Network Scope in device history"
+        for link in item["links"]
+    )
+
+
+def test_collected_device_intake_marker_uses_collection_operator(tmp_path, monkeypatch):
+    db_path, _, _, manifest = finalized_collection(tmp_path, monkeypatch)
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT marked_by FROM pipeline_intake_sources WHERE source_id=?",
+            (manifest["run_id"],),
+        ).fetchone()[0] == "analyst"
+    item = _item(list_ingestion_status(db_path), "device_collected_authority")
+    assert item["actor"] == "analyst"
+
+
 def test_changed_descriptor_identity_blocks_device_summary_completion(tmp_path, monkeypatch):
     db_path, run_id = _complete_summary(
         tmp_path, monkeypatch,

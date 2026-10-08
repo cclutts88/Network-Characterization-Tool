@@ -112,6 +112,32 @@ A roadmap item should only be marked complete when:
 - User acceptance: provide a disposable running preview with scenarios and expected
   results; development verification does not imply user, Range, or main acceptance.
 
+## Field feedback correction cycle — 2026-10-08
+
+- [x] Captured the complete Teams operator-feedback window from 2026-09-28 12:23
+  through 2026-10-05 16:09, including the supporting screenshots, in
+  [docs/FIELD_FEEDBACK_2026-09-28_TO_2026-10-05.md](docs/FIELD_FEEDBACK_2026-09-28_TO_2026-10-05.md).
+- [~] Reconcile each report against the current foundation build before changing
+  behavior. Reports already corrected after the Range build remain regression checks;
+  confirmed defects are grouped into small evidence/reliability and operator-workflow
+  changes with focused tests and browser validation.
+- [~] Three-role review is active: the primary agent implements; the novice operator
+  evaluates discoverability and linear workflow; the independent reviewer verifies
+  evidence meaning, compatibility, regression risk, tests, and roadmap accuracy.
+- [x] First verified correction batch: preserve the initiating analyst through new
+  manual and collected device authority, give `Needs scope` a direct assignment path,
+  include retained addresses in Proposed Route interface choices, remove the duplicate
+  Exposure Report regeneration action, and prevent stale catalog/load/generation
+  responses from replacing the selected network. Existing LFA heading order, complete
+  subnet-grouped Scan History, and `/8` No-Strike support were retained with regression
+  coverage. Disposable browser acceptance confirmed the System Health actor and scope
+  path. Focused Docker suite: **135 passed, 1 skipped**; strict host Node runtime check
+  passed. Independent quality gate: **CLEAR**.
+- [ ] Complete the confirmed corrections, record each disposition in the field-feedback
+  register, pass the independent quality gate, and commit the tested foundation-only
+  changes. This cycle does not promote changes to `main` or replace the installed Range
+  image.
+
 ### Deviation history
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |

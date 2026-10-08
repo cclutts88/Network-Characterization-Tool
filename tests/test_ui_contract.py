@@ -1077,6 +1077,8 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="routeSimulationDevice"' in html
     assert 'id="routeSimulationNetwork"' in html
     assert 'id="routeSimulationInterface"' in html
+    assert "device?.interface_details" in html
+    assert "item.address||item.network" in html
     assert 'id="routeSimulationPriorityKind"' in html
     assert 'id="routeSimulationPriorityValue"' in html
     assert 'id="routePriorityKindControl" class="hidden"' in html
@@ -1096,7 +1098,10 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "Building this subnet report from retained evidence" in html
     assert "prefers-reduced-motion:reduce" in html
     assert 'class="generate-network-report"' in html
-    assert 'id="regenerateReport"' in html
+    assert html.count('id="regenerateReport"') == 1
+    assert "Use the single Regenerate report action inside the open report" in html
+    assert "reportRequestRevision" in html
+    assert "clearExposureWorkspace" in html
     assert 'id="exportReport"' in html
     assert "/api/reachability/exposure-reports" in html
     assert "No report yet" in html

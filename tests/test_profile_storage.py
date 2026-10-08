@@ -881,6 +881,15 @@ def test_authenticated_actor_is_bound_and_only_admin_can_remove_global_rule(
     assert removed["entries"] == []
 
 
+def test_global_no_strike_accepts_large_cidr_without_expanding_it(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    saved = add_global_no_strike(
+        NoStrikeUpdate(entries=["10.0.0.0/8"], changed_by="safety-officer"),
+        db_path,
+    )
+    assert saved["entries"] == ["10.0.0.0/8"]
+
+
 def test_local_mode_ignores_client_supplied_safety_and_fallback_actor(
     tmp_path, monkeypatch
 ):

@@ -175,6 +175,7 @@ def init_device_collection_authority_storage(db_path: Path) -> None:
 
 def begin_manual_upload_authority(
     db_path: Path, run_id: str, *, pipeline_policy_version: int | None = 1,
+    marked_by: str = "local-operator",
 ) -> dict:
     init_device_collection_authority_storage(db_path)
     from app.pipeline_intake import (
@@ -205,7 +206,7 @@ def begin_manual_upload_authority(
                     db,
                     source_kind=MANUAL_DEVICE_SOURCE,
                     source_id=run_id,
-                    marked_by="local-operator",
+                    marked_by=marked_by,
                     marked_at=created_at,
                     policy_version=pipeline_policy_version,
                 )
@@ -216,7 +217,9 @@ def begin_manual_upload_authority(
     return {"run_id": run_id, "state": "preparing", "revision": 1}
 
 
-def begin_collected_device_authority(db_path: Path, run_id: str) -> dict:
+def begin_collected_device_authority(
+    db_path: Path, run_id: str, *, marked_by: str = "local-operator",
+) -> dict:
     """Create or resume the preparation record for one successful collection."""
     init_device_collection_authority_storage(db_path)
     from app.pipeline_intake import (
@@ -242,7 +245,7 @@ def begin_collected_device_authority(db_path: Path, run_id: str) -> dict:
                 db,
                 source_kind=COLLECTED_DEVICE_SOURCE,
                 source_id=run_id,
-                marked_by="local-operator",
+                marked_by=marked_by,
                 marked_at=created_at,
                 policy_version=DEVICE_INGESTION_POLICY_VERSION,
             )

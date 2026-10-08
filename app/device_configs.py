@@ -1787,7 +1787,11 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
             "NCT is verifying the exact retained files used for analysis."
         )
         _write_json_atomic(run_dir / "manifest.json", manifest)
-        begin_collected_device_authority(DB_PATH, manifest["run_id"])
+        begin_collected_device_authority(
+            DB_PATH,
+            manifest["run_id"],
+            marked_by=str(manifest.get("operator") or "local-operator"),
+        )
         expected_files = {
             item["filename"]: item for item in current_contract["files"]
         }
@@ -3021,7 +3025,9 @@ async def upload_result(
         run_dir.rmdir()
         raise HTTPException(status_code=422, detail="Choose a non-empty result file")
     try:
-        begin_manual_upload_authority(DB_PATH, run_id)
+        begin_manual_upload_authority(
+            DB_PATH, run_id, marked_by=values["operator"],
+        )
         completed_at = utc_now()
         artifact = register_artifact_file(
             db_path=DB_PATH,

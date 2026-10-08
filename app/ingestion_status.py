@@ -483,7 +483,15 @@ def _device(db: sqlite3.Connection, marker: sqlite3.Row) -> dict:
         if collection else f"Device evidence {run_id[:8]}"
     )
     received = (authority["activated_at"] or authority["created_at"]) if authority else (collection["completed_at"] or collection["created_at"] if collection else None)
-    actor = marker["marked_by"]
+    # The intake marker records who admitted the source to this pipeline version.
+    # Older device markers used the local fallback even when the immutable collection
+    # manifest retained an exact operator. Prefer that authoritative operator for the
+    # status display without rewriting historical marker provenance.
+    actor = (
+        str(collection["operator"] or "").strip()
+        if collection and "operator" in collection.keys()
+        else ""
+    ) or marker["marked_by"]
     if authority is None:
         retained = _stage("retained", "Evidence authority", "blocked", "The intake marker points to a missing device evidence authority.")
     elif authority["state"] == "active":
@@ -509,7 +517,13 @@ def _device(db: sqlite3.Connection, marker: sqlite3.Row) -> dict:
     else:
         scope_stage = _stage("scope", "Network Scope", "needs_scope", "Choose the Network Scope that gives the reported addresses their meaning.")
         observations = _stage("scoped_observations", "Scoped device addresses", "needs_scope", "Address receipts start after a Network Scope is assigned.")
-    links = [{"label": "Open device history", "url": f"/device-config?run={quote(run_id)}#deviceHistory"}]
+    links = [{
+        "label": (
+            "Open device history" if assignment
+            else "Assign Network Scope in device history"
+        ),
+        "url": f"/device-config?run={quote(run_id)}#deviceHistory",
+    }]
     if authority and authority["state"] == "active" and authority["retained_filename"]:
         links.insert(0, {"label": "Open retained source", "url": f"/api/device-configs/{quote(run_id)}/files/{quote(authority['retained_filename'])}"})
     return _item(marker, run_id, name, received, actor, None,
