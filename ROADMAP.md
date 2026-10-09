@@ -2036,6 +2036,23 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    isolated stable `main` runs and three isolated foundation runs next, then add the
    still-unmeasured HTTP, persistent-view and rendered-browser slices.
 
+   **2026-10-09 retained core comparison completion:** three fresh isolated runs
+   of stable `main` `fc979133634fe068c7dd13b5aa6b0cb873305c0e` and three of
+   foundation `aca02905ca29256ff58cca701a74968b1da2bf99` passed the canonical
+   correctness oracle and every predeclared absolute and relative limit. All six
+   used unique inspected containers from image
+   `sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85`
+   with networking disabled and read-only source/corpus mounts. Median whole-run
+   wall time was 3.839 seconds on stable and 3.689 seconds on foundation; CPU time
+   was 5.498 versus 4.028 seconds; peak memory was 173,367,296 versus 177,496,064
+   bytes. Foundation retained a 36,864-byte query cache and converted all 24 warm
+   enrichment requests to cache hits; stable repeated all 24 searches. Raw reports
+   and the passing machine summary are retained under
+   `docs/benchmarks/phase0-core-20261009/`. This closes the retained core-engine
+   slice. Step 15 remains **in progress** for HTTP/persistent-view, rendered-browser,
+   multi-process, Range-hardware and production-scale measurements; this result does
+   not establish Range or mission readiness.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.

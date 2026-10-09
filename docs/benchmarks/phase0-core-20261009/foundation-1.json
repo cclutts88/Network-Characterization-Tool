@@ -1,0 +1,291 @@
+{
+  "benchmark": "phase0-core-engine-comparison",
+  "comparison_statistic": "median of three fresh-process repeats",
+  "corpus": {
+    "file_count": 17,
+    "generator_version": "phase0-benchmark-corpus:1",
+    "manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+    "total_bytes": 3492762
+  },
+  "correctness": {
+    "device_files": 4,
+    "enrichment": {
+      "cache_database_bytes": 36864,
+      "cache_supported": true,
+      "candidate_associations": 240,
+      "cold_cache_misses": 24,
+      "cold_search_calls": 24,
+      "cves": 24,
+      "retained_data_root_bytes": 159969,
+      "warm_cache_hits": 24,
+      "warm_search_calls": 0
+    },
+    "history": {
+      "hosts_added": 1,
+      "hosts_no_longer_confirmed": 1,
+      "ports_added": 2,
+      "ports_no_longer_observed": 1,
+      "version_changes": 1
+    },
+    "nmap_files": 9
+  },
+  "environment": {
+    "empty_data_directory_verified": true,
+    "fresh_process_required": true,
+    "machine": "x86_64",
+    "network_required": false,
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "python": "3.12.14 (main, Sep  1 2026, 00:10:07) [GCC 14.2.0]"
+  },
+  "expected_workloads": [
+    "device:devices/firewall.txt:cold",
+    "device:devices/firewall.txt:warm",
+    "device:devices/router.txt:cold",
+    "device:devices/router.txt:warm",
+    "device:devices/switch.txt:cold",
+    "device:devices/switch.txt:warm",
+    "device:devices/switch_1000_interfaces.txt:cold",
+    "device:devices/switch_1000_interfaces.txt:warm",
+    "enrichment:cold",
+    "enrichment:warm",
+    "history:compare",
+    "nmap:nmap/history_after.xml:cold",
+    "nmap:nmap/history_after.xml:warm",
+    "nmap:nmap/history_before.xml:cold",
+    "nmap:nmap/history_before.xml:warm",
+    "nmap:nmap/history_before_duplicate.xml:cold",
+    "nmap:nmap/history_before_duplicate.xml:warm",
+    "nmap:nmap/large_segment_01.xml:cold",
+    "nmap:nmap/large_segment_01.xml:warm",
+    "nmap:nmap/large_segment_02.xml:cold",
+    "nmap:nmap/large_segment_02.xml:warm",
+    "nmap:nmap/large_segment_03.xml:cold",
+    "nmap:nmap/large_segment_03.xml:warm",
+    "nmap:nmap/large_segment_04.xml:cold",
+    "nmap:nmap/large_segment_04.xml:warm",
+    "nmap:nmap/medium_udp.xml:cold",
+    "nmap:nmap/medium_udp.xml:warm",
+    "nmap:nmap/small_tcp.xml:cold",
+    "nmap:nmap/small_tcp.xml:warm"
+  ],
+  "failures": [],
+  "limitations": [
+    "Core parser, comparison, device-summary and offline enrichment work only.",
+    "HTTP endpoints, bounded pages, persistent foundation views and rendered browser timing are not measured.",
+    "Multi-process, Range, mission, production-history and physical-hardware performance are not measured."
+  ],
+  "limits": {
+    "absolute": {
+      "enrichment_cold_wall_seconds": 30.0,
+      "enrichment_warm_wall_seconds": 30.0,
+      "history_compare_wall_seconds": 10.0,
+      "retained_data_root_bytes": 104857600,
+      "single_device_parse_wall_seconds": 20.0,
+      "single_nmap_parse_wall_seconds": 30.0,
+      "whole_run_cpu_seconds": 120.0,
+      "whole_run_peak_rss_bytes": 1073741824,
+      "whole_run_wall_seconds": 120.0
+    },
+    "relative": {
+      "cpu_seconds_allowance": 0.5,
+      "foundation_over_main_ratio": 2.0,
+      "peak_rss_bytes_allowance": 134217728,
+      "wall_seconds_allowance": 0.5
+    }
+  },
+  "metrics": {
+    "device:devices/firewall.txt:cold": {
+      "cpu_seconds": 0.07828700000000022,
+      "wall_seconds": 0.11453941599938844
+    },
+    "device:devices/firewall.txt:warm": {
+      "cpu_seconds": 0.06842700000000002,
+      "wall_seconds": 0.09726616199986893
+    },
+    "device:devices/router.txt:cold": {
+      "cpu_seconds": 0.07008400000000004,
+      "wall_seconds": 0.09901467700001376
+    },
+    "device:devices/router.txt:warm": {
+      "cpu_seconds": 0.07408499999999996,
+      "wall_seconds": 0.10297299399826443
+    },
+    "device:devices/switch.txt:cold": {
+      "cpu_seconds": 0.05913900000000005,
+      "wall_seconds": 0.08681308700033696
+    },
+    "device:devices/switch.txt:warm": {
+      "cpu_seconds": 0.06447299999999978,
+      "wall_seconds": 0.09346231699964846
+    },
+    "device:devices/switch_1000_interfaces.txt:cold": {
+      "cpu_seconds": 0.2333989999999999,
+      "wall_seconds": 0.2717608180009847
+    },
+    "device:devices/switch_1000_interfaces.txt:warm": {
+      "cpu_seconds": 0.23258,
+      "wall_seconds": 0.26166074100001424
+    },
+    "enrichment:cold": {
+      "cpu_seconds": 1.620329,
+      "wall_seconds": 0.589419096999336
+    },
+    "enrichment:warm": {
+      "cpu_seconds": 0.002990999999999744,
+      "wall_seconds": 0.016268291001324542
+    },
+    "history:compare": {
+      "cpu_seconds": 0.0012630000000002362,
+      "wall_seconds": 0.001261030000023311
+    },
+    "nmap:nmap/history_after.xml:cold": {
+      "cpu_seconds": 0.003990999999999856,
+      "wall_seconds": 0.005334598999979789
+    },
+    "nmap:nmap/history_after.xml:warm": {
+      "cpu_seconds": 0.003293999999999908,
+      "wall_seconds": 0.004656348000935395
+    },
+    "nmap:nmap/history_before.xml:cold": {
+      "cpu_seconds": 0.0035840000000000316,
+      "wall_seconds": 0.0050551000003906665
+    },
+    "nmap:nmap/history_before.xml:warm": {
+      "cpu_seconds": 0.0032929999999999904,
+      "wall_seconds": 0.004733641000711941
+    },
+    "nmap:nmap/history_before_duplicate.xml:cold": {
+      "cpu_seconds": 0.003063000000000038,
+      "wall_seconds": 0.0044471210003393935
+    },
+    "nmap:nmap/history_before_duplicate.xml:warm": {
+      "cpu_seconds": 0.003371000000000013,
+      "wall_seconds": 0.004685868998421938
+    },
+    "nmap:nmap/large_segment_01.xml:cold": {
+      "cpu_seconds": 0.04119399999999995,
+      "wall_seconds": 0.04399183900022763
+    },
+    "nmap:nmap/large_segment_01.xml:warm": {
+      "cpu_seconds": 0.07103599999999988,
+      "wall_seconds": 0.07425538299867185
+    },
+    "nmap:nmap/large_segment_02.xml:cold": {
+      "cpu_seconds": 0.04475899999999999,
+      "wall_seconds": 0.048131064999324735
+    },
+    "nmap:nmap/large_segment_02.xml:warm": {
+      "cpu_seconds": 0.04797399999999996,
+      "wall_seconds": 0.0516441620002297
+    },
+    "nmap:nmap/large_segment_03.xml:cold": {
+      "cpu_seconds": 0.08553500000000014,
+      "wall_seconds": 0.08945829000003869
+    },
+    "nmap:nmap/large_segment_03.xml:warm": {
+      "cpu_seconds": 0.051087000000000105,
+      "wall_seconds": 0.054523208000318846
+    },
+    "nmap:nmap/large_segment_04.xml:cold": {
+      "cpu_seconds": 0.05325000000000002,
+      "wall_seconds": 0.05677877400012221
+    },
+    "nmap:nmap/large_segment_04.xml:warm": {
+      "cpu_seconds": 0.0962590000000001,
+      "wall_seconds": 0.10208155100008298
+    },
+    "nmap:nmap/medium_udp.xml:cold": {
+      "cpu_seconds": 0.005532000000000092,
+      "wall_seconds": 0.007560264999483479
+    },
+    "nmap:nmap/medium_udp.xml:warm": {
+      "cpu_seconds": 0.005222999999999978,
+      "wall_seconds": 0.006699932999254088
+    },
+    "nmap:nmap/small_tcp.xml:cold": {
+      "cpu_seconds": 0.0006099999999999994,
+      "wall_seconds": 0.0021524479998333845
+    },
+    "nmap:nmap/small_tcp.xml:warm": {
+      "cpu_seconds": 0.0005479999999999929,
+      "wall_seconds": 0.0020896660007565515
+    }
+  },
+  "passed": true,
+  "repeat": 1,
+  "retained_state": {
+    "data_root_bytes": 159969,
+    "data_root_file_count": 9,
+    "files": [
+      {
+        "path": "analyzer.db",
+        "size_bytes": 36864
+      },
+      {
+        "path": "device-configs/3f5b5a3c9f1951d2802789e0f8d069ab/manifest.json",
+        "size_bytes": 256
+      },
+      {
+        "path": "device-configs/3f5b5a3c9f1951d2802789e0f8d069ab/uploaded-evidence.txt",
+        "size_bytes": 448
+      },
+      {
+        "path": "device-configs/4615012081f3bdbace511f3ed3ae8d6b/manifest.json",
+        "size_bytes": 254
+      },
+      {
+        "path": "device-configs/4615012081f3bdbace511f3ed3ae8d6b/uploaded-evidence.txt",
+        "size_bytes": 558
+      },
+      {
+        "path": "device-configs/51e99c2af85cca7ee6a78110c89deaa2/manifest.json",
+        "size_bytes": 270
+      },
+      {
+        "path": "device-configs/51e99c2af85cca7ee6a78110c89deaa2/uploaded-evidence.txt",
+        "size_bytes": 120383
+      },
+      {
+        "path": "device-configs/a1911a113b8337a48c860e5114e7816b/manifest.json",
+        "size_bytes": 254
+      },
+      {
+        "path": "device-configs/a1911a113b8337a48c860e5114e7816b/uploaded-evidence.txt",
+        "size_bytes": 682
+      }
+    ]
+  },
+  "runner_sha256": "379e6af411004e2f5b213465b3badef6ec6a254eb514e7fa6d88c6dcc87441ff",
+  "runner_version": "phase0-core-benchmark:1",
+  "target": {
+    "container_image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "identity_evidence": {
+      "container_image": {
+        "container_id": "64f6929b8b67507de952d9fc45cfd3c74dc1a0be6638bf5c62531e0b504f05b8",
+        "corpus_mount_read_only": true,
+        "fresh_container": true,
+        "image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+        "network_mode": "none",
+        "source_mount_read_only": true,
+        "verification_method": "controller:docker-image-inspect"
+      },
+      "git": {
+        "clean": true,
+        "revision": "aca02905ca29256ff58cca701a74968b1da2bf99",
+        "source_digest_sha256": "6c28ee0057a6242ce98d6c6ac7262d06013b288aa02e3ce24ec736743a5ea8c5",
+        "verification_method": "controller:git-rev-parse-status-and-source-digest"
+      },
+      "type": "externally-verified-controller-attestations",
+      "validated": true
+    },
+    "revision": "aca02905ca29256ff58cca701a74968b1da2bf99",
+    "source_digest_sha256": "6c28ee0057a6242ce98d6c6ac7262d06013b288aa02e3ce24ec736743a5ea8c5",
+    "source_file_count": 90
+  },
+  "total": {
+    "cpu_seconds": 3.9252219999999993,
+    "peak_rss_bytes": 176435200,
+    "peak_rss_method": "cgroup-v2 memory.peak including child processes",
+    "wall_seconds": 3.6872420630006673
+  }
+}
