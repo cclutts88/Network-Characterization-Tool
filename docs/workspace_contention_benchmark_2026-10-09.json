@@ -1,0 +1,739 @@
+{
+  "aggregate": {
+    "concurrent": {
+      "filter_preset": {
+        "p95_limit_ms": 1000.0,
+        "p95_within_limit": true,
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 2436.065,
+        "worst_repeat_p50_ms": 1.391,
+        "worst_repeat_p95_ms": 12.412
+      },
+      "layout": {
+        "p95_limit_ms": 1000.0,
+        "p95_within_limit": true,
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 1434.66,
+        "worst_repeat_p50_ms": 1.39,
+        "worst_repeat_p95_ms": 9.681
+      },
+      "note": {
+        "p95_limit_ms": 1000.0,
+        "p95_within_limit": true,
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 1832.282,
+        "worst_repeat_p50_ms": 1.678,
+        "worst_repeat_p95_ms": 15.468
+      },
+      "working_view": {
+        "p95_limit_ms": 1000.0,
+        "p95_within_limit": true,
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 1435.306,
+        "worst_repeat_p50_ms": 1.371,
+        "worst_repeat_p95_ms": 11.607
+      }
+    },
+    "serial": {
+      "filter_preset": {
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 9.14,
+        "worst_repeat_p50_ms": 2.756,
+        "worst_repeat_p95_ms": 3.185
+      },
+      "layout": {
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 4.46,
+        "worst_repeat_p50_ms": 2.799,
+        "worst_repeat_p95_ms": 3.276
+      },
+      "note": {
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 9.889,
+        "worst_repeat_p50_ms": 3.079,
+        "worst_repeat_p95_ms": 3.547
+      },
+      "working_view": {
+        "sample_count_per_run": 400,
+        "worst_repeat_max_ms": 7.648,
+        "worst_repeat_p50_ms": 2.691,
+        "worst_repeat_p95_ms": 3.059
+      }
+    }
+  },
+  "configuration": {
+    "analysts": 8,
+    "cycles_per_analyst": 50,
+    "guardrails": {
+      "concurrent_p95": "at most max(1000 ms, 10 times serial p95)",
+      "errors_and_conflicts": 0,
+      "ordinary_save": "each measured ordinary save is less than 5000 ms",
+      "reader_progress": "at least one completed read while concurrent writers are active"
+    },
+    "operations_per_family_per_run": 400,
+    "payload_bytes": 4096,
+    "percentile_method": "nearest rank: sorted[ceil(p * n) - 1]",
+    "reader_workers": 2,
+    "reads_per_worker": 50,
+    "recursive_branch_items": 1000,
+    "repeats_per_mode": 3,
+    "seed": 20261009
+  },
+  "environment": {
+    "host_label": "Windows Docker Desktop development host",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "python": "3.12.14",
+    "runtime_label": "nct-foundation-tests:local",
+    "source_commit": "970f25c350ddf29ad7ea8c61f0b6c828fe447205",
+    "sqlite": "3.46.1"
+  },
+  "generated_at": "2026-10-09T17:32:10+00:00",
+  "guardrail_failures": [],
+  "limitations": [
+    "Local disposable development benchmark; it is not Range-scale or mission-ready acceptance.",
+    "Measures direct in-process storage functions, not HTTP requests or rendered page performance.",
+    "Does not measure network latency, multi-process contention, cold-cache startup, or a large retained installation.",
+    "Each simulated analyst owns distinct ordinary records, so optimistic conflicts are treated as failures rather than intentional test traffic.",
+    "Whole-process process_time is reported as CPU time; it is not per-thread CPU attribution."
+  ],
+  "passed": true,
+  "runs": [
+    {
+      "failures": {
+        "locked_busy_timeout": [],
+        "locked_busy_timeout_count": 0,
+        "optimistic_conflict": [],
+        "optimistic_conflict_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      "mode": "serial",
+      "ordinary_during_recursive": {
+        "filter_preset": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "layout": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "note": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "working_view": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        }
+      },
+      "ordinary_families": {
+        "filter_preset": {
+          "count": 400,
+          "max_ms": 9.14,
+          "p50_ms": 2.705,
+          "p95_ms": 3.084
+        },
+        "layout": {
+          "count": 400,
+          "max_ms": 3.958,
+          "p50_ms": 2.728,
+          "p95_ms": 3.257
+        },
+        "note": {
+          "count": 400,
+          "max_ms": 7.414,
+          "p50_ms": 3.021,
+          "p95_ms": 3.547
+        },
+        "working_view": {
+          "count": 400,
+          "max_ms": 7.648,
+          "p50_ms": 2.632,
+          "p95_ms": 3.019
+        }
+      },
+      "passed": true,
+      "process_cpu_seconds": 1.6277,
+      "reads": {
+        "attempted": 100,
+        "completed": 100,
+        "while_writers_active": 0
+      },
+      "recursive_operations": [
+        {
+          "action": "share",
+          "milliseconds": 81.107
+        },
+        {
+          "action": "unshare",
+          "milliseconds": 79.04
+        },
+        {
+          "action": "move",
+          "milliseconds": 7.125
+        }
+      ],
+      "recursive_overlap_contract": {
+        "passed": true,
+        "required_per_family": false
+      },
+      "repeat": 1,
+      "verification": {
+        "busy_timeout_ms": 30000,
+        "failures": [],
+        "integrity_check": [
+          "ok"
+        ],
+        "journal_mode": "wal",
+        "passed": true,
+        "row_counts": {
+          "ordinary_filter_presets": 8,
+          "ordinary_layouts": 8,
+          "ordinary_notes": 32,
+          "ordinary_working_views": 8,
+          "recursive_notes": 1001
+        }
+      },
+      "wall_seconds": 5.0608
+    },
+    {
+      "failures": {
+        "locked_busy_timeout": [],
+        "locked_busy_timeout_count": 0,
+        "optimistic_conflict": [],
+        "optimistic_conflict_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      "mode": "concurrent",
+      "ordinary_during_recursive": {
+        "filter_preset": {
+          "count": 179,
+          "max_ms": 2436.065,
+          "p50_ms": 1.375,
+          "p95_ms": 34.843
+        },
+        "layout": {
+          "count": 177,
+          "max_ms": 434.291,
+          "p50_ms": 1.34,
+          "p95_ms": 34.736
+        },
+        "note": {
+          "count": 181,
+          "max_ms": 1132.353,
+          "p50_ms": 1.659,
+          "p95_ms": 55.356
+        },
+        "working_view": {
+          "count": 180,
+          "max_ms": 1130.943,
+          "p50_ms": 1.305,
+          "p95_ms": 11.49
+        }
+      },
+      "ordinary_families": {
+        "filter_preset": {
+          "count": 400,
+          "max_ms": 2436.065,
+          "p50_ms": 1.383,
+          "p95_ms": 3.5
+        },
+        "layout": {
+          "count": 400,
+          "max_ms": 434.291,
+          "p50_ms": 1.38,
+          "p95_ms": 3.424
+        },
+        "note": {
+          "count": 400,
+          "max_ms": 1132.353,
+          "p50_ms": 1.667,
+          "p95_ms": 10.233
+        },
+        "working_view": {
+          "count": 400,
+          "max_ms": 1130.943,
+          "p50_ms": 1.336,
+          "p95_ms": 3.039
+        }
+      },
+      "passed": true,
+      "process_cpu_seconds": 1.5437,
+      "reads": {
+        "attempted": 100,
+        "completed": 100,
+        "while_writers_active": 100
+      },
+      "recursive_operations": [
+        {
+          "action": "share",
+          "milliseconds": 95.794
+        },
+        {
+          "action": "unshare",
+          "milliseconds": 98.339
+        },
+        {
+          "action": "move",
+          "milliseconds": 935.988
+        }
+      ],
+      "recursive_overlap_contract": {
+        "passed": true,
+        "required_per_family": true
+      },
+      "repeat": 1,
+      "verification": {
+        "busy_timeout_ms": 30000,
+        "failures": [],
+        "integrity_check": [
+          "ok"
+        ],
+        "journal_mode": "wal",
+        "passed": true,
+        "row_counts": {
+          "ordinary_filter_presets": 8,
+          "ordinary_layouts": 8,
+          "ordinary_notes": 32,
+          "ordinary_working_views": 8,
+          "recursive_notes": 1001
+        }
+      },
+      "wall_seconds": 3.0278
+    },
+    {
+      "failures": {
+        "locked_busy_timeout": [],
+        "locked_busy_timeout_count": 0,
+        "optimistic_conflict": [],
+        "optimistic_conflict_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      "mode": "serial",
+      "ordinary_during_recursive": {
+        "filter_preset": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "layout": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "note": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "working_view": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        }
+      },
+      "ordinary_families": {
+        "filter_preset": {
+          "count": 400,
+          "max_ms": 5.098,
+          "p50_ms": 2.756,
+          "p95_ms": 3.185
+        },
+        "layout": {
+          "count": 400,
+          "max_ms": 4.113,
+          "p50_ms": 2.799,
+          "p95_ms": 3.276
+        },
+        "note": {
+          "count": 400,
+          "max_ms": 9.889,
+          "p50_ms": 3.079,
+          "p95_ms": 3.531
+        },
+        "working_view": {
+          "count": 400,
+          "max_ms": 4.839,
+          "p50_ms": 2.691,
+          "p95_ms": 3.011
+        }
+      },
+      "passed": true,
+      "process_cpu_seconds": 1.651,
+      "reads": {
+        "attempted": 100,
+        "completed": 100,
+        "while_writers_active": 0
+      },
+      "recursive_operations": [
+        {
+          "action": "share",
+          "milliseconds": 79.918
+        },
+        {
+          "action": "unshare",
+          "milliseconds": 80.762
+        },
+        {
+          "action": "move",
+          "milliseconds": 6.885
+        }
+      ],
+      "recursive_overlap_contract": {
+        "passed": true,
+        "required_per_family": false
+      },
+      "repeat": 2,
+      "verification": {
+        "busy_timeout_ms": 30000,
+        "failures": [],
+        "integrity_check": [
+          "ok"
+        ],
+        "journal_mode": "wal",
+        "passed": true,
+        "row_counts": {
+          "ordinary_filter_presets": 8,
+          "ordinary_layouts": 8,
+          "ordinary_notes": 32,
+          "ordinary_working_views": 8,
+          "recursive_notes": 1001
+        }
+      },
+      "wall_seconds": 5.1556
+    },
+    {
+      "failures": {
+        "locked_busy_timeout": [],
+        "locked_busy_timeout_count": 0,
+        "optimistic_conflict": [],
+        "optimistic_conflict_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      "mode": "concurrent",
+      "ordinary_during_recursive": {
+        "filter_preset": {
+          "count": 206,
+          "max_ms": 734.404,
+          "p50_ms": 1.328,
+          "p95_ms": 6.823
+        },
+        "layout": {
+          "count": 205,
+          "max_ms": 1434.66,
+          "p50_ms": 1.347,
+          "p95_ms": 11.226
+        },
+        "note": {
+          "count": 207,
+          "max_ms": 1832.282,
+          "p50_ms": 1.615,
+          "p95_ms": 35.192
+        },
+        "working_view": {
+          "count": 205,
+          "max_ms": 831.086,
+          "p50_ms": 1.295,
+          "p95_ms": 19.519
+        }
+      },
+      "ordinary_families": {
+        "filter_preset": {
+          "count": 400,
+          "max_ms": 734.404,
+          "p50_ms": 1.356,
+          "p95_ms": 4.525
+        },
+        "layout": {
+          "count": 400,
+          "max_ms": 1434.66,
+          "p50_ms": 1.372,
+          "p95_ms": 3.465
+        },
+        "note": {
+          "count": 400,
+          "max_ms": 1832.282,
+          "p50_ms": 1.629,
+          "p95_ms": 11.788
+        },
+        "working_view": {
+          "count": 400,
+          "max_ms": 831.086,
+          "p50_ms": 1.325,
+          "p95_ms": 2.993
+        }
+      },
+      "passed": true,
+      "process_cpu_seconds": 1.5345,
+      "reads": {
+        "attempted": 100,
+        "completed": 100,
+        "while_writers_active": 100
+      },
+      "recursive_operations": [
+        {
+          "action": "share",
+          "milliseconds": 200.975
+        },
+        {
+          "action": "unshare",
+          "milliseconds": 81.159
+        },
+        {
+          "action": "move",
+          "milliseconds": 935.835
+        }
+      ],
+      "recursive_overlap_contract": {
+        "passed": true,
+        "required_per_family": true
+      },
+      "repeat": 2,
+      "verification": {
+        "busy_timeout_ms": 30000,
+        "failures": [],
+        "integrity_check": [
+          "ok"
+        ],
+        "journal_mode": "wal",
+        "passed": true,
+        "row_counts": {
+          "ordinary_filter_presets": 8,
+          "ordinary_layouts": 8,
+          "ordinary_notes": 32,
+          "ordinary_working_views": 8,
+          "recursive_notes": 1001
+        }
+      },
+      "wall_seconds": 2.8089
+    },
+    {
+      "failures": {
+        "locked_busy_timeout": [],
+        "locked_busy_timeout_count": 0,
+        "optimistic_conflict": [],
+        "optimistic_conflict_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      "mode": "serial",
+      "ordinary_during_recursive": {
+        "filter_preset": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "layout": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "note": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "working_view": {
+          "count": 0,
+          "max_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        }
+      },
+      "ordinary_families": {
+        "filter_preset": {
+          "count": 400,
+          "max_ms": 9.112,
+          "p50_ms": 2.682,
+          "p95_ms": 3.154
+        },
+        "layout": {
+          "count": 400,
+          "max_ms": 4.46,
+          "p50_ms": 2.706,
+          "p95_ms": 3.203
+        },
+        "note": {
+          "count": 400,
+          "max_ms": 4.187,
+          "p50_ms": 3.0,
+          "p95_ms": 3.436
+        },
+        "working_view": {
+          "count": 400,
+          "max_ms": 5.541,
+          "p50_ms": 2.63,
+          "p95_ms": 3.059
+        }
+      },
+      "passed": true,
+      "process_cpu_seconds": 1.6452,
+      "reads": {
+        "attempted": 100,
+        "completed": 100,
+        "while_writers_active": 0
+      },
+      "recursive_operations": [
+        {
+          "action": "share",
+          "milliseconds": 78.886
+        },
+        {
+          "action": "unshare",
+          "milliseconds": 80.41
+        },
+        {
+          "action": "move",
+          "milliseconds": 8.058
+        }
+      ],
+      "recursive_overlap_contract": {
+        "passed": true,
+        "required_per_family": false
+      },
+      "repeat": 3,
+      "verification": {
+        "busy_timeout_ms": 30000,
+        "failures": [],
+        "integrity_check": [
+          "ok"
+        ],
+        "journal_mode": "wal",
+        "passed": true,
+        "row_counts": {
+          "ordinary_filter_presets": 8,
+          "ordinary_layouts": 8,
+          "ordinary_notes": 32,
+          "ordinary_working_views": 8,
+          "recursive_notes": 1001
+        }
+      },
+      "wall_seconds": 5.0288
+    },
+    {
+      "failures": {
+        "locked_busy_timeout": [],
+        "locked_busy_timeout_count": 0,
+        "optimistic_conflict": [],
+        "optimistic_conflict_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      "mode": "concurrent",
+      "ordinary_during_recursive": {
+        "filter_preset": {
+          "count": 23,
+          "max_ms": 1335.717,
+          "p50_ms": 11.134,
+          "p95_ms": 136.575
+        },
+        "layout": {
+          "count": 24,
+          "max_ms": 731.18,
+          "p50_ms": 3.032,
+          "p95_ms": 183.66
+        },
+        "note": {
+          "count": 24,
+          "max_ms": 183.934,
+          "p50_ms": 4.064,
+          "p95_ms": 108.424
+        },
+        "working_view": {
+          "count": 27,
+          "max_ms": 1435.306,
+          "p50_ms": 7.247,
+          "p95_ms": 130.297
+        }
+      },
+      "ordinary_families": {
+        "filter_preset": {
+          "count": 400,
+          "max_ms": 1335.717,
+          "p50_ms": 1.391,
+          "p95_ms": 12.412
+        },
+        "layout": {
+          "count": 400,
+          "max_ms": 731.18,
+          "p50_ms": 1.39,
+          "p95_ms": 9.681
+        },
+        "note": {
+          "count": 400,
+          "max_ms": 430.904,
+          "p50_ms": 1.678,
+          "p95_ms": 15.468
+        },
+        "working_view": {
+          "count": 400,
+          "max_ms": 1435.306,
+          "p50_ms": 1.371,
+          "p95_ms": 11.607
+        }
+      },
+      "passed": true,
+      "process_cpu_seconds": 1.5121,
+      "reads": {
+        "attempted": 100,
+        "completed": 100,
+        "while_writers_active": 100
+      },
+      "recursive_operations": [
+        {
+          "action": "share",
+          "milliseconds": 101.891
+        },
+        {
+          "action": "unshare",
+          "milliseconds": 100.57
+        },
+        {
+          "action": "move",
+          "milliseconds": 6.818
+        }
+      ],
+      "recursive_overlap_contract": {
+        "passed": true,
+        "required_per_family": true
+      },
+      "repeat": 3,
+      "verification": {
+        "busy_timeout_ms": 30000,
+        "failures": [],
+        "integrity_check": [
+          "ok"
+        ],
+        "journal_mode": "wal",
+        "passed": true,
+        "row_counts": {
+          "ordinary_filter_presets": 8,
+          "ordinary_layouts": 8,
+          "ordinary_notes": 32,
+          "ordinary_working_views": 8,
+          "recursive_notes": 1001
+        }
+      },
+      "wall_seconds": 2.6712
+    }
+  ],
+  "schema_version": 2
+}

@@ -1818,9 +1818,10 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
        tests passed with 12 expected skips and one dependency deprecation warning; 20
        focused ancestry tests passed. The live built-in guide showed the limits and
        all-or-nothing behavior without browser errors. Independent reviewer: CLEAR;
-       novice operator guide: CLEAR. Broader representative multi-workload benchmarking
-       remains open, so Step 12 stays partial.
-     - [~] Representative workspace contention benchmark started 2026-10-09. Use a
+       novice operator guide: CLEAR. The representative local benchmark below closes
+       the next reliability subgate; production-scale and Range validation remain open,
+       so Step 12 stays partial.
+     - [x] Representative workspace contention benchmark completed 2026-10-09. Use a
        disposable database and public storage functions to run simultaneous investigation-
        note, Map-layout, working-view, and filter-preset updates for multiple isolated
        analysts while bounded reads continue. Record per-family latency, wall/CPU time,
@@ -1832,14 +1833,34 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
        a 1,000-item recursive share/unshare/move lane, and bounded readers. It must fail
        on any lock error, conflict, unexpected error, incomplete read progress, missing
        per-family recursive overlap, incorrect payload/version/audit/folder state,
-       integrity failure, five-second call, or concurrent p95 above the greater of one
+       integrity failure, five-second measured ordinary save, or concurrent p95 above the greater of one
        second and ten times serial p95. Independent start-gate review: CLEAR after
        deterministic recursive overlap and complete descendant/audit checks were added.
+       Plain-language result: eight simulated analysts could save separate workspace
+       records while reads and a 1,000-item folder change continued; all requested work
+       completed and the final saved data and change history were correct.
+       Commit `970f25c350ddf29ad7ea8c61f0b6c828fe447205` passed all three
+       serial and three concurrent repeats: 400 measured saves per family per run,
+       100/100 reads in each concurrent run while writers were active, nonzero recursive
+       overlap for every family, zero lock/busy/timeout errors, zero optimistic conflicts,
+       zero unexpected errors, exact final payload/version/ownership/audit/folder state,
+       and `PRAGMA integrity_check = ok`. Worst concurrent p95 was 15.468 ms and
+       worst measured ordinary save was 2,436.065 ms, within the predeclared 1,000 ms
+       p95 and five-second ordinary-save limits. Ownership fault tests now prove that
+       incorrect primary-row or audit ownership fails the benchmark. Final Linux
+       validation: 1,136 passed, 12 expected skips, and one existing dependency
+       deprecation warning. Novice documentation gate: CLEAR. Independent completion
+       gate: CLEAR. Reproducible script, complete JSON, and plain-language
+       report are retained in `scripts/benchmark_workspace_contention.py` and
+       `docs/workspace_contention_benchmark_2026-10-09.{json,md}`. This is a local,
+       direct, single-process storage baseline only; HTTP/page, network, multi-process,
+       cold-cache, large-installation, Range, and mission performance remain unclaimed.
    - [x] Initial disposable synthetic storage measurements executed for 100 and 1,000
      collections: first dry run, initial backfill, repeated backfill, wall time,
      CPU, peak process memory and bytes. Original-file and observation-count checks
      passed. Reviewer CLEAR; report and reproducible script retained. Production-scale,
-     cold-cache, concurrent-workload and note-tree acceptance remain open.
+     cold-cache, multi-process and Range acceptance remain open; the later local
+     concurrent-workspace and note-tree subgates are complete above.
 
    WAL and a 30-second busy timeout were already present before this redesign; the
    remaining reliability work is focused on eliminating unnecessary writes and
