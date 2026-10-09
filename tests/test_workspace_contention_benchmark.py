@@ -92,6 +92,54 @@ def test_recursive_verification_rejects_partial_descendant_state(tmp_path):
     assert any("recursive descendants" in item for item in verification["failures"])
 
 
+def test_verification_rejects_primary_row_owner_changes(tmp_path):
+    db_path = tmp_path / "wrong-primary-owner.db"
+    states, recursive = benchmark._prepare(
+        db_path, workers=1, payload_bytes=0, recursive_items=5
+    )
+    benchmark._recursive(db_path, recursive)
+    with benchmark.connect_database(db_path) as db:
+        db.execute(
+            "UPDATE analyst_workspace_layouts SET owner = 'wrong-owner' WHERE layout_id = ?",
+            (states[0]["layout"]["layout_id"],),
+        )
+        db.execute(
+            "UPDATE analyst_filter_presets SET owner = 'wrong-owner' WHERE preset_id = ?",
+            (states[0]["filter_preset"]["preset_id"],),
+        )
+
+    verification = benchmark._verify(db_path, states, recursive)
+
+    assert verification["passed"] is False
+    assert any("expected owner" in item for item in verification["failures"])
+    assert any("row ownership/count mismatch" in item for item in verification["failures"])
+
+
+def test_verification_rejects_audit_owner_changes(tmp_path):
+    db_path = tmp_path / "wrong-audit-owner.db"
+    states, recursive = benchmark._prepare(
+        db_path, workers=1, payload_bytes=0, recursive_items=5
+    )
+    benchmark._recursive(db_path, recursive)
+    with benchmark.connect_database(db_path) as db:
+        db.execute(
+            """UPDATE analyst_workspace_layout_audit SET owner = 'wrong-owner'
+               WHERE layout_id = ?""",
+            (states[0]["layout"]["layout_id"],),
+        )
+        db.execute(
+            """UPDATE analyst_investigation_note_audit SET owner = 'wrong-owner'
+               WHERE note_id = ? AND action = 'share'""",
+            (recursive["root"]["note_id"],),
+        )
+
+    verification = benchmark._verify(db_path, states, recursive)
+
+    assert verification["passed"] is False
+    assert any("unexpected audit owner" in item for item in verification["failures"])
+    assert any("recursive root audit mismatch" in item for item in verification["failures"])
+
+
 def test_workspace_contention_run_reports_failure_without_false_success(
     tmp_path, monkeypatch
 ):

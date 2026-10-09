@@ -265,19 +265,19 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
         for state in states:
             owner = state["owner"]
             note = db.execute(
-                "SELECT version, content FROM analyst_investigation_notes WHERE note_id = ?",
+                "SELECT owner, version, content FROM analyst_investigation_notes WHERE note_id = ?",
                 (state["note"]["note_id"],),
             ).fetchone()
             layout = db.execute(
-                "SELECT version, snapshot_json FROM analyst_workspace_layouts WHERE layout_id = ?",
+                "SELECT owner, version, snapshot_json FROM analyst_workspace_layouts WHERE layout_id = ?",
                 (state["layout"]["layout_id"],),
             ).fetchone()
             view = db.execute(
-                "SELECT version, snapshot_json FROM analyst_view_preferences WHERE owner = ? AND page = 'hunt'",
+                "SELECT owner, version, snapshot_json FROM analyst_view_preferences WHERE owner = ? AND page = 'hunt'",
                 (owner,),
             ).fetchone()
             preset = db.execute(
-                "SELECT version, snapshot_json FROM analyst_filter_presets WHERE preset_id = ?",
+                "SELECT owner, version, snapshot_json FROM analyst_filter_presets WHERE preset_id = ?",
                 (state["filter_preset"]["preset_id"],),
             ).fetchone()
             rows = {"note": note, "layout": layout, "working_view": view, "filter_preset": preset}
@@ -287,6 +287,10 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                 if actual_version != expected_version:
                     failures.append(
                         f"{owner} {family}: expected version {expected_version}, found {actual_version}"
+                    )
+                if row and str(row["owner"]) != owner:
+                    failures.append(
+                        f"{owner} {family}: expected owner {owner}, found {row['owner']}"
                     )
                 if row:
                     if family == "note":
@@ -313,7 +317,7 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                 ),
             ):
                 audit = db.execute(
-                    f"SELECT action, version, actor FROM {table} WHERE {identity_column} = ? ORDER BY audit_id",
+                    f"SELECT action, version, owner, actor FROM {table} WHERE {identity_column} = ? ORDER BY audit_id",
                     (identity,),
                 ).fetchall()
                 expected_versions = list(range(1, 2 + state["updates"]["note" if "note" in table else "layout"]))
@@ -327,6 +331,8 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                     failures.append(f"{owner} {table}: audit actions are not contiguous")
                 if any(str(row["actor"]) != owner for row in audit):
                     failures.append(f"{owner} {table}: unexpected audit actor")
+                if any(str(row["owner"]) != owner for row in audit):
+                    failures.append(f"{owner} {table}: unexpected audit owner")
 
             owner_note_count = int(
                 db.execute(
@@ -338,7 +344,7 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                 failures.append(f"{owner}: expected 4 owned note records, found {owner_note_count}")
 
         recursive_row = db.execute(
-            "SELECT parent_id, version, visibility, shared_page FROM analyst_investigation_notes WHERE note_id = ?",
+            "SELECT owner, parent_id, version, visibility, shared_page FROM analyst_investigation_notes WHERE note_id = ?",
             (recursive["root"]["note_id"],),
         ).fetchone()
         recursive_children = db.execute(
@@ -362,7 +368,8 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                 f"recursive owner: expected {recursive['items'] + 1} records, found {recursive_count}"
             )
         if recursive_row is None or (
-            str(recursive_row["parent_id"]) != recursive["destination"]["note_id"]
+            str(recursive_row["owner"]) != recursive["owner"]
+            or str(recursive_row["parent_id"]) != recursive["destination"]["note_id"]
             or int(recursive_row["version"]) != 4
             or str(recursive_row["visibility"]) != "personal"
             or recursive_row["shared_page"] is not None
@@ -381,19 +388,24 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                 "recursive descendants did not retain their exact parent, version 3, and personal sharing state"
             )
         recursive_audit = db.execute(
-            """SELECT action, version, actor
+            """SELECT action, version, owner, actor
                FROM analyst_investigation_note_audit
                WHERE note_id = ? ORDER BY audit_id""",
             (recursive["root"]["note_id"],),
         ).fetchall()
         expected_recursive_audit = [
-            ("create", 1, recursive["owner"]),
-            ("share", 2, recursive["owner"]),
-            ("unshare", 3, recursive["owner"]),
-            ("update", 4, recursive["owner"]),
+            ("create", 1, recursive["owner"], recursive["owner"]),
+            ("share", 2, recursive["owner"], recursive["owner"]),
+            ("unshare", 3, recursive["owner"], recursive["owner"]),
+            ("update", 4, recursive["owner"], recursive["owner"]),
         ]
         actual_recursive_audit = [
-            (str(row["action"]), int(row["version"]), str(row["actor"]))
+            (
+                str(row["action"]),
+                int(row["version"]),
+                str(row["owner"]),
+                str(row["actor"]),
+            )
             for row in recursive_audit
         ]
         if actual_recursive_audit != expected_recursive_audit:
@@ -415,13 +427,19 @@ def _verify(db_path: Path, states: list[dict], recursive: dict) -> dict:
                 ).fetchone()[0]
             ),
             "ordinary_layouts": int(
-                db.execute("SELECT COUNT(*) FROM analyst_workspace_layouts").fetchone()[0]
+                db.execute(
+                    "SELECT COUNT(*) FROM analyst_workspace_layouts WHERE owner LIKE 'benchmark-analyst-%'"
+                ).fetchone()[0]
             ),
             "ordinary_working_views": int(
-                db.execute("SELECT COUNT(*) FROM analyst_view_preferences").fetchone()[0]
+                db.execute(
+                    "SELECT COUNT(*) FROM analyst_view_preferences WHERE owner LIKE 'benchmark-analyst-%'"
+                ).fetchone()[0]
             ),
             "ordinary_filter_presets": int(
-                db.execute("SELECT COUNT(*) FROM analyst_filter_presets").fetchone()[0]
+                db.execute(
+                    "SELECT COUNT(*) FROM analyst_filter_presets WHERE owner LIKE 'benchmark-analyst-%'"
+                ).fetchone()[0]
             ),
             "recursive_notes": recursive_count,
         }
@@ -731,7 +749,7 @@ def run_suite(
             "guardrails": {
                 "errors_and_conflicts": 0,
                 "concurrent_p95": "at most max(1000 ms, 10 times serial p95)",
-                "individual_call": "less than 5000 ms",
+                "ordinary_save": "each measured ordinary save is less than 5000 ms",
                 "reader_progress": "at least one completed read while concurrent writers are active",
             },
         },
