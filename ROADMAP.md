@@ -2002,6 +2002,40 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    dataset prerequisite; Step 15 remains in progress until exact stable `main` and
    foundation revisions run the retained benchmark procedure under predeclared limits.
 
+   **2026-10-09 core-engine comparison runner start:** add a revision-neutral worker
+   for one fresh-process repeat of the directly comparable stable/foundation core:
+   every Nmap parser workload, known historical comparison, every device parser
+   workload, and the frozen offline enrichment workload. Declare absolute and relative
+   limits plus the three-repeat median rule in code before either retained branch run.
+   Each retained repeat must use a new network-disabled Linux container, read-only
+   source/corpus mounts and a nonexistent data path; record the actual source-tree
+   digest, Git revision evidence, container image identity, runner digest, corpus
+   manifest digest, wall/CPU time including child work, whole-container peak memory,
+   retained cache size, correctness results and every limitation. Stable `main` has no
+   persistent query cache, so its repeated query work remains a directly measured
+   baseline while foundation cache reuse is a separately asserted capability. HTTP and
+   bounded-page endpoints, foundation persistence views, Analyze/Hunt/Reach/Map requests,
+   rendered browser timing, multi-process load, Range hardware and mission data remain
+   required later Step 15 slices. Independent architecture start gate: **CLEAR**.
+
+   **2026-10-09 core-engine comparison runner completion:** the revision-neutral
+   worker and three-repeat summarizer now enforce the canonical corpus rather than
+   trusting an editable manifest; reject linked inputs and reused state; verify the
+   complete workload and result oracle; and measure parser, history, device and
+   offline-enrichment work with predeclared absolute and relative limits. Retained
+   reports require external controller evidence for an exact clean Git revision,
+   mounted source digest, inspected image, unique fresh container, disabled network
+   and read-only source/corpus mounts. Storage accounting includes every file in the
+   disposable data root, including SQLite side files. The summary rejects missing
+   workloads, cross-branch correctness drift, reused containers and workload-level
+   or whole-run wall/CPU/memory regressions. Focused Linux validation: **17 passed**.
+   Complete Docker regression suite: **1,169 passed, 13 skipped**, with the existing
+   Starlette dependency warning. Independent quality gate: **CLEAR** after the
+   initial manifest, identity, workload, retained-storage and whole-run comparison
+   findings were corrected. Step 15 remains in progress: retain and summarize three
+   isolated stable `main` runs and three isolated foundation runs next, then add the
+   still-unmeasured HTTP, persistent-view and rendered-browser slices.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
