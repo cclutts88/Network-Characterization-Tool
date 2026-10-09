@@ -2043,7 +2043,9 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="networkOverview"' in html
     assert "Current network evidence" in html
     assert "Newest retained Nmap results and device configuration evidence" in html
-    assert "/api/analysis/network" in html
+    assert "/api/analysis/network/page?${params}" in html
+    assert "/api/analysis/network/outliers?${params}" in html
+    assert "/api/analysis/network/ips?${params}" in html
     assert 'id="networkFocus"' in html
     assert 'value="ip">IP address</option>' in html
     assert 'value="port">Lowest observed port</option>' in html
@@ -2064,15 +2066,15 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "currentNetwork.hosts" in html
     assert 'id="networkOutliersPanel"' in html
     assert "Least Frequency Analysis (LFA)" in html
-    assert "The Subnet filter above recalculates this view" in html
+    assert "The Subnet filter in Host Inventory recalculates this view" in html
     assert 'id="lfaThreshold"' in html
     assert 'min="1" max="50" step="1" value="20"' in html
     assert 'id="lfaThresholdValue"' in html
-    assert "members.length*(threshold/100)" in html
+    assert "Number(item.affected_count||0)/Math.max(1,Number(group.member_count||0))" in html
     assert "$('lfaThreshold').oninput=updateLfaThreshold" in html
     assert "renderNetworkOutliers" in html
     assert ".outlier-group thead th{position:static;top:auto}" in html
-    assert html.index("<thead><tr><th>Uncommon port</th>") < html.index("<tbody>${unusual.map")
+    assert html.index("<thead><tr><th>Uncommon port</th>") < html.index("<tbody>${group.unusual.map")
     assert 'id="networkChangesPanel"' in html
     assert 'id="loadNetworkChanges"' in html
     assert "/api/analysis/network-changes" in html

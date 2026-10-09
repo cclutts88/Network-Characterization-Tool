@@ -549,5 +549,10 @@ def capture_network_evidence_snapshot(
         "mutable_context": mutable,
         "oui": oui_identity,
     }
-    context = {"groups": groups, "oui": oui_identity}
-    return NetworkEvidenceSnapshot(_digest_json(descriptor), context)
+    revision = _digest_json(descriptor)
+    context = {
+        "groups": groups,
+        "oui": oui_identity,
+        "source_revision": revision,
+    }
+    return NetworkEvidenceSnapshot(revision, context)

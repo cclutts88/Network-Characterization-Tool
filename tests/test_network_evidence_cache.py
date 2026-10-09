@@ -573,6 +573,7 @@ def test_real_empty_model_hits_then_exact_context_change_rebuilds(tmp_path, monk
     first = main._latest_network_evidence()
     second = main._latest_network_evidence()
     assert first == second and first is not second
+    assert first["source_revision"] == main._capture_network_evidence_snapshot().key
     assert builds == ["topology"]
     assert main._NETWORK_EVIDENCE_CACHE.status()["hits"] == 1
 
@@ -583,6 +584,7 @@ def test_real_empty_model_hits_then_exact_context_change_rebuilds(tmp_path, monk
         )
     third = main._latest_network_evidence()
     assert third["source"]["scan_count"] == 0
+    assert third["source_revision"] != first["source_revision"]
     assert builds == ["topology", "topology"]
 
 

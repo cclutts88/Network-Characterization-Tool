@@ -141,6 +141,13 @@ from app.network_evidence_cache import (
     NetworkEvidenceSourceChanged,
     capture_network_evidence_snapshot,
 )
+from app.network_inventory import (
+    NETWORK_INVENTORY_SORTS,
+    StaleNetworkEvidenceError,
+    filtered_network_inventory_ips,
+    network_inventory_outliers,
+    page_network_inventory,
+)
 from app.reachability import (
     build_vendor_policy_rule,
     build_source_exposure_report,
@@ -3106,7 +3113,10 @@ def _latest_network_evidence() -> dict:
         # The descriptor carries an exact OUI identity. A miss after that identity
         # changes must not reuse the loader's older process-local lookup table.
         reset_oui_database_cache()
-        return _build_latest_network_evidence(context["groups"])
+        result = _build_latest_network_evidence(context["groups"])
+        if context.get("source_revision"):
+            result["source_revision"] = context["source_revision"]
+        return result
 
     return _NETWORK_EVIDENCE_CACHE.get(_capture_network_evidence_snapshot, build)
 
@@ -3138,6 +3148,77 @@ def analyze_current_network() -> dict:
         **_latest_network_evidence(),
         "status": "analysis_network_complete",
     }
+
+
+def _current_network_revision_conflict(
+    exc: StaleNetworkEvidenceError | NetworkEvidenceSourceChanged,
+) -> None:
+    raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/analysis/network/page")
+def analyze_current_network_page(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=200),
+    subnet: str = Query(default="", max_length=200),
+    sort: str = Query(default="ip"),
+    revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    """Return one exact-source page of the current host/device inventory."""
+    if sort not in NETWORK_INVENTORY_SORTS:
+        raise HTTPException(status_code=422, detail="Unsupported inventory sort")
+    try:
+        return {
+            **page_network_inventory(
+                _latest_network_evidence(),
+                limit=limit,
+                offset=offset,
+                search=search,
+                subnet=subnet,
+                sort=sort,
+                expected_revision=revision,
+            ),
+            "status": "analysis_network_page_complete",
+        }
+    except (StaleNetworkEvidenceError, NetworkEvidenceSourceChanged) as exc:
+        _current_network_revision_conflict(exc)
+
+
+@app.get("/api/analysis/network/outliers")
+def analyze_current_network_outliers(
+    threshold: int = Query(default=20, ge=1, le=50),
+    subnet: str = Query(default="", max_length=200),
+    revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    """Calculate LFA from the complete exact-source filtered network model."""
+    try:
+        return network_inventory_outliers(
+            _latest_network_evidence(),
+            threshold=threshold,
+            subnet=subnet,
+            expected_revision=revision,
+        )
+    except (StaleNetworkEvidenceError, NetworkEvidenceSourceChanged) as exc:
+        _current_network_revision_conflict(exc)
+
+
+@app.get("/api/analysis/network/ips")
+def analyze_current_network_ips(
+    search: str = Query(default="", max_length=200),
+    subnet: str = Query(default="", max_length=200),
+    revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    """Return every IP matching the current filters, independent of visible page."""
+    try:
+        return filtered_network_inventory_ips(
+            _latest_network_evidence(),
+            search=search,
+            subnet=subnet,
+            expected_revision=revision,
+        )
+    except (StaleNetworkEvidenceError, NetworkEvidenceSourceChanged) as exc:
+        _current_network_revision_conflict(exc)
 
 
 @app.get("/api/hostnames/identities")
