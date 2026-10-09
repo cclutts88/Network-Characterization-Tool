@@ -303,11 +303,13 @@ def analyze_manual_upload_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
     allow_create: bool = True,
+    initialize_storage: bool = True,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
     transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Reuse one immutable result only while upload authority remains active."""
-    init_derived_result_storage(db_path)
+    if initialize_storage:
+        init_derived_result_storage(db_path)
     snapshot = capture_manual_upload_snapshot(db_path, run_id, run_dir)
     authority = require_available_collection(
         db_path, run_id, manifest=snapshot["authority_manifest"]
@@ -646,11 +648,13 @@ def analyze_collected_device_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
     allow_create: bool = True,
+    initialize_storage: bool = True,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
     transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Analyze a finalized SSH collection only through its verified frozen inputs."""
-    init_derived_result_storage(db_path)
+    if initialize_storage:
+        init_derived_result_storage(db_path)
     snapshot = capture_collected_device_snapshot(db_path, run_id, run_dir)
     authority = require_available_collection(
         db_path, run_id, manifest=snapshot["authority_manifest"]

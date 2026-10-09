@@ -140,10 +140,10 @@ class NetworkEvidenceCache:
     def get(
         self,
         snapshot_provider: Callable[[], NetworkEvidenceSnapshot],
-        builder: Callable[[Any], dict],
+        builder: Callable[[Any], Any],
         *,
         retry_on_change: int = 1,
-    ) -> dict:
+    ) -> Any:
         attempts = 0
         while True:
             snapshot = snapshot_provider()

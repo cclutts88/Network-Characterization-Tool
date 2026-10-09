@@ -303,7 +303,7 @@ A roadmap item should only be marked complete when:
     and clearing three initially halted descriptor gaps. Device-evidence selection, Map
     rebuilding, and server-side detail paging remain open under report #30. This work is
     foundation-only.
-  - [~] Fourth bounded correction audit started: replace the shared network view's use
+  - [x] Fourth bounded correction: replace the shared network view's use
     of the fully enriched Device History reader as its newest-device selector. Measure
     and isolate the minimum exact selection contract needed by Analyze, Hunt, and Reach
     without changing Device History, evidence authority, deletion and integrity rules,
@@ -334,14 +334,37 @@ A roadmap item should only be marked complete when:
     policy. The complete Docker suite passed **1,065 with 10 skipped** and one existing
     warning. The restarted preview served System Health and the Current Network, Hunt,
     and Reach APIs successfully; the novice empty-state smoke pass returned **CLEAR**.
-    Sub-gate 4b and its mutation, replacement, scope, gateway, deletion, and concurrency
-    tests remain next.
+    Sub-gate 4b now reuses one serialized current-device analysis entry inside the
+    running NCT process only after a read-only snapshot binds the exact selected
+    authority, durable admission decision, immutable saved result and provenance links,
+    run-local and canonical evidence bytes, raw manifest bytes, candidate-file shape,
+    scope assignments and observation work, WAN roles, calculation contracts, and
+    database identity. Every caller receives a private copy. A cold build cannot create
+    or repair evidence, and a missing or inconsistent intent, result, link, file, or
+    database state returns a visible conflict instead of publishing or falling back.
+    Identical concurrent requests share one build; a source change discards the stale
+    result and retries once. Warm entries invalidate automatically after database
+    replacement, authority deletion, scope-observation completion, WAN changes, and
+    calculation changes. Tests pass **14** focused cache cases, including 101 distinct
+    devices through the cached builder and a real manifest change during a cold build;
+    the broader device/Reach suite passes **175**. The independent quality gate returned
+    **CLEAR — DOCUMENTED DEVIATION** after first halting completion for five missing
+    integration proofs. The existing 2026-10-08 Whole-network current device selection
+    deviation row covers both selector and exact-cache sub-gates; no duplicate row is
+    needed. The
+    complete Docker suite passes **1,079 with 10 skipped** and one existing dependency
+    warning. The restarted preview served System Health and the Current Network, Hunt,
+    and Reach APIs successfully, and direct browser checks confirmed all four views
+    render their expected empty states. The novice final pass returned **CLEAR** with no
+    visible error or navigation regression; its isolated data set did not contain
+    populated device evidence. Map rebuilding and server-side detail paging remain open
+    under report #30. This work is foundation-only.
 
 ### Deviation history
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
-| 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, verify only selected canonical parsed-manifest content, surface selected integrity conflicts, and temporarily calculate fresh private results on every request until an exact cache is added | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only JSON rewrites do not change selector meaning. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Sub-gate 4b must add exact retained-evidence byte validation and serialized private-copy reuse across evidence, scope, WAN, contracts, and database replacement before device analysis is cached again |
+| 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, surface selected integrity conflicts, then reuse one serialized private current-device analysis only when a read-only snapshot proves its exact admission, result, provenance, retained bytes, scope-observation, WAN, contract, and database inputs are unchanged | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only parsed-manifest changes do not affect selection, while raw manifest bytes still invalidate analysis reuse. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Cold cache builds are read-only, warm entries invalidate on every captured dependency and database replacement, and changing inputs retry once before a visible conflict |
 | 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use a one-entry, process-local serialized cache keyed by an exact canonical descriptor, with per-descriptor single-flight builds and pre/post-build source validation | The assembled view combines immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting that mixed presentation model would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, and calculation-contract changes rebuild. Hunt/SearchSploit and Reach/report outputs remain uncached. Device-selection optimization, Map rebuilding, and server-side detail paging remain open |
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |

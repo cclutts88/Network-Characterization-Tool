@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app import main
+from app.network_evidence_cache import NetworkEvidenceSnapshot
 from app.iptables_policy import parse_iptables_policy
 from app.reachability import (
     build_vendor_policy_rule,
@@ -1236,38 +1237,45 @@ def test_invalid_endpoint_is_rejected():
         parse_endpoint("not a network")
 
 
-def test_latest_reachability_evidence_uses_exact_device_selector(monkeypatch):
-    records = [{"run_id": "usable"}, {"run_id": "upload"}]
+def test_latest_reachability_evidence_uses_exact_private_device_cache(monkeypatch):
+    main._DEVICE_ANALYSIS_CACHE.clear()
     monkeypatch.setattr(
         main,
-        "select_latest_device_evidence",
-        lambda _db, _config: (records, {"selected_run_ids": ["usable", "upload"]}),
+        "capture_device_analysis_snapshot",
+        lambda **_kwargs: NetworkEvidenceSnapshot(
+            "stable", {
+                "selected_run_ids": ["usable", "upload"], "gateways": [],
+            },
+        ),
     )
     analyzed = []
 
-    def analyze(run_id, *, include_correlations=True):
-        analyzed.append((run_id, include_correlations))
+    def analyze(
+        run_id, *, include_correlations=True, read_only_verified=False,
+    ):
+        analyzed.append((run_id, include_correlations, read_only_verified))
         return {"run_id": run_id}
 
     monkeypatch.setattr(main, "analyze_device_collection", analyze)
-    monkeypatch.setattr(main, "get_external_wan_gateways", lambda db_path: [])
     result = main._latest_device_reachability_evidence()
-    rebuilt = main._latest_device_reachability_evidence()
+    result[0]["run_id"] = "caller-change"
+    cached = main._latest_device_reachability_evidence()
 
-    assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
-    assert rebuilt == result
-    assert rebuilt is not result
+    assert cached == [{"run_id": "usable"}, {"run_id": "upload"}]
+    assert cached is not result
     assert analyzed == [
-        ("usable", False), ("upload", False),
-        ("usable", False), ("upload", False),
+        ("usable", False, True), ("upload", False, True),
     ]
 
 
 def test_latest_reachability_evidence_reports_selected_integrity_conflict(monkeypatch):
+    main._DEVICE_ANALYSIS_CACHE.clear()
     monkeypatch.setattr(
         main,
-        "select_latest_device_evidence",
-        lambda _db, _config: ([{"run_id": "broken-run"}], {}),
+        "capture_device_analysis_snapshot",
+        lambda **_kwargs: NetworkEvidenceSnapshot(
+            "broken", {"selected_run_ids": ["broken-run"], "gateways": []},
+        ),
     )
     monkeypatch.setattr(
         main,
@@ -1276,8 +1284,6 @@ def test_latest_reachability_evidence_reports_selected_integrity_conflict(monkey
             main.DeviceCollectionIntegrityError("retained bytes changed")
         ),
     )
-    monkeypatch.setattr(main, "get_external_wan_gateways", lambda _db: [])
-
     with pytest.raises(main.HTTPException) as raised:
         main._latest_device_reachability_evidence()
 
@@ -1289,14 +1295,23 @@ def test_latest_reachability_evidence_reports_selected_integrity_conflict(monkey
 def test_latest_reachability_evidence_retries_selection_changed_during_build(
     monkeypatch,
 ):
+    main._DEVICE_ANALYSIS_CACHE.clear()
     selectors = iter([
-        ([{"run_id": "older"}], {"selected_run_ids": ["older"]}),
-        ([{"run_id": "newer"}], {"selected_run_ids": ["newer"]}),
-        ([{"run_id": "newer"}], {"selected_run_ids": ["newer"]}),
-        ([{"run_id": "newer"}], {"selected_run_ids": ["newer"]}),
+        NetworkEvidenceSnapshot(
+            "older", {"selected_run_ids": ["older"], "gateways": []}
+        ),
+        NetworkEvidenceSnapshot(
+            "newer", {"selected_run_ids": ["newer"], "gateways": []}
+        ),
+        NetworkEvidenceSnapshot(
+            "newer", {"selected_run_ids": ["newer"], "gateways": []}
+        ),
+        NetworkEvidenceSnapshot(
+            "newer", {"selected_run_ids": ["newer"], "gateways": []}
+        ),
     ])
     monkeypatch.setattr(
-        main, "select_latest_device_evidence", lambda _db, _config: next(selectors)
+        main, "capture_device_analysis_snapshot", lambda **_kwargs: next(selectors)
     )
     analyzed = []
     monkeypatch.setattr(
@@ -1304,7 +1319,6 @@ def test_latest_reachability_evidence_retries_selection_changed_during_build(
         "analyze_device_collection",
         lambda run_id, **_kwargs: analyzed.append(run_id) or {"run_id": run_id},
     )
-    monkeypatch.setattr(main, "get_external_wan_gateways", lambda _db: [])
 
     result = main._latest_device_reachability_evidence()
 
@@ -1313,22 +1327,23 @@ def test_latest_reachability_evidence_retries_selection_changed_during_build(
 
 
 def test_latest_reachability_evidence_rejects_repeated_selection_change(monkeypatch):
+    main._DEVICE_ANALYSIS_CACHE.clear()
     call_number = 0
 
-    def changing_selector(_db, _config):
+    def changing_selector(**_kwargs):
         nonlocal call_number
         call_number += 1
         run_id = f"run-{call_number}"
-        return ([{"run_id": run_id}], {"selected_run_ids": [run_id]})
+        return NetworkEvidenceSnapshot(
+            run_id, {"selected_run_ids": [run_id], "gateways": []}
+        )
 
-    monkeypatch.setattr(main, "select_latest_device_evidence", changing_selector)
+    monkeypatch.setattr(main, "capture_device_analysis_snapshot", changing_selector)
     monkeypatch.setattr(
         main,
         "analyze_device_collection",
         lambda run_id, **_kwargs: {"run_id": run_id},
     )
-    monkeypatch.setattr(main, "get_external_wan_gateways", lambda _db: [])
-
     with pytest.raises(main.HTTPException) as raised:
         main._latest_device_reachability_evidence()
 

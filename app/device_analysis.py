@@ -121,6 +121,7 @@ def delete_device_analysis_storage(run_id: str, db_path: Path = DB_PATH) -> None
 
 def _device_summary_snapshot(
     run_id: str, config_dir: Path, db_path: Path,
+    *, read_only_verified: bool = False,
 ) -> tuple[dict, dict]:
     run_dir = device_collection_directory(run_id, config_dir)
     lifecycle = get_device_collection_authority(db_path, run_id)
@@ -148,6 +149,10 @@ def _device_summary_snapshot(
         marked = get_admission_intent(
             db_path, intent_kind=intent_kind, source_id=run_id,
         ) is not None
+        if read_only_verified and not marked:
+            raise DeviceCollectionIncomplete(
+                "Reusable device analysis has no durable admission intent"
+            )
         expected_result_id = None
         if marked:
             from app.derived_jobs import device_summary_job_for_run
@@ -168,11 +173,15 @@ def _device_summary_snapshot(
             expected_result_id = attempt["output_id"]
         if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT:
             verified = analyze_manual_upload_summary(
-                db_path, run_id, run_dir, allow_create=not marked,
+                db_path, run_id, run_dir,
+                allow_create=False if read_only_verified else not marked,
+                initialize_storage=not read_only_verified,
             )
         elif authority.get("selection_contract") == COLLECTED_DEVICE_SELECTION_CONTRACT:
             verified = analyze_collected_device_summary(
-                db_path, run_id, run_dir, allow_create=not marked,
+                db_path, run_id, run_dir,
+                allow_create=False if read_only_verified else not marked,
+                initialize_storage=not read_only_verified,
             )
         else:
             raise DeviceCollectionIntegrityError(
@@ -558,11 +567,14 @@ def analyze_device_collection(
     db_path: Path | None = None,
     data_dir: Path | None = None,
     include_correlations: bool = True,
+    read_only_verified: bool = False,
 ) -> dict:
     config_dir = CONFIG_DIR if config_dir is None else config_dir
     db_path = DB_PATH if db_path is None else db_path
     data_dir = DATA_DIR if data_dir is None else data_dir
-    summary, manifest = _device_summary_snapshot(run_id, config_dir, db_path)
+    summary, manifest = _device_summary_snapshot(
+        run_id, config_dir, db_path, read_only_verified=read_only_verified,
+    )
     run_dir = device_collection_directory(run_id, config_dir)
     manifest.pop("key_path", None)
     interfaces = [

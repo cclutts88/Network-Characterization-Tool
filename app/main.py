@@ -84,7 +84,10 @@ from app.device_configs import (
 from app.device_evidence_catalog import (
     DeviceEvidenceCatalogError,
     reconcile_device_evidence_catalog,
-    select_latest_device_evidence,
+)
+from app.device_analysis_cache import (
+    DeviceAnalysisSnapshotError,
+    capture_device_analysis_snapshot,
 )
 from app.device_collection_profiles import init_device_collection_profile_storage
 from app.device_analysis import (
@@ -135,6 +138,7 @@ from app.hunting_ui import hunting_page
 from app.mac_enrichment import reset_oui_database_cache
 from app.network_evidence_cache import (
     NetworkEvidenceCache,
+    NetworkEvidenceSourceChanged,
     capture_network_evidence_snapshot,
 )
 from app.reachability import (
@@ -3014,6 +3018,7 @@ def _latest_hunting_groups(
 
 
 _NETWORK_EVIDENCE_CACHE = NetworkEvidenceCache()
+_DEVICE_ANALYSIS_CACHE = NetworkEvidenceCache()
 
 
 def _prepare_network_evidence_manifests(
@@ -3498,27 +3503,20 @@ def analyze_network_control_routes(
 
 
 def _latest_device_reachability_evidence() -> list[dict]:
-    for _selection_attempt in range(2):
-        try:
-            selected_records, selector = select_latest_device_evidence(
-                DB_PATH, CONFIG_DIR
-            )
-        except DeviceEvidenceCatalogError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Current device evidence could not be verified: {exc}. "
-                    "Restart NCT to reconcile its device selector, then open Device "
-                    "History if the issue remains."
-                ),
-            ) from exc
+    def snapshot():
+        return capture_device_analysis_snapshot(
+            db_path=DB_PATH, config_dir=CONFIG_DIR,
+        )
+
+    def build(context: dict) -> list[dict]:
         analyses = []
-        for record in selected_records:
-            run_id = str(record["run_id"])
+        for run_id in context["selected_run_ids"]:
             try:
-                analyses.append(
-                    analyze_device_collection(run_id, include_correlations=False)
-                )
+                analyses.append(analyze_device_collection(
+                    run_id,
+                    include_correlations=False,
+                    read_only_verified=True,
+                ))
             except (
                 DeviceCollectionDeleted,
                 DeviceCollectionIncomplete,
@@ -3536,33 +3534,30 @@ def _latest_device_reachability_evidence() -> list[dict]:
                         "retained record."
                     ),
                 ) from exc
-        try:
-            _confirmed_records, confirmed_selector = select_latest_device_evidence(
-                DB_PATH, CONFIG_DIR
-            )
-        except DeviceEvidenceCatalogError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Current device evidence changed during selection: {exc}. "
-                    "Retry the page; restart NCT if the issue remains."
-                ),
-            ) from exc
-        if selector == confirmed_selector:
-            break
-    else:
+        result = analyses
+        for gateway in context["gateways"]:
+            result = apply_external_gateway_role(result, gateway)
+        return result
+
+    try:
+        return _DEVICE_ANALYSIS_CACHE.get(snapshot, build)
+    except (DeviceEvidenceCatalogError, DeviceAnalysisSnapshotError) as exc:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Current device evidence changed repeatedly during selection. "
-                "Retry the page after collection activity finishes."
+                f"Current device evidence could not be verified: {exc}. "
+                "Restart NCT to reconcile its device selector, then open Device "
+                "History if the issue remains."
             ),
-        )
-    result = analyses
-    gateways = get_external_wan_gateways(DB_PATH)
-    for gateway in gateways:
-        result = apply_external_gateway_role(result, gateway)
-    return result
+        ) from exc
+    except NetworkEvidenceSourceChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Current device evidence changed repeatedly while the page was built. "
+                "Retry after collection activity finishes."
+            ),
+        ) from exc
 
 
 @app.get("/api/network-semantics/external-wan-gateway")
