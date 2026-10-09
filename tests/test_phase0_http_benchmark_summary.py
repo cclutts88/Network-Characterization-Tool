@@ -103,6 +103,8 @@ def test_http_summary_accepts_exact_six_run_comparison(tmp_path):
     assert result["passed"] is True
     assert result["failures"] == []
     assert set(result["common_endpoint_comparisons"]) == set(COMMON_WORKLOADS)
+    assert result["stable_main"]["correctness"]["common"]["map"]["interfaces"] == 2
+    assert result["foundation"]["correctness"]["common"]["map"]["interfaces"] == 1000
 
 
 def test_http_summary_rejects_missing_capability_and_mutation_drift(tmp_path):

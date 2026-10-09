@@ -63,6 +63,19 @@ def _load(paths: list[Path], label: str, foundation: bool) -> list[dict]:
 
 
 def _expected_common(*, foundation: bool) -> dict:
+    map_summary = {
+        "devices": 1, "gateways": 0, "interfaces": 1000, "subnets": 0,
+        "hosts": 4188, "relationships": 1041, "nmap_records_read": 4315,
+        "configuration_records_read": 4, "mac_observations": 4315,
+        "mac_identified_hosts": 4188, "mac_conflicts": 0,
+        "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0,
+    } if foundation else {
+        "devices": 1, "gateways": 1, "interfaces": 2, "subnets": 2,
+        "hosts": 4188, "relationships": 47, "nmap_records_read": 4315,
+        "configuration_records_read": 4, "mac_observations": 4315,
+        "mac_identified_hosts": 4188, "mac_conflicts": 0,
+        "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0,
+    }
     return {
         "current": {
             "status": "analysis_network_complete", "host_count": 4188,
@@ -75,13 +88,7 @@ def _expected_common(*, foundation: bool) -> dict:
             "status": "hunting_network_complete", "host_count": 4188,
             "finding_count": 6125,
         },
-        "map": {
-            "devices": 1, "gateways": 0, "interfaces": 1000, "subnets": 0,
-            "hosts": 4188, "relationships": 1041, "nmap_records_read": 4315,
-            "configuration_records_read": 4, "mac_observations": 4315,
-            "mac_identified_hosts": 4188, "mac_conflicts": 0,
-            "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0,
-        },
+        "map": map_summary,
         "reach": {"hosts": 4188, "devices": 0 if foundation else 1, "saved_networks": 0},
     }
 
