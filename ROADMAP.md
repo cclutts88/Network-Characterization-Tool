@@ -1965,7 +1965,42 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    This completes only the documented nested slices. Broader current truth,
    physical-device reconciliation, scoped device observations, exact Last Seen and
    automatic service disappearance remain open.
-15. [ ] Benchmark against Phase 0 datasets.
+15. [~] Benchmark against Phase 0 datasets.
+
+   **2026-10-09 representative-dataset prerequisite start:** build one versioned,
+   deterministic synthetic corpus before comparing performance. The corpus will cover
+   small TCP-only Nmap, medium UDP-only Nmap, time-separated combined TCP/UDP history
+   with known changes and duplicate bytes, four 1,000-host Nmap files across separate
+   subnets, representative router/firewall/switch evidence including the existing
+   1,000-interface boundary, and a frozen offline enrichment-heavy workload with exact
+   cache expectations. Every file must have a retained size and SHA-256 digest plus a
+   correctness oracle. Generation and verification must be local, disposable and free
+   of operator, Range, mission or production evidence. The generator may not overwrite
+   an existing directory. This prerequisite does not complete Step 15: stable `main`
+   and foundation must still run the same declared benchmark in clean Linux images,
+   retain raw measurements and pass correctness/resource limits chosen before the run.
+   Independent architecture start gate: **CLEAR**. Novice documentation direction:
+   keep engineering detail in the dated report and do not present a static development
+   result as live System Health or Range readiness.
+
+   **2026-10-09 representative-dataset prerequisite completion:**
+   `phase0-benchmark-corpus:1` now generates 17 deterministic synthetic files totaling
+   about 3.5 MB. The retained manifest fixes the generator version and seed, exact
+   SHA-256/size for every input, exact per-file Nmap and device parser counts, known
+   history changes, duplicate bytes, and offline candidate/cache expectations. The
+   frozen enrichment command, configuration and database path are part of the hashed
+   corpus; the real adapter produced 24 cold queries, 24 warm cache hits, 240 candidate
+   associations and 24 CVEs as declared. Verification regenerates the canonical bytes
+   and full manifest rather than trusting editable recorded hashes, and rejects existing
+   output paths, unsafe paths, links, missing files, extra files, changed files and a
+   changed file paired with an updated manifest hash. Focused Linux validation: **9
+   passed**. Complete Docker regression suite: **1,152 passed, 13 skipped**, with the
+   existing Starlette dependency warning. Novice documentation gate: **CLEAR** after
+   explicitly separating this developer dataset from live System Health. Independent
+   quality gate: **CLEAR** after correcting the initial manifest-trust, incomplete
+   enrichment identity and broad-oracle findings. This completes only the shared
+   dataset prerequisite; Step 15 remains in progress until exact stable `main` and
+   foundation revisions run the retained benchmark procedure under predeclared limits.
 
 ## Exit criteria
 
