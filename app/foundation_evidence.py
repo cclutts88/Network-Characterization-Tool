@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
+import re
 import sqlite3
 from decimal import Decimal, InvalidOperation
 
@@ -15,7 +17,14 @@ MAX_ENDPOINT_PAGE = 100
 MAX_RECEIPT_PAGE = 25
 MAX_SERVICE_PAGE = 250
 MAX_LATEST_SELECTION_CANDIDATES = 5000
+MAX_MAC_ASSOCIATION_CANDIDATES = 5000
+MAX_MAC_ASSOCIATION_PAGE = 100
 LATEST_OBSERVATION_SELECTION_CONTRACT = "latest-supported-nmap-observations:1"
+MAC_ASSOCIATION_SELECTION_CONTRACT = "source-reported-mac-address-associations:1"
+
+
+class FoundationEvidenceConflict(ValueError):
+    pass
 
 
 def _page(limit: int, offset: int, maximum: int) -> tuple[int, int]:
@@ -1018,6 +1027,244 @@ def get_foundation_latest_observations(
                 and last_confirmed["status"] in {"ordered", "overlapping"}
             ),
             "service_disappearance": False,
+        },
+    }
+
+
+_MAC_ASSOCIATION_CANDIDATES_SQL = _PRIMARY_CTE + """
+SELECT assignment.assignment_id, assignment.revision, assignment.event_kind,
+       assignment.assigned_at, assignment.actor AS assignment_actor, assignment.reason,
+       assessment.assessment_id, assessment.parser_version, assessment.assessed_at,
+       assessment.recorded_at,
+       CASE
+           WHEN json_valid(assessment.payload_json)
+           THEN CASE
+               WHEN json_type(
+                   assessment.payload_json,
+                   '$.facts.coverage.completion.successful'
+               ) = 'true'
+               THEN 1 ELSE 0
+           END
+           ELSE NULL
+       END AS completion_successful,
+       endpoint.entity_id, endpoint.address,
+       receipt.facts_json AS endpoint_facts_json,
+       observation.observation_id, observation.sha256, observation.source_kind,
+       observation.source_ref, observation.observed_at, observation.original_filename,
+       observation.actor AS observation_actor,
+       (SELECT COUNT(*) FROM service_receipts service
+        JOIN service_entities entity ON entity.entity_id = service.service_id
+        WHERE service.assessment_id = assessment.assessment_id
+          AND entity.host_id = receipt.host_id) AS service_count
+FROM primary_links
+JOIN artifact_scope_assignments assignment
+  ON assignment.assignment_id = primary_links.assignment_id
+JOIN entity_assessments assessment
+  ON assessment.assessment_id = primary_links.assessment_id
+JOIN endpoint_receipts receipt
+  ON receipt.assessment_id = assessment.assessment_id
+JOIN endpoint_entities endpoint
+  ON endpoint.entity_id = receipt.host_id AND endpoint.scope_id = assignment.scope_id
+JOIN artifact_observations observation
+  ON observation.observation_id = assessment.artifact_observation_id
+ORDER BY assignment.assignment_id, assessment.assessment_id,
+         endpoint.address, endpoint.entity_id
+LIMIT ?
+"""
+
+
+def _normalize_source_mac(value: object) -> tuple[str, bool] | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{12}", candidate):
+        compact = candidate
+    elif re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", candidate):
+        compact = candidate.replace(":", "")
+    elif re.fullmatch(r"(?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}", candidate):
+        compact = candidate.replace("-", "")
+    elif re.fullmatch(r"[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}", candidate):
+        compact = candidate.replace(".", "")
+    else:
+        return None
+    try:
+        octets = bytes.fromhex(compact)
+    except ValueError:
+        return None
+    if octets == b"\x00" * 6 or octets[0] & 1:
+        return None
+    normalized = ":".join(f"{part:02x}" for part in octets)
+    return normalized, bool(octets[0] & 2)
+
+
+def _reported_macs(endpoint_facts: dict) -> list[dict]:
+    addresses = endpoint_facts.get("addresses")
+    if not isinstance(addresses, list):
+        return []
+    found = {}
+    for address in addresses:
+        if not isinstance(address, dict):
+            continue
+        if str(address.get("addrtype") or "").strip().lower() != "mac":
+            continue
+        normalized = _normalize_source_mac(address.get("addr"))
+        if normalized is None:
+            continue
+        mac, locally_administered = normalized
+        found.setdefault(mac, {
+            "mac": mac,
+            "locally_administered": locally_administered,
+            "vendor": str(address.get("vendor") or "").strip() or None,
+        })
+    return [found[key] for key in sorted(found)]
+
+
+def _assignment_set_revision(rows: list[sqlite3.Row]) -> str:
+    identities = sorted({
+        (str(row["assignment_id"]), int(row["revision"]), str(row["assessment_id"]))
+        for row in rows
+    })
+    encoded = json.dumps(identities, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _mark_interval_groups(items: list[dict]) -> None:
+    timed = [item for item in items if item["_interval"] is not None]
+    timed.sort(key=lambda item: (
+        item["_interval"][0], item["_interval"][1], item["address"],
+        item["assessment"]["assessment_id"], item["assignment"]["assignment_id"],
+    ))
+    groups: list[list[dict]] = []
+    group_end = None
+    for item in timed:
+        start, end = item["_interval"]
+        if not groups or start > group_end:
+            groups.append([item])
+            group_end = end
+        else:
+            groups[-1].append(item)
+            group_end = max(group_end, end)
+    for group_index, group in enumerate(groups, start=1):
+        status = "overlapping_or_tied" if len(group) > 1 else "distinct_window"
+        for item in group:
+            item["source_window_group"] = group_index
+            item["source_window_status"] = status
+    for item in items:
+        if item["_interval"] is None:
+            item["source_window_group"] = None
+            item["source_window_status"] = "unknown"
+        item.pop("_interval", None)
+
+
+def get_foundation_mac_associations(
+    db_path: Path,
+    scope_id: str,
+    mac: str,
+    *,
+    limit: int = 25,
+    offset: int = 0,
+    expected_revision: str | None = None,
+) -> dict:
+    """List bounded source-reported MAC/address associations without device merging."""
+    limit, offset = _page(limit, offset, MAX_MAC_ASSOCIATION_PAGE)
+    normalized = _normalize_source_mac(mac)
+    if normalized is None:
+        raise ValueError("Use a valid unicast MAC address reported by Nmap")
+    normalized_mac, locally_administered = normalized
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        scope_row = db.execute(
+            """SELECT scope_id, label, description, version, active
+               FROM network_scopes WHERE scope_id = ?""",
+            (scope_id,),
+        ).fetchone()
+        if scope_row is None:
+            raise KeyError("Network Scope not found")
+        rows = db.execute(
+            _MAC_ASSOCIATION_CANDIDATES_SQL,
+            (scope_id, NMAP_ENDPOINT_PARSER, MAX_MAC_ASSOCIATION_CANDIDATES + 1),
+        ).fetchall()
+    if len(rows) > MAX_MAC_ASSOCIATION_CANDIDATES:
+        raise ValueError(
+            "This view cannot safely review more than 5,000 candidate source records "
+            "at once. No result was produced and nothing changed. Use a smaller "
+            "Network Scope"
+        )
+    selection_revision = _assignment_set_revision(rows)
+    if expected_revision is not None and expected_revision != selection_revision:
+        raise FoundationEvidenceConflict(
+            "The current scope assignments changed; refresh address-association evidence"
+        )
+
+    associations = []
+    excluded_unsuccessful = 0
+    for row in rows:
+        if row["completion_successful"] != 1:
+            excluded_unsuccessful += 1
+            continue
+        endpoint_facts = _json(row["endpoint_facts_json"])
+        reported = next(
+            (item for item in _reported_macs(endpoint_facts)
+             if item["mac"] == normalized_mac),
+            None,
+        )
+        if reported is None:
+            continue
+        record, interval, completed = _supported_observation_candidate(row)
+        if not completed:
+            excluded_unsuccessful += 1
+            continue
+        associations.append({
+            "address": row["address"],
+            "entity_id": row["entity_id"],
+            "mac": reported,
+            "assignment": record["assignment"],
+            "assessment": record["assessment"],
+            "source": record["source"],
+            "presence": record["presence"],
+            "collection_window": record["collection_window"],
+            "service_count": record["service_count"],
+            "_interval": interval,
+        })
+    _mark_interval_groups(associations)
+    associations.sort(key=lambda item: (
+        item["source_window_group"] is None,
+        item["source_window_group"] or 0,
+        item["address"], item["assessment"]["assessment_id"],
+        item["assignment"]["assignment_id"],
+    ))
+    page = associations[offset:offset + limit]
+    return {
+        "contract": MAC_ASSOCIATION_SELECTION_CONTRACT,
+        "scope": _scope(scope_row),
+        "mac": {
+            "normalized": normalized_mac,
+            "locally_administered": locally_administered,
+            "warning": (
+                "This MAC is locally administered and may be private, randomized, "
+                "or reused by different systems"
+                if locally_administered else None
+            ),
+        },
+        "associations": page,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "total": len(associations),
+            "has_more": offset + len(page) < len(associations),
+            "selection_revision": selection_revision,
+        },
+        "candidate_receipts_reviewed": len(rows),
+        "excluded_unsuccessful_receipts": excluded_unsuccessful,
+        "read_only": True,
+        "claims": {
+            "physical_device_identity": False,
+            "address_move": False,
+            "dhcp_cause": False,
+            "live_or_current_truth": False,
+            "exact_last_seen_timestamp": False,
+            "cross_scope_identity": False,
         },
     }
 

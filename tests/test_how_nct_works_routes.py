@@ -85,6 +85,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Versioned coverage receipts retain successful completion" in html
     assert "Latest supported and last confirmed Nmap source windows" in html
     assert "last confirmed positive observation" in html
+    assert "source-reported MAC/IP associations within one scope" in html
+    assert "possible address reuse or a DHCP-related hypothesis" in html
+    assert "does not prove one device, DHCP movement" in html
+    assert "physical-device reconciliation, DHCP-cause proof" in html
     assert "never treats processing time as observation time" in html
     assert "Planned: passive activity summaries" in html
     assert "Build details · version" in html

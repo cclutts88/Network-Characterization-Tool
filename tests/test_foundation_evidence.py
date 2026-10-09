@@ -7,9 +7,11 @@ from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
 from app.entities import record_assessment
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
 from app.foundation_evidence import (
+    FoundationEvidenceConflict,
     compare_foundation_receipt_services,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
+    get_foundation_mac_associations,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
     list_foundation_evidence_scopes,
@@ -73,6 +75,26 @@ def lifecycle_xml(
         f'<address addr="{address}" addrtype="ipv4"/><ports>{extras}{"".join(ports)}</ports>'
         f'</host><runstats><finished time="{finish}" exit="success"/></runstats></nmaprun>'
     ).encode()
+
+
+def mac_lifecycle_xml(
+    *, address="192.0.2.10", mac="00:11:22:33:44:55", start=100,
+    host_start=None, host_end=None, finish=None, successful=True,
+):
+    content = lifecycle_xml(
+        [22], [("tcp", 22, "open")], address=address, start=start,
+        host_start=host_start, host_end=host_end, finish=finish,
+    )
+    content = content.replace(
+        f'<address addr="{address}" addrtype="ipv4"/>'.encode(),
+        (
+            f'<address addr="{address}" addrtype="ipv4"/>'
+            f'<address addr="{mac}" addrtype="mac" vendor="Example Vendor"/>'
+        ).encode(),
+    )
+    if not successful:
+        content = content.replace(b'exit="success"', b'exit="error"')
+    return content
 
 
 def large_assessment_xml(host_count=1000):
@@ -328,6 +350,10 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
             f"/api/foundation-evidence/scopes/{lab['scope_id']}"
             f"/endpoints/{entity_id}/latest-observations"
         )
+        mac_associations = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}/mac-associations",
+            params={"mac": "00:11:22:33:44:55"},
+        )
         missing = client.get("/api/foundation-evidence/scopes/missing")
         rejected = client.post("/api/foundation-evidence/scopes")
     assert scopes.status_code == 200
@@ -336,6 +362,8 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
     assert comparison.json()["read_only"] is True
     assert latest.status_code == 200
     assert latest.json()["contract"] == "latest-supported-nmap-observations:1"
+    assert mac_associations.status_code == 200
+    assert mac_associations.json()["read_only"] is True
     assert missing.status_code == 404
     # The shared viewer guard rejects all non-read methods before route matching.
     assert rejected.status_code == 403
@@ -371,9 +399,13 @@ def test_read_model_opens_database_read_only(tmp_path, monkeypatch):
     latest = evidence.get_foundation_latest_observations(
         db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
     )
+    associations = evidence.get_foundation_mac_associations(
+        db, lab["scope_id"], "00:11:22:33:44:55",
+    )
     assert catalog["read_only"] is True
     assert latest["read_only"] is True
-    assert calls == [True, True, True, True, True]
+    assert associations["read_only"] is True
+    assert calls == [True, True, True, True, True, True]
 
 
 def test_scope_read_is_one_snapshot_when_a_correction_commits_mid_read(tmp_path, monkeypatch):
@@ -1382,3 +1414,263 @@ def test_latest_observation_requires_boolean_true_completion(
     rejected = get_foundation_latest_observations(db, lab["scope_id"], entity_id)
     assert rejected["latest_supported_observations"]["status"] == "unavailable"
     assert rejected["incomplete_record_count"] == 1
+
+
+def test_mac_associations_preserve_addresses_sources_and_overlapping_windows(tmp_path):
+    db = tmp_path / "mac-associations.db"
+    lab = scope(db, "Lab")
+    first = observation(
+        db, "upload:mac-first",
+        content=mac_lifecycle_xml(
+            address="192.0.2.10", start=100, host_start=101, host_end=110, finish=111,
+        ),
+    )
+    second = observation(
+        db, "upload:mac-second",
+        content=mac_lifecycle_xml(
+            address="192.0.2.25", start=105, host_start=106, host_end=115, finish=116,
+        ),
+    )
+    for item in (first, second):
+        process(db, assign(db, item, lab))
+
+    result = get_foundation_mac_associations(
+        db, lab["scope_id"], "00-11-22-33-44-55",
+    )
+
+    assert result["contract"] == "source-reported-mac-address-associations:1"
+    assert result["mac"] == {
+        "normalized": "00:11:22:33:44:55",
+        "locally_administered": False,
+        "warning": None,
+    }
+    assert {item["address"] for item in result["associations"]} == {
+        "192.0.2.10", "192.0.2.25",
+    }
+    assert {item["source"]["observation_id"] for item in result["associations"]} == {
+        first["observation_id"], second["observation_id"],
+    }
+    assert {item["source_window_status"] for item in result["associations"]} == {
+        "overlapping_or_tied"
+    }
+    assert all(item["source"]["source_url"] for item in result["associations"])
+    assert result["claims"] == {
+        "physical_device_identity": False,
+        "address_move": False,
+        "dhcp_cause": False,
+        "live_or_current_truth": False,
+        "exact_last_seen_timestamp": False,
+        "cross_scope_identity": False,
+    }
+
+
+def test_mac_associations_warn_for_local_and_reject_invalid_or_multicast(tmp_path):
+    db = tmp_path / "mac-validation.db"
+    lab = scope(db, "Lab")
+    local = observation(
+        db, "upload:local-mac",
+        content=mac_lifecycle_xml(mac="02:11:22:33:44:55"),
+    )
+    malformed = observation(
+        db, "upload:malformed-mac",
+        content=mac_lifecycle_xml(
+            address="192.0.2.11", mac="00ZZ11ZZ22ZZ33ZZ44ZZ55", start=200,
+        ),
+    )
+    slashed = observation(
+        db, "upload:slashed-mac",
+        content=mac_lifecycle_xml(
+            address="192.0.2.12", mac="00/11/22/33/44/55", start=220,
+        ),
+    )
+    for item in (local, malformed, slashed):
+        process(db, assign(db, item, lab))
+
+    result = get_foundation_mac_associations(
+        db, lab["scope_id"], "02:11:22:33:44:55",
+    )
+    assert result["pagination"]["total"] == 1
+    assert result["mac"]["locally_administered"] is True
+    assert "randomized" in result["mac"]["warning"]
+    with pytest.raises(ValueError, match="valid unicast"):
+        get_foundation_mac_associations(db, lab["scope_id"], "01:11:22:33:44:55")
+    with pytest.raises(ValueError, match="valid unicast"):
+        get_foundation_mac_associations(db, lab["scope_id"], "not-a-mac")
+    with pytest.raises(ValueError, match="valid unicast"):
+        get_foundation_mac_associations(
+            db, lab["scope_id"], "00/11/22/33/44/55",
+        )
+
+
+def test_mac_associations_accept_only_the_documented_exact_source_formats(tmp_path):
+    db = tmp_path / "mac-formats.db"
+    lab = scope(db, "Lab")
+    for index, mac in enumerate((
+        "001122334455", "00:11:22:33:44:55", "00-11-22-33-44-55", "0011.2233.4455",
+    )):
+        item = observation(
+            db, f"upload:format-{index}",
+            content=mac_lifecycle_xml(
+                address=f"192.0.2.{30 + index}", mac=mac, start=300 + index * 20,
+            ),
+        )
+        process(db, assign(db, item, lab))
+
+    result = get_foundation_mac_associations(
+        db, lab["scope_id"], "0011.2233.4455",
+    )
+    assert result["pagination"]["total"] == 4
+
+
+def test_mac_associations_exclude_other_scopes_old_parsers_unsuccessful_and_superseded(
+    tmp_path,
+):
+    db = tmp_path / "mac-eligibility.db"
+    first_scope, second_scope = scope(db, "First"), scope(db, "Second")
+    moved_source = observation(
+        db, "upload:moved-mac", content=mac_lifecycle_xml(),
+    )
+    original = assign(db, moved_source, first_scope)
+    process(db, original)
+    corrected = correct_artifact_scope(
+        db,
+        expected_assignment_id=original["assignment_id"],
+        destination_scope_id=second_scope["scope_id"],
+        actor="analyst",
+        reason="Corrected exact context",
+        whole_artifact_confirmed=True,
+    )
+    process(db, corrected)
+    legacy = observation(
+        db, "upload:legacy-mac",
+        content=mac_lifecycle_xml(address="192.0.2.20", start=200),
+    )
+    process(db, assign(db, legacy, first_scope), parser_version="nmap-endpoints:legacy")
+    failed = observation(
+        db, "upload:failed-mac",
+        content=mac_lifecycle_xml(
+            address="192.0.2.30", start=300, successful=False,
+        ),
+    )
+    process(db, assign(db, failed, first_scope))
+
+    first = get_foundation_mac_associations(
+        db, first_scope["scope_id"], "00:11:22:33:44:55",
+    )
+    second = get_foundation_mac_associations(
+        db, second_scope["scope_id"], "00:11:22:33:44:55",
+    )
+
+    assert first["associations"] == []
+    assert first["excluded_unsuccessful_receipts"] == 1
+    assert [item["address"] for item in second["associations"]] == ["192.0.2.10"]
+    assert second["associations"][0]["assignment"]["assignment_id"] == corrected["assignment_id"]
+
+
+def test_mac_association_pages_are_revision_bound_and_candidate_work_is_bounded(
+    tmp_path, monkeypatch,
+):
+    import app.foundation_evidence as evidence
+
+    db = tmp_path / "mac-paging.db"
+    first_scope, second_scope = scope(db, "First"), scope(db, "Second")
+    assignments = []
+    for index in range(3):
+        item = observation(
+            db, f"upload:mac-page-{index}",
+            content=mac_lifecycle_xml(
+                address=f"192.0.2.{10 + index}", start=100 + index * 20,
+            ),
+        )
+        assignment = assign(db, item, first_scope)
+        process(db, assignment)
+        assignments.append(assignment)
+
+    first_page = get_foundation_mac_associations(
+        db, first_scope["scope_id"], "00:11:22:33:44:55", limit=1,
+    )
+    revision = first_page["pagination"]["selection_revision"]
+    assert first_page["pagination"] == {
+        "limit": 1, "offset": 0, "total": 3, "has_more": True,
+        "selection_revision": revision,
+    }
+    correct_artifact_scope(
+        db,
+        expected_assignment_id=assignments[0]["assignment_id"],
+        destination_scope_id=second_scope["scope_id"],
+        actor="analyst",
+        reason="Concurrent correction",
+        whole_artifact_confirmed=True,
+    )
+    with pytest.raises(FoundationEvidenceConflict, match="refresh"):
+        get_foundation_mac_associations(
+            db, first_scope["scope_id"], "00:11:22:33:44:55",
+            limit=1, offset=1, expected_revision=revision,
+        )
+
+    monkeypatch.setattr(evidence, "MAX_MAC_ASSOCIATION_CANDIDATES", 1)
+    with pytest.raises(ValueError, match="more than 5,000 candidate source records"):
+        evidence.get_foundation_mac_associations(
+            db, first_scope["scope_id"], "00:11:22:33:44:55",
+        )
+
+
+def test_mac_associations_keep_duplicate_observations_and_unknown_time_visible(tmp_path):
+    db = tmp_path / "mac-provenance.db"
+    lab = scope(db, "Lab")
+    content = mac_lifecycle_xml().replace(
+        b'<host starttime="101" endtime="109">', b'<host>',
+    )
+    first = observation(db, "upload:duplicate-one", content=content)
+    second = observation(db, "upload:duplicate-two", content=content)
+    assert first["sha256"] == second["sha256"]
+    assert first["observation_id"] != second["observation_id"]
+    process(db, assign(db, first, lab))
+    process(db, assign(db, second, lab))
+
+    result = get_foundation_mac_associations(
+        db, lab["scope_id"], "00:11:22:33:44:55",
+    )
+
+    assert result["pagination"]["total"] == 2
+    assert {item["source"]["observation_id"] for item in result["associations"]} == {
+        first["observation_id"], second["observation_id"],
+    }
+    assert {item["source_window_status"] for item in result["associations"]} == {
+        "unknown",
+    }
+    assert all(item["source_window_group"] is None for item in result["associations"])
+
+
+def test_mac_association_route_rejects_a_page_after_scope_correction(tmp_path, monkeypatch):
+    import app.main as main
+
+    db = tmp_path / "mac-route-conflict.db"
+    monkeypatch.setattr(main, "DB_PATH", db)
+    lab, corrected_scope = scope(db, "Lab"), scope(db, "Corrected")
+    item = observation(db, "upload:route-mac", content=mac_lifecycle_xml())
+    assignment = assign(db, item, lab)
+    process(db, assignment)
+    first_page = get_foundation_mac_associations(
+        db, lab["scope_id"], "00:11:22:33:44:55", limit=1,
+    )
+    correct_artifact_scope(
+        db,
+        expected_assignment_id=assignment["assignment_id"],
+        destination_scope_id=corrected_scope["scope_id"],
+        actor="analyst",
+        reason="Correct exact context",
+        whole_artifact_confirmed=True,
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}/mac-associations",
+            params={
+                "mac": "00:11:22:33:44:55",
+                "selection_revision": first_page["pagination"]["selection_revision"],
+            },
+        )
+
+    assert response.status_code == 409
+    assert "refresh address-association evidence" in response.json()["detail"]

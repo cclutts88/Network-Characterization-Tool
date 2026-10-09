@@ -1884,6 +1884,53 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
      identity, promote configuration assertions to positive sightings, or treat an
      omitted address as disappearance. Historical adoption remains explicit. See
      `docs/DEVICE_OBSERVATIONS.md`.
+   - [x] Source-reported MAC address associations. From one saved Nmap receipt, an
+     analyst can open a bounded, read-only list of every eligible IP association for
+     the same exact MAC inside the selected Network Scope, with source links, timing
+     uncertainty, scope-assignment revision protection and local/private-MAC caution.
+     This remains investigation evidence and does not create physical-device identity,
+     prove DHCP movement, select a current address or calculate exact Last Seen.
+
+   **2026-10-09 address-association evidence start:** add a bounded, read-only
+   Steps 13–14 slice that lets an analyst follow one exact source-reported MAC within
+   one Network Scope to every retained supported Nmap address/source association. This
+   is evidence that can help investigate possible address reuse or a DHCP-related
+   hypothesis; it is not a physical-device merge, current-state decision or exact Last
+   Seen claim. Only valid
+   unicast MACs directly retained in immutable endpoint receipts may participate.
+   Broadcast, multicast, malformed, enriched, inferred, hostname-derived and device-
+   configuration identifiers are excluded; locally administered addresses carry a
+   randomization/private-address warning. The view must keep distinct observations,
+   scopes, overlapping/unknown source windows and multiple addresses in one source
+   separate; use current unsuperseded assignments, the supported parser and strictly
+   successful completion; bind pages to one assignment-set revision; fail on a reviewed
+   candidate-work ceiling; and perform no writes, artifact reads, backfill or inference.
+   Physical reconciliation, broader current truth, historical adoption and exact Last
+   Seen remain open. Independent architecture start gate: CLEAR.
+
+   **2026-10-09 address-association evidence completion:** the
+   `source-reported-mac-address-associations:1` selector and Analyze / Changes Over Time
+   view now preserve each address, assignment, assessment and retained source as a
+   separate row. Only current unsuperseded assignments, the supported Nmap parser,
+   successful completion and directly reported valid unicast MACs are eligible. Exact
+   validation accepts plain hex, colon-separated octets, hyphen-separated octets and
+   Cisco dotted groups; arbitrary separators, junk, zero, multicast and broadcast
+   values are rejected. Unknown, equal and overlapping source windows remain visibly
+   uncertain; locally administered values warn about privacy, randomization and reuse.
+   Pages bind to one assignment-set revision and conflict after a correction. The
+   selector opens the database read-only, never reads artifact bytes, and fails without
+   partial output above the reviewed 5,000-candidate ceiling. The page includes exact
+   source links, persistent limitations, stale-response protection, full-width opened
+   records and contextual Operator Guide help. Focused Docker validation: 126 passed,
+   1 skipped because Node is unavailable in the image; the skipped host Node runtime
+   regression passed separately. Full Docker suite: 1,143 passed, 13 skipped, with the
+   existing Starlette dependency warning. Isolated browser validation confirmed two
+   IP associations, source windows, retained-source links, local/private caution,
+   full-width wrapping and a clean console. Independent final gate: **CLEAR**. Novice
+   wording corrections replaced DHCP certainty with a bounded hypothesis and retained
+   the limits on physical identity, current address, absence and exact Last Seen. No
+   architecture deviation. This remains foundation-branch development work; it is not
+   yet Range-ready, mission-ready or available on `main`.
 
    **2026-10-04 scoped-device-receipt completion:** Device History now records and
    corrects a reviewed Network Scope for one retained collection, shows durable stage

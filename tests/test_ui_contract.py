@@ -229,6 +229,11 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "[data-latest-observations]" in SHELL_SCRIPT
     assert "last confirmed positive observation, with direct evidence links" in SHELL_SCRIPT
     assert "This is not a live check or an exact Last Seen time" in SHELL_SCRIPT
+    assert "[data-mac-associations]" in SHELL_SCRIPT
+    assert "Review retained IP associations for a reported MAC" in SHELL_SCRIPT
+    assert "possible address reuse or a DHCP-related hypothesis" in SHELL_SCRIPT
+    assert "does not merge addresses into one device, prove DHCP movement" in SHELL_SCRIPT
+    assert "Opening the view sends no traffic and changes no evidence" in SHELL_SCRIPT
     assert "[data-device-scope-assignment]" in SHELL_SCRIPT
     assert "creates traceable interface-address receipts" in SHELL_SCRIPT
     assert "[data-device-scope-receipts]" in SHELL_SCRIPT
@@ -2116,6 +2121,17 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "processedEvidenceSource(record.source)" in html
     assert "data-latest-page" in html
     assert "Open ${serviceCount} reported service" in html
+    assert "Follow address evidence for ${esc(item.normalized)}" in html
+    assert "Reported IP associations for this MAC" in html
+    assert "They do not prove one physical device, DHCP movement" in html
+    assert "No match does not prove absence" in html
+    assert "/mac-associations?${params}" in html
+    assert "selection_revision" in html
+    assert "target.dataset.macRequest!==signature" in html
+    assert "bindMacAssociations(target)" in html
+    assert ".processed-evidence-endpoint.receipts-open{grid-column:1/-1}" in html
+    assert "card.classList.add('receipts-open')" in html
+    assert ".processed-evidence-mac-item .meta{overflow-wrap:anywhere}" in html
     assert "Processed source records for this scope" in html
     assert "Use as Record A" in html
     assert "Use as Record B" in html

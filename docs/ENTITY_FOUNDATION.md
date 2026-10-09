@@ -75,6 +75,32 @@ physical device, infer service disappearance, adopt an older parser, rewrite rec
 or contact a network. Device-configuration addresses remain collection facts until a
 separate scoped-device observation contract is reviewed.
 
+## Address association evidence
+
+`source-reported-mac-address-associations:1` is a bounded, read-only investigation
+view for one exact Network Scope and one valid unicast MAC address directly reported
+by retained Nmap evidence. It includes only the current supported parser, current
+unsuperseded scope assignments, and source records that prove successful completion.
+Every IP association, assignment, assessment, source link, and source collection
+window remains separate. Repeated encounters with identical bytes remain separate
+observations.
+
+The view can help an analyst investigate possible address reuse or a DHCP-related
+hypothesis. It does not prove that matching rows describe one physical device, that
+DHCP caused an address change, that one IP replaced another, which address is current,
+or an exact `Last Seen` time. Locally administered MACs remain eligible but carry an
+explicit warning because they may be private, randomized, or reused. Malformed,
+zero, multicast, inferred, enriched, device-configuration, and hostname-derived MACs
+are excluded.
+
+Validated non-overlapping source windows may be displayed in order. Equal,
+overlapping, transitively overlapping, and unknown windows remain visibly uncertain.
+Several IP addresses reported in one retained source remain distinct associations and
+never become movement evidence. Pages are tied to the exact current assignment set;
+an assignment correction rejects a later stale page. Candidate work is capped before
+receipt JSON is parsed, and exceeding that ceiling returns no partial result. The
+selector opens no artifact bytes, contacts no network, and changes no evidence.
+
 ## Remaining gates
 
 - The first verified Nmap XML adapter is implemented and is invoked only through the

@@ -21,9 +21,11 @@ from app.evidence_scope_assignments import (
     init_evidence_scope_assignment_storage,
 )
 from app.foundation_evidence import (
+    FoundationEvidenceConflict,
     compare_foundation_receipt_services,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
+    get_foundation_mac_associations,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
     list_foundation_evidence_scopes,
@@ -1799,6 +1801,29 @@ def foundation_evidence_latest_observations(
             confirmed_offset=confirmed_offset,
             unknown_offset=unknown_offset,
         )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get("/api/foundation-evidence/scopes/{scope_id}/mac-associations")
+def foundation_evidence_mac_associations(
+    scope_id: str,
+    mac: str = Query(min_length=11, max_length=32),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    selection_revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    try:
+        return get_foundation_mac_associations(
+            DB_PATH,
+            scope_id,
+            mac,
+            limit=limit,
+            offset=offset,
+            expected_revision=selection_revision,
+        )
+    except FoundationEvidenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (KeyError, ValueError) as exc:
         raise _network_scope_error(exc) from exc
 
