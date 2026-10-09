@@ -14,6 +14,10 @@ class NoteConflict(ValueError):
     pass
 
 
+MAX_NOTE_PARENT_DEPTH = 128
+MAX_NOTE_MOVE_ITEMS = 1_000
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -53,6 +57,10 @@ def init_note_storage(db_path: Path) -> None:
         db.execute(
             """CREATE INDEX IF NOT EXISTS analyst_notes_owner_parent
                ON analyst_investigation_notes(owner, parent_id, position)"""
+        )
+        db.execute(
+            """CREATE INDEX IF NOT EXISTS analyst_notes_parent
+               ON analyst_investigation_notes(parent_id)"""
         )
         db.execute(
             """CREATE TABLE IF NOT EXISTS analyst_investigation_note_audit (
@@ -255,6 +263,27 @@ def _prepare_branch_mutation(
         raise
 
 
+def _unstaged_child_sql(stage_table: str) -> str:
+    if stage_table not in {"nct_note_branch_stage", "nct_note_move_branch"}:
+        raise ValueError("Unsupported note staging table")
+    return f"""SELECT EXISTS(
+                 SELECT 1
+                 FROM {stage_table} parent
+                 CROSS JOIN analyst_investigation_notes AS child
+                   INDEXED BY analyst_notes_parent
+                 WHERE child.parent_id = parent.note_id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM {stage_table} staged_child
+                     WHERE staged_child.note_id = child.note_id
+                   )
+                 LIMIT 1
+               )"""
+
+
+def _has_unstaged_child(db: sqlite3.Connection, stage_table: str) -> bool:
+    return bool(db.execute(_unstaged_child_sql(stage_table)).fetchone()[0])
+
+
 def _revalidate_staged_branch(
     db: sqlite3.Connection, *, owner: str, note_id: str, snapshot: dict, action: str
 ) -> sqlite3.Row:
@@ -279,16 +308,7 @@ def _revalidate_staged_branch(
               OR current.kind != staged.kind
               OR current.version != staged.version"""
     ).fetchone()[0]
-    added = db.execute(
-        """SELECT COUNT(*)
-           FROM analyst_investigation_notes child
-           JOIN nct_note_branch_stage parent
-             ON child.parent_id = parent.note_id
-           LEFT JOIN nct_note_branch_stage staged_child
-             ON staged_child.note_id = child.note_id
-           WHERE child.owner = ? AND staged_child.note_id IS NULL""",
-        (owner,),
-    ).fetchone()[0]
+    added = _has_unstaged_child(db, "nct_note_branch_stage")
     if mismatch or added:
         raise NoteConflict(
             f"This folder or something inside it changed in another session; "
@@ -297,30 +317,310 @@ def _revalidate_staged_branch(
     return root
 
 
-def _validate_parent(
-    db: sqlite3.Connection, *, owner: str, parent_id: str | None, note_id: str | None
-) -> None:
+def _read_parent_snapshot(
+    db: sqlite3.Connection,
+    *,
+    owner: str,
+    parent_id: str | None,
+    note_id: str | None,
+) -> list[sqlite3.Row]:
     if not parent_id:
-        return
-    parent = db.execute(
-        "SELECT note_id, parent_id, kind FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
-        (parent_id, owner),
-    ).fetchone()
-    if parent is None or parent[2] != "folder":
+        return []
+    db.row_factory = sqlite3.Row
+    rows = db.execute(
+        """WITH RECURSIVE ancestors(
+               note_id, owner, parent_id, kind, depth, path, cycle
+           ) AS (
+             SELECT note_id, owner, parent_id, kind, 1,
+                    ',' || note_id || ',', 0
+             FROM analyst_investigation_notes WHERE note_id = ?
+             UNION ALL
+             SELECT parent.note_id, parent.owner, parent.parent_id, parent.kind,
+                    ancestors.depth + 1,
+                    ancestors.path || parent.note_id || ',',
+                    instr(ancestors.path, ',' || parent.note_id || ',') > 0
+             FROM analyst_investigation_notes parent
+             JOIN ancestors ON parent.note_id = ancestors.parent_id
+             WHERE ancestors.cycle = 0 AND ancestors.depth <= ?
+           )
+           SELECT note_id, owner, parent_id, kind, depth, cycle
+           FROM ancestors ORDER BY depth""",
+        (parent_id, MAX_NOTE_PARENT_DEPTH),
+    ).fetchall()
+    if not rows:
         raise ValueError("The selected parent folder is not available")
-    cursor = parent
-    visited: set[str] = set()
-    while cursor is not None:
-        current_id = str(cursor[0])
-        if current_id == note_id:
+    for row in rows:
+        if bool(row["cycle"]):
+            raise ValueError("The selected folder structure contains a cycle")
+        if int(row["depth"]) > MAX_NOTE_PARENT_DEPTH:
+            raise ValueError(
+                f"Folders can be nested under at most {MAX_NOTE_PARENT_DEPTH} parent folders"
+            )
+        if str(row["owner"]) != owner:
+            raise ValueError("The selected folder structure crosses analyst ownership")
+        if str(row["kind"]) != "folder":
+            raise ValueError("Every item in the selected parent path must be a folder")
+        if str(row["note_id"]) == note_id:
             raise ValueError("A folder cannot be moved inside itself")
-        if current_id in visited or not cursor[1]:
-            break
-        visited.add(current_id)
-        cursor = db.execute(
-            "SELECT note_id, parent_id, kind FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
-            (cursor[1], owner),
+    if rows[-1]["parent_id"]:
+        raise ValueError("The selected folder structure has a missing ancestor")
+    return rows
+
+
+def _stage_parent_rows(db: sqlite3.Connection, rows: list[sqlite3.Row]) -> None:
+    db.execute(
+        """CREATE TEMP TABLE nct_note_parent_stage (
+               note_id TEXT PRIMARY KEY,
+               owner TEXT NOT NULL,
+               parent_id TEXT,
+               kind TEXT NOT NULL,
+               depth INTEGER NOT NULL
+           ) WITHOUT ROWID"""
+    )
+    db.executemany(
+        """INSERT INTO nct_note_parent_stage
+           (note_id, owner, parent_id, kind, depth) VALUES (?, ?, ?, ?, ?)""",
+        [
+            (
+                row["note_id"],
+                row["owner"],
+                row["parent_id"],
+                row["kind"],
+                row["depth"],
+            )
+            for row in rows
+        ],
+    )
+
+
+def _read_save_target(
+    db: sqlite3.Connection, *, owner: str, note_id: str | None
+) -> sqlite3.Row | None:
+    if not note_id:
+        return None
+    row = db.execute(
+        """SELECT note_id, owner, parent_id, kind
+           FROM analyst_investigation_notes WHERE note_id = ?""",
+        (note_id,),
+    ).fetchone()
+    if row is None or str(row["owner"]) != owner:
+        raise KeyError(note_id)
+    return row
+
+
+def _read_descendant_snapshot(
+    db: sqlite3.Connection, *, owner: str, note_id: str
+) -> list[sqlite3.Row]:
+    rows = db.execute(
+        """WITH RECURSIVE descendants(
+               note_id, owner, parent_id, kind, depth, path, cycle
+           ) AS (
+             SELECT note_id, owner, parent_id, kind, 0,
+                    ',' || note_id || ',', 0
+             FROM analyst_investigation_notes WHERE note_id = ?
+             UNION ALL
+             SELECT child.note_id, child.owner, child.parent_id, child.kind,
+                    descendants.depth + 1,
+                    descendants.path || child.note_id || ',',
+                    instr(descendants.path, ',' || child.note_id || ',') > 0
+             FROM analyst_investigation_notes child
+             JOIN descendants ON child.parent_id = descendants.note_id
+             WHERE descendants.cycle = 0 AND descendants.depth <= ?
+           )
+           SELECT note_id, owner, parent_id, kind, depth, cycle
+           FROM descendants LIMIT ?""",
+        (note_id, MAX_NOTE_PARENT_DEPTH, MAX_NOTE_MOVE_ITEMS + 1),
+    ).fetchall()
+    if not rows or str(rows[0]["note_id"]) != note_id:
+        raise KeyError(note_id)
+    if len(rows) > MAX_NOTE_MOVE_ITEMS:
+        raise ValueError(
+            f"A single folder move supports at most {MAX_NOTE_MOVE_ITEMS:,} items, "
+            "counting the folder and everything inside it"
+        )
+    by_id = {str(row["note_id"]): row for row in rows}
+    for row in rows:
+        if bool(row["cycle"]):
+            raise ValueError("This folder structure contains a cycle")
+        if int(row["depth"]) > MAX_NOTE_PARENT_DEPTH:
+            raise ValueError(
+                f"Folders can be nested under at most {MAX_NOTE_PARENT_DEPTH} parent folders"
+            )
+        if str(row["owner"]) != owner:
+            raise ValueError("This folder structure crosses analyst ownership")
+        if str(row["note_id"]) == note_id:
+            continue
+        parent = by_id.get(str(row["parent_id"] or ""))
+        if parent is None or str(parent["kind"]) != "folder":
+            raise ValueError("Every item in a moved branch must be inside a folder")
+    return rows
+
+
+def _stage_save_target(
+    db: sqlite3.Connection,
+    target: sqlite3.Row | None,
+    descendants: list[sqlite3.Row],
+) -> None:
+    db.execute(
+        """CREATE TEMP TABLE nct_note_save_target (
+               note_id TEXT PRIMARY KEY,
+               owner TEXT NOT NULL,
+               parent_id TEXT,
+               kind TEXT NOT NULL
+           ) WITHOUT ROWID"""
+    )
+    if target is not None:
+        db.execute(
+            """INSERT INTO nct_note_save_target
+               (note_id, owner, parent_id, kind) VALUES (?, ?, ?, ?)""",
+            (target["note_id"], target["owner"], target["parent_id"], target["kind"]),
+        )
+    db.execute(
+        """CREATE TEMP TABLE nct_note_move_branch (
+               note_id TEXT PRIMARY KEY,
+               owner TEXT NOT NULL,
+               parent_id TEXT,
+               kind TEXT NOT NULL,
+               depth INTEGER NOT NULL
+           ) WITHOUT ROWID"""
+    )
+    db.executemany(
+        """INSERT INTO nct_note_move_branch
+           (note_id, owner, parent_id, kind, depth) VALUES (?, ?, ?, ?, ?)""",
+        [
+            (
+                row["note_id"],
+                row["owner"],
+                row["parent_id"],
+                row["kind"],
+                row["depth"],
+            )
+            for row in descendants
+        ],
+    )
+
+
+def _prepare_parent_save(
+    db_path: Path,
+    *,
+    owner: str,
+    parent_id: str | None,
+    note_id: str | None,
+) -> sqlite3.Connection:
+    init_note_storage(db_path)
+    db = connect_database(db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        rows = _read_parent_snapshot(
+            db, owner=owner, parent_id=parent_id, note_id=note_id
+        )
+        target = _read_save_target(db, owner=owner, note_id=note_id)
+        moving = target is not None and target["parent_id"] != parent_id
+        descendants = (
+            _read_descendant_snapshot(db, owner=owner, note_id=note_id)
+            if moving and note_id
+            else []
+        )
+        if descendants:
+            deepest = max(int(row["depth"]) for row in descendants)
+            if len(rows) + deepest > MAX_NOTE_PARENT_DEPTH:
+                raise ValueError(
+                    f"This move would nest an item inside more than "
+                    f"{MAX_NOTE_PARENT_DEPTH} parent folders"
+                )
+        _stage_parent_rows(db, rows)
+        _stage_save_target(db, target, descendants)
+        db.commit()
+        return db
+    except Exception:
+        db.rollback()
+        db.close()
+        raise
+
+
+def _revalidate_parent_stage(
+    db: sqlite3.Connection,
+    *,
+    owner: str,
+    parent_id: str | None,
+    note_id: str | None,
+) -> None:
+    target_count = int(
+        db.execute("SELECT COUNT(*) FROM nct_note_save_target").fetchone()[0]
+    )
+    if note_id:
+        if target_count != 1:
+            raise NoteConflict("This note changed in another session; reload before saving")
+        target_mismatch = int(
+            db.execute(
+                """SELECT COUNT(*) FROM nct_note_save_target staged
+                   LEFT JOIN analyst_investigation_notes current
+                     ON current.note_id = staged.note_id
+                   WHERE current.note_id IS NULL
+                      OR current.owner != staged.owner
+                      OR current.parent_id IS NOT staged.parent_id
+                      OR current.kind != staged.kind"""
+            ).fetchone()[0]
+        )
+        if target_mismatch:
+            raise NoteConflict(
+                "This note or folder moved or changed type in another session; "
+                "nothing was saved. Reload before saving"
+            )
+    elif target_count:
+        raise NoteConflict("The selected note structure changed; reload before saving")
+    staged_count = int(
+        db.execute("SELECT COUNT(*) FROM nct_note_parent_stage").fetchone()[0]
+    )
+    if not parent_id:
+        if staged_count:
+            raise NoteConflict("The selected folder structure changed; reload before saving")
+    else:
+        direct = db.execute(
+            "SELECT note_id FROM nct_note_parent_stage WHERE depth = 1"
         ).fetchone()
+        if direct is None or str(direct[0]) != parent_id:
+            raise NoteConflict("The selected folder structure changed; reload before saving")
+        mismatch = int(
+            db.execute(
+                """SELECT COUNT(*)
+                   FROM nct_note_parent_stage staged
+                   LEFT JOIN analyst_investigation_notes current
+                     ON current.note_id = staged.note_id
+                   WHERE current.note_id IS NULL
+                      OR current.owner != staged.owner
+                      OR current.parent_id IS NOT staged.parent_id
+                      OR current.kind != staged.kind"""
+            ).fetchone()[0]
+        )
+        if mismatch:
+            raise NoteConflict(
+                "The selected folder structure changed in another session; "
+                "nothing was saved. Reload before saving"
+            )
+    moved_count = int(
+        db.execute("SELECT COUNT(*) FROM nct_note_move_branch").fetchone()[0]
+    )
+    if not moved_count:
+        return
+    branch_mismatch = int(
+        db.execute(
+            """SELECT COUNT(*)
+               FROM nct_note_move_branch staged
+               LEFT JOIN analyst_investigation_notes current
+                 ON current.note_id = staged.note_id
+               WHERE current.note_id IS NULL
+                  OR current.owner != staged.owner
+                  OR current.parent_id IS NOT staged.parent_id
+                  OR current.kind != staged.kind"""
+        ).fetchone()[0]
+    )
+    added = _has_unstaged_child(db, "nct_note_move_branch")
+    if branch_mismatch or added:
+        raise NoteConflict(
+            "This folder or something inside it changed in another session; "
+            "nothing was saved. Reload before saving"
+        )
 
 
 def save_note(
@@ -352,11 +652,14 @@ def save_note(
     if len(context_json) > 32_000:
         raise ValueError("Note context is too large")
     changed_at = utc_now()
-    init_note_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
-        db.row_factory = sqlite3.Row
-        _validate_parent(db, owner=owner, parent_id=parent_id, note_id=note_id)
+    db = _prepare_parent_save(
+        db_path, owner=owner, parent_id=parent_id, note_id=note_id
+    )
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        _revalidate_parent_stage(
+            db, owner=owner, parent_id=parent_id, note_id=note_id
+        )
         if note_id:
             existing = db.execute(
                 "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
@@ -366,11 +669,22 @@ def save_note(
                 raise KeyError(note_id)
             if expected_version != int(existing["version"]):
                 raise NoteConflict("This note changed in another session; reload it before saving")
+            if existing["kind"] == "folder" and kind == "note":
+                has_children = db.execute(
+                    """SELECT 1 FROM analyst_investigation_notes
+                       WHERE parent_id = ? LIMIT 1""",
+                    (note_id,),
+                ).fetchone()
+                if has_children is not None:
+                    raise ValueError(
+                        "A folder with items inside it cannot be changed into a note"
+                    )
             version = int(existing["version"]) + 1
-            db.execute(
+            updated = db.execute(
                 """UPDATE analyst_investigation_notes
                    SET parent_id = ?, kind = ?, title = ?, content = ?, context_json = ?,
-                       version = ?, updated_at = ? WHERE note_id = ? AND owner = ?""",
+                       version = ?, updated_at = ?
+                   WHERE note_id = ? AND owner = ? AND version = ?""",
                 (
                     parent_id,
                     kind,
@@ -381,8 +695,13 @@ def save_note(
                     changed_at,
                     note_id,
                     owner,
+                    expected_version,
                 ),
             )
+            if updated.rowcount != 1:
+                raise NoteConflict(
+                    "This note changed in another session; reload it before saving"
+                )
             action = "update"
         else:
             note_id = uuid.uuid4().hex
@@ -420,6 +739,12 @@ def save_note(
         row = db.execute(
             "SELECT * FROM analyst_investigation_notes WHERE note_id = ?", (note_id,)
         ).fetchone()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     result = _decode(row)
     result["writable"] = True
     return result

@@ -61,7 +61,13 @@ optimistic version checks. **Shared notes** open from the right and show only
 material explicitly published to the current Device, Nmap, Analyze, Hunt, or
 Map page. Shared material is read-only to other analysts and identifies its
 owner. Sharing or unsharing a folder applies to its complete branch. A selected
-note or folder tree can be downloaded as a portable Markdown document.
+note or folder tree can be downloaded as a portable Markdown document. Create
+and move operations validate the complete destination structure before saving,
+support up to 128 parent folders, and reject missing, cross-owner, non-folder,
+or cyclic ancestry. Moving one folder is limited to 1,000 total items, counting
+the selected folder and everything inside it, so the writer lock has a finite
+work bound. A larger folder remains unchanged. A folder with children cannot be
+converted into a note.
 
 An authorized host operator can use `scripts/nct-admin-recover.sh` when all
 Administrators are locked out. Recovery is limited to an existing Administrator,

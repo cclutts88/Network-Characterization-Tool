@@ -1798,6 +1798,28 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
        operator gate: CLEAR after the full-path correction. The unavoidable row mutation
        remains inside one write transaction; deeper parent-walk and broader representative
        concurrent-workload benchmarks remain separate follow-up work.
+     - [x] Investigation-note parent ancestry gate completed 2026-10-09. Reproductions
+       showed that save/move accepted an existing ancestor cycle, missing or cross-owner
+       ancestry, and a non-folder ancestor; a non-empty folder could be converted into a
+       note, and a 1,500-level target performed 1,500 ancestry reads while holding the
+       SQLite writer slot. Save/move now performs one finite, fail-closed structural
+       ancestor preflight before the lock, supports at most 128 parent folders, and
+       revalidates exact identifier/owner/parent/kind tuples after locking. Moving a folder
+       also stages its exact subtree, applies the depth limit to the deepest descendant,
+       and is capped at 1,000 total moved items so lock-time work has a finite bound.
+       Larger moves are refused without changing the folder. Target version, mutation,
+       and audit remain one transaction; non-empty folder conversion is rejected and
+       metadata-only ancestor changes do not create false conflicts. A parent-leading
+       index and forced existence-only lookup prevent new-child checks from scanning the
+       notes table; the same correction now protects recursive share/delete revalidation.
+       Corrupt-tree, inverse-move, post-staging drift/addition, exact depth and item-count
+       boundaries, audit rollback, query-plan, unrelated-writer/branch, 50,000-unrelated-
+       row, and 50,000-post-stage-child checks passed. Final validation: 1,130 full Linux
+       tests passed with 12 expected skips and one dependency deprecation warning; 20
+       focused ancestry tests passed. The live built-in guide showed the limits and
+       all-or-nothing behavior without browser errors. Independent reviewer: CLEAR;
+       novice operator guide: CLEAR. Broader representative multi-workload benchmarking
+       remains open, so Step 12 stays partial.
    - [x] Initial disposable synthetic storage measurements executed for 100 and 1,000
      collections: first dry run, initial backfill, repeated backfill, wall time,
      CPU, peak process memory and bytes. Original-file and observation-count checks

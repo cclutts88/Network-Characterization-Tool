@@ -118,9 +118,15 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Hunt, Reach, and Map continue to use the complete internal model" in html
     assert "does not contact the network, remove evidence, or change" in html
     assert "<strong>Investigation note folders:</strong>" in html
-    assert "exact folder and note counts, path, and current shared-page impact" in html
-    assert "bound to that exact branch revision" in html
-    assert "does not split a large folder across partial commits" in html
+    assert "exact folder and note counts, full path, and current shared-page impact" in html
+    assert "The preview remains valid only while that folder and its contents stay unchanged" in html
+    assert "either completes for the whole folder or changes nothing" in html
+    assert "Moving a folder carries everything inside it to the new location" in html
+    assert "One move supports up to 1,000 total items" in html
+    assert "a larger folder stays in place" in html
+    assert "nested inside up to 128 parent folders" in html
+    assert "another analyst’s folder" in html
+    assert "A folder that still contains items cannot be changed into a note" in html
     assert "download Markdown first" in html
     assert "foundation/evidence-engine-v2" in html
     assert 'href="/settings/system-health"' in html
