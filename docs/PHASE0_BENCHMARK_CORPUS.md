@@ -73,3 +73,47 @@ The summary requires repeats 1, 2 and 3, six unique fresh containers, identical
 runner/corpus/image identities, exact results, the full workload list and the
 predeclared median limits. A passing result applies only to this core development
 comparison; it does not establish HTTP, browser, Range or mission performance.
+
+## HTTP and persistent-view comparison runner
+
+`scripts/benchmark_phase0_http.py` extends the same isolated procedure through a
+fixed ordered in-process HTTP session. It stages all canonical Nmap and device
+inputs before timing and disables background processing for the measurement. The
+common stable/foundation requests cover Current Network, Hunt, Map and Reach. The
+foundation run also checks bounded Current Network pages, full filtered IP export,
+filtered LFA, and Processed Evidence pages and receipts.
+
+The Current Network paging, export and LFA checks share the deterministic
+`10.20.0.0/24` filter. The first 100 and final 20 addresses must be complete,
+ordered and non-overlapping. Processed Evidence uses the same valid 120-host UDP
+source as its strict-entity paging fixture and independently requires a 100-row
+first page and 20-row final page. The four 1,000-host files remain part of the
+complete Current Network workload; their intentionally repeated service rows make
+them unsuitable for this strict processed-view fixture and no 1,000-host processed
+view claim is made.
+
+Every request must return the exact expected status, content type, totals, row
+order and complete-response semantics. The runner records the exact ordered address
+identity, response size, elapsed time and process resource use. It hashes retained
+evidence and the logical database before and after requests. Foundation reads may
+not change either. Stable `main` is allowed only its three declared legacy cache
+tables because its existing read paths populate those caches.
+
+After three stable-main reports and three foundation reports exist, run:
+
+```text
+python scripts/summarize_phase0_http_benchmark.py \
+  --main-run MAIN-1.json --main-run MAIN-2.json --main-run MAIN-3.json \
+  --foundation-run FOUNDATION-1.json \
+  --foundation-run FOUNDATION-2.json \
+  --foundation-run FOUNDATION-3.json \
+  --output phase0-http-summary.json
+```
+
+The summary requires the fixed workload and request order, exact branch-specific
+correctness, consistent retained evidence within each branch, six unique inspected
+containers and identical runner/corpus/image identities. Common requests use the
+predeclared three-run median comparison. Foundation-only requests use their
+predeclared absolute limits. These measurements use FastAPI's in-process TestClient;
+rendered-browser, concurrent-process, Range-hardware, production-scale and mission
+performance remain separate work.

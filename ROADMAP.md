@@ -2071,6 +2071,32 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    performance remain separate later gates. Independent architecture start gate:
    **CLEAR**.
 
+   **2026-10-09 HTTP and persistent-view comparison runner completion:** the
+   revision-neutral worker now stages the complete canonical Nmap/device corpus
+   before timing and executes one fixed ordered in-process HTTP session. Common
+   stable/foundation requests cover complete Current Network, shared Hunt and Map
+   reuse, and Reach. Foundation-only requests cover revision-bound Current Network
+   pages, full filtered export and LFA, and bounded Processed Evidence catalog,
+   endpoint, latest-observation and service receipts. The `10.20.0.0/24` filter has
+   an exact 120-address oracle: a 100-row first page, non-overlapping 20-row final
+   page, identical complete export and exact LFA membership. The valid 120-host UDP
+   input provides the same strict Processed Evidence paging proof; the synthetic
+   1,000-host files retain repeated service rows and therefore remain complete-view
+   scale inputs rather than strict processed-view inputs. No 1,000-host processed
+   scale claim is made. The runner enforces response status/content type, exact
+   result/order identities, byte/resource ceilings, external Git/container
+   attestations, and unchanged retained evidence. Foundation requests must leave the
+   logical database and database file unchanged. Stable `main` may change only its
+   existing `device_analysis_cache`, `device_collections` and `scan_analysis_cache`
+   tables, and the report names that legacy read-path behavior. Focused Linux
+   validation: **24 passed**. Independent quality gate: **CLEAR** after correcting
+   cross-branch evidence identity, filter, final-page, row-order and validation-fixture
+   findings. Complete Docker regression suite: **1,176 passed, 13 skipped**, with
+   the existing Starlette dependency warning. Retained three-repeat branch
+   measurements are next. These are in-process TestClient measurements and do not
+   establish rendered-browser, multi-process, Range, production-scale or mission
+   performance.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
