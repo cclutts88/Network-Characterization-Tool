@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -17,6 +18,10 @@ from app.network_evidence_cache import (
     NetworkEvidenceSourceChanged,
     NetworkEvidenceSnapshot,
     capture_network_evidence_snapshot,
+    select_map_configuration_file,
+    select_map_configuration_records,
+    select_map_import_rows,
+    select_map_scan_rows,
 )
 from app.poc import init_poc_storage
 from app.saved_networks import init_saved_network_storage
@@ -579,3 +584,308 @@ def test_real_empty_model_hits_then_exact_context_change_rebuilds(tmp_path, monk
     third = main._latest_network_evidence()
     assert third["source"]["scan_count"] == 0
     assert builds == ["topology", "topology"]
+
+
+def test_map_boundary_selectors_share_deterministic_limits(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    stamp = "2030-01-01T00:00:00+00:00"
+    with connect_database(db_path) as db:
+        for index in range(1, 202):
+            run_id = f"{index:032x}"
+            db.execute(
+                "INSERT INTO scan_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id, stamp, "completed", "a", "r", "host", "eth0", "safe",
+                    json.dumps({"run_id": run_id, "created_at": stamp}),
+                ),
+            )
+            digest = f"{index:064x}"
+            db.execute(
+                "INSERT INTO imports VALUES (?, ?, ?, ?, ?, ?)",
+                (digest, f"{index}.xml", f"imports/{index}.xml", stamp, '{"hosts":[]}', "{}"),
+            )
+        scans = select_map_scan_rows(db)
+        imports = select_map_import_rows(db)
+
+    scan_run_index = scans["columns"].index("run_id")
+    import_name_index = imports["columns"].index("filename")
+    assert len(scans["rows"]) == len(imports["rows"]) == 200
+    assert scans["rows"][0][scan_run_index] == f"{201:032x}"
+    assert scans["rows"][-1][scan_run_index] == f"{2:032x}"
+    assert imports["rows"][0][import_name_index] == "201.xml"
+    assert imports["rows"][-1][import_name_index] == "2.xml"
+
+    for index in range(1, 302):
+        run_id = f"{index:032x}"
+        run_dir = config_dir / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "manifest.json").write_text(json.dumps({
+            "run_id": run_id,
+            "operation": "manual_upload",
+            "status": "uploaded",
+            "created_at": stamp,
+        }))
+        (run_dir / "uploaded-z.txt").write_text("z")
+        (run_dir / "uploaded-a.txt").write_text("a")
+        (run_dir / "uploaded-A.txt").write_text("A")
+    records, error = select_map_configuration_records(config_dir)
+    assert error is None and len(records) == 300
+    assert records[0][1]["run_id"] == f"{301:032x}"
+    assert records[-1][1]["run_id"] == f"{2:032x}"
+    assert select_map_configuration_file(records[0][0].parent).name == "uploaded-A.txt"
+
+
+def test_map_only_snapshot_tracks_selected_scans_not_the_excluded_201st(
+    tmp_path,
+):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    stamp = "2030-01-01T00:00:00+00:00"
+    with connect_database(db_path) as db:
+        for index in range(1, 202):
+            run_id = f"{index:032x}"
+            db.execute(
+                "INSERT INTO scan_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id, stamp, "completed", "a", "r", "host", "eth0", "safe",
+                    json.dumps({
+                        "run_id": run_id,
+                        "created_at": stamp,
+                        "targets": [f"10.0.0.{index}"],
+                    }, sort_keys=True),
+                ),
+            )
+
+    def snapshot():
+        return capture_network_evidence_snapshot(
+            db_path=db_path,
+            config_dir=config_dir,
+            run_directory=lambda run_id: tmp_path / "runs" / run_id,
+            prepare_manifests=lambda manifests, _queued: manifests,
+            select_groups=lambda manifests: [manifests],
+            map_only=True,
+        )
+
+    original = snapshot()
+    assert original.key is not None
+
+    excluded_run_id = f"{1:032x}"
+    with connect_database(db_path) as db:
+        manifest = json.loads(db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?",
+            (excluded_run_id,),
+        ).fetchone()[0])
+        manifest["targets"] = ["10.9.9.1"]
+        db.execute(
+            "UPDATE scan_runs SET manifest_json = ? WHERE run_id = ?",
+            (json.dumps(manifest, sort_keys=True), excluded_run_id),
+        )
+    assert snapshot().key == original.key
+
+    selected_run_id = f"{201:032x}"
+    with connect_database(db_path) as db:
+        manifest = json.loads(db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?",
+            (selected_run_id,),
+        ).fetchone()[0])
+        manifest["targets"] = ["10.9.9.201"]
+        db.execute(
+            "UPDATE scan_runs SET manifest_json = ? WHERE run_id = ?",
+            (json.dumps(manifest, sort_keys=True), selected_run_id),
+        )
+    assert snapshot().key != original.key
+
+
+def test_current_network_and_map_share_private_topology_with_stable_build_time(
+    monkeypatch,
+):
+    import app.main as main
+    import app.network_map as network_map
+
+    builds = []
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+    monkeypatch.setattr(
+        network_map,
+        "_capture_map_topology_snapshot",
+        lambda: NetworkEvidenceSnapshot("stable", {}),
+    )
+    monkeypatch.setattr(
+        network_map,
+        "_build_topology_uncached",
+        lambda: builds.append("build") or {
+            "generated_at": "2030-01-01T00:00:00+00:00",
+            "nodes": [{"id": "ip:10.0.0.1", "sources": []}],
+            "edges": [], "summary": {}, "warnings": [],
+        },
+    )
+    monkeypatch.setattr(main, "merge_hunting_analyses", lambda _items, source: {
+        "hosts": [], "source": source,
+    })
+    monkeypatch.setattr(
+        main, "correlate_hunting_identity",
+        lambda hunting, topology, **_kwargs: {
+            **hunting, "topology_generated_at": topology["generated_at"],
+        },
+    )
+
+    current = main._build_latest_network_evidence([])
+    direct = network_map.topology()
+    direct["nodes"][0]["id"] = "caller mutation"
+    again = network_map.build_topology()
+
+    assert builds == ["build"]
+    assert current["topology_generated_at"] == direct["generated_at"] == again["generated_at"]
+    assert again["nodes"][0]["id"] == "ip:10.0.0.1"
+
+
+def test_map_cache_retries_recovers_and_bypasses_unverifiable_inputs(monkeypatch):
+    import app.network_map as network_map
+
+    state = {"key": "before", "fail": False, "uncacheable": False}
+    builds = []
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+
+    def snapshot():
+        return NetworkEvidenceSnapshot(
+            None if state["uncacheable"] else state["key"], {}
+        )
+
+    def build():
+        builds.append(state["key"])
+        if state["fail"]:
+            state["fail"] = False
+            raise RuntimeError("injected map build failure")
+        if state["key"] == "before":
+            state["key"] = "after"
+        return {"generated_at": state["key"], "nodes": [], "edges": []}
+
+    monkeypatch.setattr(network_map, "_capture_map_topology_snapshot", snapshot)
+    monkeypatch.setattr(network_map, "_build_topology_uncached", build)
+    assert network_map.build_topology()["generated_at"] == "after"
+    assert builds == ["before", "after"]
+
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+    state["key"] = "recovery"
+    state["fail"] = True
+    with pytest.raises(RuntimeError, match="injected map build failure"):
+        network_map.build_topology()
+    assert network_map._MAP_TOPOLOGY_CACHE.status()["in_flight"] == 0
+    assert network_map.build_topology()["generated_at"] == "recovery"
+
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+    state["uncacheable"] = True
+    network_map.build_topology()
+    network_map.build_topology()
+    assert builds[-2:] == ["recovery", "recovery"]
+    assert network_map._MAP_TOPOLOGY_CACHE.status()["entry_count"] == 0
+
+
+def test_identical_map_requests_share_one_build(monkeypatch):
+    import app.network_map as network_map
+
+    entered = threading.Event()
+    release = threading.Event()
+    builds = 0
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+    monkeypatch.setattr(
+        network_map,
+        "_capture_map_topology_snapshot",
+        lambda: NetworkEvidenceSnapshot("same", {}),
+    )
+
+    def delayed():
+        nonlocal builds
+        builds += 1
+        entered.set()
+        assert release.wait(5)
+        return {"generated_at": "stable", "nodes": [], "edges": []}
+
+    monkeypatch.setattr(network_map, "_build_topology_uncached", delayed)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(network_map.build_topology) for _ in range(6)]
+        assert entered.wait(5)
+        release.set()
+        results = [future.result(timeout=10) for future in futures]
+
+    assert builds == 1
+    assert all(result == results[0] for result in results)
+    assert len({id(result) for result in results}) == len(results)
+
+
+def test_map_cache_invalidates_on_database_change_and_replacement(tmp_path, monkeypatch):
+    import app.network_map as network_map
+
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    monkeypatch.setattr(network_map, "DB_PATH", db_path)
+    monkeypatch.setattr(network_map, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(network_map, "DATA_DIR", tmp_path)
+    builds = 0
+
+    def counted():
+        nonlocal builds
+        builds += 1
+        return {"generated_at": str(builds), "nodes": [], "edges": []}
+
+    monkeypatch.setattr(network_map, "_build_topology_uncached", counted)
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+    assert network_map.build_topology()["generated_at"] == "1"
+    assert network_map.build_topology()["generated_at"] == "1"
+
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO saved_networks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("net", "Alpha", "10.0.0.0/24", "", "", "[]", "t", "a", "t", "a", 1),
+        )
+    assert network_map.build_topology()["generated_at"] == "2"
+
+    replacement = tmp_path / "replacement.db"
+    with sqlite3.connect(db_path) as source, sqlite3.connect(replacement) as target:
+        source.backup(target)
+    os.replace(replacement, db_path)
+    assert network_map.build_topology()["generated_at"] == "3"
+    assert builds == 3
+
+
+def test_map_oui_second_fallback_exact_change_invalidates_and_reloads(
+    tmp_path, monkeypatch,
+):
+    import app.mac_enrichment as mac_enrichment
+    import app.network_evidence_cache as evidence_cache
+    import app.network_map as network_map
+
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO imports VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "a" * 64, "one.xml", "imports/one.xml", "2030-01-01",
+                json.dumps({"hosts": [{"ip": "10.0.0.1", "mac": "00:11:22:33:44:55"}]}),
+                "{}",
+            ),
+        )
+    primary = tmp_path / "primary-oui"
+    fallback = tmp_path / "fallback-oui"
+    primary.write_text("AABBCC OtherVendor\n")
+    fallback.write_text("001122 VendorOne\n")
+    fallback_times = fallback.stat()
+    monkeypatch.setattr(evidence_cache, "oui_search_paths", lambda: (primary, fallback))
+    monkeypatch.setattr(mac_enrichment, "oui_search_paths", lambda: (primary, fallback))
+    monkeypatch.setattr(network_map, "DB_PATH", db_path)
+    monkeypatch.setattr(network_map, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(network_map, "DATA_DIR", tmp_path)
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+
+    first = network_map.build_topology()
+    assert next(node for node in first["nodes"] if node.get("ip") == "10.0.0.1")["vendor"] == "VendorOne"
+    fallback.write_text("001122 VendorTwo\n")
+    os.utime(fallback, ns=(fallback_times.st_atime_ns, fallback_times.st_mtime_ns))
+    second = network_map.build_topology()
+    assert next(node for node in second["nodes"] if node.get("ip") == "10.0.0.1")["vendor"] == "VendorTwo"
+    assert second["generated_at"] != first["generated_at"] or second != first

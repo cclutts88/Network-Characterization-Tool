@@ -17,6 +17,16 @@ from app.mac_enrichment import (
     normalize_mac,
     oui_database_info,
     parse_neighbor_text,
+    reset_oui_database_cache,
+)
+from app.network_evidence_cache import (
+    MAX_MAP_CONFIG_BYTES,
+    NetworkEvidenceCache,
+    capture_network_evidence_snapshot,
+    select_map_configuration_file,
+    select_map_configuration_records,
+    select_map_import_rows,
+    select_map_scan_rows,
 )
 from app.poc import DATA_DIR, DB_PATH, RUNS_DIR_NAME
 from app.ip_sort import ip_sort_key
@@ -33,11 +43,6 @@ from app.topology_neighbors import parse_topology_neighbors
 
 
 router = APIRouter(prefix="/api/network-map", tags=["network-map"])
-
-# Keep this aligned with the retained device-collection limit. The map needs
-# interface and topology evidence from large configurations even though it
-# deliberately does not return the full routing table to the browser.
-MAX_MAP_CONFIG_BYTES = 100 * 1024 * 1024
 
 IPV4_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 CIDR_RE = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}(?![\w.])")
@@ -597,14 +602,20 @@ def add_analysis_hosts(
 def imported_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
     try:
         with connect_database(DB_PATH) as db:
-            rows = db.execute(
-                "SELECT sha256, filename, imported_at, analysis_json FROM imports "
-                "ORDER BY imported_at DESC LIMIT 200"
-            ).fetchall()
+            selected = select_map_import_rows(db)
     except sqlite3.Error:
         return 0
+    columns = selected["columns"]
+    indexes = {
+        name: columns.index(name)
+        for name in ("sha256", "filename", "imported_at", "analysis_json")
+    }
     count = 0
-    for sha256, filename, imported_at, analysis_json in rows:
+    for row in selected["rows"]:
+        sha256, filename, imported_at, analysis_json = (
+            row[indexes[name]]
+            for name in ("sha256", "filename", "imported_at", "analysis_json")
+        )
         try:
             analysis = json.loads(analysis_json)
         except (TypeError, json.JSONDecodeError):
@@ -655,13 +666,13 @@ def automated_scan_source_label(manifest: dict, run_id: str) -> str:
 def automated_scan_hosts(nodes: dict[str, dict], edges: dict, warnings: list[str]) -> int:
     try:
         with connect_database(DB_PATH) as db:
-            rows = db.execute(
-                "SELECT manifest_json FROM scan_runs ORDER BY created_at DESC LIMIT 200"
-            ).fetchall()
+            selected = select_map_scan_rows(db)
     except sqlite3.Error:
         return 0
+    manifest_index = selected["columns"].index("manifest_json")
     count = 0
-    for (manifest_json,) in rows:
+    for row in selected["rows"]:
+        manifest_json = row[manifest_index]
         try:
             manifest = json.loads(manifest_json)
         except (TypeError, json.JSONDecodeError):
@@ -1359,17 +1370,12 @@ def merge_device_alias(nodes: dict[str, dict], edges: dict[tuple[str, str, str],
 
 
 def config_result_text(run_dir: Path, manifest: dict) -> tuple[str, str | None]:
-    candidates = [run_dir / "stdout.txt"]
-    candidates.extend(
-        path for path in run_dir.glob("uploaded-*") if path.is_file()
-    )
-    for path in candidates:
-        if not path.is_file() or path.stat().st_size > MAX_MAP_CONFIG_BYTES:
-            continue
+    path = select_map_configuration_file(run_dir)
+    if path is not None:
         try:
             return path.read_text(encoding="utf-8", errors="replace"), path.name
         except OSError:
-            continue
+            pass
     return "", None
 
 
@@ -1427,19 +1433,11 @@ def configuration_interface_ips(interfaces: list[dict]) -> list[str]:
 
 def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, str], dict],
                           warnings: list[str]) -> int:
-    if not CONFIG_DIR.exists():
-        return 0
-    manifests: list[tuple[Path, dict]] = []
-    for path in CONFIG_DIR.glob("*/manifest.json"):
-        try:
-            manifests.append((path, json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, json.JSONDecodeError):
-            continue
-    manifests.sort(key=lambda item: item[1].get("completed_at") or item[1].get("created_at") or "", reverse=True)
+    manifests, _selection_error = select_map_configuration_records(CONFIG_DIR)
     parsed_devices: set[str] = set()
     aliases: dict[str, str] = {}
     count = 0
-    for path, manifest in manifests[:300]:
+    for path, manifest in manifests:
         operation = manifest.get("operation")
         legacy_pull = operation is None and manifest.get("vendor") and manifest.get("device_type")
         if operation not in {
@@ -2040,7 +2038,7 @@ def annotate_os_inferences(nodes: dict[str, dict]) -> None:
         node["os_display"] = os_display(node)
 
 
-def build_topology() -> dict:
+def _build_topology_uncached() -> dict:
     nodes: dict[str, dict] = {}
     edges: dict[tuple[str, str, str], dict] = {}
     warnings: list[str] = []
@@ -2120,6 +2118,29 @@ def build_topology() -> dict:
         "edges": list(edges.values()),
         "warnings": warnings,
     }
+
+
+_MAP_TOPOLOGY_CACHE = NetworkEvidenceCache()
+
+
+def _capture_map_topology_snapshot():
+    return capture_network_evidence_snapshot(
+        db_path=DB_PATH,
+        config_dir=CONFIG_DIR,
+        run_directory=lambda run_id: DATA_DIR / RUNS_DIR_NAME / run_id,
+        prepare_manifests=lambda manifests, _queued: manifests,
+        select_groups=lambda _manifests: [],
+        map_only=True,
+    )
+
+
+def build_topology() -> dict:
+    """Return one private topology built at the retained generated_at time."""
+    def build(_context: dict) -> dict:
+        reset_oui_database_cache()
+        return _build_topology_uncached()
+
+    return _MAP_TOPOLOGY_CACHE.get(_capture_map_topology_snapshot, build)
 
 
 @router.get("")

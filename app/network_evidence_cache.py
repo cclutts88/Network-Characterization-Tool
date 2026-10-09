@@ -227,6 +227,20 @@ def _table_rows(
     }
 
 
+def select_map_scan_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
+    """Select the exact automated scan rows consumed by Map."""
+    return _table_rows(
+        db, "scan_runs", order_by="created_at DESC, rowid DESC", limit=limit,
+    )
+
+
+def select_map_import_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
+    """Select the exact manual import rows consumed by Map."""
+    return _table_rows(
+        db, "imports", order_by="imported_at DESC, rowid DESC", limit=limit,
+    )
+
+
 def _scan_artifact_rows(db: sqlite3.Connection, run_ids: set[str]) -> list[list]:
     if not run_ids:
         return []
@@ -253,10 +267,14 @@ def _scan_artifact_rows(db: sqlite3.Connection, run_ids: set[str]) -> list[list]
     return rows
 
 
-def _selected_config_file(run_dir: Path) -> Path | None:
+def select_map_configuration_file(run_dir: Path) -> Path | None:
     candidates = [run_dir / "stdout.txt"]
     candidates.extend(
-        path for path in sorted(run_dir.glob("uploaded-*")) if path.is_file()
+        path for path in sorted(
+            run_dir.glob("uploaded-*"),
+            key=lambda item: (item.name.casefold(), item.name),
+        )
+        if path.is_file()
     )
     for path in candidates:
         if path.is_file() and path.stat().st_size <= MAX_MAP_CONFIG_BYTES:
@@ -264,23 +282,45 @@ def _selected_config_file(run_dir: Path) -> Path | None:
     return None
 
 
-def _configuration_inputs(config_dir: Path) -> tuple[list[dict], str | None]:
+def select_map_configuration_records(
+    config_dir: Path, limit: int = 300,
+) -> tuple[list[tuple[Path, dict]], str | None]:
+    """Select Map manifests with one deterministic order shared by build and cache."""
     if not config_dir.exists():
         return [], None
-    records: list[tuple[Path, dict, dict]] = []
+    records: list[tuple[Path, dict]] = []
+    error: str | None = None
     for path in config_dir.glob("*/manifest.json"):
         try:
-            identity = stable_file_identity(path)
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            return [], f"Device manifest is not stable and readable: {exc}"
-        records.append((path, value, identity))
+            error = error or f"Device manifest is not stable and readable: {exc}"
+            continue
+        records.append((path, value))
     records.sort(
-        key=lambda item: item[1].get("completed_at") or item[1].get("created_at") or "",
+        key=lambda item: (
+            str(item[1].get("completed_at") or item[1].get("created_at") or ""),
+            str(item[1].get("run_id") or item[0].parent.name),
+            item[0].parent.name.casefold(),
+        ),
         reverse=True,
     )
+    return records[:limit], error
+
+
+def _configuration_inputs(config_dir: Path) -> tuple[list[dict], str | None]:
+    selected, error = select_map_configuration_records(config_dir)
+    records: list[tuple[Path, dict, dict]] = []
+    for path, value in selected:
+        try:
+            identity = stable_file_identity(path)
+        except OSError as exc:
+            return [], f"Device manifest is not stable and readable: {exc}"
+        records.append((path, value, identity))
+    if error:
+        return [], error
     described: list[dict] = []
-    for path, manifest, manifest_identity in records[:300]:
+    for path, manifest, manifest_identity in records:
         operation = manifest.get("operation")
         legacy_pull = operation is None and manifest.get("vendor") and manifest.get("device_type")
         if operation not in {
@@ -294,11 +334,11 @@ def _configuration_inputs(config_dir: Path) -> tuple[list[dict], str | None]:
             "completed", "uploaded", "failed",
         }:
             return [], f"Device collection {path.parent.name} is still changing"
-        selected = _selected_config_file(path.parent)
-        if selected is None:
+        evidence_path = select_map_configuration_file(path.parent)
+        if evidence_path is None:
             return [], f"Device collection {path.parent.name} has no stable selected evidence"
         try:
-            selected_identity = stable_file_identity(selected)
+            selected_identity = stable_file_identity(evidence_path)
         except OSError as exc:
             return [], str(exc)
         described.append({
@@ -316,6 +356,7 @@ def capture_network_evidence_snapshot(
     run_directory: Callable[[str], Path],
     prepare_manifests: Callable[[list[dict], list[str]], list[dict]],
     select_groups: Callable[[list[dict]], list[list[dict]]],
+    map_only: bool = False,
 ) -> NetworkEvidenceSnapshot:
     """Capture the exact dependencies and the group context built from that snapshot."""
     try:
@@ -323,36 +364,56 @@ def capture_network_evidence_snapshot(
     except OSError as exc:
         return NetworkEvidenceSnapshot(None, [], str(exc))
 
-    try:
-        with connect_database(db_path, read_only=True) as db:
-            db.execute("BEGIN")
-            scan_rows = _table_rows(
-                db, "scan_runs", order_by="created_at DESC, rowid DESC", limit=5000
+    scan_rows = None
+    manifest_index = None
+    if map_only:
+        groups: list[list[dict]] = []
+    else:
+        try:
+            with connect_database(db_path, read_only=True) as db:
+                db.execute("BEGIN")
+                scan_rows = _table_rows(
+                    db, "scan_runs", order_by="created_at DESC, rowid DESC", limit=5000
+                )
+                scan_columns = scan_rows["columns"]
+                manifest_index = scan_columns.index("manifest_json")
+                raw_manifests = [
+                    json.loads(row[manifest_index]) for row in scan_rows["rows"]
+                ]
+                queued_ids = [
+                    str(row[0])
+                    for row in db.execute(
+                        "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
+                    ).fetchall()
+                ]
+        except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
+            return NetworkEvidenceSnapshot(
+                None, [], f"Scan selection cannot be fingerprinted: {exc}"
             )
-            scan_columns = scan_rows["columns"]
-            manifest_index = scan_columns.index("manifest_json")
-            raw_manifests = [
-                json.loads(row[manifest_index]) for row in scan_rows["rows"]
-            ]
-            queued_ids = [
-                str(row[0])
-                for row in db.execute(
-                    "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
-                ).fetchall()
-            ]
-    except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
-        return NetworkEvidenceSnapshot(None, [], f"Scan selection cannot be fingerprinted: {exc}")
 
-    manifests = prepare_manifests(raw_manifests, queued_ids)
-    groups = select_groups(manifests)
+        manifests = prepare_manifests(raw_manifests, queued_ids)
+        groups = select_groups(manifests)
     selected_ids = {
         str(manifest.get("run_id"))
         for group in groups
         for manifest in group
         if manifest.get("run_id")
     }
+    try:
+        with connect_database(db_path, read_only=True) as db:
+            db.execute("BEGIN")
+            topology_scan_rows = select_map_scan_rows(db)
+        topology_manifest_index = topology_scan_rows["columns"].index("manifest_json")
+        topology_manifests = [
+            json.loads(row[topology_manifest_index])
+            for row in topology_scan_rows["rows"]
+        ]
+    except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
+        return NetworkEvidenceSnapshot(
+            None, groups, f"Map scan selection cannot be fingerprinted: {exc}"
+        )
     topology_ids = {
-        str(manifest.get("run_id")) for manifest in manifests[:200]
+        str(manifest.get("run_id")) for manifest in topology_manifests
         if manifest.get("run_id")
     }
     relevant_run_ids = selected_ids | topology_ids
@@ -361,9 +422,7 @@ def capture_network_evidence_snapshot(
         with connect_database(db_path, read_only=True) as db:
             db.execute("BEGIN")
             artifact_rows = _scan_artifact_rows(db, relevant_run_ids)
-            imports = _table_rows(
-                db, "imports", order_by="imported_at DESC, rowid DESC", limit=200
-            )
+            imports = select_map_import_rows(db)
             mutable = {
                 "host_identities": _table_rows(
                     db, "analyst_host_identities", order_by="length(ip), ip"
@@ -463,7 +522,7 @@ def capture_network_evidence_snapshot(
             "device": database["device"],
             "inode": database["inode"],
         },
-        "scan_rows": {
+        "scan_rows": None if scan_rows is None else {
             "columns": scan_rows["columns"],
             "rows": [
                 [*row[:manifest_index], _digest_json(row[manifest_index]), *row[manifest_index + 1:]]
@@ -474,6 +533,7 @@ def capture_network_evidence_snapshot(
             [str(manifest.get("run_id") or "") for manifest in group]
             for group in groups
         ],
+        "topology_scan_rows": topology_scan_rows,
         "nmap_inputs": nmap_inputs,
         "imports": {
             "columns": imports["columns"],

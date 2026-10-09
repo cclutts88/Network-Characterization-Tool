@@ -359,13 +359,40 @@ A roadmap item should only be marked complete when:
     visible error or navigation regression; its isolated data set did not contain
     populated device evidence. Map rebuilding and server-side detail paging remain open
     under report #30. This work is foundation-only.
+  - [x] Fifth bounded correction complete: Current Network correlation and the Map page
+    now share one serialized process-local Map topology calculation while its exact
+    retained database, newest 200 Nmap scan records, newest 200 manual imports, newest
+    300 configuration records, selected retained files, identity/OS review decisions,
+    Saved Networks, OUI sources, and calculation contracts are unchanged. Every caller
+    receives a private copy. A changed input discards an in-progress mixed result and
+    retries once; unverifiable inputs bypass reuse; failures do not leave a blocked
+    calculation. Map's response shape and specialized topology semantics are unchanged.
+    The selection order has explicit record and exact-filename tie-breakers, including
+    case-only uploaded filenames. The cache descriptor uses the exact Map selections, so
+    an older unselected 201st scan does not cause needless rebuilding while a selected
+    scan change does. The first verified Map view may still publish a missing reusable
+    topology-derived result under the existing evidence-pipeline contract; the Operator
+    Guide explains this local calculation and the meaning of its generated time.
+    Validation passed **22 focused cache tests**, **52 broader Map, Current Network, and
+    Hunt tests with 2 skipped**, and the complete Docker suite with **1,086 passed and 10
+    skipped** plus one existing dependency warning. Live API checks confirmed healthy
+    Current Network and Map responses and a stable reused Map build time; direct browser
+    checks confirmed both empty-state pages rendered with no browser warnings or errors.
+    The novice final pass returned **CLEAR** after confirming navigation, both empty
+    states, and the guide's explanation of the local calculation and generated time.
+    The independent quality gate returned **CLEAR — DOCUMENTED DEVIATION** after first
+    halting completion for exact selection and case-only ordering gaps, then verifying
+    both fixes independently. The existing 2026-10-08 Whole-network current-view
+    performance deviation covers this cache; no duplicate deviation is needed.
+    Server-side detail paging remains the next separate sub-gate. This work is
+    foundation-only.
 
 ### Deviation history
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
 | 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, surface selected integrity conflicts, then reuse one serialized private current-device analysis only when a read-only snapshot proves its exact admission, result, provenance, retained bytes, scope-observation, WAN, contract, and database inputs are unchanged | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only parsed-manifest changes do not affect selection, while raw manifest bytes still invalidate analysis reuse. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Cold cache builds are read-only, warm entries invalidate on every captured dependency and database replacement, and changing inputs retry once before a visible conflict |
-| 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use a one-entry, process-local serialized cache keyed by an exact canonical descriptor, with per-descriptor single-flight builds and pre/post-build source validation | The assembled view combines immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting that mixed presentation model would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, and calculation-contract changes rebuild. Hunt/SearchSploit and Reach/report outputs remain uncached. Device-selection optimization, Map rebuilding, and server-side detail paging remain open |
+| 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use one-entry, process-local serialized caches keyed by exact canonical descriptors, with per-descriptor single-flight builds and pre/post-build source validation. The current evidence view, current device analysis, and Map topology each retain their own exact dependency boundary while shared consumers reuse private serialized copies | The assembled views combine immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting those mixed presentation models would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, selected evidence changes, OUI changes, and calculation-contract changes rebuild. Map and Current Network now share one exact topology calculation. Hunt/SearchSploit and Reach/report outputs remain uncached. Server-side detail paging remains open |
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
 | 2026-10-08 | Phase 1 candidate evidence | Use the dataset-scoped SearchSploit query cache as the reusable Hunt enrichment boundary | Keep the query cache as an execution aid, but publish an immutable candidate assessment during new supported scan ingestion. The saved identity binds exact Nmap bytes, offline dataset metadata, and the SearchSploit executable digest; each uncached query must report the frozen database path. Hunt reads that saved result, while route/policy exposure is calculated separately from current retained context | Field report #38 required page reads to stop recalculating candidates, and review showed that cache warmth, failed commands, executable changes, or a mismatched configuration file could otherwise change or mislabel the same evidence | Existing cache entries use a new executable-bound namespace. Failed queries publish no result. Historical/manual adoption and reassessment against a newer dataset require future explicit operator actions and do not occur on Hunt reads |
