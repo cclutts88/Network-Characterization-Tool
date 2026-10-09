@@ -189,3 +189,8 @@ def oui_database_info(paths: tuple[Path, ...] | None = None) -> dict:
             except OSError:
                 continue
     return {"available": False, "path": None, "prefix_count": 0, "modified_at": None}
+
+
+def reset_oui_database_cache() -> None:
+    """Reload offline OUI content after its exact source identity changes."""
+    _load_oui_file.cache_clear()

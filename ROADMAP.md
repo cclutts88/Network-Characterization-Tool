@@ -281,11 +281,34 @@ A roadmap item should only be marked complete when:
     independent quality gate: **CLEAR**. Shared evidence is still rebuilt independently
     per request; a reviewed descriptor-bound process cache remains a separate later
     correction. This work is foundation-only.
+  - [x] Third bounded correction: reuse one serialized shared current-network
+    base model inside a running NCT process only when a canonical descriptor proves the
+    exact scan selection, Nmap bytes and registration, topology imports, device
+    manifests and selected evidence, analyst identity/OS choices, Saved Network labels,
+    offline OUI data, calculation contracts, and database identity are unchanged. An
+    identical concurrent request shares one build; every caller receives a private copy.
+    Recheck the descriptor after each cold build, discard results built across a source
+    change, and bypass reuse for unverifiable legacy or unstable inputs. Hunt enrichment, Reach
+    results, exposure reports, and comparisons remain outside this cache. Adversarial
+    tests cover concurrent callers, source changes during a build, nested caller
+    mutation, direct database changes and replacement, same-size/same-time filesystem
+    changes, calculation-contract changes, fallback OUI files, scan-selection races,
+    symlinked device evidence, failure recovery, and uncacheable legacy evidence. An
+    isolated empty-data measurement improved from 47.64 ms cold to 3.05 ms warm; this is
+    proof of reuse rather than a representative large-installation benchmark. The live
+    Analyze, Hunt, and Reach pages loaded their final states with successful API responses
+    and no server errors. Cache-specific tests: **15 passed**; combined
+    Analyze/Hunt/Reach/UI regressions: **168 passed**; complete Docker suite:
+    **1,052 passed, 10 skipped**; independent quality gate: **CLEAR** after reproducing
+    and clearing three initially halted descriptor gaps. Device-evidence selection, Map
+    rebuilding, and server-side detail paging remain open under report #30. This work is
+    foundation-only.
 
 ### Deviation history
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use a one-entry, process-local serialized cache keyed by an exact canonical descriptor, with per-descriptor single-flight builds and pre/post-build source validation | The assembled view combines immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting that mixed presentation model would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, and calculation-contract changes rebuild. Hunt/SearchSploit and Reach/report outputs remain uncached. Device-selection optimization, Map rebuilding, and server-side detail paging remain open |
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |
 | 2026-10-08 | Phase 1 candidate evidence | Use the dataset-scoped SearchSploit query cache as the reusable Hunt enrichment boundary | Keep the query cache as an execution aid, but publish an immutable candidate assessment during new supported scan ingestion. The saved identity binds exact Nmap bytes, offline dataset metadata, and the SearchSploit executable digest; each uncached query must report the frozen database path. Hunt reads that saved result, while route/policy exposure is calculated separately from current retained context | Field report #38 required page reads to stop recalculating candidates, and review showed that cache warmth, failed commands, executable changes, or a mismatched configuration file could otherwise change or mislabel the same evidence | Existing cache entries use a new executable-bound namespace. Failed queries publish no result. Historical/manual adoption and reassessment against a newer dataset require future explicit operator actions and do not occur on Hunt reads |

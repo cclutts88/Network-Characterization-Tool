@@ -74,8 +74,14 @@ from app.poc import (
     router as poc_router,
     run_directory,
     schedule_worker,
+    with_host_count,
+    with_queue_state,
 )
-from app.device_configs import history as device_collection_history, router as device_config_router
+from app.device_configs import (
+    CONFIG_DIR,
+    history as device_collection_history,
+    router as device_config_router,
+)
 from app.device_collection_profiles import init_device_collection_profile_storage
 from app.device_analysis import (
     analyze_device_collection,
@@ -122,6 +128,11 @@ from app.hunting import (
     merge_hunting_analyses,
 )
 from app.hunting_ui import hunting_page
+from app.mac_enrichment import reset_oui_database_cache
+from app.network_evidence_cache import (
+    NetworkEvidenceCache,
+    capture_network_evidence_snapshot,
+)
 from app.reachability import (
     build_vendor_policy_rule,
     build_source_exposure_report,
@@ -2974,8 +2985,10 @@ def _hunting_subnets(group: list[dict]) -> list[str]:
     return list(dict.fromkeys(str(item) for item in values if item))
 
 
-def _latest_hunting_groups() -> list[list[dict]]:
-    manifests = list_scan_run_plans(limit=5000)
+def _latest_hunting_groups(
+    manifests: list[dict] | None = None,
+) -> list[list[dict]]:
+    manifests = list_scan_run_plans(limit=5000) if manifests is None else manifests
     for manifest in manifests:
         manifest["_comparison_xml_available"] = (
             run_directory(manifest["run_id"]) / "scan.xml"
@@ -2999,10 +3012,31 @@ def _latest_hunting_groups() -> list[list[dict]]:
     return selected
 
 
-def _latest_network_evidence() -> dict:
+_NETWORK_EVIDENCE_CACHE = NetworkEvidenceCache()
+
+
+def _prepare_network_evidence_manifests(
+    manifests: list[dict], queued_ids: list[str],
+) -> list[dict]:
+    return [
+        with_queue_state(with_host_count(manifest), DB_PATH, queued_ids)
+        for manifest in manifests
+    ]
+
+
+def _capture_network_evidence_snapshot():
+    return capture_network_evidence_snapshot(
+        db_path=DB_PATH,
+        config_dir=CONFIG_DIR,
+        run_directory=run_directory,
+        prepare_manifests=_prepare_network_evidence_manifests,
+        select_groups=_latest_hunting_groups,
+    )
+
+
+def _build_latest_network_evidence(groups: list[list[dict]]) -> dict:
     from app.network_map import build_topology
 
-    groups = _latest_hunting_groups()
     analyses, sources, scope_summaries = [], [], []
     for group in groups:
         description = describe_run_group(group)
@@ -3059,6 +3093,16 @@ def _latest_network_evidence() -> dict:
         },
     ), build_topology(), include_configuration_devices=True)
     return result
+
+
+def _latest_network_evidence() -> dict:
+    def build(context: dict) -> dict:
+        # The descriptor carries an exact OUI identity. A miss after that identity
+        # changes must not reuse the loader's older process-local lookup table.
+        reset_oui_database_cache()
+        return _build_latest_network_evidence(context["groups"])
+
+    return _NETWORK_EVIDENCE_CACHE.get(_capture_network_evidence_snapshot, build)
 
 
 @app.get("/api/hunting/network")
