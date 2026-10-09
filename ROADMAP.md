@@ -267,6 +267,20 @@ A roadmap item should only be marked complete when:
     delete, and legacy paging probes. Report #30 remains partially complete while shared
     Analyze/Hunt/Reach reconstruction, device evidence selection, Map reconstruction,
     and server-side detail paging remain open.
+  - [x] Second bounded correction: keep the shared current-network evidence
+    model as the input to Analyze, Hunt, and Reach, but load saved SearchSploit candidate
+    assessments only for Hunt and the exposure-report actions that use them. Ordinary
+    Reach context, path evaluation, saved-report freshness checks, and proposed-change
+    simulations must not perform Hunt-only enrichment. Add an actionable empty state to
+    Reach and clarify the difference between the Current Network roster and Hunt's
+    investigation view. Preserve the same retained hosts, services, provenance, routes,
+    policies, and conservative outcomes. Focused Reach/Hunt/UI suite: **119 passed**;
+    complete Docker suite: **1,037 passed, 10 skipped**. Live browser checks confirmed
+    the empty-state actions, correct new-scan and manual-import destinations, and a clean
+    console. Novice workflow: **CLEAR** after the scan/import actions were separated;
+    independent quality gate: **CLEAR**. Shared evidence is still rebuilt independently
+    per request; a reviewed descriptor-bound process cache remains a separate later
+    correction. This work is foundation-only.
 
 ### Deviation history
 

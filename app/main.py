@@ -3063,8 +3063,10 @@ def _latest_network_evidence() -> dict:
 
 @app.get("/api/hunting/network")
 def analyze_hunting_network() -> dict:
-    result = _latest_network_evidence()
-    result["status"] = "hunting_network_complete"
+    result = {
+        **_latest_network_evidence(),
+        "status": "hunting_network_complete",
+    }
     run_ids = [
         run_id
         for scope in (result.get("source") or {}).get("scope_summaries") or []
@@ -3082,9 +3084,10 @@ def analyze_hunting_network() -> dict:
 @app.get("/api/analysis/network")
 def analyze_current_network() -> dict:
     """Return the newest retained evidence as one host/device inventory."""
-    result = _latest_network_evidence()
-    result["status"] = "analysis_network_complete"
-    return result
+    return {
+        **_latest_network_evidence(),
+        "status": "analysis_network_complete",
+    }
 
 
 @app.get("/api/hostnames/identities")
@@ -3676,7 +3679,7 @@ def delete_external_wan_gateway_semantic(
 
 @app.get("/api/reachability/context")
 def reachability_context() -> dict:
-    hunting = analyze_hunting_network()
+    hunting = _latest_network_evidence()
     devices = _latest_device_reachability_evidence()
     return {
         "status": "reachability_context_complete",
@@ -3769,7 +3772,7 @@ def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
             "port": query.port,
             "flow_state": query.flow_state,
             "source_external": query.source_external,
-            "hunting": analyze_hunting_network(),
+            "hunting": _latest_network_evidence(),
             "saved_networks": list_saved_networks(DB_PATH),
             "device_analyses": _latest_device_reachability_evidence(),
         }
@@ -3785,7 +3788,7 @@ def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
 
 @app.post("/api/reachability/exposure-report")
 def generate_source_exposure_report() -> dict:
-    hunting = analyze_hunting_network()
+    hunting = _latest_network_evidence()
     return build_source_exposure_report(
         hunting=hunting,
         saved_networks=list_saved_networks(DB_PATH),
@@ -3807,7 +3810,7 @@ def _saved_network_for_report(saved_network_id: str) -> tuple[dict, list[dict]]:
 
 @app.get("/api/reachability/exposure-reports")
 def list_retained_exposure_reports() -> dict:
-    hunting = analyze_hunting_network()
+    hunting = _latest_network_evidence()
     networks = list_saved_networks(DB_PATH)
     return {
         "status": "exposure_report_catalog_complete",
@@ -3822,7 +3825,7 @@ def get_retained_exposure_report(saved_network_id: str) -> dict:
     record = get_exposure_report(DB_PATH, saved_network_id)
     if record is None:
         raise HTTPException(status_code=404, detail="No exposure report has been generated for this Saved Network")
-    current = exposure_port_snapshot(analyze_hunting_network(), network["cidr"])
+    current = exposure_port_snapshot(_latest_network_evidence(), network["cidr"])
     return {
         "status": "retained_exposure_report_complete",
         "summary": exposure_report_status(record, current),
@@ -3833,7 +3836,7 @@ def get_retained_exposure_report(saved_network_id: str) -> dict:
 @app.post("/api/reachability/exposure-reports/{saved_network_id}")
 def generate_retained_exposure_report(saved_network_id: str, request: Request) -> dict:
     target, networks = _saved_network_for_report(saved_network_id)
-    hunting = analyze_hunting_network()
+    hunting = _latest_network_evidence()
     try:
         report = build_source_exposure_report(
             hunting=hunting,
@@ -3879,7 +3882,7 @@ def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict
             insertion_index=query.insertion_index,
             vendor_rule=query.vendor_rule,
             template_id=query.template_id,
-            hunting=analyze_hunting_network(),
+            hunting=_latest_network_evidence(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
         )
@@ -3904,7 +3907,7 @@ def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> 
             next_hop=query.next_hop,
             priority_kind=query.priority_kind,
             priority_value=query.priority_value,
-            hunting=analyze_hunting_network(),
+            hunting=_latest_network_evidence(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
         )
@@ -3924,7 +3927,7 @@ def simulate_retained_change_scenario(query: ReachabilityChangeScenarioQuery) ->
             source_external=query.source_external,
             route=query.route.model_dump(),
             policy=query.policy.model_dump(),
-            hunting=analyze_hunting_network(),
+            hunting=_latest_network_evidence(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
         )

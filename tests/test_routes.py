@@ -123,7 +123,7 @@ def test_reachability_api_is_conservative_without_retained_evidence():
 
 
 def test_reachability_api_returns_json_for_explicit_external_address(monkeypatch):
-    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: {"hosts": [], "findings": []})
+    monkeypatch.setattr("app.main._latest_network_evidence", lambda: {"hosts": [], "findings": []})
     monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
     monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: [])
 
@@ -159,7 +159,7 @@ def test_reachability_api_dispatches_destination_cidr_to_evidence_backed_range(m
         ]},
         "policy": {"firewall_acl": []},
     }]
-    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: {"hosts": [], "findings": []})
+    monkeypatch.setattr("app.main._latest_network_evidence", lambda: {"hosts": [], "findings": []})
     monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
     monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: devices)
 
@@ -186,7 +186,7 @@ def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
     enrichment = {"status": "searchsploit_complete", "matches": []}
     captured = {}
 
-    monkeypatch.setattr("app.main.analyze_hunting_network", lambda: hunting)
+    monkeypatch.setattr("app.main._latest_network_evidence", lambda: hunting)
     monkeypatch.setattr("app.main.list_saved_networks", lambda _path: saved)
     monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: devices)
     monkeypatch.setattr(
@@ -210,6 +210,67 @@ def test_source_exposure_report_route_uses_retained_evidence(monkeypatch):
         "device_analyses": devices,
         "searchsploit": enrichment,
     }
+
+
+def test_ordinary_reach_routes_skip_hunt_only_searchsploit_enrichment(monkeypatch):
+    evidence = {"hosts": [], "findings": [], "source": {"scope_summaries": []}}
+    monkeypatch.setattr("app.main._latest_network_evidence", lambda: evidence)
+    monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
+    monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: [])
+
+    def unexpected_searchsploit(*_args, **_kwargs):
+        raise AssertionError("ordinary Reach must not load Hunt-only SearchSploit data")
+
+    monkeypatch.setattr(
+        "app.main.load_retained_searchsploit_candidates", unexpected_searchsploit
+    )
+    monkeypatch.setattr(
+        "app.main.classify_searchsploit_exposure", unexpected_searchsploit
+    )
+
+    with TestClient(app) as client:
+        context = client.get("/api/reachability/context")
+        evaluation = client.post(
+            "/api/reachability/evaluate",
+            json={
+                "source": "192.0.2.10",
+                "destination": "198.51.100.20",
+                "protocol": "tcp",
+                "port": 443,
+            },
+        )
+        catalog = client.get("/api/reachability/exposure-reports")
+
+    assert context.status_code == 200
+    assert evaluation.status_code == 200
+    assert catalog.status_code == 200
+
+
+def test_hunt_network_still_loads_retained_searchsploit_candidates(monkeypatch):
+    evidence = {"hosts": [], "findings": [], "source": {"scope_summaries": []}}
+    calls = []
+    monkeypatch.setattr("app.main._latest_network_evidence", lambda: evidence)
+    monkeypatch.setattr("app.main.list_saved_networks", lambda _path: [])
+    monkeypatch.setattr("app.main._latest_device_reachability_evidence", lambda: [])
+    monkeypatch.setattr(
+        "app.main.load_retained_searchsploit_candidates",
+        lambda _path, run_ids: calls.append(list(run_ids)) or [],
+    )
+    monkeypatch.setattr(
+        "app.main.classify_searchsploit_exposure",
+        lambda candidates, **_kwargs: {
+            "status": "searchsploit_candidates_complete",
+            "candidate_count": len(candidates),
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/hunting/network")
+
+    assert response.status_code == 200
+    assert response.json()["searchsploit"]["status"] == "searchsploit_candidates_complete"
+    assert calls == [[]]
+    assert "status" not in evidence
 
 
 def test_preview_and_package_use_the_same_udp_settings_and_required_n():

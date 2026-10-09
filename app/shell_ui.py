@@ -351,7 +351,7 @@ SHELL_SCRIPT = r"""
       ]},
       {label:'Analyze',items:[
         {title:'Current network',icon:'analysis',children:[
-          {href:'/analysis#networkOverview',title:'Host inventory',description:'Combine retained scan and hostname evidence into the current network picture.'},
+          {href:'/analysis#networkOverview',title:'Host inventory',description:'Use this as the network roster: combine retained scan, hostname, and device evidence into the current host and device picture.'},
           {href:'/analysis#networkOutliersPanel',title:'LFA',description:'Least Frequency Analysis identifies services and behavior that appear least often among comparable systems in the selected network scope.'}
         ]},
         {title:'Network devices',icon:'networkdevice',children:[
@@ -369,7 +369,7 @@ SHELL_SCRIPT = r"""
       {label:'Investigate',items:[
         {title:'Hunt',icon:'hunt',children:[
           {title:'Timeline',planned:true,description:'When available, Timeline will show when retained observations first appeared or changed across saved scans and device collections. Network Evidence remains the view of what the selected evidence currently reports.'},
-          {href:'/hunting#huntOverview',title:'Network evidence',description:'Review hosts and services in one table. NCT loads the saved offline CVE candidate assessment prepared during supported ingestion; expand a related row to inspect references without recalculating them.'},
+          {href:'/hunting#huntOverview',title:'Network evidence',description:'Investigate the roster’s observed services and saved offline CVE candidates. Expand a related row to inspect references without recalculating them.'},
           {href:'/device-analysis#activityEvidenceSection',title:'Device command history and changes',description:'Open one exact retained device collection. Review command-history text as leads, then compare collected running configuration with saved startup configuration.'}
         ]},
         {title:'Reach',icon:'reach',children:[

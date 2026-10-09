@@ -1190,6 +1190,22 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "The target is known to exist, but no retained route" in html
 
 
+def test_reachability_empty_state_routes_novices_to_required_evidence():
+    html = reachability_page().body.decode()
+
+    assert 'id="emptyContext"' in html
+    assert "Reach needs retained network context first" in html
+    assert 'href="/scans#savedNetworkPanel"' in html
+    assert 'href="/scans#scanBuilder"' in html
+    assert 'href="/analysis#xmlImport"' in html
+    assert "run a new scan" in html
+    assert "import Nmap evidence" in html
+    assert 'href="/device-config#collectionPlan"' in html
+    assert "classList.toggle('hidden',Boolean(hasContext))" in html
+    assert "Use this as the network roster" in SHELL_SCRIPT
+    assert "Investigate the roster’s observed services" in SHELL_SCRIPT
+
+
 def test_range_results_explain_evidence_coverage_once():
     html = reachability_page().body.decode()
 
