@@ -273,7 +273,7 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "Scan focus" not in account_script.text
         assert "title:'Filters'" not in account_script.text
         assert "{href:'/hunting#systemsPanel',title:'Systems'" not in account_script.text
-        assert "huntOverview:['huntEvidenceOverview','networkFiltersPanel','systemsPanel']" in account_script.text
+        assert "huntOverview:['huntEvidenceOverview','huntQuickSearch','networkFiltersPanel','systemsPanel']" in account_script.text
         assert "systemsPanel:['huntOverview','networkFiltersPanel']" not in account_script.text
         assert "nct-task-focused" in account_script.text
         assert "Enable Operator Guide" in account_script.text

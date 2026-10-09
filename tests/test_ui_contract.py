@@ -892,6 +892,13 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert html.index("Network filters") < html.index("CVE and candidate filters")
     assert "Filters apply to the host and service tables below" in html
     assert 'id="networkFiltersPanel"' in html
+    assert '<details class="panel" id="networkFiltersPanel" data-workspace-card="network-filters">' in html
+    assert '<details class="panel" id="networkFiltersPanel" data-workspace-card="network-filters" open>' not in html
+    assert '<details class="panel" data-workspace-card="network-overview">' in html
+    assert '<details class="panel" data-workspace-card="network-overview" open>' not in html
+    assert 'id="huntQuickSearch" class="panel hunt-quick-search"' in html
+    assert html.index('id="search"') < html.index('id="networkFiltersPanel"')
+    assert "search:['Quick filter hosts and services'" in SHELL_SCRIPT
     assert 'id="activeFilterSummary"' in html
     assert 'id="searchsploitFilterSummary"' in html
     assert "updateFilterSummaries" in html

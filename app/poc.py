@@ -90,7 +90,12 @@ from app.pipeline_intake import (
 )
 from app.automated_nmap_foundation import get_automated_scan_foundation_status
 from app.derived_jobs import scan_run_job_statuses, start_derived_job_worker
-from app.scan_history import build_scan_history_catalog, scan_history_group_page
+from app.scan_history_index import (
+    init_scan_history_index_storage,
+    scan_history_catalog_page,
+    scan_history_group_page_from_index,
+    sync_scan_history_manifest,
+)
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -1451,6 +1456,7 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                         ),
                     ),
                 )
+        init_scan_history_index_storage(db_path)
         init_scan_scope_context_storage(db_path)
         info = db_path.stat()
         _POC_STORAGE_READY[storage_key] = (info.st_dev, info.st_ino)
@@ -1982,6 +1988,7 @@ def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
                 manifest["profile"], json.dumps(manifest, sort_keys=True),
             ),
         )
+        sync_scan_history_manifest(db, manifest)
 
 
 def insert_reviewed_scan_run(
@@ -2026,6 +2033,8 @@ def insert_reviewed_scan_run(
                 manifest["profile"], json.dumps(manifest, sort_keys=True),
             ),
         )
+        sync_scan_history_manifest(db, manifest)
+
         insert_run_scope_context(db, manifest["run_id"], context)
         mark_pipeline_source(
             db,
@@ -2068,6 +2077,7 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
                 manifest["run_id"],
             ),
         )
+        sync_scan_history_manifest(db, manifest)
         registered_aggregate_count = int(db.execute(
             """SELECT COUNT(*) FROM artifact_observations
                WHERE source_kind = 'nmap_scan' AND source_ref = ?
@@ -4910,14 +4920,7 @@ def scan_history_group_catalog(
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
-    catalog = build_scan_history_catalog(list_all_scan_history_metadata(DB_PATH))
-    return {
-        "groups": catalog[offset : offset + limit],
-        "total": len(catalog),
-        "limit": limit,
-        "offset": offset,
-        "has_more": offset + limit < len(catalog),
-    }
+    return scan_history_catalog_page(DB_PATH, limit=limit, offset=offset)
 
 
 @router.get("/scan-history-groups/{group_id}/runs")
@@ -4927,8 +4930,8 @@ def scan_history_group_runs(
     cursor: str | None = Query(default=None, max_length=512),
 ) -> dict:
     try:
-        page = scan_history_group_page(
-            list_all_scan_history_metadata(DB_PATH), group_id, limit=limit, cursor=cursor
+        page = scan_history_group_page_from_index(
+            DB_PATH, group_id, limit=limit, cursor=cursor
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

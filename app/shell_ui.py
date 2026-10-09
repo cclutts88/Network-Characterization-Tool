@@ -403,7 +403,7 @@ SHELL_SCRIPT = r"""
       '/hostnames':{candidates:'main > section.panel',support:{}},
       '/analysis':{candidates:'main > section.panel,main > details.panel',support:{networkOverview:['analysisPanel'],xmlImport:['analysisPanel']}},
       '/device-analysis':{candidates:'main > section.panel,#analysisPanel > section.panel,#analysisPanel > .two-column',support:{deviceEvidencePicker:['deviceOverviewSection'],activityEvidenceSection:['deviceEvidencePicker'],routingEvidenceSection:['deviceEvidencePicker'],policyEvidenceSection:['deviceEvidencePicker'],comparisonPanel:['deviceEvidencePicker']}},
-      '/hunting':{candidates:'main > section.panel,#huntPanel > .panel,main > details.panel',support:{huntOverview:['huntEvidenceOverview','networkFiltersPanel','systemsPanel']}},
+      '/hunting':{candidates:'main > section.panel,#huntPanel > .panel,main > details.panel',support:{huntOverview:['huntEvidenceOverview','huntQuickSearch','networkFiltersPanel','systemsPanel']}},
       '/reachability':{candidates:'main > section.panel,main > details.panel,main > section#result',support:{reachAssessment:['result','reachOutcomeGuide']}},
       '/network-map':{candidates:'main > #mapSummary,main > #mapLayoutPanel,main > #mapWorkspace,main > #mapFilesPanel',support:{mapWorkspace:['mapSummary','mapLayoutPanel']}}
     };
@@ -508,6 +508,7 @@ SHELL_SCRIPT = r"""
     };
     const actionGuideHints={
       '/hunting':{
+        search:['Quick filter hosts and services','Filters the already loaded Hunt table while you type. It matches host names, addresses, ports, services, products, and versions. Open Network filters only when you need the more specific controls.','This changes only the visible rows. It does not rerun analysis, contact the network, or alter retained evidence.'],
         manageExploitReferences:['Manage offline exploit references','Opens Settings / System Health at the local Exploit-DB reference controls. Use it to upload an air-gapped archive, update a connected system, or reactivate an earlier saved version.','This shortcut only opens settings. Reference maintenance changes future candidate matching; it does not rescan the network, contact a device, alter retained evidence, or confirm a vulnerability.']
       },
       '/settings/system-health':{
