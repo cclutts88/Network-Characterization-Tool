@@ -2053,6 +2053,24 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    multi-process, Range-hardware and production-scale measurements; this result does
    not establish Range or mission readiness.
 
+   **2026-10-09 HTTP and persistent-view benchmark start:** extend the retained
+   comparison through in-process public HTTP requests against deterministically
+   staged canonical evidence. The fixed common capability matrix covers Hunt Network
+   Evidence, the complete Current Network response, Reach context and Map; missing
+   expected routes fail rather than being skipped. Foundation-only acceptance covers
+   bounded Current Network first/last pages, filtered export and LFA plus bounded
+   Processed Evidence scope, endpoint, observation and service receipts. Finish all
+   staging and foundation processing before timing, freeze source order, stop background
+   work, and describe the one fixed ordered request session without relabeling shared
+   cache reuse as an independent cold request. Require exact status/content type,
+   revision-bound row order/totals, full export/LFA semantics, fixed response-size
+   ceilings and unchanged retained evidence/database state after reads. Common endpoints
+   use the predeclared three-repeat median relative rule; foundation-only endpoints use
+   predeclared absolute limits. These are TestClient in-process HTTP measurements.
+   Rendered-browser, multi-process, Range-hardware, production-scale and mission
+   performance remain separate later gates. Independent architecture start gate:
+   **CLEAR**.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
