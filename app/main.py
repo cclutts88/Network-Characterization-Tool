@@ -79,8 +79,12 @@ from app.poc import (
 )
 from app.device_configs import (
     CONFIG_DIR,
-    history as device_collection_history,
     router as device_config_router,
+)
+from app.device_evidence_catalog import (
+    DeviceEvidenceCatalogError,
+    reconcile_device_evidence_catalog,
+    select_latest_device_evidence,
 )
 from app.device_collection_profiles import init_device_collection_profile_storage
 from app.device_analysis import (
@@ -316,10 +320,6 @@ PACKAGE_DIR = DATA_DIR / "packages"
 DB_PATH = DATA_DIR / "analyzer.db"
 MAX_EXPANDED_ADDRESSES = 65536
 MAX_HOSTNAME_EVIDENCE_BYTES = 50 * 1024 * 1024
-_DEVICE_EVIDENCE_CACHE_LOCK = threading.Lock()
-_DEVICE_EVIDENCE_CACHE_KEY: tuple | None = None
-_DEVICE_EVIDENCE_CACHE_VALUE: list[dict] = []
-
 class TerrainSegment(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     targets: list[str] = Field(min_length=1)
@@ -1316,6 +1316,7 @@ async def lifespan(_: FastAPI):
     init_derived_result_storage(DB_PATH)
     init_pipeline_intake_storage(DB_PATH)
     init_derived_job_storage(DB_PATH)
+    reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
     init_auth_storage(DB_PATH)
     init_achievement_storage(DB_PATH)
     init_workspace_storage(DB_PATH)
@@ -3497,51 +3498,70 @@ def analyze_network_control_routes(
 
 
 def _latest_device_reachability_evidence() -> list[dict]:
-    global _DEVICE_EVIDENCE_CACHE_KEY, _DEVICE_EVIDENCE_CACHE_VALUE
-    records = device_collection_history(limit=100)
-    selected_records = []
-    seen_devices = set()
-    for record in records:
-        device_key = str(record.get("device_address") or record.get("device_name") or "").casefold()
-        if not device_key or device_key in seen_devices:
-            continue
-        if str(record.get("status") or "").casefold() not in {"completed", "uploaded"}:
-            continue
-        selected_records.append(record)
-        seen_devices.add(device_key)
-    gateways = get_external_wan_gateways(DB_PATH)
-    cache_key = (
-        id(device_collection_history),
-        id(analyze_device_collection),
-        tuple(
-            (
-                str(record.get("run_id") or ""),
-                str(record.get("completed_at") or record.get("created_at") or ""),
-                int(record.get("retained_output_bytes") or record.get("uploaded_size") or 0),
-            )
-            for record in selected_records
-        ),
-        json.dumps(gateways, sort_keys=True, default=str) if gateways else "",
-    )
-    with _DEVICE_EVIDENCE_CACHE_LOCK:
-        if cache_key == _DEVICE_EVIDENCE_CACHE_KEY:
-            return _DEVICE_EVIDENCE_CACHE_VALUE
-
-    analyses = []
-    for record in selected_records:
+    for _selection_attempt in range(2):
         try:
-            analysis = analyze_device_collection(
-                record["run_id"], include_correlations=False
+            selected_records, selector = select_latest_device_evidence(
+                DB_PATH, CONFIG_DIR
             )
-        except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError):
-            continue
-        analyses.append(analysis)
+        except DeviceEvidenceCatalogError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Current device evidence could not be verified: {exc}. "
+                    "Restart NCT to reconcile its device selector, then open Device "
+                    "History if the issue remains."
+                ),
+            ) from exc
+        analyses = []
+        for record in selected_records:
+            run_id = str(record["run_id"])
+            try:
+                analyses.append(
+                    analyze_device_collection(run_id, include_correlations=False)
+                )
+            except (
+                DeviceCollectionDeleted,
+                DeviceCollectionIncomplete,
+                DeviceCollectionIntegrityError,
+                ValueError,
+                FileNotFoundError,
+                json.JSONDecodeError,
+                OSError,
+            ) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Current device evidence {run_id} could not be verified: {exc}. "
+                        "Open Device History and retry local verification or review the "
+                        "retained record."
+                    ),
+                ) from exc
+        try:
+            _confirmed_records, confirmed_selector = select_latest_device_evidence(
+                DB_PATH, CONFIG_DIR
+            )
+        except DeviceEvidenceCatalogError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Current device evidence changed during selection: {exc}. "
+                    "Retry the page; restart NCT if the issue remains."
+                ),
+            ) from exc
+        if selector == confirmed_selector:
+            break
+    else:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Current device evidence changed repeatedly during selection. "
+                "Retry the page after collection activity finishes."
+            ),
+        )
     result = analyses
+    gateways = get_external_wan_gateways(DB_PATH)
     for gateway in gateways:
         result = apply_external_gateway_role(result, gateway)
-    with _DEVICE_EVIDENCE_CACHE_LOCK:
-        _DEVICE_EVIDENCE_CACHE_KEY = cache_key
-        _DEVICE_EVIDENCE_CACHE_VALUE = result
     return result
 
 

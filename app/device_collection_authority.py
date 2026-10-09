@@ -171,6 +171,9 @@ def init_device_collection_authority_storage(db_path: Path) -> None:
                 BEGIN SELECT RAISE(ABORT, 'device collection authority inputs are permanent'); END;
             """
         )
+        from app.device_evidence_catalog import ensure_device_evidence_catalog_schema
+
+        ensure_device_evidence_catalog_schema(db)
 
 
 def begin_manual_upload_authority(
@@ -471,6 +474,12 @@ def activate_manual_upload_authority(
         record_device_summary_intent(
             db, run_id, intent_kind=MANUAL_DEVICE_INTENT,
         )
+        from app.device_evidence_catalog import record_device_evidence_activation
+
+        current = _authority_record(_authority_row(db, run_id))
+        if current is None:
+            raise DeviceCollectionIntegrityError("Device upload activation lost its authority")
+        record_device_evidence_activation(db, manifest, current)
     return get_device_collection_authority(db_path, run_id) or {}
 
 
@@ -574,6 +583,12 @@ def activate_collected_device_authority(
         record_device_summary_intent(
             db, run_id, intent_kind=COLLECTED_DEVICE_INTENT,
         )
+        from app.device_evidence_catalog import record_device_evidence_activation
+
+        current = _authority_record(_authority_row(db, run_id))
+        if current is None:
+            raise DeviceCollectionIntegrityError("Device collection activation lost its authority")
+        record_device_evidence_activation(db, manifest, current)
     return get_device_collection_authority(db_path, run_id) or {}
 
 
@@ -685,4 +700,7 @@ def tombstone_device_collection(db_path: Path, run_id: str) -> dict:
         ).fetchone()
         if table is not None:
             db.execute("DELETE FROM device_collections WHERE run_id = ?", (run_id,))
+        from app.device_evidence_catalog import record_device_evidence_deletion
+
+        record_device_evidence_deletion(db, run_id)
     return get_device_collection_authority(db_path, run_id) or {}

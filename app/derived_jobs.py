@@ -180,6 +180,10 @@ def init_derived_job_storage(db_path: Path) -> None:
                 ON pipeline_job_attempts(state, requested_at, attempt_id);
             CREATE INDEX IF NOT EXISTS pipeline_job_run_lookup
                 ON pipeline_jobs(source_run_id, requested_at DESC);
+            CREATE INDEX IF NOT EXISTS pipeline_job_type_run_lookup
+                ON pipeline_jobs(
+                    job_type, source_run_id, requested_at DESC, job_id DESC
+                );
             CREATE INDEX IF NOT EXISTS pipeline_job_source_lookup
                 ON pipeline_jobs(source_kind, source_ref, requested_at DESC);
             CREATE TABLE IF NOT EXISTS pipeline_job_migrations (

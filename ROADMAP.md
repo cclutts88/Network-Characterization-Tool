@@ -303,11 +303,45 @@ A roadmap item should only be marked complete when:
     and clearing three initially halted descriptor gaps. Device-evidence selection, Map
     rebuilding, and server-side detail paging remain open under report #30. This work is
     foundation-only.
+  - [~] Fourth bounded correction audit started: replace the shared network view's use
+    of the fully enriched Device History reader as its newest-device selector. Measure
+    and isolate the minimum exact selection contract needed by Analyze, Hunt, and Reach
+    without changing Device History, evidence authority, deletion and integrity rules,
+    or the verified device-summary calculation. The current fixed 100-record window must
+    not hide an older device merely because newer collections belong to other devices.
+    Any reusable selection or analysis boundary must return private results, invalidate
+    on the exact authority, manifest, selected evidence, gateway-role, or calculation
+    change it consumes, remain rollback-compatible, and perform no page-time evidence
+    writes. Sub-gate 4a is complete: a disposable transaction-maintained
+    selector catalog replaces the global newest-100 history window. One indexed SQL
+    selection finds the latest eligible verified summary for every distinct device and
+    only those selected manifests and immutable result dependencies are read. The
+    selector fingerprints canonical parsed-manifest content, so formatting-only JSON
+    rewrites do not change meaning. Selection uses retained completion/creation time
+    plus the run identifier as a deterministic tie-breaker. A semantic change or corrupt
+    selected record is an actionable integrity
+    conflict; NCT does not silently fall back to an older record. The previous weak
+    mutable device-analysis cache is disabled until sub-gate 4b can bind a serialized,
+    private-copy cache to exact evidence, scope, WAN, calculation, and database inputs.
+    Activation and deletion update the disposable selector in their authority
+    transactions, older rollback writes leave pure-SQL dirty markers for startup repair,
+    and a selection change during calculation is retried once before returning a visible
+    conflict. Focused selector/Reach tests pass **82** and the broader device ingestion,
+    authority, observation, analysis, and Reach suite passes **146** with one existing
+    warning. The independent quality gate returned **CLEAR — DOCUMENTED DEVIATION**
+    after separately probing scale, unrelated records, exact semantic change detection,
+    rollback, deletion, catalog tampering, read-only behavior, and the visible conflict
+    policy. The complete Docker suite passed **1,065 with 10 skipped** and one existing
+    warning. The restarted preview served System Health and the Current Network, Hunt,
+    and Reach APIs successfully; the novice empty-state smoke pass returned **CLEAR**.
+    Sub-gate 4b and its mutation, replacement, scope, gateway, deletion, and concurrency
+    tests remain next.
 
 ### Deviation history
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, verify only selected canonical parsed-manifest content, surface selected integrity conflicts, and temporarily calculate fresh private results on every request until an exact cache is added | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only JSON rewrites do not change selector meaning. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Sub-gate 4b must add exact retained-evidence byte validation and serialized private-copy reuse across evidence, scope, WAN, contracts, and database replacement before device analysis is cached again |
 | 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use a one-entry, process-local serialized cache keyed by an exact canonical descriptor, with per-descriptor single-flight builds and pre/post-build source validation | The assembled view combines immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting that mixed presentation model would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, and calculation-contract changes rebuild. Hunt/SearchSploit and Reach/report outputs remain uncached. Device-selection optimization, Map rebuilding, and server-side detail paging remain open |
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
 | 2026-09-27 | Phase 1 | Cache Searchsploit enrichment by normalized service fingerprint | First implementation caches the sanitized Searchsploit query keyed to the active Exploit-DB dataset identity | Current enrichment already deduplicates findings into normalized queries; persisting that boundary provides the same reuse benefit with less invasive change | Later canonical Service entities can reference this cache rather than replacing it |

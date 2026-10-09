@@ -1236,13 +1236,13 @@ def test_invalid_endpoint_is_rejected():
         parse_endpoint("not a network")
 
 
-def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(monkeypatch):
-    records = [
-        {"run_id": "failed", "device_address": "10.80.0.1", "status": "failed"},
-        {"run_id": "usable", "device_address": "10.80.0.1", "status": "completed"},
-        {"run_id": "upload", "device_address": "10.80.0.2", "status": "uploaded"},
-    ]
-    monkeypatch.setattr(main, "device_collection_history", lambda limit: records)
+def test_latest_reachability_evidence_uses_exact_device_selector(monkeypatch):
+    records = [{"run_id": "usable"}, {"run_id": "upload"}]
+    monkeypatch.setattr(
+        main,
+        "select_latest_device_evidence",
+        lambda _db, _config: (records, {"selected_run_ids": ["usable", "upload"]}),
+    )
     analyzed = []
 
     def analyze(run_id, *, include_correlations=True):
@@ -1250,16 +1250,90 @@ def test_latest_reachability_evidence_skips_failed_pull_and_uses_newest_success(
         return {"run_id": run_id}
 
     monkeypatch.setattr(main, "analyze_device_collection", analyze)
-    monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_KEY", None)
-    monkeypatch.setattr(main, "_DEVICE_EVIDENCE_CACHE_VALUE", [])
-
     monkeypatch.setattr(main, "get_external_wan_gateways", lambda db_path: [])
     result = main._latest_device_reachability_evidence()
-    cached = main._latest_device_reachability_evidence()
+    rebuilt = main._latest_device_reachability_evidence()
 
     assert result == [{"run_id": "usable"}, {"run_id": "upload"}]
-    assert cached is result
-    assert analyzed == [("usable", False), ("upload", False)]
+    assert rebuilt == result
+    assert rebuilt is not result
+    assert analyzed == [
+        ("usable", False), ("upload", False),
+        ("usable", False), ("upload", False),
+    ]
+
+
+def test_latest_reachability_evidence_reports_selected_integrity_conflict(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "select_latest_device_evidence",
+        lambda _db, _config: ([{"run_id": "broken-run"}], {}),
+    )
+    monkeypatch.setattr(
+        main,
+        "analyze_device_collection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            main.DeviceCollectionIntegrityError("retained bytes changed")
+        ),
+    )
+    monkeypatch.setattr(main, "get_external_wan_gateways", lambda _db: [])
+
+    with pytest.raises(main.HTTPException) as raised:
+        main._latest_device_reachability_evidence()
+
+    assert raised.value.status_code == 409
+    assert "broken-run" in raised.value.detail
+    assert "Device History" in raised.value.detail
+
+
+def test_latest_reachability_evidence_retries_selection_changed_during_build(
+    monkeypatch,
+):
+    selectors = iter([
+        ([{"run_id": "older"}], {"selected_run_ids": ["older"]}),
+        ([{"run_id": "newer"}], {"selected_run_ids": ["newer"]}),
+        ([{"run_id": "newer"}], {"selected_run_ids": ["newer"]}),
+        ([{"run_id": "newer"}], {"selected_run_ids": ["newer"]}),
+    ])
+    monkeypatch.setattr(
+        main, "select_latest_device_evidence", lambda _db, _config: next(selectors)
+    )
+    analyzed = []
+    monkeypatch.setattr(
+        main,
+        "analyze_device_collection",
+        lambda run_id, **_kwargs: analyzed.append(run_id) or {"run_id": run_id},
+    )
+    monkeypatch.setattr(main, "get_external_wan_gateways", lambda _db: [])
+
+    result = main._latest_device_reachability_evidence()
+
+    assert result == [{"run_id": "newer"}]
+    assert analyzed == ["older", "newer"]
+
+
+def test_latest_reachability_evidence_rejects_repeated_selection_change(monkeypatch):
+    call_number = 0
+
+    def changing_selector(_db, _config):
+        nonlocal call_number
+        call_number += 1
+        run_id = f"run-{call_number}"
+        return ([{"run_id": run_id}], {"selected_run_ids": [run_id]})
+
+    monkeypatch.setattr(main, "select_latest_device_evidence", changing_selector)
+    monkeypatch.setattr(
+        main,
+        "analyze_device_collection",
+        lambda run_id, **_kwargs: {"run_id": run_id},
+    )
+    monkeypatch.setattr(main, "get_external_wan_gateways", lambda _db: [])
+
+    with pytest.raises(main.HTTPException) as raised:
+        main._latest_device_reachability_evidence()
+
+    assert raised.value.status_code == 409
+    assert "changed repeatedly" in raised.value.detail
 
 
 def test_reach_follows_each_retained_next_hop_without_inventing_devices():
