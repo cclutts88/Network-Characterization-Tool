@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -93,6 +94,207 @@ def list_notes(db_path: Path, owner: str, page: str | None = None) -> list[dict]
             item["parent_id"] = None
         item["writable"] = item["owner"] == owner
     return items
+
+
+def _branch_revision(note_id: str, rows: list[sqlite3.Row]) -> str:
+    payload = {
+        "schema": 1,
+        "root": note_id,
+        "items": [
+            [str(row["note_id"]), str(row["parent_id"] or ""), int(row["version"])]
+            for row in sorted(rows, key=lambda item: str(item["note_id"]))
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _read_branch_snapshot(
+    db: sqlite3.Connection, *, owner: str, note_id: str
+) -> dict:
+    db.row_factory = sqlite3.Row
+    rows = db.execute(
+        """WITH RECURSIVE branch(
+               note_id, owner, parent_id, kind, title, version, visibility, shared_page
+           ) AS (
+             SELECT note_id, owner, parent_id, kind, title, version, visibility, shared_page
+             FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?
+             UNION
+             SELECT child.note_id, child.owner, child.parent_id, child.kind, child.title,
+                    child.version, child.visibility, child.shared_page
+             FROM analyst_investigation_notes child
+             JOIN branch ON child.parent_id = branch.note_id
+             WHERE child.owner = ?
+           )
+           SELECT * FROM branch ORDER BY note_id""",
+        (note_id, owner, owner),
+    ).fetchall()
+    if not rows:
+        raise KeyError(note_id)
+    by_id = {str(row["note_id"]): row for row in rows}
+    root = by_id[note_id]
+    if root["parent_id"] in by_id:
+        raise NoteConflict("This folder structure contains a cycle and cannot be changed")
+    for row in rows:
+        if row["note_id"] == note_id:
+            continue
+        parent = by_id.get(str(row["parent_id"] or ""))
+        if parent is None or parent["kind"] != "folder":
+            raise NoteConflict("This folder structure is inconsistent and cannot be changed")
+
+    path_rows = [root]
+    parent_id = root["parent_id"]
+    visited = {note_id}
+    while parent_id:
+        if parent_id in visited:
+            raise NoteConflict("This folder structure contains a cycle and cannot be changed")
+        visited.add(parent_id)
+        parent = db.execute(
+            """SELECT note_id, parent_id, kind, title
+               FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?""",
+            (parent_id, owner),
+        ).fetchone()
+        if parent is None:
+            break
+        path_rows.append(parent)
+        parent_id = parent["parent_id"]
+
+    folder_count = sum(1 for row in rows if row["kind"] == "folder")
+    note_count = len(rows) - folder_count
+    shared_page_counts: dict[str, int] = {}
+    for row in rows:
+        if row["visibility"] != "shared":
+            continue
+        page = str(row["shared_page"] or "unknown")
+        shared_page_counts[page] = shared_page_counts.get(page, 0) + 1
+    return {
+        "note_id": note_id,
+        "title": str(root["title"]),
+        "kind": str(root["kind"]),
+        "root_version": int(root["version"]),
+        "path": [str(row["title"]) for row in reversed(path_rows)],
+        "items_total": len(rows),
+        "folder_count": folder_count,
+        "note_count": note_count,
+        "shared_items": sum(shared_page_counts.values()),
+        "shared_page_counts": dict(sorted(shared_page_counts.items())),
+        "branch_revision": _branch_revision(note_id, rows),
+        "rows": rows,
+    }
+
+
+def preview_note_branch(db_path: Path, *, owner: str, note_id: str) -> dict:
+    init_note_storage(db_path)
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        snapshot = _read_branch_snapshot(db, owner=owner, note_id=note_id)
+    return {key: value for key, value in snapshot.items() if key != "rows"}
+
+
+def _stage_branch_rows(db: sqlite3.Connection, rows: list[sqlite3.Row]) -> None:
+    db.execute(
+        """CREATE TEMP TABLE nct_note_branch_stage (
+               note_id TEXT PRIMARY KEY,
+               owner TEXT NOT NULL,
+               parent_id TEXT,
+               kind TEXT NOT NULL,
+               version INTEGER NOT NULL
+           ) WITHOUT ROWID"""
+    )
+    db.executemany(
+        """INSERT INTO nct_note_branch_stage
+           (note_id, owner, parent_id, kind, version) VALUES (?, ?, ?, ?, ?)""",
+        [
+            (
+                row["note_id"],
+                row["owner"],
+                row["parent_id"],
+                row["kind"],
+                row["version"],
+            )
+            for row in rows
+        ],
+    )
+    db.commit()
+
+
+def _prepare_branch_mutation(
+    db_path: Path,
+    *,
+    owner: str,
+    note_id: str,
+    expected_version: int,
+    branch_revision: str | None,
+    action: str,
+) -> tuple[sqlite3.Connection, dict]:
+    init_note_storage(db_path)
+    with connect_database(db_path, read_only=True) as reader:
+        reader.execute("BEGIN")
+        snapshot = _read_branch_snapshot(reader, owner=owner, note_id=note_id)
+    if expected_version != snapshot["root_version"]:
+        raise NoteConflict(
+            f"This {snapshot['kind']} changed in another session; reload it before {action}"
+        )
+    if snapshot["kind"] == "folder" and branch_revision != snapshot["branch_revision"]:
+        raise NoteConflict(
+            f"This folder or something inside it changed in another session; "
+            f"reload it before {action}"
+        )
+    if branch_revision is not None and branch_revision != snapshot["branch_revision"]:
+        raise NoteConflict(
+            f"This note changed in another session; reload it before {action}"
+        )
+
+    db = connect_database(db_path)
+    db.row_factory = sqlite3.Row
+    try:
+        _stage_branch_rows(db, snapshot["rows"])
+        return db, snapshot
+    except Exception:
+        db.close()
+        raise
+
+
+def _revalidate_staged_branch(
+    db: sqlite3.Connection, *, owner: str, note_id: str, snapshot: dict, action: str
+) -> sqlite3.Row:
+    root = db.execute(
+        "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
+        (note_id, owner),
+    ).fetchone()
+    if root is None:
+        raise NoteConflict(f"This item is no longer available; reload before {action}")
+    if int(root["version"]) != snapshot["root_version"]:
+        raise NoteConflict(
+            f"This {snapshot['kind']} changed in another session; reload it before {action}"
+        )
+    mismatch = db.execute(
+        """SELECT COUNT(*)
+           FROM nct_note_branch_stage staged
+           LEFT JOIN analyst_investigation_notes current
+             ON current.note_id = staged.note_id
+           WHERE current.note_id IS NULL
+              OR current.owner != staged.owner
+              OR current.parent_id IS NOT staged.parent_id
+              OR current.kind != staged.kind
+              OR current.version != staged.version"""
+    ).fetchone()[0]
+    added = db.execute(
+        """SELECT COUNT(*)
+           FROM analyst_investigation_notes child
+           JOIN nct_note_branch_stage parent
+             ON child.parent_id = parent.note_id
+           LEFT JOIN nct_note_branch_stage staged_child
+             ON staged_child.note_id = child.note_id
+           WHERE child.owner = ? AND staged_child.note_id IS NULL""",
+        (owner,),
+    ).fetchone()[0]
+    if mismatch or added:
+        raise NoteConflict(
+            f"This folder or something inside it changed in another session; "
+            f"nothing was changed. Reload before {action}"
+        )
+    return root
 
 
 def _validate_parent(
@@ -224,35 +426,34 @@ def save_note(
 
 
 def delete_note(
-    db_path: Path, *, owner: str, note_id: str, expected_version: int
+    db_path: Path,
+    *,
+    owner: str,
+    note_id: str,
+    expected_version: int,
+    branch_revision: str | None = None,
 ) -> dict:
-    init_note_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
-        db.row_factory = sqlite3.Row
-        row = db.execute(
-            "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
-            (note_id, owner),
-        ).fetchone()
-        if row is None:
-            raise KeyError(note_id)
-        if expected_version != int(row["version"]):
-            raise NoteConflict("This note changed in another session; reload it before deleting")
-        descendants = db.execute(
-            """WITH RECURSIVE branch(note_id) AS (
-                 SELECT note_id FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?
-                 UNION ALL
-                 SELECT child.note_id FROM analyst_investigation_notes child
-                 JOIN branch ON child.parent_id = branch.note_id WHERE child.owner = ?
-               ) SELECT note_id FROM branch""",
-            (note_id, owner, owner),
-        ).fetchall()
-        ids = [item[0] for item in descendants]
-        placeholders = ",".join("?" for _ in ids)
-        db.execute(
-            f"DELETE FROM analyst_investigation_notes WHERE note_id IN ({placeholders})",
-            ids,
+    db, snapshot = _prepare_branch_mutation(
+        db_path,
+        owner=owner,
+        note_id=note_id,
+        expected_version=expected_version,
+        branch_revision=branch_revision,
+        action="deleting",
+    )
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        row = _revalidate_staged_branch(
+            db, owner=owner, note_id=note_id, snapshot=snapshot, action="deleting"
         )
+        deleted = db.execute(
+            """DELETE FROM analyst_investigation_notes
+               WHERE owner = ?
+                 AND note_id IN (SELECT note_id FROM nct_note_branch_stage)""",
+            (owner,),
+        ).rowcount
+        if deleted != snapshot["items_total"]:
+            raise NoteConflict("The complete folder could not be deleted; nothing was changed")
         changed_at = utc_now()
         db.execute(
             """INSERT INTO analyst_investigation_note_audit
@@ -264,10 +465,23 @@ def delete_note(
                 row["version"],
                 owner,
                 changed_at,
-                f"Deleted {len(ids)} item(s)",
+                f"Deleted {snapshot['items_total']} item(s)",
             ),
         )
-    return {"deleted": True, "note_id": note_id, "items_removed": len(ids)}
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    return {
+        "deleted": True,
+        "note_id": note_id,
+        "title": snapshot["title"],
+        "items_removed": snapshot["items_total"],
+        "folders_removed": snapshot["folder_count"],
+        "notes_removed": snapshot["note_count"],
+    }
 
 
 def share_note(
@@ -278,41 +492,39 @@ def share_note(
     expected_version: int,
     shared: bool,
     page: str | None = None,
+    branch_revision: str | None = None,
 ) -> dict:
-    init_note_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")  # Protect validation and mutation as one short write.
-        db.row_factory = sqlite3.Row
-        row = db.execute(
-            "SELECT * FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?",
-            (note_id, owner),
-        ).fetchone()
-        if row is None:
-            raise KeyError(note_id)
-        if expected_version != int(row["version"]):
-            raise NoteConflict("This note changed in another session; reload it before sharing")
-        branch = db.execute(
-            """WITH RECURSIVE branch(note_id) AS (
-                 SELECT note_id FROM analyst_investigation_notes WHERE note_id = ? AND owner = ?
-                 UNION ALL
-                 SELECT child.note_id FROM analyst_investigation_notes child
-                 JOIN branch ON child.parent_id = branch.note_id WHERE child.owner = ?
-               ) SELECT note_id FROM branch""",
-            (note_id, owner, owner),
-        ).fetchall()
-        ids = [item[0] for item in branch]
-        placeholders = ",".join("?" for _ in ids)
-        visibility = "shared" if shared else "personal"
-        page = str(page or "").strip().lower() or None
-        if shared and page not in {"device", "nmap", "analyze", "hunt", "reach", "map"}:
-            raise ValueError("Choose the NCT page where this note should be shared")
-        changed_at = utc_now()
-        db.execute(
-            f"""UPDATE analyst_investigation_notes
-                SET visibility = ?, shared_page = ?, version = version + 1, updated_at = ?
-                WHERE note_id IN ({placeholders})""",
-            [visibility, page if shared else None, changed_at, *ids],
+    page = str(page or "").strip().lower() or None
+    if shared and page not in {"device", "nmap", "analyze", "hunt", "reach", "map"}:
+        raise ValueError("Choose the NCT page where this note should be shared")
+    db, snapshot = _prepare_branch_mutation(
+        db_path,
+        owner=owner,
+        note_id=note_id,
+        expected_version=expected_version,
+        branch_revision=branch_revision,
+        action="changing its sharing",
+    )
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        _revalidate_staged_branch(
+            db,
+            owner=owner,
+            note_id=note_id,
+            snapshot=snapshot,
+            action="changing its sharing",
         )
+        visibility = "shared" if shared else "personal"
+        changed_at = utc_now()
+        updated_count = db.execute(
+            """UPDATE analyst_investigation_notes
+                SET visibility = ?, shared_page = ?, version = version + 1, updated_at = ?
+                WHERE owner = ?
+                  AND note_id IN (SELECT note_id FROM nct_note_branch_stage)""",
+            (visibility, page if shared else None, changed_at, owner),
+        ).rowcount
+        if updated_count != snapshot["items_total"]:
+            raise NoteConflict("The complete folder could not be updated; nothing was changed")
         updated = db.execute(
             "SELECT * FROM analyst_investigation_notes WHERE note_id = ?", (note_id,)
         ).fetchone()
@@ -327,11 +539,20 @@ def share_note(
                 updated["version"],
                 owner,
                 changed_at,
-                f"Updated {len(ids)} item(s)",
+                f"Updated {snapshot['items_total']} item(s)",
             ),
         )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     result = _decode(updated)
     result["writable"] = True
+    result["items_updated"] = snapshot["items_total"]
+    result["folders_updated"] = snapshot["folder_count"]
+    result["notes_updated"] = snapshot["note_count"]
     return result
 
 

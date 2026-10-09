@@ -27,6 +27,25 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert "body.nct-notes-shared-open>main" in SESSION_SCRIPT
 
 
+def test_recursive_note_changes_preview_exact_scope_and_report_results():
+    assert "/branch-preview`" in SESSION_SCRIPT
+    assert "branch_revision:preview.branch_revision" in SESSION_SCRIPT
+    assert "['Personal notes',...(preview.path||[preview.title])]" in SESSION_SCRIPT
+    assert "Affected: ${scope}." in SESSION_SCRIPT
+    assert "This cannot be undone. Download Markdown first if you need a copy." in SESSION_SCRIPT
+    assert "setNoteMutationBusy(true)" in SESSION_SCRIPT
+    assert "No sharing changes were made." in SESSION_SCRIPT
+    assert "Nothing was deleted." in SESSION_SCRIPT
+    assert "Deleted “${result.title||preview.title}”" in SESSION_SCRIPT
+    assert "sharedImpact(preview)" in SESSION_SCRIPT
+    assert "Refresh notes before continuing." in SESSION_SCRIPT
+    assert "loadNotes(saved.note_id,true)" in SESSION_SCRIPT
+    assert "loadNotes(null,true)" in SESSION_SCRIPT
+    assert "completed on the server, but NCT could not refresh" in SESSION_SCRIPT
+    assert "noteMutationPending||noteRefreshRequired" in SESSION_SCRIPT
+    assert "role=\"status\" aria-live=\"polite\"" in SESSION_SCRIPT
+
+
 def test_system_health_explains_bounded_calculation_status():
     html = storage_page().body.decode()
     assert "Evidence intake status" in html

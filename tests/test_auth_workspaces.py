@@ -482,9 +482,18 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
             },
         ).json()
         assert note["owner"] == "nctadmin"
+        branch_preview = admin.get(
+            f"/api/workspaces/notes/{folder['note_id']}/branch-preview"
+        ).json()
+        assert branch_preview["items_total"] == 2
         assert admin.post(
             f"/api/workspaces/notes/{folder['note_id']}/share",
-            json={"shared": True, "page": "map", "expected_version": 1},
+            json={
+                "shared": True,
+                "page": "map",
+                "expected_version": 1,
+                "branch_revision": branch_preview["branch_revision"],
+            },
         ).status_code == 200
 
     with TestClient(app) as viewer:

@@ -283,6 +283,7 @@ from app.investigation_notes import (
     export_note_markdown,
     init_note_storage,
     list_notes,
+    preview_note_branch,
     save_note,
     share_note,
 )
@@ -593,6 +594,7 @@ class InvestigationNoteShareRequest(BaseModel):
     shared: bool
     expected_version: int = Field(ge=1)
     page: Literal["device", "nmap", "analyze", "hunt", "reach", "map"] | None = None
+    branch_revision: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class AnalystViewPreferenceRequest(BaseModel):
@@ -2535,7 +2537,10 @@ def store_investigation_note(
 
 @app.delete("/api/workspaces/notes/{note_id}")
 def remove_investigation_note(
-    request: Request, note_id: str, expected_version: int
+    request: Request,
+    note_id: str,
+    expected_version: int,
+    branch_revision: str | None = None,
 ) -> dict:
     analyst = investigation_notes_analyst(request)
     if analyst is None:
@@ -2546,6 +2551,24 @@ def remove_investigation_note(
             owner=analyst["username"],
             note_id=note_id,
             expected_version=expected_version,
+            branch_revision=branch_revision,
+        )
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Personal note not found") from exc
+
+
+@app.get("/api/workspaces/notes/{note_id}/branch-preview")
+def investigation_note_branch_preview(request: Request, note_id: str) -> dict:
+    analyst = investigation_notes_analyst(request)
+    if analyst is None:
+        raise HTTPException(status_code=409, detail="Investigation notes require authenticated mode")
+    try:
+        return preview_note_branch(
+            DB_PATH,
+            owner=analyst["username"],
+            note_id=note_id,
         )
     except NoteConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2568,6 +2591,7 @@ def change_investigation_note_sharing(
             expected_version=sharing.expected_version,
             shared=sharing.shared,
             page=sharing.page,
+            branch_revision=sharing.branch_revision,
         )
     except NoteConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

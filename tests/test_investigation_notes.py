@@ -6,6 +6,7 @@ from app.investigation_notes import (
     NoteConflict,
     delete_note,
     list_notes,
+    preview_note_branch,
     save_note,
     share_note,
     export_note_markdown,
@@ -33,6 +34,7 @@ def test_personal_note_tree_and_page_scoped_sharing(tmp_path):
     }
     assert list_notes(db_path, "bravo", "map") == []
 
+    preview = preview_note_branch(db_path, owner="alpha", note_id=folder["note_id"])
     shared = share_note(
         db_path,
         owner="alpha",
@@ -40,6 +42,7 @@ def test_personal_note_tree_and_page_scoped_sharing(tmp_path):
         expected_version=folder["version"],
         shared=True,
         page="map",
+        branch_revision=preview["branch_revision"],
     )
     assert shared["visibility"] == "shared"
     assert shared["shared_page"] == "map"
@@ -117,11 +120,13 @@ def test_note_conflicts_ownership_cycles_and_branch_delete(tmp_path):
             expected_version=1,
         )
 
+    preview = preview_note_branch(db_path, owner="alpha", note_id=parent["note_id"])
     removed = delete_note(
         db_path,
         owner="alpha",
         note_id=parent["note_id"],
         expected_version=1,
+        branch_revision=preview["branch_revision"],
     )
     assert removed["items_removed"] == 3
     assert list_notes(db_path, "alpha", "map") == []

@@ -1780,6 +1780,24 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
      stronger durable-state checks. Independent default/delete, share/delete, audit
      rollback and lock-release checks passed. Recursive note-folder mutations still
      hold a writer slot proportional to branch size; large-data contention remains open.
+     - [x] Recursive investigation-note folder gate completed 2026-10-09. A reproduced
+       branch-version gap allowed an unchanged folder version to delete a newer edited
+       child or overwrite a newer child sharing decision. Recursive share, unshare, and
+       delete now require a read-only exact branch preview and opaque descendant revision,
+       stage the branch before taking the writer slot, revalidate every staged item and
+       new child after the lock, and apply one atomic set-based mutation plus audit record.
+       Chunked commits are prohibited. The UI locks the notes workspace before preview,
+       shows the full Personal notes path, exact folder/note counts, current shared-page
+       impact, and exact completion results. If the server changes data but refresh fails,
+       stale editing remains disabled until Refresh succeeds. Rollback, stale-descendant,
+       moved/added-child, unrelated-branch, post-staging race, and 1,201-item branch tests
+       passed. Final validation after the path wording correction: 1,110 full Linux tests
+       passed with 12 expected skips; 75 focused tests and the host-browser runtime
+       regression also passed. Live browser delete/share previews were canceled without
+       changing data and reported no browser errors. Independent reviewer: CLEAR; novice
+       operator gate: CLEAR after the full-path correction. The unavoidable row mutation
+       remains inside one write transaction; deeper parent-walk and broader representative
+       concurrent-workload benchmarks remain separate follow-up work.
    - [x] Initial disposable synthetic storage measurements executed for 100 and 1,000
      collections: first dry run, initial backfill, repeated backfill, wall time,
      CPU, peak process memory and bytes. Original-file and observation-count checks
