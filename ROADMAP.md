@@ -2097,6 +2097,37 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    establish rendered-browser, multi-process, Range, production-scale or mission
    performance.
 
+   **2026-10-09 retained HTTP and persistent-view comparison completion:** three
+   fresh isolated runs of stable `main`
+   `fc979133634fe068c7dd13b5aa6b0cb873305c0e` and three of foundation
+   `611854cc737a57857da648574bae19144e424426` passed the exact correctness
+   oracle and every predeclared absolute and relative limit. All six used unique
+   inspected containers from image
+   `sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85`
+   with networking disabled and read-only target/corpus mounts. Both revisions
+   returned the exact ordered 4,188-host Current Network and 6,125 Hunt findings.
+   Foundation also passed the exact 120-address filtered page/export/LFA and
+   strict Processed Evidence page oracle and bounded endpoint/latest/service
+   requests without changing evidence or its database; stable changed only the
+   three declared legacy cache tables.
+   Median whole-run wall time was 14.091 seconds on stable and 13.245 seconds on
+   foundation; CPU time was 8.066 versus 6.624 seconds; peak memory was
+   475,942,912 versus 570,290,176 bytes. The first foundation Current Network
+   build was slower at 5.289 versus 3.719 seconds but passed its ceiling; repeated
+   Current Network, Hunt, Map and Reach requests were faster in this local run.
+   Map results differ materially by revision: stable reports 2 interfaces, 2
+   subnets and 47 relationships, while foundation's newer exact topology rules
+   report 1,000 interfaces, no synthetic subnets and 1,041 relationships. Each
+   exact result repeated three times, so Map timing is a revision comparison rather
+   than identical-output work. The initial summary rejected the unmodeled stable
+   Map result; the exact branch-specific oracle was added without changing any raw
+   run, and independent review returned **CLEAR**. Raw reports, the passing machine
+   summary and a plain-language report are retained under
+   `docs/benchmarks/phase0-http-20261009/`. This closes the retained HTTP and
+   persistent-view slice. Step 15 remains **in progress** for rendered-browser,
+   multi-process, Range-hardware and production-scale measurements; this result
+   does not establish Range or mission readiness.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.

@@ -1,0 +1,459 @@
+{
+  "benchmark": "phase0-http-persistent-view-comparison",
+  "comparison_statistic": "median of three fresh-process repeats",
+  "corpus": {
+    "file_count": 17,
+    "generator_version": "phase0-benchmark-corpus:1",
+    "manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+    "total_bytes": 3492762
+  },
+  "correctness": {
+    "allowed_database_table_changes": [],
+    "common": {
+      "current": {
+        "host_count": 4188,
+        "hosts": 4188,
+        "ordered_host_addresses_sha256": "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+        "scan_count": 7,
+        "status": "analysis_network_complete",
+        "unique_host_addresses": 4188
+      },
+      "hunt": {
+        "finding_count": 6125,
+        "host_count": 4188,
+        "status": "hunting_network_complete"
+      },
+      "map": {
+        "arp_neighbors": 0,
+        "configuration_records_read": 4,
+        "devices": 1,
+        "gateways": 0,
+        "hosts": 4188,
+        "interfaces": 1000,
+        "mac_conflicts": 0,
+        "mac_identified_hosts": 4188,
+        "mac_observations": 4315,
+        "nmap_records_read": 4315,
+        "relationships": 1041,
+        "subnets": 0,
+        "switchport_links": 0,
+        "topology_neighbors": 0
+      },
+      "reach": {
+        "devices": 0,
+        "hosts": 4188,
+        "saved_networks": 0
+      }
+    },
+    "database_logical_sha256_after": "2e8284c1be23af3472a9c130928b5e0c8710e3eefc548df198dc412ca8fa569a",
+    "database_logical_sha256_before": "2e8284c1be23af3472a9c130928b5e0c8710e3eefc548df198dc412ca8fa569a",
+    "database_logical_state_unchanged": true,
+    "database_main_file_after": "9246821f33024391511a8e9d31a350bedaba9510bb4b7019efaf6dd0d725a149",
+    "database_main_file_before": "9246821f33024391511a8e9d31a350bedaba9510bb4b7019efaf6dd0d725a149",
+    "database_table_counts": {
+      "analyst_achievements": 0,
+      "analyst_auth_audit": 0,
+      "analyst_filter_presets": 0,
+      "analyst_host_identities": 0,
+      "analyst_investigation_note_audit": 0,
+      "analyst_investigation_notes": 0,
+      "analyst_scan_drafts": 0,
+      "analyst_sessions": 0,
+      "analyst_shell_preferences": 0,
+      "analyst_users": 0,
+      "analyst_view_preferences": 0,
+      "analyst_workspace_layout_audit": 0,
+      "analyst_workspace_layouts": 0,
+      "analyst_workspace_preferences": 0,
+      "app_settings": 0,
+      "artifact_observation_scope_contexts": 0,
+      "artifact_observations": 1,
+      "artifact_registry": 1,
+      "artifact_scope_assignments": 1,
+      "assessment_scope_assignment_links": 1,
+      "derived_result_inputs": 0,
+      "derived_result_observation_links": 0,
+      "derived_results": 0,
+      "device_analysis_cache": 0,
+      "device_collection_authority": 0,
+      "device_collection_authority_inputs": 0,
+      "device_collection_profile_roots": 0,
+      "device_collection_profile_versions": 0,
+      "device_collections": 0,
+      "device_command_observations": 0,
+      "device_evidence_catalog": 0,
+      "device_evidence_catalog_dirty": 0,
+      "device_evidence_catalog_meta": 1,
+      "device_interface_assessments": 0,
+      "device_interface_receipts": 0,
+      "device_scope_assignments": 0,
+      "endpoint_entities": 120,
+      "endpoint_receipts": 120,
+      "entity_assessments": 1,
+      "global_no_strike_history": 0,
+      "host_os_inference_review_audit": 0,
+      "host_os_inference_reviews": 0,
+      "host_os_override_audit": 0,
+      "host_os_overrides": 0,
+      "imports": 0,
+      "network_environment_settings": 0,
+      "network_scope_audit": 1,
+      "network_scopes": 1,
+      "network_semantics": 0,
+      "network_wan_interfaces": 0,
+      "pipeline_admission_intents": 0,
+      "pipeline_intake_sources": 0,
+      "pipeline_job_attempts": 0,
+      "pipeline_job_migrations": 1,
+      "pipeline_job_requests": 0,
+      "pipeline_jobs": 0,
+      "reach_exposure_reports": 0,
+      "saved_network_scope_associations": 0,
+      "saved_networks": 0,
+      "scan_foundation_processing_attempts": 0,
+      "scan_history_groups": 7,
+      "scan_history_index_dirty": 0,
+      "scan_history_index_meta": 1,
+      "scan_history_memberships": 9,
+      "scan_inherited_scope_assignments": 0,
+      "scan_profiles": 8,
+      "scan_run_audit": 0,
+      "scan_run_scope_contexts": 0,
+      "scan_run_scope_sources": 0,
+      "scan_runs": 9,
+      "scan_schedule_scope_contexts": 0,
+      "scan_schedule_scope_sources": 0,
+      "scan_schedules": 0,
+      "service_entities": 160,
+      "service_receipts": 160,
+      "shared_analyst_themes": 0
+    },
+    "database_tables_changed_by_requests": [],
+    "evidence_sha256_unchanged": "f18dab10b8133ed616801cc34c43c13e21f52153c142ea145942fa5c997e4d0b",
+    "foundation": {
+      "current_filtered_total": 120,
+      "current_first_count": 100,
+      "current_last_count": 20,
+      "current_ordered_addresses_sha256": "bb8e4b9771e3e0563da37754efd56cbff67f969e3720374c4bd3c3505fbf5036",
+      "current_page_overlap_count": 0,
+      "export_addresses_sha256": "bb8e4b9771e3e0563da37754efd56cbff67f969e3720374c4bd3c3505fbf5036",
+      "export_count": 120,
+      "inventory_subnet": "10.20.0.0/24",
+      "latest_contract": "latest-supported-nmap-observations:1",
+      "lfa_member_count": 120,
+      "processed_endpoint_total": 120,
+      "processed_first_count": 100,
+      "processed_last_count": 20,
+      "processed_ordered_addresses_sha256": "45542eb68e7938271e382d3d45385978692dc727566af6f885702aace0917aff",
+      "processed_page_overlap_count": 0,
+      "processed_scope_count": 1,
+      "service_total": 1
+    },
+    "staged": {
+      "device_files": 4,
+      "nmap_files": 9
+    }
+  },
+  "expected_workloads": [
+    "current-ips:complete",
+    "current-lfa:complete",
+    "current-page:first",
+    "current-page:last",
+    "current:first",
+    "current:repeat",
+    "hunt:shared-reuse",
+    "map:shared-reuse",
+    "processed:endpoint",
+    "processed:first-page",
+    "processed:last-page",
+    "processed:latest",
+    "processed:scopes",
+    "processed:services",
+    "reach:shared-reuse"
+  ],
+  "failures": [],
+  "foundation_capabilities": true,
+  "limitations": [
+    "In-process TestClient HTTP measurements only.",
+    "One fixed ordered session measures first build and shared reuse; later requests are not independent cold starts.",
+    "Rendered browser, multi-process, Range, mission, production-history and physical-hardware performance are not measured."
+  ],
+  "limits": {
+    "absolute": {
+      "bounded_response_bytes": 2000000,
+      "common_request_wall_seconds": 30.0,
+      "complete_response_bytes": 25000000,
+      "foundation_request_wall_seconds": 10.0,
+      "retained_data_root_bytes": 200000000,
+      "whole_run_cpu_seconds": 120.0,
+      "whole_run_peak_rss_bytes": 1073741824,
+      "whole_run_wall_seconds": 120.0
+    },
+    "relative": {
+      "cpu_seconds_allowance": 0.5,
+      "foundation_over_main_ratio": 2.0,
+      "peak_rss_bytes_allowance": 134217728,
+      "wall_seconds_allowance": 0.5
+    }
+  },
+  "metrics": {
+    "current-ips:complete": {
+      "cpu_seconds": 0.539968,
+      "response_bytes": 1678,
+      "wall_seconds": 0.9815446930006146
+    },
+    "current-lfa:complete": {
+      "cpu_seconds": 0.2754709999999996,
+      "response_bytes": 269,
+      "wall_seconds": 0.7114293429985992
+    },
+    "current-page:first": {
+      "cpu_seconds": 0.34410899999999955,
+      "response_bytes": 473504,
+      "wall_seconds": 0.7735533459999715
+    },
+    "current-page:last": {
+      "cpu_seconds": 0.26423099999999966,
+      "response_bytes": 102859,
+      "wall_seconds": 0.6877793460007524
+    },
+    "current:first": {
+      "cpu_seconds": 2.6654269999999998,
+      "response_bytes": 21601081,
+      "wall_seconds": 5.285325372999068
+    },
+    "current:repeat": {
+      "cpu_seconds": 0.6092219999999999,
+      "response_bytes": 21601081,
+      "wall_seconds": 1.024826505999954
+    },
+    "hunt:shared-reuse": {
+      "cpu_seconds": 0.634366,
+      "response_bytes": 21603262,
+      "wall_seconds": 1.2046931100012443
+    },
+    "map:shared-reuse": {
+      "cpu_seconds": 0.18048700000000029,
+      "response_bytes": 8234910,
+      "wall_seconds": 0.4411808179975196
+    },
+    "processed:endpoint": {
+      "cpu_seconds": 0.007951999999999515,
+      "response_bytes": 4295,
+      "wall_seconds": 0.02832910800134414
+    },
+    "processed:first-page": {
+      "cpu_seconds": 0.00910399999999889,
+      "response_bytes": 14692,
+      "wall_seconds": 0.03174232099991059
+    },
+    "processed:last-page": {
+      "cpu_seconds": 0.008764000000001104,
+      "response_bytes": 3481,
+      "wall_seconds": 0.03032338499906473
+    },
+    "processed:latest": {
+      "cpu_seconds": 0.00758800000000015,
+      "response_bytes": 3474,
+      "wall_seconds": 0.02757509599905461
+    },
+    "processed:scopes": {
+      "cpu_seconds": 0.006445000000001144,
+      "response_bytes": 405,
+      "wall_seconds": 0.022455031001300085
+    },
+    "processed:services": {
+      "cpu_seconds": 0.005791000000000324,
+      "response_bytes": 655,
+      "wall_seconds": 0.021133428999746684
+    },
+    "reach:shared-reuse": {
+      "cpu_seconds": 0.5269410000000008,
+      "response_bytes": 12756179,
+      "wall_seconds": 1.0387032920007186
+    }
+  },
+  "passed": true,
+  "repeat": 3,
+  "request_session": {
+    "background_work_disabled_before_measurement": true,
+    "kind": "one fixed ordered in-process TestClient session",
+    "order": [
+      "current:first",
+      "current:repeat",
+      "hunt:shared-reuse",
+      "map:shared-reuse",
+      "reach:shared-reuse",
+      "current-page:first",
+      "current-page:last",
+      "current-ips:complete",
+      "current-lfa:complete",
+      "processed:scopes",
+      "processed:first-page",
+      "processed:last-page",
+      "processed:endpoint",
+      "processed:latest",
+      "processed:services"
+    ],
+    "staging_complete_before_measurement": true
+  },
+  "retained_state": {
+    "data_root_bytes": 5283414,
+    "data_root_file_count": 30,
+    "files": [
+      {
+        "path": "analyzer.db",
+        "size_bytes": 1699840
+      },
+      {
+        "path": "analyzer.db-shm",
+        "size_bytes": 32768
+      },
+      {
+        "path": "analyzer.db-wal",
+        "size_bytes": 0
+      },
+      {
+        "path": "artifacts/sha256/e5/e5771ca78e3cbbfe8e4bcb4851cc3d630b831dd3506ebc11e01f3e2e1c133fcc",
+        "size_bytes": 94883
+      },
+      {
+        "path": "device-configs/191be8c240645440bd6b92a85fdfef13/manifest.json",
+        "size_bytes": 375
+      },
+      {
+        "path": "device-configs/191be8c240645440bd6b92a85fdfef13/uploaded-evidence.txt",
+        "size_bytes": 448
+      },
+      {
+        "path": "device-configs/683fc2bd71292a181d15d7d8d1da0933/manifest.json",
+        "size_bytes": 373
+      },
+      {
+        "path": "device-configs/683fc2bd71292a181d15d7d8d1da0933/uploaded-evidence.txt",
+        "size_bytes": 558
+      },
+      {
+        "path": "device-configs/b2fe695284c0c76d6f62b7c0bb962a0b/manifest.json",
+        "size_bytes": 373
+      },
+      {
+        "path": "device-configs/b2fe695284c0c76d6f62b7c0bb962a0b/uploaded-evidence.txt",
+        "size_bytes": 682
+      },
+      {
+        "path": "device-configs/ed8e7c75a75d4d57727e4634b3f4088c/manifest.json",
+        "size_bytes": 389
+      },
+      {
+        "path": "device-configs/ed8e7c75a75d4d57727e4634b3f4088c/uploaded-evidence.txt",
+        "size_bytes": 120383
+      },
+      {
+        "path": "scan-runs/3a0d9d23fc46cfc8bd36b961139f6c46/manifest.json",
+        "size_bytes": 457
+      },
+      {
+        "path": "scan-runs/3a0d9d23fc46cfc8bd36b961139f6c46/scan.xml",
+        "size_bytes": 756395
+      },
+      {
+        "path": "scan-runs/4eb7d578c861ea9cf7fe04d44bbfc454/manifest.json",
+        "size_bytes": 451
+      },
+      {
+        "path": "scan-runs/4eb7d578c861ea9cf7fe04d44bbfc454/scan.xml",
+        "size_bytes": 68573
+      },
+      {
+        "path": "scan-runs/716bc5705d2ee76884f5008e48974b5b/manifest.json",
+        "size_bytes": 455
+      },
+      {
+        "path": "scan-runs/716bc5705d2ee76884f5008e48974b5b/scan.xml",
+        "size_bytes": 755385
+      },
+      {
+        "path": "scan-runs/835ed762754fa788c431ed81cdd4adab/manifest.json",
+        "size_bytes": 457
+      },
+      {
+        "path": "scan-runs/835ed762754fa788c431ed81cdd4adab/scan.xml",
+        "size_bytes": 756395
+      },
+      {
+        "path": "scan-runs/a0f3f18fb7a07e159786c3ec8f25d226/manifest.json",
+        "size_bytes": 457
+      },
+      {
+        "path": "scan-runs/a0f3f18fb7a07e159786c3ec8f25d226/scan.xml",
+        "size_bytes": 756395
+      },
+      {
+        "path": "scan-runs/b2bf1e83f792a609747c759c414467a8/manifest.json",
+        "size_bytes": 450
+      },
+      {
+        "path": "scan-runs/b2bf1e83f792a609747c759c414467a8/scan.xml",
+        "size_bytes": 68585
+      },
+      {
+        "path": "scan-runs/d5898fd1670e4976c5a9d1558f4d0b8c/manifest.json",
+        "size_bytes": 447
+      },
+      {
+        "path": "scan-runs/d5898fd1670e4976c5a9d1558f4d0b8c/scan.xml",
+        "size_bytes": 94883
+      },
+      {
+        "path": "scan-runs/d7af2c9b6743016ee44e90925c97f787/manifest.json",
+        "size_bytes": 446
+      },
+      {
+        "path": "scan-runs/d7af2c9b6743016ee44e90925c97f787/scan.xml",
+        "size_bytes": 3077
+      },
+      {
+        "path": "scan-runs/dc5969e5e8025c478960f0dbdb50fbc8/manifest.json",
+        "size_bytes": 461
+      },
+      {
+        "path": "scan-runs/dc5969e5e8025c478960f0dbdb50fbc8/scan.xml",
+        "size_bytes": 68573
+      }
+    ]
+  },
+  "runner_sha256": "21b7fa6bb068ee7680d80469ebcff933a4d7f7783760901e2dfe202e13934d1f",
+  "runner_version": "phase0-http-benchmark:1",
+  "target": {
+    "container_image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "identity_evidence": {
+      "container_image": {
+        "container_id": "4dc5c11909687688c38cb67e3a472f9e0a769a3457fa9d58537163f1320f48be",
+        "corpus_mount_read_only": true,
+        "fresh_container": true,
+        "image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+        "network_mode": "none",
+        "source_mount_read_only": true,
+        "verification_method": "controller:docker-image-inspect"
+      },
+      "git": {
+        "clean": true,
+        "revision": "611854cc737a57857da648574bae19144e424426",
+        "source_digest_sha256": "6c28ee0057a6242ce98d6c6ac7262d06013b288aa02e3ce24ec736743a5ea8c5",
+        "verification_method": "controller:git-rev-parse-status-and-source-digest"
+      },
+      "type": "externally-verified-controller-attestations",
+      "validated": true
+    },
+    "revision": "611854cc737a57857da648574bae19144e424426",
+    "source_digest_sha256": "6c28ee0057a6242ce98d6c6ac7262d06013b288aa02e3ce24ec736743a5ea8c5",
+    "source_file_count": 90
+  },
+  "total": {
+    "cpu_seconds": 6.6489959999999995,
+    "peak_rss_bytes": 568819712,
+    "peak_rss_method": "cgroup-v2 memory.peak including child processes",
+    "wall_seconds": 13.199898410999594
+  }
+}
