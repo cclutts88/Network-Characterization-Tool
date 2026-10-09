@@ -1820,6 +1820,21 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
        all-or-nothing behavior without browser errors. Independent reviewer: CLEAR;
        novice operator guide: CLEAR. Broader representative multi-workload benchmarking
        remains open, so Step 12 stays partial.
+     - [~] Representative workspace contention benchmark started 2026-10-09. Use a
+       disposable database and public storage functions to run simultaneous investigation-
+       note, Map-layout, working-view, and filter-preset updates for multiple isolated
+       analysts while bounded reads continue. Record per-family latency, wall/CPU time,
+       SQLite locked/busy failures, other errors, and exact final version/audit counts.
+       Retain the reproducible script and dated results. This establishes a local
+       development baseline only; it must not be described as Range-scale or mission-ready
+       performance. The retained run uses three identical serial and eight-analyst
+       concurrent repeats, 50 cycles per analyst and operation family, 4 KiB payloads,
+       a 1,000-item recursive share/unshare/move lane, and bounded readers. It must fail
+       on any lock error, conflict, unexpected error, incomplete read progress, missing
+       per-family recursive overlap, incorrect payload/version/audit/folder state,
+       integrity failure, five-second call, or concurrent p95 above the greater of one
+       second and ten times serial p95. Independent start-gate review: CLEAR after
+       deterministic recursive overlap and complete descendant/audit checks were added.
    - [x] Initial disposable synthetic storage measurements executed for 100 and 1,000
      collections: first dry run, initial backfill, repeated backfill, wall time,
      CPU, peak process memory and bytes. Original-file and observation-count checks
