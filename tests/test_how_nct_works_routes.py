@@ -86,6 +86,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Latest supported and last confirmed Nmap source windows" in html
     assert "last confirmed positive observation" in html
     assert "source-reported MAC/IP associations within one scope" in html
+    assert "Current reported service state" in html
+    assert "did not assess the port" in html
+    assert "latest defensible saved source report" in html
+    assert "does not read source files or contact the network" in html
     assert "possible address reuse or a DHCP-related hypothesis" in html
     assert "does not prove one device, DHCP movement" in html
     assert "physical-device reconciliation, DHCP-cause proof" in html

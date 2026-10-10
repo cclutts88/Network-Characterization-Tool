@@ -2120,6 +2120,21 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "Open saved source records" in html
     assert "Open latest supported observations" in html
     assert "/latest-observations?${params}" in html
+    assert "Open latest source-reported service state" in html
+    assert "/current-service-states?${params}" in html
+    assert "A later scan that did not assess a port shows Not assessed" in html
+    assert "Why this source was selected" in html
+    current_service_renderer = html.split("function renderCurrentServiceStates", 1)[1].split(
+        "async function openCurrentServiceStates", 1
+    )[0]
+    assert "Selection contract:" not in current_service_renderer
+    assert "target.dataset.currentServiceRequest!==request" in html
+    assert "data-current-service-states" in html
+    assert ".processed-evidence-endpoint.current-services-open{grid-column:1/-1}" in html
+    assert "card.classList.add('current-services-open')" in html
+    assert "Open supporting source evidence" in SHELL_SCRIPT
+    assert ".processed-evidence-current-services details > summary" in SHELL_SCRIPT
+    assert "collection window and the retained evidence link" in SHELL_SCRIPT
     assert "Last confirmed observation" in html
     assert "Latest supported observation" in html
     assert "Successful records whose order is uncertain" in html

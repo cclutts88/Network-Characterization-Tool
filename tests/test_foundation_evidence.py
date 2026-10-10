@@ -9,6 +9,7 @@ from app.evidence_scope_assignments import assign_artifact_scope, correct_artifa
 from app.foundation_evidence import (
     FoundationEvidenceConflict,
     compare_foundation_receipt_services,
+    get_foundation_current_service_states,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
     get_foundation_mac_associations,
@@ -350,6 +351,10 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
             f"/api/foundation-evidence/scopes/{lab['scope_id']}"
             f"/endpoints/{entity_id}/latest-observations"
         )
+        current_services = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}"
+            f"/endpoints/{entity_id}/current-service-states"
+        )
         mac_associations = client.get(
             f"/api/foundation-evidence/scopes/{lab['scope_id']}/mac-associations",
             params={"mac": "00:11:22:33:44:55"},
@@ -362,6 +367,9 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
     assert comparison.json()["read_only"] is True
     assert latest.status_code == 200
     assert latest.json()["contract"] == "latest-supported-nmap-observations:1"
+    assert current_services.status_code == 200
+    assert current_services.json()["contract"] == "current-reported-service-state:1"
+    assert current_services.json()["read_only"] is True
     assert mac_associations.status_code == 200
     assert mac_associations.json()["read_only"] is True
     assert missing.status_code == 404
@@ -399,13 +407,17 @@ def test_read_model_opens_database_read_only(tmp_path, monkeypatch):
     latest = evidence.get_foundation_latest_observations(
         db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
     )
+    current_services = evidence.get_foundation_current_service_states(
+        db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
+    )
     associations = evidence.get_foundation_mac_associations(
         db, lab["scope_id"], "00:11:22:33:44:55",
     )
     assert catalog["read_only"] is True
     assert latest["read_only"] is True
+    assert current_services["read_only"] is True
     assert associations["read_only"] is True
-    assert calls == [True, True, True, True, True, True]
+    assert calls == [True, True, True, True, True, True, True]
 
 
 def test_scope_read_is_one_snapshot_when_a_correction_commits_mid_read(tmp_path, monkeypatch):
@@ -979,6 +991,171 @@ def _latest_for(db, destination):
     return get_foundation_latest_observations(
         db, destination["scope_id"], scoped["endpoints"][0]["entity_id"],
     )
+
+
+def _current_for(db, destination, **page):
+    scoped = get_foundation_scope_evidence(db, destination["scope_id"])
+    assert len(scoped["endpoints"]) == 1
+    return get_foundation_current_service_states(
+        db, destination["scope_id"], scoped["endpoints"][0]["entity_id"],
+        **page,
+    )
+
+
+def test_current_service_state_uses_latest_ordered_coverage_per_protocol_port(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = observation(
+        db, "upload:earlier-current", content=lifecycle_xml(
+            [22, 443, 12345],
+            [("tcp", 22, "open"), ("tcp", 443, "open"),
+             ("tcp", 12345, "open")], start=100,
+        ),
+    )
+    later = observation(
+        db, "upload:later-current", content=lifecycle_xml(
+            list(range(1, 101)), [("tcp", 22, "closed")], start=200,
+        ),
+    )
+    for item in (earlier, later):
+        process(db, assign(db, item, lab))
+
+    result = _current_for(db, lab)
+    by_service = {(item["protocol"], item["port"]): item
+                  for item in result["services"]}
+    assert result["contract"] == "current-reported-service-state:1"
+    assert result["selection"]["status"] == "ordered"
+    assert by_service[("tcp", 22)]["status"] == "reported"
+    assert by_service[("tcp", 22)]["reported_state"] == "closed"
+    assert by_service[("tcp", 22)]["basis"] == "explicit"
+    assert by_service[("tcp", 443)]["status"] == "not_assessed"
+    assert by_service[("tcp", 12345)]["status"] == "not_assessed"
+    assert "not included" in by_service[("tcp", 443)]["reason"]
+    assert all(
+        row["evidence"][0]["source"]["observation_id"] == later["observation_id"]
+        for row in by_service.values()
+    )
+    assert result["claims"] == {
+        "latest_defensible_source_reported_state": True,
+        "live_or_current_network_truth": False,
+        "physical_device_identity": False,
+        "exact_last_seen_timestamp": False,
+        "absence_or_disappearance": False,
+    }
+
+
+def test_current_service_state_keeps_tcp_and_udp_separate(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    successful = XML.replace(
+        b'<finished time="110" timestr="done"/>',
+        b'<finished time="110" timestr="done" exit="success"/>',
+    )
+    process(db, assign(db, observation(db, "upload:tcp-udp", content=successful), lab))
+    result = _current_for(db, lab)
+    by_service = {(item["protocol"], item["port"]): item
+                  for item in result["services"]}
+    assert by_service[("tcp", 53)]["reported_state"] == "open"
+    assert by_service[("udp", 53)]["reported_state"] == "open|filtered"
+
+
+def test_current_service_state_does_not_choose_overlapping_or_unknown_time(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    overlapping = [
+        lifecycle_xml([22], [("tcp", 22, "open")], start=100,
+                      host_start=101, host_end=115, finish=116),
+        lifecycle_xml([22], [("tcp", 22, "closed")], start=105,
+                      host_start=110, host_end=120, finish=121),
+    ]
+    for index, content in enumerate(overlapping):
+        process(db, assign(db, observation(
+            db, f"upload:overlap-current-{index}", content=content,
+        ), lab))
+    result = _current_for(db, lab)
+    assert result["selection"]["status"] == "unresolved"
+    assert result["services"][0]["status"] == "unresolved"
+    assert {item["reported_state"] for item in result["services"][0]["evidence"]} == {
+        "open", "closed",
+    }
+    assert all(item["source"]["source_url"]
+               for item in result["services"][0]["evidence"])
+
+    unknown_xml = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=300,
+    ).replace(b' starttime="301" endtime="309"', b'')
+    unknown = observation(db, "upload:unknown-current", content=unknown_xml)
+    process(db, assign(db, unknown, lab))
+    uncertain = _current_for(db, lab)
+    assert uncertain["selection"]["status"] == "unresolved"
+    assert uncertain["selection"]["unknown_time_count"] == 1
+    assert unknown["observation_id"] in {
+        item["source"]["observation_id"]
+        for item in uncertain["services"][0]["evidence"]
+    }
+
+
+def test_current_service_state_keeps_duplicate_byte_encounters_distinct(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    content = lifecycle_xml([22], [("tcp", 22, "open")], start=200)
+    items = [
+        observation(db, "upload:duplicate-current-one", content=content),
+        observation(db, "upload:duplicate-current-two", content=content),
+    ]
+    for item in items:
+        process(db, assign(db, item, lab))
+    result = _current_for(db, lab)
+    assert result["selection"]["status"] == "unresolved"
+    assert len(result["services"][0]["evidence"]) == 2
+    assert len({item["source"]["observation_id"]
+                for item in result["services"][0]["evidence"]}) == 2
+    assert len({item["source"]["sha256"]
+                for item in result["services"][0]["evidence"]}) == 1
+
+
+def test_current_service_state_pages_are_revision_bound_after_scope_correction(tmp_path):
+    db = tmp_path / "nct.db"
+    first, second = scope(db, "First"), scope(db, "Second")
+    item = observation(db, "upload:revision-current", content=lifecycle_xml(
+        [22, 443], [("tcp", 22, "open"), ("tcp", 443, "open")], start=100,
+    ))
+    assignment = assign(db, item, first)
+    process(db, assignment)
+    first_page = _current_for(db, first, limit=1)
+    entity_id = first_page["endpoint"]["entity_id"]
+    revision = first_page["pagination"]["selection_revision"]
+    correct_artifact_scope(
+        db, expected_assignment_id=assignment["assignment_id"],
+        destination_scope_id=second["scope_id"], actor="analyst",
+        reason="Corrected exact context", whole_artifact_confirmed=True,
+    )
+    with pytest.raises(FoundationEvidenceConflict):
+        get_foundation_current_service_states(
+            db, first["scope_id"], entity_id, limit=1, offset=1,
+            expected_revision=revision,
+        )
+
+
+def test_current_service_state_enforces_candidate_bound_before_json_decode(
+    tmp_path, monkeypatch,
+):
+    from app import foundation_evidence as evidence
+
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    for index in range(2):
+        process(db, assign(db, observation(
+            db, f"upload:bounded-current-{index}",
+            content=lifecycle_xml([22], [("tcp", 22, "open")], start=100 + index * 20),
+        ), lab))
+    monkeypatch.setattr(evidence, "MAX_CURRENT_SERVICE_CANDIDATES", 1)
+    monkeypatch.setattr(
+        evidence, "_json",
+        lambda raw: (_ for _ in ()).throw(AssertionError("JSON decoded before bound")),
+    )
+    with pytest.raises(ValueError, match="source-record bound"):
+        _current_for(db, lab)
 
 
 def test_latest_observation_uses_source_windows_not_import_or_processing_order(tmp_path):

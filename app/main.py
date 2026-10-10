@@ -23,6 +23,7 @@ from app.evidence_scope_assignments import (
 from app.foundation_evidence import (
     FoundationEvidenceConflict,
     compare_foundation_receipt_services,
+    get_foundation_current_service_states,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
     get_foundation_mac_associations,
@@ -1801,6 +1802,27 @@ def foundation_evidence_latest_observations(
             confirmed_offset=confirmed_offset,
             unknown_offset=unknown_offset,
         )
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get(
+    "/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}"
+    "/current-service-states"
+)
+def foundation_evidence_current_service_states(
+    scope_id: str, entity_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    selection_revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    try:
+        return get_foundation_current_service_states(
+            DB_PATH, scope_id, entity_id, limit=limit, offset=offset,
+            expected_revision=selection_revision,
+        )
+    except FoundationEvidenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (KeyError, ValueError) as exc:
         raise _network_scope_error(exc) from exc
 

@@ -441,6 +441,7 @@ A roadmap item should only be marked complete when:
 | 2026-10-04 | Phase 1 automatic Nmap admission | Find new eligible work by scanning timestamps or all retained evidence after startup | Mark only new participating manual Nmap observations and scan runs, then commit a frozen admission intent with the authoritative assignment or eligible scan finalization before the durable worker creates a job | Timestamp selection can silently adopt historical evidence, miss work across clock changes, or switch a retry to a corrected assignment or newer parser. Making immediate job creation part of evidence retention would also make a successful import, assignment or scan depend on queue availability | Admission intents preserve the exact source, scope decision, actor and processing contract while allowing queue admission after the source transaction. Startup and worker recovery examine only pending intents from explicitly marked sources. Historical rows keep the explicit Queue action; missing scope remains Needs scope; corrections create new intents and cannot redirect older work. This gate covers new manual and automated Nmap evidence only. Device intake, processing retries, current-state selection and Last Seen remain separate gates. |
 | 2026-10-04 | Phase 1 automatic device-summary admission | Calculate verified device summaries while opening a page or silently adopt every active authority after upgrade | Mark only new participating manual uploads and eligible SSH collections, freeze an admission intent when exact device authority activates, then calculate through the shared durable worker | Page-time calculation can race authority changes and makes navigation perform expensive work. Broad startup adoption would silently change historical processing behavior | Device summaries are scope-free reusable calculations. Their intents retain the authority revision, selection contract, semantic manifest and ordered exact inputs. Historical unmarked authorities keep their established on-demand behavior until a separate adoption gate. Failed or interrupted calculation requires explicit local retry and never contacts the device. Normalized device observations, Network Scope assignment, physical-device identity, current-state selection and Last Seen remain later gates. |
 | 2026-10-04 | Phase 1 latest supported observations / Last Seen foundation | Build a broad current-state model and exact Last Seen behavior after canonical entity storage | First add a versioned, read-only selector for one scoped Nmap address that separately reports the latest supported source window and the last confirmed positive source window | Existing immutable receipts can safely order scoped Nmap observations by validated source collection windows, but they cannot yet prove physical-device identity, live state, exact per-service time, device-configuration scope, or disappearance | Identity remains Network Scope plus IP address. Only current unsuperseded assignments, the supported parser, successful completion and valid source windows may participate. Equal or transitively overlapping windows remain grouped; successful unknown-time records remain visible and block an unqualified latest claim. Every displayed observation links to its retained evidence. A later assumed or incomplete record cannot erase earlier confirmation. This completes only a nested Steps 13-14 slice; broader current state, physical-device reconciliation, device observations, service absence and exact Last Seen remain open. See `docs/ENTITY_FOUNDATION.md` |
+| 2026-10-10 | Phase 1 current reported service state | Treat a selected latest record, upload time, processing time, or scan run ID as current network truth | Add a versioned, read-only selector for one exact IP address in one Network Scope that determines the latest defensible source-reported state independently for each protocol and port | Current immutable Nmap receipts can prove source collection order and exact port coverage for a bounded set of successful records, but they cannot prove live status, physical-device identity, exact Last Seen, or disappearance. A later narrower scan must not silently inherit an older service state | “Current” in this view means latest defensible source-reported state only. Only current unsuperseded assignments, `nmap-endpoints:2`, successful completion, strict non-overlapping host collection windows and `nmap-coverage:1` may participate. Unknown, equal, touching or transitively overlapping windows remain unresolved. A latest record that did not assess a port produces **Not assessed**; it does not carry the older state forward. TCP, UDP and SCTP remain separate. Results use saved database receipts only: they perform no artifact reads, artifact-content hashing, XML parsing, backfill, job creation or writes. The candidate ceiling is enforced before stored JSON payloads are decoded. A hash of assignment identity metadata may bind paging to the same read-only selection revision; it never reads or verifies evidence bytes. Results are paged, revision-bound, candidate-capped and source-linked. Upload, processing and run order are display-only. Physical-device reconciliation, live truth, exact Last Seen and disappearance remain open. See `docs/CURRENT_REPORTED_SERVICE_STATE.md` |
 | 2026-10-04 | Phase 1 scoped device observations | Normalize verified device configuration directly into a broad current-device model | Add a collection-specific, explicitly scoped receipt stage after the reusable scope-free summary; reject mixed or unresolved routing contexts and retain configuration assertions separately from Nmap confirmations | The reusable summary is presentation-bounded, device configuration does not establish live presence or address time, and physical-device reconciliation does not yet have a reviewed stable-identity contract | Exact selected configuration bytes are verified before extraction. Append-only scope decisions, immutable interface/address receipts, atomic job publication, exact replay comparison and explicit coverage preserve evidence meaning. Missing or failed normalization preserves the completed summary. This completes a bounded nested Step 13 slice; physical identity, live status, broad current truth and exact Last Seen remain open. See `docs/DEVICE_OBSERVATIONS.md` |
 | 2026-10-04 | Phase 1 storage | Enable optional exact-content compaction after verified backfill | Add a separate administrator-confirmed action that replaces only reviewed exact copies with hard links to canonical content while preserving every logical evidence path and record | Independent adversarial review reproduced unsafe crash, journal, queue, path-substitution, recovery-integrity and confirmation-ownership cases during implementation; each case was corrected and retained as a regression | This is single-process maintenance. No second NCT process or external evidence edit may use the data directory during inspection, compaction or recovery. Files must share a filesystem and compatible security metadata; shared paths use canonical filesystem timestamps while recorded evidence timestamps remain. A durable recovery block stops all guarded evidence changes when safe repair cannot be proved. Estimated and measured savings are reported separately; automatic pruning stays disabled. See `docs/EXACT_CONTENT_COMPACTION.md` |
 | 2026-09-27 | Phase 1 jobs | Use the future generic persistent worker | Storage inspection uses one explicit background operation per application process, a persisted status/report and per-file backfill checkpoints | The generic worker is a later Phase 1 item; Settings must not hash evidence during page reads | Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented |
@@ -1966,6 +1967,51 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    This completes only the documented nested slices. Broader current truth,
    physical-device reconciliation, scoped device observations, exact Last Seen and
    automatic service disappearance remain open.
+
+   **2026-10-10 current reported service-state start:** Add one bounded read-only view
+   for a single scoped IP address that selects the latest defensible source-reported
+   state separately for each protocol and port. The selector will use only current,
+   unsuperseded, successfully completed `nmap-endpoints:2` records and versioned
+   coverage receipts. Strictly later non-overlapping source windows may replace an
+   older state. Equal, touching, overlapping or unknown-time evidence remains
+   unresolved. When the latest ordered record did not assess a previously reported
+   port, the result is **Not assessed** rather than an inherited older state. Every
+   determination must link to the exact retained source and explain its coverage basis.
+   The API will use saved database receipts only, enforce the source-record ceiling
+   before decoding stored JSON, and perform no artifact reads, artifact-content
+   hashing, XML parsing, backfill, job creation or writes. A hash of assignment identity
+   metadata may bind paging to one read-only selection revision without reading or
+   verifying evidence bytes. It will be paged, revision-bound and fail without
+   partial output above reviewed candidate bounds. Boundary tests will prove these
+   restrictions. The operator view and built-in How NCT Works guide
+   will say plainly that this is saved source-reported state, not live truth, physical
+   identity, exact Last Seen or proof of disappearance. Independent architecture start
+   review recommended this bounded gate. Completion requires focused API, correction,
+   timing, coverage, duplicate-encounter, delayed-response, guide and browser checks,
+   followed by the full Docker suite and an independent final quality gate.
+
+   **2026-10-10 current reported service-state completion:**
+   `current-reported-service-state:1` now provides a lazy, read-only view for one exact
+   Network Scope and IP address. It selects each protocol/port result from the latest
+   strictly ordered successful source window, reports **Not assessed** when that source
+   did not cover an older port, and keeps tied, touching, overlapping or unknown-time
+   evidence **Unresolved** with every relevant retained source. TCP, UDP and SCTP remain
+   separate. Results are paged, bound to one assignment-set revision and capped before
+   stored receipt JSON is decoded; stale paging is rejected. The view reads database
+   receipts only and creates no artifacts, jobs, backfill or writes. Focused Docker
+   validation: **132 passed**. A fresh complete Docker regression run: **1,212 passed,
+   14 skipped**, with the existing Starlette dependency warning; an earlier complete
+   run had one transient Phase 0 HTTP benchmark miss, which passed immediately in
+   isolation and in the fresh complete rerun. The representative 120-address corpus
+   returned the selected address's read-only result in about 39 ms. Live browser checks
+   confirmed full-width readable details, retained source expansion, plain-language
+   labels, a specific Operator Guide explanation and a clean console. The novice
+   operator recheck is **PASS**. This remains saved source-reported evidence rather than
+   live truth, physical-device identity, exact Last Seen or proof of disappearance.
+   Independent final quality gate: **CLEAR**. The reviewer independently reran the
+   three affected test files in a network-disabled container (**132 passed**) and found
+   the implementation read-only, bounded, source-linked, revision-safe and consistent
+   with the documented no-claim boundaries. No material finding remains.
 15. [~] Benchmark against Phase 0 datasets.
 
    **2026-10-09 representative-dataset prerequisite start:** build one versioned,
