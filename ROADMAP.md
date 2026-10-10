@@ -1947,6 +1947,46 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     exact storage-class lock/rename/fsync/WAL qualification, forced-termination testing,
     older-image schema protection, Range validation and multi-replica operation remain
     open. The change is foundation-only and does not alter stable `main`.
+    **2026-10-10 mounted-storage qualification start:** Begin Kubernetes acceptance gate
+    3B with an explicit administrator-run check for one candidate mounted data root. The
+    check must work only inside a newly and privately created disposable directory, never
+    open `analyzer.db` or retained evidence, refuse links and ambiguous or pre-existing
+    workspaces, and clean up by verified directory identity without recursively inspecting
+    the supplied root. It will test separate-process advisory locks, same-directory atomic
+    rename plus file/directory sync, and SQLite WAL/SHM creation, separate-process writer
+    contention, checkpoint, child termination, reopen and integrity. Strict time, process,
+    file, workspace, child-output and report limits apply; stuck child process groups must
+    be terminated and reaped. Failed, unavailable, timed-out or incomplete cleanup makes
+    the result fail. The bounded JSON report will separate operator-declared storage
+    identity from measured ownership, permission and filesystem facts and bind both to the
+    exact tool source with a canonical SHA-256 digest explicitly labeled unauthenticated.
+    A pass applies only to the exact mounted environment tested and does not approve a
+    storage class or establish Kubernetes readiness. Replacement stability,
+    backup/restore, node loss and forced termination remain later gates. Independent start
+    gate: **CLEAR** with these safeguards.
+    **2026-10-10 mounted-storage qualification complete:** Added the explicit Linux
+    administrator tool and operator instructions for testing one exact candidate mount.
+    The complete run is controller-bounded and fail-closed. Workers remain bound to open
+    root/workspace descriptors plus a private marker, child process groups terminate if
+    their orchestrator exits, and cleanup refuses changed identities or unexpected
+    objects. Separate processes verify advisory-lock contention and release, acknowledge
+    the preexisting value and every one of 64 same-directory replacements, continuously
+    watch the replacement interval for missing, partial or unexpected bytes, and verify
+    WAL/SHM creation, rejected concurrent SQLite writing, a non-busy truncated checkpoint,
+    exact reopened rows and integrity. Reports bind the declared storage identity,
+    measured ownership/permission/filesystem facts, exact schema/tool source, outcome and
+    exit code to an explicitly unauthenticated canonical digest. Negative tests cover
+    links, pre-existing or escaped workspaces, lock failure, timeouts including repeated
+    shutdown timeout, changed worker markers, path replacement, altered/self-consistent
+    reports, cleanup refusal, bad checkpoint facts and a deliberate unlink-pause-rename
+    fault. Focused isolated Linux validation passed **22 tests**; a live disposable
+    container run passed with 65 synchronized replacement observations, more than 20,000
+    continuous observations, exact SQLite reopen/integrity, and confirmed cleanup. Final
+    isolated Linux regression validation passed **1,275 tests with 15 skipped** and one
+    existing dependency deprecation warning.
+    Independent completion gate: **CLEAR**. This is foundation-only acceptance evidence
+    for gate 3B; it does not qualify a Kubernetes storage class or establish Range,
+    mission, multi-replica or stable-`main` readiness.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

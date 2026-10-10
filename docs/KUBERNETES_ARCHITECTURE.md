@@ -138,6 +138,19 @@ Unsupported network filesystems fail closed. The approved layout must name the d
 WAL/SHM side files, artifacts, job state, generated reports, backups and restore target.
 Evidence and database backups must retain compatible provenance and recovery order.
 
+The explicit `scripts/qualify_kubernetes_storage.py` check covers only the exact mounted
+environment supplied to it. It works in a new private disposable directory and does not
+open the NCT database or retained evidence. A controller enforces the complete run's time
+limit. Workers stay bound to the already-open directory and an orchestrator-only marker,
+so replacing a path cannot redirect a check. Synchronized and continuous independent
+observers cover each replacement result and the replacement interval. A passing report
+demonstrates the bounded lock, observed repeated replacement, sync and SQLite WAL checks
+recorded in that run; its SHA-256 digest is an
+unauthenticated integrity value, not a signature or storage-class approval. Driver and
+volume identity must be declared by the operator and retained with the measured report.
+Replacement stability, backup/restore, node loss, forced termination and upgrade or
+rollback behavior still require later acceptance gates.
+
 ## Upgrades and rollback
 
 Image rollback and data rollback are different operations. A previous image must never
