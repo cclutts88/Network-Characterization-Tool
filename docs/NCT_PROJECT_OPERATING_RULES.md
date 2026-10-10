@@ -245,6 +245,28 @@ Verify that implementation:
 
 A container restart may remain a recovery mechanism, but it is not an acceptable final fix for recurring `database is locked` conditions.
 
+# Kubernetes Capability Review
+
+Preserve standalone offline operation while reviewing every meaningful runtime, job,
+storage, health, identity and deployment change for the Kubernetes boundaries in
+`docs/KUBERNETES_ARCHITECTURE.md`.
+
+Require the reviewer to halt work that:
+
+- Treats ReadWriteOnce storage as proof that only one application pod can write.
+- Allows overlapping replacement, autoscaling or multiple NCT application replicas to
+  open the SQLite database.
+- Uses a persistent volume without proving reliable locks, atomic rename, `fsync` and
+  SQLite WAL/SHM behavior.
+- Allows an older image to open a newer incompatible schema during rollback.
+- Uses pod names, pod IPs, container names or process IDs as durable mission identity.
+- Performs unbounded Kubernetes discovery, reads Secrets, requires cluster-admin access,
+  or reports denied/unavailable cluster information as zero healthy resources.
+- Claims multi-replica, Kubernetes, Range or mission readiness without the exact
+  deployment-specific acceptance gate.
+
+Kubernetes is an optional deployment capability, not a dependency for core NCT.
+
 # Testing
 
 Do not treat green CI alone as proof that a feature is correct.

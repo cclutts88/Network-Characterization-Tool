@@ -411,6 +411,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-10 | Deployment architecture | Keep Kubernetes, external databases and server infrastructure outside the requirements for core offline use | Preserve the standalone single-container profile while requiring new runtime, job, storage, identity, health and deployment designs to remain compatible with a future Kubernetes profile. The initial Kubernetes profile remains exactly one NCT application replica; multi-replica operation is blocked until cross-process leases, singleton-operation coordination and a reviewed shared database/artifact design exist | The user wants the full platform developed with Kubernetes capabilities in mind without losing disconnected-Range operation or forcing a cluster onto small deployments | Provider-neutral local health comes first, followed by an optional namespace-scoped Kubernetes adapter. SQLite volumes must pass lock, atomic-rename, `fsync` and WAL/SHM qualification; RWO alone is insufficient. Upgrades must prevent an older image from opening an incompatible newer schema. See `docs/KUBERNETES_ARCHITECTURE.md` |
 | 2026-10-09 | Phase 0 rendered-browser benchmark | Run the same Chromium build inside isolated Linux benchmark containers | Use one SHA-256-identified local Windows Chrome/Playwright build for every repeat. Keep each NCT app on a unique internal-only Docker network and reach it only through a disposable dual-network relay published on `127.0.0.1`; block every non-loopback browser request and record the app, relay, network, browser process tree and cleanup identities | No compatible browser image is installed locally and the NCT Linux test image contains no browser executable; Docker Desktop does not publish a host port directly from an internal-only network | Preserves isolated app/data/source execution and equal browser settings across revisions while clearly limiting the result to same-host Windows Chrome. The relay is not part of NCT or a deployment package. No Linux-browser, Range, GPU, human-workflow, production-scale or mission-performance claim is made; those remain separate gates |
 | 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, surface selected integrity conflicts, then reuse one serialized private current-device analysis only when a read-only snapshot proves its exact admission, result, provenance, retained bytes, scope-observation, WAN, contract, and database inputs are unchanged | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only parsed-manifest changes do not affect selection, while raw manifest bytes still invalidate analysis reuse. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Cold cache builds are read-only, warm entries invalidate on every captured dependency and database replacement, and changing inputs retry once before a visible conflict |
 | 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use one-entry, process-local serialized caches keyed by exact canonical descriptors, with per-descriptor single-flight builds and pre/post-build source validation. The current evidence view, current device analysis, and Map topology each retain their own exact dependency boundary while shared consumers reuse private serialized copies. Project Current Network host/detail pages from the complete exact-source model with revision-bound server paging | The assembled views combine immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting those mixed presentation models would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, selected evidence changes, OUI changes, and calculation-contract changes rebuild. Map and Current Network share one exact topology calculation. Current Network responses and browser work are bounded to 100 hosts while LFA and export retain complete-filter semantics. The backend still assembles the complete reusable model, and specialized Hunt, Reach, and Map payload paging plus representative large-installation benchmarking remain future scale work |
@@ -574,6 +575,25 @@ New mission-state designs must therefore prefer:
 
 Do not introduce new persistent mission objects that can only be reconciled by
 copying/replacing the SQLite database or by applying last-writer-wins semantics.
+
+## 2.9 Kubernetes-compatible without requiring Kubernetes
+
+Core NCT must continue to run offline as one container on constrained Range hardware.
+At the same time, new work must avoid assumptions that prevent a future Kubernetes
+deployment. Runtime identity, work ownership, health, storage, configuration and
+mission identity may not depend on a container name, pod name, pod IP, local process
+ID or installation-local row number.
+
+The first supported Kubernetes profile is one NCT application replica. A ReadWriteOnce
+volume is not proof of one writer because more than one pod can mount it on the same
+node. The profile must also enforce one replica, no autoscaling, non-overlapping
+replacement and fail-closed startup when a former writer may still exist. Multi-replica
+application service remains blocked until the worker, database and artifact-storage
+contracts explicitly support it.
+
+Kubernetes awareness is optional and least-privilege. A denied or absent cluster API is
+reported as unavailable rather than zero. See `docs/KUBERNETES_ARCHITECTURE.md` for the
+design and acceptance gates.
 
 ---
 
@@ -776,7 +796,8 @@ SQLite tables.
 Evaluate embedded DuckDB queries over Parquet for fast local analytics without
 adding another server.
 
-No core requirement for PostgreSQL, Elasticsearch, Redis, or Kubernetes.
+No core requirement for PostgreSQL, Elasticsearch, Redis, or Kubernetes. Designs must
+still preserve the future Kubernetes boundaries in `docs/KUBERNETES_ARCHITECTURE.md`.
 
 ---
 
@@ -1749,6 +1770,27 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
       intentionally has no cross-process lease or mid-calculation checkpoint. Broader
       multi-family scheduling, cross-process leases, progress checkpoints, cancellation,
       dependency ordering and automatic retries remain open, so Step 11 stays partial.
+
+    **2026-10-10 Kubernetes-capable architecture start:** Treat Kubernetes compatibility
+    as a standing design constraint without making Kubernetes a core dependency. Define
+    standalone, single-replica Kubernetes and future multi-replica profiles; storage and
+    rollback safety; stable runtime identity; graceful drain and restart behavior;
+    provider-neutral health; least-privilege cluster visibility; scan-worker placement;
+    and explicit acceptance gates before adding live resource telemetry or orchestration
+    integration. The independent start review halted the first proposal until it made
+    single-writer enforcement, SQLite filesystem qualification, schema-aware rollback
+    and Kubernetes API allowlists explicit.
+
+    **2026-10-10 Kubernetes-capable architecture baseline completion:** The roadmap,
+    project operating rules and `docs/KUBERNETES_ARCHITECTURE.md` now make Kubernetes
+    compatibility a standing design gate while preserving the offline single-container
+    profile. They define the initial one-replica profile, SQLite storage qualification,
+    non-overlapping replacement, schema-aware rollback, stable identity, graceful drain,
+    provider-neutral health, least-privilege optional cluster visibility, scan-worker
+    placement and the separate multi-replica acceptance sequence. Independent architecture
+    gate: **CLEAR** after all four start-gate safeguards were made explicit. Novice wording
+    review: **PASS**. This is an architecture baseline only; Kubernetes manifests, live
+    resource telemetry, cluster status and multi-replica execution remain unimplemented.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.
