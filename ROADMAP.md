@@ -2228,6 +2228,19 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    covers both forms. This changes harness input compatibility only; it does not change
    application behavior, the corpus, or any performance limit.
 
+   **2026-10-09 Hunt bounded-render correction complete; quality gate CLEAR —
+   DOCUMENTED DEVIATION:** the exact committed Windows Chrome rehearsal exercised all
+   four fixed pages plus Hunt Previous/Next, 25/50/100 row sizes, Inventory paging,
+   filter-before-page behavior, complete filtered CSV, and CVE/exposure filters across
+   multiple pages on cold and reload navigation. Chrome peaked at **1.588 GiB** under the
+   unchanged **2.5 GiB** limit, compared with the earlier 2.629 GiB diagnostic. The app
+   peaked at **397.8 MiB**; retained state was unchanged; screenshot hashes matched; and
+   all disposable containers, network, data and browser profiles were removed. The
+   independent reviewer verified the exact commit and seven harness component hashes.
+   The complete isolated suite then passed **1,195 tests with 14 skipped**. The accepted
+   same-host Windows Chrome limitation remains documented; begin a new six-run retained
+   comparison rather than reusing the invalid partial matrix.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
