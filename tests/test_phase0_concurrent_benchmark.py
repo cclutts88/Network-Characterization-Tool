@@ -1,6 +1,9 @@
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 
 from scripts.benchmark_phase0_concurrent_clients import (
     CYCLES,
@@ -19,6 +22,26 @@ from scripts.summarize_phase0_concurrent_benchmark import (
     _validate_result_bindings,
 )
 from scripts.verify_phase0_concurrent_state import snapshot, verify
+
+
+def test_concurrent_helpers_support_direct_container_execution(tmp_path):
+    project_root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    for name in (
+        "verify_phase0_concurrent_state.py",
+        "summarize_phase0_concurrent_benchmark.py",
+    ):
+        completed = subprocess.run(
+            [sys.executable, str(project_root / "scripts" / name), "--help"],
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
 
 
 def test_concurrent_client_runner_self_test_and_fault_injection():

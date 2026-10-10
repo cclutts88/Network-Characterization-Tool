@@ -8,7 +8,10 @@ import json
 from pathlib import Path
 import sqlite3
 
-from scripts.benchmark_phase0_concurrent_clients import CYCLES, WORKER_COUNT
+try:
+    from scripts.benchmark_phase0_concurrent_clients import CYCLES, WORKER_COUNT
+except ModuleNotFoundError:  # Direct script execution inside the benchmark container.
+    from benchmark_phase0_concurrent_clients import CYCLES, WORKER_COUNT
 
 
 EXPECTED_CHANGED_TABLES = {

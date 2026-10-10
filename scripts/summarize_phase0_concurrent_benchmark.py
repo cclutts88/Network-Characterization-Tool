@@ -8,16 +8,28 @@ import json
 from pathlib import Path
 import statistics
 
-from scripts.benchmark_phase0_concurrent_clients import (
-    CYCLES,
-    EXPECTED_MAP_SUMMARY,
-    EXPECTED_ORDERED_HOSTS_SHA256,
-    MAX_RESPONSE_BYTES,
-    REQUEST_ORDER,
-    WORKER_COUNT,
-    _latency,
-)
-from scripts.verify_phase0_concurrent_state import EXPECTED_CHANGED_TABLES
+try:
+    from scripts.benchmark_phase0_concurrent_clients import (
+        CYCLES,
+        EXPECTED_MAP_SUMMARY,
+        EXPECTED_ORDERED_HOSTS_SHA256,
+        MAX_RESPONSE_BYTES,
+        REQUEST_ORDER,
+        WORKER_COUNT,
+        _latency,
+    )
+    from scripts.verify_phase0_concurrent_state import EXPECTED_CHANGED_TABLES
+except ModuleNotFoundError:  # Direct script execution inside the benchmark container.
+    from benchmark_phase0_concurrent_clients import (
+        CYCLES,
+        EXPECTED_MAP_SUMMARY,
+        EXPECTED_ORDERED_HOSTS_SHA256,
+        MAX_RESPONSE_BYTES,
+        REQUEST_ORDER,
+        WORKER_COUNT,
+        _latency,
+    )
+    from verify_phase0_concurrent_state import EXPECTED_CHANGED_TABLES
 
 
 RAW_ARTIFACTS = {
