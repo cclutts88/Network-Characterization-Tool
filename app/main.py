@@ -41,6 +41,11 @@ from app.storage_health import recover_incomplete_compactions, storage_status, s
 from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
 from app.runtime_health import runtime_health_snapshot
+from app.runtime_trends import (
+    runtime_trends_snapshot,
+    start_runtime_trends,
+    stop_runtime_trends,
+)
 from app.lifecycle_health import (
     begin_shutdown,
     begin_startup,
@@ -1334,6 +1339,7 @@ async def lifespan(_: FastAPI):
     background_workers_started = False
     scheduler_stop = None
     scheduler_thread = None
+    runtime_trends_started = False
     try:
         configure_database(DB_PATH)
         init_storage()
@@ -1374,11 +1380,15 @@ async def lifespan(_: FastAPI):
                 name="scan-scheduler",
             )
             scheduler_thread.start()
+        runtime_trends_started = start_runtime_trends()
         mark_ready()
         try:
             yield
         finally:
             begin_shutdown()
+            runtime_trends_stopped = (
+                stop_runtime_trends() if runtime_trends_started else True
+            )
             try:
                 if background_workers_started:
                     stop_derived_job_worker(DB_PATH)
@@ -1386,6 +1396,8 @@ async def lifespan(_: FastAPI):
                     scheduler_thread.join(timeout=2)
             finally:
                 mark_stopped()
+            if not runtime_trends_stopped:
+                raise RuntimeError("The runtime trend sampler did not stop cleanly")
     except BaseException:
         mark_failed()
         raise
@@ -1491,7 +1503,9 @@ def system_storage_status(request: Request) -> dict:
 @app.get("/api/system/runtime-health")
 def system_runtime_health(request: Request) -> dict:
     require_storage_admin(request)
-    return runtime_health_snapshot(DB_PATH, DATA_DIR)
+    result = runtime_health_snapshot(DB_PATH, DATA_DIR)
+    result["trends"] = runtime_trends_snapshot()
+    return result
 
 
 @app.get("/api/system/analysis-status")

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../app/storage_ui.py", import.meta.url), "utf8");
-const start = source.indexOf("function runtimePercent(");
+const start = source.indexOf("function runtimeDuration(");
 const end = source.indexOf("document.addEventListener('visibilitychange'", start);
 assert.ok(start >= 0 && end > start, "Could not find runtime-health UI functions");
 const runtimeCode = source.slice(start, end);
@@ -35,6 +35,15 @@ function sample(cpuStatus = "available") {
       attempts: {queued: 0, running: 0},
       intake: {waiting: 0, retrying: 0},
     },
+    trends: {
+      status: "running", near_peak_percent: 95,
+      metrics: {
+        process_cpu: {status: "available", sampling_attempts: 3, available_samples: 2, current: 2.5, average: 1.5, maximum: 2.5, longest_near_peak_seconds: 5, basis: "Percent of one CPU"},
+        container_cpu: {status: "available", sampling_attempts: 3, available_samples: 2, current: 2.0, average: 1.0, maximum: 2.0, longest_near_peak_seconds: 0, basis: "Percent of 2-CPU container allowance"},
+        process_memory: {status: "available", sampling_attempts: 3, available_samples: 3, current: 100, average: 90, maximum: 100, longest_near_peak_seconds: 10, basis: "NCT process resident memory"},
+        container_memory: {status: "available", sampling_attempts: 3, available_samples: 3, current: 200, average: 180, maximum: 200, longest_near_peak_seconds: 5, basis: "Linux control-group memory"},
+      },
+    },
     orchestrator: {status: "not_configured"},
   };
 }
@@ -60,6 +69,21 @@ await eval(`(async () => {
 
   renderRuntimeHealth((${sample.toString()})('warming_up'));
   assert.equal(byId('runtimeHealthStatus').textContent,'Collecting the second CPU sample. Other live measurements are available.');
+  assert.equal(byId('runtimeProcessCpuCurrent').textContent,'2.5%');
+  assert.equal(byId('runtimeProcessCpuAverage').textContent,'1.5%');
+  assert.equal(byId('runtimeProcessCpuMaximum').textContent,'2.5%');
+  assert.equal(byId('runtimeProcessCpuNearMax').textContent,'5 sec');
+  assert.equal(byId('runtimeProcessMemoryCurrent').textContent,'100 B');
+  assert.equal(byId('runtimeProcessMemoryAverage').textContent,'90 B');
+  assert.equal(byId('runtimeProcessMemoryMaximum').textContent,'100 B');
+  assert.equal(byId('runtimeProcessMemoryNearMax').textContent,'10 sec');
+  assert.equal(byId('runtimeContainerCpuBasis').textContent,'Basis: 2-CPU container allowance');
+  assert.equal(byId('runtimeTrendStatus').textContent,'Window: 3 of 720 samples · 5 seconds apart · Near max: at least 95% · Resets on restart');
+
+  const failed=(${sample.toString()})('unavailable');
+  for(const item of Object.values(failed.trends.metrics))Object.assign(item,{status:'unavailable',available_samples:0,current:null,average:null,maximum:null,longest_near_peak_seconds:0});
+  renderRuntimeHealth(failed);
+  for(const id of ['runtimeProcessCpuCurrent','runtimeProcessCpuAverage','runtimeProcessCpuMaximum','runtimeProcessCpuNearMax','runtimeContainerCpuCurrent','runtimeContainerCpuAverage','runtimeContainerCpuMaximum','runtimeContainerCpuNearMax','runtimeProcessMemoryCurrent','runtimeProcessMemoryAverage','runtimeProcessMemoryMaximum','runtimeProcessMemoryNearMax','runtimeContainerMemoryCurrent','runtimeContainerMemoryAverage','runtimeContainerMemoryMaximum','runtimeContainerMemoryNearMax'])assert.equal(byId(id).textContent,'Unavailable');
 
   runtimePanelVisible=true;
   const first=refreshRuntimeHealth();

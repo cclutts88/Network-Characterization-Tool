@@ -52,6 +52,9 @@ def test_system_health_explains_bounded_calculation_status():
     assert "Unsupported measurements say Unavailable instead of showing zero" in html
     assert "Reading it does not start a scan, contact a network target, or change retained evidence" in html
     assert "Process and container measurements stay separate" in html
+    assert 'aria-label="CPU use"' in html
+    assert 'aria-label="Memory use"' in html
+    assert html.count("<th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th>") == 2
     assert "/api/system/runtime-health" in html
     assert "document.visibilityState==='visible'&&runtimePanelVisible" in html
     assert "if(!runtimeCanPoll()||runtimeInFlight)return" in html

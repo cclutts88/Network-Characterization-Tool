@@ -7,23 +7,32 @@ def storage_page() -> HTMLResponse:
 <title>NCT · System Health</title>
 <style>
 :root{color-scheme:dark;--bg:#09131c;--panel:#112330;--line:#304955;--text:#e8f2f6;--muted:#abc0cb;--accent:#62d9ba}
-#nct-page-context{display:none!important}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui}header{padding:20px 4vw;border-bottom:1px solid var(--line)}main{max-width:1180px;margin:auto;padding:30px 24px}h1{font-size:30px;margin:0}h2{font-size:19px;margin:0 0 12px}h3{font-size:16px;margin:20px 0 8px}p{color:var(--muted)}.panel,.metric{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:18px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.metric strong{display:block;font-size:29px;margin-top:12px}.metric span,.metric small{color:var(--muted)}.metric small{display:block;margin-top:7px}.metric-detail{min-height:3.1em}.actions{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}button,input,select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:11px 16px;background:#193445;color:var(--text)}button{font-weight:650;cursor:pointer}button.compact{padding:6px 10px;font-size:13px}button.primary{background:var(--accent);color:#09251d}button:disabled{opacity:.5;cursor:wait}input{width:min(100%,430px)}select{max-width:100%}dl{display:grid;grid-template-columns:1fr 1fr;gap:10px}dd{margin:0;text-align:right}dt{color:var(--muted)}.badge{display:inline-block;border:1px solid var(--accent);color:var(--accent);border-radius:30px;padding:4px 12px}.state{font-size:12px;font-weight:750;letter-spacing:.04em}.state.CURRENT{color:#75e6b8}.state.STALE{color:#ffd166}.state.UNKNOWN{color:#f5a6a6}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:9px}table{width:100%;border-collapse:collapse;min-width:760px}th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase}tr:last-child td{border-bottom:0}.pager{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}.pager div{display:flex;gap:8px}.panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px}.hidden{display:none}.identifier{max-width:460px;overflow-wrap:anywhere;color:var(--muted);font:12px/1.45 ui-monospace,monospace}details summary{cursor:pointer;color:var(--accent)}#issues{overflow-wrap:anywhere}#offlineExploitDb{scroll-margin-top:24px}#searchsploitStatus.good{color:#75e6b8}#searchsploitStatus.warn{color:#ffd166}#searchsploitStatus.bad{color:#f5a6a6}.process-list{color:var(--muted)}.process-list strong{color:var(--text)}a{color:var(--accent)}@media(max-width:800px){.metrics{grid-template-columns:repeat(2,1fr)}}@media(max-width:450px){.metrics{grid-template-columns:1fr}main{padding:20px 14px}}
+#nct-page-context{display:none!important}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui}header{padding:20px 4vw;border-bottom:1px solid var(--line)}main{max-width:1180px;margin:auto;padding:30px 24px}h1{font-size:30px;margin:0}h2{font-size:19px;margin:0 0 12px}h3{font-size:16px;margin:20px 0 8px}p{color:var(--muted)}.panel,.metric{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:18px}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}.metric strong{display:block;font-size:29px;margin-top:12px}.metric span,.metric small{color:var(--muted)}.metric small{display:block;margin-top:7px}.metric-detail{min-height:3.1em}.actions{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}button,input,select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:11px 16px;background:#193445;color:var(--text)}button{font-weight:650;cursor:pointer}button.compact{padding:6px 10px;font-size:13px}button.primary{background:var(--accent);color:#09251d}button:disabled{opacity:.5;cursor:wait}input{width:min(100%,430px)}select{max-width:100%}dl{display:grid;grid-template-columns:1fr 1fr;gap:10px}dd{margin:0;text-align:right}dt{color:var(--muted)}.badge{display:inline-block;border:1px solid var(--accent);color:var(--accent);border-radius:30px;padding:4px 12px}.state{font-size:12px;font-weight:750;letter-spacing:.04em}.state.CURRENT{color:#75e6b8}.state.STALE{color:#ffd166}.state.UNKNOWN{color:#f5a6a6}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:9px}table{width:100%;border-collapse:collapse;min-width:760px}th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase}tr:last-child td{border-bottom:0}.runtime-table{min-width:540px}.runtime-table th:first-child,.runtime-table td:first-child{width:28%;font-weight:700}.runtime-table td:not(:first-child){font-variant-numeric:tabular-nums}.runtime-source-detail{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:2px}.pager{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}.pager div{display:flex;gap:8px}.panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px}.hidden{display:none}.identifier{max-width:460px;overflow-wrap:anywhere;color:var(--muted);font:12px/1.45 ui-monospace,monospace}details summary{cursor:pointer;color:var(--accent)}#issues{overflow-wrap:anywhere}#offlineExploitDb{scroll-margin-top:24px}#searchsploitStatus.good{color:#75e6b8}#searchsploitStatus.warn{color:#ffd166}#searchsploitStatus.bad{color:#f5a6a6}.process-list{color:var(--muted)}.process-list strong{color:var(--text)}a{color:var(--accent)}@media(max-width:800px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:450px){.metrics{grid-template-columns:1fr}main{padding:20px 14px}}
 .intake-ready,.stage-completed{color:#75e6b8}.intake-processing,.intake-needs_scope,.stage-waiting,.stage-queued,.stage-running,.stage-retrying,.stage-needs_scope{color:#ffd166}.intake-needs_attention,.stage-failed,.stage-interrupted,.stage-blocked,.stage-paused,.stage-unavailable{color:#f5a6a6}.stage-list{margin:0;padding-left:18px;min-width:260px}.stage-list li{margin:0 0 7px}.intake-links{display:flex;flex-direction:column;gap:5px}
 </style><script src="/assets/nct-session.js"></script></head><body>
 <header><strong>NCT</strong> · Network Correlation &amp; Triage</header><main>
 <p>Settings / System Health</p><h1>System health</h1>
 <p>Manage offline reference data, evidence storage, local processing status, and current resource use.</p>
 <section class="panel" id="runtimeHealthPanel"><h2>Live performance and reliability</h2>
-<p>This is a current local sample for the running NCT application and its container when Linux exposes container limits. Reading it does not start a scan, contact a network target, or change retained evidence. It is not a benchmark or a history graph. Unsupported measurements say Unavailable instead of showing zero.</p>
+<p>This is a current local sample for the running NCT application and its container when Linux exposes container limits. Process and container measurements stay separate. Reading it does not start a scan, contact a network target, or change retained evidence. It is not a benchmark or a history graph. Unsupported measurements say Unavailable instead of showing zero.</p>
 <p id="runtimeHealthStatus" role="status" aria-live="polite">Waiting for this panel to become visible.</p>
+<p id="runtimeTrendStatus">CPU and memory trends are warming up.</p>
+<h3>CPU</h3>
+<div class="table-wrap"><table class="runtime-table" aria-label="CPU use"><thead><tr><th>Measurement</th><th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th></tr></thead><tbody>
+<tr><td>NCT process</td><td id="runtimeProcessCpuCurrent">—</td><td id="runtimeProcessCpuAverage">—</td><td id="runtimeProcessCpuMaximum">—</td><td id="runtimeProcessCpuNearMax">—</td></tr>
+<tr><td>Container<small class="runtime-source-detail" id="runtimeContainerCpuBasis">Basis unavailable</small></td><td id="runtimeContainerCpuCurrent">—</td><td id="runtimeContainerCpuAverage">—</td><td id="runtimeContainerCpuMaximum">—</td><td id="runtimeContainerCpuNearMax">—</td></tr>
+</tbody></table></div>
+<h3>Memory</h3>
+<div class="table-wrap"><table class="runtime-table" aria-label="Memory use"><thead><tr><th>Measurement</th><th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th></tr></thead><tbody>
+<tr><td>NCT process</td><td id="runtimeProcessMemoryCurrent">—</td><td id="runtimeProcessMemoryAverage">—</td><td id="runtimeProcessMemoryMaximum">—</td><td id="runtimeProcessMemoryNearMax">—</td></tr>
+<tr><td>Container</td><td id="runtimeContainerMemoryCurrent">—</td><td id="runtimeContainerMemoryAverage">—</td><td id="runtimeContainerMemoryMaximum">—</td><td id="runtimeContainerMemoryNearMax">—</td></tr>
+</tbody></table></div>
 <div class="metrics">
-<div class="metric"><span>CPU now</span><strong id="runtimeCpu">—</strong><small class="metric-detail" id="runtimeCpuDetail">Process and container measurements stay separate.</small></div>
-<div class="metric"><span>Memory now</span><strong id="runtimeMemory">—</strong><small class="metric-detail" id="runtimeMemoryDetail">Process and container measurements stay separate.</small></div>
 <div class="metric"><span>Data filesystem</span><strong id="runtimeDisk">—</strong><small class="metric-detail" id="runtimeDiskDetail">Capacity of the filesystem that holds retained NCT data.</small></div>
 <div class="metric"><span>Saved work active</span><strong id="runtimeWork">—</strong><small class="metric-detail" id="runtimeWorkDetail">Queued and running local processing.</small></div>
 </div>
 <dl><dt>Database files</dt><dd id="runtimeDatabase">—</dd><dt>Measurement provider</dt><dd id="runtimeProvider">Local</dd><dt>Last sample</dt><dd id="runtimeSample">—</dd><dt>Kubernetes status</dt><dd id="runtimeOrchestrator">Not configured</dd></dl>
-<p>CPU needs two samples before a percentage appears. Peaks and CPU sampling reset when this application restarts. This panel keeps no long-term telemetry and does not contact Kubernetes unless a future administrator-approved adapter is configured.</p>
+<p>CPU needs two successful samples before a percentage appears. A valid first counter says Warming up; a failed measurement says Unavailable. The rolling samples reset when this application restarts. This panel keeps no long-term telemetry and does not contact Kubernetes unless a future administrator-approved adapter is configured.</p>
 </section>
 <section class="panel" id="offlineExploitDb"><h2>Offline Exploit-DB references</h2>
 <p>NCT automatically compares saved product and version fingerprints with this local reference database. The results are leads for analyst review, not proof that a system is vulnerable. NCT never runs exploit code.</p>
@@ -104,18 +113,31 @@ def storage_page() -> HTMLResponse:
 <script>
 const byId=id=>document.getElementById(id);
 function bytes(value){if(value==null)return '—';const units=['B','KiB','MiB','GiB','TiB'];let i=0;while(value>=1024&&i<4){value/=1024;i++;}return value.toFixed(i?1:0)+' '+units[i];}
-function runtimePercent(item,key='percent_of_one_cpu'){if(!item||item.status==='unavailable')return 'Unavailable';if(item.status==='warming_up')return 'Warming up';return `${Number(item[key]||0).toFixed(1)}%`;}
-function runtimeBytes(item,key){return !item||item.status!=='available'?'Unavailable':bytes(item[key]);}
+function runtimeDuration(seconds){seconds=Number(seconds||0);if(seconds<60)return `${seconds.toFixed(0)} sec`;if(seconds<3600)return `${(seconds/60).toFixed(1)} min`;return `${(seconds/3600).toFixed(1)} hr`;}
+function runtimeTrendValue(item,key,formatter){if(!item)return 'Unavailable';if(!item.available_samples)return item.status==='warming_up'?'Warming up':'Unavailable';return formatter(item[key]);}
+function runtimeTrendCurrent(item,formatter){if(!item)return 'Unavailable';if(item.status==='warming_up')return 'Warming up';return item.current==null?'Unavailable':formatter(item.current);}
 function renderRuntimeHealth(data){
- const m=data.measurements||{},processCpu=m.process_cpu,containerCpu=m.container_cpu,processMemory=m.process_memory,containerMemory=m.container_memory,disk=m.data_filesystem,database=m.database_files,work=data.workload||{};
+ const m=data.measurements||{},disk=m.data_filesystem,database=m.database_files,work=data.workload||{},trends=data.trends||{},trendMetrics=trends.metrics||{},processCpuTrend=trendMetrics.process_cpu,containerCpuTrend=trendMetrics.container_cpu,processMemoryTrend=trendMetrics.process_memory,containerMemoryTrend=trendMetrics.container_memory;
  const states=[...Object.values(m),work].map(item=>item&&item.status),warming=states.includes('warming_up'),unavailable=states.includes('unavailable');
  byId('runtimeHealthStatus').textContent=warming?(unavailable?'CPU is warming up, and some other measurements are unavailable.':'Collecting the second CPU sample. Other live measurements are available.'):(unavailable?'Some live measurements are unavailable on this system.':'Live local measurements are available.');
- byId('runtimeCpu').textContent=runtimePercent(processCpu);
- const containerCpuText=containerCpu&&containerCpu.status==='available'&&containerCpu.percent_of_allowance!=null?`${Number(containerCpu.percent_of_allowance).toFixed(1)}% of container allowance`:runtimePercent(containerCpu);
- byId('runtimeCpuDetail').textContent=`NCT process: ${runtimePercent(processCpu)} of one CPU. Container: ${containerCpuText}.`;
- byId('runtimeMemory').textContent=runtimeBytes(processMemory,'current_bytes');
- const containerPeak=containerMemory&&containerMemory.status==='available'&&containerMemory.peak_bytes!=null?bytes(containerMemory.peak_bytes):'Unavailable';
- byId('runtimeMemoryDetail').textContent=`NCT process: ${runtimeBytes(processMemory,'current_bytes')} now, ${runtimeBytes(processMemory,'peak_bytes')} peak. Container: ${runtimeBytes(containerMemory,'current_bytes')} now, ${containerPeak} peak${containerMemory&&containerMemory.status==='available'&&containerMemory.limit_bytes!=null?`, ${bytes(containerMemory.limit_bytes)} limit`:''}.`;
+ const percent=value=>`${Number(value).toFixed(1)}%`;
+ byId('runtimeProcessCpuCurrent').textContent=runtimeTrendCurrent(processCpuTrend,percent);
+ byId('runtimeProcessCpuAverage').textContent=runtimeTrendValue(processCpuTrend,'average',percent);
+ byId('runtimeProcessCpuMaximum').textContent=runtimeTrendValue(processCpuTrend,'maximum',percent);
+ byId('runtimeProcessCpuNearMax').textContent=runtimeTrendValue(processCpuTrend,'longest_near_peak_seconds',runtimeDuration);
+ byId('runtimeContainerCpuCurrent').textContent=runtimeTrendCurrent(containerCpuTrend,percent);
+ byId('runtimeContainerCpuAverage').textContent=runtimeTrendValue(containerCpuTrend,'average',percent);
+ byId('runtimeContainerCpuMaximum').textContent=runtimeTrendValue(containerCpuTrend,'maximum',percent);
+ byId('runtimeContainerCpuNearMax').textContent=runtimeTrendValue(containerCpuTrend,'longest_near_peak_seconds',runtimeDuration);
+ byId('runtimeProcessMemoryCurrent').textContent=runtimeTrendCurrent(processMemoryTrend,bytes);
+ byId('runtimeProcessMemoryAverage').textContent=runtimeTrendValue(processMemoryTrend,'average',bytes);
+ byId('runtimeProcessMemoryMaximum').textContent=runtimeTrendValue(processMemoryTrend,'maximum',bytes);
+ byId('runtimeProcessMemoryNearMax').textContent=runtimeTrendValue(processMemoryTrend,'longest_near_peak_seconds',runtimeDuration);
+ byId('runtimeContainerMemoryCurrent').textContent=runtimeTrendCurrent(containerMemoryTrend,bytes);
+ byId('runtimeContainerMemoryAverage').textContent=runtimeTrendValue(containerMemoryTrend,'average',bytes);
+ byId('runtimeContainerMemoryMaximum').textContent=runtimeTrendValue(containerMemoryTrend,'maximum',bytes);
+ byId('runtimeContainerMemoryNearMax').textContent=runtimeTrendValue(containerMemoryTrend,'longest_near_peak_seconds',runtimeDuration);
+ byId('runtimeContainerCpuBasis').textContent=containerCpuTrend&&containerCpuTrend.basis?containerCpuTrend.basis.replace(/^Percent of /,'Basis: '):'Basis unavailable';
  byId('runtimeDisk').textContent=disk&&disk.status==='available'?`${bytes(disk.used_bytes)} used`:'Unavailable';
  byId('runtimeDiskDetail').textContent=disk&&disk.status==='available'?`${bytes(disk.available_bytes)} available of ${bytes(disk.total_bytes)}.`:'Filesystem capacity is unavailable.';
  if(work.status==='available'){
@@ -127,6 +149,8 @@ function renderRuntimeHealth(data){
  byId('runtimeProvider').textContent=data.provider==='local'?'Local application and container':'Unavailable';
  byId('runtimeSample').textContent=data.sampled_at?`${dateText(data.sampled_at)} · current sample`:'Unavailable';
  byId('runtimeOrchestrator').textContent=data.orchestrator&&data.orchestrator.status==='not_configured'?'Not configured':'Unavailable';
+ const attempts=processMemoryTrend&&processMemoryTrend.sampling_attempts||0;
+ byId('runtimeTrendStatus').textContent=`Window: ${attempts} of 720 samples · 5 seconds apart · Near max: at least ${trends.near_peak_percent||95}% · Resets on restart`;
 }
 let runtimePanelVisible=false,runtimeInFlight=false,runtimeRequestId=0,runtimeTimer=null,runtimeController=null;
 function runtimeCanPoll(){return document.visibilityState==='visible'&&runtimePanelVisible;}

@@ -1882,6 +1882,42 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     the Operator Guide retains the exact byte or IEC value, and keep memory and storage
     comparisons explicit so a friendlier label does not silently change the quantity.
     Novice wording review is pending; no unit semantics have been changed yet.
+
+    **2026-10-10 bounded CPU and memory trends start:** Extend live System Health with
+    restart-local CPU and memory averages, highest sampled values and longest consecutive
+    near-peak stretches for both the NCT process and its Linux container. A dedicated
+    sampler will run every five seconds while NCT is running and keep at most 720 attempts
+    per metric, representing the last hour or time since restart. Near peak means at least
+    95% of the current bounded-window maximum; one qualifying sample represents zero
+    elapsed seconds, unavailable or late samples break a stretch, and the threshold is
+    recalculated when samples enter or leave the window. Container CPU starts a new trend
+    segment whenever its allowance or measurement basis changes. The sampler reads only
+    fixed process and cgroup counters, keeps its own CPU baselines, writes no history and
+    performs no database, evidence or network access. This is a documented bounded
+    in-memory operational-context extension to the earlier no-history limit, not retained
+    telemetry, continuous recording, an alert or a benchmark. Independent start gate:
+    **CLEAR** with fixed-size, lifecycle, unavailable-sample and wording safeguards.
+    A user-directed presentation refinement replaces the earlier paragraph-style CPU
+    and memory details with two compact tables limited to Current, Average, Maximum,
+    and Time near max. Kernel lifetime peaks and container memory limits remain in the
+    bounded administrator API response but are intentionally not added as extra table
+    fields. This keeps the operational display aligned with the operator's requested
+    four-value comparison rather than mixing lifetime counters into the rolling window.
+    **Completed and development-verified:** the five-second restart-local sampler, fixed
+    one-hour/720-attempt bounds, process/container CPU and memory series, allowance-basis
+    resets, unavailable-gap handling, and compact four-column tables are implemented.
+    Current, Average, Maximum, and Time near max now come from the same completed series,
+    so Current cannot be newer than the displayed Maximum. Failed CPU, memory, or sampler
+    measurements say Unavailable; only a valid first CPU counter awaiting its next reading
+    says Warming up. Focused validation passed 122 tests, the isolated network-disabled
+    full suite passed 1,235 tests with 15 skipped, the UI runtime regression passed, and
+    live browser checks passed at normal size and 1,400 by 1,000 with the Operator Guide
+    open and no console warnings, overlap, table scrolling, or page overflow. The novice
+    operator returned **PASS**. Independent quality gate: **CLEAR — DOCUMENTED
+    DEVIATION** for the user-directed four-column display while lifetime peaks and the
+    container memory limit remain available in the bounded administrator API. This is
+    committed foundation behavior only; Range, mission, Kubernetes adapter, and stable
+    `main` acceptance remain later reviewed gates.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.
