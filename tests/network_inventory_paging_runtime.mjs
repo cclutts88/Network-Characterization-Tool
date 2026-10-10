@@ -11,6 +11,28 @@ function handler(name) {
   return match[0];
 }
 
+function namedFunction(name, esc) {
+  const match = source.match(new RegExp(`^function ${name}\\(.*$`, "m"));
+  assert.ok(match, `Could not find ${name} in app/analysis_ui.py`);
+  return Function("esc", `return (${match[0]})`)(esc);
+}
+
+{
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]);
+  const hostnameEvidence = namedFunction("hostnameEvidence", esc);
+  assert.equal(hostnameEvidence({}), "");
+  assert.equal(
+    hostnameEvidence({analyst_hostname:{hostname:"branch-office",source_filename:"analyst & notes.csv"}}),
+    '<span class="hostname-origin">Analyst hostname · analyst &amp; notes.csv</span>',
+  );
+  assert.equal(
+    hostnameEvidence({hostname_conflict:true,analyst_hostname:{hostname:"alias <one>",source_filename:"source.csv"}}),
+    '<span class="hostname-origin conflict" title="Scanner hostname retained">Imported alias: alias &lt;one&gt; · source.csv</span>',
+  );
+}
+
 await eval([
   "(async () => {",
   `let currentNetwork={source_revision:${JSON.stringify(revisionA)}},networkPage=1,networkRequest=0;`,

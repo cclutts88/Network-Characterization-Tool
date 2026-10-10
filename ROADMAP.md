@@ -2128,6 +2128,38 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    multi-process, Range-hardware and production-scale measurements; this result
    does not establish Range or mission readiness.
 
+   **2026-10-09 rendered-browser benchmark start:** measure the canonical corpus in a
+   real Chromium browser with three fresh isolated repeats for each exact stable and
+   foundation revision. Direct Analyze, Hunt, Reach and Map loads and same-context
+   reloads must reach exact revision-specific rendered results with no page, console
+   or request failures; foundation also exercises the 100-row Current Network page,
+   its 20-row final page and the corresponding 100/20 Processed Evidence pages. Record
+   action-to-ready time, navigation timing, long tasks, DOM size, JavaScript heap,
+   transfer size and separate application/browser resource use under limits declared
+   before retained runs. Prestage and finish processing before timing, prewarm HTTP,
+   start each cold measurement in a fresh browser context, block external requests,
+   use fixed browser/viewport/locale/time-zone settings, require two stable animation
+   frames, attest every source/image/container/browser/corpus/runner identity and prove
+   retained database and evidence bytes do not change after prewarm. Raw JSON,
+   screenshots and failure traces remain retained. This slice does not establish human
+   workflow, multi-process, GPU, Range, production-scale or mission readiness.
+   Independent architecture start gate: **CLEAR**. Live preflight stopped Current
+   Network before any rows were shown because the label for analyst-imported hostnames
+   was missing. Restore that label and independently confirm the complete roster loads
+   before recording benchmark measurements.
+
+   **2026-10-09 rendered-browser preflight repair completion:** restored the shared
+   analyst-hostname label used by Current Network and retained scan rows, including its
+   scanner-conflict provenance and output escaping. The runtime regression now covers
+   absent, normal and conflicting imported-hostname cases. An isolated real-Chrome
+   check rendered rows 1-25 of the complete 4,188-host Current Network result where the
+   page previously stopped before showing any row. Focused validation passed 65 tests
+   with 1 expected skip; the complete Docker suite passed **1,176 tests with 13
+   expected skips**; the host JavaScript runtime regression and whitespace check passed.
+   Independent quality gate: **CLEAR**. The browser benchmark remains in progress; its
+   harness must handle only the predeclared favicon request while treating every other
+   page, console and request failure as fatal.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
