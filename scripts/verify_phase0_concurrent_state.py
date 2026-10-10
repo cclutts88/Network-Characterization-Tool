@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
+import tempfile
+from typing import Iterator
 
 try:
     from scripts.benchmark_phase0_concurrent_clients import CYCLES, WORKER_COUNT
@@ -25,6 +29,18 @@ EXPECTED_CHANGED_TABLES = {
 }
 
 
+@contextmanager
+def _private_database_copy(db_path: Path) -> Iterator[Path]:
+    """Copy SQLite state off a read-only evidence mount before opening it."""
+    with tempfile.TemporaryDirectory(prefix="nct-phase0-sqlite-") as directory:
+        copied_db = Path(directory) / db_path.name
+        for suffix in ("", "-wal", "-shm"):
+            source = Path(f"{db_path}{suffix}")
+            if source.is_file():
+                shutil.copyfile(source, Path(f"{copied_db}{suffix}"))
+        yield copied_db
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -40,31 +56,32 @@ def snapshot(data_root: Path) -> dict:
     logical = hashlib.sha256()
     counts: dict[str, int] = {}
     table_digests: dict[str, str] = {}
-    with sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True) as db:
-        db.execute("PRAGMA query_only=ON")
-        integrity = [str(row[0]) for row in db.execute("PRAGMA integrity_check")]
-        tables = [
-            row[0]
-            for row in db.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            )
-        ]
-        for table in tables:
-            quoted = '"' + table.replace('"', '""') + '"'
-            columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
-            rows = db.execute(f"SELECT * FROM {quoted} ORDER BY rowid").fetchall()
-            counts[table] = len(rows)
-            table_digest = hashlib.sha256()
-            header = json.dumps([table, columns], sort_keys=True).encode()
-            logical.update(header)
-            table_digest.update(header)
-            for row in rows:
-                normalized = [value.hex() if isinstance(value, bytes) else value for value in row]
-                content = json.dumps(normalized, sort_keys=True, default=str).encode()
-                logical.update(content)
-                table_digest.update(content)
-            table_digests[table] = table_digest.hexdigest()
+    with _private_database_copy(db_path) as copied_db:
+        with sqlite3.connect(f"file:{copied_db.as_posix()}?mode=ro", uri=True) as db:
+            db.execute("PRAGMA query_only=ON")
+            integrity = [str(row[0]) for row in db.execute("PRAGMA integrity_check")]
+            tables = [
+                row[0]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            ]
+            for table in tables:
+                quoted = '"' + table.replace('"', '""') + '"'
+                columns = [row[1] for row in db.execute(f"PRAGMA table_info({quoted})")]
+                rows = db.execute(f"SELECT * FROM {quoted} ORDER BY rowid").fetchall()
+                counts[table] = len(rows)
+                table_digest = hashlib.sha256()
+                header = json.dumps([table, columns], sort_keys=True).encode()
+                logical.update(header)
+                table_digest.update(header)
+                for row in rows:
+                    normalized = [value.hex() if isinstance(value, bytes) else value for value in row]
+                    content = json.dumps(normalized, sort_keys=True, default=str).encode()
+                    logical.update(content)
+                    table_digest.update(content)
+                table_digests[table] = table_digest.hexdigest()
     evidence = hashlib.sha256()
     evidence_files = 0
     for path in sorted(data_root.rglob("*")):
@@ -115,7 +132,9 @@ def verify(data_root: Path, before: dict, setup: dict, run: dict) -> dict:
         failures.append("client benchmark result did not pass")
 
     db_path = data_root / "analyzer.db"
-    with sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True) as db:
+    with _private_database_copy(db_path) as copied_db, sqlite3.connect(
+        f"file:{copied_db.as_posix()}?mode=ro", uri=True
+    ) as db:
         db.row_factory = sqlite3.Row
         users = setup["users"]
         expected_owners = set(users) | {"collision-analyst"}
