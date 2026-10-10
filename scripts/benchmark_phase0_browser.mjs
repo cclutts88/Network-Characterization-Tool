@@ -60,6 +60,10 @@ function sha256Values(values) {
   return crypto.createHash("sha256").update(JSON.stringify(values)).digest("hex");
 }
 
+function parseJsonText(text) {
+  return JSON.parse(String(text).replace(/^\uFEFF/, ""));
+}
+
 function harnessComponents() {
   return Object.fromEntries(HARNESS_COMPONENT_PATHS.map(relative => {
     const filename = path.join(BENCHMARK_ROOT, ...relative.split("/"));
@@ -702,13 +706,14 @@ async function main() {
     assert.equal(aborted, true);
     assert.equal(existing.handlers.console.length, 1);
     assert.equal(future.handlers.console.length, 1);
+    assert.deepEqual(parseJsonText("\uFEFF{\"bom\":true}"), {bom: true});
     console.log("Phase 0 rendered-browser benchmark self-test passed");
     return;
   }
   const configIndex = process.argv.indexOf("--config");
   const outputIndex = process.argv.indexOf("--output");
   if (configIndex < 0 || outputIndex < 0) throw new Error("--config and --output are required");
-  const config = JSON.parse(fs.readFileSync(process.argv[configIndex + 1], "utf8"));
+  const config = parseJsonText(fs.readFileSync(process.argv[configIndex + 1], "utf8"));
   const result = await benchmark(config);
   const rendered = JSON.stringify(result, null, 2) + "\n";
   fs.writeFileSync(process.argv[outputIndex + 1], rendered);

@@ -2221,6 +2221,13 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    mark this correction complete until the unchanged 2.5 GiB limit passes a fresh
    foundation Chrome rehearsal and the independent reviewer clears the evidence.
 
+   **2026-10-09 controller compatibility correction:** the first retained rehearsal was
+   rejected before measurement because Windows PowerShell wrote a byte-order marker into
+   the generated JSON configuration. Cleanup removed every disposable resource. The
+   runner now accepts either standard UTF-8 or UTF-8 with that marker, and its self-test
+   covers both forms. This changes harness input compatibility only; it does not change
+   application behavior, the corpus, or any performance limit.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
