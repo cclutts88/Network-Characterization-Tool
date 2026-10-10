@@ -2314,6 +2314,30 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    DOCUMENTED DEVIATION**: all six records, identities, screenshots, cleanup hashes,
    limits and summary figures verify, and no rejected matrix is represented as valid.
 
+   **2026-10-09 eight-client single-worker concurrency benchmark start:** exercise the
+   actual deployment shape: one normal single-process Uvicorn NCT container under
+   eight synchronized, independent OS client processes, each using its own authenticated
+   analyst account and session. Run three fresh foundation repeats against the canonical
+   synthetic corpus. Use a fixed mixed sequence of bounded Current Network, Hunt, Reach,
+   Map and personal-workspace reads plus isolated note, layout, view and filter-preset
+   saves. Include one deliberately synchronized same-record version collision; require
+   exactly one accepted update and one expected conflict with complete audit history.
+   Treat any timeout, unexpected 4xx/409, 5xx, worker exit, malformed response or SQLite
+   locked/busy message as failure. Require exact read results and response bounds, reads
+   completing while writes overlap, exact per-owner state and audit records, no cross-owner
+   visibility or mutation, and an unchanged logical database outside the declared auth and
+   workspace rows. Retained evidence files must remain byte-for-byte unchanged. Record
+   p50/p95/max latency, throughput, total wall time, separate application/client CPU and
+   peak memory, exact source/image/corpus/runner/container/process/data-root identities,
+   and cleanup under limits fixed before any retained run. The deployment must be verified
+   to contain exactly one Uvicorn application process. Stable `main` is not compared because
+   the tested authenticated workspace and bounded foundation endpoints are foundation-only;
+   the earlier retained core, HTTP and browser slices provide the cross-version comparisons.
+   Independent architecture gate: **CLEAR — DOCUMENTED DEVIATION**. This is multi-process
+   analyst-client load against one application process. It does not validate multiple NCT
+   server workers, worker leases/checkpoints, multiple application containers, live scans,
+   long-duration use, Range hardware, production-scale history or mission readiness.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
