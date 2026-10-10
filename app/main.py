@@ -41,6 +41,14 @@ from app.storage_health import recover_incomplete_compactions, storage_status, s
 from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
 from app.runtime_health import runtime_health_snapshot
+from app.lifecycle_health import (
+    begin_shutdown,
+    begin_startup,
+    mark_failed,
+    mark_ready,
+    mark_stopped,
+    probe_result,
+)
 from app.ingestion_status import list_ingestion_status
 from app.derived_result_status import list_derived_result_status
 from app.derived_version_inventory import (
@@ -1322,54 +1330,65 @@ def parse_xml(content: bytes) -> dict:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    configure_database(DB_PATH)
-    init_storage()
-    init_poc_storage()
-    retire_legacy_scan_analysis_cache(DB_PATH)
-    init_device_analysis_storage(DB_PATH)
-    init_device_collection_authority_storage(DB_PATH)
-    init_device_collection_profile_storage(DB_PATH)
-    init_device_observation_storage(DB_PATH)
-    init_derived_result_storage(DB_PATH)
-    init_pipeline_intake_storage(DB_PATH)
-    init_derived_job_storage(DB_PATH)
-    reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
-    init_auth_storage(DB_PATH)
-    init_achievement_storage(DB_PATH)
-    init_workspace_storage(DB_PATH)
-    init_scan_collaboration_storage(DB_PATH)
-    init_note_storage(DB_PATH)
-    init_view_preference_storage(DB_PATH)
-    init_shell_preference_storage(DB_PATH)
-    init_network_semantics_storage(DB_PATH)
-    init_host_identity_storage(DB_PATH)
-    init_exposure_report_storage(DB_PATH)
-    init_evidence_scope_assignment_storage(DB_PATH)
-    init_automated_nmap_foundation_storage(DB_PATH)
-    recover_missing_automated_nmap_intents(DB_PATH)
-    compaction_recovery = recover_incomplete_compactions(DB_PATH)
-    background_workers_started = not compaction_recovery.get("recovery_required")
+    begin_startup()
+    background_workers_started = False
     scheduler_stop = None
     scheduler_thread = None
-    if background_workers_started:
-        recover_interrupted_derived_jobs(DB_PATH)
-        start_derived_job_worker(DB_PATH, DATA_DIR)
-        recover_scheduler_state()
-        scheduler_stop = threading.Event()
-        scheduler_thread = threading.Thread(
-            target=schedule_worker,
-            args=(scheduler_stop,),
-            daemon=True,
-            name="scan-scheduler",
-        )
-        scheduler_thread.start()
     try:
-        yield
-    finally:
+        configure_database(DB_PATH)
+        init_storage()
+        init_poc_storage()
+        retire_legacy_scan_analysis_cache(DB_PATH)
+        init_device_analysis_storage(DB_PATH)
+        init_device_collection_authority_storage(DB_PATH)
+        init_device_collection_profile_storage(DB_PATH)
+        init_device_observation_storage(DB_PATH)
+        init_derived_result_storage(DB_PATH)
+        init_pipeline_intake_storage(DB_PATH)
+        init_derived_job_storage(DB_PATH)
+        reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
+        init_auth_storage(DB_PATH)
+        init_achievement_storage(DB_PATH)
+        init_workspace_storage(DB_PATH)
+        init_scan_collaboration_storage(DB_PATH)
+        init_note_storage(DB_PATH)
+        init_view_preference_storage(DB_PATH)
+        init_shell_preference_storage(DB_PATH)
+        init_network_semantics_storage(DB_PATH)
+        init_host_identity_storage(DB_PATH)
+        init_exposure_report_storage(DB_PATH)
+        init_evidence_scope_assignment_storage(DB_PATH)
+        init_automated_nmap_foundation_storage(DB_PATH)
+        recover_missing_automated_nmap_intents(DB_PATH)
+        compaction_recovery = recover_incomplete_compactions(DB_PATH)
+        background_workers_started = not compaction_recovery.get("recovery_required")
         if background_workers_started:
-            stop_derived_job_worker(DB_PATH)
-            scheduler_stop.set()
-            scheduler_thread.join(timeout=2)
+            recover_interrupted_derived_jobs(DB_PATH)
+            start_derived_job_worker(DB_PATH, DATA_DIR)
+            recover_scheduler_state()
+            scheduler_stop = threading.Event()
+            scheduler_thread = threading.Thread(
+                target=schedule_worker,
+                args=(scheduler_stop,),
+                daemon=True,
+                name="scan-scheduler",
+            )
+            scheduler_thread.start()
+        mark_ready()
+        try:
+            yield
+        finally:
+            begin_shutdown()
+            try:
+                if background_workers_started:
+                    stop_derived_job_worker(DB_PATH)
+                    scheduler_stop.set()
+                    scheduler_thread.join(timeout=2)
+            finally:
+                mark_stopped()
+    except BaseException:
+        mark_failed()
+        raise
 
 
 app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifespan)
@@ -1402,7 +1421,14 @@ async def local_authentication_guard(request: Request, call_next):
             return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
     if not auth_enabled():
         return await call_next(request)
-    public_paths = {"/health", "/login", "/api/auth/login"}
+    public_paths = {
+        "/health",
+        "/health/startup",
+        "/health/readiness",
+        "/health/liveness",
+        "/login",
+        "/api/auth/login",
+    }
     if request.url.path in public_paths:
         return await call_next(request)
     analyst = session_identity(DB_PATH, request.cookies.get(SESSION_COOKIE))
@@ -2093,6 +2119,26 @@ def health() -> dict:
         "build_id": BUILD_ID,
         "build_commit": BUILD_COMMIT,
     }
+
+
+def _lifecycle_probe(name: Literal["startup", "readiness", "liveness"]) -> JSONResponse:
+    status_code, body = probe_result(name)
+    return JSONResponse(body, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/health/startup")
+async def startup_health() -> JSONResponse:
+    return _lifecycle_probe("startup")
+
+
+@app.get("/health/readiness")
+async def readiness_health() -> JSONResponse:
+    return _lifecycle_probe("readiness")
+
+
+@app.get("/health/liveness")
+async def liveness_health() -> JSONResponse:
+    return _lifecycle_probe("liveness")
 
 
 @app.get("/login", response_class=HTMLResponse)

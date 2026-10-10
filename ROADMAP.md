@@ -1834,6 +1834,54 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     the connection use was corrected, the scope test passed independently, and the clean
     complete rerun produced the reported result. Kubernetes API access, historical
     telemetry, alert thresholds and multi-replica execution remain unimplemented.
+
+    **2026-10-10 lifecycle probes start:** Implement Kubernetes acceptance gate 2 with
+    separate side-effect-free startup, readiness and liveness endpoints while keeping
+    the existing `/health` deployment contract unchanged. Startup means required
+    initialization and the compaction-recovery safety check completed; an unresolved
+    compaction condition may remain safely fenced for administrator review without
+    causing a restart loop, while fatal initialization or recovery exceptions still
+    prevent startup. Readiness means the HTTP service can safely accept requests, not
+    that every optional dependency or workload is healthy. Liveness proves only that
+    the process can answer the request and performs no database, disk, worker or network
+    check. The endpoints will bypass authentication-session lookup, use fixed non-secret
+    response fields, return meaningful 200/503 states with no-store caching, reset state
+    across failed or repeated lifespans and mark readiness false before shutdown cleanup.
+    This slice does not yet prove Kubernetes traffic draining or deployment readiness.
+    Independent revised architecture start gate: **CLEAR** after distinguishing safely
+    fenced recovery from fatal startup failure.
+
+    **2026-10-10 lifecycle probes completion:** Kubernetes acceptance gate 2 now exposes
+    independent `/health/startup`, `/health/readiness` and `/health/liveness` checks.
+    They return fixed non-secret JSON, useful 200/503 states and `Cache-Control: no-store`
+    without authentication-session, database, filesystem, worker or network-target
+    reads. The existing `/health` response is unchanged for current deployment tooling.
+    Lifecycle state resets at each startup, fatal initialization remains failed, safely
+    fenced compaction recovery preserves HTTP access while workers stay stopped, and
+    readiness becomes false before shutdown cleanup. Focused authentication, route,
+    recovery, shutdown-order and deployment compatibility validation passed **86 tests**;
+    direct isolated HTTP checks passed for all four health contracts. The complete suite
+    passed **1,226 tests with 15 skips** in a fresh network-disabled disposable container.
+    A prior run in the long-lived preview exceeded the one-GiB phase-0 cgroup peak by
+    about 4 MiB because that kernel counter retained earlier container activity; the
+    exact benchmark and complete suite both passed from a fresh container. This is
+    foundation-only development readiness. Kubernetes manifests, traffic draining,
+    durable-storage qualification and Range validation remain open under gates 3 and 4.
+    The first final review halted synchronous probe handlers because an exhausted shared
+    request thread pool could otherwise delay liveness and provoke a false restart. All
+    three handlers now execute directly on the application event loop, with a regression
+    assertion that preserves that contract. The focused **86 tests** and complete fresh,
+    network-disabled Docker suite of **1,226 tests with 15 skips** passed again after the
+    correction. Final independent gate: **CLEAR**.
+
+    **2026-10-10 System Health unit-label follow-up:** The first live-health display uses
+    IEC binary units (`MiB`, `GiB`, `TiB`) because process, container and filesystem
+    values originate as exact bytes and binary labels avoid the decimal/binary ambiguity
+    of `MB`, `GB` and `TB`. This precision is less familiar to novice operators. Review
+    whether the primary cards should use familiar decimal `GB`/`TB` presentation while
+    the Operator Guide retains the exact byte or IEC value, and keep memory and storage
+    comparisons explicit so a friendlier label does not silently change the quantity.
+    Novice wording review is pending; no unit semantics have been changed yet.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

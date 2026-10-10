@@ -89,6 +89,25 @@ Health reads must be bounded, side-effect-free and inexpensive. Opening System H
 must not initialize schema, hash evidence, start a benchmark, enqueue work or contact a
 network target.
 
+The application exposes three fixed, unauthenticated orchestration probes. They bypass
+session lookup and return `Cache-Control: no-store`:
+
+- `/health/startup` reports success after required initialization and the recovery
+  safety check finish. An unresolved compaction condition may remain safely fenced so
+  an administrator can inspect and recover it; a fatal initialization or recovery
+  exception prevents startup.
+- `/health/readiness` reports success only while the HTTP instance may safely accept
+  requests. Optional dependency loss, absent SearchSploit data, failed saved work and a
+  safely fenced recovery condition belong to workload or storage health rather than
+  making the administrative service unavailable.
+- `/health/liveness` reports only that the process can answer. It does not query SQLite,
+  inspect disk, check workers or contact a network target.
+
+The legacy `/health` response remains available for existing deployment tooling.
+Readiness is cleared before local shutdown cleanup begins, but that ordering alone does
+not prove Kubernetes Service removal or traffic draining; those remain deployment-gate
+tests.
+
 The Kubernetes adapter must:
 
 - use a dedicated read-only ServiceAccount;
@@ -171,9 +190,11 @@ Kubernetes capability advances only through reviewed gates:
 8. Multi-replica concurrency and failure testing.
 9. Representative disconnected Range validation.
 
-Acceptance status: gate 1 is implemented on `foundation/evidence-engine-v2` with the
-local provider and bounded administrator System Health display. Gates 2 through 9 remain
-open. Completing gate 1 does not make this build Kubernetes-ready.
+Acceptance status: gates 1 and 2 are implemented on `foundation/evidence-engine-v2`.
+Gate 1 provides the local provider and bounded administrator System Health display.
+Gate 2 provides side-effect-free lifecycle probes with explicit recovery and shutdown
+semantics. Gates 3 through 9 remain open. Completing these two gates does not make this
+build Kubernetes-ready.
 
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.
