@@ -411,6 +411,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-09 | Phase 0 rendered-browser benchmark | Run the same Chromium build inside isolated Linux benchmark containers | Use one SHA-256-identified local Windows Chrome/Playwright build for every repeat. Keep each NCT app on a unique internal-only Docker network and reach it only through a disposable dual-network relay published on `127.0.0.1`; block every non-loopback browser request and record the app, relay, network, browser process tree and cleanup identities | No compatible browser image is installed locally and the NCT Linux test image contains no browser executable; Docker Desktop does not publish a host port directly from an internal-only network | Preserves isolated app/data/source execution and equal browser settings across revisions while clearly limiting the result to same-host Windows Chrome. The relay is not part of NCT or a deployment package. No Linux-browser, Range, GPU, human-workflow, production-scale or mission-performance claim is made; those remain separate gates |
 | 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, surface selected integrity conflicts, then reuse one serialized private current-device analysis only when a read-only snapshot proves its exact admission, result, provenance, retained bytes, scope-observation, WAN, contract, and database inputs are unchanged | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only parsed-manifest changes do not affect selection, while raw manifest bytes still invalidate analysis reuse. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Cold cache builds are read-only, warm entries invalidate on every captured dependency and database replacement, and changing inputs retry once before a visible conflict |
 | 2026-10-08 | Whole-network current-view performance | Persist the assembled network model as another reusable derived-result family | Use one-entry, process-local serialized caches keyed by exact canonical descriptors, with per-descriptor single-flight builds and pre/post-build source validation. The current evidence view, current device analysis, and Map topology each retain their own exact dependency boundary while shared consumers reuse private serialized copies. Project Current Network host/detail pages from the complete exact-source model with revision-bound server paging | The assembled views combine immutable evidence with mutable analyst identity/OS choices, Saved Network labels, offline OUI data, and filesystem-backed legacy inputs. Persisting those mixed presentation models would create invalidation and migration authority that the evidence pipeline does not yet define | Evidence remains authoritative; unverifiable or changing inputs bypass reuse; restart, rollback, database replacement, selected evidence changes, OUI changes, and calculation-contract changes rebuild. Map and Current Network share one exact topology calculation. Current Network responses and browser work are bounded to 100 hosts while LFA and export retain complete-filter semantics. The backend still assembles the complete reusable model, and specialized Hunt, Reach, and Map payload paging plus representative large-installation benchmarking remain future scale work |
 | 2026-09-27 | Phase 1 | Add SQLite WAL/busy-timeout reliability controls | Existing code already had WAL + 30s busy timeout; foundation work is focusing on eliminating repeated schema initialization and long/redundant write paths instead of re-adding WAL | Repository inspection showed WAL was already enabled at startup | Continue auditing storage modules for request-path DDL and lock-heavy patterns |
@@ -2159,6 +2160,38 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    Independent quality gate: **CLEAR**. The browser benchmark remains in progress; its
    harness must handle only the predeclared favicon request while treating every other
    page, console and request failure as fatal.
+
+   **2026-10-09 rendered-browser environment deviation:** no Chromium or Playwright
+   browser image is installed in the local Docker inventory, and the isolated NCT Linux
+   test image contains no browser executable. Use the same SHA-256-identified local
+   Chrome executable and Playwright version for all six runs, with a new Chrome process,
+   temporary profile and browser context for every repeat. Each application repeat still
+   runs in a unique fresh Docker container with disposable data, and every non-loopback
+   browser request is blocked. Record separate application and browser process resource
+   use, unique process/profile/container identities and cleanup. Independent gate:
+   **CLEAR - DOCUMENTED DEVIATION**. This is a same-host Chrome comparison; it is not a
+   browser-container, Linux-browser, Range or mission performance result.
+
+   **2026-10-09 rendered-browser runner completion:** a revision-neutral controller now
+   creates fresh canonical data, keeps the application on a unique internal-only Docker
+   network, and exposes it to the local browser through a disposable loopback relay. It
+   externally verifies clean Git, exact source/corpus/image/container/network/browser
+   identities, read-only mounts, completed staging/prewarm, fresh data and profile roots,
+   and cleanup. The browser attaches failure monitoring to existing and future pages,
+   blocks all non-loopback requests, verifies exact revision-specific Analyze, Hunt,
+   Reach and Map content and order, rechecks every raw limit in the summary, retains fixed
+   success screenshots, and preserves failure screenshots and traces. A complete stable
+   `main` rehearsal passed the 4,188-address, 6,125-finding, 47-relationship and Reach
+   oracles, resource limits, unchanged-state check, 32-process Chrome tree, eight success
+   screenshots and full temporary-resource cleanup. The controller-bound final result
+   also retains the exact raw result, before/after evidence state, all seven harness
+   component identities, and independently checked screenshot files. Focused regression
+   validation passed **18 tests with 1 expected container-Node skip** and the host
+   fault-injection self-test passed; the complete Docker suite passed **1,194 tests with
+   14 expected skips**. Independent quality gate: **CLEAR - DOCUMENTED DEVIATION** after
+   verifying the exact final stable rehearsal, all six previously open evidence controls,
+   and the documented same-host Chrome limitation. Retained three-repeat measurements
+   have not started.
 
 ## Exit criteria
 
