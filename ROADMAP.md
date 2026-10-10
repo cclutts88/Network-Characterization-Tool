@@ -2241,6 +2241,30 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    same-host Windows Chrome limitation remains documented; begin a new six-run retained
    comparison rather than reusing the invalid partial matrix.
 
+   **2026-10-09 retained comparison preparation halt and correction start:** all six new
+   runs individually passed, but the strict matrix validator rejected them because fresh
+   preparations did not have one exact logical database identity. Investigation showed
+   benchmark-only scope, observation and assignment IDs and initialization timestamps
+   were generated at run time, while the Artifact Registry retained the controller's
+   unique staging path instead of the `/data` path used by the measured container. Keep
+   the validator strict. Freeze benchmark-only IDs and clocks during preparation, restore
+   process globals afterward, and rewrite registered artifact paths to their correct
+   runtime `/data` location. The rejected six-run set is invalid comparison evidence and
+   must not be summarized or reused.
+
+   **2026-10-09 deterministic preparation correction complete:**
+   two independently created foundation data roots now have the same logical database
+   hash, physical database hash, table counts, every per-table digest and evidence hash.
+   The preparation context restores the real UUID and clock functions before returning,
+   and targeted tests cover restoration, safe path rebasing and the disposable catalog
+   timestamp. The focused isolated benchmark suite passed **22 tests with 1 expected
+   environment skip**, and the complete isolated suite passed **1,198 tests with 14
+   expected skips**. Independent review returned **CLEAR — DOCUMENTED DEVIATION**:
+   the prepared files are byte-for-byte repeatable, the registered evidence resolves
+   under the measured container's `/data` path, and the remaining same-host Windows
+   Chrome limitation is explicit. Begin a new six-run retained matrix; do not
+   retroactively bless either rejected matrix.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.
