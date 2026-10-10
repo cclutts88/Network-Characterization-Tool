@@ -1918,6 +1918,35 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     container memory limit remain available in the bounded administrator API. This is
     committed foundation behavior only; Range, mission, Kubernetes adapter, and stable
     `main` acceptance remain later reviewed gates.
+    **2026-10-10 process-lifetime SQLite writer guard start:** Begin Kubernetes
+    acceptance gate 3A by preventing overlapping NCT application processes from opening
+    the same SQLite data area. The fixed guard will live beside `analyzer.db`, use a
+    nonblocking byte-range filesystem lock acquired before database configuration or
+    migrations, remain held through worker and scheduler shutdown, and never be unlinked
+    or replaced. Startup contention must fail closed without changing database bytes.
+    Unsafe links or non-regular guard objects must fail closed; the descriptor must not
+    pass to child processes. Normal shutdown, failed startup and process exit release the
+    guard, while uncertain worker shutdown deliberately retains it until process exit.
+    Separate-process tests are required. This does not qualify a Kubernetes storage class,
+    solve older-image rollback, or establish multi-replica support. Independent start
+    gate: **CLEAR** with these exact safeguards.
+    **2026-10-10 process-lifetime SQLite writer guard completion:** NCT now acquires the
+    fixed application writer guard before opening or configuring SQLite. Contention,
+    unsafe links and non-regular guard objects fail closed without changing database
+    bytes; the descriptor is close-on-exec and the guard file remains stable rather than
+    being removed or replaced. Storage maintenance, scheduled-batch producers, scan
+    workers and saved-analysis workers now fence admission and register their thread under
+    the same lock used by shutdown. Shutdown stops the scheduler and scheduled-batch
+    producers before scan children, proves each writer family stopped, and retains the
+    guard until process exit whenever that proof fails. Separate-process contention,
+    release, crash recovery, failed startup, repeated lifespan, start/shutdown barrier and
+    producer-before-child tests passed. The clean network-disabled suite passed **1,253
+    tests with 15 skipped**; live preview readiness succeeded and a second process was
+    rejected while the preview owned its isolated data directory. Independent quality
+    gate: **CLEAR**. This completes application-side gate 3A only. Kubernetes manifests,
+    exact storage-class lock/rename/fsync/WAL qualification, forced-termination testing,
+    older-image schema protection, Range validation and multi-replica operation remain
+    open. The change is foundation-only and does not alter stable `main`.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

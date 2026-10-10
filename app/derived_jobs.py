@@ -71,6 +71,7 @@ _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _INTAKE_RETRY_DELAYS = (0.25, 1.0, 5.0)
 _WORKERS: dict[Path, tuple[threading.Event, threading.Thread]] = {}
 _WORKERS_LOCK = threading.RLock()
+_WORKERS_SHUTTING_DOWN = False
 
 
 class DerivedJobConflict(ValueError):
@@ -1979,6 +1980,8 @@ def start_derived_job_worker(db_path: Path, data_dir: Path | None = None) -> Non
     path = Path(db_path).resolve()
     root = Path(data_dir) if data_dir is not None else path.parent
     with _WORKERS_LOCK:
+        if _WORKERS_SHUTTING_DOWN:
+            return
         current = _WORKERS.get(path)
         if current and current[1].is_alive():
             return
@@ -1992,21 +1995,47 @@ def start_derived_job_worker(db_path: Path, data_dir: Path | None = None) -> Non
                 (utc_now(),),
             )
         stop = threading.Event()
-        thread = threading.Thread(
-            target=_worker_loop, args=(path, root, stop), daemon=True,
-            name="saved-analysis-worker",
-        )
+        thread = _new_derived_worker_thread(path, root, stop)
         _WORKERS[path] = (stop, thread)
-        thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            if _WORKERS.get(path) == (stop, thread):
+                _WORKERS.pop(path, None)
+            raise
 
 
-def stop_derived_job_worker(db_path: Path, timeout: float = 2.0) -> None:
+def _new_derived_worker_thread(
+    db_path: Path, data_dir: Path, stop: threading.Event,
+) -> threading.Thread:
+    return threading.Thread(
+        target=_worker_loop, args=(db_path, data_dir, stop), daemon=True,
+        name="saved-analysis-worker",
+    )
+
+
+def stop_derived_job_worker(db_path: Path, timeout: float = 2.0) -> bool:
+    global _WORKERS_SHUTTING_DOWN
     path = Path(db_path).resolve()
     with _WORKERS_LOCK:
+        _WORKERS_SHUTTING_DOWN = True
         current = _WORKERS.get(path)
     if current:
         current[0].set()
         current[1].join(timeout=timeout)
+        stopped = not current[1].is_alive()
+        if stopped:
+            with _WORKERS_LOCK:
+                if _WORKERS.get(path) is current:
+                    _WORKERS.pop(path, None)
+        return stopped
+    return True
+
+
+def resume_derived_job_worker() -> None:
+    global _WORKERS_SHUTTING_DOWN
+    with _WORKERS_LOCK:
+        _WORKERS_SHUTTING_DOWN = False
 
 
 def recover_interrupted_derived_jobs(db_path: Path) -> int:

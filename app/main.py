@@ -37,7 +37,13 @@ from app.nmap_assignment_workflow import (
     list_manual_nmap_assignment_statuses,
     manual_nmap_assignment_for_processing,
 )
-from app.storage_health import recover_incomplete_compactions, storage_status, start_storage_job
+from app.storage_health import (
+    recover_incomplete_compactions,
+    resume_storage_jobs,
+    start_storage_job,
+    stop_storage_jobs,
+    storage_status,
+)
 from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
 from app.runtime_health import runtime_health_snapshot
@@ -46,6 +52,7 @@ from app.runtime_trends import (
     start_runtime_trends,
     stop_runtime_trends,
 )
+from app.writer_guard import acquire_application_writer_guard
 from app.lifecycle_health import (
     begin_shutdown,
     begin_startup,
@@ -88,9 +95,12 @@ from app.poc import (
     list_scan_run_plans,
     normalize_ipv4_networks,
     recover_scheduler_state,
+    resume_scan_workers,
     router as poc_router,
     run_directory,
     schedule_worker,
+    stop_scan_workers,
+    stop_schedule_batch_workers,
     with_host_count,
     with_queue_state,
 )
@@ -136,6 +146,7 @@ from app.derived_jobs import (
     list_derived_jobs,
     recover_interrupted_derived_jobs,
     retry_derived_job,
+    resume_derived_job_worker,
     start_derived_job_worker,
     stop_derived_job_worker,
 )
@@ -1333,14 +1344,29 @@ def parse_xml(content: bytes) -> dict:
     }
 
 
+def _new_scheduler_thread(stop_event: threading.Event) -> threading.Thread:
+    return threading.Thread(
+        target=schedule_worker,
+        args=(stop_event,),
+        daemon=True,
+        name="scan-scheduler",
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     begin_startup()
     background_workers_started = False
     scheduler_stop = None
     scheduler_thread = None
+    scheduler_thread_started = False
     runtime_trends_started = False
+    writer_guard = None
+    startup_succeeded = False
+    primary_error: BaseException | None = None
     try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        writer_guard = acquire_application_writer_guard(DB_PATH)
         configure_database(DB_PATH)
         init_storage()
         init_poc_storage()
@@ -1367,40 +1393,73 @@ async def lifespan(_: FastAPI):
         init_automated_nmap_foundation_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
+        resume_storage_jobs()
         background_workers_started = not compaction_recovery.get("recovery_required")
         if background_workers_started:
+            resume_scan_workers()
+            resume_derived_job_worker()
             recover_interrupted_derived_jobs(DB_PATH)
             start_derived_job_worker(DB_PATH, DATA_DIR)
             recover_scheduler_state()
             scheduler_stop = threading.Event()
-            scheduler_thread = threading.Thread(
-                target=schedule_worker,
-                args=(scheduler_stop,),
-                daemon=True,
-                name="scan-scheduler",
-            )
+            scheduler_thread = _new_scheduler_thread(scheduler_stop)
             scheduler_thread.start()
+            scheduler_thread_started = True
         runtime_trends_started = start_runtime_trends()
         mark_ready()
-        try:
-            yield
-        finally:
-            begin_shutdown()
-            runtime_trends_stopped = (
-                stop_runtime_trends() if runtime_trends_started else True
-            )
-            try:
-                if background_workers_started:
-                    stop_derived_job_worker(DB_PATH)
-                    scheduler_stop.set()
-                    scheduler_thread.join(timeout=2)
-            finally:
-                mark_stopped()
-            if not runtime_trends_stopped:
-                raise RuntimeError("The runtime trend sampler did not stop cleanly")
-    except BaseException:
+        startup_succeeded = True
+        yield
+    except BaseException as exc:
+        primary_error = exc
         mark_failed()
         raise
+    finally:
+        if writer_guard is not None:
+            if startup_succeeded:
+                begin_shutdown()
+            shutdown_clean = True
+            if scheduler_stop is not None:
+                scheduler_stop.set()
+            if scheduler_thread_started and scheduler_thread is not None:
+                scheduler_thread.join(timeout=2)
+                shutdown_clean = (not scheduler_thread.is_alive()) and shutdown_clean
+            try:
+                shutdown_clean = stop_storage_jobs() and shutdown_clean
+            except BaseException:
+                shutdown_clean = False
+            try:
+                shutdown_clean = stop_schedule_batch_workers() and shutdown_clean
+            except BaseException:
+                shutdown_clean = False
+            try:
+                shutdown_clean = stop_scan_workers() and shutdown_clean
+            except BaseException:
+                shutdown_clean = False
+            if runtime_trends_started:
+                try:
+                    shutdown_clean = stop_runtime_trends() and shutdown_clean
+                except BaseException:
+                    shutdown_clean = False
+            if background_workers_started:
+                try:
+                    shutdown_clean = stop_derived_job_worker(DB_PATH) and shutdown_clean
+                except BaseException:
+                    shutdown_clean = False
+            if shutdown_clean:
+                writer_guard.release()
+                if startup_succeeded and primary_error is None:
+                    mark_stopped()
+                elif primary_error is not None:
+                    mark_failed()
+            else:
+                # Keep the descriptor and its lock alive until process exit. Releasing
+                # while a local worker may still write would let another pod start.
+                mark_failed()
+                if primary_error is None:
+                    raise RuntimeError(
+                        "NCT shutdown could not prove that every writer stopped; "
+                        "the application writer guard remains held until process exit"
+                    )
 
 
 app = FastAPI(title="Nmap Terrain Analyzer", version=APP_VERSION, lifespan=lifespan)

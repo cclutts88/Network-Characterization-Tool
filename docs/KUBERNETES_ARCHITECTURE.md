@@ -193,8 +193,12 @@ Kubernetes capability advances only through reviewed gates:
 Acceptance status: gates 1 and 2 are implemented on `foundation/evidence-engine-v2`.
 Gate 1 provides the local provider and bounded administrator System Health display.
 Gate 2 provides side-effect-free lifecycle probes with explicit recovery and shutdown
-semantics. Gates 3 through 9 remain open. Completing these two gates does not make this
-build Kubernetes-ready.
+semantics. Application-side gate 3A now adds a process-lifetime writer guard acquired
+before SQLite opens, atomic shutdown admission fences for local writer families, and
+fail-closed retention when shutdown cannot prove every writer stopped. Gate 3 remains
+open until single-replica manifests, least-privilege permissions and the exact durable
+storage class pass lock, rename, `fsync`, WAL and SHM qualification. Gates 4 through 9
+also remain open. Completing gates 1, 2 and 3A does not make this build Kubernetes-ready.
 
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.

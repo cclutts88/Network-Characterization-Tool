@@ -95,6 +95,7 @@ def test_manual_scans_join_fifo_queue_instead_of_being_rejected(monkeypatch, tmp
     monkeypatch.setattr(poc.threading, "Thread", DeferredThread)
     with poc.ACTIVE_RUNS_LOCK:
         poc.ACTIVE_RUNS.clear()
+        poc.ACTIVE_RUN_THREADS.clear()
 
     first = poc.launch_scan_run(
         request("alpha"), db_path=db_path, data_dir=data_dir, interfaces={"eth0"}
@@ -117,3 +118,4 @@ def test_manual_scans_join_fifo_queue_instead_of_being_rejected(monkeypatch, tmp
 
     with poc.ACTIVE_RUNS_LOCK:
         poc.ACTIVE_RUNS.clear()
+        poc.ACTIVE_RUN_THREADS.clear()

@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import shutil
 import threading
+import time
 import uuid
 
 from app.artifacts import (artifact_root_for, canonical_artifact_path,
@@ -28,6 +29,8 @@ from app.evidence_maintenance import (
 
 _LOCK = threading.Lock()
 _ACTIVE: set[str] = set()
+_THREADS: dict[str, threading.Thread] = {}
+_SHUTTING_DOWN = False
 TERMINAL = {"completed", "completed_without_nmap", "failed", "cancelled", "interrupted", "uploaded", "timed_out"}
 COMPACTION_CONFIRMATION = "REMOVE VERIFIED DUPLICATE COPIES"
 MIN_COMPACTION_FREE_BYTES = 1024 * 1024
@@ -885,6 +888,10 @@ def storage_status(db_path: Path) -> dict:
     return value
 
 
+def _new_storage_thread(work) -> threading.Thread:
+    return threading.Thread(target=work, daemon=True, name="storage-health")
+
+
 def start_storage_job(
     db_path: Path,
     mode: str,
@@ -901,14 +908,7 @@ def start_storage_job(
         previous_plan = previous_report.get("compaction") or {}
         if not plan_id or not previous_plan.get("enabled") or previous_plan.get("plan_id") != plan_id:
             raise ValueError("Run and review a current storage dry run before compaction")
-    with _LOCK:
-        if str(db_path) in _ACTIVE:
-            raise ValueError("A storage operation is already running")
-        previous = storage_status(db_path)
-        value = {"status": "running", "mode": mode, "started_at": utc_now(), "report": previous.get("report")}
-        _save_status(db_path, value)
-        _ACTIVE.add(str(db_path))
-
+    value: dict = {}
     def work():
         try:
             if mode == "backfill":
@@ -933,5 +933,50 @@ def start_storage_job(
             finally:
                 with _LOCK:
                     _ACTIVE.discard(str(db_path))
-    threading.Thread(target=work, daemon=True, name="storage-health").start()
+                    _THREADS.pop(str(db_path), None)
+
+    # The shutdown fence, registration, and thread start share one lock. A
+    # shutdown caller can therefore never observe an empty registry and then
+    # have a storage writer appear after it decides the writer guard is safe.
+    with _LOCK:
+        if _SHUTTING_DOWN:
+            raise ValueError("Storage maintenance is shutting down")
+        if str(db_path) in _ACTIVE:
+            raise ValueError("A storage operation is already running")
+        previous = storage_status(db_path)
+        value.update({
+            "status": "running",
+            "mode": mode,
+            "started_at": utc_now(),
+            "report": previous.get("report"),
+        })
+        _save_status(db_path, value)
+        thread = _new_storage_thread(work)
+        _ACTIVE.add(str(db_path))
+        _THREADS[str(db_path)] = thread
+        try:
+            thread.start()
+        except BaseException:
+            _THREADS.pop(str(db_path), None)
+            _ACTIVE.discard(str(db_path))
+            raise
     return value.copy()
+
+
+def stop_storage_jobs(timeout: float = 2.0) -> bool:
+    """Wait briefly for storage writers; they are not safe to abandon and replace."""
+    global _SHUTTING_DOWN
+    deadline = time.monotonic() + max(0.0, timeout)
+    with _LOCK:
+        _SHUTTING_DOWN = True
+        threads = list(_THREADS.values())
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    with _LOCK:
+        return not any(thread.is_alive() for thread in _THREADS.values())
+
+
+def resume_storage_jobs() -> None:
+    global _SHUTTING_DOWN
+    with _LOCK:
+        _SHUTTING_DOWN = False

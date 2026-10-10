@@ -43,14 +43,16 @@ def test_private_view_and_preset_routes_are_account_scoped(monkeypatch, tmp_path
         assert preset.status_code == 200
         assert admin.get("/api/workspaces/views/hunt").json()["presets"][0]["name"] == "Windows"
 
-        with TestClient(app) as second:
-            assert second.post(
-                "/api/auth/login",
-                json={"username": "second", "password": "second analyst password"},
-            ).status_code == 200
-            personal = second.get("/api/workspaces/views/hunt").json()
-            assert personal["preference"] is None
-            assert personal["presets"] == []
+        # One running NCT application owns the database. Switch the simulated
+        # browser session rather than starting a second application lifespan.
+        admin.cookies.clear()
+        assert admin.post(
+            "/api/auth/login",
+            json={"username": "second", "password": "second analyst password"},
+        ).status_code == 200
+        personal = admin.get("/api/workspaces/views/hunt").json()
+        assert personal["preference"] is None
+        assert personal["presets"] == []
 
 
 def test_view_preference_route_rejects_stale_update(monkeypatch, tmp_path):

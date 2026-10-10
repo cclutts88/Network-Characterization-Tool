@@ -517,9 +517,13 @@ class RunControl:
 
 
 ACTIVE_RUNS: dict[str, RunControl] = {}
+ACTIVE_RUN_THREADS: dict[str, threading.Thread] = {}
 ACTIVE_RUNS_LOCK = threading.Lock()
 ACTIVE_SCHEDULE_BATCHES: set[str] = set()
+ACTIVE_SCHEDULE_THREADS: dict[str, threading.Thread] = {}
 ACTIVE_SCHEDULE_BATCHES_LOCK = threading.Lock()
+_SCAN_WORKER_SHUTDOWN = threading.Event()
+_SCHEDULE_WORKER_SHUTDOWN = threading.Event()
 DELETE_CHALLENGES: dict[str, tuple[str, float]] = {}
 DELETE_CHALLENGES_LOCK = threading.Lock()
 
@@ -3552,6 +3556,9 @@ def _scan_worker_entry(
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
         dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+    finally:
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUN_THREADS.pop(run_id, None)
 
 
 def dispatch_next_queued_run(
@@ -3561,6 +3568,8 @@ def dispatch_next_queued_run(
     if evidence_mutations_blocked(db_path):
         return None
     with ACTIVE_RUNS_LOCK:
+        if _SCAN_WORKER_SHUTDOWN.is_set():
+            return None
         if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
             return None
         queued_ids = _queued_run_ids(db_path)
@@ -3570,19 +3579,20 @@ def dispatch_next_queued_run(
         if manifest is None or manifest.get("status") != "queued":
             return None
         control = RunControl()
-        ACTIVE_RUNS[manifest["run_id"]] = control
-    try:
-        worker = threading.Thread(
-            target=_scan_worker_entry,
-            args=(manifest["run_id"], control),
-            kwargs={"db_path": db_path, "data_dir": data_dir},
-            daemon=True,
-            name=f"scan-{manifest['run_id'][:8]}",
+        worker = _new_scan_worker_thread(
+            manifest["run_id"], control, db_path=db_path, data_dir=data_dir,
         )
-        worker.start()
-    except Exception:
-        with ACTIVE_RUNS_LOCK:
+        ACTIVE_RUNS[manifest["run_id"]] = control
+        ACTIVE_RUN_THREADS[manifest["run_id"]] = worker
+        try:
+            worker.start()
+        except BaseException as exc:
             ACTIVE_RUNS.pop(manifest["run_id"], None)
+            ACTIVE_RUN_THREADS.pop(manifest["run_id"], None)
+            start_error = exc
+        else:
+            start_error = None
+    if start_error is not None:
         manifest["status"] = "failed"
         manifest["error"] = "The scan worker could not be started"
         manifest["completed_at"] = utc_now()
@@ -3596,8 +3606,24 @@ def dispatch_next_queued_run(
             changed_at=manifest["completed_at"],
         )
         dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
-        raise
+        raise start_error
     return with_queue_state(manifest, db_path)
+
+
+def _new_scan_worker_thread(
+    run_id: str,
+    control: RunControl,
+    *,
+    db_path: Path,
+    data_dir: Path,
+) -> threading.Thread:
+    return threading.Thread(
+        target=_scan_worker_entry,
+        args=(run_id, control),
+        kwargs={"db_path": db_path, "data_dir": data_dir},
+        daemon=True,
+        name=f"scan-{run_id[:8]}",
+    )
 
 
 def schedule_target_chunks(
@@ -3829,6 +3855,7 @@ def execute_schedule_batch(
     finally:
         with ACTIVE_SCHEDULE_BATCHES_LOCK:
             ACTIVE_SCHEDULE_BATCHES.discard(schedule_id)
+            ACTIVE_SCHEDULE_THREADS.pop(schedule_id, None)
 
 
 @guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
@@ -3860,10 +3887,6 @@ def queue_scan_schedule_batch(
         if recovering
         else 0
     )
-    with ACTIVE_SCHEDULE_BATCHES_LOCK:
-        if ACTIVE_SCHEDULE_BATCHES:
-            raise RuntimeError("Another scheduled batch is already active")
-        ACTIVE_SCHEDULE_BATCHES.add(schedule_id)
     batch_id = uuid.uuid4().hex
     schedule["batch_status"] = "queued"
     schedule["active_batch_id"] = batch_id
@@ -3877,24 +3900,27 @@ def queue_scan_schedule_batch(
         if recovering and resume_after < len(chunks)
         else f"Queued {len(chunks)} sequential chunk(s)"
     )
-    _store_scan_schedule(schedule, db_path)
-    try:
-        worker = threading.Thread(
-            target=execute_schedule_batch,
-            args=(schedule_id, batch_id),
-            kwargs={
-                "advance_schedule": advance_schedule,
-                "db_path": db_path,
-                "data_dir": data_dir,
-            },
-            daemon=True,
-            name=f"schedule-{schedule_id[:8]}",
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        if _SCHEDULE_WORKER_SHUTDOWN.is_set():
+            raise RuntimeError("The scan scheduler is shutting down")
+        if ACTIVE_SCHEDULE_BATCHES:
+            raise RuntimeError("Another scheduled batch is already active")
+        _store_scan_schedule(schedule, db_path)
+        worker = _new_schedule_batch_thread(
+            schedule_id,
+            batch_id,
+            advance_schedule=advance_schedule,
+            db_path=db_path,
+            data_dir=data_dir,
         )
-        worker.start()
-    except Exception:
-        with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        ACTIVE_SCHEDULE_BATCHES.add(schedule_id)
+        ACTIVE_SCHEDULE_THREADS[schedule_id] = worker
+        try:
+            worker.start()
+        except Exception:
             ACTIVE_SCHEDULE_BATCHES.discard(schedule_id)
-        raise
+            ACTIVE_SCHEDULE_THREADS.pop(schedule_id, None)
+            raise
     return {
         "schedule_id": schedule_id,
         "batch_id": batch_id,
@@ -3906,6 +3932,27 @@ def queue_scan_schedule_batch(
         "chunk_size": int(schedule.get("chunk_size") or 256),
         "chunk_delay_seconds": int(schedule.get("chunk_delay_seconds") or 0),
     }
+
+
+def _new_schedule_batch_thread(
+    schedule_id: str,
+    batch_id: str,
+    *,
+    advance_schedule: bool,
+    db_path: Path,
+    data_dir: Path,
+) -> threading.Thread:
+    return threading.Thread(
+        target=execute_schedule_batch,
+        args=(schedule_id, batch_id),
+        kwargs={
+            "advance_schedule": advance_schedule,
+            "db_path": db_path,
+            "data_dir": data_dir,
+        },
+        daemon=True,
+        name=f"schedule-{schedule_id[:8]}",
+    )
 
 
 def run_scan_schedule_now(schedule_id: str, db_path: Path = DB_PATH) -> dict:
@@ -4115,6 +4162,42 @@ def schedule_worker(stop_event: threading.Event, interval_seconds: float = 15.0)
             # One malformed or unavailable schedule must not stop future checks.
             pass
         stop_event.wait(interval_seconds)
+
+
+def resume_scan_workers() -> None:
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        _SCHEDULE_WORKER_SHUTDOWN.clear()
+    with ACTIVE_RUNS_LOCK:
+        _SCAN_WORKER_SHUTDOWN.clear()
+
+
+def stop_scan_workers(timeout: float = 2.0) -> bool:
+    """Request active scans to stop and prove their writer threads exited."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    with ACTIVE_RUNS_LOCK:
+        _SCAN_WORKER_SHUTDOWN.set()
+        controls = list(ACTIVE_RUNS.values())
+        threads = list(ACTIVE_RUN_THREADS.values())
+    for control in controls:
+        control.cancel_event.set()
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    with ACTIVE_RUNS_LOCK:
+        return not any(thread.is_alive() for thread in ACTIVE_RUN_THREADS.values())
+
+
+def stop_schedule_batch_workers(timeout: float = 2.0) -> bool:
+    """Wait briefly for scheduled batch writers; retain the guard if any remain."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        _SCHEDULE_WORKER_SHUTDOWN.set()
+        threads = list(ACTIVE_SCHEDULE_THREADS.values())
+    for thread in threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    with ACTIVE_SCHEDULE_BATCHES_LOCK:
+        return not any(
+            thread.is_alive() for thread in ACTIVE_SCHEDULE_THREADS.values()
+        )
 
 
 def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
