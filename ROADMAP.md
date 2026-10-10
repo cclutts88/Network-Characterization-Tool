@@ -1791,6 +1791,49 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     gate: **CLEAR** after all four start-gate safeguards were made explicit. Novice wording
     review: **PASS**. This is an architecture baseline only; Kubernetes manifests, live
     resource telemetry, cluster status and multi-replica execution remain unimplemented.
+
+    **2026-10-10 provider-neutral live health start:** Implement the first Kubernetes
+    acceptance gate as an administrator-only, read-only System Health view. The local
+    provider will report separately identified process and container CPU/memory,
+    data-filesystem capacity, fixed database/WAL/SHM file size and bounded saved-work
+    counts, with measurement source, unit, sample time and explicit Warming up or
+    Unavailable states. CPU uses monotonic two-sample deltas. Health reads use fixed
+    paths and a time-bounded read-only database query; they do not walk evidence,
+    initialize schema, write storage, start work, benchmark the system or contact a
+    network target. The browser will keep at most one request active, poll only while
+    the page and panel are visible and discard delayed responses. This slice does not
+    add Kubernetes API access, historical telemetry, alerts, autoscaling or a
+    Kubernetes-readiness claim. Independent architecture start gate: **CLEAR**.
+
+    **2026-10-10 provider-neutral live health completion:** Settings / System Health now
+    begins with a live Performance and Reliability panel for administrators. It reports
+    separate NCT-process and available Linux-container CPU/memory, data-filesystem used,
+    available and total capacity, fixed SQLite/WAL/SHM file size, and queued, running,
+    waiting and retrying saved work. Every measurement names its scope, source and unit;
+    the first CPU sample says Warming up and unsupported or over-budget reads say
+    Unavailable rather than zero. The API omits paths, environment values and runtime
+    identifiers. It uses fixed file metadata, filesystem statistics and a 50 ms bounded
+    read-only aggregate through NCT's shared SQLite connection policy; it never walks
+    evidence or initializes schema. The browser keeps one four-second-bounded request in
+    flight, polls at five-second intervals only while the page and panel are visible,
+    and discards delayed responses. The page, Operator Guide and built-in How NCT Works
+    guide explain that these are restart-local current samples, not retained history,
+    a benchmark, an alert or network truth, and that reading them starts no scan or
+    network contact. The novice operator's first pass found three wording gaps; all were
+    corrected, then the normal and narrow layouts passed with the Guide open and no
+    browser warning or error. The independent final gate then halted a stale-status edge
+    case where a visible refresh timeout looked like an intentional off-screen cancel.
+    NCT now marks prior values as the last successful sample after a failed or timed-out
+    visible refresh, while hiding the panel cancels silently; an executable browser-logic
+    regression proves both paths and the CPU warm-up banner separately. Final independent
+    gate: **CLEAR**. Focused System Health/storage/guide validation passed **132 tests
+    with 1 expected container-Node skip**, and the same browser-logic regression passed
+    directly with Node. The complete network-disabled Docker suite passed **1,220 tests
+    with 15 skips**. The first complete run also exposed the new module bypassing the shared
+    SQLite connection helper and an unrelated timing-sensitive scope-correction test;
+    the connection use was corrected, the scope test passed independently, and the clean
+    complete rerun produced the reported result. Kubernetes API access, historical
+    telemetry, alert thresholds and multi-replica execution remain unimplemented.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

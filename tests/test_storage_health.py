@@ -307,6 +307,7 @@ def test_storage_routes_require_administrator(tmp_path, monkeypatch, role, expec
     monkeypatch.setattr(main, "session_identity", lambda *args: {"username": "test", "role": role} if role else None)
     client = TestClient(main.app)
     assert client.get("/api/system/storage").status_code == expected
+    assert client.get("/api/system/runtime-health").status_code == expected
     assert client.get("/api/system/analysis-status").status_code == expected
     assert client.get("/api/system/analysis-versions").status_code == expected
     assert client.get("/api/system/analysis-jobs").status_code == expected

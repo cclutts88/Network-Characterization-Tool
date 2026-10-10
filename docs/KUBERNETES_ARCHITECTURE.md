@@ -54,6 +54,12 @@ This profile is future work. It remains unsupported until NCT has:
 
 A Kubernetes manifest or successful pod start does not satisfy this gate.
 
+SQLite remains embedded in the NCT application for standalone and approved
+single-replica deployments. NCT must not put SQLite behind a custom network service or
+database sidecar. A future multiple-replica profile requires a separately reviewed,
+real shared transactional database; PostgreSQL is one possible candidate, not a selected
+dependency or approved design.
+
 ## Runtime and mission identity
 
 Pod names, pod IPs, container names, node names and process IDs are temporary runtime
@@ -164,6 +170,10 @@ Kubernetes capability advances only through reviewed gates:
 7. Shared database and artifact-storage decision with migration and rollback design.
 8. Multi-replica concurrency and failure testing.
 9. Representative disconnected Range validation.
+
+Acceptance status: gate 1 is implemented on `foundation/evidence-engine-v2` with the
+local provider and bounded administrator System Health display. Gates 2 through 9 remain
+open. Completing gate 1 does not make this build Kubernetes-ready.
 
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.

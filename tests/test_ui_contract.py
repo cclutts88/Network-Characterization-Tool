@@ -48,6 +48,22 @@ def test_recursive_note_changes_preview_exact_scope_and_report_results():
 
 def test_system_health_explains_bounded_calculation_status():
     html = storage_page().body.decode()
+    assert "Live performance and reliability" in html
+    assert "Unsupported measurements say Unavailable instead of showing zero" in html
+    assert "Reading it does not start a scan, contact a network target, or change retained evidence" in html
+    assert "Process and container measurements stay separate" in html
+    assert "/api/system/runtime-health" in html
+    assert "document.visibilityState==='visible'&&runtimePanelVisible" in html
+    assert "if(!runtimeCanPoll()||runtimeInFlight)return" in html
+    assert "requestId!==runtimeRequestId||!runtimeCanPoll()" in html
+    assert "runtimeController.abort()" in html
+    assert "cache:'no-store'" in html
+    assert "Live measurement refresh timed out" in html
+    assert "last successful sample" in html
+    assert "keeps no long-term telemetry" in html
+    assert "'Live performance and reliability'" in SHELL_SCRIPT
+    assert "Unavailable does not mean zero" in SHELL_SCRIPT
+    assert "panel?actionGuideFor(panel):null" in SHELL_SCRIPT
     assert "Evidence intake status" in html
     assert "Processing is local and never starts a scan or contacts a device" in html
     assert "/api/system/ingestion-status?limit=${ingestionLimit}&offset=${requestedOffset}" in html

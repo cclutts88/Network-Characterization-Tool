@@ -40,6 +40,7 @@ from app.nmap_assignment_workflow import (
 from app.storage_health import recover_incomplete_compactions, storage_status, start_storage_job
 from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
+from app.runtime_health import runtime_health_snapshot
 from app.ingestion_status import list_ingestion_status
 from app.derived_result_status import list_derived_result_status
 from app.derived_version_inventory import (
@@ -1459,6 +1460,12 @@ def how_nct_works_readme() -> HTMLResponse:
 def system_storage_status(request: Request) -> dict:
     require_storage_admin(request)
     return storage_status(DB_PATH)
+
+
+@app.get("/api/system/runtime-health")
+def system_runtime_health(request: Request) -> dict:
+    require_storage_admin(request)
+    return runtime_health_snapshot(DB_PATH, DATA_DIR)
 
 
 @app.get("/api/system/analysis-status")

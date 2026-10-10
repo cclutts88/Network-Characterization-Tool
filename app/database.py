@@ -53,15 +53,19 @@ class DatabaseConnection(sqlite3.Connection):
             self.close()
 
 
-def connect_database(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
+def connect_database(
+    db_path: Path, *, read_only: bool = False,
+    busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS,
+) -> sqlite3.Connection:
     """Open an application connection with consistent lock handling."""
+    busy_timeout_ms = max(0, int(busy_timeout_ms))
     connection = sqlite3.connect(
         db_path.resolve().as_uri() + "?mode=ro" if read_only else db_path,
         uri=read_only,
-        timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+        timeout=busy_timeout_ms / 1000,
         factory=DatabaseConnection,
     )
-    connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
     connection.execute("PRAGMA foreign_keys = ON")
     connection.create_function(
         "nct_normalize_ipv4_network_list",
