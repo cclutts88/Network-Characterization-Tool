@@ -34,7 +34,7 @@ $containerName = "nct-phase0-browser-$($token.Substring(0,8))"
 $proxyName = "nct-phase0-browser-proxy-$($token.Substring(0,8))"
 $networkName = "nct-phase0-browser-net-$($token.Substring(0,8))"
 $dataRoot = Join-Path $WorkRoot "data-$token"
-$containerDataRoot = "/work/data-$token"
+$containerDataRoot = '/data'
 $profileRoot = Join-Path $WorkRoot "profile-$token"
 $artifact = [System.IO.Path]::GetFullPath($ArtifactRoot)
 $resultPath = Join-Path $artifact 'result.json'
@@ -53,6 +53,7 @@ $proxyStarted = $false
 $networkCreated = $false
 $runSucceeded = $false
 try {
+    New-Item -ItemType Directory -Path $dataRoot | Out-Null
     $imageId = Invoke-Checked 'docker' @('image', 'inspect', '--format', '{{.Id}}', $Image)
     $foundationFlag = @()
     if ($FoundationCapabilities) { $foundationFlag = @('--foundation-capabilities') }
@@ -61,10 +62,11 @@ try {
         '-v',"${target}:/target:ro",
         '-v',"${benchmarkRoot}:/benchmark:ro",
         '-v',"${corpus}:/corpus:ro",
-        '-v',"${WorkRoot}:/work:rw",
+        '-v',"${dataRoot}:/data:rw",
         '-w','/benchmark',$Image,'python','scripts/prepare_phase0_browser_data.py',
         '--target-root','/target','--corpus','/corpus','--data-root',$containerDataRoot,
-        '--revision',$revision,'--output',"$containerDataRoot/.phase0-browser-preparation-output.json"
+        '--revision',$revision,'--output',"$containerDataRoot/.phase0-browser-preparation-output.json",
+        '--allow-existing-empty-data-root'
     ) + $foundationFlag
     Invoke-Checked 'docker' $prepareArgs | Set-Content -LiteralPath $prepareReport -Encoding utf8
     $prepared = Get-Content -LiteralPath $prepareReport -Raw | ConvertFrom-Json

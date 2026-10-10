@@ -265,6 +265,27 @@ def test_rollback_authority_write_is_detected_until_startup_reconcile(tmp_path):
     assert descriptor["dirty"] == []
 
 
+def test_reconcile_is_read_only_when_catalog_is_already_current(tmp_path):
+    db_path, config_dir = _setup(tmp_path)
+    run_id = "e" * 32
+    _add_collection(
+        db_path, config_dir, run_id=run_id, address="10.0.0.5",
+        completed_at="2030-01-01T00:00:00+00:00",
+    )
+    reconcile_device_evidence_catalog(db_path, config_dir)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE device_evidence_catalog_meta SET reconciled_at = ? WHERE singleton = 1",
+            ("2030-04-01T00:00:00+00:00",),
+        )
+    before = db_path.read_bytes()
+
+    result = reconcile_device_evidence_catalog(db_path, config_dir)
+
+    assert result == {"indexed": 1, "issues": []}
+    assert db_path.read_bytes() == before
+
+
 def test_selector_reads_do_not_modify_database_or_manifests(tmp_path):
     db_path, config_dir = _setup(tmp_path)
     run_id = "c" * 32

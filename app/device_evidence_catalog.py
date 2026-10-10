@@ -213,6 +213,21 @@ def _authority_rows(db: sqlite3.Connection) -> list[dict]:
     return [dict(zip(keys, row)) for row in rows]
 
 
+def _catalog_rows(db: sqlite3.Connection) -> list[list]:
+    if not _table_exists(db, "device_evidence_catalog"):
+        return []
+    return [
+        list(row)
+        for row in db.execute(
+            """SELECT run_id, device_key, completed_at, created_at, status,
+                      operation, manifest_json, manifest_sha256,
+                      authority_revision, selection_contract,
+                      semantic_manifest_sha256
+               FROM device_evidence_catalog ORDER BY run_id"""
+        ).fetchall()
+    ]
+
+
 def _safe_manifest(config_dir: Path, run_id: str) -> tuple[dict, str]:
     """Return parsed content and its canonical semantic JSON digest."""
     root = Path(config_dir).resolve()
@@ -268,6 +283,32 @@ def reconcile_device_evidence_catalog(db_path: Path, config_dir: Path) -> dict:
             raise DeviceEvidenceCatalogError(
                 "Device manifest changed while rebuilding its selector catalog"
             )
+    expected_rows = [
+        [value[key] for key in (
+            "run_id", "device_key", "completed_at", "created_at", "status",
+            "operation", "manifest_json", "manifest_sha256", "authority_revision",
+            "selection_contract", "semantic_manifest_sha256",
+        )]
+        for value in sorted(values, key=lambda item: item["run_id"])
+    ]
+    with connect_database(db_path, read_only=True) as db:
+        meta = (
+            db.execute(
+                "SELECT schema_version FROM device_evidence_catalog_meta WHERE singleton = 1"
+            ).fetchone()
+            if _table_exists(db, "device_evidence_catalog_meta") else None
+        )
+        dirty = (
+            db.execute("SELECT 1 FROM device_evidence_catalog_dirty LIMIT 1").fetchone()
+            if _table_exists(db, "device_evidence_catalog_dirty") else None
+        )
+        if (
+            not issues
+            and meta == (CATALOG_SCHEMA_VERSION,)
+            and dirty is None
+            and _catalog_rows(db) == expected_rows
+        ):
+            return {"indexed": len(values), "issues": []}
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         if _authority_rows(db) != before:

@@ -2265,6 +2265,38 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    Chrome limitation is explicit. Begin a new six-run retained matrix; do not
    retroactively bless either rejected matrix.
 
+   **2026-10-09 retained comparison second halt and correction start:** all three stable
+   repeats and all three foundation repeats passed their browser oracles and cleanup
+   checks, but the strict summary again rejected the set. The earlier proof covered the
+   foundation preparation path only. Stable-main cache identities still incorporated
+   fresh staging file times and a live SQLite cache timestamp, so repeat databases were
+   not identical. Keep the set rejected. Prepare through the same `/data` path used by
+   the measured container, normalize benchmark-only evidence file times before cache
+   creation, and freeze disposable cache timestamps after prewarming. Prove both stable
+   and foundation preparations independently before starting another retained matrix.
+
+   **2026-10-09 second correction complete:** two fresh stable
+   preparations now match in logical database hash, physical database hash, table counts
+   and evidence hash. Two fresh foundation preparations were then started as complete
+   applications, prewarmed through Analysis, Hunt, Reach and Map, and again matched in
+   logical database hash, physical database hash, table counts and evidence hash after
+   startup. Selector-catalog reconciliation now returns without a write when its current
+   rows, schema marker and clean-state marker already match source authority. Focused
+   browser, summary and catalog tests passed **35 tests with 1 expected environment
+   skip**, and the complete isolated suite passed **1,201 tests with 14 expected skips**.
+   A reviewer-identified tied file-time risk was then removed by assigning each synthetic
+   device a distinct deterministic order and requiring the exact expected selected device
+   ID in the preparation oracle. The corrected two-run stable proof matches at logical
+   database hash `dd19340a...`, physical database hash `ae3b05ca...` and evidence hash
+   `e2b217c4...`; the corrected two-start foundation proof matches at logical database
+   hash `629b15d6...`, physical database hash `42c66c4f...` and evidence hash
+   `894afa79...`. The final complete isolated suite passed **1,201 tests with 14 expected
+   skips**. Independent review returned **CLEAR — DOCUMENTED DEVIATION** and confirmed
+   that both proof pairs are byte-for-byte identical, device selection is explicit, and
+   catalog reconciliation preserves the database only after checking complete current
+   state. The existing same-host Windows Chrome limitation remains documented. A new
+   retained six-run comparison may begin; all earlier rejected matrices remain invalid.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.

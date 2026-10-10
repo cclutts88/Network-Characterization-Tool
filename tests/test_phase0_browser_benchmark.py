@@ -8,9 +8,12 @@ import pytest
 
 from scripts.snapshot_phase0_browser_state import snapshot
 from scripts.prepare_phase0_browser_data import (
+    FIXED_EVIDENCE_MTIME_NS,
     FIXED_RUNTIME_TIME,
     _deterministic_application_runtime,
+    _freeze_evidence_file_mtimes,
     _freeze_preparation_metadata,
+    _initialize_data_root,
     _rebase_artifact_paths,
 )
 
@@ -95,8 +98,49 @@ def test_browser_preparation_freezes_disposable_catalog_timestamp(tmp_path):
         db.execute(
             "INSERT INTO device_evidence_catalog_meta VALUES (1, 1, CURRENT_TIMESTAMP)"
         )
+        db.execute(
+            "CREATE TABLE device_analysis_cache "
+            "(run_id TEXT, updated_at TEXT)"
+        )
+        db.execute(
+            "INSERT INTO device_analysis_cache VALUES ('run-1', CURRENT_TIMESTAMP)"
+        )
     _freeze_preparation_metadata(db_path)
     with sqlite3.connect(db_path) as db:
         assert db.execute(
             "SELECT reconciled_at FROM device_evidence_catalog_meta"
         ).fetchone()[0] == FIXED_RUNTIME_TIME
+        assert db.execute(
+            "SELECT updated_at FROM device_analysis_cache"
+        ).fetchone()[0] == FIXED_RUNTIME_TIME
+
+
+def test_browser_preparation_freezes_staged_evidence_times(tmp_path):
+    newest = tmp_path / "device-configs" / "a-run" / "manifest.json"
+    older = tmp_path / "device-configs" / "b-run" / "manifest.json"
+    newest.parent.mkdir(parents=True)
+    older.parent.mkdir(parents=True)
+    newest.write_text("newest", encoding="utf-8")
+    older.write_text("older", encoding="utf-8")
+    _freeze_evidence_file_mtimes(tmp_path)
+    newest_value = newest.stat()
+    older_value = older.stat()
+    assert newest_value.st_mtime_ns == FIXED_EVIDENCE_MTIME_NS + 2_000_000_000
+    assert older_value.st_mtime_ns == FIXED_EVIDENCE_MTIME_NS + 1_000_000_000
+    assert newest_value.st_mtime_ns > older_value.st_mtime_ns
+
+
+def test_browser_preparation_accepts_only_an_existing_empty_mount(tmp_path):
+    mounted = tmp_path / "mounted"
+    mounted.mkdir()
+    _initialize_data_root(mounted, allow_existing_empty=True)
+    (mounted / "unexpected.txt").write_text("occupied", encoding="utf-8")
+    with pytest.raises(ValueError, match="must not exist"):
+        _initialize_data_root(mounted, allow_existing_empty=True)
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(ValueError, match="must not exist"):
+        _initialize_data_root(existing, allow_existing_empty=False)
+    created = tmp_path / "new-root"
+    _initialize_data_root(created, allow_existing_empty=True)
+    assert created.is_dir()
