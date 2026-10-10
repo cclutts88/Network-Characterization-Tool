@@ -8,8 +8,17 @@ $maximumCpuTicks = @{}
 $processes = @{}
 $seen = New-Object 'System.Collections.Generic.HashSet[int]'
 $sampleCount = 0
+$workloadNames = @('analysis','hunt','reach','map')
+$workloadProfiles = @{}
+$peakByWorkload = @{}
+foreach ($name in $workloadNames) {
+    $workloadProfiles[$name] = Join-Path $ProfileRoot $name
+    $peakByWorkload[$name] = [int64]0
+}
 while (-not (Test-Path -LiteralPath $StopFile)) {
     $aggregate = [int64]0
+    $workloadAggregates = @{}
+    foreach ($name in $workloadNames) { $workloadAggregates[$name] = [int64]0 }
     $rows = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
         Where-Object { $_.CommandLine -and $_.CommandLine.Contains($ProfileRoot) }
     foreach ($row in $rows) {
@@ -23,12 +32,23 @@ while (-not (Test-Path -LiteralPath $StopFile)) {
             }
         }
         $aggregate += [int64]$row.WorkingSetSize
+        foreach ($name in $workloadNames) {
+            if ($row.CommandLine.Contains($workloadProfiles[$name])) {
+                $workloadAggregates[$name] += [int64]$row.WorkingSetSize
+                break
+            }
+        }
         $ticks = [int64]$row.KernelModeTime + [int64]$row.UserModeTime
         if (-not $maximumCpuTicks.ContainsKey($row.ProcessId) -or $ticks -gt $maximumCpuTicks[$row.ProcessId]) {
             $maximumCpuTicks[$row.ProcessId] = $ticks
         }
     }
     if ($aggregate -gt $peakWorkingSet) { $peakWorkingSet = $aggregate }
+    foreach ($name in $workloadNames) {
+        if ($workloadAggregates[$name] -gt $peakByWorkload[$name]) {
+            $peakByWorkload[$name] = $workloadAggregates[$name]
+        }
+    }
     $sampleCount += 1
     Start-Sleep -Milliseconds 100
 }
@@ -42,6 +62,12 @@ $result = [ordered]@{
     process_count = $seen.Count
     sample_count = $sampleCount
     peak_working_set_bytes = $peakWorkingSet
+    peak_working_set_bytes_by_workload = [ordered]@{
+        analysis = $peakByWorkload['analysis']
+        hunt = $peakByWorkload['hunt']
+        reach = $peakByWorkload['reach']
+        map = $peakByWorkload['map']
+    }
     cpu_seconds = [math]::Round($cpuTicks / 10000000.0, 6)
 }
 $result | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $OutputFile -Encoding utf8

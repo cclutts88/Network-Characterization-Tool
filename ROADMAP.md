@@ -2190,8 +2190,15 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    fault-injection self-test passed; the complete Docker suite passed **1,194 tests with
    14 expected skips**. Independent quality gate: **CLEAR - DOCUMENTED DEVIATION** after
    verifying the exact final stable rehearsal, all six previously open evidence controls,
-   and the documented same-host Chrome limitation. Retained three-repeat measurements
-   have not started.
+   and the documented same-host Chrome limitation. At that gate, retained three-repeat
+   measurements had not started.
+
+   **2026-10-09 retained-run finding:** the first three stable repeats completed, but the
+   first foundation repeat stopped at the predeclared browser-memory gate: 2.682 GiB
+   observed versus a 2.5 GiB limit. The failed repeat still proved complete removal of its
+   app container, relay, internal network, temporary data and browser profile. Do not
+   treat the partial matrix as retained evidence. Add per-workload browser-memory sampling
+   to identify the responsible page before changing application behavior or any limit.
 
 ## Exit criteria
 
