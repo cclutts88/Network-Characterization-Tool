@@ -951,6 +951,14 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'prepareDatasetPreview' in html
     assert '<details class="panel" data-workspace-card="capability-datasets"><summary>Capability datasets</summary>' in html
     assert "Hosts and services stay in one bulk table" in html
+    assert "body.nct-guide-open #systemsPanel .table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
+    assert "@media(min-width:851px){body.nct-guide-open #systemsPanel .table-wrap" in html
+    assert "max-width:1600px" not in html
+    assert "body.nct-guide-open #systemsPanel .table-wrap thead th{top:0}" in html
+    assert 'aria-label="Hunt capability evidence table"' in html
+    assert 'aria-label="Hunt host and device inventory table"' in html
+    assert "#systemsPanel .table-wrap:focus{outline:2px solid var(--accent)" in html
+    assert "scroll inside the table to see every column while keeping its headings in view" in html
     assert "function setSystemView(view)" in html
     assert "function renderHostInventoryRows()" in html
     assert "hosts:[],findings:[]" in html
@@ -2107,6 +2115,21 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "Number(item.affected_count||0)/Math.max(1,Number(group.member_count||0))" in html
     assert "$('lfaThreshold').oninput=updateLfaThreshold" in html
     assert "renderNetworkOutliers" in html
+    assert "function lfaAffectedHosts(item)" in html
+    assert 'class="lfa-host-list"' in html
+    assert 'class="lfa-list-closed">show list' in html
+    assert 'class="lfa-list-open">hide list' in html
+    assert ".lfa-host-list-body{max-height:260px;overflow:auto" in html
+    assert '.lfa-host-list-body:focus{outline:2px solid var(--accent)' in html
+    assert 'role="region" tabindex="0" aria-label="${esc(label)}"' in html
+    assert "Affected addresses for ${item.port||'unknown'}/${item.protocol||'unknown'}" in html
+    assert "body.nct-guide-open .network-overview-body>.table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
+    assert "@media(min-width:851px){body.nct-guide-open .network-overview-body>.table-wrap" in html
+    assert "max-width:1600px" not in html
+    assert "body.nct-guide-open .network-overview-body>.table-wrap thead th{top:0}" in html
+    assert 'aria-label="Current network evidence table"' in html
+    assert ".network-overview-body>.table-wrap:focus{outline:2px solid var(--accent)" in html
+    assert "scroll inside the table to see every column while keeping its headings in view" in html
     assert ".outlier-group thead th{position:static;top:auto}" in html
     assert html.index("<thead><tr><th>Uncommon port</th>") < html.index("<tbody>${group.unusual.map")
     assert 'id="networkChangesPanel"' in html
@@ -2131,10 +2154,16 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "target.dataset.currentServiceRequest!==request" in html
     assert "data-current-service-states" in html
     assert ".processed-evidence-endpoint.current-services-open{grid-column:1/-1}" in html
+    assert ".processed-evidence-current-services thead th{position:static;top:auto}" in html
     assert "card.classList.add('current-services-open')" in html
     assert "Open supporting source evidence" in SHELL_SCRIPT
     assert ".processed-evidence-current-services details > summary" in SHELL_SCRIPT
     assert "collection window and the retained evidence link" in SHELL_SCRIPT
+    assert "body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
+    assert "html[data-nct-density=compact] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
+    assert "html[data-nct-density=spacious] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
+    assert "--nct-guide-reserve" in SHELL_SCRIPT
+    assert "Review affected hosts" in SHELL_SCRIPT
     assert "Last confirmed observation" in html
     assert "Latest supported observation" in html
     assert "Successful records whose order is uncertain" in html

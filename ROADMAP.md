@@ -2012,6 +2012,53 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    three affected test files in a network-disabled container (**132 passed**) and found
    the implementation read-only, bounded, source-linked, revision-safe and consistent
    with the documented no-claim boundaries. No material finding remains.
+
+   **2026-10-10 service-state header-order correction start:** The live operator check
+   found that the shared sticky-table rule could hold the service-state headings below
+   the first visible result while scrolling. Keep sticky headings for long tables, but
+   make this compact per-address result use normal table order so headings always render
+   before its first service row. Completion requires a focused contract test and a live
+   browser geometry check at the operator's current viewport. Per user direction,
+   heading order, alignment, sticky behavior and horizontal overflow are now permanent
+   whole-tool novice-operator checks in `docs/NCT_PROJECT_OPERATING_RULES.md`.
+
+   **2026-10-10 whole-tool heading audit follow-up start:** The new standing novice pass
+   found that the open resizable Guide can cover rightmost table columns on desktop in
+   Hunt, System Health and Current Network, and that one LFA result can place hundreds
+   of addresses inline in a single cell until its headings scroll away. Reserve the
+   Guide's actual current width in the desktop workspace, update that reservation when
+   the pane is resized or closed, and collapse large LFA address lists into a bounded
+   scrollable disclosure. Preserve horizontal table scrolling and the Guide's existing
+   resize, pin, top/bottom dock and narrow-screen behavior. Completion requires focused
+   tests, representative browser geometry with the Guide open and resized, a repeated
+   novice pass and independent review.
+
+   **2026-10-10 service-state header and whole-tool heading audit completion:** The
+   compact per-address service-state table now renders its headings in normal document
+   order. On desktop, the workspace reserves the Guide's measured width in comfortable,
+   compact and spacious density, including with the navigation sidebar open or
+   collapsed. At narrower desktop widths, the Current Network and Hunt bulk tables use
+   labeled, keyboard-focusable internal scroll regions so all columns remain available,
+   their headings remain attached during vertical scrolling and no column sits behind
+   the Guide. Both pages explain this behavior in visible operator text. Large LFA host
+   lists keep all retained addresses but collapse them into a labeled 260-pixel keyboard
+   scroll region; the disclosure changes from **show list** to **hide list** while open.
+   Browser checks at a 1,400-pixel viewport covered all three density modes and both
+   sidebar states. Boundary checks at 1,600 and 1,601 pixels and a large-desktop check
+   at 2,000 pixels widened the Guide from 350 to 710 pixels; Current Network and Hunt
+   still ended at least 32 pixels before the Guide. Every repaired table ended at least
+   26 pixels before the Guide, and keyboard horizontal and vertical scrolling retained
+   aligned headings. The repeated
+   whole-tool novice audit is **PASS**, including Nmap history, Analyze changes, Hunt,
+   Reach, device history, System Health, Current Network and LFA, with a clean browser
+   console. Focused Docker validation: **65 passed**. A fresh network-disabled Docker
+   regression run: **1,212 passed, 14 skipped**, with only the existing dependency and
+   read-only test-cache warnings. The first run in the long-lived preview container
+   exceeded the benchmark's whole-container cumulative memory peak; the required fresh
+   container stayed within the limit. Independent final quality gate: **CLEAR** after
+   confirming the 1,600-pixel cutoff was removed, desktop protection now applies at
+   every width above the existing narrow-screen overlay boundary, and the accessibility,
+   evidence-preservation and keyboard-scroll contracts remain intact.
 15. [~] Benchmark against Phase 0 datasets.
 
    **2026-10-09 representative-dataset prerequisite start:** build one versioned,

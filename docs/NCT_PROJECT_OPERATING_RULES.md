@@ -108,6 +108,19 @@ Routine implementation details do not require constant updates. Prioritize notif
 - Acts as a development quality gate.
 - May notify me when meaningful milestones are completed or when intervention is required.
 
+**Novice operator subagent**
+- Exercises user-visible work as an entry-level network analyst who has no prior NCT
+  configuration or data-model knowledge.
+- Reviews the full analyst journey for discoverability, plain-language guidance,
+  linear navigation and understandable evidence limits.
+- Treats table headings as a standing whole-tool check on every relevant page: no data
+  may appear above its column headings; sticky headings may not cover content or detach
+  from their table; headings and cells must remain aligned while scrolling, at narrower
+  widths and while the Operator Guide is open; horizontal overflow may not make column
+  meaning ambiguous.
+- Reports exact pages and visible reproductions to the primary agent and remains
+  read-only unless the user explicitly changes that role.
+
 The reviewer should evaluate meaningful implementation milestones using these states:
 
 ## QUALITY GATE: CLEAR
