@@ -508,7 +508,10 @@ SHELL_SCRIPT = r"""
     };
     const actionGuideHints={
       '/hunting':{
-        search:['Quick filter hosts and services','Filters the already loaded Hunt table while you type. It matches host names, addresses, ports, services, products, and versions. Open Network filters only when you need the more specific controls.','This changes only the visible rows. It does not rerun analysis, contact the network, or alter retained evidence.'],
+        search:['Quick filter hosts and services','Filters the complete loaded Hunt evidence before NCT chooses the visible page. It changes which matching rows are displayed without removing evidence. It matches host names, addresses, ports, services, products, and versions.','This does not rerun analysis, contact the network, or alter retained evidence.'],
+        systemPageSize:['Hunt rows per page','Choose whether the current Hunt table shows 25, 50, or 100 matching rows at a time. Filters apply to the complete loaded evidence before NCT chooses the page.','Changing page size affects presentation only. It does not remove evidence, rerun candidate matching, or limit a filtered export.'],
+        systemPagePrevious:['Previous Hunt page','Shows the previous bounded page of the current Hunt view.','The complete filtered result stays loaded; only the visible rows change.'],
+        systemPageNext:['Next Hunt page','Shows the next bounded page of the current Hunt view.','The complete filtered result stays loaded; only the visible rows change.'],
         manageExploitReferences:['Manage offline exploit references','Opens Settings / System Health at the local Exploit-DB reference controls. Use it to upload an air-gapped archive, update a connected system, or reactivate an earlier saved version.','This shortcut only opens settings. Reference maintenance changes future candidate matching; it does not rescan the network, contact a device, alter retained evidence, or confirm a vulnerability.']
       },
       '/settings/system-health':{
@@ -633,7 +636,7 @@ SHELL_SCRIPT = r"""
       '/hunt':{
         refreshNetwork:['Refresh Hunt evidence','Reloads retained evidence available to Hunt. It does not scan the network.','Newly imported or analyzed evidence becomes available without duplicating collection.'],
         exportHuntJson:['Export Hunt JSON','Downloads the current Hunt results and filters as structured data.','Exporting does not change findings or source evidence.'],
-        exportHuntCsv:['Export Hunt CSV','Downloads the current Hunt rows in spreadsheet-friendly form.','The file reflects the current filters and does not alter retained evidence.'],
+        exportHuntCsv:['Export Hunt CSV','Downloads every finding that matches the current filters, including matches on other pages.','The file reflects the current filters and does not alter retained evidence.'],
         capabilityViewTab:['Show capability findings','Switches Hunt to findings organized by capability and service interpretation.','This changes the presentation only.'],
         inventoryViewTab:['Show inventory evidence','Switches Hunt to the supporting hosts, services, and source evidence.','This changes the presentation only.'],
         compare:['Compare Hunt evidence','Compares selected retained evidence within Hunt. It does not collect the network again.','Differences remain traceable to their source snapshots.'],

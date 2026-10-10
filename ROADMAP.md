@@ -2200,6 +2200,27 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    treat the partial matrix as retained evidence. Add per-workload browser-memory sampling
    to identify the responsible page before changing application behavior or any limit.
 
+   **2026-10-09 Hunt bounded-render correction start:** diagnostic sampling isolated the
+   peak to Hunt at 2.629 GiB; Analyze was 1.344 GiB, Reach 1.190 GiB, and Map 0.886 GiB.
+   Keep the complete loaded Hunt evidence available to filters and exports, but render a
+   bounded 25-, 50-, or 100-row table page after applying the active filters. Preserve
+   combined host summaries, individual filtered findings, Inventory, saved CVE details,
+   full filtered export, exact ordering and Operator Guide explanations. The 2.5 GiB
+   browser limit remains unchanged.
+
+   **2026-10-09 Hunt bounded-render implementation and runtime-regression complete;
+   memory recheck pending:** Hunt now applies all active filters to the complete loaded
+   evidence, then renders a shared 25-, 50-, or 100-row page for combined capability
+   summaries, individual filtered findings, and Inventory. The CSV action exports every
+   filtered finding across all pages. A retained Chrome benchmark oracle now exercises
+   Previous/Next, all page sizes, Inventory, filter-before-page behavior, complete
+   filtered export, and CVE/exposure filters spanning pages on both cold and reload
+   navigation. The novice review clarified the Quick filter and CSV Operator Guide text.
+   The focused isolated suite passed **84 tests with 1 expected environment skip**, and
+   the browser-runner syntax/self-test passed. Do not resume retained comparison runs or
+   mark this correction complete until the unchanged 2.5 GiB limit passes a fresh
+   foundation Chrome rehearsal and the independent reviewer clears the evidence.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.

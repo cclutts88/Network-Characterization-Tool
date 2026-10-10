@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 
-export const RUNNER_VERSION = "phase0-rendered-browser:2";
+export const RUNNER_VERSION = "phase0-rendered-browser:3";
 export const EXPECTED_COMMON = Object.freeze({
   host_count: 4188,
   finding_count: 6125,
@@ -247,7 +247,11 @@ async function waitReady(page, name, foundation) {
     await page.waitForFunction(() => document.querySelector("main")?.getAttribute("aria-busy") === "false");
     await page.waitForFunction(() => document.querySelector("#networkPageSummary")?.textContent === "Rows 1–25 of 4188 · page 1 of 168");
   } else if (name === "hunt") {
-    await page.waitForFunction(() => document.querySelectorAll("#findingSummaryRows tr").length === 4188);
+    if (foundation) {
+      await page.waitForFunction(() => document.querySelector("#systemPageSummary")?.textContent === "Rows 1–25 of 4188 · page 1 of 168" && document.querySelectorAll("#findingSummaryRows tr").length === 25);
+    } else {
+      await page.waitForFunction(() => document.querySelectorAll("#findingSummaryRows tr").length === 4188);
+    }
   } else if (name === "reach") {
     const devices = foundation ? 0 : 1;
     await page.waitForFunction(expected => document.querySelector("#status")?.textContent === `0 Saved Networks, 4188 observed hosts, and ${expected} current device collection${expected === 1 ? "" : "s"} available.`, devices);
@@ -311,6 +315,121 @@ async function jsonFromPage(page, pathName) {
   }, pathName);
 }
 
+async function huntPagingOracle(page, data, grouped) {
+  const renderedGroups = async () => page.locator(".finding-summary-row").evaluateAll(rows => rows.map(row => row.dataset.ip || ""));
+  const renderedFindings = async () => page.locator("#findingRows .finding-row").evaluateAll(rows => rows.map(row => row.dataset.matchkey || ""));
+  const renderedHosts = async () => page.locator("#hostRows .host-row").evaluateAll(rows => rows.map(row => row.dataset.ip || ""));
+  const waitSummary = async expected => page.waitForFunction(value => document.querySelector("#systemPageSummary")?.textContent === value, expected);
+
+  await page.click("#systemPageNext");
+  await waitSummary("Rows 26–50 of 4188 · page 2 of 168");
+  assert.deepEqual(await renderedGroups(), grouped.slice(25, 50), "Hunt Next did not render the exact second page");
+  await page.click("#systemPagePrevious");
+  await waitSummary("Rows 1–25 of 4188 · page 1 of 168");
+  assert.deepEqual(await renderedGroups(), grouped.slice(0, 25), "Hunt Previous did not restore the exact first page");
+
+  for (const size of [50, 100]) {
+    await page.selectOption("#systemPageSize", String(size));
+    await waitSummary(`Rows 1–${size} of 4188 · page 1 of ${Math.ceil(4188 / size)}`);
+    assert.deepEqual(await renderedGroups(), grouped.slice(0, size), `Hunt ${size}-row page mismatch`);
+  }
+
+  const hostAddresses = (data.hosts || []).map(item => String(item.ip || ""));
+  await page.click("#inventoryViewTab");
+  await waitSummary("Rows 1–100 of 4188 · page 1 of 42");
+  assert.deepEqual(await renderedHosts(), hostAddresses.slice(0, 100), "Hunt Inventory first page mismatch");
+  await page.click("#systemPageNext");
+  await waitSummary("Rows 101–200 of 4188 · page 2 of 42");
+  assert.deepEqual(await renderedHosts(), hostAddresses.slice(100, 200), "Hunt Inventory next page mismatch");
+  await page.click("#systemPagePrevious");
+  await waitSummary("Rows 1–100 of 4188 · page 1 of 42");
+
+  await page.click("#capabilityViewTab");
+  await page.selectOption("#systemPageSize", "25");
+  const filtered = await page.evaluate(() => {
+    const term = "10.20.0.";
+    document.querySelector("#search").value = term;
+    applyFilters();
+    const expected = current.findings.filter(item => itemMatches(item, false)).map(item => findingMatchKey(item));
+    const original = NCTExport.csv;
+    let captured = null;
+    NCTExport.csv = (_name, rows) => { captured = rows; };
+    try { exportHuntCsv(); } finally { NCTExport.csv = original; }
+    return {expected, exported_rows: captured?.length || 0};
+  });
+  assert.ok(filtered.expected.length > 25, "Hunt quick-filter corpus must span more than one page");
+  await waitSummary(`Rows 1–25 of ${filtered.expected.length} · page 1 of ${Math.ceil(filtered.expected.length / 25)}`);
+  assert.deepEqual(await renderedFindings(), filtered.expected.slice(0, 25), "Hunt quick filter was not applied before paging");
+  assert.equal(filtered.exported_rows, filtered.expected.length + 1, "Hunt filtered CSV omitted off-page findings");
+  await page.click("#systemPageNext");
+  await waitSummary(`Rows 26–${Math.min(50, filtered.expected.length)} of ${filtered.expected.length} · page 2 of ${Math.ceil(filtered.expected.length / 25)}`);
+  assert.deepEqual(await renderedFindings(), filtered.expected.slice(25, 50), "Hunt filtered second page mismatch");
+
+  const cve = await page.evaluate(() => {
+    document.querySelector("#search").value = "";
+    const candidates = current.findings.slice(0, 30);
+    const select = document.querySelector("#cveFilter");
+    select.disabled = false;
+    select.append(new Option("CVE benchmark", "CVE-BENCHMARK"));
+    select.value = "CVE-BENCHMARK";
+    cveFilteredHostKeys = new Set(candidates.map(item => String(item.host_key || "")));
+    cveFilteredMatchKeys = new Set(candidates.map(item => findingMatchKey(item)));
+    applyFilters();
+    return candidates.map(item => findingMatchKey(item));
+  });
+  await waitSummary("Rows 1–25 of 30 · page 1 of 2");
+  assert.deepEqual(await renderedFindings(), cve.slice(0, 25), "Hunt CVE filter first page mismatch");
+  await page.click("#systemPageNext");
+  await waitSummary("Rows 26–30 of 30 · page 2 of 2");
+  assert.deepEqual(await renderedFindings(), cve.slice(25), "Hunt CVE filter second page mismatch");
+
+  const exposure = await page.evaluate(() => {
+    const cveSelect = document.querySelector("#cveFilter");
+    cveSelect.value = "";
+    cveFilteredHostKeys = null;
+    cveFilteredMatchKeys = null;
+    const hostKeys = [];
+    const seen = new Set();
+    for (const item of current.findings) {
+      const key = String(item.host_key || "");
+      if (!seen.has(key)) { seen.add(key); hostKeys.push(key); }
+      if (hostKeys.length === 30) break;
+    }
+    const select = document.querySelector("#exposureFilter");
+    select.disabled = false;
+    select.append(new Option("Exposure benchmark", "benchmark"));
+    select.value = "benchmark";
+    exposureFilteredHostKeys = new Set(hostKeys);
+    applyFilters();
+    return current.findings.filter(item => exposureFilteredHostKeys.has(String(item.host_key || ""))).map(item => findingMatchKey(item));
+  });
+  assert.ok(exposure.length > 25, "Hunt exposure-filter corpus must span more than one page");
+  await waitSummary(`Rows 1–25 of ${exposure.length} · page 1 of ${Math.ceil(exposure.length / 25)}`);
+  assert.deepEqual(await renderedFindings(), exposure.slice(0, 25), "Hunt exposure filter first page mismatch");
+  await page.click("#systemPageNext");
+  await waitSummary(`Rows 26–${Math.min(50, exposure.length)} of ${exposure.length} · page 2 of ${Math.ceil(exposure.length / 25)}`);
+  assert.deepEqual(await renderedFindings(), exposure.slice(25, 50), "Hunt exposure filter second page mismatch");
+
+  await page.evaluate(() => {
+    document.querySelector("#exposureFilter").value = "";
+    exposureFilteredHostKeys = null;
+    systemPageSize = 25;
+    document.querySelector("#systemPageSize").value = "25";
+    setSystemView("capabilities");
+  });
+  await waitSummary("Rows 1–25 of 4188 · page 1 of 168");
+  assert.deepEqual(await renderedGroups(), grouped.slice(0, 25), "Hunt default page was not restored after paging checks");
+  return {
+    next_previous: true,
+    page_sizes: [25, 50, 100],
+    inventory_paging: true,
+    filters_before_paging: true,
+    filtered_export_all_pages: true,
+    cve_filter_across_pages: true,
+    exposure_filter_across_pages: true,
+  };
+}
+
 async function exactRenderedOracle(page, name, foundation) {
   if (name === "analysis") {
     const data = await jsonFromPage(page, "/api/analysis/network");
@@ -338,9 +457,11 @@ async function exactRenderedOracle(page, name, foundation) {
     assert.equal(data.status, "hunting_network_complete");
     assert.equal(data.host_count, EXPECTED_COMMON.host_count);
     assert.equal(data.finding_count, EXPECTED_COMMON.finding_count);
-    assert.deepEqual(rendered, grouped, "Hunt rendered host/order mismatch");
-    assert.equal(sha256Values(rendered), EXPECTED_COMMON.ordered_host_addresses_sha256, "Hunt rendered host/order digest mismatch");
-    return {host_count: data.host_count, finding_count: data.finding_count, rendered_group_count: rendered.length, ordered_groups_sha256: sha256Values(rendered)};
+    assert.equal(grouped.length, EXPECTED_COMMON.host_count);
+    assert.equal(sha256Values(grouped), EXPECTED_COMMON.ordered_host_addresses_sha256, "Hunt full host/order digest mismatch");
+    assert.deepEqual(rendered, foundation ? grouped.slice(0, 25) : grouped, "Hunt rendered host/order mismatch");
+    const paging = foundation ? await huntPagingOracle(page, data, grouped) : null;
+    return {host_count: data.host_count, finding_count: data.finding_count, group_count: grouped.length, rendered_group_count: rendered.length, rendered_first_page: rendered.slice(0, 25), ordered_groups_sha256: sha256Values(grouped), paging};
   }
   if (name === "reach") {
     const data = await jsonFromPage(page, "/api/reachability/context");

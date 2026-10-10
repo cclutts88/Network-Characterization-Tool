@@ -974,7 +974,17 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "if(!(item.evidence_states||[]).includes('inferred'))return[]" in html
     assert 'id="findingSummaryRows"' in html
     assert "renderFindingSummaries(data.findings||[])" in html
-    assert "activeSystemView==='capabilities'" in html
+    assert "activeSystemView==='inventory'" in html
+    assert 'id="systemPageSize"' in html
+    assert 'id="systemPagePrevious"' in html
+    assert 'id="systemPageNext"' in html
+    assert 'id="systemPageSummary"' in html
+    assert "function systemPageSlice(items)" in html
+    assert "function itemMatches(item,isHost)" in html
+    assert "renderFindingSummaries(visible.flat())" in html
+    assert "findings=(current.findings||[]).filter" in html
+    assert "Hunt rows per page" in SHELL_SCRIPT
+    assert "Filters apply to the complete loaded evidence before NCT chooses the page" in SHELL_SCRIPT
     assert "function anyHuntFilterActive()" in html
     assert ".finding-summary-row.hidden-row{display:none}" in html
     assert "content-visibility:auto" in html

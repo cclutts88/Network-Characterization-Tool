@@ -9,6 +9,7 @@ from scripts.summarize_phase0_browser_benchmark import (
     COMMON_ADDRESS_SHA256,
     EXPECTED_ANALYZE_FIRST_PAGE,
     EXPECTED_ACTION_CORRECTNESS,
+    EXPECTED_HUNT_PAGING,
     EXPECTED_MAP,
     FOUNDATION_ACTIONS,
     HARNESS_COMPONENTS,
@@ -36,7 +37,7 @@ def _run(repeat: int, foundation: bool):
     actions = {name: _metric() for name in FOUNDATION_ACTIONS} if foundation else {}
     result = {
         "benchmark": "phase0-rendered-browser-comparison",
-        "runner_version": "phase0-rendered-browser:2",
+        "runner_version": "phase0-rendered-browser:3",
         "runner_sha256": "a" * 64,
         "harness_components": {name: "b" * 64 for name in HARNESS_COMPONENTS},
         "repeat": repeat,
@@ -89,7 +90,7 @@ def _run(repeat: int, foundation: bool):
     }
     correctness = {
         "analysis": {"host_count": 4188, "ordered_host_addresses_sha256": COMMON_ADDRESS_SHA256, "rendered_first_page": EXPECTED_ANALYZE_FIRST_PAGE},
-        "hunt": {"host_count": 4188, "finding_count": 6125, "rendered_group_count": 4188, "ordered_groups_sha256": COMMON_ADDRESS_SHA256},
+        "hunt": {"host_count": 4188, "finding_count": 6125, "group_count": 4188, "rendered_group_count": 25 if foundation else 4188, "rendered_first_page": EXPECTED_ANALYZE_FIRST_PAGE, "ordered_groups_sha256": COMMON_ADDRESS_SHA256, "paging": copy.deepcopy(EXPECTED_HUNT_PAGING) if foundation else None},
         "reach": {"saved_networks": 0, "hosts": 4188, "devices": 0 if foundation else 1, "device_collections": 0 if foundation else 1},
         "map": {"summary": copy.deepcopy(EXPECTED_MAP[foundation]), "rendered": {"devices": EXPECTED_MAP[foundation]["devices"] + EXPECTED_MAP[foundation]["gateways"], "interfaces": EXPECTED_MAP[foundation]["interfaces"], "subnets": EXPECTED_MAP[foundation]["subnets"], "hosts": 4188, "mac_observations": 4315, "arp_neighbors": 0, "topology_neighbors": 0}},
     }
@@ -169,6 +170,7 @@ def test_summary_accepts_exact_three_repeat_matrix(tmp_path):
         (lambda run: run["harness_components"].pop("scripts/phase0_loopback_proxy.py"), "harness component identity"),
         (lambda run: run["controller_cleanup"].update(data_root_removed=False), "controller cleanup evidence"),
         (lambda run: run["workloads"]["analysis"]["cold"]["correctness"].update(rendered_first_page=["wrong"] * 25), "Analyze exact rendered oracle"),
+        (lambda run: run["workloads"]["hunt"]["cold"]["correctness"]["paging"].update(filtered_export_all_pages=False), "Hunt exact rendered oracle"),
     ],
 )
 def test_summary_rejects_incomplete_or_over_limit_runs(tmp_path, mutation, message):
