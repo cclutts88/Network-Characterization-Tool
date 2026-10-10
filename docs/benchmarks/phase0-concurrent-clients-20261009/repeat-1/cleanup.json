@@ -1,0 +1,10 @@
+{
+  "verification_method": "controller:post-run-resource-verification",
+  "run_succeeded": true,
+  "app_container_removed": true,
+  "client_container_removed": true,
+  "internal_network_removed": true,
+  "data_root_removed": true,
+  "controller_token": "323a78473d2b489890213c13f8b6d77e",
+  "result_sha256": "c6053ba1ba49ffc5d2b12d1d8279ae0de112a44388581d22c05b0fc920e93130"
+}

@@ -1,0 +1,75 @@
+{
+  "verification_method": "controller:docker-inspect-sanitized",
+  "network": {
+    "id": "ef3c82936f9676b345477e91435fa956d29ab2992a52ad89e58eb41d7493a1f0",
+    "name": "nct-phase0-concurrent-net-a3b17767",
+    "internal": true
+  },
+  "application": {
+    "id": "eac8987de8118ebfb2df70fbb8dd277430797327ccc297217cf9e4f390e485f0",
+    "image": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "created": "2026-10-10T03:25:15.498522126Z",
+    "path": "python",
+    "args": [
+      "-m",
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8080"
+    ],
+    "mounts": [
+      {
+        "destination": "/benchmark",
+        "rw": false,
+        "source": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation"
+      },
+      {
+        "destination": "/data",
+        "rw": true,
+        "source": "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-concurrent-work\\retained-work\\data-a3b17767d32644fea037211fc95ab66b"
+      },
+      {
+        "destination": "/workspace",
+        "rw": false,
+        "source": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation"
+      }
+    ],
+    "networks": [
+      "nct-phase0-concurrent-net-a3b17767"
+    ]
+  },
+  "client": {
+    "id": "6f6fdd57fccae93f07d47e6bb6a39758f3fe0333c7ef03728d660a5e2db1b350",
+    "image": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "created": "2026-10-10T03:25:28.150773334Z",
+    "path": "python",
+    "args": [
+      "scripts/benchmark_phase0_concurrent_clients.py",
+      "--mode",
+      "run",
+      "--base-url",
+      "http://nct-phase0-concurrent-app-a3b17767:8080",
+      "--setup",
+      "/artifacts/setup.json",
+      "--output",
+      "/artifacts/client-run.json"
+    ],
+    "mounts": [
+      {
+        "destination": "/artifacts",
+        "rw": true,
+        "source": "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-concurrent-work\\retained-20261009\\repeat-2"
+      },
+      {
+        "destination": "/benchmark",
+        "rw": false,
+        "source": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation"
+      }
+    ],
+    "networks": [
+      "nct-phase0-concurrent-net-a3b17767"
+    ]
+  }
+}

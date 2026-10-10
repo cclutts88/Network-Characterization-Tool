@@ -2338,6 +2338,34 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    server workers, worker leases/checkpoints, multiple application containers, live scans,
    long-duration use, Range hardware, production-scale history or mission readiness.
 
+   **2026-10-09 eight-client single-worker concurrency benchmark complete:** foundation
+   `b5ee87c9cd0ec3482d3183bc48ab73f33148c2c0` passed three fresh retained repeats
+   using eight independent simulated analyst processes and one verified Uvicorn
+   application process. Every repeat completed **394 recorded workload operations**:
+   each analyst ran four mixed read/save cycles plus an ownership-isolation check, and
+   two synchronized clients produced exactly one accepted same-record update and one
+   expected version conflict. Ten additional login requests occurred inside each repeat's
+   wall-time measurement but are excluded from its workload latency and throughput
+   calculations; account and synthetic-record setup occurred before timing.
+   The strict summary independently recalculated response content, request order,
+   latency, read/write overlap, fixed limits, raw-file hashes, per-owner final records,
+   audit sequences, logical database changes, evidence preservation, resources,
+   process/container identity and cleanup with no failures. Median wall time was
+   **67.04 seconds**, median throughput **5.877 requests/second**, median read p95
+   **5.187 seconds**, and median write p95 **0.281 seconds**. Median application peak
+   memory was **933,421,056 bytes** and median client peak memory **1,863,012,352
+   bytes**; both stayed below the fixed **2,147,483,648-byte** limits. The harness
+   failed closed during rehearsal on direct-helper import and read-only SQLite-open
+   defects; both were corrected, regression-tested and independently cleared before
+   retained runs began. Retain the summary, all three raw run records, attestations,
+   logs, resource/process captures and cleanup proofs under
+   `docs/benchmarks/phase0-concurrent-clients-20261009/`. Final independent evidence
+   review returned **CLEAR — DOCUMENTED DEVIATION** after verifying every retained
+   hash, result binding, count, measurement, identity and cleanup proof. Novice wording
+   review returned **CLEAR**, and the final complete Docker suite passed **1,206 tests
+   with 14 expected skips**. This is a local synthetic single-worker development
+   result, not a multi-worker, live-scan, Range, production, or mission-readiness claim.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.

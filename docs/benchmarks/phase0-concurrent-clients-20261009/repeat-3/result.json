@@ -1,0 +1,207 @@
+{
+  "benchmark_version": "phase0-concurrent-controller:1",
+  "passed": true,
+  "repeat": 3,
+  "identity": {
+    "revision": "b5ee87c9cd0ec3482d3183bc48ab73f33148c2c0",
+    "clean_git": true,
+    "target_root": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+    "image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "app_container_id": "e9c45e2f6a8bbf3652d6637a22ef9cba023c3544f92680673aa192aee200c01b",
+    "client_container_id": "67ae1122c7cec7bc794fcb527056544d680024ffd0cbcee5ba1d0e968ed92df1",
+    "network_id": "4aa399a00b4bbb57e1af59cca7cc5457e4334976ab6a1cc5a1291f2ce9585c54",
+    "network_internal": true,
+    "controller_token": "50bcee869aee494598bb7f9363e4ec8d",
+    "fresh_data_root": true,
+    "data_root_host_path": "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-concurrent-work\\retained-work\\data-50bcee869aee494598bb7f9363e4ec8d",
+    "source_mount_read_only": true,
+    "benchmark_mount_read_only": true,
+    "corpus_manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+    "source_digest_sha256": "b35e2de127f7ded08e957453d746699ce317a1e9cb35981645f9808e718752ac",
+    "runner_sha256": "237b6eb2527813176c0529a65369ac5ad85a89a86d20e366a8cf3dda2525c3e9",
+    "verifier_sha256": "bb95b9c2a27f0773b5d3f3f3c15c2da966823bd09b3423bf397009f46d71a4a9",
+    "controller_sha256": "cd1787646fe9eb71afd4f1171daf4200c701e4ec444f993c10ff0308326c1ddb",
+    "preparation_sha256": "7b96866932909ad71e384d589b1ba0b2cbc31039b81297460b25b2fb448fa57a",
+    "process_capture_sha256": "020862b367a3b068c8d7b3410c8b7e3d497c397f866adecf6241a64a406cdb94",
+    "resource_capture_sha256": "92519ef77ffad51f3d2840ee356b7fa13a5a917a7f34bb6dd7b770471e6b268c",
+    "single_application_process": {
+      "processes": [
+        {
+          "command": "python -m uvicorn app.main:app --host 0.0.0.0 --port 8080",
+          "pid": 1
+        }
+      ],
+      "uvicorn_application_process_count": 1
+    },
+    "app_container_created_at": "2026-10-10T03:27:04.106970161Z"
+  },
+  "resources": {
+    "limits": {
+      "app_cpu_seconds": 240,
+      "client_cpu_seconds": 240,
+      "app_peak_memory_bytes": 2147483648,
+      "client_peak_memory_bytes": 2147483648
+    },
+    "application": {
+      "cpu_seconds": 68.666896,
+      "container_lifetime_peak_memory_bytes": 935755776,
+      "memory_scope": "full measured container lifetime, including startup and setup"
+    },
+    "clients": {
+      "cpu_seconds": 17.182467,
+      "container_lifetime_peak_memory_bytes": 1902428160,
+      "memory_scope": "full client container lifetime"
+    }
+  },
+  "client_summary": {
+    "client_processes": 8,
+    "collision_processes": 2,
+    "cycles_per_client": 4,
+    "failures": [],
+    "family_latency": {
+      "current": {
+        "count": 32,
+        "max_seconds": 7.515038,
+        "p50_seconds": 2.213867,
+        "p95_seconds": 7.318188
+      },
+      "hunt": {
+        "count": 32,
+        "max_seconds": 5.695435,
+        "p50_seconds": 4.70402,
+        "p95_seconds": 5.606698
+      },
+      "isolation:layout": {
+        "count": 8,
+        "max_seconds": 0.09416,
+        "p50_seconds": 0.057926,
+        "p95_seconds": 0.09416
+      },
+      "map": {
+        "count": 32,
+        "max_seconds": 3.87512,
+        "p50_seconds": 2.024634,
+        "p95_seconds": 3.856222
+      },
+      "reach": {
+        "count": 32,
+        "max_seconds": 4.756718,
+        "p50_seconds": 4.04212,
+        "p95_seconds": 4.750528
+      },
+      "workspace:layouts": {
+        "count": 32,
+        "max_seconds": 0.819458,
+        "p50_seconds": 0.234776,
+        "p95_seconds": 0.543508
+      },
+      "workspace:notes": {
+        "count": 32,
+        "max_seconds": 1.391409,
+        "p50_seconds": 0.486474,
+        "p95_seconds": 1.001892
+      },
+      "workspace:presets": {
+        "count": 32,
+        "max_seconds": 0.497349,
+        "p50_seconds": 0.171376,
+        "p95_seconds": 0.39676
+      },
+      "workspace:view": {
+        "count": 32,
+        "max_seconds": 0.372358,
+        "p50_seconds": 0.160004,
+        "p95_seconds": 0.371939
+      },
+      "write:layout": {
+        "count": 32,
+        "max_seconds": 0.452112,
+        "p50_seconds": 0.180738,
+        "p95_seconds": 0.451795
+      },
+      "write:note": {
+        "count": 32,
+        "max_seconds": 0.451512,
+        "p50_seconds": 0.173336,
+        "p95_seconds": 0.431552
+      },
+      "write:preset": {
+        "count": 32,
+        "max_seconds": 0.298645,
+        "p50_seconds": 0.131853,
+        "p95_seconds": 0.261299
+      },
+      "write:view": {
+        "count": 32,
+        "max_seconds": 0.338402,
+        "p50_seconds": 0.106591,
+        "p95_seconds": 0.317317
+      }
+    },
+    "limits": {
+      "read_p95_seconds": 30,
+      "request_timeout_seconds": 60,
+      "response_bytes": {
+        "current": 4194304,
+        "hunt": 67108864,
+        "map": 33554432,
+        "reach": 33554432,
+        "workspace": 2097152,
+        "write": 2097152
+      },
+      "total_wall_seconds": 240,
+      "write_p95_seconds": 10
+    },
+    "passed": true,
+    "read_latency": {
+      "count": 256,
+      "max_seconds": 7.515038,
+      "p50_seconds": 1.080658,
+      "p95_seconds": 5.187128
+    },
+    "requests": 394,
+    "successful_reads_overlapping_write_window": 92,
+    "throughput_requests_per_second": 5.858,
+    "wall_seconds": 67.258458,
+    "write_latency": {
+      "count": 128,
+      "max_seconds": 0.452112,
+      "p50_seconds": 0.152065,
+      "p95_seconds": 0.347153
+    }
+  },
+  "state_verification": {
+    "passed": true,
+    "actual_changed_tables": [
+      "analyst_filter_presets",
+      "analyst_investigation_note_audit",
+      "analyst_investigation_notes",
+      "analyst_sessions",
+      "analyst_view_preferences",
+      "analyst_workspace_layout_audit",
+      "analyst_workspace_layouts"
+    ],
+    "evidence_sha256": "503a8d1210e308977d8d7a57aa79d0cb0e6f7274020bf208e791c20d8ac1c0fb",
+    "evidence_file_count": 29,
+    "database_integrity": [
+      "ok"
+    ]
+  },
+  "limitations": [
+    "Eight simulated analyst client processes against one single-process Uvicorn NCT container.",
+    "No multi-worker server, multiple application containers, worker lease/checkpoint, live scan, browser, Range, production-scale, or mission claim."
+  ],
+  "raw_artifacts": {
+    "setup.json": "2e4eadbdd2d30d6a9988e38c500e36ec474eb31d4dcad456b33490777bb31422",
+    "preparation.json": "0fe8b5877f51bfd9febc58813854b383e54dd755a5263e38b370a87d44003f96",
+    "before.json": "71003f55ba53dbd1c284fe66c980bfcd5489edd134ec262865f3625469057e5e",
+    "client-run.json": "af7f844c2684210f8e596ec207efbe2417a64ca2334f45349eb66e40aee2a842",
+    "verification.json": "9d60d628abc633730afab50cb00b6c1d095c74b0c20976a868ea4a38bf976b96",
+    "application.log": "eb382006f7a688dcd98a62f67252818b4c2f46e78a2d9e0e45933bf4c28817b6",
+    "application-processes.json": "8fe1bfb6154bd78c3ff87907f89c71ce3358446f570b3f6878f9ed660a5fdcd7",
+    "application-resource-before.json": "46769cbe5379cf28cc2a9b1b6a0adebedb0ae12b156fb2001e099d8c52e1ab07",
+    "application-resource-after.json": "b1345d6dbeed6a6063449607d2805b6eee18b96d51191271c48f9298f99f2d02",
+    "container-inspection.json": "6def080fb5709829877a80b38d12371756eec7b79b16fc75d900b928cf1d4945",
+    "git-fresh-attestation.json": "78c185ca642f63ecda1698b54648c0e8d3c6e509c8f17a333e1c71789154a0e3"
+  }
+}

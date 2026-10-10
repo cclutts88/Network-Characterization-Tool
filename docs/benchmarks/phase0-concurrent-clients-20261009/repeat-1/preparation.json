@@ -1,0 +1,52 @@
+{
+  "corpus_manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+  "corpus_total_bytes": 3492762,
+  "correctness": {
+    "current": {
+      "host_count": 4188,
+      "hosts": 4188,
+      "ordered_host_addresses_sha256": "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+      "scan_count": 7,
+      "status": "analysis_network_complete",
+      "unique_host_addresses": 4188
+    },
+    "hunt": {
+      "finding_count": 6125,
+      "host_count": 4188,
+      "status": "hunting_network_complete"
+    },
+    "map": {
+      "arp_neighbors": 0,
+      "configuration_records_read": 4,
+      "devices": 1,
+      "gateways": 0,
+      "hosts": 4188,
+      "interfaces": 1000,
+      "mac_conflicts": 0,
+      "mac_identified_hosts": 4188,
+      "mac_observations": 4315,
+      "nmap_records_read": 4315,
+      "relationships": 1041,
+      "subnets": 0,
+      "switchport_links": 0,
+      "topology_neighbors": 0
+    },
+    "reach": {
+      "devices": 0,
+      "hosts": 4188,
+      "saved_networks": 0
+    }
+  },
+  "foundation_capabilities": true,
+  "preparation_version": "phase0-browser-data:2",
+  "prewarm_complete": true,
+  "revision": "b5ee87c9cd0ec3482d3183bc48ab73f33148c2c0",
+  "selected_device_run_id": "ed8e7c75a75d4d57727e4634b3f4088c",
+  "source_digest_sha256": "b35e2de127f7ded08e957453d746699ce317a1e9cb35981645f9808e718752ac",
+  "source_file_count": 90,
+  "staged": {
+    "device_files": 4,
+    "nmap_files": 9
+  },
+  "staging_complete": true
+}

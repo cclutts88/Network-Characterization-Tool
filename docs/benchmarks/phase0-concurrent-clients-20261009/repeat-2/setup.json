@@ -1,0 +1,107 @@
+{
+  "benchmark_version": "phase0-concurrent-clients:1",
+  "collision": {
+    "note_id": "1748bfd1147549edb93b5fc297b42ecd",
+    "version": 1
+  },
+  "records": {
+    "analyst-00": {
+      "layout_id": "4022fd8c4c544542be7aa74e76f227d0",
+      "note_id": "bd4902b515474ef8a8e159796cfd17f5",
+      "preset_id": "7f9a34ddfe5949adb2103f07db54e579",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-01": {
+      "layout_id": "7047f2a120bf423fa007ea4bd6f6ae8a",
+      "note_id": "30c28b1f115f4fb7b8ef9c048b1c9561",
+      "preset_id": "127d30f3268a40848e53d2744c009e34",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-02": {
+      "layout_id": "0f6e9a536f624680a5c42abba6488324",
+      "note_id": "92543f95d4b04df5b724d8782aa59ea5",
+      "preset_id": "b419dbad88814d6ab922cc8f1ad00d1e",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-03": {
+      "layout_id": "f287253719274e3b97f6821f762d0d29",
+      "note_id": "8537e638eeab4ae3a5e96b71665077aa",
+      "preset_id": "56a3835713bf40eaab0d2435b55ba54a",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-04": {
+      "layout_id": "ac0209b4f64340c0bdc6aaaeee4690ae",
+      "note_id": "0fc56045acb447acbbce0d3cc31778b2",
+      "preset_id": "511fe426a53c42fdb3a1b0d0781d5032",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-05": {
+      "layout_id": "5546eca4934747f7be83930ce1038cbc",
+      "note_id": "61da47d9b73a4b9ba18d4f53e0fff036",
+      "preset_id": "0df6cab83ee84e94bc6521c8a87410cd",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-06": {
+      "layout_id": "18b78a2a106e4e359f293b5c861a6065",
+      "note_id": "645717e325194020acb5b7fd4f1421e3",
+      "preset_id": "5cb274d15d51484f8fed502b32ce1927",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    },
+    "analyst-07": {
+      "layout_id": "7720e35b379c4dd89b533b2951bfb68c",
+      "note_id": "c9d4778501be4a39890d04d435c30fa1",
+      "preset_id": "bd15d9b6a5f64848b7c1096294288bd0",
+      "versions": {
+        "layout": 1,
+        "note": 1,
+        "preset": 1,
+        "view": 1
+      }
+    }
+  },
+  "users": [
+    "analyst-00",
+    "analyst-01",
+    "analyst-02",
+    "analyst-03",
+    "analyst-04",
+    "analyst-05",
+    "analyst-06",
+    "analyst-07"
+  ]
+}

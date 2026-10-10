@@ -1,0 +1,33 @@
+{
+  "benchmark_version": "phase0-concurrent-summary:1",
+  "failures": [],
+  "identity": {
+    "controller_sha256": "cd1787646fe9eb71afd4f1171daf4200c701e4ec444f993c10ff0308326c1ddb",
+    "corpus_manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+    "image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "preparation_sha256": "7b96866932909ad71e384d589b1ba0b2cbc31039b81297460b25b2fb448fa57a",
+    "process_capture_sha256": "020862b367a3b068c8d7b3410c8b7e3d497c397f866adecf6241a64a406cdb94",
+    "resource_capture_sha256": "92519ef77ffad51f3d2840ee356b7fa13a5a917a7f34bb6dd7b770471e6b268c",
+    "revision": "b5ee87c9cd0ec3482d3183bc48ab73f33148c2c0",
+    "runner_sha256": "237b6eb2527813176c0529a65369ac5ad85a89a86d20e366a8cf3dda2525c3e9",
+    "source_digest_sha256": "b35e2de127f7ded08e957453d746699ce317a1e9cb35981645f9808e718752ac",
+    "target_root": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+    "verifier_sha256": "bb95b9c2a27f0773b5d3f3f3c15c2da966823bd09b3423bf397009f46d71a4a9"
+  },
+  "limitations": [
+    "Eight simulated analyst client processes against one single-process Uvicorn NCT container.",
+    "No stable-main comparison, multi-worker server, multiple application containers, worker lease/checkpoint, live scan, browser, long-duration, Range, production-scale, or mission claim."
+  ],
+  "medians": {
+    "application_cpu_seconds": 68.408761,
+    "application_peak_memory_bytes": 933421056.0,
+    "client_cpu_seconds": 16.860002,
+    "client_peak_memory_bytes": 1863012352.0,
+    "read_p95_seconds": 5.187128,
+    "throughput_requests_per_second": 5.877,
+    "wall_seconds": 67.043934,
+    "write_p95_seconds": 0.281489
+  },
+  "passed": true,
+  "repeats": 3
+}

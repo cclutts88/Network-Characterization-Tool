@@ -1,0 +1,10 @@
+{
+  "verification_method": "controller:git-status-and-fresh-root-preflight",
+  "revision": "b5ee87c9cd0ec3482d3183bc48ab73f33148c2c0",
+  "status_porcelain": "",
+  "clean": true,
+  "target_root": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+  "data_root_host_path": "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-concurrent-work\\retained-work\\data-50bcee869aee494598bb7f9363e4ec8d",
+  "data_root_existed_before": false,
+  "data_root_empty_after_creation": true
+}
