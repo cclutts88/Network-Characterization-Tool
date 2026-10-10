@@ -1,0 +1,242 @@
+﻿{
+    "method":  "Win32_Process profile-root sampling at 100 ms",
+    "profile_root":  "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\profile-1941c18b-c502-4810-abe0-92c7bd0690c4",
+    "process_ids":  [
+                        2088,
+                        3864,
+                        4216,
+                        6684,
+                        9052,
+                        10164,
+                        11804,
+                        11944,
+                        12556,
+                        12884,
+                        14972,
+                        16004,
+                        16840,
+                        17584,
+                        19276,
+                        20000,
+                        20816,
+                        21360,
+                        22388,
+                        25012,
+                        25816,
+                        26016,
+                        26056,
+                        26500,
+                        27552,
+                        28792,
+                        33900,
+                        35232,
+                        37740,
+                        40056,
+                        42848,
+                        45236
+                    ],
+    "processes":  [
+                      {
+                          "process_id":  45236,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  26016,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:17",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  16840,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:19",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  14972,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  42848,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  2088,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  4216,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  3864,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  37740,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  40056,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:17",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  21360,
+                          "parent_process_id":  12556,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  25012,
+                          "parent_process_id":  12556,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  6684,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:17",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  10164,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:17",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  12556,
+                          "parent_process_id":  3520,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  12884,
+                          "parent_process_id":  3520,
+                          "creation_date":  "10/09/2026 21:41:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  25816,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  16004,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:17",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  26500,
+                          "parent_process_id":  3520,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  26056,
+                          "parent_process_id":  3520,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  33900,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  27552,
+                          "parent_process_id":  12556,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  35232,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  20816,
+                          "parent_process_id":  12556,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  17584,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  19276,
+                          "parent_process_id":  12556,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  28792,
+                          "parent_process_id":  26500,
+                          "creation_date":  "10/09/2026 21:41:36",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  22388,
+                          "parent_process_id":  12556,
+                          "creation_date":  "10/09/2026 21:42:16",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  9052,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  20000,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  11804,
+                          "parent_process_id":  26056,
+                          "creation_date":  "10/09/2026 21:42:00",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      },
+                      {
+                          "process_id":  11944,
+                          "parent_process_id":  12884,
+                          "creation_date":  "10/09/2026 21:41:17",
+                          "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                      }
+                  ],
+    "process_count":  32,
+    "sample_count":  326,
+    "peak_working_set_bytes":  1783500800,
+    "peak_working_set_bytes_by_workload":  {
+                                               "analysis":  1380167680,
+                                               "hunt":  1783500800,
+                                               "reach":  1133072384,
+                                               "map":  863100928
+                                           },
+    "cpu_seconds":  37.078125
+}

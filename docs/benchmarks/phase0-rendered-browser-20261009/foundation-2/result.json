@@ -1,0 +1,1119 @@
+﻿{
+    "benchmark":  "phase0-rendered-browser-comparison",
+    "runner_version":  "phase0-rendered-browser:3",
+    "runner_sha256":  "8fee8bea108e69281a8dc43e26ae1fcc9a59acb257064ef90a4f6f430f542175",
+    "harness_components":  {
+                               "scripts/benchmark_phase0_browser.mjs":  "8fee8bea108e69281a8dc43e26ae1fcc9a59acb257064ef90a4f6f430f542175",
+                               "scripts/prepare_phase0_browser_data.py":  "7b96866932909ad71e384d589b1ba0b2cbc31039b81297460b25b2fb448fa57a",
+                               "scripts/phase0_loopback_proxy.py":  "72ec37771299ac8dd195c24327131bf0685f3da40d0936d64bd0cb926d19d241",
+                               "scripts/run_phase0_browser_repeat.ps1":  "b0b81c8703ee089321c0393bdd9a6027a975474b8f37116daa81265362f4f49c",
+                               "scripts/sample_windows_browser.ps1":  "a4c5fe9d1f3cf380f9ab572c934d2f7c5d08877c42342cb153fbb2bb15c82e3a",
+                               "scripts/snapshot_phase0_browser_state.py":  "8f6d04508583e5f16cac30c837273f9fb8b0cdac4fbf188836edb8c33c4b4b9d",
+                               "scripts/summarize_phase0_browser_benchmark.py":  "d5c6c26db8a2cdf39ee170e1f9187b475fdf2de01a5bb4f2b1252279604892ff"
+                           },
+    "repeat":  2,
+    "foundation_capabilities":  true,
+    "target":  {
+                   "revision":  "3a42d6c3cdeb2538b7e2e5baef6c47bb23320833",
+                   "source_digest_sha256":  "b35e2de127f7ded08e957453d746699ce317a1e9cb35981645f9808e718752ac",
+                   "container_id":  "d30a59ab23b35b45d95f4a59a050648791a0e8a2c672af2133b4d65d65b3f15a",
+                   "container_image_id":  "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+                   "identity_evidence":  {
+                                             "type":  "externally-verified-browser-controller-attestations",
+                                             "validated":  true,
+                                             "git":  {
+                                                         "verification_method":  "controller:git-rev-parse-status-and-source-digest",
+                                                         "revision":  "3a42d6c3cdeb2538b7e2e5baef6c47bb23320833",
+                                                         "clean":  true,
+                                                         "source_digest_sha256":  "b35e2de127f7ded08e957453d746699ce317a1e9cb35981645f9808e718752ac"
+                                                     },
+                                             "corpus":  {
+                                                            "verification_method":  "controller:canonical-corpus-regeneration",
+                                                            "manifest_sha256":  "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8"
+                                                        },
+                                             "container":  {
+                                                               "verification_method":  "controller:docker-inspect-and-prewarm",
+                                                               "container_id":  "d30a59ab23b35b45d95f4a59a050648791a0e8a2c672af2133b4d65d65b3f15a",
+                                                               "image_id":  "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+                                                               "proxy_container_id":  "7acaf6c384d54dd77869fc010bd5c8aed433471a366e111a9b2a03acc7e5feee",
+                                                               "proxy_image_id":  "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+                                                               "proxy_created_at":  "2026-10-10T02:45:48.413773357Z",
+                                                               "created_at":  "2026-10-10T02:45:48.087239958Z",
+                                                               "controller_token":  "4c3a3b04-9037-4dde-aa77-a5928ce1f00c",
+                                                               "fresh_container":  true,
+                                                               "fresh_data_root":  true,
+                                                               "staging_complete":  true,
+                                                               "prewarm_complete":  true,
+                                                               "live_http_prewarm_complete":  true,
+                                                               "source_mount_read_only":  true,
+                                                               "benchmark_mount_read_only":  true,
+                                                               "source_mount_host_path":  "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+                                                               "benchmark_mount_host_path":  "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+                                                               "data_mount_host_path":  "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\data-4c3a3b04-9037-4dde-aa77-a5928ce1f00c",
+                                                               "network_internal":  true,
+                                                               "network_id":  "732890e0b22e1fd38e1d1f9423cebcd56568dda835aa42147ca75df057c905ea",
+                                                               "loopback_only_publication":  true,
+                                                               "published_host_ip":  "127.0.0.1",
+                                                               "relay_architecture":  "app on internal-only network; disposable dual-network TCP relay published on loopback",
+                                                               "inspected_mount_destinations":  [
+                                                                                                    "/benchmark",
+                                                                                                    "/data",
+                                                                                                    "/workspace"
+                                                                                                ],
+                                                               "inspected_network_name":  "nct-phase0-browser-net-4c3a3b04",
+                                                               "app_direct_publication_count":  0,
+                                                               "inspected_proxy_network_count":  2,
+                                                               "inspected_published_bindings":  [
+                                                                                                    {
+                                                                                                        "HostIp":  "127.0.0.1",
+                                                                                                        "HostPort":  "18166"
+                                                                                                    }
+                                                                                                ]
+                                                           }
+                                         }
+               },
+    "corpus_manifest_sha256":  "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+    "browser":  {
+                    "version":  "155.0.8059.39",
+                    "executable_sha256":  "d3784ffbf1f6109348416064b3e4cd739b06fa61d89a81b262c780df9f32270c",
+                    "playwright_version":  "1.62.1",
+                    "node_version":  "v24.19.0",
+                    "profile_root_token":  "profile-4c3a3b04-9037-4dde-aa77-a5928ce1f00c",
+                    "profile_cleanup_verified":  true,
+                    "settings":  {
+                                     "viewport":  "1440x900",
+                                     "device_scale_factor":  1,
+                                     "locale":  "en-US",
+                                     "timezone":  "America/Chicago",
+                                     "color_scheme":  "dark",
+                                     "reduced_motion":  "reduce",
+                                     "external_requests":  "blocked and fatal",
+                                     "favicon":  "locally fulfilled with HTTP 204"
+                                 }
+                },
+    "workloads":  {
+                      "analysis":  {
+                                       "cold":  {
+                                                    "metric":  {
+                                                                   "action_to_ready_ms":  5233.1357,
+                                                                   "navigation":  {
+                                                                                      "dom_content_loaded_ms":  144.6000000089407,
+                                                                                      "load_event_ms":  152.20000000298023,
+                                                                                      "response_end_ms":  9.799999997019768
+                                                                                  },
+                                                                   "request_count":  15,
+                                                                   "transfer_bytes":  607350,
+                                                                   "dom_nodes":  2300,
+                                                                   "js_heap_bytes":  5404008,
+                                                                   "long_task_count":  0,
+                                                                   "resource_count":  14,
+                                                                   "long_task_total_ms":  0,
+                                                                   "longest_task_ms":  0,
+                                                                   "cls":  0.049102025161554784,
+                                                                   "lcp_ms":  440
+                                                               },
+                                                    "shell":  {
+                                                                  "active":  "/analysis#xmlImport",
+                                                                  "breadcrumb":  "Collect / Nmap Scans",
+                                                                  "heading":  "Import \u0026 Investigate"
+                                                              },
+                                                    "correctness":  {
+                                                                        "host_count":  4188,
+                                                                        "ordered_host_addresses_sha256":  "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+                                                                        "rendered_first_page":  [
+                                                                                                    "10.10.0.1",
+                                                                                                    "10.10.0.2",
+                                                                                                    "10.10.0.3",
+                                                                                                    "10.20.0.1",
+                                                                                                    "10.20.0.2",
+                                                                                                    "10.20.0.3",
+                                                                                                    "10.20.0.4",
+                                                                                                    "10.20.0.5",
+                                                                                                    "10.20.0.6",
+                                                                                                    "10.20.0.7",
+                                                                                                    "10.20.0.8",
+                                                                                                    "10.20.0.9",
+                                                                                                    "10.20.0.10",
+                                                                                                    "10.20.0.11",
+                                                                                                    "10.20.0.12",
+                                                                                                    "10.20.0.13",
+                                                                                                    "10.20.0.14",
+                                                                                                    "10.20.0.15",
+                                                                                                    "10.20.0.16",
+                                                                                                    "10.20.0.17",
+                                                                                                    "10.20.0.18",
+                                                                                                    "10.20.0.19",
+                                                                                                    "10.20.0.20",
+                                                                                                    "10.20.0.21",
+                                                                                                    "10.20.0.22"
+                                                                                                ]
+                                                                    }
+                                                },
+                                       "reload":  {
+                                                      "metric":  {
+                                                                     "action_to_ready_ms":  1013.1815000000006,
+                                                                     "navigation":  {
+                                                                                        "dom_content_loaded_ms":  52.20000000298023,
+                                                                                        "load_event_ms":  59.1000000089407,
+                                                                                        "response_end_ms":  11.5
+                                                                                    },
+                                                                     "request_count":  15,
+                                                                     "transfer_bytes":  607350,
+                                                                     "dom_nodes":  2300,
+                                                                     "js_heap_bytes":  100365872,
+                                                                     "long_task_count":  0,
+                                                                     "resource_count":  14,
+                                                                     "long_task_total_ms":  0,
+                                                                     "longest_task_ms":  0,
+                                                                     "cls":  0.006403227880658436,
+                                                                     "lcp_ms":  268
+                                                                 },
+                                                      "shell":  {
+                                                                    "active":  "/analysis#xmlImport",
+                                                                    "breadcrumb":  "Collect / Nmap Scans",
+                                                                    "heading":  "Import \u0026 Investigate"
+                                                                },
+                                                      "correctness":  {
+                                                                          "host_count":  4188,
+                                                                          "ordered_host_addresses_sha256":  "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+                                                                          "rendered_first_page":  [
+                                                                                                      "10.10.0.1",
+                                                                                                      "10.10.0.2",
+                                                                                                      "10.10.0.3",
+                                                                                                      "10.20.0.1",
+                                                                                                      "10.20.0.2",
+                                                                                                      "10.20.0.3",
+                                                                                                      "10.20.0.4",
+                                                                                                      "10.20.0.5",
+                                                                                                      "10.20.0.6",
+                                                                                                      "10.20.0.7",
+                                                                                                      "10.20.0.8",
+                                                                                                      "10.20.0.9",
+                                                                                                      "10.20.0.10",
+                                                                                                      "10.20.0.11",
+                                                                                                      "10.20.0.12",
+                                                                                                      "10.20.0.13",
+                                                                                                      "10.20.0.14",
+                                                                                                      "10.20.0.15",
+                                                                                                      "10.20.0.16",
+                                                                                                      "10.20.0.17",
+                                                                                                      "10.20.0.18",
+                                                                                                      "10.20.0.19",
+                                                                                                      "10.20.0.20",
+                                                                                                      "10.20.0.21",
+                                                                                                      "10.20.0.22"
+                                                                                                  ]
+                                                                      }
+                                                  },
+                                       "actions":  {
+                                                       "current:first-100":  {
+                                                                                 "action_to_ready_ms":  869.673899999998,
+                                                                                 "navigation":  {
+                                                                                                    "dom_content_loaded_ms":  52.20000000298023,
+                                                                                                    "load_event_ms":  59.1000000089407,
+                                                                                                    "response_end_ms":  11.5
+                                                                                                },
+                                                                                 "request_count":  1,
+                                                                                 "transfer_bytes":  473804,
+                                                                                 "dom_nodes":  5549,
+                                                                                 "js_heap_bytes":  110431669,
+                                                                                 "long_task_count":  1,
+                                                                                 "resource_count":  18,
+                                                                                 "long_task_total_ms":  0,
+                                                                                 "longest_task_ms":  0,
+                                                                                 "cls":  0,
+                                                                                 "lcp_ms":  0
+                                                                             },
+                                                       "current:last-20":  {
+                                                                               "action_to_ready_ms":  720.1948000000011,
+                                                                               "navigation":  {
+                                                                                                  "dom_content_loaded_ms":  52.20000000298023,
+                                                                                                  "load_event_ms":  59.1000000089407,
+                                                                                                  "response_end_ms":  11.5
+                                                                                              },
+                                                                               "request_count":  1,
+                                                                               "transfer_bytes":  103159,
+                                                                               "dom_nodes":  2061,
+                                                                               "js_heap_bytes":  12204168,
+                                                                               "long_task_count":  1,
+                                                                               "resource_count":  19,
+                                                                               "long_task_total_ms":  0,
+                                                                               "longest_task_ms":  0,
+                                                                               "cls":  0.06925925925925926,
+                                                                               "lcp_ms":  0
+                                                                           },
+                                                       "processed:first-100":  {
+                                                                                   "action_to_ready_ms":  149.73259999999937,
+                                                                                   "navigation":  {
+                                                                                                      "dom_content_loaded_ms":  52.20000000298023,
+                                                                                                      "load_event_ms":  59.1000000089407,
+                                                                                                      "response_end_ms":  11.5
+                                                                                                  },
+                                                                                   "request_count":  1,
+                                                                                   "transfer_bytes":  14992,
+                                                                                   "dom_nodes":  4172,
+                                                                                   "js_heap_bytes":  8545902,
+                                                                                   "long_task_count":  1,
+                                                                                   "resource_count":  21,
+                                                                                   "long_task_total_ms":  0,
+                                                                                   "longest_task_ms":  0,
+                                                                                   "cls":  0,
+                                                                                   "lcp_ms":  0
+                                                                               },
+                                                       "processed:last-20":  {
+                                                                                 "action_to_ready_ms":  125.40399999999863,
+                                                                                 "navigation":  {
+                                                                                                    "dom_content_loaded_ms":  52.20000000298023,
+                                                                                                    "load_event_ms":  59.1000000089407,
+                                                                                                    "response_end_ms":  11.5
+                                                                                                },
+                                                                                 "request_count":  1,
+                                                                                 "transfer_bytes":  3781,
+                                                                                 "dom_nodes":  2492,
+                                                                                 "js_heap_bytes":  16963996,
+                                                                                 "long_task_count":  1,
+                                                                                 "resource_count":  22,
+                                                                                 "long_task_total_ms":  0,
+                                                                                 "longest_task_ms":  0,
+                                                                                 "cls":  0,
+                                                                                 "lcp_ms":  0
+                                                                             }
+                                                   },
+                                       "action_correctness":  {
+                                                                  "current_count":  120,
+                                                                  "current_ordered_addresses_sha256":  "bb8e4b9771e3e0563da37754efd56cbff67f969e3720374c4bd3c3505fbf5036",
+                                                                  "processed_count":  120,
+                                                                  "processed_ordered_addresses_sha256":  "45542eb68e7938271e382d3d45385978692dc727566af6f885702aace0917aff"
+                                                              },
+                                       "screenshots":  [
+                                                           {
+                                                               "filename":  "analysis-cold.png",
+                                                               "sha256":  "f23522a6bbf7fc95ae946956bce57fda0419d117fe5a57fbed125de684857672"
+                                                           },
+                                                           {
+                                                               "filename":  "analysis-reload.png",
+                                                               "sha256":  "f23522a6bbf7fc95ae946956bce57fda0419d117fe5a57fbed125de684857672"
+                                                           },
+                                                           {
+                                                               "filename":  "analysis-foundation-actions.png",
+                                                               "sha256":  "68f1dda79890a1006dc8942bbd6eb844cf35b2fdbf112ea1ff00ac0bc750b0f2"
+                                                           }
+                                                       ]
+                                   },
+                      "hunt":  {
+                                   "cold":  {
+                                                "metric":  {
+                                                               "action_to_ready_ms":  1687.7448000000004,
+                                                               "navigation":  {
+                                                                                  "dom_content_loaded_ms":  125.5,
+                                                                                  "load_event_ms":  134.70000000298023,
+                                                                                  "response_end_ms":  9.299999997019768
+                                                                              },
+                                                               "request_count":  12,
+                                                               "transfer_bytes":  22016492,
+                                                               "dom_nodes":  2096,
+                                                               "js_heap_bytes":  25827011,
+                                                               "long_task_count":  2,
+                                                               "resource_count":  11,
+                                                               "long_task_total_ms":  101,
+                                                               "longest_task_ms":  51,
+                                                               "cls":  0.00005359263478973766,
+                                                               "lcp_ms":  496
+                                                           },
+                                                "shell":  {
+                                                              "active":  "/hunting#huntOverview",
+                                                              "breadcrumb":  "Investigate / Hunt",
+                                                              "heading":  "Network Evidence"
+                                                          },
+                                                "correctness":  {
+                                                                    "host_count":  4188,
+                                                                    "finding_count":  6125,
+                                                                    "group_count":  4188,
+                                                                    "rendered_group_count":  25,
+                                                                    "rendered_first_page":  [
+                                                                                                "10.10.0.1",
+                                                                                                "10.10.0.2",
+                                                                                                "10.10.0.3",
+                                                                                                "10.20.0.1",
+                                                                                                "10.20.0.2",
+                                                                                                "10.20.0.3",
+                                                                                                "10.20.0.4",
+                                                                                                "10.20.0.5",
+                                                                                                "10.20.0.6",
+                                                                                                "10.20.0.7",
+                                                                                                "10.20.0.8",
+                                                                                                "10.20.0.9",
+                                                                                                "10.20.0.10",
+                                                                                                "10.20.0.11",
+                                                                                                "10.20.0.12",
+                                                                                                "10.20.0.13",
+                                                                                                "10.20.0.14",
+                                                                                                "10.20.0.15",
+                                                                                                "10.20.0.16",
+                                                                                                "10.20.0.17",
+                                                                                                "10.20.0.18",
+                                                                                                "10.20.0.19",
+                                                                                                "10.20.0.20",
+                                                                                                "10.20.0.21",
+                                                                                                "10.20.0.22"
+                                                                                            ],
+                                                                    "ordered_groups_sha256":  "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+                                                                    "paging":  {
+                                                                                   "next_previous":  true,
+                                                                                   "page_sizes":  [
+                                                                                                      25,
+                                                                                                      50,
+                                                                                                      100
+                                                                                                  ],
+                                                                                   "inventory_paging":  true,
+                                                                                   "filters_before_paging":  true,
+                                                                                   "filtered_export_all_pages":  true,
+                                                                                   "cve_filter_across_pages":  true,
+                                                                                   "exposure_filter_across_pages":  true
+                                                                               }
+                                                                }
+                                            },
+                                   "reload":  {
+                                                  "metric":  {
+                                                                 "action_to_ready_ms":  1433.2669000000024,
+                                                                 "navigation":  {
+                                                                                    "dom_content_loaded_ms":  44.1000000089407,
+                                                                                    "load_event_ms":  49.400000005960464,
+                                                                                    "response_end_ms":  8.5
+                                                                                },
+                                                                 "request_count":  12,
+                                                                 "transfer_bytes":  22016492,
+                                                                 "dom_nodes":  2096,
+                                                                 "js_heap_bytes":  164896368,
+                                                                 "long_task_count":  0,
+                                                                 "resource_count":  11,
+                                                                 "long_task_total_ms":  0,
+                                                                 "longest_task_ms":  0,
+                                                                 "cls":  0,
+                                                                 "lcp_ms":  224
+                                                             },
+                                                  "shell":  {
+                                                                "active":  "/hunting#huntOverview",
+                                                                "breadcrumb":  "Investigate / Hunt",
+                                                                "heading":  "Network Evidence"
+                                                            },
+                                                  "correctness":  {
+                                                                      "host_count":  4188,
+                                                                      "finding_count":  6125,
+                                                                      "group_count":  4188,
+                                                                      "rendered_group_count":  25,
+                                                                      "rendered_first_page":  [
+                                                                                                  "10.10.0.1",
+                                                                                                  "10.10.0.2",
+                                                                                                  "10.10.0.3",
+                                                                                                  "10.20.0.1",
+                                                                                                  "10.20.0.2",
+                                                                                                  "10.20.0.3",
+                                                                                                  "10.20.0.4",
+                                                                                                  "10.20.0.5",
+                                                                                                  "10.20.0.6",
+                                                                                                  "10.20.0.7",
+                                                                                                  "10.20.0.8",
+                                                                                                  "10.20.0.9",
+                                                                                                  "10.20.0.10",
+                                                                                                  "10.20.0.11",
+                                                                                                  "10.20.0.12",
+                                                                                                  "10.20.0.13",
+                                                                                                  "10.20.0.14",
+                                                                                                  "10.20.0.15",
+                                                                                                  "10.20.0.16",
+                                                                                                  "10.20.0.17",
+                                                                                                  "10.20.0.18",
+                                                                                                  "10.20.0.19",
+                                                                                                  "10.20.0.20",
+                                                                                                  "10.20.0.21",
+                                                                                                  "10.20.0.22"
+                                                                                              ],
+                                                                      "ordered_groups_sha256":  "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+                                                                      "paging":  {
+                                                                                     "next_previous":  true,
+                                                                                     "page_sizes":  [
+                                                                                                        25,
+                                                                                                        50,
+                                                                                                        100
+                                                                                                    ],
+                                                                                     "inventory_paging":  true,
+                                                                                     "filters_before_paging":  true,
+                                                                                     "filtered_export_all_pages":  true,
+                                                                                     "cve_filter_across_pages":  true,
+                                                                                     "exposure_filter_across_pages":  true
+                                                                                 }
+                                                                  }
+                                              },
+                                   "actions":  {
+
+                                               },
+                                   "action_correctness":  null,
+                                   "screenshots":  [
+                                                       {
+                                                           "filename":  "hunt-cold.png",
+                                                           "sha256":  "2f2e94072ab78caa781c078259d7864a5aca41e01a60c301c885f6e15154b5f7"
+                                                       },
+                                                       {
+                                                           "filename":  "hunt-reload.png",
+                                                           "sha256":  "2f2e94072ab78caa781c078259d7864a5aca41e01a60c301c885f6e15154b5f7"
+                                                       }
+                                                   ]
+                               },
+                      "reach":  {
+                                    "cold":  {
+                                                 "metric":  {
+                                                                "action_to_ready_ms":  1462.6043999999965,
+                                                                "navigation":  {
+                                                                                   "dom_content_loaded_ms":  106.40000000596046,
+                                                                                   "load_event_ms":  144.90000000596046,
+                                                                                   "response_end_ms":  7.600000008940697
+                                                                               },
+                                                                "request_count":  9,
+                                                                "transfer_bytes":  13157227,
+                                                                "dom_nodes":  9596,
+                                                                "js_heap_bytes":  17392952,
+                                                                "long_task_count":  1,
+                                                                "resource_count":  8,
+                                                                "long_task_total_ms":  72,
+                                                                "longest_task_ms":  72,
+                                                                "cls":  0.000054299018347050756,
+                                                                "lcp_ms":  464
+                                                            },
+                                                 "shell":  {
+                                                               "active":  "/reachability#reachAssessment",
+                                                               "breadcrumb":  "Investigate / Reach",
+                                                               "heading":  "Path Assessment"
+                                                           },
+                                                 "correctness":  {
+                                                                     "saved_networks":  0,
+                                                                     "hosts":  4188,
+                                                                     "devices":  0,
+                                                                     "device_collections":  0
+                                                                 }
+                                             },
+                                    "reload":  {
+                                                   "metric":  {
+                                                                  "action_to_ready_ms":  1355.392200000002,
+                                                                  "navigation":  {
+                                                                                     "dom_content_loaded_ms":  55.599999994039536,
+                                                                                     "load_event_ms":  59.79999999701977,
+                                                                                     "response_end_ms":  7.0999999940395355
+                                                                                 },
+                                                                  "request_count":  9,
+                                                                  "transfer_bytes":  13157227,
+                                                                  "dom_nodes":  9596,
+                                                                  "js_heap_bytes":  89627259,
+                                                                  "long_task_count":  0,
+                                                                  "resource_count":  8,
+                                                                  "long_task_total_ms":  0,
+                                                                  "longest_task_ms":  0,
+                                                                  "cls":  0,
+                                                                  "lcp_ms":  200
+                                                              },
+                                                   "shell":  {
+                                                                 "active":  "/reachability#reachAssessment",
+                                                                 "breadcrumb":  "Investigate / Reach",
+                                                                 "heading":  "Path Assessment"
+                                                             },
+                                                   "correctness":  {
+                                                                       "saved_networks":  0,
+                                                                       "hosts":  4188,
+                                                                       "devices":  0,
+                                                                       "device_collections":  0
+                                                                   }
+                                               },
+                                    "actions":  {
+
+                                                },
+                                    "action_correctness":  null,
+                                    "screenshots":  [
+                                                        {
+                                                            "filename":  "reach-cold.png",
+                                                            "sha256":  "f85af9aad9808a3bd6e7d795bf5994b84a30b7a3ce7a3562ff3b0cff07036404"
+                                                        },
+                                                        {
+                                                            "filename":  "reach-reload.png",
+                                                            "sha256":  "f85af9aad9808a3bd6e7d795bf5994b84a30b7a3ce7a3562ff3b0cff07036404"
+                                                        }
+                                                    ]
+                                },
+                      "map":  {
+                                  "cold":  {
+                                               "metric":  {
+                                                              "action_to_ready_ms":  803.8159999999989,
+                                                              "navigation":  {
+                                                                                 "dom_content_loaded_ms":  110.09999999403954,
+                                                                                 "load_event_ms":  131,
+                                                                                 "response_end_ms":  9.799999997019768
+                                                                             },
+                                                              "request_count":  11,
+                                                              "transfer_bytes":  8823395,
+                                                              "dom_nodes":  1252,
+                                                              "js_heap_bytes":  26029842,
+                                                              "long_task_count":  2,
+                                                              "resource_count":  10,
+                                                              "long_task_total_ms":  126,
+                                                              "longest_task_ms":  67,
+                                                              "cls":  0.021461084737895448,
+                                                              "lcp_ms":  496
+                                                          },
+                                               "shell":  {
+                                                             "active":  "/network-map#mapWorkspace",
+                                                             "breadcrumb":  "Investigate / Map",
+                                                             "heading":  "Network Map"
+                                                         },
+                                               "correctness":  {
+                                                                   "summary":  {
+                                                                                   "arp_neighbors":  0,
+                                                                                   "configuration_records_read":  4,
+                                                                                   "devices":  1,
+                                                                                   "gateways":  0,
+                                                                                   "hosts":  4188,
+                                                                                   "interfaces":  1000,
+                                                                                   "mac_conflicts":  0,
+                                                                                   "mac_identified_hosts":  4188,
+                                                                                   "mac_observations":  4315,
+                                                                                   "nmap_records_read":  4315,
+                                                                                   "relationships":  1041,
+                                                                                   "subnets":  0,
+                                                                                   "switchport_links":  0,
+                                                                                   "topology_neighbors":  0
+                                                                               },
+                                                                   "rendered":  {
+                                                                                    "devices":  1,
+                                                                                    "interfaces":  1000,
+                                                                                    "subnets":  0,
+                                                                                    "hosts":  4188,
+                                                                                    "mac_observations":  4315,
+                                                                                    "arp_neighbors":  0,
+                                                                                    "topology_neighbors":  0
+                                                                                }
+                                                               }
+                                           },
+                                  "reload":  {
+                                                 "metric":  {
+                                                                "action_to_ready_ms":  739.6676000000007,
+                                                                "navigation":  {
+                                                                                   "dom_content_loaded_ms":  63.599999994039536,
+                                                                                   "load_event_ms":  69.19999998807907,
+                                                                                   "response_end_ms":  11.099999994039536
+                                                                               },
+                                                                "request_count":  11,
+                                                                "transfer_bytes":  8823395,
+                                                                "dom_nodes":  1252,
+                                                                "js_heap_bytes":  75206488,
+                                                                "long_task_count":  0,
+                                                                "resource_count":  10,
+                                                                "long_task_total_ms":  0,
+                                                                "longest_task_ms":  0,
+                                                                "cls":  0.021461084737895448,
+                                                                "lcp_ms":  216
+                                                            },
+                                                 "shell":  {
+                                                               "active":  "/network-map#mapWorkspace",
+                                                               "breadcrumb":  "Investigate / Map",
+                                                               "heading":  "Network Map"
+                                                           },
+                                                 "correctness":  {
+                                                                     "summary":  {
+                                                                                     "arp_neighbors":  0,
+                                                                                     "configuration_records_read":  4,
+                                                                                     "devices":  1,
+                                                                                     "gateways":  0,
+                                                                                     "hosts":  4188,
+                                                                                     "interfaces":  1000,
+                                                                                     "mac_conflicts":  0,
+                                                                                     "mac_identified_hosts":  4188,
+                                                                                     "mac_observations":  4315,
+                                                                                     "nmap_records_read":  4315,
+                                                                                     "relationships":  1041,
+                                                                                     "subnets":  0,
+                                                                                     "switchport_links":  0,
+                                                                                     "topology_neighbors":  0
+                                                                                 },
+                                                                     "rendered":  {
+                                                                                      "devices":  1,
+                                                                                      "interfaces":  1000,
+                                                                                      "subnets":  0,
+                                                                                      "hosts":  4188,
+                                                                                      "mac_observations":  4315,
+                                                                                      "arp_neighbors":  0,
+                                                                                      "topology_neighbors":  0
+                                                                                  }
+                                                                 }
+                                             },
+                                  "actions":  {
+
+                                              },
+                                  "action_correctness":  null,
+                                  "screenshots":  [
+                                                      {
+                                                          "filename":  "map-cold.png",
+                                                          "sha256":  "01c3ac08f9b31bc81277f8b172d66c940da82e4268e982262a5c78ee9a1d33b1"
+                                                      },
+                                                      {
+                                                          "filename":  "map-reload.png",
+                                                          "sha256":  "01c3ac08f9b31bc81277f8b172d66c940da82e4268e982262a5c78ee9a1d33b1"
+                                                      }
+                                                  ]
+                              }
+                  },
+    "resources":  {
+                      "browser":  {
+                                      "method":  "Win32_Process profile-root sampling at 100 ms",
+                                      "profile_root":  "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\profile-4c3a3b04-9037-4dde-aa77-a5928ce1f00c",
+                                      "process_ids":  [
+                                                          1884,
+                                                          6684,
+                                                          6804,
+                                                          7416,
+                                                          12684,
+                                                          14348,
+                                                          16096,
+                                                          16120,
+                                                          17020,
+                                                          19324,
+                                                          22036,
+                                                          22624,
+                                                          23156,
+                                                          24476,
+                                                          24628,
+                                                          26192,
+                                                          27992,
+                                                          29424,
+                                                          30204,
+                                                          31040,
+                                                          31236,
+                                                          31740,
+                                                          32348,
+                                                          34476,
+                                                          35880,
+                                                          36124,
+                                                          36328,
+                                                          40104,
+                                                          41848,
+                                                          43536,
+                                                          43864,
+                                                          44768
+                                                      ],
+                                      "processes":  [
+                                                        {
+                                                            "process_id":  17020,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  12684,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  22624,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  14348,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:14",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  34476,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  6804,
+                                                            "parent_process_id":  24540,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  41848,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  30204,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  43536,
+                                                            "parent_process_id":  24540,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  6684,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  24476,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  40104,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  1884,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  23156,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  19324,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:14",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  35880,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  31040,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:14",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  36328,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:13",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  16096,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  24628,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  36124,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  31236,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  43864,
+                                                            "parent_process_id":  29424,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  7416,
+                                                            "parent_process_id":  24540,
+                                                            "creation_date":  "10/09/2026 21:46:13",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  16120,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  27992,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  32348,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:13",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  44768,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:14",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  29424,
+                                                            "parent_process_id":  24540,
+                                                            "creation_date":  "10/09/2026 21:46:43",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  31740,
+                                                            "parent_process_id":  6804,
+                                                            "creation_date":  "10/09/2026 21:46:31",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  26192,
+                                                            "parent_process_id":  7416,
+                                                            "creation_date":  "10/09/2026 21:46:13",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        },
+                                                        {
+                                                            "process_id":  22036,
+                                                            "parent_process_id":  43536,
+                                                            "creation_date":  "10/09/2026 21:45:52",
+                                                            "executable_path":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                                                        }
+                                                    ],
+                                      "process_count":  32,
+                                      "sample_count":  275,
+                                      "peak_working_set_bytes":  1750597632,
+                                      "peak_working_set_bytes_by_workload":  {
+                                                                                 "analysis":  1425887232,
+                                                                                 "hunt":  1750597632,
+                                                                                 "reach":  1287147520,
+                                                                                 "map":  976588800
+                                                                             },
+                                      "cpu_seconds":  37.828125,
+                                      "process_tree_verified":  true
+                                  },
+                      "app":  {
+                                  "method":  "container cgroup v2",
+                                  "cpu_seconds":  11.849343,
+                                  "peak_memory_bytes":  406986752
+                              }
+                  },
+    "retained_state":  {
+                           "pre":  {
+                                       "database_logical_sha256":  "629b15d63ff5eb0d262f44f39f83eac41239c8c59ad76af58dd762cbb6bffb01",
+                                       "database_main_file_sha256":  "42c66c4fcb8142c90e67c772528bb4162da627d075d0784cb3e9c1bff64a9f41",
+                                       "database_table_counts":  {
+                                                                     "analyst_achievements":  0,
+                                                                     "analyst_auth_audit":  0,
+                                                                     "analyst_filter_presets":  0,
+                                                                     "analyst_host_identities":  0,
+                                                                     "analyst_investigation_note_audit":  0,
+                                                                     "analyst_investigation_notes":  0,
+                                                                     "analyst_scan_drafts":  0,
+                                                                     "analyst_sessions":  0,
+                                                                     "analyst_shell_preferences":  0,
+                                                                     "analyst_users":  0,
+                                                                     "analyst_view_preferences":  0,
+                                                                     "analyst_workspace_layout_audit":  0,
+                                                                     "analyst_workspace_layouts":  0,
+                                                                     "analyst_workspace_preferences":  0,
+                                                                     "app_settings":  0,
+                                                                     "artifact_observation_scope_contexts":  0,
+                                                                     "artifact_observations":  1,
+                                                                     "artifact_registry":  1,
+                                                                     "artifact_scope_assignments":  1,
+                                                                     "assessment_scope_assignment_links":  1,
+                                                                     "derived_result_inputs":  0,
+                                                                     "derived_result_observation_links":  0,
+                                                                     "derived_results":  0,
+                                                                     "device_analysis_cache":  0,
+                                                                     "device_collection_authority":  0,
+                                                                     "device_collection_authority_inputs":  0,
+                                                                     "device_collection_profile_roots":  0,
+                                                                     "device_collection_profile_versions":  0,
+                                                                     "device_collections":  0,
+                                                                     "device_command_observations":  0,
+                                                                     "device_evidence_catalog":  0,
+                                                                     "device_evidence_catalog_dirty":  0,
+                                                                     "device_evidence_catalog_meta":  1,
+                                                                     "device_interface_assessments":  0,
+                                                                     "device_interface_receipts":  0,
+                                                                     "device_scope_assignments":  0,
+                                                                     "endpoint_entities":  120,
+                                                                     "endpoint_receipts":  120,
+                                                                     "entity_assessments":  1,
+                                                                     "global_no_strike_history":  0,
+                                                                     "host_os_inference_review_audit":  0,
+                                                                     "host_os_inference_reviews":  0,
+                                                                     "host_os_override_audit":  0,
+                                                                     "host_os_overrides":  0,
+                                                                     "imports":  0,
+                                                                     "network_environment_settings":  0,
+                                                                     "network_scope_audit":  1,
+                                                                     "network_scopes":  1,
+                                                                     "network_semantics":  0,
+                                                                     "network_wan_interfaces":  0,
+                                                                     "pipeline_admission_intents":  0,
+                                                                     "pipeline_intake_sources":  0,
+                                                                     "pipeline_job_attempts":  0,
+                                                                     "pipeline_job_migrations":  1,
+                                                                     "pipeline_job_requests":  0,
+                                                                     "pipeline_jobs":  0,
+                                                                     "reach_exposure_reports":  0,
+                                                                     "saved_network_scope_associations":  0,
+                                                                     "saved_networks":  0,
+                                                                     "scan_foundation_processing_attempts":  0,
+                                                                     "scan_history_groups":  7,
+                                                                     "scan_history_index_dirty":  0,
+                                                                     "scan_history_index_meta":  1,
+                                                                     "scan_history_memberships":  9,
+                                                                     "scan_inherited_scope_assignments":  0,
+                                                                     "scan_profiles":  8,
+                                                                     "scan_run_audit":  0,
+                                                                     "scan_run_scope_contexts":  0,
+                                                                     "scan_run_scope_sources":  0,
+                                                                     "scan_runs":  9,
+                                                                     "scan_schedule_scope_contexts":  0,
+                                                                     "scan_schedule_scope_sources":  0,
+                                                                     "scan_schedules":  0,
+                                                                     "service_entities":  160,
+                                                                     "service_receipts":  160,
+                                                                     "shared_analyst_themes":  0
+                                                                 },
+                                       "evidence_file_count":  29,
+                                       "evidence_sha256":  "3058e5d8fc61c6eb078c28ce705743ca4c64d25f25b56b044c340faac22d4aa8"
+                                   },
+                           "post":  {
+                                        "database_logical_sha256":  "629b15d63ff5eb0d262f44f39f83eac41239c8c59ad76af58dd762cbb6bffb01",
+                                        "database_main_file_sha256":  "42c66c4fcb8142c90e67c772528bb4162da627d075d0784cb3e9c1bff64a9f41",
+                                        "database_table_counts":  {
+                                                                      "analyst_achievements":  0,
+                                                                      "analyst_auth_audit":  0,
+                                                                      "analyst_filter_presets":  0,
+                                                                      "analyst_host_identities":  0,
+                                                                      "analyst_investigation_note_audit":  0,
+                                                                      "analyst_investigation_notes":  0,
+                                                                      "analyst_scan_drafts":  0,
+                                                                      "analyst_sessions":  0,
+                                                                      "analyst_shell_preferences":  0,
+                                                                      "analyst_users":  0,
+                                                                      "analyst_view_preferences":  0,
+                                                                      "analyst_workspace_layout_audit":  0,
+                                                                      "analyst_workspace_layouts":  0,
+                                                                      "analyst_workspace_preferences":  0,
+                                                                      "app_settings":  0,
+                                                                      "artifact_observation_scope_contexts":  0,
+                                                                      "artifact_observations":  1,
+                                                                      "artifact_registry":  1,
+                                                                      "artifact_scope_assignments":  1,
+                                                                      "assessment_scope_assignment_links":  1,
+                                                                      "derived_result_inputs":  0,
+                                                                      "derived_result_observation_links":  0,
+                                                                      "derived_results":  0,
+                                                                      "device_analysis_cache":  0,
+                                                                      "device_collection_authority":  0,
+                                                                      "device_collection_authority_inputs":  0,
+                                                                      "device_collection_profile_roots":  0,
+                                                                      "device_collection_profile_versions":  0,
+                                                                      "device_collections":  0,
+                                                                      "device_command_observations":  0,
+                                                                      "device_evidence_catalog":  0,
+                                                                      "device_evidence_catalog_dirty":  0,
+                                                                      "device_evidence_catalog_meta":  1,
+                                                                      "device_interface_assessments":  0,
+                                                                      "device_interface_receipts":  0,
+                                                                      "device_scope_assignments":  0,
+                                                                      "endpoint_entities":  120,
+                                                                      "endpoint_receipts":  120,
+                                                                      "entity_assessments":  1,
+                                                                      "global_no_strike_history":  0,
+                                                                      "host_os_inference_review_audit":  0,
+                                                                      "host_os_inference_reviews":  0,
+                                                                      "host_os_override_audit":  0,
+                                                                      "host_os_overrides":  0,
+                                                                      "imports":  0,
+                                                                      "network_environment_settings":  0,
+                                                                      "network_scope_audit":  1,
+                                                                      "network_scopes":  1,
+                                                                      "network_semantics":  0,
+                                                                      "network_wan_interfaces":  0,
+                                                                      "pipeline_admission_intents":  0,
+                                                                      "pipeline_intake_sources":  0,
+                                                                      "pipeline_job_attempts":  0,
+                                                                      "pipeline_job_migrations":  1,
+                                                                      "pipeline_job_requests":  0,
+                                                                      "pipeline_jobs":  0,
+                                                                      "reach_exposure_reports":  0,
+                                                                      "saved_network_scope_associations":  0,
+                                                                      "saved_networks":  0,
+                                                                      "scan_foundation_processing_attempts":  0,
+                                                                      "scan_history_groups":  7,
+                                                                      "scan_history_index_dirty":  0,
+                                                                      "scan_history_index_meta":  1,
+                                                                      "scan_history_memberships":  9,
+                                                                      "scan_inherited_scope_assignments":  0,
+                                                                      "scan_profiles":  8,
+                                                                      "scan_run_audit":  0,
+                                                                      "scan_run_scope_contexts":  0,
+                                                                      "scan_run_scope_sources":  0,
+                                                                      "scan_runs":  9,
+                                                                      "scan_schedule_scope_contexts":  0,
+                                                                      "scan_schedule_scope_sources":  0,
+                                                                      "scan_schedules":  0,
+                                                                      "service_entities":  160,
+                                                                      "service_receipts":  160,
+                                                                      "shared_analyst_themes":  0
+                                                                  },
+                                        "evidence_file_count":  29,
+                                        "evidence_sha256":  "3058e5d8fc61c6eb078c28ce705743ca4c64d25f25b56b044c340faac22d4aa8"
+                                    },
+                           "unchanged":  true
+                       },
+    "limits":  {
+                   "common_action_to_ready_ms":  30000,
+                   "foundation_action_to_ready_ms":  15000,
+                   "navigation_load_event_ms":  30000,
+                   "longest_task_ms":  2500,
+                   "long_task_total_ms":  5000,
+                   "dom_nodes":  175000,
+                   "js_heap_bytes":  536870912,
+                   "transfer_bytes":  52428800,
+                   "request_count":  150,
+                   "cls":  0.25,
+                   "lcp_ms":  20000,
+                   "browser_peak_working_set_bytes":  2684354560,
+                   "browser_cpu_seconds":  180,
+                   "app_peak_memory_bytes":  1073741824,
+                   "app_cpu_seconds":  180
+               },
+    "passed":  true,
+    "failures":  [
+
+                 ],
+    "limitations":  [
+                        "Same-host Windows Chrome comparison using fresh browser processes and profiles.",
+                        "No browser-container, Linux-browser, GPU, human-interaction, multi-process, Range, production-scale or mission performance claim."
+                    ],
+    "controller_cleanup":  {
+                               "verification_method":  "controller:post-run-resource-verification",
+                               "run_succeeded":  true,
+                               "app_container_removed":  true,
+                               "relay_container_removed":  true,
+                               "internal_network_removed":  true,
+                               "data_root_removed":  true,
+                               "browser_profile_removed":  true,
+                               "controller_token":  "4c3a3b04-9037-4dde-aa77-a5928ce1f00c",
+                               "runner_result_sha256":  "6ef424496cf9563053b8851ec2ea8819b1fefd4c81365b43cc4c4d38500564ab"
+                           }
+}

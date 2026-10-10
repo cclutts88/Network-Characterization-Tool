@@ -2297,6 +2297,23 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    state. The existing same-host Windows Chrome limitation remains documented. A new
    retained six-run comparison may begin; all earlier rejected matrices remain invalid.
 
+   **2026-10-09 retained rendered-browser comparison complete:** stable main `fc979133`
+   and foundation `3a42d6c` each passed three fresh
+   Chrome runs. The strict summary confirmed identical starting databases within each
+   version, exact retained-state preservation during every run, all page and pagination
+   oracles, all declared absolute limits, and complete cleanup. Median browser peak
+   memory was **1,787,838,464 bytes** on stable main and **1,741,778,944 bytes** on the
+   foundation build; median application peak memory was **263,340,032 bytes** and
+   **406,986,752 bytes**, respectively. Foundation Hunt cold readiness was **1,618 ms**
+   with **2,096 rendered nodes**, compared with **4,115 ms** and **139,168 nodes** on
+   stable main, while preserving all **4,188 hosts** and **6,125 findings**. Retain the
+   strict summary, all six run records, cleanup proofs, resource samples and screenshots
+   under `docs/benchmarks/phase0-rendered-browser-20261009/`. The result remains limited
+   to same-host Windows Chrome; it is not a multi-analyst, Range, production-scale or
+   mission-performance claim. Final independent evidence review returned **CLEAR —
+   DOCUMENTED DEVIATION**: all six records, identities, screenshots, cleanup hashes,
+   limits and summary figures verify, and no rejected matrix is represented as valid.
+
 ## Exit criteria
 
 - Reopening a page does not recreate expensive analysis.

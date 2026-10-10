@@ -1,0 +1,278 @@
+{
+  "benchmark": "phase0-rendered-browser-summary",
+  "browser": {
+    "executable_sha256": "d3784ffbf1f6109348416064b3e4cd739b06fa61d89a81b262c780df9f32270c",
+    "node_version": "v24.19.0",
+    "playwright_version": "1.62.1",
+    "settings": {
+      "color_scheme": "dark",
+      "device_scale_factor": 1,
+      "external_requests": "blocked and fatal",
+      "favicon": "locally fulfilled with HTTP 204",
+      "locale": "en-US",
+      "reduced_motion": "reduce",
+      "timezone": "America/Chicago",
+      "viewport": "1440x900"
+    },
+    "version": "155.0.8059.39"
+  },
+  "comparison_rule": "three-repeat median under predeclared absolute limits; no relative cross-revision gate",
+  "foundation": {
+    "actions": {
+      "current:first-100": {
+        "action_to_ready_ms": 773.793999999998,
+        "dom_nodes": 5549,
+        "js_heap_bytes": 110907793,
+        "transfer_bytes": 473804
+      },
+      "current:last-20": {
+        "action_to_ready_ms": 720.9750999999997,
+        "dom_nodes": 2061,
+        "js_heap_bytes": 8988004,
+        "transfer_bytes": 103159
+      },
+      "processed:first-100": {
+        "action_to_ready_ms": 149.73259999999937,
+        "dom_nodes": 4172,
+        "js_heap_bytes": 29193813,
+        "transfer_bytes": 14992
+      },
+      "processed:last-20": {
+        "action_to_ready_ms": 136.27350000000297,
+        "dom_nodes": 2492,
+        "js_heap_bytes": 16963996,
+        "transfer_bytes": 3781
+      }
+    },
+    "app_cpu_seconds_median": 11.849343,
+    "app_peak_memory_bytes_median": 406986752,
+    "browser_cpu_seconds_median": 37.484375,
+    "browser_peak_working_set_bytes_median": 1741778944,
+    "medians": {
+      "analysis": {
+        "cold": {
+          "action_to_ready_ms": 5233.1357,
+          "cls": 0.006403227880658436,
+          "dom_nodes": 2300,
+          "js_heap_bytes": 5719340,
+          "lcp_ms": 492,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 15,
+          "transfer_bytes": 607350
+        },
+        "reload": {
+          "action_to_ready_ms": 974.1234000000004,
+          "cls": 0.006403227880658436,
+          "dom_nodes": 2300,
+          "js_heap_bytes": 106024924,
+          "lcp_ms": 248,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 15,
+          "transfer_bytes": 607350
+        }
+      },
+      "hunt": {
+        "cold": {
+          "action_to_ready_ms": 1618.2649999999994,
+          "cls": 0,
+          "dom_nodes": 2096,
+          "js_heap_bytes": 25823571,
+          "lcp_ms": 496,
+          "long_task_total_ms": 51,
+          "longest_task_ms": 51,
+          "request_count": 12,
+          "transfer_bytes": 22016492
+        },
+        "reload": {
+          "action_to_ready_ms": 1427.739300000001,
+          "cls": 0,
+          "dom_nodes": 2096,
+          "js_heap_bytes": 164896368,
+          "lcp_ms": 184,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 12,
+          "transfer_bytes": 22016492
+        }
+      },
+      "map": {
+        "cold": {
+          "action_to_ready_ms": 803.8159999999989,
+          "cls": 0.021461084737895448,
+          "dom_nodes": 1252,
+          "js_heap_bytes": 26029842,
+          "lcp_ms": 508,
+          "long_task_total_ms": 135,
+          "longest_task_ms": 76,
+          "request_count": 11,
+          "transfer_bytes": 8823395
+        },
+        "reload": {
+          "action_to_ready_ms": 739.6676000000007,
+          "cls": 0.021461084737895448,
+          "dom_nodes": 1252,
+          "js_heap_bytes": 75253772,
+          "lcp_ms": 216,
+          "long_task_total_ms": 51,
+          "longest_task_ms": 51,
+          "request_count": 11,
+          "transfer_bytes": 8823395
+        }
+      },
+      "reach": {
+        "cold": {
+          "action_to_ready_ms": 1355.7188999999998,
+          "cls": 0,
+          "dom_nodes": 9596,
+          "js_heap_bytes": 17390636,
+          "lcp_ms": 456,
+          "long_task_total_ms": 69,
+          "longest_task_ms": 69,
+          "request_count": 9,
+          "transfer_bytes": 13157227
+        },
+        "reload": {
+          "action_to_ready_ms": 1319.5650000000023,
+          "cls": 5.4299018347050756e-05,
+          "dom_nodes": 9596,
+          "js_heap_bytes": 89844867,
+          "lcp_ms": 164,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 9,
+          "transfer_bytes": 13157227
+        }
+      }
+    },
+    "revision": "3a42d6c3cdeb2538b7e2e5baef6c47bb23320833"
+  },
+  "limitations": [
+    "Same-host Windows Chrome comparison only.",
+    "No browser-container, Linux-browser, GPU, human-interaction, multi-process, Range, production-scale or mission performance claim."
+  ],
+  "limits": {
+    "app_cpu_seconds": 180,
+    "app_peak_memory_bytes": 1073741824,
+    "browser_cpu_seconds": 180,
+    "browser_peak_working_set_bytes": 2684354560,
+    "cls": 0.25,
+    "common_action_to_ready_ms": 30000,
+    "dom_nodes": 175000,
+    "foundation_action_to_ready_ms": 15000,
+    "js_heap_bytes": 536870912,
+    "lcp_ms": 20000,
+    "long_task_total_ms": 5000,
+    "longest_task_ms": 2500,
+    "navigation_load_event_ms": 30000,
+    "request_count": 150,
+    "transfer_bytes": 52428800
+  },
+  "passed": true,
+  "stable_main": {
+    "app_cpu_seconds_median": 20.67933,
+    "app_peak_memory_bytes_median": 263340032,
+    "browser_cpu_seconds_median": 36.828125,
+    "browser_peak_working_set_bytes_median": 1787838464,
+    "medians": {
+      "analysis": {
+        "cold": {
+          "action_to_ready_ms": 3184.3377,
+          "cls": 0.006403227880658436,
+          "dom_nodes": 6045,
+          "js_heap_bytes": 24742034,
+          "lcp_ms": 348,
+          "long_task_total_ms": 53,
+          "longest_task_ms": 53,
+          "request_count": 12,
+          "transfer_bytes": 18982555
+        },
+        "reload": {
+          "action_to_ready_ms": 2975.010400000001,
+          "cls": 0.006403227880658436,
+          "dom_nodes": 6045,
+          "js_heap_bytes": 117710519,
+          "lcp_ms": 224,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 12,
+          "transfer_bytes": 18982555
+        }
+      },
+      "hunt": {
+        "cold": {
+          "action_to_ready_ms": 4114.977900000002,
+          "cls": 0,
+          "dom_nodes": 139168,
+          "js_heap_bytes": 89289341,
+          "lcp_ms": 444,
+          "long_task_total_ms": 162,
+          "longest_task_ms": 162,
+          "request_count": 12,
+          "transfer_bytes": 18973186
+        },
+        "reload": {
+          "action_to_ready_ms": 4065.244400000003,
+          "cls": 0,
+          "dom_nodes": 139168,
+          "js_heap_bytes": 160257017,
+          "lcp_ms": 200,
+          "long_task_total_ms": 178,
+          "longest_task_ms": 178,
+          "request_count": 12,
+          "transfer_bytes": 18973186
+        }
+      },
+      "map": {
+        "cold": {
+          "action_to_ready_ms": 1093.9334999999992,
+          "cls": 0.021461084737895448,
+          "dom_nodes": 1248,
+          "js_heap_bytes": 20699859,
+          "lcp_ms": 472,
+          "long_task_total_ms": 58,
+          "longest_task_ms": 58,
+          "request_count": 11,
+          "transfer_bytes": 6909090
+        },
+        "reload": {
+          "action_to_ready_ms": 1015.530500000008,
+          "cls": 0.021461084737895448,
+          "dom_nodes": 1248,
+          "js_heap_bytes": 40949634,
+          "lcp_ms": 940,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 11,
+          "transfer_bytes": 6909090
+        }
+      },
+      "reach": {
+        "cold": {
+          "action_to_ready_ms": 2963.6103999999978,
+          "cls": 0,
+          "dom_nodes": 9550,
+          "js_heap_bytes": 8949100,
+          "lcp_ms": 352,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 9,
+          "transfer_bytes": 10122877
+        },
+        "reload": {
+          "action_to_ready_ms": 2739.775499999996,
+          "cls": 0,
+          "dom_nodes": 9550,
+          "js_heap_bytes": 63081295,
+          "lcp_ms": 188,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "request_count": 9,
+          "transfer_bytes": 10122877
+        }
+      }
+    },
+    "revision": "fc979133634fe068c7dd13b5aa6b0cb873305c0e"
+  }
+}

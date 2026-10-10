@@ -1,0 +1,11 @@
+﻿{
+    "verification_method":  "controller:post-run-resource-verification",
+    "run_succeeded":  true,
+    "app_container_removed":  true,
+    "relay_container_removed":  true,
+    "internal_network_removed":  true,
+    "data_root_removed":  true,
+    "browser_profile_removed":  true,
+    "controller_token":  "4c3a3b04-9037-4dde-aa77-a5928ce1f00c",
+    "runner_result_sha256":  "6ef424496cf9563053b8851ec2ea8819b1fefd4c81365b43cc4c4d38500564ab"
+}

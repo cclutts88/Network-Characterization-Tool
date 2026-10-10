@@ -1,0 +1,57 @@
+﻿{
+    "base_url":  "http://127.0.0.1:18162",
+    "repeat":  1,
+    "foundation_capabilities":  false,
+    "container_name":  "nct-phase0-browser-db98fba7",
+    "container_id":  "42bb674297d6623e468fd0059da0a53874553421f62c3f0b6f01ed533eb23975",
+    "container_image_id":  "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "revision":  "fc979133634fe068c7dd13b5aa6b0cb873305c0e",
+    "source_digest_sha256":  "9059c71e804843b01ce125ddd78d82c0c2061852928f43dfe2a437ddf384724d",
+    "corpus_manifest_sha256":  "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+    "browser_executable":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "browser_sha256":  "d3784ffbf1f6109348416064b3e4cd739b06fa61d89a81b262c780df9f32270c",
+    "browser_version":  "155.0.8059.39",
+    "playwright_version":  "1.62.1",
+    "profile_root":  "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\profile-db98fba7-a258-45e7-b666-a8451826ec37",
+    "artifact_root":  "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-retained-20261009-v6\\main-1",
+    "snapshot_script_in_container":  "/benchmark/scripts/snapshot_phase0_browser_state.py",
+    "identity_evidence":  {
+                              "type":  "externally-verified-browser-controller-attestations",
+                              "validated":  true,
+                              "git":  {
+                                          "verification_method":  "controller:git-rev-parse-status-and-source-digest",
+                                          "revision":  "fc979133634fe068c7dd13b5aa6b0cb873305c0e",
+                                          "clean":  true,
+                                          "source_digest_sha256":  "9059c71e804843b01ce125ddd78d82c0c2061852928f43dfe2a437ddf384724d"
+                                      },
+                              "corpus":  {
+                                             "verification_method":  "controller:canonical-corpus-regeneration",
+                                             "manifest_sha256":  "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8"
+                                         },
+                              "container":  {
+                                                "verification_method":  "controller:docker-inspect-and-prewarm",
+                                                "container_id":  "42bb674297d6623e468fd0059da0a53874553421f62c3f0b6f01ed533eb23975",
+                                                "image_id":  "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+                                                "proxy_container_id":  "64edb6800d914ecaa5d1573452d0cafdfba1bed84c56c385cd99e723ea3807fa",
+                                                "proxy_image_id":  "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+                                                "proxy_created_at":  "2026-10-10T02:39:34.982077349Z",
+                                                "created_at":  "2026-10-10T02:39:34.650409278Z",
+                                                "controller_token":  "db98fba7-a258-45e7-b666-a8451826ec37",
+                                                "fresh_container":  true,
+                                                "fresh_data_root":  true,
+                                                "staging_complete":  true,
+                                                "prewarm_complete":  true,
+                                                "live_http_prewarm_complete":  true,
+                                                "source_mount_read_only":  true,
+                                                "benchmark_mount_read_only":  true,
+                                                "source_mount_host_path":  "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\Network-Characterization-Tool-main",
+                                                "benchmark_mount_host_path":  "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+                                                "data_mount_host_path":  "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\data-db98fba7-a258-45e7-b666-a8451826ec37",
+                                                "network_internal":  true,
+                                                "network_id":  "a664b4294afe3c63f3b76713d609d2fad6fe19f6b26d6f07ecc96dd1034b3590",
+                                                "loopback_only_publication":  true,
+                                                "published_host_ip":  "127.0.0.1",
+                                                "relay_architecture":  "app on internal-only network; disposable dual-network TCP relay published on loopback"
+                                            }
+                          }
+}

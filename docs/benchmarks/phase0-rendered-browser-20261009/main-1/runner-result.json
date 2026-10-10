@@ -1,0 +1,908 @@
+{
+  "benchmark": "phase0-rendered-browser-comparison",
+  "runner_version": "phase0-rendered-browser:3",
+  "runner_sha256": "8fee8bea108e69281a8dc43e26ae1fcc9a59acb257064ef90a4f6f430f542175",
+  "harness_components": {
+    "scripts/benchmark_phase0_browser.mjs": "8fee8bea108e69281a8dc43e26ae1fcc9a59acb257064ef90a4f6f430f542175",
+    "scripts/prepare_phase0_browser_data.py": "7b96866932909ad71e384d589b1ba0b2cbc31039b81297460b25b2fb448fa57a",
+    "scripts/phase0_loopback_proxy.py": "72ec37771299ac8dd195c24327131bf0685f3da40d0936d64bd0cb926d19d241",
+    "scripts/run_phase0_browser_repeat.ps1": "b0b81c8703ee089321c0393bdd9a6027a975474b8f37116daa81265362f4f49c",
+    "scripts/sample_windows_browser.ps1": "a4c5fe9d1f3cf380f9ab572c934d2f7c5d08877c42342cb153fbb2bb15c82e3a",
+    "scripts/snapshot_phase0_browser_state.py": "8f6d04508583e5f16cac30c837273f9fb8b0cdac4fbf188836edb8c33c4b4b9d",
+    "scripts/summarize_phase0_browser_benchmark.py": "d5c6c26db8a2cdf39ee170e1f9187b475fdf2de01a5bb4f2b1252279604892ff"
+  },
+  "repeat": 1,
+  "foundation_capabilities": false,
+  "target": {
+    "revision": "fc979133634fe068c7dd13b5aa6b0cb873305c0e",
+    "source_digest_sha256": "9059c71e804843b01ce125ddd78d82c0c2061852928f43dfe2a437ddf384724d",
+    "container_id": "42bb674297d6623e468fd0059da0a53874553421f62c3f0b6f01ed533eb23975",
+    "container_image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+    "identity_evidence": {
+      "type": "externally-verified-browser-controller-attestations",
+      "validated": true,
+      "git": {
+        "verification_method": "controller:git-rev-parse-status-and-source-digest",
+        "revision": "fc979133634fe068c7dd13b5aa6b0cb873305c0e",
+        "clean": true,
+        "source_digest_sha256": "9059c71e804843b01ce125ddd78d82c0c2061852928f43dfe2a437ddf384724d"
+      },
+      "corpus": {
+        "verification_method": "controller:canonical-corpus-regeneration",
+        "manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8"
+      },
+      "container": {
+        "verification_method": "controller:docker-inspect-and-prewarm",
+        "container_id": "42bb674297d6623e468fd0059da0a53874553421f62c3f0b6f01ed533eb23975",
+        "image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+        "proxy_container_id": "64edb6800d914ecaa5d1573452d0cafdfba1bed84c56c385cd99e723ea3807fa",
+        "proxy_image_id": "sha256:1b573eed7a2e0311ee21e3be7c212ef02a288c2cfc1c16516b7bec43ddc15a85",
+        "proxy_created_at": "2026-10-10T02:39:34.982077349Z",
+        "created_at": "2026-10-10T02:39:34.650409278Z",
+        "controller_token": "db98fba7-a258-45e7-b666-a8451826ec37",
+        "fresh_container": true,
+        "fresh_data_root": true,
+        "staging_complete": true,
+        "prewarm_complete": true,
+        "live_http_prewarm_complete": true,
+        "source_mount_read_only": true,
+        "benchmark_mount_read_only": true,
+        "source_mount_host_path": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\Network-Characterization-Tool-main",
+        "benchmark_mount_host_path": "C:\\Users\\chris\\OneDrive\\Desktop\\Net_Char_Tool\\nct-foundation",
+        "data_mount_host_path": "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\data-db98fba7-a258-45e7-b666-a8451826ec37",
+        "network_internal": true,
+        "network_id": "a664b4294afe3c63f3b76713d609d2fad6fe19f6b26d6f07ecc96dd1034b3590",
+        "loopback_only_publication": true,
+        "published_host_ip": "127.0.0.1",
+        "relay_architecture": "app on internal-only network; disposable dual-network TCP relay published on loopback",
+        "inspected_mount_destinations": [
+          "/benchmark",
+          "/data",
+          "/workspace"
+        ],
+        "inspected_network_name": "nct-phase0-browser-net-db98fba7",
+        "app_direct_publication_count": 0,
+        "inspected_proxy_network_count": 2,
+        "inspected_published_bindings": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "18162"
+          }
+        ]
+      }
+    }
+  },
+  "corpus_manifest_sha256": "355b89e8dc8b3c38b0bf97ed41cc3c62cb3504493cfeefb71e85a894604e16d8",
+  "browser": {
+    "version": "155.0.8059.39",
+    "executable_sha256": "d3784ffbf1f6109348416064b3e4cd739b06fa61d89a81b262c780df9f32270c",
+    "playwright_version": "1.62.1",
+    "node_version": "v24.19.0",
+    "profile_root_token": "profile-db98fba7-a258-45e7-b666-a8451826ec37",
+    "profile_cleanup_verified": true,
+    "settings": {
+      "viewport": "1440x900",
+      "device_scale_factor": 1,
+      "locale": "en-US",
+      "timezone": "America/Chicago",
+      "color_scheme": "dark",
+      "reduced_motion": "reduce",
+      "external_requests": "blocked and fatal",
+      "favicon": "locally fulfilled with HTTP 204"
+    }
+  },
+  "workloads": {
+    "analysis": {
+      "cold": {
+        "metric": {
+          "action_to_ready_ms": 3131.1841,
+          "navigation": {
+            "dom_content_loaded_ms": 116,
+            "load_event_ms": 119.29999999701977,
+            "response_end_ms": 12.200000002980232
+          },
+          "request_count": 12,
+          "transfer_bytes": 18982555,
+          "dom_nodes": 6045,
+          "js_heap_bytes": 24732250,
+          "long_task_count": 1,
+          "resource_count": 11,
+          "long_task_total_ms": 54,
+          "longest_task_ms": 54,
+          "cls": 0.006403227880658436,
+          "lcp_ms": 348
+        },
+        "shell": {
+          "active": "/analysis#xmlImport",
+          "breadcrumb": "Collect / Nmap Scans",
+          "heading": "Import Nmap Evidence"
+        },
+        "correctness": {
+          "host_count": 4188,
+          "ordered_host_addresses_sha256": "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+          "rendered_first_page": [
+            "10.10.0.1",
+            "10.10.0.2",
+            "10.10.0.3",
+            "10.20.0.1",
+            "10.20.0.2",
+            "10.20.0.3",
+            "10.20.0.4",
+            "10.20.0.5",
+            "10.20.0.6",
+            "10.20.0.7",
+            "10.20.0.8",
+            "10.20.0.9",
+            "10.20.0.10",
+            "10.20.0.11",
+            "10.20.0.12",
+            "10.20.0.13",
+            "10.20.0.14",
+            "10.20.0.15",
+            "10.20.0.16",
+            "10.20.0.17",
+            "10.20.0.18",
+            "10.20.0.19",
+            "10.20.0.20",
+            "10.20.0.21",
+            "10.20.0.22"
+          ]
+        }
+      },
+      "reload": {
+        "metric": {
+          "action_to_ready_ms": 2925.7469,
+          "navigation": {
+            "dom_content_loaded_ms": 46.3999999910593,
+            "load_event_ms": 51,
+            "response_end_ms": 8.799999997019768
+          },
+          "request_count": 12,
+          "transfer_bytes": 18982555,
+          "dom_nodes": 6045,
+          "js_heap_bytes": 117503635,
+          "long_task_count": 0,
+          "resource_count": 11,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "cls": 0.006403227880658436,
+          "lcp_ms": 180
+        },
+        "shell": {
+          "active": "/analysis#xmlImport",
+          "breadcrumb": "Collect / Nmap Scans",
+          "heading": "Import Nmap Evidence"
+        },
+        "correctness": {
+          "host_count": 4188,
+          "ordered_host_addresses_sha256": "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+          "rendered_first_page": [
+            "10.10.0.1",
+            "10.10.0.2",
+            "10.10.0.3",
+            "10.20.0.1",
+            "10.20.0.2",
+            "10.20.0.3",
+            "10.20.0.4",
+            "10.20.0.5",
+            "10.20.0.6",
+            "10.20.0.7",
+            "10.20.0.8",
+            "10.20.0.9",
+            "10.20.0.10",
+            "10.20.0.11",
+            "10.20.0.12",
+            "10.20.0.13",
+            "10.20.0.14",
+            "10.20.0.15",
+            "10.20.0.16",
+            "10.20.0.17",
+            "10.20.0.18",
+            "10.20.0.19",
+            "10.20.0.20",
+            "10.20.0.21",
+            "10.20.0.22"
+          ]
+        }
+      },
+      "actions": {},
+      "action_correctness": null,
+      "screenshots": [
+        {
+          "filename": "analysis-cold.png",
+          "sha256": "471eae7ed2aff12631f254b79d508e71cdf6b9c1f7c5a91a02de96e67c2f2694"
+        },
+        {
+          "filename": "analysis-reload.png",
+          "sha256": "471eae7ed2aff12631f254b79d508e71cdf6b9c1f7c5a91a02de96e67c2f2694"
+        }
+      ]
+    },
+    "hunt": {
+      "cold": {
+        "metric": {
+          "action_to_ready_ms": 4114.977900000002,
+          "navigation": {
+            "dom_content_loaded_ms": 126.8999999910593,
+            "load_event_ms": 133.09999999403954,
+            "response_end_ms": 8.599999994039536
+          },
+          "request_count": 12,
+          "transfer_bytes": 18973186,
+          "dom_nodes": 139168,
+          "js_heap_bytes": 89337301,
+          "long_task_count": 1,
+          "resource_count": 11,
+          "long_task_total_ms": 161,
+          "longest_task_ms": 161,
+          "cls": 0,
+          "lcp_ms": 444
+        },
+        "shell": {
+          "active": "/hunting#huntOverview",
+          "breadcrumb": "Investigate / Hunt",
+          "heading": "Network Evidence"
+        },
+        "correctness": {
+          "host_count": 4188,
+          "finding_count": 6125,
+          "group_count": 4188,
+          "rendered_group_count": 4188,
+          "rendered_first_page": [
+            "10.10.0.1",
+            "10.10.0.2",
+            "10.10.0.3",
+            "10.20.0.1",
+            "10.20.0.2",
+            "10.20.0.3",
+            "10.20.0.4",
+            "10.20.0.5",
+            "10.20.0.6",
+            "10.20.0.7",
+            "10.20.0.8",
+            "10.20.0.9",
+            "10.20.0.10",
+            "10.20.0.11",
+            "10.20.0.12",
+            "10.20.0.13",
+            "10.20.0.14",
+            "10.20.0.15",
+            "10.20.0.16",
+            "10.20.0.17",
+            "10.20.0.18",
+            "10.20.0.19",
+            "10.20.0.20",
+            "10.20.0.21",
+            "10.20.0.22"
+          ],
+          "ordered_groups_sha256": "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+          "paging": null
+        }
+      },
+      "reload": {
+        "metric": {
+          "action_to_ready_ms": 4327.494399999996,
+          "navigation": {
+            "dom_content_loaded_ms": 54,
+            "load_event_ms": 59.5,
+            "response_end_ms": 7.899999991059303
+          },
+          "request_count": 12,
+          "transfer_bytes": 18973186,
+          "dom_nodes": 139168,
+          "js_heap_bytes": 160282001,
+          "long_task_count": 1,
+          "resource_count": 11,
+          "long_task_total_ms": 211,
+          "longest_task_ms": 211,
+          "cls": 0,
+          "lcp_ms": 208
+        },
+        "shell": {
+          "active": "/hunting#huntOverview",
+          "breadcrumb": "Investigate / Hunt",
+          "heading": "Network Evidence"
+        },
+        "correctness": {
+          "host_count": 4188,
+          "finding_count": 6125,
+          "group_count": 4188,
+          "rendered_group_count": 4188,
+          "rendered_first_page": [
+            "10.10.0.1",
+            "10.10.0.2",
+            "10.10.0.3",
+            "10.20.0.1",
+            "10.20.0.2",
+            "10.20.0.3",
+            "10.20.0.4",
+            "10.20.0.5",
+            "10.20.0.6",
+            "10.20.0.7",
+            "10.20.0.8",
+            "10.20.0.9",
+            "10.20.0.10",
+            "10.20.0.11",
+            "10.20.0.12",
+            "10.20.0.13",
+            "10.20.0.14",
+            "10.20.0.15",
+            "10.20.0.16",
+            "10.20.0.17",
+            "10.20.0.18",
+            "10.20.0.19",
+            "10.20.0.20",
+            "10.20.0.21",
+            "10.20.0.22"
+          ],
+          "ordered_groups_sha256": "09dcf4ae04213b940e824b8aeaf73ac0b71db509f46dd3fef26d7e558e2325b1",
+          "paging": null
+        }
+      },
+      "actions": {},
+      "action_correctness": null,
+      "screenshots": [
+        {
+          "filename": "hunt-cold.png",
+          "sha256": "256170fc3e07fcc5e43695a5429f1365356ace4151a04633221fdd4a08151ae7"
+        },
+        {
+          "filename": "hunt-reload.png",
+          "sha256": "256170fc3e07fcc5e43695a5429f1365356ace4151a04633221fdd4a08151ae7"
+        }
+      ]
+    },
+    "reach": {
+      "cold": {
+        "metric": {
+          "action_to_ready_ms": 2963.6103999999978,
+          "navigation": {
+            "dom_content_loaded_ms": 80.90000000596046,
+            "load_event_ms": 109.90000000596046,
+            "response_end_ms": 7.5
+          },
+          "request_count": 9,
+          "transfer_bytes": 10122877,
+          "dom_nodes": 9550,
+          "js_heap_bytes": 8956032,
+          "long_task_count": 0,
+          "resource_count": 8,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "cls": 0,
+          "lcp_ms": 340
+        },
+        "shell": {
+          "active": "/reachability#reachAssessment",
+          "breadcrumb": "Investigate / Reach",
+          "heading": "Path Assessment"
+        },
+        "correctness": {
+          "saved_networks": 0,
+          "hosts": 4188,
+          "devices": 1,
+          "device_collections": 1
+        }
+      },
+      "reload": {
+        "metric": {
+          "action_to_ready_ms": 2762.3845,
+          "navigation": {
+            "dom_content_loaded_ms": 42.6000000089407,
+            "load_event_ms": 46.30000001192093,
+            "response_end_ms": 8.400000005960464
+          },
+          "request_count": 9,
+          "transfer_bytes": 10122877,
+          "dom_nodes": 9550,
+          "js_heap_bytes": 63145651,
+          "long_task_count": 0,
+          "resource_count": 8,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "cls": 0,
+          "lcp_ms": 188
+        },
+        "shell": {
+          "active": "/reachability#reachAssessment",
+          "breadcrumb": "Investigate / Reach",
+          "heading": "Path Assessment"
+        },
+        "correctness": {
+          "saved_networks": 0,
+          "hosts": 4188,
+          "devices": 1,
+          "device_collections": 1
+        }
+      },
+      "actions": {},
+      "action_correctness": null,
+      "screenshots": [
+        {
+          "filename": "reach-cold.png",
+          "sha256": "b7459b3ff4de518a3f503c3e433ed9ef8b7897e405fc55b7566425cde1faf9ac"
+        },
+        {
+          "filename": "reach-reload.png",
+          "sha256": "b7459b3ff4de518a3f503c3e433ed9ef8b7897e405fc55b7566425cde1faf9ac"
+        }
+      ]
+    },
+    "map": {
+      "cold": {
+        "metric": {
+          "action_to_ready_ms": 1093.9334999999992,
+          "navigation": {
+            "dom_content_loaded_ms": 100.29999999701977,
+            "load_event_ms": 137,
+            "response_end_ms": 9
+          },
+          "request_count": 11,
+          "transfer_bytes": 6909090,
+          "dom_nodes": 1248,
+          "js_heap_bytes": 20685415,
+          "long_task_count": 1,
+          "resource_count": 10,
+          "long_task_total_ms": 58,
+          "longest_task_ms": 58,
+          "cls": 0.021461084737895448,
+          "lcp_ms": 428
+        },
+        "shell": {
+          "active": "/network-map#mapWorkspace",
+          "breadcrumb": "Investigate / Map",
+          "heading": "Network Map"
+        },
+        "correctness": {
+          "summary": {
+            "devices": 1,
+            "gateways": 1,
+            "interfaces": 2,
+            "subnets": 2,
+            "hosts": 4188,
+            "relationships": 47,
+            "nmap_records_read": 4315,
+            "configuration_records_read": 4,
+            "mac_observations": 4315,
+            "mac_identified_hosts": 4188,
+            "mac_conflicts": 0,
+            "arp_neighbors": 0,
+            "topology_neighbors": 0,
+            "switchport_links": 0
+          },
+          "rendered": {
+            "devices": 2,
+            "interfaces": 2,
+            "subnets": 2,
+            "hosts": 4188,
+            "mac_observations": 4315,
+            "arp_neighbors": 0,
+            "topology_neighbors": 0
+          }
+        }
+      },
+      "reload": {
+        "metric": {
+          "action_to_ready_ms": 996.8399000000063,
+          "navigation": {
+            "dom_content_loaded_ms": 67.30000001192093,
+            "load_event_ms": 73.6000000089407,
+            "response_end_ms": 9.200000002980232
+          },
+          "request_count": 11,
+          "transfer_bytes": 6909090,
+          "dom_nodes": 1248,
+          "js_heap_bytes": 40949506,
+          "long_task_count": 0,
+          "resource_count": 10,
+          "long_task_total_ms": 0,
+          "longest_task_ms": 0,
+          "cls": 0.021461084737895448,
+          "lcp_ms": 920
+        },
+        "shell": {
+          "active": "/network-map#mapWorkspace",
+          "breadcrumb": "Investigate / Map",
+          "heading": "Network Map"
+        },
+        "correctness": {
+          "summary": {
+            "devices": 1,
+            "gateways": 1,
+            "interfaces": 2,
+            "subnets": 2,
+            "hosts": 4188,
+            "relationships": 47,
+            "nmap_records_read": 4315,
+            "configuration_records_read": 4,
+            "mac_observations": 4315,
+            "mac_identified_hosts": 4188,
+            "mac_conflicts": 0,
+            "arp_neighbors": 0,
+            "topology_neighbors": 0,
+            "switchport_links": 0
+          },
+          "rendered": {
+            "devices": 2,
+            "interfaces": 2,
+            "subnets": 2,
+            "hosts": 4188,
+            "mac_observations": 4315,
+            "arp_neighbors": 0,
+            "topology_neighbors": 0
+          }
+        }
+      },
+      "actions": {},
+      "action_correctness": null,
+      "screenshots": [
+        {
+          "filename": "map-cold.png",
+          "sha256": "b884760a84763d94dc0cfdb6b3c3146c80c1bddd1789d6d26524d5c05581d461"
+        },
+        {
+          "filename": "map-reload.png",
+          "sha256": "b884760a84763d94dc0cfdb6b3c3146c80c1bddd1789d6d26524d5c05581d461"
+        }
+      ]
+    }
+  },
+  "resources": {
+    "browser": {
+      "method": "Win32_Process profile-root sampling at 100 ms",
+      "profile_root": "C:\\Users\\chris\\Documents\\Codex\\nct-phase0-browser-work\\profile-db98fba7-a258-45e7-b666-a8451826ec37",
+      "process_ids": [
+        1980,
+        3068,
+        6348,
+        8604,
+        10604,
+        11892,
+        12100,
+        12172,
+        12644,
+        17488,
+        17956,
+        18164,
+        20392,
+        20436,
+        23056,
+        23168,
+        25224,
+        26096,
+        28236,
+        30032,
+        30096,
+        32812,
+        33496,
+        35200,
+        35592,
+        38088,
+        39596,
+        41068,
+        42976,
+        45864,
+        47496,
+        47868
+      ],
+      "processes": [
+        {
+          "process_id": 23168,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 6348,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 28236,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 41068,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 25224,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:57",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 30032,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 33496,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 11892,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:58",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 18164,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:58",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 20392,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:39",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 23056,
+          "parent_process_id": 45988,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 12644,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:39",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 26096,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 1980,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 10604,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:58",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 30096,
+          "parent_process_id": 45988,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 12172,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:39",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 47868,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 8604,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 17956,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:58",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 35592,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:58",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 12100,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 42976,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 39596,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 35200,
+          "parent_process_id": 23056,
+          "creation_date": "10/09/2026 21:40:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 38088,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 3068,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 17488,
+          "parent_process_id": 45988,
+          "creation_date": "10/09/2026 21:39:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 32812,
+          "parent_process_id": 20436,
+          "creation_date": "10/09/2026 21:39:58",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 45864,
+          "parent_process_id": 30096,
+          "creation_date": "10/09/2026 21:40:23",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 20436,
+          "parent_process_id": 45988,
+          "creation_date": "10/09/2026 21:39:57",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        },
+        {
+          "process_id": 47496,
+          "parent_process_id": 17488,
+          "creation_date": "10/09/2026 21:39:38",
+          "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        }
+      ],
+      "process_count": 32,
+      "sample_count": 325,
+      "peak_working_set_bytes": 1787838464,
+      "peak_working_set_bytes_by_workload": {
+        "analysis": 1397256192,
+        "hunt": 1787838464,
+        "reach": 1091403776,
+        "map": 887316480
+      },
+      "cpu_seconds": 36.828125,
+      "process_tree_verified": true
+    },
+    "app": {
+      "method": "container cgroup v2",
+      "cpu_seconds": 20.740461,
+      "peak_memory_bytes": 237285376
+    }
+  },
+  "retained_state": {
+    "pre": {
+      "database_logical_sha256": "dd19340aaeecc794a0f68dc54e02f250c268926114ddb358cb7181089883679a",
+      "database_main_file_sha256": "ae3b05ca92b4e282ad5d51998b396e06346be29efc1bef335043983018f80a63",
+      "database_table_counts": {
+        "analyst_auth_audit": 0,
+        "analyst_filter_presets": 0,
+        "analyst_host_identities": 0,
+        "analyst_investigation_note_audit": 0,
+        "analyst_investigation_notes": 0,
+        "analyst_scan_drafts": 0,
+        "analyst_sessions": 0,
+        "analyst_shell_preferences": 0,
+        "analyst_users": 0,
+        "analyst_view_preferences": 0,
+        "analyst_workspace_layout_audit": 0,
+        "analyst_workspace_layouts": 0,
+        "analyst_workspace_preferences": 0,
+        "app_settings": 0,
+        "device_analysis_cache": 1,
+        "device_collections": 1,
+        "device_command_observations": 0,
+        "host_os_inference_review_audit": 0,
+        "host_os_inference_reviews": 0,
+        "host_os_override_audit": 0,
+        "host_os_overrides": 0,
+        "imports": 0,
+        "network_environment_settings": 0,
+        "network_semantics": 0,
+        "network_wan_interfaces": 0,
+        "reach_exposure_reports": 0,
+        "saved_networks": 0,
+        "scan_analysis_cache": 7,
+        "scan_profiles": 8,
+        "scan_run_audit": 0,
+        "scan_runs": 9,
+        "scan_schedules": 0,
+        "shared_analyst_themes": 0
+      },
+      "evidence_file_count": 28,
+      "evidence_sha256": "795b79ca5f1571dddb7d8e2f9d2dcddd783c4aa29cb4766bcd61accb460b9bb1"
+    },
+    "post": {
+      "database_logical_sha256": "dd19340aaeecc794a0f68dc54e02f250c268926114ddb358cb7181089883679a",
+      "database_main_file_sha256": "ae3b05ca92b4e282ad5d51998b396e06346be29efc1bef335043983018f80a63",
+      "database_table_counts": {
+        "analyst_auth_audit": 0,
+        "analyst_filter_presets": 0,
+        "analyst_host_identities": 0,
+        "analyst_investigation_note_audit": 0,
+        "analyst_investigation_notes": 0,
+        "analyst_scan_drafts": 0,
+        "analyst_sessions": 0,
+        "analyst_shell_preferences": 0,
+        "analyst_users": 0,
+        "analyst_view_preferences": 0,
+        "analyst_workspace_layout_audit": 0,
+        "analyst_workspace_layouts": 0,
+        "analyst_workspace_preferences": 0,
+        "app_settings": 0,
+        "device_analysis_cache": 1,
+        "device_collections": 1,
+        "device_command_observations": 0,
+        "host_os_inference_review_audit": 0,
+        "host_os_inference_reviews": 0,
+        "host_os_override_audit": 0,
+        "host_os_overrides": 0,
+        "imports": 0,
+        "network_environment_settings": 0,
+        "network_semantics": 0,
+        "network_wan_interfaces": 0,
+        "reach_exposure_reports": 0,
+        "saved_networks": 0,
+        "scan_analysis_cache": 7,
+        "scan_profiles": 8,
+        "scan_run_audit": 0,
+        "scan_runs": 9,
+        "scan_schedules": 0,
+        "shared_analyst_themes": 0
+      },
+      "evidence_file_count": 28,
+      "evidence_sha256": "795b79ca5f1571dddb7d8e2f9d2dcddd783c4aa29cb4766bcd61accb460b9bb1"
+    },
+    "unchanged": true
+  },
+  "limits": {
+    "common_action_to_ready_ms": 30000,
+    "foundation_action_to_ready_ms": 15000,
+    "navigation_load_event_ms": 30000,
+    "longest_task_ms": 2500,
+    "long_task_total_ms": 5000,
+    "dom_nodes": 175000,
+    "js_heap_bytes": 536870912,
+    "transfer_bytes": 52428800,
+    "request_count": 150,
+    "cls": 0.25,
+    "lcp_ms": 20000,
+    "browser_peak_working_set_bytes": 2684354560,
+    "browser_cpu_seconds": 180,
+    "app_peak_memory_bytes": 1073741824,
+    "app_cpu_seconds": 180
+  },
+  "passed": true,
+  "failures": [],
+  "limitations": [
+    "Same-host Windows Chrome comparison using fresh browser processes and profiles.",
+    "No browser-container, Linux-browser, GPU, human-interaction, multi-process, Range, production-scale or mission performance claim."
+  ]
+}
