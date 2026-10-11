@@ -208,10 +208,18 @@ Gate 1 provides the local provider and bounded administrator System Health displ
 Gate 2 provides side-effect-free lifecycle probes with explicit recovery and shutdown
 semantics. Application-side gate 3A now adds a process-lifetime writer guard acquired
 before SQLite opens, atomic shutdown admission fences for local writer families, and
-fail-closed retention when shutdown cannot prove every writer stopped. Gate 3 remains
-open until single-replica manifests, least-privilege permissions and the exact durable
-storage class pass lock, rename, `fsync`, WAL and SHM qualification. Gates 4 through 9
-also remain open. Completing gates 1, 2 and 3A does not make this build Kubernetes-ready.
+fail-closed retention when shutdown cannot prove every writer stopped. Gate 3B provides
+the bounded exact-mount qualification tool. Gate 3C is in progress: claim creation is
+separate from qualification, and the report, Job, and Deployment bind both the
+immutable claim UID and bound-volume UID. The generated web
+profile is one analysis-only replica with `Recreate`, forced local authentication, no
+API token or RBAC, no Linux capabilities, and exact qualification-report binding. Active
+Nmap, schedules and device contact are disabled in both the interface and server routes;
+a future collection worker requires its own reviewed placement and privilege profile.
+Gate 3 remains open until this package and its exact storage environment complete the
+deployment acceptance checks. Gates 4 through 9 also remain open. Completing gates 1,
+2, 3A or 3B does not make this build Kubernetes-ready. See
+`docs/KUBERNETES_SINGLE_REPLICA.md`.
 
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.

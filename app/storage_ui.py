@@ -15,6 +15,10 @@ def storage_page() -> HTMLResponse:
 <p>Manage offline reference data, evidence storage, local processing status, and current resource use.</p>
 <section class="panel" id="runtimeHealthPanel"><h2>Live performance and reliability</h2>
 <p>This is a current local sample for the running NCT application and its container when Linux exposes container limits. Process and container measurements stay separate. Reading it does not start a scan, contact a network target, or change retained evidence. It is not a benchmark or a history graph. Unsupported measurements say Unavailable instead of showing zero.</p>
+<div class="metrics">
+<div class="metric"><span>Deployment profile</span><strong id="deploymentProfile">—</strong><small class="metric-detail">How this NCT copy is allowed to run.</small></div>
+<div class="metric"><span>Active scanning</span><strong id="activeCollection">—</strong><small class="metric-detail" id="activeCollectionDetail">Checking deployment policy.</small></div>
+</div>
 <p id="runtimeHealthStatus" role="status" aria-live="polite">Waiting for this panel to become visible.</p>
 <p id="runtimeTrendStatus">CPU and memory trends are warming up.</p>
 <h3>CPU</h3>
@@ -31,7 +35,7 @@ def storage_page() -> HTMLResponse:
 <div class="metric"><span>Data filesystem</span><strong id="runtimeDisk">—</strong><small class="metric-detail" id="runtimeDiskDetail">Capacity of the filesystem that holds retained NCT data.</small></div>
 <div class="metric"><span>Saved work active</span><strong id="runtimeWork">—</strong><small class="metric-detail" id="runtimeWorkDetail">Queued and running local processing.</small></div>
 </div>
-<dl><dt>Database files</dt><dd id="runtimeDatabase">—</dd><dt>Measurement provider</dt><dd id="runtimeProvider">Local</dd><dt>Last sample</dt><dd id="runtimeSample">—</dd><dt>Kubernetes status</dt><dd id="runtimeOrchestrator">Not configured</dd></dl>
+<dl><dt>Database files</dt><dd id="runtimeDatabase">—</dd><dt>Measurement provider</dt><dd id="runtimeProvider">Local</dd><dt>Last sample</dt><dd id="runtimeSample">—</dd><dt>Optional Kubernetes health adapter</dt><dd id="runtimeOrchestrator">Not configured · deployment profile remains active</dd></dl>
 <p>CPU needs two successful samples before a percentage appears. A valid first counter says Warming up; a failed measurement says Unavailable. The rolling samples reset when this application restarts. This panel keeps no long-term telemetry and does not contact Kubernetes unless a future administrator-approved adapter is configured.</p>
 </section>
 <section class="panel" id="offlineExploitDb"><h2>Offline Exploit-DB references</h2>
@@ -118,6 +122,10 @@ function runtimeTrendValue(item,key,formatter){if(!item)return 'Unavailable';if(
 function runtimeTrendCurrent(item,formatter){if(!item)return 'Unavailable';if(item.status==='warming_up')return 'Warming up';return item.current==null?'Unavailable':formatter(item.current);}
 function renderRuntimeHealth(data){
  const m=data.measurements||{},disk=m.data_filesystem,database=m.database_files,work=data.workload||{},trends=data.trends||{},trendMetrics=trends.metrics||{},processCpuTrend=trendMetrics.process_cpu,containerCpuTrend=trendMetrics.container_cpu,processMemoryTrend=trendMetrics.process_memory,containerMemoryTrend=trendMetrics.container_memory;
+ const deployment=data.deployment||{},collection=data.active_collection||{};
+ byId('deploymentProfile').textContent=deployment.label||'Standalone';
+ byId('activeCollection').textContent=collection.enabled===false?'Disabled by deployment policy':'Enabled';
+ byId('activeCollectionDetail').textContent=collection.detail||'This deployment can start authorized collection work.';
  const states=[...Object.values(m),work].map(item=>item&&item.status),warming=states.includes('warming_up'),unavailable=states.includes('unavailable');
  byId('runtimeHealthStatus').textContent=warming?(unavailable?'CPU is warming up, and some other measurements are unavailable.':'Collecting the second CPU sample. Other live measurements are available.'):(unavailable?'Some live measurements are unavailable on this system.':'Live local measurements are available.');
  const percent=value=>`${Number(value).toFixed(1)}%`;
@@ -148,7 +156,7 @@ function renderRuntimeHealth(data){
  byId('runtimeDatabase').textContent=database&&database.status==='available'?`${bytes(database.total_bytes)} across ${database.files_present} present file${database.files_present===1?'':'s'}`:'Unavailable';
  byId('runtimeProvider').textContent=data.provider==='local'?'Local application and container':'Unavailable';
  byId('runtimeSample').textContent=data.sampled_at?`${dateText(data.sampled_at)} · current sample`:'Unavailable';
- byId('runtimeOrchestrator').textContent=data.orchestrator&&data.orchestrator.status==='not_configured'?'Not configured':'Unavailable';
+ byId('runtimeOrchestrator').textContent=data.orchestrator&&data.orchestrator.status==='not_configured'?'Not configured · deployment profile remains active':'Unavailable · deployment profile remains active';
  const attempts=processMemoryTrend&&processMemoryTrend.sampling_attempts||0;
  byId('runtimeTrendStatus').textContent=`Window: ${attempts} of 720 samples · 5 seconds apart · Near max: at least ${trends.near_peak_percent||95}% · Resets on restart`;
 }

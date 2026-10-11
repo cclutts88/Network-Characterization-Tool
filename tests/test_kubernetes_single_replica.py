@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import qualify_kubernetes_storage as qualifier  # noqa: E402
+import render_kubernetes_single_replica as renderer  # noqa: E402
+
+
+def args(tmp_path: Path, **changes) -> argparse.Namespace:
+    values = {
+        "name": "nct-analysis",
+        "namespace": "nct",
+        "image": "registry.example/nct@sha256:" + "a" * 64,
+        "pvc_name": "nct-data",
+        "storage_class": "approved-rwo",
+        "storage_size": "20Gi",
+        "pvc_uid": "11111111-2222-4333-8444-555555555555",
+        "bound_volume_uid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "output": tmp_path / "output.json",
+        "overwrite": False,
+        "bootstrap_secret": None,
+        "storage_report": tmp_path / "report.json",
+        "storage_report_digest": "",
+    }
+    values.update(changes)
+    value = argparse.Namespace(**values)
+    renderer._validate_args(value)
+    return value
+
+
+def passing_report(value: argparse.Namespace) -> dict:
+    identity = renderer.storage_identity(value)
+    source = SCRIPTS / "qualify_kubernetes_storage.py"
+    report = {
+        "schema_version": qualifier.REPORT_SCHEMA_VERSION,
+        "tool": {
+            "version": qualifier.TOOL_VERSION,
+            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        },
+        "declared": {
+            "storage_identity": identity,
+            "storage_identity_sha256": hashlib.sha256(identity.encode()).hexdigest(),
+            "accepted": True,
+        },
+        "measured": {
+            "executor_uid": renderer.RUN_AS_UID,
+            "executor_gid": renderer.RUN_AS_GID,
+        },
+        "checks": [
+            {"id": check, "status": "pass", "detail": "passed", "duration_seconds": 0.01}
+            for check in sorted(renderer.REQUIRED_CHECKS)
+        ],
+        "cleanup": {
+            "id": "cleanup",
+            "status": "pass",
+            "detail": "removed",
+            "duration_seconds": 0.01,
+        },
+        "limitations": ["bounded exact-volume evidence only"],
+    }
+    return qualifier._finalize(report)
+
+
+def write_report(value: argparse.Namespace, report: dict | None = None) -> dict:
+    report = report or passing_report(value)
+    value.storage_report.write_text(json.dumps(report), encoding="utf-8")
+    value.storage_report_digest = report["attestation"]["digest"]
+    return report
+
+
+def items_by_kind(document: dict) -> dict[str, dict]:
+    return {item["kind"]: item for item in document["items"]}
+
+
+def test_qualification_job_is_bounded_unprivileged_and_exact(tmp_path: Path) -> None:
+    value = args(tmp_path)
+    claim_document = renderer.claim_resources(value)
+    document = renderer.qualification_resources(value)
+    items = items_by_kind(document)
+    account = items["ServiceAccount"]
+    claim = items_by_kind(claim_document)["PersistentVolumeClaim"]
+    job = items["Job"]
+    pod = job["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert account["automountServiceAccountToken"] is False
+    assert "PersistentVolumeClaim" not in items
+    assert claim["spec"] == {
+        "accessModes": ["ReadWriteOnce"],
+        "volumeMode": "Filesystem",
+        "storageClassName": "approved-rwo",
+        "resources": {"requests": {"storage": "20Gi"}},
+    }
+    assert job["spec"]["backoffLimit"] == 0
+    assert job["spec"]["activeDeadlineSeconds"] == 60
+    assert pod["restartPolicy"] == "Never"
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["securityContext"]["runAsUser"] == renderer.RUN_AS_UID
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    assert container["image"].endswith("@sha256:" + "a" * 64)
+    assert container["args"][-1] == renderer.storage_identity(value)
+    assert container["resources"]["limits"] == {"cpu": "500m", "memory": "256Mi"}
+    assert job["metadata"]["name"].endswith(renderer._identity_sha256(renderer.storage_identity(value))[:12])
+    assert job["metadata"]["annotations"]["nct.openai.com/pvc-uid"] == value.pvc_uid
+    assert job["metadata"]["annotations"]["nct.openai.com/bound-volume-uid"] == value.bound_volume_uid
+
+
+def test_deployment_is_one_analysis_only_replica_and_uses_exact_report(tmp_path: Path) -> None:
+    value = args(tmp_path, bootstrap_secret="nct-bootstrap")
+    report = write_report(value)
+    document = renderer.deployment_resources(value)
+    items = items_by_kind(document)
+    deployment = items["Deployment"]
+    pod = deployment["spec"]["template"]
+    pod_spec = pod["spec"]
+    container = pod_spec["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+
+    assert deployment["spec"]["replicas"] == 1
+    assert deployment["spec"]["strategy"] == {"type": "Recreate"}
+    assert pod_spec["automountServiceAccountToken"] is False
+    assert pod_spec["securityContext"]["runAsUser"] == renderer.RUN_AS_UID
+    assert pod_spec["securityContext"]["runAsGroup"] == renderer.RUN_AS_GID
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert "add" not in container["securityContext"]["capabilities"]
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    assert env["NCT_AUTH_MODE"]["value"] == "local"
+    assert env["NCT_COOKIE_SECURE"]["value"] == "1"
+    assert env["NCT_ACTIVE_COLLECTION_MODE"]["value"] == "disabled"
+    assert env["NCT_BOOTSTRAP_ADMIN"]["valueFrom"]["secretKeyRef"] == {
+        "name": "nct-bootstrap", "key": "username",
+    }
+    assert env["NCT_BOOTSTRAP_PASSWORD_FILE"]["value"].endswith("/password")
+    assert all(item["kind"] != "Secret" for item in document["items"])
+    assert all(item["kind"] != "PersistentVolumeClaim" for item in document["items"])
+    assert {probe for probe in ("startupProbe", "readinessProbe", "livenessProbe")} <= set(container)
+    assert pod["metadata"]["annotations"]["nct.openai.com/storage-evidence-digest"] == report["attestation"]["digest"]
+    assert pod["metadata"]["annotations"]["nct.openai.com/pvc-uid"] == value.pvc_uid
+    assert pod["metadata"]["annotations"]["nct.openai.com/bound-volume-uid"] == value.bound_volume_uid
+    assert items["Service"]["spec"]["type"] == "ClusterIP"
+
+
+def test_post_bootstrap_deployment_has_no_secret_reference(tmp_path: Path) -> None:
+    value = args(tmp_path)
+    write_report(value)
+    document = renderer.deployment_resources(value)
+    deployment = items_by_kind(document)["Deployment"]
+    pod = deployment["spec"]["template"]["spec"]
+    env_names = {item["name"] for item in pod["containers"][0]["env"]}
+    volume_names = {item["name"] for item in pod["volumes"]}
+    assert "NCT_BOOTSTRAP_ADMIN" not in env_names
+    assert "NCT_BOOTSTRAP_PASSWORD_FILE" not in env_names
+    assert "bootstrap" not in volume_names
+    assert "NCT_AUTH_MODE" in env_names
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    (
+        ({"namespace": "other"}, "exact PVC request"),
+        ({"pvc_name": "other-data"}, "exact PVC request"),
+        ({"storage_class": "other-rwo"}, "exact PVC request"),
+        ({"storage_size": "40Gi"}, "exact PVC request"),
+        ({"pvc_uid": "99999999-2222-4333-8444-555555555555"}, "exact PVC request"),
+        ({"bound_volume_uid": "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee"}, "exact PVC request"),
+    ),
+)
+def test_deployment_rejects_report_identity_mismatch(tmp_path: Path, change: dict, message: str) -> None:
+    original = args(tmp_path)
+    report = write_report(original)
+    changed = args(tmp_path, **change)
+    changed.storage_report.write_text(json.dumps(report), encoding="utf-8")
+    changed.storage_report_digest = report["attestation"]["digest"]
+    with pytest.raises(renderer.RenderError, match=message):
+        renderer.deployment_resources(changed)
+
+
+@pytest.mark.parametrize("fault", ("cleanup", "uid", "source", "digest", "check"))
+def test_deployment_rejects_failed_or_mismatched_evidence(tmp_path: Path, fault: str) -> None:
+    value = args(tmp_path)
+    report = passing_report(value)
+    if fault == "cleanup":
+        report["cleanup"]["status"] = "fail"
+    elif fault == "uid":
+        report["measured"]["executor_uid"] = 0
+    elif fault == "source":
+        report["tool"]["source_sha256"] = "b" * 64
+    elif fault == "check":
+        report["checks"][0]["status"] = "unavailable"
+    report = qualifier._finalize({key: value for key, value in report.items() if key != "attestation"})
+    value.storage_report.write_text(json.dumps(report), encoding="utf-8")
+    value.storage_report_digest = "c" * 64 if fault == "digest" else report["attestation"]["digest"]
+    with pytest.raises(renderer.RenderError):
+        renderer.deployment_resources(value)
+
+
+def test_renderer_requires_exact_image_and_refuses_overwrite(tmp_path: Path) -> None:
+    with pytest.raises(renderer.RenderError, match="exact sha256"):
+        args(tmp_path, image="registry.example/nct:latest")
+    value = args(tmp_path)
+    renderer._write_output(value.output, renderer.qualification_resources(value), False)
+    with pytest.raises(renderer.RenderError, match="already exists"):
+        renderer._write_output(value.output, renderer.qualification_resources(value), False)
+
+
+def test_renderer_bounds_inputs_and_final_output(tmp_path: Path) -> None:
+    with pytest.raises(renderer.RenderError, match="exact sha256"):
+        args(tmp_path, image="r" * 600 + "@sha256:" + "a" * 64)
+    with pytest.raises(renderer.RenderError, match="positive Mi"):
+        args(tmp_path, storage_size="9" * 40 + "Gi")
+    with pytest.raises(renderer.RenderError, match="immutable Kubernetes object identifier"):
+        args(tmp_path, pvc_uid="a" * 129)
+    oversized = {"value": "x" * renderer.MAX_OUTPUT_BYTES}
+    with pytest.raises(renderer.RenderError, match="safe output limit"):
+        renderer._write_output(tmp_path / "oversized.json", oversized, False)
+
+
+def test_runtime_image_contains_exact_qualifier_path() -> None:
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY scripts/qualify_kubernetes_storage.py /opt/nct/tools/qualify_kubernetes_storage.py" in dockerfile

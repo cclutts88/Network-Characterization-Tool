@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.auth import auth_enabled
+from app.active_collection import require_active_collection
 from app.database import connect_database
 from app.evidence_maintenance import guarded_evidence_mutation
 from app.artifacts import (
@@ -2808,6 +2809,7 @@ def preview(plan: DeviceConfigPlan, request: Request) -> dict:
 @guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     """Open a short-lived SSH control session and stop at the device password prompt."""
+    require_active_collection()
     _require_secure_password_transport(request)
     plan = bind_signed_in_actor(request, plan, "operator")
     try:
@@ -2940,6 +2942,7 @@ def submit_interactive_password(
     request: Request,
 ) -> dict:
     """Send a one-time password to the waiting SSH PTY without persisting or logging it."""
+    require_active_collection()
     _require_secure_password_transport(request)
     with _INTERACTIVE_SESSIONS_LOCK:
         session = _INTERACTIVE_SESSIONS.get(session_id)
@@ -2992,6 +2995,7 @@ def cancel_interactive_session(session_id: str) -> dict:
 @guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     """Validate the key and capture every non-interactive SSH access check."""
+    require_active_collection()
     plan = bind_signed_in_actor(request, plan, "operator")
     try:
         plan, profile = resolve_device_collection_profile_plan(plan)
@@ -3056,6 +3060,7 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
 @router.post("/execute")
 @guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def execute(plan: DeviceConfigPlan, request: Request) -> dict:
+    require_active_collection()
     plan = bind_signed_in_actor(request, plan, "operator")
     try:
         plan, profile = resolve_device_collection_profile_plan(plan)

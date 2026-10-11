@@ -935,6 +935,8 @@ def _qualify_storage_in_process(
         root_value = os.fstat(root_fd)
         root_identity = (root_value.st_dev, root_value.st_ino)
         report["measured"] = facts
+        report["measured"]["executor_uid"] = os.geteuid()
+        report["measured"]["executor_gid"] = os.getegid()
         report["checks"].append(_result("root", "pass", "Root identity and permissions were measured without following links", started))
         workspace, workspace_identity = _create_workspace(root_fd, resolved, workspace_name)
         workspace_fd = _open_workspace(root_fd, workspace_name, workspace_identity)

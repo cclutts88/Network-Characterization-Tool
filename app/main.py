@@ -53,6 +53,11 @@ from app.runtime_trends import (
     stop_runtime_trends,
 )
 from app.writer_guard import acquire_application_writer_guard
+from app.active_collection import (
+    active_collection_enabled,
+    active_collection_status,
+    deployment_profile_status,
+)
 from app.lifecycle_health import (
     begin_shutdown,
     begin_startup,
@@ -1364,8 +1369,10 @@ async def lifespan(_: FastAPI):
     writer_guard = None
     startup_succeeded = False
     primary_error: BaseException | None = None
+    collection_enabled = False
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        collection_enabled = active_collection_enabled()
         writer_guard = acquire_application_writer_guard(DB_PATH)
         configure_database(DB_PATH)
         init_storage()
@@ -1396,15 +1403,17 @@ async def lifespan(_: FastAPI):
         resume_storage_jobs()
         background_workers_started = not compaction_recovery.get("recovery_required")
         if background_workers_started:
-            resume_scan_workers()
+            if collection_enabled:
+                resume_scan_workers()
             resume_derived_job_worker()
             recover_interrupted_derived_jobs(DB_PATH)
             start_derived_job_worker(DB_PATH, DATA_DIR)
-            recover_scheduler_state()
-            scheduler_stop = threading.Event()
-            scheduler_thread = _new_scheduler_thread(scheduler_stop)
-            scheduler_thread.start()
-            scheduler_thread_started = True
+            if collection_enabled:
+                recover_scheduler_state()
+                scheduler_stop = threading.Event()
+                scheduler_thread = _new_scheduler_thread(scheduler_stop)
+                scheduler_thread.start()
+                scheduler_thread_started = True
         runtime_trends_started = start_runtime_trends()
         mark_ready()
         startup_succeeded = True
@@ -1564,6 +1573,8 @@ def system_runtime_health(request: Request) -> dict:
     require_storage_admin(request)
     result = runtime_health_snapshot(DB_PATH, DATA_DIR)
     result["trends"] = runtime_trends_snapshot()
+    result["deployment"] = deployment_profile_status()
+    result["active_collection"] = active_collection_status()
     return result
 
 
@@ -2255,6 +2266,7 @@ def current_analyst(request: Request) -> dict:
     return {
         "authentication_enabled": auth_enabled(),
         "analyst": request.state.analyst,
+        "active_collection": active_collection_status(),
     }
 
 

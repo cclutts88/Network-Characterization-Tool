@@ -94,3 +94,13 @@ passed this bounded check. The report digest detects later alteration when compa
 a separately trusted copy; it is not a signature. A pass does not approve a storage
 class or establish Kubernetes, Range, or mission readiness. Save the JSON outside the
 candidate data root and retain it with the deployment evidence for later review.
+
+## Kubernetes single-replica renderer
+
+`render_kubernetes_single_replica.py` creates three bounded JSON packages for the
+analysis-only profile: the claim, a qualification Job bound to the immutable claim and
+volume UIDs, and the one-replica NCT Deployment after a matching passing report is
+supplied. It requires an immutable image digest, never calls `kubectl`, never accepts a
+Secret value, caps its inputs and output, and refuses mismatched or failed storage
+evidence. Follow the complete operator sequence and limitations in
+[`docs/KUBERNETES_SINGLE_REPLICA.md`](../docs/KUBERNETES_SINGLE_REPLICA.md).

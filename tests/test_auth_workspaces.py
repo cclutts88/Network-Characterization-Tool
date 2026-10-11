@@ -531,7 +531,15 @@ def test_local_operator_notes_are_persistent_without_account_sign_in(
 
     with TestClient(app) as client:
         identity = client.get("/api/auth/me").json()
-        assert identity == {"authentication_enabled": False, "analyst": None}
+        assert identity == {
+            "authentication_enabled": False,
+            "analyst": None,
+            "active_collection": {
+                "enabled": True,
+                "mode": "enabled",
+                "detail": "This deployment can start authorized scans and device collections.",
+            },
+        }
         created = client.post(
             "/api/workspaces/notes",
             json={"title": "Local field note", "kind": "note", "content": "Observed."},

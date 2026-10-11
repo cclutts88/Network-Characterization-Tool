@@ -411,6 +411,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-10 | Kubernetes acceptance gate 3C | Let the first single-replica web Deployment retain active scan and device-collection capability | Make the first Kubernetes web profile analysis only: exactly one `Recreate` replica, forced local authentication, no API token or RBAC, all Linux capabilities dropped, and server/UI enforcement that disables Nmap, scheduled execution, SSH device contact and packet capture. Keep import, upload, saved-evidence processing, analysis and portable scan-package creation available. A later collection worker must receive a separately reviewed placement and minimum-privilege profile | Web replicas cannot assume mission-network reachability and must not automatically inherit raw-network privileges. Combining the first SQLite/PVC acceptance gate with active collection would hide a materially different security and placement boundary | The renderer requires one exact image digest and a matching passing exact-PVC qualification report from the same numeric user/group. The built-in guide, System Health, scan and device pages expose the analysis-only boundary. This does not block the standalone profile and does not establish live collection, Range, mission or multi-replica readiness. See `docs/KUBERNETES_SINGLE_REPLICA.md` |
 | 2026-10-10 | Deployment architecture | Keep Kubernetes, external databases and server infrastructure outside the requirements for core offline use | Preserve the standalone single-container profile while requiring new runtime, job, storage, identity, health and deployment designs to remain compatible with a future Kubernetes profile. The initial Kubernetes profile remains exactly one NCT application replica; multi-replica operation is blocked until cross-process leases, singleton-operation coordination and a reviewed shared database/artifact design exist | The user wants the full platform developed with Kubernetes capabilities in mind without losing disconnected-Range operation or forcing a cluster onto small deployments | Provider-neutral local health comes first, followed by an optional namespace-scoped Kubernetes adapter. SQLite volumes must pass lock, atomic-rename, `fsync` and WAL/SHM qualification; RWO alone is insufficient. Upgrades must prevent an older image from opening an incompatible newer schema. See `docs/KUBERNETES_ARCHITECTURE.md` |
 | 2026-10-09 | Phase 0 rendered-browser benchmark | Run the same Chromium build inside isolated Linux benchmark containers | Use one SHA-256-identified local Windows Chrome/Playwright build for every repeat. Keep each NCT app on a unique internal-only Docker network and reach it only through a disposable dual-network relay published on `127.0.0.1`; block every non-loopback browser request and record the app, relay, network, browser process tree and cleanup identities | No compatible browser image is installed locally and the NCT Linux test image contains no browser executable; Docker Desktop does not publish a host port directly from an internal-only network | Preserves isolated app/data/source execution and equal browser settings across revisions while clearly limiting the result to same-host Windows Chrome. The relay is not part of NCT or a deployment package. No Linux-browser, Range, GPU, human-workflow, production-scale or mission-performance claim is made; those remain separate gates |
 | 2026-10-08 | Whole-network current device selection | Reuse Device History's newest records and its existing device-analysis cache | Maintain a rebuildable SQL selector for every active supported device collection, rank only eligible verified summaries per device by retained completion/creation time and run identifier, surface selected integrity conflicts, then reuse one serialized private current-device analysis only when a read-only snapshot proves its exact admission, result, provenance, retained bytes, scope-observation, WAN, contract, and database inputs are unchanged | Device History's global 100-record window could hide an older distinct device, manifest filesystem time is not a stable evidence ordering contract, and the old cache returned a shared mutable object while omitting exact evidence, scope, and WAN inputs | Source authority and retained evidence remain unchanged. Formatting-only parsed-manifest changes do not affect selection, while raw manifest bytes still invalidate analysis reuse. Rollback writes are detected and repaired on startup. A damaged newest eligible record is visible rather than hidden by an older record. Cold cache builds are read-only, warm entries invalidate on every captured dependency and database replacement, and changing inputs retry once before a visible conflict |
@@ -1987,6 +1988,53 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     Independent completion gate: **CLEAR**. This is foundation-only acceptance evidence
     for gate 3B; it does not qualify a Kubernetes storage class or establish Range,
     mission, multi-replica or stable-`main` readiness.
+    **2026-10-10 single-replica analysis package start:** Begin Kubernetes acceptance
+    gate 3C with a three-package, provider-neutral renderer. The first package creates
+    the exact ReadWriteOnce claim. The second creates a one-shot qualification Job
+    bound to the immutable claim and bound-volume UIDs. The third requires the
+    separately supplied unauthenticated report digest and rejects any mismatch in report
+    schema, tool source, namespace, claim, immutable claim UID, immutable bound-volume
+    UID, storage class, requested size, access mode,
+    numeric user/group, checks, cleanup or outcome before rendering NCT. The web profile
+    uses one `Recreate` replica, forced local authentication, a temporary password-file
+    bootstrap Secret reference, secure cookies, bounded resources, lifecycle probes, no
+    API token or RBAC, a read-only root filesystem and no Linux capabilities. Per the
+    independent start review, this first web profile is analysis only: Nmap, scheduled
+    execution, SSH device contact and packet capture are disabled in the pages, direct
+    routes and startup scheduler/scan-worker recovery. Import, upload, local processing,
+    evidence review and portable package creation remain available. The renderer never
+    calls `kubectl` or accepts Secret values; it rejects oversized inputs and output.
+    Enabled schedule creation and schedule activation are rejected server-side in the
+    analysis-only profile while pause, edit, and delete remain available. Ordered
+    HTTPS, bootstrap-removal, storage,
+    upgrade and acceptance instructions must pass novice review. This is a start record;
+    gate 3C remains open pending focused, full-suite, live browser, container-image and
+    independent completion validation.
+    **2026-10-10 novice completion correction:** The first live novice pass found four
+    operator contradictions after the security review cleared: System Health made the
+    optional cluster-health adapter look like the deployment itself was unconfigured;
+    scan status still called the analyzer available; the runbook did not define its
+    Kubernetes prerequisites and terms; and the HTTPS step lacked an explicit handoff.
+    Rename the adapter status, make analysis-only active-scan and paused-schedule text
+    explicit, and add copyable variables, definitions, prerequisites, registry notes,
+    and a concrete HTTPS administrator handoff before repeating the completion gate.
+    **2026-10-10 single-replica analysis package complete:** Gate 3C now provides three
+    bounded packages: claim creation, a one-shot qualification Job tied to the immutable
+    claim and bound-volume UIDs, and a one-replica analysis-only Deployment that accepts
+    only the matching passing report. Replacing either storage object requires a new
+    qualification. Enabled schedule creation, schedule activation, Nmap, SSH collection,
+    packet capture, scan-worker recovery and scheduler startup are refused while import,
+    upload, retained-evidence processing, analysis and portable package creation remain
+    available. The final image ran the qualifier as user/group `10001:10001` with every
+    check and cleanup passing; the renderer produced the expected UID-bound resources;
+    the post-bootstrap read-only-root preview restarted without bootstrap credentials;
+    and live System Health, scan, schedule and device pages showed the deployment limits
+    without layout or console faults. Final isolated Linux validation passed **1,296
+    tests with 15 skipped** and one existing dependency warning. Independent quality
+    gate: **CLEAR**. Novice-operator gate: **CLEAR**. This completes the foundation-only
+    gate 3C package; it does not claim a cluster apply, HTTPS installation, backup or
+    restore proof, Range readiness, mission readiness, multi-replica safety or availability
+    on `main`. Those remain later Kubernetes acceptance gates.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

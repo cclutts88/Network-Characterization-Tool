@@ -449,6 +449,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "openWaiting=new Set" in html
     assert "item.open=openWaiting.has(item.dataset.queueRun)" in html
     assert "Waiting scans are shown below and will start in queue order." in html
+    assert "retained waiting scan${waiting.length===1?'':'s'} will not start here" in html
+    assert "Retained waiting scans cannot start in this analysis-only deployment" in html
     assert "function showActiveEmpty" in html
     assert "currentLive=false" in html
     assert "currentLive=['running','awaiting_fallback_approval'].includes(state)" in html

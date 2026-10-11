@@ -81,6 +81,7 @@ from app.saved_network_scope_associations import (
     resolve_schedule_scope_context_in_transaction,
 )
 from app.request_identity import bind_signed_in_actor
+from app.active_collection import require_active_collection
 from app.pipeline_intake import (
     AUTOMATED_NMAP_SOURCE,
     NMAP_INGESTION_POLICY_VERSION,
@@ -4641,6 +4642,8 @@ def scan_schedule_history() -> list[dict]:
 @router.post("/scan-schedules", status_code=201)
 def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> dict:
     try:
+        if request.enabled:
+            require_active_collection()
         request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_schedule(request, DB_PATH)
     except SavedNetworkScopeConflict as exc:
@@ -4654,6 +4657,8 @@ def change_scan_schedule_state(
     schedule_id: str, request: ScheduleStateChange, http_request: Request
 ) -> dict:
     try:
+        if request.enabled:
+            require_active_collection()
         request = bind_signed_in_actor(http_request, request, "changed_by")
         return set_scan_schedule_enabled(
             schedule_id, request.enabled, changed_by=request.changed_by,
@@ -4682,6 +4687,7 @@ def repin_scan_schedule_profile(
 
 @router.post("/scan-schedules/{schedule_id}/run", status_code=202)
 def run_saved_scan_schedule(schedule_id: str) -> dict:
+    require_active_collection()
     try:
         return run_scan_schedule_now(schedule_id)
     except KeyError as exc:
@@ -4731,6 +4737,7 @@ def create_scan_run_plan(plan: ScanRunPlan, http_request: Request) -> dict:
 @router.post("/scan-runs", status_code=202)
 @guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
 def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
+    require_active_collection()
     try:
         actor_fields = ["operator", "created_by", "executed_by"]
         if request.scheduled:
