@@ -2071,6 +2071,66 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     package. Gate 4A remains started until the exact-cluster backup, isolated restore,
     application startup, sign-in and retained-evidence exercise succeeds. It does not
     claim Kubernetes, Range, mission, upgrade, node-loss, rollback or `main` readiness.
+    **2026-10-12 Kubernetes failure/replacement gate 4B start:** Begin the bounded
+    single-replica failure-acceptance package on an isolated Gate 4A-restored target.
+    The package must prevent automatic replacement while node loss is ambiguous, prove
+    writer-lock contention and release without opening SQLite, retain queued and running
+    processing truth across abrupt termination, compare cold database and retained-
+    evidence baselines, and bind each scenario to the exact image, deployment, storage
+    identities and qualification evidence. The four acceptance exercises are forced
+    process termination, Recreate replacement, controlled two-node rescheduling and
+    externally fenced node loss. Ambiguous node loss deliberately requires independent
+    administrator fencing and storage-detachment proof before replacement; automatic
+    failover is not accepted because ReadWriteOnce, Recreate, a missing Pod object and
+    the application lock do not independently prove the old node stopped writing.
+    Local development can complete and test the package, but only exact-cluster exercises
+    can complete Gate 4B. Independent start review: **CLEAR — DOCUMENTED DEVIATION**.
+    **Gate 4B quality-gate correction in progress:** The first completion review halted
+    the package because its receipt did not yet prove replacement ordering, externally
+    fenced node loss, old-attachment detachment, mandatory retry and intake attribution,
+    private-copy cold inspection, the actual Gate 4A restore receipt, full lock/runtime
+    identity, bounded durable recording, or the complete operator command and permission
+    sequence. The corrected package now requires a verified Gate 4A restore receipt,
+    copies the locked tree into bounded temporary storage before opening SQLite, binds
+    structured single-writer events to old/new Pod, node, generation and distinct
+    attachment identities, hashes retained provider fencing/detachment records, requires
+    one Running job, one Queued job, one pending intake intent and exactly one completed
+    retry, and requires pre-replacement lock release for rescheduling and node loss.
+    The runbook now includes namespace permission preflight, explicit denied application
+    permissions, identity refresh, every snapshot phase, retained-evidence download,
+    orchestration schema and final verifier inputs. The novice review confirmed the
+    corrected runbook order but halted on generic disclosure guidance; dedicated cold-
+    recovery and failure-instruction Guide entries now explain that opening help performs
+    no action and that node loss requires independent fencing and detachment. A second
+    independent review then halted on the physical handoff sequence, fence-before-stop
+    ordering, retained cluster observations and impossible pre-replacement Pod binding.
+    The package now establishes and identifies the destination attachment before an
+    isolated destination lock probe, explicitly omits a future Pod identity from that
+    receipt, starts the replacement only after the probe passes, and records node loss as
+    readiness loss, external fencing, confirmed writer stop, old detachment, destination
+    attachment, lock proof and replacement in that order. A mandatory hashed live
+    cluster-observation log now backs event times, Pod identities, Ready/writer maxima,
+    attachment movement and health evidence; the operator steps include both lock probes,
+    identity refresh, observation capture and bounded verifier inputs. A third review
+    then halted on the controlled-reschedule generation change, loss of the destination
+    attachment when a one-shot probe exits, contradictory stale attachment/Pod states,
+    independently generated health timestamps, and limits checked only after hashing.
+    The destination probe now holds the mounted volume for a bounded period after
+    releasing the writer lock, remains present until the same-node replacement is Ready,
+    and is then removed. The verifier binds its pre-scale generation and requires the
+    exact controlled scale transition, rejects active old or extra attachments and a
+    retained old Pod, requires one captured time per event across health and observation
+    records, and rejects oversized or cumulatively excessive files before streaming past
+    the allowed boundary. Adversarial tests cover those states. Focused isolated
+    validation currently passes **117 tests**. Independent quality gate:
+    **CLEAR — DOCUMENTED DEVIATION**. Novice-operator gate: **CLEAR**. The retained
+    cluster/provider records and SHA-256 bindings detect changes but are not authenticated
+    signatures and still require human review; local tests cannot prove physical fencing,
+    CSI detachment, scheduler behavior or node recovery. The full isolated Docker suite
+    passed **1,337 tests with 15 skips** and one existing dependency warning. This
+    completes the foundation-only Gate 4B package; Gate 4B itself remains started until
+    all four exercises pass on the exact qualified cluster. It does not claim Kubernetes,
+    Range, mission, multi-replica or `main` readiness.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

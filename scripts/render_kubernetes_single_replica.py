@@ -30,6 +30,7 @@ IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 SIZE_RE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi|Ti)$")
 IMMUTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+SCENARIO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{7,79}$")
 REQUIRED_CHECKS = {
     "root",
     "advisory_file_lock",
@@ -216,6 +217,224 @@ def qualification_resources(args: argparse.Namespace) -> dict:
     return _resource_list([_service_account(args), job])
 
 
+def writer_lock_probe_resources(args: argparse.Namespace) -> dict:
+    _report, identity, identity_sha256 = validate_report(args)
+    args.hold_seconds = getattr(args, "hold_seconds", 0)
+    if args.phase == "destination-pre-replacement":
+        if args.expect != "available" or args.scenario_kind not in {"controlled-rescheduling", "node-loss"}:
+            raise RenderError("destination pre-replacement probes require available rescheduling or node-loss evidence")
+        if args.pod_uid is not None:
+            raise RenderError("destination pre-replacement probes must not claim a replacement Pod UID")
+        if args.hold_seconds < 60:
+            raise RenderError("destination pre-replacement probes must hold the attachment for at least 60 seconds")
+    elif not args.pod_uid:
+        raise RenderError("active and released-replacement probes require a Pod UID")
+    elif args.hold_seconds:
+        raise RenderError("only destination pre-replacement probes may hold the attachment")
+    labels = {
+        "app.kubernetes.io/name": args.name,
+        "app.kubernetes.io/component": "writer-lock-probe",
+    }
+    suffix_seed = json.dumps(
+        {
+            "scenario": args.scenario_id,
+            "phase": args.phase,
+            "expect": args.expect,
+            "storage": identity_sha256,
+            "pod": args.pod_uid or "destination-pre-replacement",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    suffix = f"writer-lock-{hashlib.sha256(suffix_seed.encode()).hexdigest()[:12]}"
+    prefix = args.name[: 62 - len(suffix)].rstrip("-")
+    job_name = f"{prefix}-{suffix}"
+    annotations = {
+        "nct.openai.com/scenario-id": args.scenario_id,
+        "nct.openai.com/scenario-kind": args.scenario_kind,
+        "nct.openai.com/expected-lock-state": args.expect,
+        "nct.openai.com/pvc-uid": args.pvc_uid,
+        "nct.openai.com/bound-volume-uid": args.bound_volume_uid,
+        "nct.openai.com/storage-evidence-digest": args.storage_report_digest,
+        "nct.openai.com/storage-identity-sha256": identity_sha256,
+    }
+    probe_args = [
+        "--expect", args.expect,
+        "--scenario-id", args.scenario_id,
+        "--scenario-kind", args.scenario_kind,
+        "--phase", args.phase,
+        "--image", args.image,
+        "--application-version", args.application_version,
+        "--build-id", args.build_id,
+        "--deployment-uid", args.deployment_uid,
+        "--deployment-generation", str(args.deployment_generation),
+        "--node-uid", args.node_uid,
+        "--storage-attachment-identity", args.storage_attachment_identity,
+        "--pvc-uid", args.pvc_uid,
+        "--bound-volume-uid", args.bound_volume_uid,
+        "--qualification-report-digest", args.storage_report_digest,
+        "--receipt-path", "/tmp/nct-writer-lock-receipt.json",
+    ]
+    if args.pod_uid:
+        probe_args.extend(["--pod-uid", args.pod_uid])
+    if args.hold_seconds:
+        probe_args.extend(["--hold-seconds", str(args.hold_seconds)])
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": _metadata(job_name, args.namespace, labels, annotations),
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": args.hold_seconds + 60,
+            "ttlSecondsAfterFinished": 86400,
+            "template": {
+                "metadata": {"labels": labels, "annotations": annotations},
+                "spec": {
+                    "serviceAccountName": f"{args.name}-runtime",
+                    "automountServiceAccountToken": False,
+                    "restartPolicy": "Never",
+                    "nodeName": args.node_name,
+                    "terminationGracePeriodSeconds": 5,
+                    "securityContext": _pod_security(),
+                    "containers": [{
+                        "name": "probe-writer-lock",
+                        "image": args.image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["python", "/opt/nct/tools/probe_nct_writer_lock.py"],
+                        "args": probe_args,
+                        "terminationMessagePath": "/tmp/nct-writer-lock-receipt.json",
+                        "terminationMessagePolicy": "File",
+                        "securityContext": _container_security(),
+                        "resources": {
+                            "requests": {"cpu": "25m", "memory": "32Mi"},
+                            "limits": {"cpu": "250m", "memory": "128Mi"},
+                        },
+                        "volumeMounts": [
+                            {"name": "data", "mountPath": "/data"},
+                            {"name": "tmp", "mountPath": "/tmp"},
+                        ],
+                    }],
+                    "volumes": [
+                        {"name": "data", "persistentVolumeClaim": {"claimName": args.pvc_name}},
+                        {"name": "tmp", "emptyDir": {"sizeLimit": "16Mi"}},
+                    ],
+                },
+            },
+        },
+    }
+    return _resource_list([_service_account(args), job])
+
+
+def failure_snapshot_resources(args: argparse.Namespace) -> dict:
+    _report, _identity, identity_sha256 = validate_report(args)
+    restore_receipt = _read_report(args.gate4a_restore_receipt)
+    if restore_receipt.get("status") != "restore_verification_passed":
+        raise RenderError("Gate 4A restore receipt is not a passing receipt")
+    labels = {
+        "app.kubernetes.io/name": args.name,
+        "app.kubernetes.io/component": "failure-evidence",
+    }
+    suffix_seed = json.dumps(
+        {
+            "scenario": args.scenario_id,
+            "phase": args.phase,
+            "mode": args.mode,
+            "pod": args.pod_uid,
+            "restart": args.container_restart_count,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    suffix = f"failure-evidence-{hashlib.sha256(suffix_seed.encode()).hexdigest()[:10]}"
+    prefix = args.name[: 62 - len(suffix)].rstrip("-")
+    job_name = f"{prefix}-{suffix}"
+    receipt_name = f"{prefix}-{hashlib.sha256((suffix_seed + '-restore').encode()).hexdigest()[:10]}"
+    annotations = {
+        "nct.openai.com/scenario-id": args.scenario_id,
+        "nct.openai.com/scenario-kind": args.scenario_kind,
+        "nct.openai.com/evidence-mode": args.mode,
+        "nct.openai.com/evidence-phase": args.phase,
+        "nct.openai.com/pvc-uid": args.pvc_uid,
+        "nct.openai.com/bound-volume-uid": args.bound_volume_uid,
+        "nct.openai.com/storage-evidence-digest": args.storage_report_digest,
+        "nct.openai.com/storage-identity-sha256": identity_sha256,
+    }
+    command_args = [
+        "snapshot", "--mode", args.mode, "--phase", args.phase,
+        "--data-root", "/data", "--scenario-id", args.scenario_id,
+        "--scenario-kind", args.scenario_kind, "--image", args.image,
+        "--application-version", args.application_version, "--build-id", args.build_id,
+        "--deployment-uid", args.deployment_uid,
+        "--deployment-generation", str(args.deployment_generation),
+        "--pod-uid", args.pod_uid,
+        "--container-restart-count", str(args.container_restart_count),
+        "--node-uid", args.node_uid,
+        "--storage-attachment-identity", args.storage_attachment_identity,
+        "--pvc-uid", args.pvc_uid, "--bound-volume-uid", args.bound_volume_uid,
+        "--qualification-report-digest", args.storage_report_digest,
+        "--gate4a-restore-receipt", "/run/nct-gate4a/restore.json",
+        "--validation-root", "/tmp", "--max-files", str(args.max_files),
+        "--max-bytes", str(args.max_bytes), "--max-seconds", str(args.max_seconds),
+        "--output", "/tmp/nct-gate4b-snapshot.json",
+    ]
+    for job_id in args.tracked_job_id:
+        command_args.extend(("--tracked-job-id", job_id))
+    for intent_id in args.tracked_intent_id:
+        command_args.extend(("--tracked-intent-id", intent_id))
+    for transition in args.health_transition:
+        command_args.extend(("--health-transition", transition))
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": _metadata(job_name, args.namespace, labels, annotations),
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": args.max_seconds + 30,
+            "ttlSecondsAfterFinished": 86400,
+            "template": {
+                "metadata": {"labels": labels, "annotations": annotations},
+                "spec": {
+                    "serviceAccountName": f"{args.name}-runtime",
+                    "automountServiceAccountToken": False,
+                    "restartPolicy": "Never",
+                    "nodeName": args.node_name,
+                    "terminationGracePeriodSeconds": 10,
+                    "securityContext": _pod_security(),
+                    "containers": [{
+                        "name": "record-failure-evidence",
+                        "image": args.image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["python", "/opt/nct/tools/nct_kubernetes_failure_evidence.py"],
+                        "args": command_args,
+                        "securityContext": _container_security(),
+                        "resources": {
+                            "requests": {"cpu": "50m", "memory": "128Mi", "ephemeral-storage": args.validation_copy_size},
+                            "limits": {"cpu": "1", "memory": "512Mi", "ephemeral-storage": args.validation_copy_size},
+                        },
+                        "volumeMounts": [
+                            {"name": "data", "mountPath": "/data"},
+                            {"name": "tmp", "mountPath": "/tmp"},
+                            {"name": "gate4a-restore", "mountPath": "/run/nct-gate4a", "readOnly": True},
+                        ],
+                    }],
+                    "volumes": [
+                        {"name": "data", "persistentVolumeClaim": {"claimName": args.pvc_name}},
+                        {"name": "tmp", "emptyDir": {"sizeLimit": args.validation_copy_size}},
+                        {"name": "gate4a-restore", "configMap": {"name": receipt_name}},
+                    ],
+                },
+            },
+        },
+    }
+    receipt_config = {
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": _metadata(receipt_name, args.namespace, labels, annotations),
+        "immutable": True,
+        "data": {"restore.json": json.dumps(restore_receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True)},
+    }
+    return _resource_list([_service_account(args), receipt_config, job])
+
+
 def _read_report(path: Path) -> dict:
     try:
         value = os.lstat(path)
@@ -370,6 +589,18 @@ def deployment_resources(args: argparse.Namespace) -> dict:
                     "serviceAccountName": f"{args.name}-runtime",
                     "automountServiceAccountToken": False,
                     "terminationGracePeriodSeconds": 120,
+                    "tolerations": [
+                        {
+                            "key": "node.kubernetes.io/not-ready",
+                            "operator": "Exists",
+                            "effect": "NoExecute",
+                        },
+                        {
+                            "key": "node.kubernetes.io/unreachable",
+                            "operator": "Exists",
+                            "effect": "NoExecute",
+                        },
+                    ],
                     "securityContext": _pod_security(),
                     "containers": [container],
                     "volumes": volumes,
@@ -408,6 +639,49 @@ def _validate_args(args: argparse.Namespace) -> None:
         args.bound_volume_uid = _immutable_id(args.bound_volume_uid, "bound volume UID")
     if getattr(args, "bootstrap_secret", None):
         args.bootstrap_secret = _name(args.bootstrap_secret, "bootstrap Secret name")
+    if getattr(args, "scenario_id", None) is not None:
+        if not SCENARIO_RE.fullmatch(args.scenario_id):
+            raise RenderError("scenario ID must be 8-80 lowercase letters, digits, or hyphens")
+        args.deployment_uid = _immutable_id(args.deployment_uid, "Deployment UID")
+        if args.pod_uid is not None:
+            args.pod_uid = _immutable_id(args.pod_uid, "Pod UID")
+        elif getattr(args, "phase", None) != "destination-pre-replacement":
+            raise RenderError("Pod UID is required outside the destination pre-replacement phase")
+        args.node_uid = _immutable_id(args.node_uid, "Node UID")
+        args.node_name = _dns(args.node_name, "node name")
+        if args.deployment_generation < 1:
+            raise RenderError("Deployment generation must be positive")
+        for attribute, label in (
+            ("application_version", "application version"),
+            ("build_id", "build ID"),
+            ("storage_attachment_identity", "storage attachment identity"),
+        ):
+            value = getattr(args, attribute)
+            if not value or len(value) > MAX_IMAGE_CHARS or any(ord(char) < 32 for char in value):
+                raise RenderError(f"{label} is invalid or too large")
+        if getattr(args, "container_restart_count", 0) < 0:
+            raise RenderError("container restart count must not be negative")
+        for attribute, label in (
+            ("tracked_job_id", "tracked job ID"),
+            ("tracked_intent_id", "tracked admission intent ID"),
+            ("health_transition", "health transition"),
+        ):
+            values = getattr(args, attribute, [])
+            if len(values) > 100 or len(values) != len(set(values)):
+                raise RenderError(f"{label} values must be unique and bounded")
+            if any(not value or len(value) > MAX_IMAGE_CHARS or any(ord(char) < 32 for char in value) for value in values):
+                raise RenderError(f"{label} is invalid or too large")
+        restore_receipt = getattr(args, "gate4a_restore_receipt", None)
+        if restore_receipt is not None and not isinstance(restore_receipt, Path):
+            raise RenderError("Gate 4A restore receipt path is invalid")
+        if getattr(args, "max_files", 1) < 1 or getattr(args, "max_files", 1) > 1_000_000:
+            raise RenderError("max files is outside the enforced limit")
+        if getattr(args, "max_bytes", 1) < 1 or getattr(args, "max_bytes", 1) > 4 * 1024**4:
+            raise RenderError("max bytes is outside the enforced limit")
+        if getattr(args, "max_seconds", 1) < 1 or getattr(args, "max_seconds", 1) > 1800:
+            raise RenderError("max seconds is outside the enforced limit")
+        if getattr(args, "validation_copy_size", None) is not None:
+            args.validation_copy_size = _size(args.validation_copy_size)
     mount_path = getattr(args, "mount_path", "/data")
     if mount_path not in {"/data", "/backup", "/restore"}:
         raise RenderError("mount path must be /data, /backup, or /restore")
@@ -466,6 +740,60 @@ def _parser() -> argparse.ArgumentParser:
     deployment.add_argument("--storage-report", type=Path, required=True)
     deployment.add_argument("--storage-report-digest", required=True)
     deployment.add_argument("--bootstrap-secret")
+    lock_probe = subparsers.add_parser("writer-lock-probe")
+    add_common(lock_probe, image=True, identity=True)
+    lock_probe.add_argument("--storage-report", type=Path, required=True)
+    lock_probe.add_argument("--storage-report-digest", required=True)
+    lock_probe.add_argument("--expect", choices=("contended", "available"), required=True)
+    lock_probe.add_argument("--scenario-id", required=True)
+    lock_probe.add_argument(
+        "--scenario-kind",
+        choices=("forced-termination", "recreate-replacement", "controlled-rescheduling", "node-loss"),
+        required=True,
+    )
+    lock_probe.add_argument(
+        "--phase",
+        choices=("old-writer-active", "destination-pre-replacement", "replacement-writer-released"),
+        required=True,
+    )
+    lock_probe.add_argument("--application-version", required=True)
+    lock_probe.add_argument("--build-id", required=True)
+    lock_probe.add_argument("--deployment-uid", required=True)
+    lock_probe.add_argument("--deployment-generation", type=int, required=True)
+    lock_probe.add_argument("--pod-uid")
+    lock_probe.add_argument("--node-name", required=True)
+    lock_probe.add_argument("--node-uid", required=True)
+    lock_probe.add_argument("--storage-attachment-identity", required=True)
+    lock_probe.add_argument("--hold-seconds", type=int, default=0)
+    snapshot = subparsers.add_parser("failure-snapshot")
+    add_common(snapshot, image=True, identity=True)
+    snapshot.add_argument("--storage-report", type=Path, required=True)
+    snapshot.add_argument("--storage-report-digest", required=True)
+    snapshot.add_argument("--mode", choices=("runtime", "cold"), required=True)
+    snapshot.add_argument("--phase", choices=("before-failure", "after-restart", "after-retry"), required=True)
+    snapshot.add_argument("--scenario-id", required=True)
+    snapshot.add_argument(
+        "--scenario-kind",
+        choices=("forced-termination", "recreate-replacement", "controlled-rescheduling", "node-loss"),
+        required=True,
+    )
+    snapshot.add_argument("--application-version", required=True)
+    snapshot.add_argument("--build-id", required=True)
+    snapshot.add_argument("--deployment-uid", required=True)
+    snapshot.add_argument("--deployment-generation", type=int, required=True)
+    snapshot.add_argument("--pod-uid", required=True)
+    snapshot.add_argument("--container-restart-count", type=int, required=True)
+    snapshot.add_argument("--node-name", required=True)
+    snapshot.add_argument("--node-uid", required=True)
+    snapshot.add_argument("--storage-attachment-identity", required=True)
+    snapshot.add_argument("--gate4a-restore-receipt", type=Path, required=True)
+    snapshot.add_argument("--validation-copy-size", default="20Gi")
+    snapshot.add_argument("--max-files", type=int, default=1_000_000)
+    snapshot.add_argument("--max-bytes", type=int, default=4 * 1024**4)
+    snapshot.add_argument("--max-seconds", type=int, default=300)
+    snapshot.add_argument("--tracked-job-id", action="append", default=[])
+    snapshot.add_argument("--tracked-intent-id", action="append", default=[])
+    snapshot.add_argument("--health-transition", action="append", default=[])
     return parser
 
 
@@ -477,8 +805,12 @@ def main() -> int:
             value = claim_resources(args)
         elif args.command == "qualification":
             value = qualification_resources(args)
-        else:
+        elif args.command == "deployment":
             value = deployment_resources(args)
+        elif args.command == "writer-lock-probe":
+            value = writer_lock_probe_resources(args)
+        else:
+            value = failure_snapshot_resources(args)
         _write_output(args.output, value, args.overwrite)
     except RenderError as exc:
         print(f"error: {exc}", file=sys.stderr)

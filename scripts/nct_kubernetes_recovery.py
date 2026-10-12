@@ -1028,7 +1028,11 @@ def restore_backup(args: argparse.Namespace) -> dict:
     result = {
         "schema_version": SCHEMA_VERSION, "status": "restore_verification_passed",
         "backup_id": args.backup_id, "verified_at": _utc_now(),
+        "source_image": manifest["source"]["image"],
+        "source_application_version": manifest["source"]["application_version"],
+        "source_build_id": manifest["source"]["build_id"],
         "manifest_sha256": manifest["manifest_sha256"],
+        "backup_receipt_sha256": receipt["receipt_sha256"],
         "archive_sha256": manifest["archive"]["sha256"],
         "inventory_root_sha256": manifest["inventory_root_sha256"],
         "target_storage_identity_sha256": _digest(target_identity),

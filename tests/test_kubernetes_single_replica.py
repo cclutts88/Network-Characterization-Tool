@@ -15,6 +15,7 @@ if str(SCRIPTS) not in sys.path:
 
 import qualify_kubernetes_storage as qualifier  # noqa: E402
 import render_kubernetes_single_replica as renderer  # noqa: E402
+import nct_kubernetes_recovery as recovery  # noqa: E402
 
 
 def args(tmp_path: Path, **changes) -> argparse.Namespace:
@@ -79,6 +80,35 @@ def write_report(value: argparse.Namespace, report: dict | None = None) -> dict:
     return report
 
 
+def write_restore_receipt(value: argparse.Namespace) -> Path:
+    path = value.output.parent / "gate4a-restore-receipt.json"
+    body = {
+        "schema_version": recovery.SCHEMA_VERSION,
+        "status": "restore_verification_passed",
+        "backup_id": "backup-20261012",
+        "source_image": value.image,
+        "source_application_version": "0.14.0-dev",
+        "source_build_id": "build-123",
+        "manifest_sha256": "1" * 64,
+        "backup_receipt_sha256": "4" * 64,
+        "archive_sha256": "2" * 64,
+        "inventory_root_sha256": "3" * 64,
+        "target_qualification_report_digest": value.storage_report_digest,
+        "source_qualification_report_digest": "5" * 64,
+        "backup_qualification_report_digest": "6" * 64,
+        "source_and_backup_preserved": True,
+        "source_storage_identity": {"pvc_uid": "source-pvc-12345678", "bound_volume_uid": "source-pv-12345678"},
+        "backup_storage_identity": {"pvc_uid": "backup-pvc-12345678", "bound_volume_uid": "backup-pv-12345678"},
+        "target_storage_identity": {
+            "pvc_uid": value.pvc_uid,
+            "bound_volume_uid": value.bound_volume_uid,
+        },
+    }
+    body["receipt_sha256"] = recovery._digest(body)
+    path.write_text(json.dumps(body), encoding="utf-8")
+    return path
+
+
 def items_by_kind(document: dict) -> dict[str, dict]:
     return {item["kind"]: item for item in document["items"]}
 
@@ -130,6 +160,18 @@ def test_deployment_is_one_analysis_only_replica_and_uses_exact_report(tmp_path:
 
     assert deployment["spec"]["replicas"] == 1
     assert deployment["spec"]["strategy"] == {"type": "Recreate"}
+    assert pod_spec["tolerations"] == [
+        {
+            "key": "node.kubernetes.io/not-ready",
+            "operator": "Exists",
+            "effect": "NoExecute",
+        },
+        {
+            "key": "node.kubernetes.io/unreachable",
+            "operator": "Exists",
+            "effect": "NoExecute",
+        },
+    ]
     assert pod_spec["automountServiceAccountToken"] is False
     assert pod_spec["securityContext"]["runAsUser"] == renderer.RUN_AS_UID
     assert pod_spec["securityContext"]["runAsGroup"] == renderer.RUN_AS_GID
@@ -150,6 +192,119 @@ def test_deployment_is_one_analysis_only_replica_and_uses_exact_report(tmp_path:
     assert pod["metadata"]["annotations"]["nct.openai.com/pvc-uid"] == value.pvc_uid
     assert pod["metadata"]["annotations"]["nct.openai.com/bound-volume-uid"] == value.bound_volume_uid
     assert items["Service"]["spec"]["type"] == "ClusterIP"
+
+
+def test_writer_lock_probe_is_exact_unprivileged_and_has_no_api_access(tmp_path: Path) -> None:
+    value = args(
+        tmp_path,
+        scenario_id="forced-stop-20261012",
+        scenario_kind="forced-termination",
+        expect="contended",
+        phase="old-writer-active",
+        application_version="0.14.0-dev",
+        build_id="build-123",
+        deployment_uid="dddddddd-2222-4333-8444-555555555555",
+        deployment_generation=7,
+        pod_uid="eeeeeeee-2222-4333-8444-555555555555",
+        node_name="worker-a.example",
+        node_uid="ffffffff-2222-4333-8444-555555555555",
+        storage_attachment_identity="csi-attachment-12345678",
+    )
+    report = write_report(value)
+    document = renderer.writer_lock_probe_resources(value)
+    items = items_by_kind(document)
+    job = items["Job"]
+    pod = job["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert pod["nodeName"] == "worker-a.example"
+    assert pod["automountServiceAccountToken"] is False
+    assert container["image"].endswith("@sha256:" + "a" * 64)
+    assert container["command"] == ["python", "/opt/nct/tools/probe_nct_writer_lock.py"]
+    assert container["terminationMessagePolicy"] == "File"
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert "--expect" in container["args"] and "contended" in container["args"]
+    assert job["metadata"]["annotations"]["nct.openai.com/storage-evidence-digest"] == report["attestation"]["digest"]
+    assert all(item["kind"] not in {"Role", "RoleBinding", "Secret"} for item in document["items"])
+
+
+def test_pre_replacement_lock_probe_targets_destination_without_future_pod(tmp_path: Path) -> None:
+    value = args(
+        tmp_path,
+        scenario_id="node-loss-20261012",
+        scenario_kind="node-loss",
+        expect="available",
+        phase="destination-pre-replacement",
+        application_version="0.14.0-dev",
+        build_id="build-123",
+        deployment_uid="dddddddd-2222-4333-8444-555555555555",
+        deployment_generation=8,
+        pod_uid=None,
+        node_name="worker-b.example",
+        node_uid="ffffffff-2222-4333-8444-666666666666",
+        storage_attachment_identity="csi-attachment-destination",
+        hold_seconds=300,
+    )
+    write_report(value)
+    document = renderer.writer_lock_probe_resources(value)
+    job = items_by_kind(document)["Job"]
+    pod = job["spec"]["template"]["spec"]
+    command_args = pod["containers"][0]["args"]
+
+    assert pod["nodeName"] == "worker-b.example"
+    assert "--pod-uid" not in command_args
+    assert "destination-pre-replacement" in command_args
+    assert "csi-attachment-destination" in command_args
+    assert command_args[command_args.index("--hold-seconds") + 1] == "300"
+    assert job["spec"]["activeDeadlineSeconds"] == 360
+
+
+def test_failure_snapshot_is_bounded_to_exact_node_storage_and_image(tmp_path: Path) -> None:
+    value = args(
+        tmp_path,
+        scenario_id="forced-stop-20261012",
+        scenario_kind="forced-termination",
+        mode="runtime",
+        phase="before-failure",
+        application_version="0.14.0-dev",
+        build_id="build-123",
+        deployment_uid="dddddddd-2222-4333-8444-555555555555",
+        deployment_generation=7,
+        pod_uid="eeeeeeee-2222-4333-8444-555555555555",
+        container_restart_count=0,
+        node_name="worker-a.example",
+        node_uid="ffffffff-2222-4333-8444-555555555555",
+        storage_attachment_identity="csi-attachment-12345678",
+        gate4a_restore_receipt=tmp_path / "gate4a-restore-receipt.json",
+        validation_copy_size="20Gi",
+        max_files=1000,
+        max_bytes=1024**3,
+        max_seconds=300,
+        tracked_job_id=["pipeline_job_running", "pipeline_job_queued"],
+        tracked_intent_id=["intake_intent_12345678"],
+        health_transition=["2026-10-12T00:00:00Z|readiness|ready"],
+    )
+    report = write_report(value)
+    value.gate4a_restore_receipt = write_restore_receipt(value)
+    document = renderer.failure_snapshot_resources(value)
+    items = items_by_kind(document)
+    job = items["Job"]
+    pod = job["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert pod["nodeName"] == "worker-a.example"
+    assert pod["automountServiceAccountToken"] is False
+    assert container["command"] == [
+        "python", "/opt/nct/tools/nct_kubernetes_failure_evidence.py",
+    ]
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert container["args"].count("--tracked-job-id") == 2
+    assert container["args"].count("--health-transition") == 1
+    assert items["ConfigMap"]["immutable"] is True
+    assert container["resources"]["limits"]["ephemeral-storage"] == "20Gi"
+    assert any(item["mountPath"] == "/run/nct-gate4a" for item in container["volumeMounts"])
+    assert job["metadata"]["annotations"]["nct.openai.com/storage-evidence-digest"] == report["attestation"]["digest"]
+    assert all(item["kind"] not in {"Role", "RoleBinding", "Secret"} for item in document["items"])
 
 
 def test_post_bootstrap_deployment_has_no_secret_reference(tmp_path: Path) -> None:
@@ -230,3 +385,5 @@ def test_renderer_bounds_inputs_and_final_output(tmp_path: Path) -> None:
 def test_runtime_image_contains_exact_qualifier_path() -> None:
     dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY scripts/qualify_kubernetes_storage.py /opt/nct/tools/qualify_kubernetes_storage.py" in dockerfile
+    assert "COPY scripts/probe_nct_writer_lock.py /opt/nct/tools/probe_nct_writer_lock.py" in dockerfile
+    assert "COPY scripts/nct_kubernetes_failure_evidence.py /opt/nct/tools/nct_kubernetes_failure_evidence.py" in dockerfile

@@ -237,5 +237,25 @@ the complete runbook succeeds against the exact cluster, image and three qualifi
 volumes, including restored startup, existing-account sign-in and retained-evidence
 download. This package status does not change the open Gate 4 aggregate or later gates.
 
+Gate 4B deliberately fails closed during ambiguous node loss. The one-replica Deployment
+tolerates not-ready and unreachable node taints indefinitely so Kubernetes cannot evict
+the old Pod and automatically create a possible second writer. An external operator must
+prove node fencing and storage detachment before removing the stale Pod and permitting a
+replacement. The foundation package includes an existing-file-only writer-lock probe,
+bounded runtime snapshots, cold inspection of a complete protected private copy,
+Gate 4A restore-receipt verification, durable-work transition verification, and four
+administrator exercises for forced process termination, Recreate replacement,
+controlled rescheduling, and fenced node loss. NCT and those Jobs receive no Kubernetes
+API token or RBAC. The verifier binds a structured single-writer event sequence to the
+old and new Pod, node, Deployment generation, PVC/PV and distinct old/new attachment
+identities. Controlled rescheduling and node loss require the old attachment to be
+detached before a replacement is created; node loss also requires a retained provider
+fencing record. The verifier checks the external records' hashes and event order but
+does not authenticate or interpret the provider statements. This is a documented
+availability tradeoff: evidence safety takes priority over automatic failover. Local
+package validation cannot prove CSI detachment, scheduler behavior, a node's power
+state, or two-node recovery; Gate 4B remains open
+until all four exercises pass on the exact qualified cluster and restored data target.
+
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.

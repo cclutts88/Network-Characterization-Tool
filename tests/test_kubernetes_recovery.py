@@ -145,6 +145,10 @@ def test_cold_backup_and_empty_target_restore_preserve_wal_artifacts_and_hardlin
     assert "imports/duplicate.xml" in paths
     result = recovery.restore_backup(restore_args(backup, target))
     assert result["status"] == "restore_verification_passed"
+    assert result["source_image"] == "registry.example/nct@sha256:" + "b" * 64
+    assert result["source_application_version"] == "0.14.0-dev"
+    assert result["source_build_id"] == "test-build"
+    assert result["backup_receipt_sha256"] == backup_receipt["receipt_sha256"]
     assert json.loads((tmp_path / "backup-20261012-restore-receipt.json").read_text())["receipt_sha256"] == result["receipt_sha256"]
     assert result["artifact_registry_verified"] == 1
     assert result["retained_evidence_verified"] == 1
