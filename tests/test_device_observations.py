@@ -411,13 +411,19 @@ def test_interrupted_observation_attempt_can_be_retried_to_completion(tmp_path, 
     assert jobs.dispatch_next_pipeline_intake(db_path) is True
     claim = jobs.claim_next_derived_job(db_path)
     assert claim is not None
+    with connect_database(db_path) as db:
+        db.execute(
+            "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' "
+            "WHERE lease_key = ?",
+            (claim["lease_key"],),
+        )
     assert jobs.recover_interrupted_derived_jobs(db_path) == 1
-    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
-    retried = jobs.retry_derived_job(
-        db_path, claim["job_id"], request_token="restart-retry",
-        requested_by="observation-analyst",
+    recovered = next(
+        item for item in jobs.list_derived_jobs(db_path, limit=100)["items"]
+        if item["job_id"] == claim["job_id"]
     )
-    assert retried["latest_attempt"]["state"] == "queued"
+    assert recovered["latest_attempt"]["state"] == "queued"
+    assert recovered["latest_attempt"]["requested_by"] == "system-recovery"
     assert jobs.run_next_derived_job(db_path, tmp_path) is True
     status = get_device_observation_status(db_path, run_id)
     assert status["state"] == "completed"

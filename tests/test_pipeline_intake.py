@@ -208,6 +208,12 @@ def test_automatic_admission_never_retries_an_existing_terminal_attempt(
     if terminal_state == "failed":
         jobs.fail_claimed_derived_job(db_path, claim, RuntimeError("expected failure"))
     else:
+        with connect_database(db_path) as db:
+            db.execute(
+                "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' "
+                "WHERE lease_key = ?",
+                (claim["lease_key"],),
+            )
         assert jobs.recover_interrupted_derived_jobs(db_path) == 1
 
     assert jobs.dispatch_next_pipeline_intake(db_path) is True
@@ -229,8 +235,15 @@ def test_automatic_admission_never_retries_an_existing_terminal_attempt(
             "SELECT request_token FROM pipeline_job_requests WHERE job_id = ?",
             (queued["job_id"],),
         ).fetchall()
-    assert attempts == [(1, terminal_state)]
-    assert requests == [(f"explicit-{terminal_state}",)]
+    if terminal_state == "failed":
+        assert attempts == [(1, "failed")]
+        assert requests == [("explicit-failed",)]
+    else:
+        assert attempts == [(1, "interrupted"), (2, "queued")]
+        assert requests == [
+            ("explicit-interrupted",),
+            (f"recovery-{claim['attempt_id']}-{claim['lease_epoch']}",),
+        ]
 
 
 def test_persistent_queue_failure_pauses_without_hot_respawn_then_recovers(

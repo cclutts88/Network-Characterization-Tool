@@ -81,7 +81,13 @@ def _run(repeat: int, foundation: bool, wall: float = 1.0) -> dict:
             "allowed_database_table_changes": changes,
             "evidence_sha256_unchanged": ("4" if foundation else "3") * 64,
         },
-        "total": {"peak_rss_bytes": 1000 if not foundation else 1100},
+        "total": {
+            "peak_rss_bytes": 1000 if not foundation else 1100,
+            "peak_rss_method": "cgroup-v2 memory.peak including child processes",
+            "peak_rss_scope": "container-lifetime-cgroup-v2",
+            "peak_rss_requested_scope": "container-lifetime-cgroup-v2",
+            "formal_phase0_acceptance_eligible": True,
+        },
         "limitations": ["in-process"],
     }
 
@@ -163,3 +169,19 @@ def test_http_summary_reports_common_endpoint_regression(tmp_path):
     result = summarize(main, foundation)
     assert result["passed"] is False
     assert any("relative limit exceeded" in item for item in result["failures"])
+
+
+def test_http_summary_rejects_process_lifetime_peak_memory(tmp_path):
+    main = _write(tmp_path, False)
+    foundation = _write(tmp_path, True)
+    changed = json.loads(foundation[0].read_text())
+    changed["total"].update({
+        "peak_rss_method": "sum of self and child ru_maxrss upper bounds",
+        "peak_rss_scope": "runner-process-lifetime",
+        "peak_rss_requested_scope": "runner-process-lifetime",
+        "formal_phase0_acceptance_eligible": False,
+    })
+    foundation[0].write_text(json.dumps(changed))
+
+    with pytest.raises(ValueError, match="formal container-lifetime peak-memory evidence"):
+        summarize(main, foundation)

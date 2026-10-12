@@ -5,6 +5,7 @@ import sqlite3
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,16 @@ from fastapi.testclient import TestClient
 
 from app.artifacts import (artifact_storage_summary, get_artifact, register_artifact_bytes,
                            register_artifact_file, register_finalized_files)
-from app.storage_health import analyze_storage, backfill_storage, start_storage_job, storage_status
+from app.evidence_maintenance import EvidenceMaintenanceBlocked, recovery_required
+from app.storage_health import (
+    _owned_storage_transaction, _save_status, analyze_storage, backfill_storage,
+    start_storage_job, storage_status,
+)
+from app.work_coordination import (
+    WorkLeaseLost,
+    acquire_work_lease,
+    renew_work_lease_on_connection,
+)
 
 
 def collection(root, run_id, content=b"router evidence", status="completed", folder="device-configs"):
@@ -81,6 +91,133 @@ def test_backfill_retries_after_checkpoint_loss_without_duplicate_observation(tm
         db.execute("DELETE FROM artifact_backfill")
     assert backfill_storage(db_path)["resumed_unchanged"] == 1
     assert artifact_storage_summary(db_path)["observation_count"] == 1
+
+
+def test_backfill_lost_owner_cannot_publish_staged_canonical_content(tmp_path):
+    collection(tmp_path, "a")
+    db_path = tmp_path / "analyzer.db"
+    calls = 0
+
+    @contextmanager
+    def fence():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise WorkLeaseLost("superseded before canonical publication")
+        with sqlite3.connect(db_path) as connection:
+            yield connection
+
+    with pytest.raises(WorkLeaseLost, match="superseded"):
+        backfill_storage(db_path, ownership_fence=fence)
+
+    assert not list((tmp_path / "artifacts" / "sha256").glob("*/*"))
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM artifact_registry").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_backfill").fetchone()[0] == 0
+
+
+def test_backfill_lost_owner_after_file_publication_cleans_canonical_and_database(tmp_path, monkeypatch):
+    import app.storage_health as storage
+
+    collection(tmp_path, "a")
+    db_path = tmp_path / "analyzer.db"
+
+    @contextmanager
+    def fence():
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+
+    def lose_ownership(**_kwargs):
+        raise WorkLeaseLost("superseded after canonical publication")
+
+    monkeypatch.setattr(storage, "_register_record_on_connection", lose_ownership)
+    with pytest.raises(WorkLeaseLost, match="superseded"):
+        backfill_storage(db_path, ownership_fence=fence)
+
+    assert not list((tmp_path / "artifacts" / "sha256").glob("*/*"))
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM artifact_registry").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_observations").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_backfill").fetchone()[0] == 0
+
+
+def test_backfill_commit_failure_stops_for_recovery_with_uncertain_canonical(tmp_path):
+    collection(tmp_path, "a")
+    db_path = tmp_path / "analyzer.db"
+    calls = 0
+
+    @contextmanager
+    def commit_failure_fence():
+        nonlocal calls
+        calls += 1
+        connection = sqlite3.connect(db_path)
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield connection
+            if calls == 2:
+                connection.rollback()
+                raise sqlite3.OperationalError("simulated commit failure")
+            connection.commit()
+        finally:
+            connection.close()
+
+    with pytest.raises(EvidenceMaintenanceBlocked, match="stopped for safety"):
+        backfill_storage(db_path, ownership_fence=commit_failure_fence)
+
+    assert recovery_required(db_path) is True
+    assert len(list((tmp_path / "artifacts" / "sha256").glob("*/*"))) == 1
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM artifact_registry").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_observations").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_backfill").fetchone()[0] == 0
+
+
+def test_background_backfill_commit_failure_stops_before_later_files(tmp_path, monkeypatch):
+    import app.storage_health as storage
+
+    collection(tmp_path, "a", content=b"first evidence")
+    collection(tmp_path, "b", content=b"second evidence")
+    db_path = tmp_path / "analyzer.db"
+    original_fence = storage._owned_storage_transaction
+    calls = 0
+
+    @contextmanager
+    def failing_fence(path, lease, heartbeat_lost):
+        nonlocal calls
+        calls += 1
+        if calls != 3:
+            with original_fence(path, lease, heartbeat_lost) as connection:
+                yield connection
+            return
+        connection = storage.connect_database(path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            renew_work_lease_on_connection(connection, lease, lease_seconds=30)
+            yield connection
+            connection.rollback()
+            raise sqlite3.OperationalError("simulated commit failure")
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(storage, "_owned_storage_transaction", failing_fence)
+    start_storage_job(db_path, "backfill")
+    for _ in range(300):
+        status = storage_status(db_path)
+        if status["status"] != "running":
+            break
+        time.sleep(.01)
+
+    assert status["status"] == "stopped_for_safety"
+    assert status["coordination_state"] == "stopped_for_safety"
+    assert recovery_required(db_path) is True
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM artifact_registry").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_observations").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM artifact_backfill").fetchone()[0] == 0
+    canonical_files = list((tmp_path / "artifacts" / "sha256").glob("*/*"))
+    assert len(canonical_files) == 1
+    assert canonical_files[0].read_bytes() == b"first evidence"
 
 
 def test_missing_evidence_and_active_collection_block_candidates(tmp_path):
@@ -187,6 +324,65 @@ def test_background_status_survives_restart_and_prevents_overlap(tmp_path, monke
     assert storage_status(db_path)["report"] == {"test": True}
     (tmp_path / "storage-health.json").write_text('{"status":"running"}')
     assert storage_status(db_path)["status"] == "interrupted"
+
+
+def test_storage_job_refuses_another_current_instance(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    acquire_work_lease(
+        db_path,
+        lease_key="storage-maintenance",
+        work_kind="storage-backfill",
+        work_id="external-operation",
+        owner_id="other-instance",
+        expired_policy="recovery_required",
+    )
+    with pytest.raises(ValueError, match="Another NCT instance"):
+        start_storage_job(db_path, "dry-run")
+
+
+def test_expired_storage_owner_stops_for_safety(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    lease = acquire_work_lease(
+        db_path,
+        lease_key="storage-maintenance",
+        work_kind="storage-compaction",
+        work_id="uncertain-operation",
+        owner_id="former-instance",
+        expired_policy="recovery_required",
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE work_leases SET expires_at='2000-01-01T00:00:00.000Z' WHERE lease_key=?",
+            (lease.lease_key,),
+        )
+    with pytest.raises(ValueError, match="stopped for safety"):
+        start_storage_job(db_path, "dry-run")
+    status = storage_status(db_path)
+    assert status["status"] == "stopped_for_safety"
+    assert status["coordination_state"] == "stopped_for_safety"
+
+
+def test_expired_storage_owner_cannot_publish_terminal_status(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    lease = acquire_work_lease(
+        db_path,
+        lease_key="storage-maintenance",
+        work_kind="storage-dry-run",
+        work_id="old-operation",
+        owner_id="old-instance",
+        expired_policy="recovery_required",
+    )
+    _save_status(db_path, {"status": "running", "operation": "old-operation"})
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE work_leases SET expires_at='2000-01-01T00:00:00.000Z' WHERE lease_key=?",
+            (lease.lease_key,),
+        )
+    with pytest.raises(WorkLeaseLost):
+        with _owned_storage_transaction(db_path, lease, threading.Event()):
+            _save_status(db_path, {"status": "complete", "operation": "old-operation"})
+    saved = json.loads((tmp_path / "storage-health.json").read_text())
+    assert saved == {"status": "running", "operation": "old-operation"}
 
 
 def manual_upload(root, registered=True):

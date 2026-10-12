@@ -63,6 +63,15 @@ from app.searchsploit_results import (
     candidate_result_identity,
     generate_searchsploit_candidate_result,
 )
+from app.work_coordination import (
+    DEFAULT_LEASE_SECONDS,
+    WorkLeaseLost,
+    acquire_work_lease_on_connection,
+    assert_work_lease_on_connection,
+    init_work_coordination_storage,
+    release_work_lease_on_connection,
+    renew_work_lease_on_connection,
+)
 
 
 JOB_TYPE = "nmap_base_analysis"
@@ -72,6 +81,8 @@ _INTAKE_RETRY_DELAYS = (0.25, 1.0, 5.0)
 _WORKERS: dict[Path, tuple[threading.Event, threading.Thread]] = {}
 _WORKERS_LOCK = threading.RLock()
 _WORKERS_SHUTTING_DOWN = False
+_RUNTIME_WORKER_ID = f"nct-runtime-{uuid.uuid4().hex}"
+_LEASE_RENEW_SECONDS = max(1.0, DEFAULT_LEASE_SECONDS / 3)
 
 
 class DerivedJobConflict(ValueError):
@@ -124,6 +135,7 @@ def _validate_supplied_run_path(path: Path, run_id: str) -> Path:
 def init_derived_job_storage(db_path: Path) -> None:
     init_pipeline_intake_storage(db_path)
     init_derived_result_storage(db_path)
+    init_work_coordination_storage(db_path)
     with connect_database(db_path) as db:
         db.executescript(
             """
@@ -163,6 +175,9 @@ def init_derived_job_storage(db_path: Path) -> None:
                     'queued', 'running', 'completed', 'failed', 'interrupted'
                 )),
                 claim_token TEXT,
+                lease_owner TEXT,
+                lease_epoch INTEGER NOT NULL DEFAULT 0 CHECK(lease_epoch >= 0),
+                lease_expires_at TEXT,
                 requested_by TEXT NOT NULL,
                 requested_at TEXT NOT NULL,
                 started_at TEXT,
@@ -199,6 +214,20 @@ def init_derived_job_storage(db_path: Path) -> None:
             );
             """
         )
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(pipeline_job_attempts)")
+        }
+        if "lease_owner" not in columns:
+            db.execute("ALTER TABLE pipeline_job_attempts ADD COLUMN lease_owner TEXT")
+        if "lease_epoch" not in columns:
+            db.execute(
+                "ALTER TABLE pipeline_job_attempts ADD COLUMN "
+                "lease_epoch INTEGER NOT NULL DEFAULT 0 CHECK(lease_epoch >= 0)"
+            )
+        if "lease_expires_at" not in columns:
+            db.execute(
+                "ALTER TABLE pipeline_job_attempts ADD COLUMN lease_expires_at TEXT"
+            )
         db.execute("BEGIN IMMEDIATE")
         _migrate_legacy_derived_jobs(db)
 
@@ -490,16 +519,22 @@ def _attempt_dict(row) -> dict | None:
     keys = (
         "attempt_id", "attempt_number", "state", "requested_by", "requested_at",
         "started_at", "finished_at", "outcome", "result_id", "output_kind",
-        "output_id", "error",
+        "output_id", "error", "lease_epoch", "lease_expires_at",
     )
-    return dict(zip(keys, row))
+    attempt = dict(zip(keys, row))
+    attempt["recovery_attempt"] = attempt["requested_by"] == "system-recovery"
+    attempt["coordination_state"] = (
+        "protected" if attempt["state"] == "running" and attempt["lease_epoch"]
+        else "not_active"
+    )
+    return attempt
 
 
 def _job_dict(db: sqlite3.Connection, row) -> dict:
     latest = db.execute(
         """SELECT attempt_id, attempt_number, state, requested_by, requested_at,
                   started_at, finished_at, outcome, result_id, output_kind,
-                  output_id, error
+                  output_id, error, lease_epoch, lease_expires_at
            FROM pipeline_job_attempts WHERE job_id = ?
            ORDER BY attempt_number DESC LIMIT 1""",
         (row[0],),
@@ -1227,10 +1262,11 @@ def retry_derived_job(
     return result
 
 
-def claim_next_derived_job(db_path: Path) -> dict | None:
+def claim_next_derived_job(
+    db_path: Path, *, worker_id: str | None = None,
+) -> dict | None:
     init_derived_job_storage(db_path)
-    claim = uuid.uuid4().hex
-    now = utc_now()
+    owner = str(worker_id or _RUNTIME_WORKER_ID)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
@@ -1239,15 +1275,68 @@ def claim_next_derived_job(db_path: Path) -> dict | None:
         ).fetchone()
         if row is None:
             return None
+        lease = acquire_work_lease_on_connection(
+            db,
+            lease_key=f"derived-attempt:{row[0]}",
+            work_kind="retained-evidence-analysis",
+            work_id=row[0],
+            owner_id=owner,
+            expired_policy="reclaim",
+        )
         changed = db.execute(
             """UPDATE pipeline_job_attempts
-               SET state = 'running', claim_token = ?, started_at = ?
+               SET state = 'running', claim_token = ?, lease_owner = ?,
+                   lease_epoch = ?, lease_expires_at = ?, started_at = ?
                WHERE attempt_id = ? AND state = 'queued'""",
-            (claim, now, row[0]),
+            (
+                lease.lease_id,
+                lease.owner_id,
+                lease.fencing_epoch,
+                lease.expires_at,
+                lease.acquired_at,
+                row[0],
+            ),
         ).rowcount
         if changed != 1:
-            return None
-        return {"attempt_id": row[0], "job_id": row[1], "claim_token": claim}
+            raise DerivedJobConflict(
+                "The queued attempt changed while protected ownership was being recorded"
+            )
+        return {
+            "attempt_id": row[0],
+            "job_id": row[1],
+            "claim_token": lease.lease_id,
+            **lease.as_claim(),
+        }
+
+
+def _assert_claim_on_connection(
+    db: sqlite3.Connection, claim: dict, message: str,
+) -> None:
+    try:
+        assert_work_lease_on_connection(db, claim)
+    except WorkLeaseLost as exc:
+        raise DerivedJobConflict(message) from exc
+    owned = db.execute(
+        """SELECT 1 FROM pipeline_job_attempts
+             WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+               AND claim_token = ? AND lease_owner = ? AND lease_epoch = ?
+               AND lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+        (
+            claim["attempt_id"], claim["job_id"], claim["claim_token"],
+            claim["lease_owner"], int(claim["lease_epoch"]),
+        ),
+    ).fetchone()
+    if owned is None:
+        raise DerivedJobConflict(message)
+
+
+def _complete_claim_on_connection(
+    db: sqlite3.Connection, claim: dict, message: str,
+) -> str:
+    _assert_claim_on_connection(db, claim, message)
+    return release_work_lease_on_connection(
+        db, claim, detail="The saved attempt reached a terminal state."
+    )
 
 
 def _current_contract_matches(job: sqlite3.Row | tuple) -> bool:
@@ -1275,6 +1364,10 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
         ).fetchone()
     if row is None:
         raise DerivedJobConflict("The saved-analysis worker no longer owns this attempt")
+    with connect_database(db_path, read_only=True) as db:
+        _assert_claim_on_connection(
+            db, claim, "The saved-analysis worker lost its claim or protected ownership"
+        )
     run_local_path = _validate_supplied_run_path(run_local_path, row[1])
     if not _current_contract_matches(row):
         raise DerivedJobConflict("The application calculation rules changed before this job ran")
@@ -1294,6 +1387,9 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
     source_guard = _scan_authority_guard(row[1], row[2])
 
     def guard(db: sqlite3.Connection) -> None:
+        _assert_claim_on_connection(
+            db, claim, "The saved-analysis worker lost its claim or protected ownership"
+        )
         source_guard(db)
         owned = db.execute(
             """SELECT 1 FROM pipeline_job_attempts
@@ -1304,12 +1400,15 @@ def execute_claimed_derived_job(db_path: Path, claim: dict, run_local_path: Path
             raise DerivedJobConflict("The saved-analysis worker lost its claim")
 
     def finalize(db: sqlite3.Connection, created: bool) -> None:
+        finished_at = _complete_claim_on_connection(
+            db, claim, "The saved-analysis worker lost its claim or protected ownership"
+        )
         changed = db.execute(
             """UPDATE pipeline_job_attempts
                SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?,
                    output_kind = 'derived_result', output_id = ?, error = NULL
                WHERE attempt_id = ? AND job_id = ? AND state = 'running' AND claim_token = ?""",
-            (utc_now(), "created" if created else "reused", row[11], row[11],
+            (finished_at, "created" if created else "reused", row[11], row[11],
              claim["attempt_id"], claim["job_id"], claim["claim_token"]),
         ).rowcount
         if changed != 1:
@@ -1348,6 +1447,10 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
         ).fetchone()
     if row is None:
         raise DerivedJobConflict("The Nmap scope worker no longer owns this attempt")
+    with connect_database(db_path, read_only=True) as db:
+        _assert_claim_on_connection(
+            db, claim, "The Nmap scope worker lost its claim or protected ownership"
+        )
     frozen_job = tuple(row[name] for name in job_columns)
     try:
         definition = json.loads(row["definition_json"] or "{}")
@@ -1468,6 +1571,9 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
     candidate_provider = searchsploit_provider_snapshot()
 
     def guard(db: sqlite3.Connection) -> None:
+        _assert_claim_on_connection(
+            db, claim, "The Nmap scope worker lost its claim or protected ownership"
+        )
         db.row_factory = sqlite3.Row
         owned = db.execute(
             f"""SELECT {select_columns} FROM pipeline_jobs job
@@ -1483,13 +1589,16 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
         validate_authority(db)
 
     def finalize(db: sqlite3.Connection, created: bool, assessment_id: str) -> None:
+        finished_at = _complete_claim_on_connection(
+            db, claim, "The Nmap scope worker lost its claim or protected ownership"
+        )
         changed = db.execute(
             """UPDATE pipeline_job_attempts
                SET state = 'completed', finished_at = ?, outcome = ?, result_id = NULL,
                    output_kind = 'entity_assessment', output_id = ?, error = NULL
                WHERE attempt_id = ? AND job_id = ? AND state = 'running'
                  AND claim_token = ?""",
-            (utc_now(), "created" if created else "reused", assessment_id,
+            (finished_at, "created" if created else "reused", assessment_id,
              claim["attempt_id"], claim["job_id"], claim["claim_token"]),
         ).rowcount
         if changed != 1:
@@ -1540,6 +1649,10 @@ def execute_claimed_device_summary_job(
         ).fetchone()
     if row is None:
         raise DerivedJobConflict("The device summary worker no longer owns this attempt")
+    with connect_database(db_path, read_only=True) as db:
+        _assert_claim_on_connection(
+            db, claim, "The device summary worker lost its claim or protected ownership"
+        )
     frozen_job = tuple(row[name] for name in job_columns)
     definition = json.loads(row["definition_json"] or "{}")
     intent_kind = definition.get("intent_kind")
@@ -1577,6 +1690,9 @@ def execute_claimed_device_summary_job(
         validate_authority(db)
 
     def guard(db: sqlite3.Connection) -> None:
+        _assert_claim_on_connection(
+            db, claim, "The device summary worker lost its claim or protected ownership"
+        )
         db.row_factory = sqlite3.Row
         owned = db.execute(
             f"""SELECT {selected} FROM pipeline_jobs job
@@ -1592,13 +1708,16 @@ def execute_claimed_device_summary_job(
         validate_authority(db)
 
     def finalize(db: sqlite3.Connection, created: bool, result_id: str) -> None:
+        finished_at = _complete_claim_on_connection(
+            db, claim, "The device summary worker lost its claim or protected ownership"
+        )
         changed = db.execute(
             """UPDATE pipeline_job_attempts
                SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?,
                    output_kind = 'derived_result', output_id = ?, error = NULL
                WHERE attempt_id = ? AND job_id = ? AND state = 'running'
                  AND claim_token = ?""",
-            (utc_now(), "created" if created else "reused", result_id, result_id,
+            (finished_at, "created" if created else "reused", result_id, result_id,
              claim["attempt_id"], claim["job_id"], claim["claim_token"]),
         ).rowcount
         if changed != 1:
@@ -1654,6 +1773,10 @@ def execute_claimed_device_observation_job(
         ).fetchone()
     if row is None:
         raise DerivedJobConflict("The device observation worker no longer owns this attempt")
+    with connect_database(db_path, read_only=True) as db:
+        _assert_claim_on_connection(
+            db, claim, "The device observation worker lost its claim or protected ownership"
+        )
     definition = json.loads(row["definition_json"] or "{}")
     assignment_contract = definition.get("assignment_contract")
     summary_result_id = definition.get("summary_result_id")
@@ -1687,6 +1810,9 @@ def execute_claimed_device_observation_job(
         raise DerivedJobConflict("Device configuration changed during extraction")
 
     def guard(db: sqlite3.Connection) -> None:
+        _assert_claim_on_connection(
+            db, claim, "The device observation worker lost its claim or protected ownership"
+        )
         db.row_factory = sqlite3.Row
         owned = db.execute(
             """SELECT job.definition_json, job.target_result_id
@@ -1714,13 +1840,16 @@ def execute_claimed_device_observation_job(
             raise DerivedJobConflict("The verified reusable summary is no longer authoritative")
 
     def finalize(db: sqlite3.Connection, created: bool, assessment_id: str) -> None:
+        finished_at = _complete_claim_on_connection(
+            db, claim, "The device observation worker lost its claim or protected ownership"
+        )
         changed = db.execute(
             """UPDATE pipeline_job_attempts
                SET state = 'completed', finished_at = ?, outcome = ?, result_id = NULL,
                    output_kind = 'device_interface_assessment', output_id = ?, error = NULL
                WHERE attempt_id = ? AND job_id = ? AND state = 'running'
                  AND claim_token = ?""",
-            (utc_now(), "created" if created else "reused", assessment_id,
+            (finished_at, "created" if created else "reused", assessment_id,
              claim["attempt_id"], claim["job_id"], claim["claim_token"]),
         ).rowcount
         if changed != 1:
@@ -1760,6 +1889,10 @@ def execute_claimed_searchsploit_candidate_job(
         ).fetchone()
     if row is None:
         raise DerivedJobConflict("The offline-candidate worker no longer owns this attempt")
+    with connect_database(db_path, read_only=True) as db:
+        _assert_claim_on_connection(
+            db, claim, "The offline-candidate worker lost its claim or protected ownership"
+        )
     definition = json.loads(row["definition_json"] or "{}")
     provider = definition.get("provider")
     if not isinstance(provider, dict):
@@ -1819,6 +1952,9 @@ def execute_claimed_searchsploit_candidate_job(
         validate_source(db)
 
     def guard(db: sqlite3.Connection) -> None:
+        _assert_claim_on_connection(
+            db, claim, "The offline-candidate worker lost its claim or protected ownership"
+        )
         owned = db.execute(
             """SELECT 1 FROM pipeline_job_attempts
                WHERE attempt_id = ? AND job_id = ? AND state = 'running'
@@ -1830,6 +1966,9 @@ def execute_claimed_searchsploit_candidate_job(
         validate_source(db)
 
     def finalize(db: sqlite3.Connection, created: bool) -> None:
+        finished_at = _complete_claim_on_connection(
+            db, claim, "The offline-candidate worker lost its claim or protected ownership"
+        )
         changed = db.execute(
             """UPDATE pipeline_job_attempts
                SET state = 'completed', finished_at = ?, outcome = ?, result_id = ?,
@@ -1837,7 +1976,7 @@ def execute_claimed_searchsploit_candidate_job(
                WHERE attempt_id = ? AND job_id = ? AND state = 'running'
                  AND claim_token = ?""",
             (
-                utc_now(), "created" if created else "reused", identity.result_id,
+                finished_at, "created" if created else "reused", identity.result_id,
                 identity.result_id, claim["attempt_id"], claim["job_id"],
                 claim["claim_token"],
             ),
@@ -1858,18 +1997,68 @@ def fail_claimed_derived_job(db_path: Path, claim: dict, error: Exception) -> No
     message = str(error).strip() or error.__class__.__name__
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        db.execute(
+        try:
+            _assert_claim_on_connection(
+                db, claim, "The worker lost ownership before failure could be saved"
+            )
+        except DerivedJobConflict:
+            return
+        finished_at = release_work_lease_on_connection(
+            db, claim, detail="The saved attempt failed while ownership was current."
+        )
+        changed = db.execute(
             """UPDATE pipeline_job_attempts
                SET state = 'failed', finished_at = ?, error = ?
                WHERE attempt_id = ? AND job_id = ? AND state = 'running' AND claim_token = ?""",
-            (utc_now(), message[:2000], claim["attempt_id"], claim["job_id"], claim["claim_token"]),
-        )
+            (finished_at, message[:2000], claim["attempt_id"], claim["job_id"], claim["claim_token"]),
+        ).rowcount
+        if changed != 1:
+            raise DerivedJobConflict("The worker lost its claim while saving failure")
+
+
+def _renew_claim_loop(
+    db_path: Path,
+    claim: dict,
+    stop: threading.Event,
+    lost: threading.Event,
+) -> None:
+    while not stop.wait(_LEASE_RENEW_SECONDS):
+        try:
+            with connect_database(db_path) as db:
+                db.execute("BEGIN IMMEDIATE")
+                renewed = renew_work_lease_on_connection(db, claim)
+                changed = db.execute(
+                    """UPDATE pipeline_job_attempts
+                          SET lease_expires_at = ?
+                        WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                          AND claim_token = ? AND lease_owner = ? AND lease_epoch = ?""",
+                    (
+                        renewed.expires_at,
+                        claim["attempt_id"], claim["job_id"], claim["claim_token"],
+                        claim["lease_owner"], int(claim["lease_epoch"]),
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise WorkLeaseLost("The saved attempt no longer matches its lease")
+                claim["lease_expires_at"] = renewed.expires_at
+        except (sqlite3.Error, WorkLeaseLost):
+            lost.set()
+            return
 
 
 def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
     claim = claim_next_derived_job(db_path)
     if claim is None:
         return False
+    heartbeat_stop = threading.Event()
+    heartbeat_lost = threading.Event()
+    heartbeat = threading.Thread(
+        target=_renew_claim_loop,
+        args=(db_path, claim, heartbeat_stop, heartbeat_lost),
+        daemon=True,
+        name=f"saved-analysis-heartbeat-{claim['attempt_id'][:8]}",
+    )
+    heartbeat.start()
     try:
         run_id = None
         with connect_database(db_path, read_only=True) as db:
@@ -1897,6 +2086,9 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
             raise DerivedJobConflict("The pipeline job type is not supported by this worker")
     except Exception as exc:
         fail_claimed_derived_job(db_path, claim, exc)
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=2)
     return True
 
 
@@ -1929,6 +2121,7 @@ def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
     admission_enabled = True
     try:
         while not stop.is_set():
+            recovered = recover_interrupted_derived_jobs(db_path)
             admitted = False
             retry_delay = None
             if admission_enabled:
@@ -1954,6 +2147,16 @@ def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
                     break
                 continue
             if not admitted and not ran:
+                with connect_database(db_path, read_only=True) as db:
+                    protected_running = db.execute(
+                        "SELECT 1 FROM pipeline_job_attempts WHERE state = 'running' LIMIT 1"
+                    ).fetchone()
+                if protected_running:
+                    if stop.wait(1.0):
+                        break
+                    continue
+                if recovered:
+                    continue
                 break
     except Exception:
         paused_after_error = True
@@ -2042,13 +2245,103 @@ def recover_interrupted_derived_jobs(db_path: Path) -> int:
     init_derived_job_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        return db.execute(
-            """UPDATE pipeline_job_attempts
-               SET state = 'interrupted', finished_at = ?,
-                   error = 'Application stopped while this attempt was running'
-               WHERE state = 'running'""",
-            (utc_now(),),
-        ).rowcount
+        now = db.execute(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+        ).fetchone()[0]
+        running = db.execute(
+            """SELECT attempt.attempt_id, attempt.job_id, attempt.attempt_number,
+                      attempt.claim_token, attempt.lease_owner, attempt.lease_epoch,
+                      lease.fencing_epoch, lease.lease_id, lease.owner_id,
+                      lease.state, lease.expires_at
+                 FROM pipeline_job_attempts attempt
+                 LEFT JOIN work_leases lease
+                   ON lease.lease_key = 'derived-attempt:' || attempt.attempt_id
+                WHERE attempt.state = 'running'
+                ORDER BY attempt.requested_at, attempt.attempt_id"""
+        ).fetchall()
+        expired = []
+        for row in running:
+            attempt_id, job_id, attempt_number, claim_token, owner, epoch = row[:6]
+            lease_epoch, lease_id, lease_owner, lease_state, lease_expiry = row[6:]
+            expected = (
+                lease_epoch is not None
+                and int(lease_epoch) == int(epoch or 0)
+                and lease_id == claim_token
+                and lease_owner == owner
+            )
+            if expected and lease_state == "active" and lease_expiry and lease_expiry > now:
+                continue
+            if lease_state == "active" and not expected:
+                # A different live identity at the same key is an inconsistent state.
+                # Do not alter that lease, but fail this attempt closed so the UI
+                # cannot present an unprotected row as indefinitely Processing.
+                db.execute(
+                    """UPDATE pipeline_job_attempts
+                          SET state = 'failed', finished_at = ?,
+                              error = 'Protected ownership does not match this attempt; administrator review is required'
+                        WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                          AND claim_token IS ? AND lease_owner IS ? AND lease_epoch = ?""",
+                    (now, attempt_id, job_id, claim_token, owner, int(epoch or 0)),
+                )
+                continue
+            expired.append(row)
+        for row in expired:
+            attempt_id, job_id, attempt_number, claim_token, owner, epoch = row[:6]
+            lease_epoch, lease_id, lease_owner, lease_state, lease_expiry = row[6:]
+            changed = db.execute(
+                """UPDATE pipeline_job_attempts
+                      SET state = 'interrupted', finished_at = ?,
+                          error = 'The former worker ownership expired; a new protected attempt was queued from retained evidence'
+                    WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                      AND claim_token IS ? AND lease_owner IS ? AND lease_epoch = ?""",
+                (now, attempt_id, job_id, claim_token, owner, int(epoch or 0)),
+            ).rowcount
+            if changed != 1:
+                continue
+            lease_key = f"derived-attempt:{attempt_id}"
+            if lease_state == "active":
+                released = db.execute(
+                    """UPDATE work_leases
+                          SET lease_id = NULL, owner_id = NULL, state = 'released',
+                              renewed_at = ?, expires_at = NULL, released_at = ?,
+                              recovery_reason = NULL
+                        WHERE lease_key = ? AND fencing_epoch = ?
+                          AND lease_id = ? AND owner_id = ? AND state = 'active'
+                          AND expires_at <= ?""",
+                    (now, now, lease_key, int(epoch or 0), claim_token, owner, now),
+                ).rowcount
+                if released != 1:
+                    raise DerivedJobConflict(
+                        "Expired analysis ownership changed during recovery"
+                    )
+                db.execute(
+                    """INSERT INTO work_lease_events(
+                           event_id, lease_key, fencing_epoch, lease_id, owner_id,
+                           event_kind, recorded_at, detail
+                       ) VALUES (?, ?, ?, ?, ?, 'expired', ?, ?)""",
+                    (
+                        uuid.uuid4().hex, lease_key, int(epoch or 0),
+                        claim_token, owner, now,
+                        "Startup found no current protected owner; the attempt remains in history.",
+                    ),
+                )
+            replacement_id = uuid.uuid4().hex
+            db.execute(
+                """INSERT INTO pipeline_job_attempts(
+                       attempt_id, job_id, attempt_number, state, claim_token,
+                       lease_owner, lease_epoch, lease_expires_at,
+                       requested_by, requested_at
+                   ) VALUES (?, ?, ?, 'queued', NULL, NULL, 0, NULL,
+                             'system-recovery', ?)""",
+                (replacement_id, job_id, int(attempt_number) + 1, now),
+            )
+            db.execute(
+                """INSERT INTO pipeline_job_requests(
+                       request_token, job_id, request_kind, requested_by, requested_at
+                   ) VALUES (?, ?, 'retry', 'system-recovery', ?)""",
+                (f"recovery-{attempt_id}-{int(epoch or 0)}", job_id, now),
+            )
+        return len(expired)
 
 
 def list_derived_jobs(db_path: Path, *, limit: int = 25, offset: int = 0) -> dict:

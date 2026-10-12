@@ -201,14 +201,16 @@ def test_restart_marks_running_interrupted_and_explicit_retry_completes(
     )
     claim = jobs.claim_next_derived_job(db_path)
     assert claim is not None
+    with connect_database(db_path) as db:
+        db.execute(
+            "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' "
+            "WHERE lease_key = ?",
+            (claim["lease_key"],),
+        )
     assert jobs.recover_interrupted_derived_jobs(db_path) == 1
-    retried = jobs.retry_derived_job(
-        db_path,
-        queued["job_id"],
-        request_token="after-restart",
-        requested_by="analyst",
-    )
-    assert retried["latest_attempt"]["state"] == "queued"
+    recovered = jobs.nmap_scope_job_for_assignment(db_path, assignment["assignment_id"])
+    assert recovered["latest_attempt"]["state"] == "queued"
+    assert recovered["latest_attempt"]["requested_by"] == "system-recovery"
     jobs.run_next_derived_job(db_path, tmp_path)
 
     with connect_database(db_path, read_only=True) as db:

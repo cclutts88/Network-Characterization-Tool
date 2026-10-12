@@ -10,6 +10,7 @@ from scripts.benchmark_phase0_http import (
     expected_workloads,
     request_order,
 )
+from scripts.benchmark_phase0_core import PEAK_MEMORY_SCOPE_PROCESS
 from scripts.generate_phase0_benchmark_corpus import generate_corpus
 from scripts.summarize_phase0_http_benchmark import EXPECTED_FOUNDATION, _expected_common
 
@@ -50,6 +51,7 @@ def test_foundation_http_runner_executes_complete_public_matrix(tmp_path):
         "--data-root", str(tmp_path / "data"),
         "--git-attestation", str(git), "--image-attestation", str(image),
         "--repeat", "1", "--foundation-capabilities", "--output", str(output),
+        "--peak-memory-scope", PEAK_MEMORY_SCOPE_PROCESS,
     ], cwd=root, capture_output=True, text=True, timeout=120)
     assert completed.returncode == 0, completed.stderr
     result = json.loads(output.read_text())
@@ -62,4 +64,7 @@ def test_foundation_http_runner_executes_complete_public_matrix(tmp_path):
     assert result["correctness"]["database_logical_sha256_before"] == result["correctness"]["database_logical_sha256_after"]
     assert result["request_session"]["order"] == request_order(True)
     assert result["request_session"]["background_work_disabled_before_measurement"] is True
+    assert result["total"]["peak_rss_scope"] == PEAK_MEMORY_SCOPE_PROCESS
+    assert result["total"]["peak_rss_requested_scope"] == PEAK_MEMORY_SCOPE_PROCESS
+    assert result["total"]["formal_phase0_acceptance_eligible"] is False
     assert result["correctness"]["evidence_sha256_unchanged"]

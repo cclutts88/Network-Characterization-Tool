@@ -7,10 +7,13 @@ from pathlib import Path
 import statistics
 
 try:
-    from scripts.benchmark_phase0_core import expected_workload_names
+    from scripts.benchmark_phase0_core import (
+        PEAK_MEMORY_SCOPE_CONTAINER,
+        expected_workload_names,
+    )
     from scripts.generate_phase0_benchmark_corpus import corpus_files
 except ModuleNotFoundError:  # Direct execution from a mounted scripts directory.
-    from benchmark_phase0_core import expected_workload_names
+    from benchmark_phase0_core import PEAK_MEMORY_SCOPE_CONTAINER, expected_workload_names
     from generate_phase0_benchmark_corpus import corpus_files
 
 
@@ -42,6 +45,14 @@ def _load(paths: list[Path], label: str) -> list[dict]:
             or container.get("corpus_mount_read_only") is not True
         ):
             raise ValueError(f"{label} lacks required external identity attestations")
+        total = run.get("total") or {}
+        if (
+            total.get("peak_rss_scope") != PEAK_MEMORY_SCOPE_CONTAINER
+            or total.get("peak_rss_requested_scope") != PEAK_MEMORY_SCOPE_CONTAINER
+            or total.get("peak_rss_method") != "cgroup-v2 memory.peak including child processes"
+            or total.get("formal_phase0_acceptance_eligible") is not True
+        ):
+            raise ValueError(f"{label} lacks formal container-lifetime peak-memory evidence")
     for field in ("revision", "source_digest_sha256", "container_image_id"):
         values = {run["target"][field] for run in runs}
         if len(values) != 1:
@@ -108,6 +119,8 @@ def summarize(main_paths: list[Path], foundation_paths: list[Path]) -> dict:
         "container_image_id": {run["target"]["container_image_id"] for run in main + foundation},
         "comparison_statistic": {run["comparison_statistic"] for run in main + foundation},
         "limits": {json.dumps(run["limits"], sort_keys=True) for run in main + foundation},
+        "peak_memory_scope": {run["total"]["peak_rss_scope"] for run in main + foundation},
+        "peak_memory_method": {run["total"]["peak_rss_method"] for run in main + foundation},
     }
     mismatches = [name for name, values in identities.items() if len(values) != 1]
     if mismatches:

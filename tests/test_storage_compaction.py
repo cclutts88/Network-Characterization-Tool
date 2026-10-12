@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import time
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,6 +30,7 @@ from app.storage_health import (
     compact_storage,
     recover_incomplete_compactions,
 )
+from app.work_coordination import WorkLeaseLost
 
 
 def collection(root: Path, run_id: str, content: bytes = b"same exact evidence") -> Path:
@@ -77,6 +79,73 @@ def test_exact_compaction_preserves_paths_records_and_is_idempotent(tmp_path):
     assert after["observation_count"] == before_observations
     assert after["reclaimable_bytes"] == 0
     assert after["compaction"]["status"] == "nothing_to_compact"
+
+
+def test_lost_owner_cannot_replace_after_preparation(tmp_path, monkeypatch):
+    import app.storage_health as storage
+
+    db_path, sources, report = ready_plan(tmp_path, 1)
+    original_inode = sources[0].stat().st_ino
+    fence_count = 0
+    source_replaces = []
+    original_replace = storage.os.replace
+
+    @contextmanager
+    def fence():
+        nonlocal fence_count
+        fence_count += 1
+        if fence_count == 2:
+            raise WorkLeaseLost("superseded after preparation")
+        with storage.connect_database(db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+
+    def observed_replace(source, target):
+        if Path(target) == sources[0]:
+            source_replaces.append((source, target))
+        return original_replace(source, target)
+
+    monkeypatch.setattr(storage.os, "replace", observed_replace)
+    with pytest.raises(WorkLeaseLost, match="superseded"):
+        compact_storage(
+            db_path, report["compaction"]["plan_id"], ownership_fence=fence,
+        )
+    assert source_replaces == []
+    assert sources[0].stat().st_ino == original_inode
+    assert any(storage.recovery_root(db_path).rglob("*.recovery"))
+
+
+def test_lost_owner_leaves_recovery_material_after_replacement(tmp_path, monkeypatch):
+    import app.storage_health as storage
+
+    db_path, sources, report = ready_plan(tmp_path, 1)
+    fence_count = 0
+    cleared = []
+    original_clear = storage.clear_recovery_required
+
+    @contextmanager
+    def fence():
+        nonlocal fence_count
+        fence_count += 1
+        if fence_count == 3:
+            raise WorkLeaseLost("superseded before cleanup")
+        with storage.connect_database(db_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+
+    def observed_clear(path):
+        if storage.recovery_required(path):
+            cleared.append(path)
+        return original_clear(path)
+
+    monkeypatch.setattr(storage, "clear_recovery_required", observed_clear)
+    with pytest.raises(WorkLeaseLost, match="superseded"):
+        compact_storage(
+            db_path, report["compaction"]["plan_id"], ownership_fence=fence,
+        )
+    assert cleared == []
+    assert storage.recovery_required(db_path)
+    assert any(storage.recovery_root(db_path).rglob("*.recovery"))
 
 
 def test_compaction_plan_survives_reads_but_not_source_change(tmp_path):

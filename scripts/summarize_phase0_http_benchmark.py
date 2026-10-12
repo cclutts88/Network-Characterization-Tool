@@ -10,10 +10,12 @@ try:
     from scripts.benchmark_phase0_http import (
         COMMON_WORKLOADS, address_digest, expected_workloads, request_order,
     )
+    from scripts.benchmark_phase0_core import PEAK_MEMORY_SCOPE_CONTAINER
 except ModuleNotFoundError:
     from benchmark_phase0_http import (
         COMMON_WORKLOADS, address_digest, expected_workloads, request_order,
     )
+    from benchmark_phase0_core import PEAK_MEMORY_SCOPE_CONTAINER
 
 
 def _load(paths: list[Path], label: str, foundation: bool) -> list[dict]:
@@ -56,6 +58,14 @@ def _load(paths: list[Path], label: str, foundation: bool) -> list[dict]:
             or session.get("staging_complete_before_measurement") is not True
         ):
             raise ValueError(f"{label} request-session declaration is wrong")
+        total = run.get("total") or {}
+        if (
+            total.get("peak_rss_scope") != PEAK_MEMORY_SCOPE_CONTAINER
+            or total.get("peak_rss_requested_scope") != PEAK_MEMORY_SCOPE_CONTAINER
+            or total.get("peak_rss_method") != "cgroup-v2 memory.peak including child processes"
+            or total.get("formal_phase0_acceptance_eligible") is not True
+        ):
+            raise ValueError(f"{label} lacks formal container-lifetime peak-memory evidence")
     for field in ("revision", "source_digest_sha256", "container_image_id"):
         if len({run["target"][field] for run in runs}) != 1:
             raise ValueError(f"{label} target {field} changed between repeats")
@@ -170,6 +180,8 @@ def summarize(main_paths: list[Path], foundation_paths: list[Path]) -> dict:
     }
     identities["corpus_manifest_sha256"] = {run["corpus"]["manifest_sha256"] for run in all_runs}
     identities["container_image_id"] = {run["target"]["container_image_id"] for run in all_runs}
+    identities["peak_memory_scope"] = {run["total"]["peak_rss_scope"] for run in all_runs}
+    identities["peak_memory_method"] = {run["total"]["peak_rss_method"] for run in all_runs}
     mismatches = [key for key, values in identities.items() if len(values) != 1]
     if mismatches:
         raise ValueError("Comparison identity differs: " + ", ".join(mismatches))

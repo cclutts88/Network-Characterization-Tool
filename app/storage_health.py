@@ -12,10 +12,26 @@ import shutil
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from contextlib import contextmanager
 
-from app.artifacts import (artifact_root_for, canonical_artifact_path,
-                           register_artifact_file, sha256_file, utc_now)
+from app.artifacts import (_register_record_on_connection, artifact_root_for,
+                           canonical_artifact_path, init_artifact_storage,
+                           sha256_file, utc_now)
 from app.database import connect_database
+from app.work_coordination import (
+    WorkLease,
+    WorkLeaseConflict,
+    WorkLeaseLost,
+    WorkRecoveryRequired,
+    acquire_work_lease,
+    assert_work_lease_on_connection,
+    release_work_lease,
+    release_work_lease_on_connection,
+    renew_work_lease,
+    renew_work_lease_on_connection,
+    work_lease_status,
+)
 from app.evidence_maintenance import (
     EvidenceMaintenanceBlocked,
     clear_recovery_required,
@@ -30,6 +46,8 @@ from app.evidence_maintenance import (
 _LOCK = threading.Lock()
 _ACTIVE: set[str] = set()
 _THREADS: dict[str, threading.Thread] = {}
+_STORAGE_OWNER = f"storage-runtime-{uuid.uuid4().hex}"
+_STORAGE_LEASE_KEY = "storage-maintenance"
 _SHUTTING_DOWN = False
 TERMINAL = {"completed", "completed_without_nmap", "failed", "cancelled", "interrupted", "uploaded", "timed_out"}
 COMPACTION_CONFIRMATION = "REMOVE VERIFIED DUPLICATE COPIES"
@@ -285,9 +303,15 @@ def _init_compaction_journal(db_path: Path) -> None:
     _fsync_journal(db_path)
 
 
-def _journal_item(db_path: Path, item: dict, state: str, detail: str | None = None) -> None:
-    with connect_database(db_path) as db:
-        db.execute("PRAGMA synchronous=FULL")
+def _journal_item(
+    db_path: Path,
+    item: dict,
+    state: str,
+    detail: str | None = None,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> None:
+    def write(db: sqlite3.Connection) -> None:
         db.execute(
             """
             INSERT INTO artifact_compaction_journal (
@@ -307,6 +331,12 @@ def _journal_item(db_path: Path, item: dict, state: str, detail: str | None = No
                 detail, utc_now(),
             ),
         )
+    if connection is None:
+        with connect_database(db_path) as db:
+            db.execute("PRAGMA synchronous=FULL")
+            write(db)
+    else:
+        write(connection)
     _fsync_journal(db_path)
 
 
@@ -662,7 +692,13 @@ def recover_incomplete_compactions(db_path: Path) -> dict:
     return {"resolved": resolved, "recovery_required": 0}
 
 
-def _restore_original(db_path: Path, item: dict, detail: str) -> None:
+def _restore_original(
+    db_path: Path,
+    item: dict,
+    detail: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> None:
     source = Path(item["source_path"])
     canonical = Path(item["canonical_path"])
     recovery = Path(item["recovery_path"])
@@ -683,10 +719,19 @@ def _restore_original(db_path: Path, item: dict, detail: str) -> None:
         raise ValueError("Restored original failed verification")
     if sha256_file(source) != (item["sha256"], item["size_bytes"]):
         raise ValueError("Restored original failed content verification")
-    _journal_item(db_path, item, "restored", detail)
+    if connection is None:
+        _journal_item(db_path, item, "restored", detail)
+    else:
+        _journal_item(db_path, item, "restored", detail, connection=connection)
 
 
-def _compact_storage_locked(db_path: Path, expected_plan_id: str) -> dict:
+def _compact_storage_locked(
+    db_path: Path,
+    expected_plan_id: str,
+    *,
+    ownership_guard: Callable[[], None] | None = None,
+    ownership_fence: Callable[[], object] | None = None,
+) -> dict:
     report = _analyze_storage(db_path)
     plan = report["compaction"]
     candidates = report.pop("_compaction_candidates")
@@ -700,6 +745,8 @@ def _compact_storage_locked(db_path: Path, expected_plan_id: str) -> dict:
     replaced = estimated = 0
     issues = []
     for candidate in candidates:
+        if ownership_guard is not None and ownership_fence is None:
+            ownership_guard()
         item_id = hashlib.sha256(
             f"{compaction_id}:{candidate['source_path']}".encode()
         ).hexdigest()
@@ -728,10 +775,17 @@ def _compact_storage_locked(db_path: Path, expected_plan_id: str) -> dict:
                 raise ValueError("The canonical file changed after confirmation")
             if source.stat().st_nlink != 1:
                 raise ValueError("The duplicate source acquired another hard link")
-            _journal_item(db_path, item, "preparing")
-            os.link(source, recovery_path)
-            _fsync_path(recovery_dir)
-            _journal_item(db_path, item, "prepared")
+            if ownership_fence is None:
+                _journal_item(db_path, item, "preparing")
+                os.link(source, recovery_path)
+                _fsync_path(recovery_dir)
+                _journal_item(db_path, item, "prepared")
+            else:
+                with ownership_fence() as fenced_db:
+                    _journal_item(db_path, item, "preparing", connection=fenced_db)
+                    os.link(source, recovery_path)
+                    _fsync_path(recovery_dir)
+                    _journal_item(db_path, item, "prepared", connection=fenced_db)
             if (source.stat().st_dev, source.stat().st_ino) != (
                 recovery_path.stat().st_dev, recovery_path.stat().st_ino,
             ):
@@ -744,45 +798,109 @@ def _compact_storage_locked(db_path: Path, expected_plan_id: str) -> dict:
                 raise ValueError("Security metadata no longer matches")
             os.link(canonical, replacement)
             _fsync_path(source.parent)
-            mark_recovery_required(
-                db_path,
-                f"Exact-content replacement in progress for {candidate['source_path']}",
-            )
-            os.replace(replacement, source)
-            _fsync_path(source.parent)
-            was_replaced = True
-            _journal_item(db_path, item, "replaced")
-            if (source.stat().st_dev, source.stat().st_ino) != (
-                canonical.stat().st_dev, canonical.stat().st_ino,
-            ) or sha256_file(source) != (candidate["sha256"], candidate["size_bytes"]):
-                raise ValueError("The shared retained path failed post-replacement verification")
-            _journal_item(db_path, item, "verified")
-            recovery_path.unlink()
-            _fsync_path(recovery_dir)
-            _journal_item(db_path, item, "completed", "Exact-content replacement verified")
-            clear_recovery_required(db_path)
+            if ownership_guard is not None and ownership_fence is None:
+                ownership_guard()
+            if ownership_fence is None:
+                mark_recovery_required(
+                    db_path,
+                    f"Exact-content replacement in progress for {candidate['source_path']}",
+                )
+                os.replace(replacement, source)
+                _fsync_path(source.parent)
+                was_replaced = True
+                _journal_item(db_path, item, "replaced")
+                if (source.stat().st_dev, source.stat().st_ino) != (
+                    canonical.stat().st_dev, canonical.stat().st_ino,
+                ) or sha256_file(source) != (candidate["sha256"], candidate["size_bytes"]):
+                    raise ValueError("The shared retained path failed post-replacement verification")
+                _journal_item(db_path, item, "verified")
+            else:
+                with ownership_fence() as fenced_db:
+                    mark_recovery_required(
+                        db_path,
+                        f"Exact-content replacement in progress for {candidate['source_path']}",
+                    )
+                    os.replace(replacement, source)
+                    _fsync_path(source.parent)
+                    was_replaced = True
+                    _journal_item(db_path, item, "replaced", connection=fenced_db)
+                    if (source.stat().st_dev, source.stat().st_ino) != (
+                        canonical.stat().st_dev, canonical.stat().st_ino,
+                    ) or sha256_file(source) != (candidate["sha256"], candidate["size_bytes"]):
+                        raise ValueError("The shared retained path failed post-replacement verification")
+                    _journal_item(db_path, item, "verified", connection=fenced_db)
+            if ownership_guard is not None and ownership_fence is None:
+                ownership_guard()
+            if ownership_fence is None:
+                recovery_path.unlink()
+                _fsync_path(recovery_dir)
+                _journal_item(db_path, item, "completed", "Exact-content replacement verified")
+                clear_recovery_required(db_path)
+            else:
+                with ownership_fence() as fenced_db:
+                    recovery_path.unlink()
+                    _fsync_path(recovery_dir)
+                    _journal_item(
+                        db_path, item, "completed", "Exact-content replacement verified",
+                        connection=fenced_db,
+                    )
+                    clear_recovery_required(db_path)
             replaced += 1
             estimated += candidate["size_bytes"]
         except Exception as exc:
+            if isinstance(exc, WorkLeaseLost):
+                # A superseded worker must leave all recovery material and status
+                # untouched for the current owner or an administrator to inspect.
+                raise
             try:
-                replacement.unlink(missing_ok=True)
-            except OSError:
-                pass
-            try:
-                if was_replaced:
-                    _restore_original(db_path, item, str(exc))
-                elif recovery_path.exists():
-                    if source.exists() and (source.stat().st_dev, source.stat().st_ino) == (
-                        recovery_path.stat().st_dev, recovery_path.stat().st_ino,
-                    ):
-                        recovery_path.unlink()
-                        _fsync_path(recovery_dir)
-                        _journal_item(db_path, item, "restored", str(exc))
+                context = ownership_fence() if ownership_fence is not None else None
+                if context is None:
+                    try:
+                        replacement.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    if was_replaced:
+                        _restore_original(db_path, item, str(exc))
+                    elif recovery_path.exists():
+                        if source.exists() and (source.stat().st_dev, source.stat().st_ino) == (
+                            recovery_path.stat().st_dev, recovery_path.stat().st_ino,
+                        ):
+                            recovery_path.unlink()
+                            _fsync_path(recovery_dir)
+                            _journal_item(db_path, item, "restored", str(exc))
+                        else:
+                            raise ValueError("Prepared original cannot be safely restored")
                     else:
-                        raise ValueError("Prepared original cannot be safely restored")
+                        _journal_item(db_path, item, "restored", str(exc))
+                    clear_recovery_required(db_path)
                 else:
-                    _journal_item(db_path, item, "restored", str(exc))
-                clear_recovery_required(db_path)
+                    with context as fenced_db:
+                        try:
+                            replacement.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        if was_replaced:
+                            _restore_original(
+                                db_path, item, str(exc), connection=fenced_db,
+                            )
+                        elif recovery_path.exists():
+                            if source.exists() and (source.stat().st_dev, source.stat().st_ino) == (
+                                recovery_path.stat().st_dev, recovery_path.stat().st_ino,
+                            ):
+                                recovery_path.unlink()
+                                _fsync_path(recovery_dir)
+                                _journal_item(
+                                    db_path, item, "restored", str(exc), connection=fenced_db,
+                                )
+                            else:
+                                raise ValueError("Prepared original cannot be safely restored")
+                        else:
+                            _journal_item(
+                                db_path, item, "restored", str(exc), connection=fenced_db,
+                            )
+                        clear_recovery_required(db_path)
+            except WorkLeaseLost:
+                raise
             except Exception as recovery_error:
                 try:
                     _journal_item(db_path, item, "recovery-required", str(recovery_error))
@@ -797,6 +915,8 @@ def _compact_storage_locked(db_path: Path, expected_plan_id: str) -> dict:
                 ) from recovery_error
             issues.append({"source_path": candidate["source_path"], "detail": str(exc)})
     after_free = shutil.disk_usage(db_path.parent).free
+    if ownership_guard is not None and ownership_fence is None:
+        ownership_guard()
     final_report = analyze_storage(db_path)
     return {
         "compaction_id": compaction_id,
@@ -811,21 +931,50 @@ def _compact_storage_locked(db_path: Path, expected_plan_id: str) -> dict:
     }
 
 
-def compact_storage(db_path: Path, expected_plan_id: str) -> dict:
+def compact_storage(
+    db_path: Path,
+    expected_plan_id: str,
+    *,
+    ownership_guard: Callable[[], None] | None = None,
+    ownership_fence: Callable[[], object] | None = None,
+) -> dict:
     with evidence_maintenance(db_path, allow_recovery=True):
         recovery = recover_incomplete_compactions(db_path)
         if recovery["recovery_required"]:
             raise EvidenceMaintenanceBlocked("Interrupted compaction recovery requires repair")
-        return _compact_storage_locked(db_path, expected_plan_id)
+        return _compact_storage_locked(
+            db_path, expected_plan_id, ownership_guard=ownership_guard,
+            ownership_fence=ownership_fence,
+        )
 
 
 @guarded_evidence_mutation(lambda db_path, *args, **kwargs: db_path)
-def backfill_storage(db_path: Path) -> dict:
+def backfill_storage(
+    db_path: Path,
+    *,
+    ownership_guard: Callable[[], None] | None = None,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    ownership_fence: Callable[[], object] | None = None,
+) -> dict:
     references, issues, active = evidence_references(db_path)
-    with connect_database(db_path) as db:
+    artifact_root = artifact_root_for(db_path)
+
+    @contextmanager
+    def local_publication_fence():
+        with connect_database(db_path) as connection:
+            if transaction_guard is not None:
+                transaction_guard(connection)
+            yield connection
+
+    publication = ownership_fence or local_publication_fence
+    with publication() as db:
+        if transaction_guard is not None:
+            transaction_guard(db)
         db.execute("CREATE TABLE IF NOT EXISTS artifact_backfill (source_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, sha256 TEXT NOT NULL)")
     completed = skipped = 0
     for ref in references:
+        if ownership_guard is not None:
+            ownership_guard()
         path = ref["path"]
         key = f"{ref['kind']}:{ref['ref']}:{path.name}"
         try:
@@ -847,20 +996,76 @@ def backfill_storage(db_path: Path) -> dict:
                     raise ValueError("Existing observation has no verified canonical content")
                 if json.dumps(_fingerprint(path)) != fingerprint:
                     raise ValueError("Evidence changed during backfill")
-                with connect_database(db_path) as db:
+                with publication() as db:
+                    if transaction_guard is not None:
+                        transaction_guard(db)
                     db.execute("INSERT OR REPLACE INTO artifact_backfill VALUES (?, ?, ?)", (key, fingerprint, digest))
                 skipped += 1
                 continue
-            record = register_artifact_file(
-                db_path=db_path, source_path=path, source_kind=ref["kind"], source_ref=ref["ref"],
-                original_filename=ref["filename"], actor=ref.get("actor"), observed_at=ref.get("observed_at"),
-                observation_key=key, metadata={"relative_path": str(path.relative_to(db_path.parent)), "backfill": True})
-            if ref.get("expected_hash", record["sha256"]) != record["sha256"]:
+            digest, size_bytes = sha256_file(path)
+            if ref.get("expected_hash", digest) != digest:
                 raise ValueError("Import content does not match its retained hash")
-            if json.dumps(_fingerprint(path)) != fingerprint:
-                raise ValueError("Evidence changed during backfill")
-            with connect_database(db_path) as db:
-                db.execute("INSERT OR REPLACE INTO artifact_backfill VALUES (?, ?, ?)", (key, fingerprint, record["sha256"]))
+            init_artifact_storage(db_path, artifact_root)
+            canonical = canonical_artifact_path(artifact_root, digest)
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            staged = canonical.with_name(f".{digest}.{uuid.uuid4().hex}.backfill")
+            physical_created = False
+            try:
+                with path.open("rb") as source, staged.open("wb") as target:
+                    shutil.copyfileobj(source, target, 1024 * 1024)
+                if sha256_file(staged) != (digest, size_bytes):
+                    raise ValueError("Evidence changed while being staged for backfill")
+
+                with publication() as db:
+                    if transaction_guard is not None:
+                        transaction_guard(db)
+                    try:
+                        if not canonical.exists():
+                            os.replace(staged, canonical)
+                            physical_created = True
+                        if sha256_file(canonical) != (digest, size_bytes):
+                            raise ValueError("Canonical artifact failed content verification")
+                        if json.dumps(_fingerprint(path)) != fingerprint:
+                            raise ValueError("Evidence changed during backfill")
+                        record = _register_record_on_connection(
+                            db=db,
+                            artifact_root=artifact_root,
+                            digest=digest,
+                            size_bytes=size_bytes,
+                            media_type="application/octet-stream",
+                            source_kind=ref["kind"],
+                            source_ref=ref["ref"],
+                            original_filename=ref["filename"],
+                            actor=ref.get("actor"),
+                            metadata={
+                                "relative_path": str(path.relative_to(db_path.parent)),
+                                "backfill": True,
+                            },
+                            observed_at=ref.get("observed_at"),
+                            observation_key=key,
+                        )
+                        db.execute(
+                            "INSERT OR REPLACE INTO artifact_backfill VALUES (?, ?, ?)",
+                            (key, fingerprint, record["sha256"]),
+                        )
+                    except BaseException:
+                        if physical_created:
+                            canonical.unlink(missing_ok=True)
+                            physical_created = False
+                        raise
+            except BaseException as exc:
+                if physical_created and canonical.exists():
+                    mark_recovery_required(
+                        db_path,
+                        "Backfill canonical publication ended with an uncertain database commit; "
+                        "retained evidence and the published canonical file require administrator verification.",
+                    )
+                    raise EvidenceMaintenanceBlocked(
+                        "Backfill stopped for safety because canonical publication has an uncertain database commit"
+                    ) from exc
+                raise
+            finally:
+                staged.unlink(missing_ok=True)
             completed += 1
         except (OSError, ValueError, sqlite3.Error):
             issues.append(f"Backfill failed: {ref['kind']}/{ref['ref']}/{ref['filename']}")
@@ -883,13 +1088,65 @@ def _save_status(db_path, value):
         temporary.unlink(missing_ok=True)
 
 
+@contextmanager
+def _owned_storage_transaction(
+    db_path: Path,
+    lease: WorkLease,
+    heartbeat_lost: threading.Event,
+):
+    """Hold SQLite's writer lock and the exact lease fence for a shared mutation."""
+    if heartbeat_lost.is_set():
+        raise WorkLeaseLost("Storage maintenance lost protected ownership")
+    connection = connect_database(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        renew_work_lease_on_connection(connection, lease, lease_seconds=30)
+        yield connection
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def storage_status(db_path: Path) -> dict:
     try:
         value = json.loads(_status_path(db_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {"status": "not_run", "report": None}
-    if value.get("status") == "running" and str(db_path) not in _ACTIVE:
-        value["status"] = "interrupted"
+        value = {"status": "not_run", "report": None}
+    coordination = work_lease_status(db_path, _STORAGE_LEASE_KEY)
+    if recovery_required(db_path) and not (
+        coordination is not None
+        and coordination["state"] == "active"
+        and coordination["currently_owned"]
+    ):
+        value["status"] = "stopped_for_safety"
+        value["coordination_state"] = "stopped_for_safety"
+        value["error"] = (
+            "Storage maintenance stopped for safety after a file publication had an uncertain outcome. "
+            "An administrator must verify the retained evidence and database before maintenance resumes."
+        )
+        return value
+    if coordination is None:
+        value["coordination_state"] = "available"
+    elif coordination["state"] == "recovery_required" or (
+        coordination["state"] == "active" and not coordination["currently_owned"]
+    ):
+        value["status"] = "stopped_for_safety"
+        value["coordination_state"] = "stopped_for_safety"
+        value["error"] = (
+            "Storage maintenance stopped for safety after ownership became uncertain. "
+            "An administrator must verify the former NCT instance and retained evidence before maintenance resumes."
+        )
+    elif coordination["state"] == "active" and coordination["currently_owned"]:
+        value["status"] = "running"
+        value["coordination_state"] = "owned"
+    else:
+        value["coordination_state"] = "available"
+        if value.get("status") == "running":
+            value["status"] = "interrupted"
+            value["error"] = "The saved status says work was running, but no current protected owner remains."
     return value
 
 
@@ -914,27 +1171,105 @@ def start_storage_job(
         if not plan_id or not previous_plan.get("enabled") or previous_plan.get("plan_id") != plan_id:
             raise ValueError("Run and review a current storage dry run before compaction")
     value: dict = {}
+    operation_id = f"storage-{mode}-{uuid.uuid4().hex}"
+    try:
+        lease = acquire_work_lease(
+            db_path,
+            lease_key=_STORAGE_LEASE_KEY,
+            work_kind=f"storage-{mode}",
+            work_id=operation_id,
+            owner_id=_STORAGE_OWNER,
+            lease_seconds=30,
+            expired_policy="recovery_required",
+        )
+    except WorkRecoveryRequired as exc:
+        raise ValueError(
+            "Storage maintenance is stopped for safety. An administrator must verify the former NCT instance and retained evidence before it can resume."
+        ) from exc
+    except WorkLeaseConflict as exc:
+        raise ValueError("Another NCT instance is already running storage maintenance") from exc
+
     def work():
+        heartbeat_stop = threading.Event()
+        heartbeat_lost = threading.Event()
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(5):
+                try:
+                    renew_work_lease(db_path, lease, lease_seconds=30)
+                except (WorkLeaseConflict, OSError, sqlite3.Error):
+                    heartbeat_lost.set()
+                    return
+
+        heartbeat_thread = threading.Thread(
+            target=heartbeat, daemon=True, name="storage-health-lease",
+        )
+
+        def guard() -> None:
+            if heartbeat_lost.is_set():
+                raise WorkLeaseLost("Storage maintenance lost protected ownership")
+            with connect_database(db_path, read_only=True) as connection:
+                assert_work_lease_on_connection(connection, lease)
+
+        def transaction_guard(connection: sqlite3.Connection) -> None:
+            if heartbeat_lost.is_set():
+                raise WorkLeaseLost("Storage maintenance lost protected ownership")
+            assert_work_lease_on_connection(connection, lease)
+
+        def ownership_fence():
+            return _owned_storage_transaction(db_path, lease, heartbeat_lost)
+
+        heartbeat_thread.start()
+        publish = False
         try:
             if mode == "backfill":
-                value["backfill"] = backfill_storage(db_path)
+                value["backfill"] = backfill_storage(
+                    db_path,
+                    ownership_guard=guard,
+                    transaction_guard=transaction_guard,
+                    ownership_fence=ownership_fence,
+                )
             elif mode == "compact":
-                value["compaction_result"] = compact_storage(db_path, plan_id)
+                value["compaction_result"] = compact_storage(
+                    db_path, plan_id, ownership_guard=guard,
+                    ownership_fence=ownership_fence,
+                )
                 value["report"] = value["compaction_result"].pop("report")
             else:
                 value["report"] = analyze_storage(db_path)
             if mode == "backfill":
                 value["report"] = analyze_storage(db_path)
+            guard()
             value["status"] = "complete"
+            publish = True
         except Exception as exc:
-            value["status"] = "failed"
-            value["error"] = str(exc) if isinstance(exc, (ValueError, EvidenceMaintenanceBlocked)) else (
-                "Storage operation failed. Retained evidence records were preserved; retry after checking storage access."
-            )
+            try:
+                guard()
+                value["status"] = (
+                    "stopped_for_safety" if recovery_required(db_path) else "failed"
+                )
+                if value["status"] == "stopped_for_safety":
+                    value["coordination_state"] = "stopped_for_safety"
+                value["error"] = str(exc) if isinstance(
+                    exc, (ValueError, EvidenceMaintenanceBlocked)
+                ) else (
+                    "Storage operation failed. Retained evidence records were preserved; retry after checking storage access."
+                )
+                publish = True
+            except (WorkLeaseConflict, OSError, sqlite3.Error):
+                publish = False
         finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=2)
             value["finished_at"] = utc_now()
             try:
-                _save_status(db_path, value)
+                if publish:
+                    with ownership_fence() as fenced_db:
+                        _save_status(db_path, value)
+                        release_work_lease_on_connection(
+                            fenced_db, lease,
+                            detail=f"Storage {mode} reached a recorded terminal state.",
+                        )
             finally:
                 with _LOCK:
                     _ACTIVE.discard(str(db_path))
@@ -954,8 +1289,11 @@ def start_storage_job(
             "mode": mode,
             "started_at": utc_now(),
             "report": previous.get("report"),
+            "coordination_state": "owned",
         })
-        _save_status(db_path, value)
+        heartbeat_lost = threading.Event()
+        with _owned_storage_transaction(db_path, lease, heartbeat_lost):
+            _save_status(db_path, value)
         thread = _new_storage_thread(work)
         _ACTIVE.add(str(db_path))
         _THREADS[str(db_path)] = thread
@@ -964,6 +1302,9 @@ def start_storage_job(
         except BaseException:
             _THREADS.pop(str(db_path), None)
             _ACTIVE.discard(str(db_path))
+            release_work_lease(
+                db_path, lease, detail="Storage thread did not start.",
+            )
             raise
     return value.copy()
 

@@ -53,6 +53,7 @@ from app.runtime_trends import (
     stop_runtime_trends,
 )
 from app.writer_guard import acquire_application_writer_guard
+from app.work_coordination import init_work_coordination_storage
 from app.schema_compatibility import (
     begin_schema_migration,
     complete_schema_migration,
@@ -1391,6 +1392,7 @@ async def lifespan(_: FastAPI):
         init_device_observation_storage(DB_PATH)
         init_derived_result_storage(DB_PATH)
         init_pipeline_intake_storage(DB_PATH)
+        init_work_coordination_storage(DB_PATH)
         init_derived_job_storage(DB_PATH)
         reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
         init_auth_storage(DB_PATH)

@@ -12,12 +12,13 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 
 
-SCHEMA_CONTRACT_VERSION = 1
-WRITABLE_SCHEMA_VERSION = 1
-READABLE_SCHEMA_VERSIONS = (1,)
+SCHEMA_CONTRACT_VERSION = 2
+WRITABLE_SCHEMA_VERSION = 2
+READABLE_SCHEMA_VERSIONS = (1, 2)
 DATA_LAYOUT_CONTRACT = "nct-data-layout-v1"
-MIGRATION_ID = "nct-foundation-data-contract-v1"
-MIGRATION_PLAN = (MIGRATION_ID,)
+LEGACY_MIGRATION_ID = "nct-foundation-data-contract-v1"
+MIGRATION_ID = "nct-work-coordination-v2"
+MIGRATION_PLAN = (LEGACY_MIGRATION_ID, MIGRATION_ID)
 
 
 class SchemaCompatibilityError(RuntimeError):
@@ -137,10 +138,11 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                 )
             if int(schema_version) == 0:
                 pending = connection.execute(
-                    "SELECT status FROM nct_schema_migrations WHERE migration_id = ?",
-                    (MIGRATION_ID,),
+                    """SELECT migration_id, status FROM nct_schema_migrations
+                         WHERE status IN ('started', 'failed')
+                         ORDER BY last_started_at DESC LIMIT 1"""
                 ).fetchone()
-                if pending is None or pending[0] not in {"started", "failed"}:
+                if pending is None:
                     raise SchemaCompatibilityError(
                         "The bootstrap schema state has no resumable migration."
                     )
@@ -158,21 +160,76 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                               after_schema_fingerprint
                          FROM nct_schema_migrations ORDER BY migration_id"""
                 ).fetchall()
-                expected = [(MIGRATION_ID, WRITABLE_SCHEMA_VERSION, "completed", recorded)]
                 if not recorded or recorded != live_fingerprint:
                     raise SchemaCompatibilityError(
                         "The saved schema fingerprint does not match the live database."
                     )
-                if ledger != expected:
+                current = [row for row in ledger if row[0] == MIGRATION_ID]
+                legacy = [row for row in ledger if row[0] == LEGACY_MIGRATION_ID]
+                unknown = [row for row in ledger if row[0] not in MIGRATION_PLAN]
+                unfinished = [row for row in ledger if row[2] == "started"]
+                if (
+                    len(current) != 1
+                    or current[0] != (
+                        MIGRATION_ID, WRITABLE_SCHEMA_VERSION, "completed", recorded
+                    )
+                    or len(legacy) != 1
+                    or legacy[0][1] != 1
+                    or legacy[0][2] != "completed"
+                    or not legacy[0][3]
+                    or unknown
+                    or unfinished
+                ):
                     raise SchemaCompatibilityError(
                         "The saved migration ledger is incomplete or inconsistent."
                     )
                 return None
+            elif int(schema_version) == 1:
+                live_fingerprint = schema_fingerprint(connection)
+                recorded = connection.execute(
+                    "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton = 1"
+                ).fetchone()[0]
+                legacy = connection.execute(
+                    """SELECT status, after_schema_fingerprint
+                         FROM nct_schema_migrations WHERE migration_id = ?""",
+                    (LEGACY_MIGRATION_ID,),
+                ).fetchone()
+                if not recorded or recorded != live_fingerprint:
+                    raise SchemaCompatibilityError(
+                        "The saved schema fingerprint does not match the live database."
+                    )
+                if legacy != ("completed", recorded):
+                    raise SchemaCompatibilityError(
+                        "The saved migration ledger is incomplete or inconsistent."
+                    )
             current_version = int(schema_version)
         else:
             current_version = 0
 
         before = schema_fingerprint(connection)
+        if current_version == 0:
+            connection.execute(
+                """INSERT INTO nct_schema_migrations(
+                       migration_id, target_schema_version, originating_build_id,
+                       originating_build_commit, status, attempts, first_started_at,
+                       last_started_at, completed_at, before_schema_fingerprint,
+                       after_schema_fingerprint, error_summary
+                   ) VALUES (?, 1, ?, ?, 'completed', 1, ?, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(migration_id) DO UPDATE SET
+                       target_schema_version = 1,
+                       originating_build_id = excluded.originating_build_id,
+                       originating_build_commit = excluded.originating_build_commit,
+                       status = 'completed', attempts = MAX(attempts, 1),
+                       last_started_at = excluded.last_started_at,
+                       completed_at = excluded.completed_at,
+                       before_schema_fingerprint = excluded.before_schema_fingerprint,
+                       after_schema_fingerprint = excluded.after_schema_fingerprint,
+                       error_summary = NULL""",
+                (
+                    LEGACY_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
+                    now, now, now, before, before,
+                ),
+            )
         previous = connection.execute(
             "SELECT attempts, first_started_at FROM nct_schema_migrations WHERE migration_id = ?",
             (MIGRATION_ID,),

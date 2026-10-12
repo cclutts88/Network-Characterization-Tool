@@ -207,6 +207,19 @@ Kubernetes capability advances only through reviewed gates:
 8. Multi-replica concurrency and failure testing.
 9. Representative disconnected Range validation.
 
+Gate 6 is implemented in work-family packages. Its common contract uses the
+authoritative transactional database, database time, opaque leases and monotonically
+increasing fencing epochs. Kubernetes Lease objects, Pod names, process IDs, RWO storage
+and filesystem locks may support diagnostics or placement but never authorize result
+publication. Retained-evidence analysis may be reclaimed only after expiry and must
+start a new attempt from immutable inputs. Network contact is never reassigned from an
+expiry alone. Compaction, backfill and migrations require reviewed recovery after
+uncertain ownership. Scheduler work requires unique durable occurrences and chunk
+claims in addition to any leader election. The first package covers the common contract,
+saved-analysis workers and storage-maintenance exclusion; scanning, scheduling and
+interactive device contact remain disabled in the Kubernetes profile and require their
+own completion package before Gate 6 can close.
+
 Acceptance status: gates 1 and 2 are implemented on `foundation/evidence-engine-v2`.
 Gate 1 provides the local provider and bounded administrator System Health display.
 Gate 2 provides side-effect-free lifecycle probes with explicit recovery and shutdown
@@ -316,3 +329,12 @@ Guide topics, denial/timeout/truncation tests and exact-cluster acceptance proce
 Gate 5 acceptance remains open until those procedures pass on the named NCT-only
 namespace and exact cluster; package completion does not establish cluster, Range,
 mission, multi-replica or stable-`main` readiness.
+
+The first Gate 6 package is complete and independently reviewed on
+`foundation/evidence-engine-v2`. It provides the common database-time lease and
+fencing contract, one protected recovery attempt for retained-evidence analysis,
+strict recovery-required handling for storage maintenance, and bounded operator
+status. Overall Gate 6 remains open. Active Nmap, scheduled scans and interactive
+device contact still need their dedicated work-family package; none of those network
+activities transfer merely because ownership expires. Gate 7 and multi-replica work
+remain blocked until that package closes Gate 6.

@@ -65,7 +65,7 @@ source bytes, authority, active scope, current assignment and worker ownership.
 
 The immutable assessment, all receipts and successful job outcome commit together.
 Normalization failure preserves the completed reusable summary and retained source.
-Failed or interrupted normalization requires an explicit local retry and never contacts
+Failed or interrupted normalization remained available for explicit local retry at the original device-observation gate. Gate 6 may instead create one separately attributed, fenced recovery attempt from retained evidence and never contacts
 the device. Historical evidence is adopted only through an explicit reviewed action.
 
 ## Deliberate boundary

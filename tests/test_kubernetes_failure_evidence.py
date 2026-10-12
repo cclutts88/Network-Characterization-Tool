@@ -11,6 +11,16 @@ import sys
 
 import pytest
 
+from app.database import connect_database
+from app.derived_jobs import (
+    _complete_claim_on_connection,
+    claim_next_derived_job,
+    init_derived_job_storage,
+    recover_interrupted_derived_jobs,
+)
+from app.pipeline_intake import AUTOMATED_NMAP_INTENT, _insert_intent
+from tests.test_kubernetes_forced_restart import insert_job
+
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
@@ -40,9 +50,22 @@ def create_data(root: Path) -> None:
         CREATE TABLE pipeline_job_attempts (
           attempt_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES pipeline_jobs(job_id),
           attempt_number INTEGER NOT NULL, state TEXT NOT NULL, claim_token TEXT,
-          requested_by TEXT NOT NULL, requested_at TEXT NOT NULL, started_at TEXT,
+          lease_owner TEXT, lease_epoch INTEGER NOT NULL DEFAULT 0,
+          lease_expires_at TEXT, requested_by TEXT NOT NULL,
+          requested_at TEXT NOT NULL, started_at TEXT,
           finished_at TEXT, outcome TEXT, result_id TEXT, output_kind TEXT,
           output_id TEXT, error TEXT
+        );
+        CREATE TABLE work_leases (
+          lease_key TEXT PRIMARY KEY, work_kind TEXT NOT NULL, work_id TEXT NOT NULL,
+          fencing_epoch INTEGER NOT NULL, lease_id TEXT, owner_id TEXT, state TEXT NOT NULL,
+          acquired_at TEXT NOT NULL, renewed_at TEXT NOT NULL, expires_at TEXT,
+          released_at TEXT, recovery_reason TEXT
+        );
+        CREATE TABLE work_lease_events (
+          event_id TEXT PRIMARY KEY, lease_key TEXT NOT NULL, fencing_epoch INTEGER NOT NULL,
+          lease_id TEXT, owner_id TEXT, event_kind TEXT NOT NULL,
+          recorded_at TEXT NOT NULL, detail TEXT
         );
         CREATE TABLE pipeline_job_requests (
           request_token TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES pipeline_jobs(job_id),
@@ -66,15 +89,37 @@ def create_data(root: Path) -> None:
             (f"request-{job_id}", job_id),
         )
         db.execute(
-            """INSERT INTO pipeline_job_attempts
-               VALUES (?, ?, 1, ?, ?, 'analyst', '2026-10-12T00:00:00Z',
-                       ?, NULL, NULL, NULL, NULL, NULL, NULL)""",
+            """INSERT INTO pipeline_job_attempts(
+                   attempt_id, job_id, attempt_number, state, claim_token,
+                   lease_owner, lease_epoch, lease_expires_at, requested_by,
+                   requested_at, started_at, finished_at, outcome, result_id,
+                   output_kind, output_id, error
+               ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'analyst',
+                         '2026-10-12T00:00:00Z', ?, NULL, NULL, NULL, NULL, NULL, NULL)""",
             (
                 f"attempt-{job_id}", job_id, state,
                 "claim-running" if state == "running" else None,
+                "owner-running" if state == "running" else None,
+                1 if state == "running" else 0,
+                "2026-10-12T00:10:00Z" if state == "running" else None,
                 "2026-10-12T00:01:00Z" if state == "running" else None,
             ),
         )
+    running_attempt = f"attempt-{RUNNING_JOB}"
+    running_key = f"derived-attempt:{running_attempt}"
+    db.execute(
+        """INSERT INTO work_leases VALUES(
+               ?, 'retained-analysis', ?, 1, 'claim-running', 'owner-running',
+               'active', '2026-10-12T00:01:00Z', '2026-10-12T00:01:00Z',
+               '2026-10-12T00:10:00Z', NULL, NULL)""",
+        (running_key, running_attempt),
+    )
+    db.execute(
+        """INSERT INTO work_lease_events VALUES(
+               'event-running-acquired', ?, 1, 'claim-running', 'owner-running',
+               'acquired', '2026-10-12T00:01:00Z', NULL)""",
+        (running_key,),
+    )
     db.execute(
         """INSERT INTO pipeline_admission_intents VALUES
            (?, 'automated_nmap_scope', 'nmap_scan_run', 'source-1', 'analyst',
@@ -221,10 +266,25 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
     db = sqlite3.connect(root / "analyzer.db")
     db.execute(
         """UPDATE pipeline_job_attempts
-           SET state='interrupted', finished_at='2026-10-12T00:02:00Z', claim_token=NULL,
+           SET state='interrupted', finished_at='2026-10-12T00:02:00Z',
                error='Application stopped while this attempt was running'
            WHERE job_id=?""",
         (RUNNING_JOB,),
+    )
+    running_attempt = f"attempt-{RUNNING_JOB}"
+    running_key = f"derived-attempt:{running_attempt}"
+    db.execute(
+        """UPDATE work_leases SET lease_id=NULL, owner_id=NULL, state='released',
+                  renewed_at='2026-10-12T00:02:00Z', expires_at=NULL,
+                  released_at='2026-10-12T00:02:00Z'
+             WHERE lease_key=?""",
+        (running_key,),
+    )
+    db.execute(
+        """INSERT INTO work_lease_events VALUES(
+               'event-running-expired', ?, 1, 'claim-running', 'owner-running',
+               'expired', '2026-10-12T00:02:00Z', 'former owner expired')""",
+        (running_key,),
     )
     db.execute(
         """UPDATE pipeline_job_attempts
@@ -241,6 +301,21 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
         "INSERT INTO pipeline_job_requests VALUES ('intent-request', ?, 'automatic', 'analyst', '2026-10-12T00:03:00Z')",
         (QUEUED_JOB,),
     )
+    db.execute(
+        "INSERT INTO pipeline_job_requests VALUES ('recovery-token', ?, 'retry', 'system-recovery', '2026-10-12T00:03:00Z')",
+        (RUNNING_JOB,),
+    )
+    db.execute(
+        """INSERT INTO pipeline_job_attempts(
+               attempt_id, job_id, attempt_number, state, claim_token,
+               lease_owner, lease_epoch, lease_expires_at, requested_by,
+               requested_at, started_at, finished_at, outcome, result_id,
+               output_kind, output_id, error
+           ) VALUES ('recovery-attempt', ?, 2, 'queued', NULL, NULL, 0, NULL,
+                     'system-recovery', '2026-10-12T00:03:00Z', NULL, NULL,
+                     NULL, NULL, NULL, NULL, NULL)""",
+        (RUNNING_JOB,),
+    )
     db.commit()
     db.close()
     after_runtime_path = tmp_path / "after-runtime.json"
@@ -248,22 +323,37 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
 
     db = sqlite3.connect(root / "analyzer.db")
     db.execute(
-        "INSERT INTO pipeline_job_requests VALUES ('retry-token', ?, 'retry', 'analyst', '2026-10-12T00:04:00Z')",
-        (RUNNING_JOB,),
+        """UPDATE pipeline_job_attempts
+              SET state='completed', claim_token='recovery-claim',
+                  lease_owner='recovery-owner', lease_epoch=1,
+                  lease_expires_at='2026-10-12T00:06:00Z',
+                  started_at='2026-10-12T00:04:00Z', finished_at='2026-10-12T00:05:00Z',
+                  outcome='reused', result_id='result-running',
+                  output_kind='derived_result', output_id='result-running'
+            WHERE attempt_id='recovery-attempt'"""
+    )
+    recovery_key = "derived-attempt:recovery-attempt"
+    db.execute(
+        """INSERT INTO work_leases VALUES(
+               ?, 'retained-analysis', 'recovery-attempt', 1, NULL, NULL,
+               'released', '2026-10-12T00:04:00Z', '2026-10-12T00:05:00Z',
+               NULL, '2026-10-12T00:05:00Z', NULL)""",
+        (recovery_key,),
     )
     db.execute(
-        """INSERT INTO pipeline_job_attempts
-           VALUES ('retry-attempt', ?, 2, 'completed', 'retry-claim', 'analyst',
-                   '2026-10-12T00:04:00Z', '2026-10-12T00:04:00Z', '2026-10-12T00:05:00Z',
-                   'reused', 'result-running', 'derived_result', 'result-running', NULL)""",
-        (RUNNING_JOB,),
+        """INSERT INTO work_lease_events VALUES
+               ('event-recovery-acquired', ?, 1, 'recovery-claim', 'recovery-owner',
+                'acquired', '2026-10-12T00:04:00Z', NULL),
+               ('event-recovery-released', ?, 1, 'recovery-claim', 'recovery-owner',
+                'released', '2026-10-12T00:05:00Z', NULL)""",
+        (recovery_key, recovery_key),
     )
     db.commit()
     db.close()
-    after_retry_path = tmp_path / "after-retry.json"
-    evidence.snapshot(snapshot_args(root, after_retry_path, "runtime", "after-retry", 1))
+    after_recovery_path = tmp_path / "after-recovery.json"
+    evidence.snapshot(snapshot_args(root, after_recovery_path, "runtime", "after-recovery", 1))
     after_cold_path = tmp_path / "after-cold.json"
-    evidence.snapshot(snapshot_args(root, after_cold_path, "cold", "after-retry", 1))
+    evidence.snapshot(snapshot_args(root, after_cold_path, "cold", "after-recovery", 1))
 
     released_lock_path = tmp_path / "released-lock.json"
     lock_probe.probe(lock_args(root, released_lock_path, "available", "replacement-writer-released"))
@@ -274,7 +364,7 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
     result_path = tmp_path / "verified.json"
     orchestration_path = tmp_path / "orchestration.json"
     orchestration_path.write_text(json.dumps({
-        "schema_version": 1,
+        "schema_version": evidence.SCHEMA_VERSION,
         "scenario": {"id": "forced-stop-20261012", "kind": "forced-termination"},
         "deployment_uid": "11111111-2222-4333-8444-555555555555",
         "generation_before": 7, "generation_after": 7,
@@ -299,7 +389,7 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
     }
     cluster_observations = tmp_path / "cluster-observations.json"
     cluster_observations.write_text(json.dumps({
-        "schema_version": 1,
+        "schema_version": evidence.SCHEMA_VERSION,
         "scenario": {"id": "forced-stop-20261012", "kind": "forced-termination"},
         "samples": [
             {"event": "before_ready", "observed_at": "2026-10-12T00:00:00Z", "deployment_uid": "11111111-2222-4333-8444-555555555555", "deployment_generation": 7, "pods": [pod], "writer_owners_observed": 1},
@@ -315,7 +405,7 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
             after_runtime=after_runtime_path,
             before_cold=before_cold_path,
             after_cold=after_cold_path,
-            after_retry=after_retry_path,
+            after_recovery=after_recovery_path,
             active_lock_receipt=active_lock_path,
             released_lock_receipt=released_lock_path,
             pre_replacement_lock_receipt=None,
@@ -335,8 +425,50 @@ def test_snapshot_and_verifier_preserve_interrupted_queued_retry_and_receipts(tm
     assert result["status"] == "gate4b_scenario_verified"
     assert result["checks"]["running_attempts_interrupted"] == 1
     assert result["checks"]["queued_attempts_preserved_or_completed"] == 1
-    assert result["checks"]["completed_retry_verified"] is True
+    assert result["checks"]["automatic_recovery_verified"] is True
     assert json.loads(result_path.read_text())["attestation"] == result["attestation"]
+
+    before_work = json.loads(before_runtime_path.read_text())
+    after_work = json.loads(after_runtime_path.read_text())
+    recovered_work = json.loads(after_recovery_path.read_text())
+
+    missing = json.loads(json.dumps(before_work))
+    missing["work"]["jobs"][RUNNING_JOB]["attempts"][-1]["lease_owner"] = None
+    with pytest.raises(evidence.FailureEvidenceError, match="protected owner identity"):
+        evidence._verify_work(missing, after_work, recovered_work)
+
+    mismatched = json.loads(json.dumps(before_work))
+    mismatched["work"]["jobs"][RUNNING_JOB]["attempts"][-1]["lease"]["work_id"] = "different-attempt"
+    with pytest.raises(evidence.FailureEvidenceError, match="different attempt or epoch"):
+        evidence._verify_work(mismatched, after_work, recovered_work)
+
+    duplicated = json.loads(json.dumps(recovered_work))
+    final_attempt = duplicated["work"]["jobs"][RUNNING_JOB]["attempts"][-1]
+    final_attempt["lease_events"].append(dict(final_attempt["lease_events"][0], event_id="duplicate-acquire"))
+    with pytest.raises(evidence.FailureEvidenceError, match="one acquired and released"):
+        evidence._verify_work(before_work, after_work, duplicated)
+
+    stale_epoch = json.loads(json.dumps(recovered_work))
+    stale_epoch["work"]["jobs"][RUNNING_JOB]["attempts"][-1]["lease"]["fencing_epoch"] = 2
+    with pytest.raises(evidence.FailureEvidenceError, match="different attempt or epoch"):
+        evidence._verify_work(before_work, after_work, stale_epoch)
+
+    stale_original_before = json.loads(json.dumps(before_work))
+    stale_original_time = json.loads(json.dumps(after_work))
+    stale_original_before["work"]["jobs"][RUNNING_JOB]["attempts"][0]["lease_events"][0]["recorded_at"] = "2026-10-12T00:03:00Z"
+    stale_original_time["work"]["jobs"][RUNNING_JOB]["attempts"][0]["lease_events"][0]["recorded_at"] = "2026-10-12T00:03:00Z"
+    with pytest.raises(evidence.FailureEvidenceError, match="outside their required chronology"):
+        evidence._verify_work(stale_original_before, stale_original_time, recovered_work)
+
+    early_recovery_release = json.loads(json.dumps(recovered_work))
+    early_recovery_release["work"]["jobs"][RUNNING_JOB]["attempts"][-1]["lease_events"][-1]["recorded_at"] = "2026-10-12T00:03:00Z"
+    with pytest.raises(evidence.FailureEvidenceError, match="outside the recovery attempt window"):
+        evidence._verify_work(before_work, after_work, early_recovery_release)
+
+    late_recovery_acquisition = json.loads(json.dumps(recovered_work))
+    late_recovery_acquisition["work"]["jobs"][RUNNING_JOB]["attempts"][-1]["lease_events"][0]["recorded_at"] = "2026-10-12T00:06:00Z"
+    with pytest.raises(evidence.FailureEvidenceError, match="outside the recovery attempt window"):
+        evidence._verify_work(before_work, after_work, late_recovery_acquisition)
 
 
 def test_verifier_rejects_disappearing_queued_work(tmp_path: Path) -> None:
@@ -354,7 +486,7 @@ def test_verifier_rejects_disappearing_queued_work(tmp_path: Path) -> None:
     }
     after = {"work": {"jobs": {}, "admission_intents": {}}}
     try:
-        evidence._verify_work(before, after, None)
+        evidence._verify_work(before, after, after)
     except evidence.FailureEvidenceError as exc:
         assert "disappeared" in str(exc)
     else:
@@ -364,20 +496,142 @@ def test_verifier_rejects_disappearing_queued_work(tmp_path: Path) -> None:
 def test_work_verifier_requires_pending_admission_intent() -> None:
     attempt = {
         "attempt_id": "running-1", "attempt_number": 1, "state": "running",
+        "started_at": "2026-10-12T00:00:00Z", "finished_at": None,
+        "claim_token": "claim-1", "lease_owner": "owner-1", "lease_epoch": 1,
         "outcome": None, "result_id": None, "output_kind": None, "output_id": None,
+        "lease": {
+            "lease_key": "derived-attempt:running-1", "work_id": "running-1",
+            "fencing_epoch": 1, "lease_id": "claim-1", "owner_id": "owner-1",
+            "state": "active",
+        },
+        "lease_events": [{
+            "event_kind": "acquired", "lease_id": "claim-1", "owner_id": "owner-1",
+            "fencing_epoch": 1, "recorded_at": "2026-10-12T00:00:00Z",
+        }],
     }
     queued = dict(attempt, attempt_id="queued-1", state="queued")
     before = {"work": {"jobs": {
         "running": {"job_id": "running", "job_type": "t", "source_kind": "s", "source_ref": "r", "requested_by": "a", "attempts": [attempt], "requests": []},
         "queued": {"job_id": "queued", "job_type": "t", "source_kind": "s", "source_ref": "q", "requested_by": "a", "attempts": [queued], "requests": []},
     }, "admission_intents": {}}}
-    interrupted = dict(attempt, state="interrupted")
+    interrupted = dict(
+        attempt, state="interrupted",
+        finished_at="2026-10-12T00:01:00Z",
+        lease={**attempt["lease"], "state": "released", "lease_id": None, "owner_id": None},
+        lease_events=attempt["lease_events"] + [{
+            "event_kind": "expired", "lease_id": "claim-1", "owner_id": "owner-1",
+            "fencing_epoch": 1, "recorded_at": "2026-10-12T00:01:00Z",
+        }],
+    )
+    recovery = {
+        **attempt, "attempt_id": "recovery-2", "attempt_number": 2,
+        "state": "queued", "requested_by": "system-recovery",
+        "started_at": None, "finished_at": None,
+    }
     after = {"work": {"jobs": {
-        "running": dict(before["work"]["jobs"]["running"], attempts=[interrupted]),
+        "running": dict(
+            before["work"]["jobs"]["running"],
+            attempts=[interrupted, recovery],
+            requests=[{"request_kind": "retry", "requested_by": "system-recovery"}],
+        ),
+        "queued": before["work"]["jobs"]["queued"],
+    }, "admission_intents": {}}}
+    completed = dict(
+        recovery, state="completed", outcome="reused", output_id="result-1",
+        started_at="2026-10-12T00:02:00Z", finished_at="2026-10-12T00:03:00Z",
+        claim_token="claim-2", lease_owner="owner-2", lease_epoch=1,
+        lease={
+            "lease_key": "derived-attempt:recovery-2", "work_id": "recovery-2",
+            "fencing_epoch": 1, "lease_id": None, "owner_id": None, "state": "released",
+        },
+        lease_events=[
+            {"event_kind": "acquired", "lease_id": "claim-2", "owner_id": "owner-2", "fencing_epoch": 1, "recorded_at": "2026-10-12T00:02:00Z"},
+            {"event_kind": "released", "lease_id": "claim-2", "owner_id": "owner-2", "fencing_epoch": 1, "recorded_at": "2026-10-12T00:03:00Z"},
+        ],
+    )
+    after_recovery = {"work": {"jobs": {
+        "running": dict(after["work"]["jobs"]["running"], attempts=[interrupted, completed]),
         "queued": before["work"]["jobs"]["queued"],
     }, "admission_intents": {}}}
     with pytest.raises(evidence.FailureEvidenceError, match="pending admission intent"):
-        evidence._verify_work(before, after, after)
+        evidence._verify_work(before, after, after_recovery)
+
+
+def test_work_verifier_accepts_real_database_timestamps_across_recovery(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    running_job = "pipeline_job_real_running"
+    queued_job = "pipeline_job_real_queued"
+    intent_id = "intake_intent_real_timing"
+    init_derived_job_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        insert_job(db, running_job, "2026-10-12T00:00:00Z")
+        insert_job(db, queued_job, "2026-10-12T00:01:00Z")
+        intent = _insert_intent(
+            db,
+            intent_kind=AUTOMATED_NMAP_INTENT,
+            source_kind="nmap_scan_run",
+            source_id="real-timing-source",
+            policy_version=1,
+            observation_id=None,
+            assignment_id=None,
+            scope_id=None,
+            actor="analyst",
+            contract={"test": "real database timing"},
+            state="pending",
+            created_at="2026-10-12T00:00:00+00:00",
+        )
+        intent_id = intent["intent_id"]
+
+    running_claim = claim_next_derived_job(db_path, worker_id="worker-before-restart")
+    assert running_claim is not None and running_claim["job_id"] == running_job
+
+    def work_snapshot() -> dict:
+        with connect_database(db_path, read_only=True) as db:
+            db.row_factory = sqlite3.Row
+            return {
+                "work": evidence._tracked_work(
+                    db, [running_job, queued_job], [intent_id],
+                )
+            }
+
+    before = work_snapshot()
+    with connect_database(db_path) as db:
+        db.execute(
+            "UPDATE work_leases SET expires_at='2000-01-01T00:00:00.000Z' WHERE lease_key=?",
+            (running_claim["lease_key"],),
+        )
+    assert recover_interrupted_derived_jobs(db_path) == 1
+
+    def complete_next(output_id: str) -> dict:
+        claim = claim_next_derived_job(db_path, worker_id=f"worker-{output_id}")
+        assert claim is not None
+        with connect_database(db_path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            finished_at = _complete_claim_on_connection(
+                db, claim, "real timing test lost ownership",
+            )
+            changed = db.execute(
+                """UPDATE pipeline_job_attempts
+                      SET state='completed', finished_at=?, outcome='created',
+                          output_kind='derived_result', output_id=?
+                    WHERE attempt_id=? AND job_id=? AND state='running'""",
+                (finished_at, output_id, claim["attempt_id"], claim["job_id"]),
+            ).rowcount
+            assert changed == 1
+        return claim
+
+    queued_claim = complete_next("result-real-queued")
+    assert queued_claim["job_id"] == queued_job
+    after = work_snapshot()
+    recovery_claim = complete_next("result-real-recovered")
+    assert recovery_claim["job_id"] == running_job
+    after_recovery = work_snapshot()
+
+    checks = evidence._verify_work(before, after, after_recovery)
+    assert checks["running_attempts_interrupted"] == 1
+    assert checks["queued_attempts_preserved_or_completed"] == 1
+    assert checks["automatic_recovery_verified"] is True
 
 
 def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachment(tmp_path: Path) -> None:
@@ -395,7 +649,7 @@ def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachmen
         storage_attachment_identity="attachment-new-12345678",
     )
     record = {
-        "schema_version": 1,
+        "schema_version": evidence.SCHEMA_VERSION,
         "scenario": {"id": "node-loss-20261012", "kind": "node-loss"},
         "deployment_uid": old_runtime["deployment_uid"],
         "generation_before": 7, "generation_after": 7,
@@ -454,7 +708,7 @@ def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachmen
             sample["attachments"] = [{"identity": new_runtime["storage_attachment_identity"], "state": "attached", "node_uid": new_runtime["node_uid"]}]
         samples.append(sample)
     cluster_path = tmp_path / "node-loss-observations.json"
-    cluster_path.write_text(json.dumps({"schema_version": 1, "scenario": record["scenario"], "samples": samples}), encoding="utf-8")
+    cluster_path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": record["scenario"], "samples": samples}), encoding="utf-8")
     args.cluster_observations = cluster_path
     cluster = evidence._verify_cluster_observations(
         args, before, after, record,
@@ -468,7 +722,7 @@ def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachmen
     duplicate_old_state = json.loads(json.dumps(samples))
     detached_sample = next(item for item in duplicate_old_state if item["event"] == "storage_detached")
     detached_sample["attachments"].append({"identity": old_runtime["storage_attachment_identity"], "state": "attached", "node_uid": old_runtime["node_uid"]})
-    cluster_path.write_text(json.dumps({"schema_version": 1, "scenario": record["scenario"], "samples": duplicate_old_state}), encoding="utf-8")
+    cluster_path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": record["scenario"], "samples": duplicate_old_state}), encoding="utf-8")
     with pytest.raises(evidence.FailureEvidenceError, match="old attachment active"):
         evidence._verify_cluster_observations(
             args, before, after, record,
@@ -479,7 +733,7 @@ def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachmen
     old_active_after_attach = json.loads(json.dumps(samples))
     attached_sample = next(item for item in old_active_after_attach if item["event"] == "storage_attached")
     attached_sample["attachments"].append({"identity": old_runtime["storage_attachment_identity"], "state": "attached", "node_uid": old_runtime["node_uid"]})
-    cluster_path.write_text(json.dumps({"schema_version": 1, "scenario": record["scenario"], "samples": old_active_after_attach}), encoding="utf-8")
+    cluster_path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": record["scenario"], "samples": old_active_after_attach}), encoding="utf-8")
     with pytest.raises(evidence.FailureEvidenceError, match="old attachment active"):
         evidence._verify_cluster_observations(
             args, before, after, record,
@@ -490,7 +744,7 @@ def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachmen
     stale_old_pod = json.loads(json.dumps(samples))
     replacement_sample = next(item for item in stale_old_pod if item["event"] == "replacement_created")
     replacement_sample["pods"].append(dict(old_pod, ready=False))
-    cluster_path.write_text(json.dumps({"schema_version": 1, "scenario": record["scenario"], "samples": stale_old_pod}), encoding="utf-8")
+    cluster_path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": record["scenario"], "samples": stale_old_pod}), encoding="utf-8")
     with pytest.raises(evidence.FailureEvidenceError, match="retain the old Pod"):
         evidence._verify_cluster_observations(
             args, before, after, record,
@@ -498,7 +752,7 @@ def test_node_loss_orchestration_binds_fencing_detachment_and_distinct_attachmen
             ["2026-10-12T00:06:00Z|startup|started", "2026-10-12T00:07:00Z|readiness|ready"],
         )
 
-    cluster_path.write_text(json.dumps({"schema_version": 1, "scenario": record["scenario"], "samples": samples}), encoding="utf-8")
+    cluster_path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": record["scenario"], "samples": samples}), encoding="utf-8")
     record["no_replacement_before_fencing_and_detachment"] = False
     record_path.write_text(json.dumps(record), encoding="utf-8")
     with pytest.raises(evidence.FailureEvidenceError, match="replacement was held"):
@@ -550,7 +804,7 @@ def test_controlled_rescheduling_requires_one_generation_step_after_pre_probe(tm
             sample["attachments"] = [{"identity": new["storage_attachment_identity"], "node_uid": new["node_uid"], "state": "attached"}]
         samples.append(sample)
     path = tmp_path / "controlled-observations.json"
-    path.write_text(json.dumps({"schema_version": 1, "scenario": scenario, "samples": samples}), encoding="utf-8")
+    path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": scenario, "samples": samples}), encoding="utf-8")
     args = argparse.Namespace(cluster_observations=path)
     before = {"scenario": scenario, "runtime": old}
     after = {"scenario": scenario, "runtime": new}
@@ -566,7 +820,7 @@ def test_controlled_rescheduling_requires_one_generation_step_after_pre_probe(tm
     for sample in invalid_generation_samples:
         if sample["event"] in {"replacement_created", "after_ready"}:
             sample["deployment_generation"] = 9
-    path.write_text(json.dumps({"schema_version": 1, "scenario": scenario, "samples": invalid_generation_samples}), encoding="utf-8")
+    path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": scenario, "samples": invalid_generation_samples}), encoding="utf-8")
     with pytest.raises(evidence.FailureEvidenceError, match="generation transition"):
         evidence._verify_cluster_observations(
             args, before, after, record,
@@ -600,7 +854,7 @@ def test_recreate_observations_reject_old_pod_after_replacement(tmp_path: Path) 
         {"event": "after_ready", "observed_at": events[4]["at"], "deployment_uid": old["deployment_uid"], "deployment_generation": 8, "pods": [new_pod], "writer_owners_observed": 1},
     ]
     path = tmp_path / "recreate-observations.json"
-    path.write_text(json.dumps({"schema_version": 1, "scenario": scenario, "samples": samples}), encoding="utf-8")
+    path.write_text(json.dumps({"schema_version": evidence.SCHEMA_VERSION, "scenario": scenario, "samples": samples}), encoding="utf-8")
     with pytest.raises(evidence.FailureEvidenceError, match="retain the old Pod"):
         evidence._verify_cluster_observations(
             argparse.Namespace(cluster_observations=path),

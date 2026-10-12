@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 
 from app.database import configure_database, connect_database
 from app.evidence_maintenance import guarded_evidence_mutation
@@ -101,6 +102,124 @@ def init_artifact_storage(db_path: Path, artifact_root: Path | None = None) -> N
         _ARTIFACT_STORAGE_READY.add(storage_key())
 
 
+def _register_record_on_connection(
+    *,
+    db: sqlite3.Connection,
+    artifact_root: Path,
+    digest: str,
+    size_bytes: int,
+    media_type: str,
+    source_kind: str,
+    source_ref: str,
+    original_filename: str | None,
+    actor: str | None,
+    metadata: dict | None,
+    observed_at: str | None,
+    observation_key: str | None = None,
+    run_id: str | None = None,
+    scope_context: dict | None = None,
+    pipeline_policy_version: int | None = None,
+) -> dict:
+    observed_at = observed_at or utc_now()
+    canonical_path = canonical_artifact_path(artifact_root, digest)
+    observation_id = hashlib.sha256(f"{observation_key}:{digest}".encode()).hexdigest() if observation_key else uuid.uuid4().hex
+    inserted = db.execute(
+            """
+            INSERT OR IGNORE INTO artifact_registry (
+                sha256, size_bytes, media_type, canonical_path,
+                first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                digest,
+                int(size_bytes),
+                media_type or "application/octet-stream",
+                str(canonical_path),
+                observed_at,
+                observed_at,
+            ),
+    ).rowcount
+    duplicate = not bool(inserted)
+    db.execute(
+            """
+            UPDATE artifact_registry
+            SET first_seen_at = MIN(first_seen_at, ?), last_seen_at = MAX(last_seen_at, ?),
+                media_type = CASE
+                    WHEN media_type = 'application/octet-stream' AND ? != ''
+                    THEN ? ELSE media_type END
+            WHERE sha256 = ?
+            """,
+            (observed_at, observed_at, media_type or "", media_type or "", digest),
+        )
+    observation_values = (
+            observation_id,
+            digest,
+            source_kind,
+            source_ref,
+            observed_at,
+            original_filename,
+            actor,
+            json.dumps(metadata or {}, sort_keys=True),
+        )
+    observation_inserted = db.execute(
+            """
+            INSERT OR IGNORE INTO artifact_observations (
+                observation_id, sha256, source_kind, source_ref, observed_at,
+                original_filename, actor, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            observation_values,
+    ).rowcount
+    if not observation_inserted:
+        existing_observation = db.execute(
+                """
+                SELECT observation_id, sha256, source_kind, source_ref, observed_at,
+                       original_filename, actor, metadata_json
+                FROM artifact_observations WHERE observation_id = ?
+                """,
+                (observation_id,),
+        ).fetchone()
+        if existing_observation is None or tuple(existing_observation) != observation_values:
+            raise ValueError("Artifact observation replay does not match retained provenance")
+    if scope_context is not None:
+        if not run_id:
+            raise ValueError("Scoped artifact observations require a scan run")
+        insert_artifact_observation_scope_context(
+            db,
+            observation_id=observation_id,
+            run_id=run_id,
+            context=scope_context,
+        )
+    if pipeline_policy_version is not None:
+        from app.pipeline_intake import MANUAL_NMAP_SOURCE, mark_pipeline_source
+
+        if source_kind != "nmap_import":
+            raise ValueError("Pipeline upload policy applies only to manual Nmap evidence")
+        mark_pipeline_source(
+            db,
+            source_kind=MANUAL_NMAP_SOURCE,
+            source_id=observation_id,
+            marked_by=actor or "local-operator",
+            marked_at=observed_at,
+            policy_version=pipeline_policy_version,
+        )
+    first_seen_at, last_seen_at = db.execute(
+        "SELECT first_seen_at, last_seen_at FROM artifact_registry WHERE sha256 = ?", (digest,)
+    ).fetchone()
+    return {
+        "sha256": digest,
+        "size_bytes": int(size_bytes),
+        "media_type": media_type or "application/octet-stream",
+        "canonical_path": str(canonical_path),
+        "duplicate": duplicate,
+        "first_seen_at": first_seen_at,
+        "last_seen_at": last_seen_at,
+        "observation_id": observation_id,
+        "source_kind": source_kind,
+        "source_ref": source_ref,
+    }
+
+
 def _register_record(
     *,
     db_path: Path,
@@ -118,111 +237,33 @@ def _register_record(
     run_id: str | None = None,
     scope_context: dict | None = None,
     pipeline_policy_version: int | None = None,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict:
     init_artifact_storage(db_path, artifact_root)
     if pipeline_policy_version is not None:
         from app.pipeline_intake import init_pipeline_intake_storage
 
         init_pipeline_intake_storage(db_path)
-    observed_at = observed_at or utc_now()
-    canonical_path = canonical_artifact_path(artifact_root, digest)
-    observation_id = hashlib.sha256(f"{observation_key}:{digest}".encode()).hexdigest() if observation_key else uuid.uuid4().hex
     with connect_database(db_path) as db:
-        inserted = db.execute(
-            """
-            INSERT OR IGNORE INTO artifact_registry (
-                sha256, size_bytes, media_type, canonical_path,
-                first_seen_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                digest,
-                int(size_bytes),
-                media_type or "application/octet-stream",
-                str(canonical_path),
-                observed_at,
-                observed_at,
-            ),
-        ).rowcount
-        duplicate = not bool(inserted)
-        db.execute(
-            """
-            UPDATE artifact_registry
-            SET first_seen_at = MIN(first_seen_at, ?), last_seen_at = MAX(last_seen_at, ?),
-                media_type = CASE
-                    WHEN media_type = 'application/octet-stream' AND ? != ''
-                    THEN ? ELSE media_type END
-            WHERE sha256 = ?
-            """,
-            (observed_at, observed_at, media_type or "", media_type or "", digest),
+        if transaction_guard is not None:
+            transaction_guard(db)
+        return _register_record_on_connection(
+            db=db,
+            artifact_root=artifact_root,
+            digest=digest,
+            size_bytes=size_bytes,
+            media_type=media_type,
+            source_kind=source_kind,
+            source_ref=source_ref,
+            original_filename=original_filename,
+            actor=actor,
+            metadata=metadata,
+            observed_at=observed_at,
+            observation_key=observation_key,
+            run_id=run_id,
+            scope_context=scope_context,
+            pipeline_policy_version=pipeline_policy_version,
         )
-        observation_values = (
-            observation_id,
-            digest,
-            source_kind,
-            source_ref,
-            observed_at,
-            original_filename,
-            actor,
-            json.dumps(metadata or {}, sort_keys=True),
-        )
-        observation_inserted = db.execute(
-            """
-            INSERT OR IGNORE INTO artifact_observations (
-                observation_id, sha256, source_kind, source_ref, observed_at,
-                original_filename, actor, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            observation_values,
-        ).rowcount
-        if not observation_inserted:
-            existing_observation = db.execute(
-                """
-                SELECT observation_id, sha256, source_kind, source_ref, observed_at,
-                       original_filename, actor, metadata_json
-                FROM artifact_observations WHERE observation_id = ?
-                """,
-                (observation_id,),
-            ).fetchone()
-            if existing_observation is None or tuple(existing_observation) != observation_values:
-                raise ValueError("Artifact observation replay does not match retained provenance")
-        if scope_context is not None:
-            if not run_id:
-                raise ValueError("Scoped artifact observations require a scan run")
-            insert_artifact_observation_scope_context(
-                db,
-                observation_id=observation_id,
-                run_id=run_id,
-                context=scope_context,
-            )
-        if pipeline_policy_version is not None:
-            from app.pipeline_intake import MANUAL_NMAP_SOURCE, mark_pipeline_source
-
-            if source_kind != "nmap_import":
-                raise ValueError("Pipeline upload policy applies only to manual Nmap evidence")
-            mark_pipeline_source(
-                db,
-                source_kind=MANUAL_NMAP_SOURCE,
-                source_id=observation_id,
-                marked_by=actor or "local-operator",
-                marked_at=observed_at,
-                policy_version=pipeline_policy_version,
-            )
-        first_seen_at, last_seen_at = db.execute(
-            "SELECT first_seen_at, last_seen_at FROM artifact_registry WHERE sha256 = ?", (digest,)
-        ).fetchone()
-    return {
-        "sha256": digest,
-        "size_bytes": int(size_bytes),
-        "media_type": media_type or "application/octet-stream",
-        "canonical_path": str(canonical_path),
-        "duplicate": duplicate,
-        "first_seen_at": first_seen_at,
-        "last_seen_at": last_seen_at,
-        "observation_id": observation_id,
-        "source_kind": source_kind,
-        "source_ref": source_ref,
-    }
 
 
 @guarded_evidence_mutation(lambda *args, **kwargs: kwargs["db_path"])
@@ -290,6 +331,7 @@ def register_artifact_file(
     expected_sha256: str | None = None,
     expected_size_bytes: int | None = None,
     pipeline_policy_version: int | None = None,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     before = source_path.stat()
@@ -334,6 +376,7 @@ def register_artifact_file(
         run_id=run_id,
         scope_context=scope_context,
         pipeline_policy_version=pipeline_policy_version,
+        transaction_guard=transaction_guard,
     )
     record["physical_created"] = physical_created
     return record

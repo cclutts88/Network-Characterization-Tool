@@ -293,6 +293,11 @@ def test_selector_reads_do_not_modify_database_or_manifests(tmp_path):
         db_path, config_dir, run_id=run_id, address="10.0.0.1",
         completed_at="2030-01-01T00:00:00+00:00",
     )
+    # Establish a stable on-disk WAL baseline before checking that the selector
+    # itself performs no writes. Closing the final prior writer may otherwise
+    # checkpoint already-committed setup pages during the first later open.
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     manifest_path = config_dir / run_id / "manifest.json"
     before_db = hashlib.sha256(db_path.read_bytes()).hexdigest()
     before_manifest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

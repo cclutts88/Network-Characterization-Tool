@@ -62,6 +62,9 @@ RELATIVE_LIMITS = {
     "peak_rss_bytes_allowance": 134_217_728,
 }
 
+PEAK_MEMORY_SCOPE_CONTAINER = "container-lifetime-cgroup-v2"
+PEAK_MEMORY_SCOPE_PROCESS = "runner-process-lifetime"
+
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
@@ -202,19 +205,29 @@ def _cpu_seconds() -> float:
     return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
 
 
-def _peak_memory() -> tuple[int, str, dict]:
-    peak_path = Path("/sys/fs/cgroup/memory.peak")
-    try:
-        value = int(peak_path.read_text().strip())
-        if value > 0:
-            return value, "cgroup-v2 memory.peak including child processes", {}
-    except (OSError, ValueError):
-        pass
+def _peak_memory(requested_scope: str = PEAK_MEMORY_SCOPE_CONTAINER) -> tuple[int, str, dict]:
+    if requested_scope not in {PEAK_MEMORY_SCOPE_CONTAINER, PEAK_MEMORY_SCOPE_PROCESS}:
+        raise ValueError("Unsupported peak-memory measurement scope")
+    if requested_scope == PEAK_MEMORY_SCOPE_CONTAINER:
+        peak_path = Path("/sys/fs/cgroup/memory.peak")
+        try:
+            value = int(peak_path.read_text().strip())
+            if value > 0:
+                return value, "cgroup-v2 memory.peak including child processes", {
+                    "peak_rss_scope": PEAK_MEMORY_SCOPE_CONTAINER,
+                    "peak_rss_requested_scope": requested_scope,
+                    "formal_phase0_acceptance_eligible": True,
+                }
+        except (OSError, ValueError):
+            pass
     own = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
     children = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
     return own + children, "sum of self and child ru_maxrss upper bounds", {
         "self_peak_rss_bytes": own,
         "child_peak_rss_bytes": children,
+        "peak_rss_scope": PEAK_MEMORY_SCOPE_PROCESS,
+        "peak_rss_requested_scope": requested_scope,
+        "formal_phase0_acceptance_eligible": False,
     }
 
 
@@ -368,6 +381,7 @@ def run_once(
     git_attestation: dict,
     image_attestation: dict,
     repeat: int,
+    peak_memory_scope: str = PEAK_MEMORY_SCOPE_CONTAINER,
 ) -> dict:
     if data_root.exists() or data_root.is_symlink():
         raise ValueError("Data directory must not exist before a benchmark repeat")
@@ -455,7 +469,7 @@ def run_once(
         "wall_seconds": time.perf_counter() - total_wall,
         "cpu_seconds": _cpu_seconds() - total_cpu,
     }
-    peak, peak_method, peak_detail = _peak_memory()
+    peak, peak_method, peak_detail = _peak_memory(peak_memory_scope)
     total_metrics.update({"peak_rss_bytes": peak, "peak_rss_method": peak_method, **peak_detail})
     failures = []
     if total_metrics["wall_seconds"] > ABSOLUTE_LIMITS["whole_run_wall_seconds"]:
@@ -530,13 +544,19 @@ def main() -> None:
     parser.add_argument("--git-attestation", type=Path, required=True)
     parser.add_argument("--image-attestation", type=Path, required=True)
     parser.add_argument("--repeat", type=int, required=True)
+    parser.add_argument(
+        "--peak-memory-scope",
+        choices=(PEAK_MEMORY_SCOPE_CONTAINER, PEAK_MEMORY_SCOPE_PROCESS),
+        default=PEAK_MEMORY_SCOPE_CONTAINER,
+        help="Use process lifetime only for test-harness runs; formal evidence requires container lifetime.",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     result = run_once(
         args.target_root.resolve(), args.corpus, args.data_root,
         json.loads(args.git_attestation.read_text(encoding="utf-8")),
         json.loads(args.image_attestation.read_text(encoding="utf-8")),
-        args.repeat,
+        args.repeat, args.peak_memory_scope,
     )
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output:

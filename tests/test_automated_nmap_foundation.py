@@ -462,15 +462,17 @@ def test_candidate_stage_restart_retry_and_dataset_change_are_explicit(
     assert run_next_derived_job(db_path, tmp_path)
     claimed = claim_next_derived_job(db_path)
     assert claimed is not None
+    with connect_database(db_path) as db:
+        db.execute(
+            "UPDATE work_leases SET expires_at='2000-01-01T00:00:00.000Z' WHERE lease_key=?",
+            (claimed["lease_key"],),
+        )
     assert recover_interrupted_derived_jobs(db_path) == 1
     with connect_database(db_path, read_only=True) as db:
         candidate_job_id = db.execute(
             "SELECT job_id FROM pipeline_jobs WHERE job_type = ?",
             ("nmap_searchsploit_candidates",),
         ).fetchone()[0]
-    retry_derived_job(
-        db_path, candidate_job_id, request_token="retry-candidate", requested_by="analyst",
-    )
     active_provider["provider_key"] = "e" * 64
     active_provider["active_version"] = "dataset-e"
     assert run_next_derived_job(db_path, tmp_path)

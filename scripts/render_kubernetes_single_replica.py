@@ -1146,7 +1146,7 @@ def _parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--storage-report", type=Path, required=True)
     snapshot.add_argument("--storage-report-digest", required=True)
     snapshot.add_argument("--mode", choices=("runtime", "cold"), required=True)
-    snapshot.add_argument("--phase", choices=("before-failure", "after-restart", "after-retry"), required=True)
+    snapshot.add_argument("--phase", choices=("before-failure", "after-restart", "after-recovery"), required=True)
     snapshot.add_argument("--scenario-id", required=True)
     snapshot.add_argument(
         "--scenario-kind",

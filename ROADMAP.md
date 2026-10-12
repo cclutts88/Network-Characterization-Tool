@@ -443,7 +443,7 @@ A roadmap item should only be marked complete when:
 | 2026-09-27 | Phase 1 storage | Replace historical duplicate files during migration | Backfill creates verified canonical copies and checkpoints but retains every historical original; new finalized collections use atomic hard-link replacement with a copy fallback | Existing consumers still depend on run-local paths; deleting historical evidence requires a separate rollback and reference-recheck gate | Backfill can temporarily increase used space. Optional compaction remains unimplemented and disabled |
 | 2026-10-04 | Phase 1 supported ingestion completion | Treat separate completed foundation features as a complete ingestion pipeline | Finish one durable staged pipeline for currently supported Nmap and device evidence; keep scope-free calculations separate from scoped observations and require explicit scope where needed | Existing operator actions use different persistence, retry and status models, and planned passive collectors or physical-device reconciliation would expand this gate without a safe identity contract | Missing scope is Needs scope, never inferred. Preserve every completed stage when another fails. Generalize the existing single-process worker through additive, preservation-tested pipeline tables, then connect intake, current-state/Last Seen receipts and acceptance benchmarks. The copied legacy queue becomes a trigger-enforced read-only audit archive. All processes must cut over together; ordinary rollback is unsafe because older code cannot see post-cutover work and cannot write the frozen queue. Historical adoption stays explicit and passive collectors remain later phases. See `docs/DERIVED_RESULTS.md` |
 | 2026-10-04 | Phase 1 automatic Nmap admission | Find new eligible work by scanning timestamps or all retained evidence after startup | Mark only new participating manual Nmap observations and scan runs, then commit a frozen admission intent with the authoritative assignment or eligible scan finalization before the durable worker creates a job | Timestamp selection can silently adopt historical evidence, miss work across clock changes, or switch a retry to a corrected assignment or newer parser. Making immediate job creation part of evidence retention would also make a successful import, assignment or scan depend on queue availability | Admission intents preserve the exact source, scope decision, actor and processing contract while allowing queue admission after the source transaction. Startup and worker recovery examine only pending intents from explicitly marked sources. Historical rows keep the explicit Queue action; missing scope remains Needs scope; corrections create new intents and cannot redirect older work. This gate covers new manual and automated Nmap evidence only. Device intake, processing retries, current-state selection and Last Seen remain separate gates. |
-| 2026-10-04 | Phase 1 automatic device-summary admission | Calculate verified device summaries while opening a page or silently adopt every active authority after upgrade | Mark only new participating manual uploads and eligible SSH collections, freeze an admission intent when exact device authority activates, then calculate through the shared durable worker | Page-time calculation can race authority changes and makes navigation perform expensive work. Broad startup adoption would silently change historical processing behavior | Device summaries are scope-free reusable calculations. Their intents retain the authority revision, selection contract, semantic manifest and ordered exact inputs. Historical unmarked authorities keep their established on-demand behavior until a separate adoption gate. Failed or interrupted calculation requires explicit local retry and never contacts the device. Normalized device observations, Network Scope assignment, physical-device identity, current-state selection and Last Seen remain later gates. |
+| 2026-10-04 | Phase 1 automatic device-summary admission | Calculate verified device summaries while opening a page or silently adopt every active authority after upgrade | Mark only new participating manual uploads and eligible SSH collections, freeze an admission intent when exact device authority activates, then calculate through the shared durable worker | Page-time calculation can race authority changes and makes navigation perform expensive work. Broad startup adoption would silently change historical processing behavior | Device summaries are scope-free reusable calculations. Their intents retain the authority revision, selection contract, semantic manifest and ordered exact inputs. Historical unmarked authorities keep their established on-demand behavior until a separate adoption gate. At this admission gate, failed or interrupted calculation required explicit local retry and never contacted the device; Gate 6 later supersedes that retry limit with one fenced recovery attempt from retained evidence. Normalized device observations, Network Scope assignment, physical-device identity, current-state selection and Last Seen remain later gates. |
 | 2026-10-04 | Phase 1 latest supported observations / Last Seen foundation | Build a broad current-state model and exact Last Seen behavior after canonical entity storage | First add a versioned, read-only selector for one scoped Nmap address that separately reports the latest supported source window and the last confirmed positive source window | Existing immutable receipts can safely order scoped Nmap observations by validated source collection windows, but they cannot yet prove physical-device identity, live state, exact per-service time, device-configuration scope, or disappearance | Identity remains Network Scope plus IP address. Only current unsuperseded assignments, the supported parser, successful completion and valid source windows may participate. Equal or transitively overlapping windows remain grouped; successful unknown-time records remain visible and block an unqualified latest claim. Every displayed observation links to its retained evidence. A later assumed or incomplete record cannot erase earlier confirmation. This completes only a nested Steps 13-14 slice; broader current state, physical-device reconciliation, device observations, service absence and exact Last Seen remain open. See `docs/ENTITY_FOUNDATION.md` |
 | 2026-10-10 | Phase 1 current reported service state | Treat a selected latest record, upload time, processing time, or scan run ID as current network truth | Add a versioned, read-only selector for one exact IP address in one Network Scope that determines the latest defensible source-reported state independently for each protocol and port | Current immutable Nmap receipts can prove source collection order and exact port coverage for a bounded set of successful records, but they cannot prove live status, physical-device identity, exact Last Seen, or disappearance. A later narrower scan must not silently inherit an older service state | “Current” in this view means latest defensible source-reported state only. Only current unsuperseded assignments, `nmap-endpoints:2`, successful completion, strict non-overlapping host collection windows and `nmap-coverage:1` may participate. Unknown, equal, touching or transitively overlapping windows remain unresolved. A latest record that did not assess a port produces **Not assessed**; it does not carry the older state forward. TCP, UDP and SCTP remain separate. Results use saved database receipts only: they perform no artifact reads, artifact-content hashing, XML parsing, backfill, job creation or writes. The candidate ceiling is enforced before stored JSON payloads are decoded. A hash of assignment identity metadata may bind paging to the same read-only selection revision; it never reads or verifies evidence bytes. Results are paged, revision-bound, candidate-capped and source-linked. Upload, processing and run order are display-only. Physical-device reconciliation, live truth, exact Last Seen and disappearance remain open. See `docs/CURRENT_REPORTED_SERVICE_STATE.md` |
 | 2026-10-04 | Phase 1 scoped device observations | Normalize verified device configuration directly into a broad current-device model | Add a collection-specific, explicitly scoped receipt stage after the reusable scope-free summary; reject mixed or unresolved routing contexts and retain configuration assertions separately from Nmap confirmations | The reusable summary is presentation-bounded, device configuration does not establish live presence or address time, and physical-device reconciliation does not yet have a reviewed stable-identity contract | Exact selected configuration bytes are verified before extraction. Append-only scope decisions, immutable interface/address receipts, atomic job publication, exact replay comparison and explicit coverage preserve evidence meaning. Missing or failed normalization preserves the completed summary. This completes a bounded nested Step 13 slice; physical identity, live status, broad current truth and exact Last Seen remain open. See `docs/DEVICE_OBSERVATIONS.md` |
@@ -1602,16 +1602,14 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
       running, completed, failed and interrupted history. Result publication, inputs,
       source link and successful outcome commit together. The operator action reads
       retained files only and never starts a scan. Queued work resumes after restart;
-      work interrupted while running requires an explicit local retry from the beginning,
-      without a rescan when the retained evidence remains intact. Bulk requests,
+      at this earlier single-process gate, work interrupted while running required an explicit local retry from the beginning, without a rescan when retained evidence remained intact. Gate 6 cross-process coordination below supersedes that limit with one fenced automatic recovery attempt. Bulk requests,
       cancellation, automatic retries, automatic stale scheduling, topology jobs,
       device-summary jobs and dependency-driven rebuilds remain separate gates.
       Completed 2026-10-03. Scan History now offers Prepare saved analysis for one
       eligible finalized scan and shows queued, running, completed, failed and
       interrupted outcomes without implying collection success. System Health shows a
       bounded read-only request and attempt history. Queued work resumes after restart;
-      an abandoned running attempt is retained as Interrupted and an explicit retry adds
-      a new attributed attempt. The runner rejects changed, missing, ambiguous or
+      an abandoned running attempt is retained as Interrupted. At this earlier gate an explicit retry added a new attributed attempt; Gate 6 below now permits one fenced system-recovery attempt from retained evidence. The runner rejects changed, missing, ambiguous or
       symlinked sources, frozen-contract changes, lost source authority and lost worker
       claims. Exact result/input/provenance publication and successful job completion
       are atomic; verified results may be reused across separate encounters without
@@ -1695,8 +1693,7 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    authoritative scope decision or eligible completion commits a frozen handoff before
    job creation. Startup and later worker starts recover only those marked handoffs;
    historical evidence retains its explicit Queue action, missing scope stays Needs
-   scope, corrections cannot redirect older work, and failed or interrupted attempts are
-   never retried automatically. A retained activity state distinguishes Waiting,
+   scope, corrections cannot redirect older work. At this earlier admission gate failed or interrupted attempts were never retried automatically; Gate 6 below now permits a single fenced system-recovery attempt after ownership expiry while preserving the earlier attempt. A retained activity state distinguishes Waiting,
    Retrying and Paused, allowing Analyze and Scan History to refresh through bounded
    temporary storage retries and stop after a true pause. The reviewer halted the gate
    for an automatic retry collision, a hot worker-respawn loop, and two polling gaps;
@@ -1717,8 +1714,7 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    participate. Authority activation freezes the revision, selection contract, semantic
    manifest and ordered exact inputs in a recoverable admission intent before job
    creation. The worker must atomically publish the reusable summary, provenance and
-   successful attempt; failed or interrupted calculations require an explicit local
-   retry and never contact the device. Device History must distinguish local source
+   successful attempt. At this earlier device-admission gate failed or interrupted calculations required an explicit local retry; Gate 6 below now permits one fenced system-recovery attempt from retained files. Neither path contacts the device. Device History must distinguish local source
    verification from summary processing and show waiting, retrying, paused, queued,
    running, completed, failed and interrupted states. Historical unmarked authorities
    retain their established on-demand behavior until a separate adoption gate. This
@@ -2218,6 +2214,85 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     Metrics API, timeout and truncation exercises remain required before Gate 5 itself
     can close. This does not claim Kubernetes, Range, mission, multi-replica or `main`
     readiness.
+    **2026-10-12 cross-process coordination gate 6 start:** Add database-authoritative
+    expiring ownership, database-time renewal and monotonically increasing fencing for
+    saved background work without weakening the existing one-process application writer
+    guard or enabling multiple web replicas. A final state change or visible result may
+    publish only when the same transaction proves the exact operation, opaque lease,
+    runtime owner and fencing epoch are still current. A superseded worker may calculate
+    only in private staging and may not publish, replace shared files, remove another
+    owner's files, or mark work complete. Replace blanket startup interruption with
+    lease-aware recovery: an unexpired owner remains Processing; expired pure analysis
+    may start a new protected attempt from immutable retained evidence; the interrupted
+    attempt stays in history. Nmap scans and device contact never move automatically
+    because expiry does not prove the former network activity stopped. Compaction,
+    backfill and migrations enter recovery-required after uncertain ownership and never
+    auto-take over. Scheduler work requires durable unique occurrences and chunk claims,
+    not only a leader lock. The first package will implement and separately test the
+    common lease/fencing contract, derived-analysis recovery and storage-maintenance
+    exclusion while retaining the analysis-only Kubernetes collection boundary; scan,
+    schedule and interactive collection coordination remain fail-closed until their
+    dedicated work-family package is complete. Default analyst views use Waiting,
+    Processing, Recovering after restart, Ready, Needs attention and Stopped for safety;
+    lease details stay in an administrator disclosure. Independent architecture start
+    gate: **CLEAR — DOCUMENTED DEVIATION** because Gate 6 can prove coordination
+    semantics with separate processes but Gate 7 must still select and validate shared
+    database and artifact storage before any multi-replica deployment. Novice start
+    gate: **CLEAR** with the plain-language status and no-force-unlock requirements.
+    **2026-10-12 cross-process coordination gate 6 implementation/review correction:**
+    The common database lease now binds one opaque operation identity, runtime owner,
+    database-time expiry and monotonically increasing fencing epoch. Derived-analysis
+    claims publish their result and release that exact lease in one transaction. Startup
+    preserves a current owner, retains an expired attempt as Interrupted, and creates one
+    separately attributed system-recovery attempt from immutable retained evidence. A
+    mismatched current lease is an integrity conflict: the attempt becomes Needs
+    attention without releasing or replacing the different live owner. Storage
+    maintenance uses the stricter recovery-required policy. Every shared compaction
+    replace, recovery cleanup, recovery-block clear and terminal status publication now
+    holds the SQLite writer lock and the exact lease fence for the whole filesystem
+    mutation; a stale worker leaves recovery material intact and publishes no terminal
+    status. Separate-process races and loss immediately before replace, cleanup and
+    status publication are deterministic regressions. Gate 4B failure evidence advances
+    to schema version 2 so a recovery claim must contain the exact lease key, opaque
+    identity, owner, epoch and chronological acquired, expired and released events;
+    missing, mismatched, duplicate and stale evidence is rejected. This evidence-format
+    revision is a documented deviation from the earlier attempt-row-only receipt because
+    those rows could not prove fencing. System Health remains fail-closed when safety
+    status is unavailable, uses Waiting, Processing, Recovering after restart, Needs
+    attention and Stopped for safety, and keeps collection-lifecycle wording distinct.
+    The final focused storage, work, recovery-evidence and interface suite passes
+    **189 tests**. A real saved-work lifecycle regression additionally proves that one
+    database clock orders claim, expiry, recovery, release and terminal publication.
+    Exact-content backfill now stages privately and publishes canonical bytes,
+    observations and checkpoints under one still-current fence. An uncertain commit
+    stops the whole maintenance run, retains a recovery-required marker and does not
+    continue to a later file. Normal compaction may report Processing while its exact
+    owner remains current; the same marker becomes Stopped for safety after ownership
+    is lost. The intake table now gives one plain-language overall status and a separate
+    next action without hiding its detailed processing stages.
+    **2026-10-12 Gate 6 benchmark-harness deviation:** The Phase 0 command-line
+    integration tests run late inside one long-lived pytest container, so that
+    container's cumulative cgroup memory high-water mark includes unrelated earlier
+    tests. Those integration tests now explicitly record runner-process-lifetime peak
+    memory. Such reports are marked ineligible for formal Phase 0 acceptance. The real
+    benchmark default remains fresh-container cgroup-v2 `memory.peak`, and both formal
+    summarizers reject any process-lifetime report and bind the accepted memory scope
+    and method into comparison identity. The correction is verified by **26 focused
+    benchmark tests**.
+    **2026-10-12 cross-process coordination gate 6 first-package completion:** The
+    complete isolated Docker suite passes **1,430 tests with 15 skips** and one existing
+    dependency warning. The disposable preview completed a storage dry run without
+    removing evidence; System Health displayed current resource tables, distinct saved
+    work states, the background-work safety guide target and corrected intake status,
+    with no browser warning or error. Independent quality gate: **CLEAR — DOCUMENTED
+    DEVIATION**. Novice-operator gate: **CLEAR**. The common contract,
+    retained-evidence analysis and storage-maintenance package is complete on
+    `foundation/evidence-engine-v2`. Overall Gate 6 remains open: active Nmap,
+    scheduled scans and interactive device contact still require dedicated
+    work-family coordination before the gate can close. Gate 7 must then select and
+    qualify shared database and artifact storage before any multi-replica deployment.
+    No Range, mission, `main`, multi-replica, scan-transfer, schedule-transfer or
+    device-contact-transfer readiness is claimed.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

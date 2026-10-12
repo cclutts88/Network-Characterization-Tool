@@ -351,6 +351,11 @@ def test_device_publication_rejects_deleted_authority_or_lost_claim(
         if failure_mode == "deleted":
             tombstone_device_collection(db_path, run_id)
         else:
+            with connect_database(db_path) as db:
+                db.execute(
+                    "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' "
+                    "WHERE state = 'active'"
+                )
             assert jobs.recover_interrupted_derived_jobs(db_path) == 1
         changed.set()
         return original(**kwargs)
@@ -361,7 +366,7 @@ def test_device_publication_rejects_deleted_authority_or_lost_claim(
     assert jobs.run_next_derived_job(db_path, tmp_path) is True
     assert changed.is_set()
     job = jobs.device_summary_job_for_run(db_path, run_id)
-    expected = "failed" if failure_mode == "deleted" else "interrupted"
+    expected = "failed" if failure_mode == "deleted" else "queued"
     assert job["latest_attempt"]["state"] == expected
     with connect_database(db_path, read_only=True) as db:
         assert db.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0

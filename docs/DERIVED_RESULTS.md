@@ -245,9 +245,12 @@ new context or publishing partial records.
 Parsing stays outside the writer transaction. Endpoint and service entities, the scoped
 assessment, evidence receipts, immutable assignment link, output reference and successful
 attempt state commit together. An existing assessment may be reused, but every distinct
-evidence encounter and assignment keeps its own job and provenance link. Failed and
-interrupted attempts retain attribution and require a new explicit retry request. Queued
-attempts resume after restart; attempts abandoned while running become Interrupted.
+evidence encounter and assignment keeps its own job and provenance link. Failed attempts
+retain attribution and require review before an explicit retry. Waiting attempts remain
+saved. When protected retained-evidence analysis loses its worker, the earlier attempt
+becomes Interrupted and one new system-attributed recovery attempt starts from the
+beginning. A superseded worker cannot publish. This automatic recovery never transfers
+network scans, device contact, or uncertain storage maintenance.
 
 The older `scan_foundation_processing_attempts` rows had no durable request tokens or job
 identities. Inventing those values would make the audit record look more precise than it
@@ -311,7 +314,7 @@ Interrupted, Blocked or Incomplete. New marked evidence cannot calculate while a
 opening. Failed or interrupted attempts require **Retry reusable analysis**, which reads
 the same retained evidence and never contacts the device. **Retry local verification** is
 a separate action for the earlier file-authority gate. A restart resumes queued work;
-work abandoned while Running becomes Interrupted and awaits explicit local retry.
+work abandoned while Running remains in history as Interrupted. Gate 6 may create one separately attributed, fenced recovery attempt from the same retained evidence after the former ownership expires.
 
 Device summaries are scope-free reusable calculations at this gate. They do not infer a
 Network Scope, merge physical-device identities, select current truth or establish Last

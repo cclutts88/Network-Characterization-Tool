@@ -73,8 +73,8 @@ def test_system_health_explains_bounded_calculation_status():
     assert "protected file handles into a private snapshot" in guide
     assert "writes a receipt to the Kubernetes termination record" in guide
     assert "Kubernetes failure and replacement testing" in guide
-    assert "A running attempt must return as Interrupted" in guide
-    assert "must first prove the old node is fenced" in guide
+    assert "earlier attempt as Interrupted and create exactly one new protected recovery attempt" in guide
+    assert "proves the old node is fenced" in guide
     assert "Kubernetes guarded upgrade and rollback" in guide
     assert "old image's own contract" in guide
     assert "Live performance and reliability" in html
@@ -118,10 +118,10 @@ def test_system_health_explains_bounded_calculation_status():
     assert "not included in this processing view" in html
     assert "byId('ingestionNext').onclick" in html
     assert "Saved analysis work" in html
-    assert "Queued work resumes automatically after restart" in html
-    assert "actively running is marked Interrupted" in html
+    assert "Waiting work stays saved" in html
+    assert "earlier attempt remains Interrupted" in html
     assert "/api/system/analysis-jobs?limit=${jobLimit}&offset=${requestedOffset}" in html
-    assert "Use Scan History to prepare analysis from a saved scan or retry it" in html
+    assert "Waiting, Processing, and Recovering use retained files only" in html
     assert "'saved analysis work':['Saved analysis work'" in SHELL_SCRIPT
     assert "Reusable analysis status" in html
     assert "does not mean the source evidence is recent, intact, or still true" in html
@@ -186,12 +186,13 @@ def test_scan_history_offers_durable_local_saved_analysis_work():
     assert "does not rerun Nmap or contact the network" in html
     assert "progress stays on this row" in html
     assert "Retry saved analysis" in html
-    assert "It will resume automatically after a restart" in html
-    assert "A retry uses the retained scan.xml and does not rescan" in html
+    assert "Recovering after restart" in html
+    assert "superseded worker cannot publish" in SHELL_SCRIPT
+    assert "Review before retrying from retained scan.xml; a retry does not rescan" in html
     assert "/analysis-jobs`" in html
     assert "/retry`" in html
     assert "'prepare from saved scan':['Prepare from saved scan'" in SHELL_SCRIPT
-    assert "The status stays on this Scan History row" in SHELL_SCRIPT
+    assert "Waiting work stays saved" in SHELL_SCRIPT
     assert "'retry saved analysis':['Retry saved analysis'" in SHELL_SCRIPT
     assert "function analysisRequestToken()" in html
     assert "Math.random().toString(36).slice(2)" in html

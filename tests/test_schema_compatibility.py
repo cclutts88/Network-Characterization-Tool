@@ -16,7 +16,9 @@ from app.schema_compatibility import (
     image_schema_contract,
     migration_plan_digest,
     schema_state,
+    schema_fingerprint,
 )
+from app.work_coordination import init_work_coordination_storage
 
 
 def test_schema_contract_migration_records_completed_fingerprint(tmp_path: Path) -> None:
@@ -29,7 +31,7 @@ def test_schema_contract_migration_records_completed_fingerprint(tmp_path: Path)
     complete_schema_migration(db_path, attempt)
 
     state = schema_state(db_path)
-    assert state["schema_version"] == 1
+    assert state["schema_version"] == 2
     assert state["data_layout_contract"] == DATA_LAYOUT_CONTRACT
     assert state["migration_plan_digest"] == migration_plan_digest()
     assert state["schema_fingerprint_matches"] is True
@@ -53,6 +55,47 @@ def test_interrupted_schema_migration_retries_idempotently(tmp_path: Path) -> No
     state = schema_state(db_path)
     assert state["migration_ledger"][-1]["attempts"] == 2
     assert state["migration_ledger"][-1]["status"] == "completed"
+
+
+def test_verified_version_one_database_upgrades_with_complete_lineage(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    begin_schema_migration(db_path)
+    with sqlite3.connect(db_path) as db:
+        fingerprint = schema_fingerprint(db)
+        db.execute("DELETE FROM nct_schema_migrations WHERE migration_id = 'nct-work-coordination-v2'")
+        db.execute(
+            """UPDATE nct_schema_state
+                  SET schema_contract_version = 1, schema_version = 1,
+                      migration_plan_digest = 'legacy-plan', schema_fingerprint = ?""",
+            (fingerprint,),
+        )
+    upgrade = begin_schema_migration(db_path)
+    assert upgrade is not None
+    init_work_coordination_storage(db_path)
+    complete_schema_migration(db_path, upgrade)
+    state = schema_state(db_path)
+    assert state["schema_version"] == 2
+    assert [item["migration_id"] for item in state["migration_ledger"]] == [
+        "nct-foundation-data-contract-v1", "nct-work-coordination-v2",
+    ]
+
+
+@pytest.mark.parametrize("mutation", [
+    "DELETE FROM nct_schema_migrations WHERE migration_id='nct-foundation-data-contract-v1'",
+    "UPDATE nct_schema_migrations SET status='failed' WHERE migration_id='nct-foundation-data-contract-v1'",
+    "UPDATE nct_schema_migrations SET after_schema_fingerprint=NULL WHERE migration_id='nct-foundation-data-contract-v1'",
+])
+def test_version_two_requires_completed_version_one_lineage(
+    tmp_path: Path, mutation: str,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    attempt = begin_schema_migration(db_path)
+    init_work_coordination_storage(db_path)
+    complete_schema_migration(db_path, attempt)
+    with sqlite3.connect(db_path) as db:
+        db.execute(mutation)
+    with pytest.raises(SchemaCompatibilityError, match="ledger"):
+        begin_schema_migration(db_path)
 
 
 def test_newer_or_changed_schema_contract_fails_closed(tmp_path: Path) -> None:
@@ -98,9 +141,9 @@ def test_incomplete_or_mismatched_completed_ledger_fails_closed(
 
 def test_image_contract_is_self_verifying_and_build_bound() -> None:
     contract = image_schema_contract()
-    assert contract["schema_contract_version"] == 1
-    assert contract["writable_schema_version"] == 1
-    assert contract["readable_schema_versions"] == [1]
+    assert contract["schema_contract_version"] == 2
+    assert contract["writable_schema_version"] == 2
+    assert contract["readable_schema_versions"] == [1, 2]
     assert len(contract["contract_digest"]) == 64
     assert contract["build_id"]
     assert contract["build_commit"]

@@ -33,7 +33,7 @@ def test_missing_database_is_a_bounded_empty_snapshot(tmp_path):
     assert page == {
         "items": [], "total": 0, "limit": 100, "offset": 0,
         "has_more": False,
-        "counts": {"ready": 0, "processing": 0, "needs_scope": 0, "needs_attention": 0},
+        "counts": {"ready": 0, "waiting": 0, "processing": 0, "recovering": 0, "needs_scope": 0, "needs_attention": 0},
         "historical_unadopted": {
             "manual_nmap": 0, "automated_nmap": 0, "device": 0, "total": 0,
         },
@@ -72,7 +72,10 @@ def test_manual_and_automated_nmap_reach_verified_ready_outputs(tmp_path):
     manual_dir, automated_dir = tmp_path / "manual", tmp_path / "automated"
     manual_dir.mkdir(); automated_dir.mkdir()
     manual_db, _, _, _ = manual_assignment(manual_dir)
-    assert list_ingestion_status(manual_db)["items"][0]["status"] == "processing"
+    waiting = list_ingestion_status(manual_db)["items"][0]
+    assert waiting["status"] == "waiting"
+    assert waiting["status_label"] == "Waiting"
+    assert "saved" in waiting["next_action"]
     assert jobs.dispatch_next_pipeline_intake(manual_db) is True
     assert jobs.run_next_derived_job(manual_db, manual_dir) is True
     manual = list_ingestion_status(manual_db)["items"][0]
@@ -131,10 +134,19 @@ def test_interrupted_work_and_missing_completed_output_need_attention(tmp_path):
     assert jobs.dispatch_next_pipeline_intake(interrupted_db) is True
     claim = jobs.claim_next_derived_job(interrupted_db)
     assert claim is not None
+    with connect_database(interrupted_db) as db:
+        db.execute(
+            "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' "
+            "WHERE lease_key = ?",
+            (claim["lease_key"],),
+        )
     assert jobs.recover_interrupted_derived_jobs(interrupted_db) == 1
     interrupted = list_ingestion_status(interrupted_db)["items"][0]
-    assert interrupted["status"] == "needs_attention"
-    assert interrupted["stages"][-1]["state"] == "interrupted"
+    assert interrupted["status"] == "recovering"
+    assert interrupted["status_label"] == "Recovering after restart"
+    assert "retained evidence" in interrupted["next_action"]
+    assert interrupted["stages"][-1]["state"] == "recovering"
+    assert interrupted["stages"][-1]["state_label"] == "Recovering after restart"
 
     missing_db, _, _, _ = manual_assignment(missing_dir)
     assert jobs.dispatch_next_pipeline_intake(missing_db) is True

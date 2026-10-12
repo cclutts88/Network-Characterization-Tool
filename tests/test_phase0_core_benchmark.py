@@ -7,6 +7,7 @@ import pytest
 from scripts.benchmark_phase0_core import (
     ABSOLUTE_LIMITS,
     COMPARISON_STATISTIC,
+    PEAK_MEMORY_SCOPE_PROCESS,
     RELATIVE_LIMITS,
     _source_digest,
     run_once,
@@ -48,6 +49,7 @@ def test_phase0_core_worker_runs_exact_corpus_with_predeclared_limits(tmp_path):
         git_attestation=git_attestation,
         image_attestation=image_attestation,
         repeat=1,
+        peak_memory_scope=PEAK_MEMORY_SCOPE_PROCESS,
     )
 
     assert result["passed"] is True
@@ -69,6 +71,8 @@ def test_phase0_core_worker_runs_exact_corpus_with_predeclared_limits(tmp_path):
     assert result["correctness"]["enrichment"]["cold_search_calls"] == 24
     assert result["correctness"]["enrichment"]["warm_search_calls"] == 0
     assert result["total"]["peak_rss_bytes"] > 0
+    assert result["total"]["peak_rss_scope"] == PEAK_MEMORY_SCOPE_PROCESS
+    assert result["total"]["formal_phase0_acceptance_eligible"] is False
     assert result["target"]["source_file_count"] > 20
     assert result["target"]["identity_evidence"]["type"] == "externally-verified-controller-attestations"
     assert result["retained_state"]["data_root_bytes"] >= result["correctness"]["enrichment"]["cache_database_bytes"]

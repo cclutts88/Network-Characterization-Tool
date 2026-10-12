@@ -114,6 +114,10 @@ The summary requires the fixed workload and request order, exact branch-specific
 correctness, consistent retained evidence within each branch, six unique inspected
 containers and identical runner/corpus/image identities. Common requests use the
 predeclared three-run median comparison. Foundation-only requests use their
-predeclared absolute limits. These measurements use FastAPI's in-process TestClient;
-rendered-browser, concurrent-process, Range-hardware, production-scale and mission
-performance remain separate work.
+predeclared absolute limits. Formal summaries also require the default fresh-container
+cgroup-v2 peak-memory scope and exact measurement method. The pytest command-line
+integration check may explicitly select runner-process-lifetime memory because it
+runs inside a longer-lived test container; its report records that scope and is not
+eligible for formal Phase 0 acceptance. These measurements use FastAPI's in-process
+TestClient; rendered-browser, concurrent-process, Range-hardware, production-scale
+and mission performance remain separate work.

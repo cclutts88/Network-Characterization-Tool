@@ -62,6 +62,10 @@ def _run(repeat: int, *, foundation: bool, wall: float = 1.0) -> dict:
             "wall_seconds": wall,
             "cpu_seconds": wall,
             "peak_rss_bytes": 1000 if not foundation else 1100,
+            "peak_rss_method": "cgroup-v2 memory.peak including child processes",
+            "peak_rss_scope": "container-lifetime-cgroup-v2",
+            "peak_rss_requested_scope": "container-lifetime-cgroup-v2",
+            "formal_phase0_acceptance_eligible": True,
         },
         "correctness": {
             "enrichment": {
@@ -203,3 +207,19 @@ def test_phase0_summary_rejects_total_only_regression(tmp_path):
     assert result["passed"] is False
     assert "whole-run wall_seconds regression limit exceeded" in result["failures"]
     assert "whole-run cpu_seconds regression limit exceeded" in result["failures"]
+
+
+def test_phase0_summary_rejects_process_lifetime_peak_memory(tmp_path):
+    main = _write_runs(tmp_path, foundation=False)
+    foundation = _write_runs(tmp_path, foundation=True)
+    changed = json.loads(foundation[0].read_text())
+    changed["total"].update({
+        "peak_rss_method": "sum of self and child ru_maxrss upper bounds",
+        "peak_rss_scope": "runner-process-lifetime",
+        "peak_rss_requested_scope": "runner-process-lifetime",
+        "formal_phase0_acceptance_eligible": False,
+    })
+    foundation[0].write_text(json.dumps(changed))
+
+    with pytest.raises(ValueError, match="formal container-lifetime peak-memory evidence"):
+        summarize(main, foundation)

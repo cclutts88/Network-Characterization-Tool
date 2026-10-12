@@ -14,6 +14,8 @@ import time
 try:
     from scripts.benchmark_phase0_core import (
         COMPARISON_STATISTIC,
+        PEAK_MEMORY_SCOPE_CONTAINER,
+        PEAK_MEMORY_SCOPE_PROCESS,
         RELATIVE_LIMITS,
         _cpu_seconds,
         _peak_memory,
@@ -26,6 +28,8 @@ try:
 except ModuleNotFoundError:
     from benchmark_phase0_core import (
         COMPARISON_STATISTIC,
+        PEAK_MEMORY_SCOPE_CONTAINER,
+        PEAK_MEMORY_SCOPE_PROCESS,
         RELATIVE_LIMITS,
         _cpu_seconds,
         _peak_memory,
@@ -262,6 +266,7 @@ def run_once(
     target_root: Path, corpus_root: Path, data_root: Path,
     git_attestation: dict, image_attestation: dict, repeat: int,
     foundation: bool,
+    peak_memory_scope: str = PEAK_MEMORY_SCOPE_CONTAINER,
 ) -> dict:
     if data_root.exists() or data_root.is_symlink():
         raise ValueError("Data directory must not exist before a benchmark repeat")
@@ -443,7 +448,7 @@ def run_once(
     if sorted(metrics) != names:
         raise AssertionError("HTTP benchmark did not execute the fixed capability matrix")
     retained = _retained_state(data_root)
-    peak, peak_method, peak_detail = _peak_memory()
+    peak, peak_method, peak_detail = _peak_memory(peak_memory_scope)
     total = {
         "wall_seconds": time.perf_counter() - total_wall,
         "cpu_seconds": _cpu_seconds() - total_cpu,
@@ -539,13 +544,19 @@ def main() -> None:
     parser.add_argument("--image-attestation", type=Path, required=True)
     parser.add_argument("--repeat", type=int, required=True)
     parser.add_argument("--foundation-capabilities", action="store_true")
+    parser.add_argument(
+        "--peak-memory-scope",
+        choices=(PEAK_MEMORY_SCOPE_CONTAINER, PEAK_MEMORY_SCOPE_PROCESS),
+        default=PEAK_MEMORY_SCOPE_CONTAINER,
+        help="Use process lifetime only for test-harness runs; formal evidence requires container lifetime.",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     result = run_once(
         args.target_root.resolve(), args.corpus, args.data_root,
         json.loads(args.git_attestation.read_text(encoding="utf-8")),
         json.loads(args.image_attestation.read_text(encoding="utf-8")),
-        args.repeat, args.foundation_capabilities,
+        args.repeat, args.foundation_capabilities, args.peak_memory_scope,
     )
     rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output:

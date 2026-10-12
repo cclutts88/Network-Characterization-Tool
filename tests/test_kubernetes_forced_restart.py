@@ -118,21 +118,20 @@ time.sleep(60)
         probe_args(root, "available", "replacement-writer-released", tmp_path / "released.json")
     )
     assert released["writer_lock"]["observed"] == "available"
+    with connect_database(db_path) as db:
+        db.execute(
+            "UPDATE work_leases SET expires_at='2000-01-01T00:00:00.000Z' WHERE lease_key=?",
+            (claim["lease_key"],),
+        )
     assert recover_interrupted_derived_jobs(db_path) == 1
     with connect_database(db_path, read_only=True) as db:
-        states = dict(db.execute(
-            """SELECT job_id, state FROM pipeline_job_attempts
-               ORDER BY job_id"""
-        ))
-        outputs = dict(db.execute(
-            """SELECT job_id, output_id FROM pipeline_job_attempts
-               ORDER BY job_id"""
-        ))
-    assert states == {
-        "pipeline_job_queued": "queued",
-        "pipeline_job_running": "interrupted",
-    }
-    assert outputs == {
-        "pipeline_job_queued": None,
-        "pipeline_job_running": None,
-    }
+        attempts = db.execute(
+            """SELECT job_id, attempt_number, state, requested_by, output_id
+                 FROM pipeline_job_attempts
+                ORDER BY job_id, attempt_number"""
+        ).fetchall()
+    assert attempts == [
+        ("pipeline_job_queued", 1, "queued", "analyst", None),
+        ("pipeline_job_running", 1, "interrupted", "analyst", None),
+        ("pipeline_job_running", 2, "queued", "system-recovery", None),
+    ]

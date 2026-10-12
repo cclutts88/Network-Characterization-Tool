@@ -744,8 +744,8 @@ next scenario's evidence. Follow this order without skipping or reusing a receip
    intent. Record `SCENARIO-active-lock.json` and `SCENARIO-before-runtime.json`.
 5. Perform exactly one failure exercise. Record `SCENARIO-after-runtime.json` after the
    replacement or restart is Ready.
-6. For every scenario, explicitly retry the Interrupted attempt, wait for that single
-   retry to complete, and record `SCENARIO-after-retry.json`. The retry is required in
+6. For every scenario, wait for the single automatic protected recovery attempt to
+   complete, and record `SCENARIO-after-recovery.json`. Recovery is required in
    all four exercises so the same verifier command applies.
 7. While the recovered copy is still Ready, repeat sign-in and health checks and download
    the same evidence as `SCENARIO-evidence-after.bin`.
@@ -760,7 +760,7 @@ next scenario's evidence. Follow this order without skipping or reusing a receip
 
 Every scenario archive must contain the before/after runtime snapshots, before/after
 cold snapshots, active/final-released lock receipts, the required pre-replacement available-lock receipt for rescheduling and node loss, before/after copies of the same selected
-evidence, the after-retry snapshot, generated Job documents and logs, health observations,
+evidence, the after-recovery snapshot, generated Job documents and logs, health observations,
 the live cluster-observation log, the structured orchestration record, and provider
 records. A missing file leaves that scenario unaccepted.
 
@@ -807,7 +807,7 @@ export PENDING_INTENT_ID='REPLACE_PENDING_INTENT_ID'
 ```
 
 The initial and final cold records omit these IDs and all live-health claims. Runtime
-`before-failure` requires a Readiness record. Runtime `after-restart` and `after-retry`
+`before-failure` requires a Readiness record. Runtime `after-restart` and `after-recovery`
 require both Startup and Readiness values in
 the exact `TIME|probe|result` format. Apply each rendered document, wait for its Job,
 and save the Job log under the matching unique scenario filename:
@@ -863,15 +863,15 @@ record_snapshot runtime after-restart after-runtime \
   --health-transition "$REPLACEMENT_CREATED_AT|startup|started" \
   --health-transition "$AFTER_READY_AT|readiness|ready"
 
-# After the one explicit retry is Complete:
-record_snapshot runtime after-retry after-retry \
+# After the one automatic protected recovery attempt is Complete:
+record_snapshot runtime after-recovery after-recovery \
   --tracked-job-id "$RUNNING_JOB_ID" --tracked-job-id "$QUEUED_JOB_ID" \
   --tracked-intent-id "$PENDING_INTENT_ID" \
   --health-transition "$REPLACEMENT_CREATED_AT|startup|started" \
   --health-transition "$AFTER_READY_AT|readiness|ready"
 
 # Only after scaling to zero and proving no Pod remains:
-record_snapshot cold after-retry after-cold
+record_snapshot cold after-recovery after-cold
 ```
 
 For the initial cold record, use the `failure-snapshot` command shown below with
@@ -882,7 +882,7 @@ record. Omit `--tracked-job-id` and `--tracked-intent-id` from this first cold r
 because the scenario work does not exist yet. Apply the generated Job, wait for
 completion, and save its log as the unique `SCENARIO-before-cold.json`. At the end,
 repeat it with
-`--mode cold --phase after-retry` and save `SCENARIO-after-cold.json`.
+`--mode cold --phase after-recovery` and save `SCENARIO-after-cold.json`.
 
 Capture each named event time once. Reuse the exact same value in the live cluster
 observation, orchestration event and health transition. Do not run `date` separately for
@@ -964,8 +964,8 @@ to NCT and do not delete the Pod. Save the operator's action or ticket and UTC t
 Confirm the same Pod UID returns Ready with a larger container restart count. Capture an
 `after-restart` runtime snapshot. The prior running attempt must be **Interrupted** with
 no output, the queued attempt must remain queued or complete once, and the admission
-intent must remain attributable. Retry the interrupted item through NCT, capture an
-`after-retry` snapshot, and require one new completed attempt whose result says created
+intent must remain attributable. Wait for NCT's single automatic protected recovery,
+capture an `after-recovery` snapshot, and require one new completed attempt whose result says created
 or reused.
 
 ### Exercise 2: Recreate replacement
@@ -975,7 +975,7 @@ Record the current Pod UID, apply the reviewed Deployment again with one replica
 UID reaches Startup or Ready. Repeat the active-lock, released-lock, runtime, cold,
 sign-in, and evidence checks. Any interval with two Ready NCT Pods or two successful
 application writer owners fails the gate.
-Retry the Interrupted attempt and capture the required `after-retry` snapshot before
+Wait for the automatic protected recovery attempt and capture the required `after-recovery` snapshot before
 stopping this scenario.
 
 ### Exercise 3: controlled rescheduling
@@ -992,7 +992,7 @@ delete the probe Job. The replacement must use that same destination node UID an
 plus the same PVC UID, bound-volume UID, qualification digest, image, and Deployment UID.
 Preserve both attachment identities and their event times. Repeat startup, sign-in, retained-evidence,
 work-state, and cold checks before uncordoning the source node.
-Retry the Interrupted attempt and capture the required `after-retry` snapshot before
+Wait for the automatic protected recovery attempt and capture the required `after-recovery` snapshot before
 stopping this scenario.
 
 ### Exercise 4: node loss
@@ -1011,8 +1011,8 @@ record this scenario as **not accepted**; do not simulate a pass.
 Before the loss, preserve its name with `export STALE_POD_NAME="$POD_NAME"`; the bounded
 replacement sequence below uses that exact stale object only after fencing, writer-stop,
 detachment, destination attachment and destination lock proof have all passed.
-After the safe replacement is Ready, retry the Interrupted attempt and capture the
-required `after-retry` snapshot before stopping this scenario.
+After the safe replacement is Ready, wait for the automatic protected recovery attempt and capture the
+required `after-recovery` snapshot before stopping this scenario.
 
 ### Record replacement order and external controls
 
@@ -1024,7 +1024,7 @@ and provider output beside it. A sample has this form:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "scenario": {"id": "REPLACE", "kind": "node-loss"},
   "samples": [
     {
@@ -1071,7 +1071,7 @@ maxima derived from the cluster-observation log:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "scenario": {"id": "REPLACE", "kind": "node-loss"},
   "deployment_uid": "REPLACE",
   "generation_before": 7,
@@ -1274,7 +1274,7 @@ python scripts/nct_kubernetes_failure_evidence.py verify \
   --after-runtime gate4b-after-runtime.json \
   --before-cold gate4b-before-cold.json \
   --after-cold gate4b-after-cold.json \
-  --after-retry gate4b-after-retry.json \
+  --after-recovery gate4b-after-recovery.json \
   --active-lock-receipt gate4b-active-lock-receipt.json \
   --released-lock-receipt gate4b-released-lock-receipt.json \
   --orchestration-record gate4b-orchestration.json \

@@ -54,9 +54,10 @@ def _json_object(raw: str | None, label: str) -> dict:
 def _stage(key: str, label: str, state: str, detail: str, **extra) -> dict:
     labels = {
         "completed": "Complete", "needs_scope": "Needs scope",
-        "waiting": "Waiting", "retrying": "Retrying", "paused": "Paused",
-        "queued": "Queued", "running": "Running", "failed": "Failed",
-        "interrupted": "Interrupted", "blocked": "Needs attention",
+        "waiting": "Waiting", "retrying": "Waiting", "paused": "Needs attention",
+        "queued": "Waiting", "running": "Processing", "recovering": "Recovering after restart",
+        "failed": "Needs attention",
+        "interrupted": "Needs attention", "blocked": "Needs attention",
         "unavailable": "Unavailable", "not_applicable": "Not required",
     }
     return {
@@ -332,14 +333,17 @@ def _work_stage(
             job_id=job_id,
             output={"kind": latest["output_kind"], "id": latest["output_id"]},
         )
+    recovering = latest["requested_by"] == "system-recovery" and job_state in {"queued", "running"}
+    visible_state = "recovering" if recovering else job_state
     detail = latest["error"] or {
-        "queued": "Saved evidence is queued and will continue automatically.",
-        "running": "Saved evidence is being processed locally.",
+        "queued": "Saved evidence is waiting safely until a worker is available.",
+        "running": "Saved evidence is processing locally under one responsible NCT worker.",
+        "recovering": "The earlier attempt remains Interrupted. A new protected attempt is starting from the retained evidence; no network contact occurs.",
         "failed": "Local processing failed. The saved evidence remains available.",
-        "interrupted": "Processing stopped during a restart and requires an explicit retry.",
-    }.get(job_state, "The saved work state is not recognized.")
-    return _stage(key, label, job_state if job_state in {
-        "queued", "running", "failed", "interrupted"
+        "interrupted": "Processing stopped during a restart. Review the retained attempt and recovery status.",
+    }.get(visible_state, "The saved work state is not recognized.")
+    return _stage(key, label, visible_state if visible_state in {
+        "queued", "running", "recovering", "failed", "interrupted"
     } else "blocked", detail, job_id=job_id)
 
 
@@ -539,14 +543,20 @@ def _item(
         code, label = "needs_attention", "Needs attention"
     elif "needs_scope" in states:
         code, label = "needs_scope", "Needs scope"
-    elif states & {"waiting", "retrying", "queued", "running"}:
+    elif "recovering" in states:
+        code, label = "recovering", "Recovering after restart"
+    elif "running" in states:
         code, label = "processing", "Processing"
+    elif states & {"waiting", "retrying", "queued"}:
+        code, label = "waiting", "Waiting"
     else:
         code, label = "ready", "Ready"
     next_action = {
-        "ready": "Open the saved result or source evidence.",
+        "ready": "Open the ready saved result or source evidence.",
         "needs_scope": "Open the source workflow and assign a Network Scope.",
-        "processing": "No action is needed while queued or running work continues.",
+        "recovering": "No action is needed while NCT starts one protected replacement attempt from retained evidence.",
+        "processing": "No action is needed while the protected local calculation is running.",
+        "waiting": "No action is needed. The request is saved and will start when a worker is available.",
         "needs_attention": "Open the source workflow to review the reason and retry when available.",
     }[code]
     return {
@@ -594,7 +604,7 @@ def list_ingestion_status(db_path: Path, *, limit: int = 25, offset: int = 0) ->
     offset = max(0, int(offset))
     empty = {
         "items": [], "total": 0, "limit": limit, "offset": offset,
-        "has_more": False, "counts": {"ready": 0, "processing": 0, "needs_scope": 0, "needs_attention": 0},
+        "has_more": False, "counts": {"ready": 0, "waiting": 0, "processing": 0, "recovering": 0, "needs_scope": 0, "needs_attention": 0},
         "historical_unadopted": {"manual_nmap": 0, "automated_nmap": 0, "device": 0, "total": 0},
         "snapshot": "read-only metadata transaction",
     }
@@ -639,7 +649,7 @@ def list_ingestion_status(db_path: Path, *, limit: int = 25, offset: int = 0) ->
                     marker["marked_at"], marker["marked_by"], None,
                     [_stage("retained", "Evidence intake", "blocked", "This build does not recognize the recorded intake type.")], [],
                 ))
-        counts = {key: 0 for key in ("ready", "processing", "needs_scope", "needs_attention")}
+        counts = {key: 0 for key in ("ready", "waiting", "processing", "recovering", "needs_scope", "needs_attention")}
         for item in items:
             counts[item["status"]] += 1
         historical = _historical_counts(db)

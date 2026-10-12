@@ -19,7 +19,7 @@ import time
 import nct_kubernetes_recovery as recovery
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TOOL_VERSION = "1"
 MAX_REPORT_BYTES = 16 * 1024**2
 MAX_INPUT_BYTES = 16 * 1024**2
@@ -187,13 +187,34 @@ def _tracked_work(db: sqlite3.Connection, job_ids: list[str], intent_ids: list[s
         attempts = [
             dict(row)
             for row in db.execute(
-                """SELECT attempt_id, attempt_number, state, claim_token, requested_by,
+                """SELECT attempt_id, attempt_number, state, claim_token, lease_owner,
+                          lease_epoch, lease_expires_at, requested_by,
                           requested_at, started_at, finished_at, outcome, result_id,
                           output_kind, output_id, error
                      FROM pipeline_job_attempts WHERE job_id=? ORDER BY attempt_number""",
                 (job_id,),
             )
         ]
+        for attempt in attempts:
+            lease_key = f"derived-attempt:{attempt['attempt_id']}"
+            lease = db.execute(
+                """SELECT lease_key, work_kind, work_id, fencing_epoch, lease_id,
+                          owner_id, state, acquired_at, renewed_at, expires_at,
+                          released_at, recovery_reason
+                     FROM work_leases WHERE lease_key=?""",
+                (lease_key,),
+            ).fetchone()
+            attempt["lease"] = dict(lease) if lease is not None else None
+            attempt["lease_events"] = [
+                dict(event)
+                for event in db.execute(
+                    """SELECT event_id, lease_key, fencing_epoch, lease_id, owner_id,
+                              event_kind, recorded_at, detail
+                         FROM work_lease_events WHERE lease_key=?
+                         ORDER BY recorded_at, event_id""",
+                    (lease_key,),
+                )
+            ]
         requests = [
             dict(row)
             for row in db.execute(
@@ -388,20 +409,52 @@ def _assert_same_binding(values: list[dict]) -> None:
             raise FailureEvidenceError("Gate 4B evidence bindings changed during the scenario")
 
 
-def _verify_work(before: dict, after: dict, after_retry: dict) -> dict:
+def _verify_work(before: dict, after: dict, after_recovery: dict) -> dict:
+    def identity(attempt: dict) -> tuple[object, object, object]:
+        return attempt.get("claim_token"), attempt.get("lease_owner"), attempt.get("lease_epoch")
+
+    def matching_events(attempt: dict, event_kind: str) -> list[dict]:
+        claim, owner, epoch = identity(attempt)
+        events = attempt.get("lease_events")
+        if not isinstance(events, list):
+            raise FailureEvidenceError("protected work is missing lease event history")
+        return [
+            event for event in events
+            if isinstance(event, dict)
+            and event.get("event_kind") == event_kind
+            and event.get("lease_id") == claim
+            and event.get("owner_id") == owner
+            and event.get("fencing_epoch") == epoch
+        ]
+
+    def require_attempt_identity(attempt: dict, *, state: str) -> dict:
+        claim, owner, epoch = identity(attempt)
+        if not isinstance(claim, str) or not claim or not isinstance(owner, str) or not owner:
+            raise FailureEvidenceError(f"{state} work is missing its protected owner identity")
+        if not isinstance(epoch, int) or epoch < 1:
+            raise FailureEvidenceError(f"{state} work has an invalid fencing epoch")
+        lease = attempt.get("lease")
+        if not isinstance(lease, dict) or lease.get("lease_key") != f"derived-attempt:{attempt['attempt_id']}":
+            raise FailureEvidenceError(f"{state} work is missing its exact lease record")
+        if lease.get("work_id") != attempt["attempt_id"] or lease.get("fencing_epoch") != epoch:
+            raise FailureEvidenceError(f"{state} work lease is bound to a different attempt or epoch")
+        return lease
+
     before_jobs = before["work"]["jobs"]
     after_jobs = after["work"]["jobs"]
-    if set(before_jobs) != set(after_jobs):
+    recovered_jobs = after_recovery["work"]["jobs"]
+    if set(before_jobs) != set(after_jobs) or set(before_jobs) != set(recovered_jobs):
         raise FailureEvidenceError("tracked processing work disappeared or changed identity")
-    running_verified = queued_verified = 0
+    running_verified = queued_verified = recovery_verified = 0
     for job_id, prior in before_jobs.items():
         current = after_jobs[job_id]
-        if {key: prior[key] for key in ("job_id", "job_type", "source_kind", "source_ref", "requested_by")} != {
-            key: current[key] for key in ("job_id", "job_type", "source_kind", "source_ref", "requested_by")
-        }:
-            raise FailureEvidenceError("tracked processing job provenance changed")
+        recovered = recovered_jobs[job_id]
+        for key in ("job_id", "job_type", "source_kind", "source_ref", "requested_by"):
+            if prior[key] != current[key] or prior[key] != recovered[key]:
+                raise FailureEvidenceError("tracked processing job provenance changed")
         prior_attempts = prior["attempts"]
         current_attempts = current["attempts"]
+        recovered_attempts = recovered["attempts"]
         if not prior_attempts or len(current_attempts) < len(prior_attempts):
             raise FailureEvidenceError("tracked processing attempt history was lost")
         prior_latest = prior_attempts[-1]
@@ -409,43 +462,101 @@ def _verify_work(before: dict, after: dict, after_retry: dict) -> dict:
         if matching is None:
             raise FailureEvidenceError("tracked processing attempt disappeared")
         if prior_latest["state"] == "running":
+            prior_lease = require_attempt_identity(prior_latest, state="running")
+            if prior_lease.get("state") != "active" or (
+                prior_lease.get("lease_id"), prior_lease.get("owner_id")
+            ) != identity(prior_latest)[:2]:
+                raise FailureEvidenceError("running work was not protected by its exact active lease")
+            prior_acquired = matching_events(prior_latest, "acquired")
+            if len(prior_acquired) != 1:
+                raise FailureEvidenceError("running work does not have exactly one matching acquisition event")
             if matching["state"] != "interrupted" or any(
                 matching[key] is not None for key in ("outcome", "result_id", "output_kind", "output_id")
             ):
                 raise FailureEvidenceError("running work was not retained as an unpublished interrupted attempt")
+            interrupted_lease = require_attempt_identity(matching, state="interrupted")
+            interrupted_acquired = matching_events(matching, "acquired")
+            interrupted_expired = matching_events(matching, "expired")
+            if interrupted_lease.get("state") != "released" or len(
+                interrupted_expired
+            ) != 1 or len(interrupted_acquired) != 1:
+                raise FailureEvidenceError("interrupted work does not prove exact protected-owner expiry")
+            original_acquired_at = _event_time(
+                interrupted_acquired[0].get("recorded_at"), "original acquisition",
+            )
+            if original_acquired_at != _event_time(
+                prior_acquired[0].get("recorded_at"), "original acquisition before restart",
+            ):
+                raise FailureEvidenceError("original acquisition event changed across restart evidence")
+            original_started_at = _event_time(prior_latest.get("started_at"), "original attempt start")
+            original_finished_at = _event_time(matching.get("finished_at"), "interrupted attempt finish")
+            original_expired_at = _event_time(
+                interrupted_expired[0].get("recorded_at"), "original owner expiry",
+            )
+            if not (
+                original_acquired_at <= original_started_at
+                <= original_finished_at <= original_expired_at
+            ):
+                raise FailureEvidenceError(
+                    "original acquisition, interrupted attempt, and expiry are outside their required chronology"
+                )
+            if len(current_attempts) != len(prior_attempts) + 1:
+                raise FailureEvidenceError("expired running work did not create exactly one recovery attempt")
+            recovery = current_attempts[-1]
+            if recovery["requested_by"] != "system-recovery" or recovery["attempt_number"] != prior_latest["attempt_number"] + 1:
+                raise FailureEvidenceError("the automatic recovery attempt has invalid attribution or sequence")
+            recovery_requests = [
+                item for item in current["requests"]
+                if item["request_kind"] == "retry" and item["requested_by"] == "system-recovery"
+            ]
+            if len(recovery_requests) != 1:
+                raise FailureEvidenceError("automatic recovery did not retain exactly one attributed request")
+            final = recovered_attempts[-1]
+            if len(recovered_attempts) != len(current_attempts) or final["attempt_id"] != recovery["attempt_id"]:
+                raise FailureEvidenceError("restart recovery created duplicate attempts")
+            if final["state"] != "completed" or final["outcome"] not in {"created", "reused"} or not final["output_id"]:
+                raise FailureEvidenceError("the protected recovery attempt did not complete with one guarded output")
+            final_lease = require_attempt_identity(final, state="completed recovery")
+            acquired = matching_events(final, "acquired")
+            released = matching_events(final, "released")
+            if final_lease.get("state") != "released" or len(acquired) != 1 or len(released) != 1:
+                raise FailureEvidenceError("completed recovery does not prove one acquired and released lease")
+            recovery_started_at = _event_time(final.get("started_at"), "recovery attempt start")
+            recovery_finished_at = _event_time(final.get("finished_at"), "recovery attempt finish")
+            recovery_acquired_at = _event_time(acquired[0].get("recorded_at"), "recovery acquisition")
+            recovery_released_at = _event_time(released[0].get("recorded_at"), "recovery release")
+            if not (
+                recovery_started_at <= recovery_acquired_at
+                <= recovery_released_at <= recovery_finished_at
+            ):
+                raise FailureEvidenceError(
+                    "recovery lease events fall outside the recovery attempt window"
+                )
             running_verified += 1
+            recovery_verified += 1
         elif prior_latest["state"] == "queued":
             if matching["state"] not in {"queued", "completed"}:
                 raise FailureEvidenceError("queued work did not remain queued or complete")
-            if len(current_attempts) != len(prior_attempts):
+            if len(current_attempts) != len(prior_attempts) or recovered_attempts != current_attempts:
                 raise FailureEvidenceError("queued work produced a duplicate attempt")
             if matching["state"] == "completed" and not matching["output_id"]:
                 raise FailureEvidenceError("completed queued work has no guarded output")
             queued_verified += 1
-    if running_verified < 1 or queued_verified < 1:
-        raise FailureEvidenceError("the scenario must track at least one running and one queued attempt")
+    if running_verified < 1 or queued_verified < 1 or recovery_verified != running_verified:
+        raise FailureEvidenceError("the scenario must prove one running recovery and one queued attempt")
     before_intents = before["work"]["admission_intents"]
     after_intents = after["work"]["admission_intents"]
-    retry_intents = after_retry["work"]["admission_intents"]
+    recovered_intents = after_recovery["work"]["admission_intents"]
     if not before_intents:
         raise FailureEvidenceError("the scenario must track at least one pending admission intent")
-    if before_intents.keys() != after_intents.keys() or before_intents.keys() != retry_intents.keys():
+    if before_intents.keys() != after_intents.keys() or before_intents.keys() != recovered_intents.keys():
         raise FailureEvidenceError("a tracked admission intent disappeared")
     admission_verified = 0
     for intent_id, prior in before_intents.items():
-        current = after_intents[intent_id]
-        retried = retry_intents[intent_id]
-        for key in ("intent_id", "intent_kind", "source_kind", "source_id", "actor", "request_token"):
-            if prior[key] != current[key] or prior[key] != retried[key]:
-                raise FailureEvidenceError("admission intent attribution changed")
-        if (
-            prior["state"] != "pending"
-            or prior["activity_state"] not in {"waiting", "retrying", "paused"}
-            or prior["admitted_job_id"] is not None
-            or prior["matching_requests"]
-        ):
-            raise FailureEvidenceError("admission intent was not pending and unadmitted before failure")
-        for observed in (current, retried):
+        for observed in (after_intents[intent_id], recovered_intents[intent_id]):
+            for key in ("intent_id", "intent_kind", "source_kind", "source_id", "actor", "request_token"):
+                if prior[key] != observed[key]:
+                    raise FailureEvidenceError("admission intent attribution changed")
             matches = observed["matching_requests"]
             if observed["state"] == "pending":
                 if observed["admitted_job_id"] is not None or matches:
@@ -458,37 +569,11 @@ def _verify_work(before: dict, after: dict, after_retry: dict) -> dict:
             else:
                 raise FailureEvidenceError("admission intent entered an unsupported state after recovery")
         admission_verified += 1
-    retry_verified = False
-    if after_jobs.keys() != after_retry["work"]["jobs"].keys():
-        raise FailureEvidenceError("tracked jobs changed before retry verification")
-    for job_id, post_restart in after_jobs.items():
-        interrupted = [item for item in post_restart["attempts"] if item["state"] == "interrupted"]
-        retried = after_retry["work"]["jobs"][job_id]
-        if not interrupted:
-            if retried["attempts"] != post_restart["attempts"] or retried["requests"] != post_restart["requests"]:
-                raise FailureEvidenceError("non-retried work changed while the interrupted job was retried")
-            continue
-        if retry_verified:
-            raise FailureEvidenceError("more than one interrupted job was retried in this scenario")
-        if len(retried["attempts"]) != len(post_restart["attempts"]) + 1:
-            raise FailureEvidenceError("interrupted work did not create exactly one retry attempt")
-        if len(retried["requests"]) != len(post_restart["requests"]) + 1:
-            raise FailureEvidenceError("interrupted work did not create exactly one retry request")
-        newest = retried["attempts"][-1]
-        if newest["attempt_number"] != interrupted[-1]["attempt_number"] + 1:
-            raise FailureEvidenceError("retry attempt sequence is invalid")
-        if newest["state"] != "completed" or newest["outcome"] not in {"created", "reused"} or not newest["output_id"]:
-            raise FailureEvidenceError("the retry did not complete with one guarded output")
-        if retried["requests"][-1]["request_kind"] != "retry":
-            raise FailureEvidenceError("the retry is missing its retained request record")
-        retry_verified = True
-    if not retry_verified:
-        raise FailureEvidenceError("no completed retry of interrupted work was verified")
     return {
         "running_attempts_interrupted": running_verified,
         "queued_attempts_preserved_or_completed": queued_verified,
         "pending_admission_intents_attributed": admission_verified,
-        "completed_retry_verified": True,
+        "automatic_recovery_verified": True,
     }
 
 
@@ -503,12 +588,15 @@ def _health_values(snapshot_value: dict, label: str) -> list[str]:
 
 
 def _event_time(value: str, label: str) -> datetime:
-    if not isinstance(value, str) or not value.endswith("Z"):
+    if not isinstance(value, str):
         raise FailureEvidenceError(f"{label} must use an exact UTC time")
     try:
-        return datetime.fromisoformat(value[:-1] + "+00:00")
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
     except ValueError as exc:
         raise FailureEvidenceError(f"{label} has an invalid UTC time") from exc
+    if parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise FailureEvidenceError(f"{label} must use an exact UTC time")
+    return parsed
 
 
 def _verify_orchestration(args: argparse.Namespace, before: dict, after: dict) -> tuple[dict, dict]:
@@ -756,8 +844,8 @@ def verify(args: argparse.Namespace) -> dict:
     after_runtime = _load(args.after_runtime, "after-runtime snapshot")
     before_cold = _load(args.before_cold, "before-cold snapshot")
     after_cold = _load(args.after_cold, "after-cold snapshot")
-    after_retry = _load(args.after_retry, "after-retry snapshot")
-    values = [before_runtime, after_runtime, before_cold, after_cold, after_retry]
+    after_recovery = _load(args.after_recovery, "after-recovery snapshot")
+    values = [before_runtime, after_runtime, before_cold, after_cold, after_recovery]
     for index, value in enumerate(values):
         _verify_attestation(value, f"snapshot {index + 1}")
     _assert_same_binding(values)
@@ -767,10 +855,10 @@ def verify(args: argparse.Namespace) -> dict:
         raise FailureEvidenceError("runtime snapshots do not describe before-failure and after-restart")
     if before_cold["mode"] != "cold" or after_cold["mode"] != "cold":
         raise FailureEvidenceError("cold snapshots are required before and after the scenario")
-    if after_retry["mode"] != "runtime" or after_retry["phase"] != "after-retry":
-        raise FailureEvidenceError("the retry snapshot must be a runtime after-retry record")
-    if after_retry["runtime"] != after_runtime["runtime"]:
-        raise FailureEvidenceError("after-retry runtime identity changed from the recovered Pod")
+    if after_recovery["mode"] != "runtime" or after_recovery["phase"] != "after-recovery":
+        raise FailureEvidenceError("the recovery snapshot must be a runtime after-recovery record")
+    if after_recovery["runtime"] != after_runtime["runtime"]:
+        raise FailureEvidenceError("after-recovery runtime identity changed from the recovered Pod")
     before_health = _health_values(before_runtime, "before-runtime")
     after_health = _health_values(after_runtime, "after-runtime")
     if not any("|readiness|ready" in item for item in before_health):
@@ -882,7 +970,7 @@ def verify(args: argparse.Namespace) -> dict:
         event = next(item for item in orchestration["events"] if item["event"] == "pre_replacement_lock_passed")
         if checked != event["at"]:
             raise FailureEvidenceError("pre-replacement lock receipt time does not match cluster observations")
-    work = _verify_work(before_runtime, after_runtime, after_retry)
+    work = _verify_work(before_runtime, after_runtime, after_recovery)
     body = {
         "schema_version": SCHEMA_VERSION,
         "status": "gate4b_scenario_verified",
@@ -958,7 +1046,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     record = commands.add_parser("snapshot")
     record.add_argument("--mode", choices=("runtime", "cold"), required=True)
-    record.add_argument("--phase", choices=("before-failure", "after-restart", "after-retry"), required=True)
+    record.add_argument("--phase", choices=("before-failure", "after-restart", "after-recovery"), required=True)
     record.add_argument("--data-root", type=Path, required=True)
     record.add_argument("--tracked-job-id", action="append", default=[])
     record.add_argument("--tracked-intent-id", action="append", default=[])
@@ -975,7 +1063,7 @@ def _parser() -> argparse.ArgumentParser:
     check.add_argument("--after-runtime", type=Path, required=True)
     check.add_argument("--before-cold", type=Path, required=True)
     check.add_argument("--after-cold", type=Path, required=True)
-    check.add_argument("--after-retry", type=Path, required=True)
+    check.add_argument("--after-recovery", type=Path, required=True)
     check.add_argument("--active-lock-receipt", type=Path, required=True)
     check.add_argument("--released-lock-receipt", type=Path, required=True)
     check.add_argument("--pre-replacement-lock-receipt", type=Path)

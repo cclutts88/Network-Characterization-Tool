@@ -107,7 +107,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "automatically receive a protected tracking record" in html
     assert "Deleting that collection cannot be undone" in html
     assert "These safeguards work automatically" in html
-    assert "<strong>Prepare from saved scan</strong> is the first durable rebuild action" in html
+    assert "<strong>Prepare from saved scan</strong> builds reusable Nmap analysis" in html
+    assert "the earlier attempt remains Interrupted and NCT creates one new protected attempt" in html
     assert "Queued work resumes automatically after an application restart" in html
     assert "does not silently continue a half-finished calculation" in html
     assert "every retained scan remains inside the dropdown for its exact recorded subnet" in html

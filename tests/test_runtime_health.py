@@ -11,9 +11,16 @@ def _health_tables(db_path: Path) -> None:
     with sqlite3.connect(db_path) as db:
         db.executescript(
             """
-            CREATE TABLE pipeline_job_attempts (state TEXT NOT NULL);
+            CREATE TABLE pipeline_job_attempts (
+                job_id TEXT NOT NULL, attempt_number INTEGER NOT NULL,
+                state TEXT NOT NULL, requested_by TEXT NOT NULL
+            );
             CREATE TABLE pipeline_admission_intents (activity_state TEXT NOT NULL);
-            INSERT INTO pipeline_job_attempts VALUES ('queued'), ('running'), ('failed');
+            CREATE TABLE work_leases (state TEXT NOT NULL);
+            INSERT INTO pipeline_job_attempts VALUES
+                ('job-1', 1, 'queued', 'alice'),
+                ('job-2', 1, 'running', 'bob'),
+                ('job-3', 1, 'failed', 'carol');
             INSERT INTO pipeline_admission_intents VALUES ('waiting'), ('retrying'), ('complete');
             """
         )
@@ -84,6 +91,10 @@ def test_workload_query_is_read_only_bounded_and_fixed_shape(tmp_path):
         "intake": {
             "waiting": 1, "retrying": 1, "paused": 0, "complete": 1,
             "needs_scope": 0, "blocked": 0,
+        },
+        "operator_status": {
+            "waiting": 3, "processing": 1, "recovering": 0,
+            "needs_attention": 1, "stopped_for_safety": 0,
         },
     }
     assert db_path.read_bytes() == before

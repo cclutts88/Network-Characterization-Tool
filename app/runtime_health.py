@@ -184,10 +184,10 @@ def _workload_measurement(db_path: Path) -> dict:
             row[0]
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name IN ('pipeline_job_attempts','pipeline_admission_intents')"
+                "AND name IN ('pipeline_job_attempts','pipeline_admission_intents','work_leases')"
             )
         }
-        if tables != {"pipeline_job_attempts", "pipeline_admission_intents"}:
+        if tables != {"pipeline_job_attempts", "pipeline_admission_intents", "work_leases"}:
             return unavailable
         attempts = {state: 0 for state in _ATTEMPT_STATES}
         for state, count in connection.execute(
@@ -206,6 +206,34 @@ def _workload_measurement(db_path: Path) -> dict:
         ):
             if state in intake:
                 intake[state] = int(count)
+        operator = {
+            "waiting": 0, "processing": 0, "recovering": 0,
+            "needs_attention": 0, "stopped_for_safety": 0,
+        }
+        for state, requested_by, count in connection.execute(
+            """SELECT attempt.state, attempt.requested_by, COUNT(*)
+                 FROM pipeline_job_attempts attempt
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM pipeline_job_attempts newer
+                     WHERE newer.job_id = attempt.job_id
+                       AND newer.attempt_number > attempt.attempt_number
+                )
+                GROUP BY attempt.state, attempt.requested_by"""
+        ):
+            count = int(count)
+            if state in {"queued", "running"} and requested_by == "system-recovery":
+                operator["recovering"] += count
+            elif state == "queued":
+                operator["waiting"] += count
+            elif state == "running":
+                operator["processing"] += count
+            elif state in {"failed", "interrupted"}:
+                operator["needs_attention"] += count
+        operator["waiting"] += intake["waiting"] + intake["retrying"]
+        operator["needs_attention"] += intake["paused"] + intake["blocked"]
+        operator["stopped_for_safety"] = int(connection.execute(
+            "SELECT COUNT(*) FROM work_leases WHERE state = 'recovery_required'"
+        ).fetchone()[0])
         if time.monotonic() > deadline:
             return unavailable
         return {
@@ -215,6 +243,7 @@ def _workload_measurement(db_path: Path) -> dict:
             "source": source,
             "attempts": attempts,
             "intake": intake,
+            "operator_status": operator,
         }
     except (OSError, sqlite3.Error):
         return unavailable

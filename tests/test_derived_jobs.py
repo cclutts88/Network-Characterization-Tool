@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -29,6 +30,14 @@ XML = b'''<nmaprun scanner="nmap" version="7.95" start="100">
 <address addr="192.0.2.10" addrtype="ipv4"/><ports>
 <port protocol="tcp" portid="443"><state state="open"/><service name="https"/></port>
 </ports></host><runstats><finished time="110" exit="success"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
+
+
+def _stale_process_publish(db_text: str, path_text: str, claim: dict, results) -> None:
+    try:
+        execute_claimed_derived_job(Path(db_text), claim, Path(path_text))
+        results.put("published")
+    except Exception as exc:
+        results.put(type(exc).__name__)
 
 
 def make_run(db: Path, data_dir: Path, run_id: str, content: bytes = XML):
@@ -114,24 +123,86 @@ def test_lost_claim_rolls_back_new_result_and_success(tmp_path, queue_only):
         assert connection.execute("SELECT state FROM pipeline_job_attempts").fetchone()[0] == "running"
 
 
-def test_restart_preserves_queued_and_interrupts_only_running_work(tmp_path, queue_only):
+def test_restart_preserves_valid_owner_then_recovers_after_expiry(tmp_path, queue_only):
     db, data = tmp_path / "nct.db", tmp_path / "data"
     make_run(db, data, "f" * 32)
     make_run(db, data, "1" * 32, XML.replace(b"443", b"444"))
     first = enqueue_nmap_base_job(db, "f" * 32, request_token="first", requested_by="alice")
     enqueue_nmap_base_job(db, "1" * 32, request_token="second", requested_by="alice")
-    claim_next_derived_job(db)
+    claim = claim_next_derived_job(db)
+    assert recover_interrupted_derived_jobs(db) == 0
+    with connect_database(db) as connection:
+        connection.execute(
+            "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' "
+            "WHERE lease_key = ?",
+            (claim["lease_key"],),
+        )
     assert recover_interrupted_derived_jobs(db) == 1
     listed = list_derived_jobs(db, limit=10)["items"]
-    states = {item["source_run_id"]: item["latest_attempt"]["state"] for item in listed}
-    assert sorted(states.values()) == ["interrupted", "queued"]
-    interrupted = next(item for item in listed if item["latest_attempt"]["state"] == "interrupted")
-    retry = retry_derived_job(
-        db, interrupted["job_id"], request_token="retry", requested_by="bob"
+    recovered = next(item for item in listed if item["job_id"] == claim["job_id"])
+    assert recovered["attempt_count"] == 2
+    assert recovered["latest_attempt"]["state"] == "queued"
+    assert recovered["latest_attempt"]["requested_by"] == "system-recovery"
+    assert recovered["latest_attempt"]["recovery_attempt"] is True
+
+
+def test_recovery_never_releases_a_different_live_lease(tmp_path, queue_only):
+    db, data = tmp_path / "nct.db", tmp_path / "data"
+    path, _ = make_run(db, data, "6" * 32)
+    enqueue_nmap_base_job(db, "6" * 32, request_token="race", requested_by="alice")
+    stale = claim_next_derived_job(db, worker_id="old-worker")
+    with connect_database(db) as connection:
+        connection.execute(
+            """UPDATE work_leases
+                  SET fencing_epoch = fencing_epoch + 1,
+                      lease_id = 'new-live-lease', owner_id = 'new-worker',
+                      expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+120 seconds')
+                WHERE lease_key = ?""",
+            (stale["lease_key"],),
+        )
+    assert recover_interrupted_derived_jobs(db) == 0
+    with connect_database(db, read_only=True) as connection:
+        lease = connection.execute(
+            "SELECT fencing_epoch, lease_id, owner_id, state FROM work_leases WHERE lease_key = ?",
+            (stale["lease_key"],),
+        ).fetchone()
+        attempt = connection.execute(
+            "SELECT state, error FROM pipeline_job_attempts WHERE attempt_id = ?",
+            (stale["attempt_id"],),
+        ).fetchone()
+    assert lease == (int(stale["lease_epoch"]) + 1, "new-live-lease", "new-worker", "active")
+    assert attempt[0] == "failed"
+    assert "administrator review" in attempt[1]
+    with pytest.raises(
+        DerivedJobConflict,
+        match="lost its claim|protected ownership|no longer owns this attempt",
+    ):
+        execute_claimed_derived_job(db, stale, path)
+
+
+def test_stale_separate_process_cannot_publish_after_recovery(tmp_path, queue_only):
+    db, data = tmp_path / "nct.db", tmp_path / "data"
+    path, _ = make_run(db, data, "9" * 32)
+    enqueue_nmap_base_job(db, "9" * 32, request_token="process-stale", requested_by="alice")
+    stale = claim_next_derived_job(db, worker_id="old-process")
+    with connect_database(db) as connection:
+        connection.execute(
+            "UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z' WHERE lease_key = ?",
+            (stale["lease_key"],),
+        )
+    assert recover_interrupted_derived_jobs(db) == 1
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    process = context.Process(
+        target=_stale_process_publish,
+        args=(str(db), str(path), stale, results),
     )
-    assert retry["attempt_count"] == 2
-    assert retry["latest_attempt"]["state"] == "queued"
-    assert retry["latest_attempt"]["requested_by"] == "bob"
+    process.start()
+    process.join(timeout=20)
+    assert process.exitcode == 0
+    assert results.get(timeout=2) == "DerivedJobConflict"
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
 
 
 def test_identical_bytes_keep_encounter_jobs_and_reuse_one_result(tmp_path, queue_only):
