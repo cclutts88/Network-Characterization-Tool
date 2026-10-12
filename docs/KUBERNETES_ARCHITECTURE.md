@@ -257,5 +257,31 @@ package validation cannot prove CSI detachment, scheduler behavior, a node's pow
 state, or two-node recovery; Gate 4B remains open
 until all four exercises pass on the exact qualified cluster and restored data target.
 
+The foundation package for Gate 4C adds an image-owned schema contract and a durable
+migration ledger to application startup. The contract binds the application version,
+build, commit, readable and writable schema versions, evidence-layout contract and
+migration-plan digest. Startup records a migration attempt before other schema writers
+run, retains failed or interrupted state, and does not become Ready until the same
+idempotent migration plan completes with before/after schema fingerprints. A bounded
+administrator tool creates cold inspection, preflight and final upgrade/rollback
+receipts tied to exact old/new images, runtime image IDs, Deployment generation, Pod,
+node, storage attachment, PVC/PV and qualification report. It verifies database
+integrity, registered artifacts, retained counts, ordered events, existing-account
+sign-in, lifecycle checks and the same evidence download. Direct rollback is permitted
+only when the old image itself declares the exact current schema writable and readable
+with the same layout and completed migration plan. Every changed or unknown contract
+requires restoring the verified pre-upgrade Gate 4A backup to a separate empty qualified
+target while preserving the failed upgraded claim. Local receipts can detect changed
+inputs but cannot prove cluster scheduling, CSI attachment behavior or an exact-cluster
+upgrade; Gate 4C remains open until both compatible and restore-required branches pass on
+the intended cluster.
+
+This package establishes the first Gate 4C-capable baseline. A participating old image
+must already provide its own bound contract and completed schema ledger; a pre-contract
+release is recoverable through Gate 4A but cannot be represented as a Gate 4C-compatible
+old image. The final verifier also requires the real Gate 4A restore receipt for restore
+branches, phase-bound released-writer receipts, and ordered cluster samples with at most
+one Ready Pod and one writer owner.
+
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.

@@ -411,6 +411,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-12 | Kubernetes acceptance gate 4C | Permit an ordinary image rollback after testing a candidate image | Default to restore-based rollback. Direct rollback is machine-authorized only when the old image's own contract proves that it can both read and write the exact current schema version, uses the same evidence-layout contract, and shares the completed migration-plan digest. Changed or unknown compatibility preserves the candidate claim and restores the verified pre-upgrade backup into a separate empty qualified target | Commit `cb7453e` had no authoritative global schema-compatibility contract. SQLite `user_version` and a schema fingerprint can detect a difference but cannot prove semantic read/write compatibility, and the existing startup schema work spans multiple module-owned transactions. A new image cannot safely declare an old image compatible on its behalf | Application startup now owns a versioned schema contract and durable migration ledger, remains unready until migration completion, and fails closed on unreadable saved state. The Gate 4C administrator package binds exact images, builds, runtime identities, storage, backup, schema, registered evidence, counts, access checks and downloads. The foundation package cannot prove Kubernetes scheduling or CSI behavior; compatible and restore-required branches still require exact-cluster exercises. See `docs/KUBERNETES_SINGLE_REPLICA.md` |
 | 2026-10-10 | Kubernetes acceptance gate 3C | Let the first single-replica web Deployment retain active scan and device-collection capability | Make the first Kubernetes web profile analysis only: exactly one `Recreate` replica, forced local authentication, no API token or RBAC, all Linux capabilities dropped, and server/UI enforcement that disables Nmap, scheduled execution, SSH device contact and packet capture. Keep import, upload, saved-evidence processing, analysis and portable scan-package creation available. A later collection worker must receive a separately reviewed placement and minimum-privilege profile | Web replicas cannot assume mission-network reachability and must not automatically inherit raw-network privileges. Combining the first SQLite/PVC acceptance gate with active collection would hide a materially different security and placement boundary | The renderer requires one exact image digest and a matching passing exact-PVC qualification report from the same numeric user/group. The built-in guide, System Health, scan and device pages expose the analysis-only boundary. This does not block the standalone profile and does not establish live collection, Range, mission or multi-replica readiness. See `docs/KUBERNETES_SINGLE_REPLICA.md` |
 | 2026-10-10 | Deployment architecture | Keep Kubernetes, external databases and server infrastructure outside the requirements for core offline use | Preserve the standalone single-container profile while requiring new runtime, job, storage, identity, health and deployment designs to remain compatible with a future Kubernetes profile. The initial Kubernetes profile remains exactly one NCT application replica; multi-replica operation is blocked until cross-process leases, singleton-operation coordination and a reviewed shared database/artifact design exist | The user wants the full platform developed with Kubernetes capabilities in mind without losing disconnected-Range operation or forcing a cluster onto small deployments | Provider-neutral local health comes first, followed by an optional namespace-scoped Kubernetes adapter. SQLite volumes must pass lock, atomic-rename, `fsync` and WAL/SHM qualification; RWO alone is insufficient. Upgrades must prevent an older image from opening an incompatible newer schema. See `docs/KUBERNETES_ARCHITECTURE.md` |
 | 2026-10-09 | Phase 0 rendered-browser benchmark | Run the same Chromium build inside isolated Linux benchmark containers | Use one SHA-256-identified local Windows Chrome/Playwright build for every repeat. Keep each NCT app on a unique internal-only Docker network and reach it only through a disposable dual-network relay published on `127.0.0.1`; block every non-loopback browser request and record the app, relay, network, browser process tree and cleanup identities | No compatible browser image is installed locally and the NCT Linux test image contains no browser executable; Docker Desktop does not publish a host port directly from an internal-only network | Preserves isolated app/data/source execution and equal browser settings across revisions while clearly limiting the result to same-host Windows Chrome. The relay is not part of NCT or a deployment package. No Linux-browser, Range, GPU, human-workflow, production-scale or mission-performance claim is made; those remain separate gates |
@@ -2131,6 +2132,50 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     completes the foundation-only Gate 4B package; Gate 4B itself remains started until
     all four exercises pass on the exact qualified cluster. It does not claim Kubernetes,
     Range, mission, multi-replica or `main` readiness.
+    **2026-10-12 Kubernetes guarded upgrade/rollback gate 4C start:** Add the missing
+    image-owned schema compatibility contract and persistent migration ledger before
+    testing any candidate image. The old Pod must be gone and its writer released; a
+    verified Gate 4A backup tied to the exact old image and build must exist before the
+    candidate can write. Preflight must bind exact old/new image and runtime identities,
+    build contracts, Deployment generation, Pod, node, attachment, PVC/PV and storage
+    qualification, then reject active work, incomplete migration, changed evidence or
+    ambiguous compatibility. Direct rollback is fail-closed and may occur only when the
+    old image itself proves it can read and write the exact resulting schema, layout and
+    migration plan. Otherwise preserve the upgraded claim, restore the backup into a
+    different empty qualified target, and make the backup-time data boundary explicit.
+    System Health and the Operator Guide explain status and next steps without exposing
+    upgrade or rollback controls. Independent architecture start gate: **CLEAR —
+    DOCUMENTED DEVIATION**. Novice start gate: **HALTED FOR REVIEW** until the direct
+    versus restore decision, administrator-only boundary, exact order and data-loss
+    warning are explicit; those findings are required completion criteria.
+    **2026-10-12 Kubernetes guarded upgrade/rollback gate 4C administrator package
+    complete:** Application startup now publishes an image-owned schema contract,
+    records resumable migration attempts, and remains unready until its exact migration
+    plan completes. The preflight and final verifier bind immutable old/new images and
+    runtime IDs, builds, schema and data-layout contracts, Deployment generations,
+    Pod/node/attachment identities, source and backup PVC/PV identities, storage
+    qualification, cold inventories, retained evidence, record counts, access checks,
+    downloads, restore receipts, and a strictly ordered lock/cluster/event timeline.
+    Compatible direct rollback is permitted only when the old image's own contract
+    authorizes the exact resulting schema and migration plan. Every other path preserves
+    the candidate claim and verifies a Gate 4A restore into a distinct empty qualified
+    target. A failed candidate requires measured Pod/runtime/health evidence and cannot
+    relabel a healthy completed migration. Ready, failed, and stopped observations derive
+    writer ownership from attested lock probes independently of Pod readiness; the web
+    check records measured HTTP results and fails before writing a success receipt when
+    sign-in, health, or evidence download fails. The package is the first Gate 4C-capable
+    baseline; earlier images remain Gate 4A restore-only. Focused isolated validation
+    passes **183 Kubernetes, schema, writer-lock, health, and UI tests**. The complete
+    isolated Docker suite passes **1,379 tests with 15 skips** and one existing
+    dependency warning.
+    Independent quality gate: **CLEAR — DOCUMENTED DEVIATION**. Novice-operator gate:
+    **CLEAR** after fail-closed web-check, independent writer measurement, accepted active
+    probe phases, and copyable recovery steps were verified. The administrator package
+    is complete on the foundation branch; Gate 4C itself remains started until compatible,
+    restore-required, and failed-candidate exercises pass on the exact qualified cluster.
+    Local tests cannot prove Kubernetes scheduling, CSI behavior, or authenticate
+    administrator-collected external records. This does not claim Range, mission,
+    multi-replica, `main`, or exact-cluster readiness.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

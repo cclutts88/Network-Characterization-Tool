@@ -99,7 +99,7 @@ def probe(args: argparse.Namespace) -> dict:
             if exc.errno not in {errno.EACCES, errno.EAGAIN}:
                 raise ProbeError("the NCT writer lock state could not be measured") from exc
             observed = "contended"
-        if observed != args.expect:
+        if args.expect != "observe" and observed != args.expect:
             raise ProbeError(
                 f"writer-lock expectation failed: expected {args.expect}, observed {observed}"
             )
@@ -159,16 +159,16 @@ def probe(args: argparse.Namespace) -> dict:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lock-path", type=Path, default=Path("/data/.analyzer.db.nct-writer.lock"))
-    parser.add_argument("--expect", choices=("contended", "available"), required=True)
+    parser.add_argument("--expect", choices=("contended", "available", "observe"), required=True)
     parser.add_argument("--scenario-id", required=True)
     parser.add_argument(
         "--scenario-kind",
-        choices=("forced-termination", "recreate-replacement", "controlled-rescheduling", "node-loss"),
+        choices=("forced-termination", "recreate-replacement", "controlled-rescheduling", "node-loss", "guarded-upgrade"),
         required=True,
     )
     parser.add_argument(
         "--phase",
-        choices=("old-writer-active", "destination-pre-replacement", "replacement-writer-released"),
+        choices=("old-writer-active", "destination-pre-replacement", "replacement-writer-released", "old-writer-released", "candidate-writer-active", "candidate-writer-released", "rollback-writer-active", "rollback-writer-released"),
         required=True,
     )
     parser.add_argument("--image", required=True)
@@ -206,12 +206,23 @@ def _validate(args: argparse.Namespace) -> None:
         args.pod_uid = _bounded(args.pod_uid, "pod UID")
     if not DIGEST_RE.fullmatch(args.qualification_report_digest):
         raise ProbeError("qualification report digest is invalid")
-    if args.expect == "contended" and args.phase != "old-writer-active":
-        raise ProbeError("a contended probe must describe the old-writer-active phase")
+    active_phases = {
+        "old-writer-active", "candidate-writer-active", "rollback-writer-active",
+    }
+    released_phases = {
+        "replacement-writer-released", "old-writer-released",
+        "candidate-writer-released", "rollback-writer-released",
+    }
+    if args.expect == "contended" and args.phase not in active_phases:
+        raise ProbeError("a contended probe must describe an active-writer phase")
     if args.expect == "available" and args.phase not in {
-        "destination-pre-replacement", "replacement-writer-released",
+        "destination-pre-replacement", *released_phases,
     }:
-        raise ProbeError("an available probe must describe a destination or released-replacement phase")
+        raise ProbeError("an available probe must describe a destination or released-writer phase")
+    if args.expect == "observe" and args.phase not in {
+        "candidate-writer-active", "rollback-writer-active",
+    }:
+        raise ProbeError("an observe probe is only valid for a guarded-upgrade active phase")
     if args.phase == "destination-pre-replacement":
         if args.scenario_kind not in {"controlled-rescheduling", "node-loss"}:
             raise ProbeError("a destination pre-replacement probe is only valid for rescheduling or node loss")

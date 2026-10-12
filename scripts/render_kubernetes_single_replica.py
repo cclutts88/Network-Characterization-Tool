@@ -31,6 +31,7 @@ DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 SIZE_RE = re.compile(r"^[1-9][0-9]*(?:Mi|Gi|Ti)$")
 IMMUTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 SCENARIO_RE = re.compile(r"^[a-z0-9][a-z0-9-]{7,79}$")
+BACKUP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{7,63}$")
 REQUIRED_CHECKS = {
     "root",
     "advisory_file_lock",
@@ -220,6 +221,23 @@ def qualification_resources(args: argparse.Namespace) -> dict:
 def writer_lock_probe_resources(args: argparse.Namespace) -> dict:
     _report, identity, identity_sha256 = validate_report(args)
     args.hold_seconds = getattr(args, "hold_seconds", 0)
+    active_phases = {
+        "old-writer-active", "candidate-writer-active", "rollback-writer-active",
+    }
+    released_phases = {
+        "replacement-writer-released", "old-writer-released",
+        "candidate-writer-released", "rollback-writer-released",
+    }
+    if args.expect == "contended" and args.phase not in active_phases:
+        raise RenderError("contended probes require an active-writer phase")
+    if args.expect == "available" and args.phase not in {
+        "destination-pre-replacement", *released_phases,
+    }:
+        raise RenderError("available probes require a destination or released-writer phase")
+    if args.expect == "observe" and args.phase not in {
+        "candidate-writer-active", "rollback-writer-active",
+    }:
+        raise RenderError("observe probes require a guarded-upgrade active phase")
     if args.phase == "destination-pre-replacement":
         if args.expect != "available" or args.scenario_kind not in {"controlled-rescheduling", "node-loss"}:
             raise RenderError("destination pre-replacement probes require available rescheduling or node-loss evidence")
@@ -435,6 +453,188 @@ def failure_snapshot_resources(args: argparse.Namespace) -> dict:
     return _resource_list([_service_account(args), receipt_config, job])
 
 
+def upgrade_inspection_resources(args: argparse.Namespace) -> dict:
+    _report, _identity, identity_sha256 = validate_report(args)
+    if not DIGEST_RE.fullmatch(args.contract_digest):
+        raise RenderError("schema contract digest must be 64 lowercase hexadecimal characters")
+    labels = {
+        "app.kubernetes.io/name": args.name,
+        "app.kubernetes.io/component": "upgrade-inspection",
+    }
+    suffix_seed = json.dumps(
+        {
+            "scenario": args.scenario_id,
+            "phase": args.phase,
+            "image": args.image,
+            "pvc_uid": args.pvc_uid,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    suffix = f"upgrade-inspect-{hashlib.sha256(suffix_seed.encode()).hexdigest()[:10]}"
+    prefix = args.name[: 62 - len(suffix)].rstrip("-")
+    job_name = f"{prefix}-{suffix}"
+    annotations = {
+        "nct.openai.com/scenario-id": args.scenario_id,
+        "nct.openai.com/upgrade-phase": args.phase,
+        "nct.openai.com/schema-contract-digest": args.contract_digest,
+        "nct.openai.com/pvc-uid": args.pvc_uid,
+        "nct.openai.com/bound-volume-uid": args.bound_volume_uid,
+        "nct.openai.com/storage-evidence-digest": args.storage_report_digest,
+        "nct.openai.com/storage-identity-sha256": identity_sha256,
+    }
+    command_args = [
+        "inspect", "--data-root", "/data", "--scenario-id", args.scenario_id,
+        "--phase", args.phase, "--image", args.image,
+        "--runtime-image-id", args.runtime_image_id,
+        "--contract-digest", args.contract_digest,
+        "--deployment-uid", args.deployment_uid,
+        "--deployment-generation", str(args.deployment_generation),
+        "--pod-uid", args.pod_uid, "--node-uid", args.node_uid,
+        "--storage-attachment-identity", args.storage_attachment_identity,
+        "--pvc-uid", args.pvc_uid, "--bound-volume-uid", args.bound_volume_uid,
+        "--qualification-report-digest", args.storage_report_digest,
+        "--validation-root", "/validation",
+        "--max-validation-bytes", str(args.max_validation_bytes),
+        "--max-files", str(args.max_files), "--max-bytes", str(args.max_bytes),
+        "--max-seconds", str(args.max_seconds),
+        "--output", "/tmp/nct-gate4c-inspection.json",
+    ]
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": _metadata(job_name, args.namespace, labels, annotations),
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": args.max_seconds + 30,
+            "ttlSecondsAfterFinished": 86400,
+            "template": {
+                "metadata": {"labels": labels, "annotations": annotations},
+                "spec": {
+                    "serviceAccountName": f"{args.name}-runtime",
+                    "automountServiceAccountToken": False,
+                    "restartPolicy": "Never",
+                    "nodeName": args.node_name,
+                    "terminationGracePeriodSeconds": 10,
+                    "securityContext": _pod_security(),
+                    "containers": [{
+                        "name": "inspect-upgrade-data",
+                        "image": args.image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["python", "/opt/nct/tools/nct_kubernetes_upgrade.py"],
+                        "args": command_args,
+                        "terminationMessagePath": "/tmp/nct-gate4c-inspection.json",
+                        "terminationMessagePolicy": "File",
+                        "securityContext": _container_security(),
+                        "resources": {
+                            "requests": {"cpu": "50m", "memory": "128Mi", "ephemeral-storage": args.validation_copy_size},
+                            "limits": {"cpu": "1", "memory": "512Mi", "ephemeral-storage": args.validation_copy_size},
+                        },
+                        "volumeMounts": [
+                            {"name": "data", "mountPath": "/data"},
+                            {"name": "tmp", "mountPath": "/tmp"},
+                            {"name": "validation", "mountPath": "/validation"},
+                        ],
+                    }],
+                    "volumes": [
+                        {"name": "data", "persistentVolumeClaim": {"claimName": args.pvc_name}},
+                        {"name": "tmp", "emptyDir": {"sizeLimit": "16Mi"}},
+                        {"name": "validation", "emptyDir": {"sizeLimit": args.validation_copy_size}},
+                    ],
+                },
+            },
+        },
+    }
+    return _resource_list([_service_account(args), job])
+
+
+def upgrade_contract_resources(args: argparse.Namespace) -> dict:
+    labels = {
+        "app.kubernetes.io/name": args.name,
+        "app.kubernetes.io/component": "upgrade-contract",
+    }
+    digest = hashlib.sha256(args.image.encode()).hexdigest()[:12]
+    suffix = f"image-contract-{digest}"
+    prefix = args.name[: 62 - len(suffix)].rstrip("-")
+    job_name = f"{prefix}-{suffix}"
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": _metadata(job_name, args.namespace, labels, {
+            "nct.openai.com/image": args.image,
+        }),
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 60,
+            "ttlSecondsAfterFinished": 86400,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "serviceAccountName": f"{args.name}-runtime",
+                    "automountServiceAccountToken": False,
+                    "restartPolicy": "Never",
+                    "terminationGracePeriodSeconds": 5,
+                    "securityContext": _pod_security(),
+                    "containers": [{
+                        "name": "read-image-contract",
+                        "image": args.image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["python", "/opt/nct/tools/nct_kubernetes_upgrade.py"],
+                        "args": ["contract", "--output", "/tmp/nct-image-contract.json"],
+                        "terminationMessagePath": "/tmp/nct-image-contract.json",
+                        "terminationMessagePolicy": "File",
+                        "securityContext": _container_security(),
+                        "resources": {
+                            "requests": {"cpu": "25m", "memory": "32Mi"},
+                            "limits": {"cpu": "250m", "memory": "128Mi"},
+                        },
+                        "volumeMounts": [{"name": "tmp", "mountPath": "/tmp"}],
+                    }],
+                    "volumes": [{"name": "tmp", "emptyDir": {"sizeLimit": "8Mi"}}],
+                },
+            },
+        },
+    }
+    return _resource_list([_service_account(args), job])
+
+
+def upgrade_backup_manifest_resources(args: argparse.Namespace) -> dict:
+    _report, identity, identity_sha256 = validate_report(args)
+    labels = {"app.kubernetes.io/name": args.name, "app.kubernetes.io/component": "upgrade-backup-manifest"}
+    job_name = f"{args.name[:40].rstrip('-')}-backup-manifest-{hashlib.sha256(args.backup_id.encode()).hexdigest()[:10]}"
+    annotations = {
+        "nct.openai.com/storage-evidence-digest": args.storage_report_digest,
+        "nct.openai.com/storage-identity-sha256": identity_sha256,
+        "nct.openai.com/backup-id": args.backup_id,
+    }
+    command = (
+        "from pathlib import Path; import os,sys; "
+        "p=Path('/backup')/sys.argv[1]/'manifest.json'; "
+        "d=p.read_bytes(); "
+        "(0 < len(d) <= 134217728) or (_ for _ in ()).throw(ValueError('manifest size')); "
+        "sys.stdout.buffer.write(d)"
+    )
+    job = {
+        "apiVersion": "batch/v1", "kind": "Job",
+        "metadata": _metadata(job_name, args.namespace, labels, annotations),
+        "spec": {"backoffLimit": 0, "activeDeadlineSeconds": 60, "ttlSecondsAfterFinished": 86400,
+                 "template": {"metadata": {"labels": labels, "annotations": annotations},
+                              "spec": {"serviceAccountName": f"{args.name}-runtime",
+                                       "automountServiceAccountToken": False,
+                                       "restartPolicy": "Never", "terminationGracePeriodSeconds": 5,
+                                       "securityContext": _pod_security(),
+                                       "containers": [{"name": "read-backup-manifest", "image": args.image,
+                                                       "imagePullPolicy": "IfNotPresent",
+                                                       "command": ["python", "-c", command, args.backup_id],
+                                                       "securityContext": _container_security(),
+                                                       "resources": {"requests": {"cpu": "25m", "memory": "32Mi"},
+                                                                     "limits": {"cpu": "250m", "memory": "128Mi"}},
+                                                       "volumeMounts": [{"name": "backup", "mountPath": "/backup", "readOnly": True}]}],
+                                       "volumes": [{"name": "backup", "persistentVolumeClaim": {"claimName": args.pvc_name, "readOnly": True}}]}}},
+    }
+    return _resource_list([_service_account(args), job])
+
+
 def _read_report(path: Path) -> dict:
     try:
         value = os.lstat(path)
@@ -628,9 +828,10 @@ def _resource_list(items: list[dict]) -> dict:
 def _validate_args(args: argparse.Namespace) -> None:
     args.name = _name(args.name, "name")
     args.namespace = _name(args.namespace, "namespace")
-    args.pvc_name = _name(args.pvc_name, "PVC name")
-    args.storage_class = _dns(args.storage_class, "storage class")
-    args.storage_size = _size(args.storage_size)
+    if hasattr(args, "pvc_name"):
+        args.pvc_name = _name(args.pvc_name, "PVC name")
+        args.storage_class = _dns(args.storage_class, "storage class")
+        args.storage_size = _size(args.storage_size)
     if getattr(args, "image", None) is not None:
         args.image = _image(args.image)
     if getattr(args, "pvc_uid", None) is not None:
@@ -656,6 +857,8 @@ def _validate_args(args: argparse.Namespace) -> None:
             ("build_id", "build ID"),
             ("storage_attachment_identity", "storage attachment identity"),
         ):
+            if not hasattr(args, attribute):
+                continue
             value = getattr(args, attribute)
             if not value or len(value) > MAX_IMAGE_CHARS or any(ord(char) < 32 for char in value):
                 raise RenderError(f"{label} is invalid or too large")
@@ -678,10 +881,14 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise RenderError("max files is outside the enforced limit")
         if getattr(args, "max_bytes", 1) < 1 or getattr(args, "max_bytes", 1) > 4 * 1024**4:
             raise RenderError("max bytes is outside the enforced limit")
+        if getattr(args, "max_validation_bytes", 1) < 1 or getattr(args, "max_validation_bytes", 1) > 4 * 1024**4:
+            raise RenderError("validation-copy bytes are outside the enforced limit")
         if getattr(args, "max_seconds", 1) < 1 or getattr(args, "max_seconds", 1) > 1800:
             raise RenderError("max seconds is outside the enforced limit")
         if getattr(args, "validation_copy_size", None) is not None:
             args.validation_copy_size = _size(args.validation_copy_size)
+    if getattr(args, "backup_id", None) is not None and not BACKUP_ID_RE.fullmatch(args.backup_id):
+        raise RenderError("backup ID must be 8-64 lowercase letters, digits, or hyphens")
     mount_path = getattr(args, "mount_path", "/data")
     if mount_path not in {"/data", "/backup", "/restore"}:
         raise RenderError("mount path must be /data, /backup, or /restore")
@@ -744,16 +951,16 @@ def _parser() -> argparse.ArgumentParser:
     add_common(lock_probe, image=True, identity=True)
     lock_probe.add_argument("--storage-report", type=Path, required=True)
     lock_probe.add_argument("--storage-report-digest", required=True)
-    lock_probe.add_argument("--expect", choices=("contended", "available"), required=True)
+    lock_probe.add_argument("--expect", choices=("contended", "available", "observe"), required=True)
     lock_probe.add_argument("--scenario-id", required=True)
     lock_probe.add_argument(
         "--scenario-kind",
-        choices=("forced-termination", "recreate-replacement", "controlled-rescheduling", "node-loss"),
+        choices=("forced-termination", "recreate-replacement", "controlled-rescheduling", "node-loss", "guarded-upgrade"),
         required=True,
     )
     lock_probe.add_argument(
         "--phase",
-        choices=("old-writer-active", "destination-pre-replacement", "replacement-writer-released"),
+        choices=("old-writer-active", "destination-pre-replacement", "replacement-writer-released", "old-writer-released", "candidate-writer-active", "candidate-writer-released", "rollback-writer-active", "rollback-writer-released"),
         required=True,
     )
     lock_probe.add_argument("--application-version", required=True)
@@ -794,6 +1001,38 @@ def _parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--tracked-job-id", action="append", default=[])
     snapshot.add_argument("--tracked-intent-id", action="append", default=[])
     snapshot.add_argument("--health-transition", action="append", default=[])
+    inspection = subparsers.add_parser("upgrade-inspection")
+    add_common(inspection, image=True, identity=True)
+    inspection.add_argument("--storage-report", type=Path, required=True)
+    inspection.add_argument("--storage-report-digest", required=True)
+    inspection.add_argument("--scenario-id", required=True)
+    inspection.add_argument(
+        "--phase", choices=("before-upgrade", "after-upgrade", "failed-candidate", "after-rollback"), required=True,
+    )
+    inspection.add_argument("--runtime-image-id", required=True)
+    inspection.add_argument("--contract-digest", required=True)
+    inspection.add_argument("--deployment-uid", required=True)
+    inspection.add_argument("--deployment-generation", type=int, required=True)
+    inspection.add_argument("--pod-uid", required=True)
+    inspection.add_argument("--node-name", required=True)
+    inspection.add_argument("--node-uid", required=True)
+    inspection.add_argument("--storage-attachment-identity", required=True)
+    inspection.add_argument("--max-files", type=int, default=1_000_000)
+    inspection.add_argument("--max-bytes", type=int, default=4 * 1024**4)
+    inspection.add_argument("--validation-copy-size", default="20Gi")
+    inspection.add_argument("--max-validation-bytes", type=int, default=20 * 1024**3)
+    inspection.add_argument("--max-seconds", type=int, default=300)
+    contract = subparsers.add_parser("upgrade-contract")
+    contract.add_argument("--name", default="nct-analysis")
+    contract.add_argument("--namespace", required=True)
+    contract.add_argument("--image", required=True)
+    contract.add_argument("--output", type=Path, required=True)
+    contract.add_argument("--overwrite", action="store_true")
+    manifest = subparsers.add_parser("upgrade-backup-manifest")
+    add_common(manifest, image=True, identity=True)
+    manifest.add_argument("--storage-report", type=Path, required=True)
+    manifest.add_argument("--storage-report-digest", required=True)
+    manifest.add_argument("--backup-id", required=True)
     return parser
 
 
@@ -809,6 +1048,12 @@ def main() -> int:
             value = deployment_resources(args)
         elif args.command == "writer-lock-probe":
             value = writer_lock_probe_resources(args)
+        elif args.command == "upgrade-inspection":
+            value = upgrade_inspection_resources(args)
+        elif args.command == "upgrade-contract":
+            value = upgrade_contract_resources(args)
+        elif args.command == "upgrade-backup-manifest":
+            value = upgrade_backup_manifest_resources(args)
         else:
             value = failure_snapshot_resources(args)
         _write_output(args.output, value, args.overwrite)

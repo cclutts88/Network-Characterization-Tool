@@ -98,6 +98,22 @@ def test_contended_probe_observes_live_owner_without_opening_database(tmp_path: 
         holder.wait(timeout=5)
 
 
+def test_observe_probe_records_failed_candidate_lock_state_without_guessing(tmp_path: Path) -> None:
+    args = values(
+        tmp_path,
+        expect="observe",
+        scenario_id="upgrade-20261012",
+        scenario_kind="guarded-upgrade",
+        phase="candidate-writer-active",
+    )
+
+    result = probe.probe(args)
+
+    assert result["writer_lock"]["expected"] == "observe"
+    assert result["writer_lock"]["observed"] == "available"
+    assert result["writer_lock"]["released_if_acquired"] is True
+
+
 def test_missing_or_mismatched_lock_fails_closed(tmp_path: Path) -> None:
     args = values(tmp_path)
     args.lock_path.unlink()

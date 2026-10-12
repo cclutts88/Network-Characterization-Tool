@@ -375,7 +375,10 @@ def test_competing_route_corrections_leave_one_current_history_entry(
     assert sorted(response.status_code for response in responses) == [201, 409]
     assert len(status["assignments"]) == 2
     assert sum(item["current"] for item in status["assignments"]) == 1
-    assert status["assignment_state"] == "correction_pending"
+    # The durable background worker may finish the winning correction before this
+    # read. Both states preserve the concurrency contract under test: one current
+    # append-only correction, with no duplicate leaf or lost history.
+    assert status["assignment_state"] in {"correction_pending", "foundation_complete"}
 
 
 def test_assignment_does_not_change_legacy_import_analysis(tmp_path, monkeypatch):

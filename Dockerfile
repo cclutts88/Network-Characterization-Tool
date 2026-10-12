@@ -24,6 +24,7 @@ COPY scripts/qualify_kubernetes_storage.py /opt/nct/tools/qualify_kubernetes_sto
 COPY scripts/nct_kubernetes_recovery.py /opt/nct/tools/nct_kubernetes_recovery.py
 COPY scripts/probe_nct_writer_lock.py /opt/nct/tools/probe_nct_writer_lock.py
 COPY scripts/nct_kubernetes_failure_evidence.py /opt/nct/tools/nct_kubernetes_failure_evidence.py
+COPY scripts/nct_kubernetes_upgrade.py /opt/nct/tools/nct_kubernetes_upgrade.py
 
 EXPOSE 8080
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

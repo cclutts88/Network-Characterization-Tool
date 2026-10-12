@@ -1314,13 +1314,730 @@ database/evidence/download checks, disappeared or duplicated work, active destru
 maintenance, or a need to grant NCT Kubernetes API access. Keep Gate 4B open until all
 four exact-cluster scenarios and independent review pass.
 
-## Upgrade and rollback boundary
+## Gate 4C guarded upgrade and rollback
 
-Before an upgrade, record the current image digest, qualified storage identity, report
-digest, application/schema compatibility, and a verified database-plus-evidence backup.
-Stop the old NCT copy completely before starting the new image. If the new image fails,
-start the old image only when its documented schema compatibility permits opening the
-current data. Otherwise restore the matching backup before starting that old image.
+Gate 4C is an administrator-only acceptance exercise. It does not add an analyst-facing
+upgrade control. Use an isolated Gate 4A-restored copy until this complete exercise has
+passed. Keep the original source, the cold backup, the candidate claim, and every receipt
+until independent review is complete.
+
+An image rollback changes the application. A data rollback restores the complete saved
+state. They are separate decisions. The old image may reopen the candidate claim only
+when the old image's own machine-readable contract proves that it can read and write the
+exact resulting schema, data layout, and completed migration plan. Missing or uncertain
+compatibility fails closed:
+
+> Rollback blocked: the old image is not verified for the current data. Nothing was
+> opened or changed.
+
+The safe default is restoration of the verified pre-upgrade backup into another empty,
+qualified claim. Never restore over the source or failed candidate claim. Restoration
+returns NCT to the recorded backup time; later changes are not included.
+
+This package establishes the first **Gate 4C-capable baseline**. Both the old and the
+candidate image in a Gate 4C exercise must provide the image-owned contract and schema
+ledger described below. A pre-contract release uses the earlier Gate 4A backup/restore
+recovery procedure; it is not eligible to pass Gate 4C. Gate 4C remains open until a
+future baseline-to-candidate exercise passes on the exact target cluster and storage.
+
+### 1. Record the exact release and cluster identities
+
+Start from the Gate 4A and 4B variables, then record both immutable images and a new
+scenario identifier:
+
+```sh
+export OLD_IMAGE='registry.example/nct@sha256:REPLACE_OLD_64_HEX_DIGEST'
+export NEW_IMAGE='registry.example/nct@sha256:REPLACE_NEW_64_HEX_DIGEST'
+export GATE4C_SCENARIO='upgrade-REPLACE_DATE-REPLACE_UNIQUE_SUFFIX'
+export DEPLOYMENT_UID="$(kubectl -n "$NCT_NAMESPACE" get deployment "$NCT_NAME" -o jsonpath='{.metadata.uid}')"
+export DEPLOYMENT_GENERATION="$(kubectl -n "$NCT_NAMESPACE" get deployment "$NCT_NAME" -o jsonpath='{.metadata.generation}')"
+export OLD_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" -o jsonpath='{.items[0].metadata.name}')"
+export OLD_POD_UID="$(kubectl -n "$NCT_NAMESPACE" get pod "$OLD_POD" -o jsonpath='{.metadata.uid}')"
+export OLD_NODE_NAME="$(kubectl -n "$NCT_NAMESPACE" get pod "$OLD_POD" -o jsonpath='{.spec.nodeName}')"
+export OLD_NODE_UID="$(kubectl get node "$OLD_NODE_NAME" -o jsonpath='{.metadata.uid}')"
+export OLD_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$OLD_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+```
+
+Get an infrastructure-operator record of the exact storage attachment identity. Record
+the live PVC and PV UIDs again. A name match is insufficient. Stop for more than one NCT
+Pod, an autoscaler, a rolling strategy, an unexpected image ID, missing attachment
+identity, or changed storage qualification.
+
+### 2. Read the contract owned by each image
+
+The contract Job has no data volume, API token, RBAC, Secret, or network capability. It
+starts the exact image only to report that image's application version, build, commit,
+readable schema versions, writable target, evidence-layout contract, migration plan, and
+contract digest.
+
+```sh
+python scripts/render_kubernetes_single_replica.py upgrade-contract \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --output gate4c-old-contract-job.json
+kubectl apply -f gate4c-old-contract-job.json
+OLD_CONTRACT_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-old-contract-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$OLD_CONTRACT_JOB" --timeout=90s
+OLD_CONTRACT_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "job-name=$OLD_CONTRACT_JOB" -o jsonpath='{.items[0].metadata.name}')"
+OLD_CONTRACT_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$OLD_CONTRACT_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+kubectl -n "$NCT_NAMESPACE" logs "job/$OLD_CONTRACT_JOB" > gate4c-old-contract-raw.json
+python scripts/nct_kubernetes_upgrade.py bind-contract \
+  --contract gate4c-old-contract-raw.json --requested-image "$OLD_IMAGE" \
+  --runtime-image-id "$OLD_CONTRACT_RUNTIME_IMAGE_ID" --output gate4c-old-contract.json
+
+python scripts/render_kubernetes_single_replica.py upgrade-contract \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NEW_IMAGE" \
+  --output gate4c-new-contract-job.json
+kubectl apply -f gate4c-new-contract-job.json
+NEW_CONTRACT_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-new-contract-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$NEW_CONTRACT_JOB" --timeout=90s
+NEW_CONTRACT_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "job-name=$NEW_CONTRACT_JOB" -o jsonpath='{.items[0].metadata.name}')"
+NEW_CONTRACT_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$NEW_CONTRACT_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+kubectl -n "$NCT_NAMESPACE" logs "job/$NEW_CONTRACT_JOB" > gate4c-new-contract-raw.json
+python scripts/nct_kubernetes_upgrade.py bind-contract \
+  --contract gate4c-new-contract-raw.json --requested-image "$NEW_IMAGE" \
+  --runtime-image-id "$NEW_CONTRACT_RUNTIME_IMAGE_ID" --output gate4c-new-contract.json
+export OLD_CONTRACT_DIGEST="$(python -c 'import json; print(json.load(open("gate4c-old-contract.json"))["contract_digest"])')"
+export NEW_CONTRACT_DIGEST="$(python -c 'import json; print(json.load(open("gate4c-new-contract.json"))["contract_digest"])')"
+export OLD_APP_VERSION="$(python -c 'import json; print(json.load(open("gate4c-old-contract.json"))["application_version"])')"
+export OLD_BUILD_ID="$(python -c 'import json; print(json.load(open("gate4c-old-contract.json"))["build_id"])')"
+export NEW_APP_VERSION="$(python -c 'import json; print(json.load(open("gate4c-new-contract.json"))["application_version"])')"
+export NEW_BUILD_ID="$(python -c 'import json; print(json.load(open("gate4c-new-contract.json"))["build_id"])')"
+```
+
+Stop if either image cannot produce a bound contract or if its observed runtime image
+digest differs from the requested image. Do not label a pre-contract release as a
+Gate 4C old image.
+
+### 3. Prove the old writer stopped and create the cold backup
+
+Download the selected retained evidence once and save its exact URL and SHA-256. Record
+successful existing-account sign-in, `/health/startup`, and `/health/readiness`. Then
+scale NCT to zero, wait for the Pod to disappear, and run the existing writer-lock probe.
+Do not proceed while active saved work or destructive maintenance is present.
+
+Define this helper and run the first check while the old copy is still Ready. Set
+`NCT_LOGIN_USER` to an existing administrator and `EVIDENCE_DOWNLOAD_URL` to the exact
+saved evidence link selected before the exercise. The helper prompts privately for the
+password for each running phase, creates credential files with owner-only permissions,
+then deletes and unsets the credential:
+
+```sh
+export NCT_BASE_URL="https://$NCT_DNS"
+export NCT_LOGIN_USER='REPLACE_EXISTING_ADMIN_USERNAME'
+export EVIDENCE_DOWNLOAD_URL='/REPLACE_WITH_EXACT_SAVED_EVIDENCE_PATH'
+gate4c_capture_checks () {
+  phase="$1"; stem="$2"; evidence="$3"
+  umask 077
+  gate4c_cleanup_credentials () {
+    rm -f "${stem}-login.json" "${stem}-cookie.jar" "${stem}-login-result.json"
+    unset NCT_LOGIN_PASSWORD
+  }
+  printf 'Password for %s: ' "$NCT_LOGIN_USER" >&2
+  read -r -s NCT_LOGIN_PASSWORD || { gate4c_cleanup_credentials; return 1; }
+  printf '\n' >&2
+  export NCT_LOGIN_PASSWORD
+  python -c 'import json,os; print(json.dumps({"username":os.environ["NCT_LOGIN_USER"],"password":os.environ["NCT_LOGIN_PASSWORD"]}))' > "${stem}-login.json" || \
+    { gate4c_cleanup_credentials; return 1; }
+  login_status="$(curl --silent --show-error --cacert "$TRUSTED_CA" -c "${stem}-cookie.jar" \
+    -H 'Content-Type: application/json' --data-binary @"${stem}-login.json" \
+    --output "${stem}-login-result.json" --write-out '%{http_code}' \
+    "$NCT_BASE_URL/api/auth/login")" || { gate4c_cleanup_credentials; return 1; }
+  startup_status="$(curl --silent --show-error --cacert "$TRUSTED_CA" \
+    --output "${stem}-startup.json" --write-out '%{http_code}' \
+    "$NCT_BASE_URL/health/startup")" || { gate4c_cleanup_credentials; return 1; }
+  readiness_status="$(curl --silent --show-error --cacert "$TRUSTED_CA" \
+    --output "${stem}-readiness.json" --write-out '%{http_code}' \
+    "$NCT_BASE_URL/health/readiness")" || { gate4c_cleanup_credentials; return 1; }
+  evidence_status="$(curl --silent --show-error --cacert "$TRUSTED_CA" \
+    -b "${stem}-cookie.jar" --output "$evidence" --write-out '%{http_code}' \
+    "$NCT_BASE_URL$EVIDENCE_DOWNLOAD_URL")" || { gate4c_cleanup_credentials; return 1; }
+  if [ "$login_status" != 200 ] || [ "$startup_status" != 200 ] || \
+     [ "$readiness_status" != 200 ] || [ "$evidence_status" != 200 ] || \
+     [ ! -s "$evidence" ]; then
+    echo "Gate 4C rejected: sign-in, health, or evidence download did not succeed" >&2
+    rm -f "${stem}-web.json" "$evidence"
+    gate4c_cleanup_credentials
+    return 1
+  fi
+  PHASE="$phase" STARTUP_STATUS="$startup_status" READINESS_STATUS="$readiness_status" \
+    OUT="${stem}-web.json" python -c 'import json,os; json.dump({"phase":os.environ["PHASE"],"startup_status":int(os.environ["STARTUP_STATUS"]),"readiness_status":int(os.environ["READINESS_STATUS"]),"existing_account_signin":True},open(os.environ["OUT"],"w"))' || \
+    { gate4c_cleanup_credentials; return 1; }
+  gate4c_cleanup_credentials
+}
+gate4c_capture_checks before-upgrade gate4c-before selected-evidence-before.bin
+gate4c_observe () {
+  phase="$1"; ready="$2"; writer_receipt="$3"; generation="$4"; pod_uid="$5"; node_uid="$6"
+  attachment="$7"; pvc_uid="$8"; pv_uid="$9"
+  writer_owners="$(WRITER_RECEIPT="$writer_receipt" python -c 'import hashlib,json,os,sys; p=json.load(open(os.environ["WRITER_RECEIPT"])); a=p.get("attestation",{}); b={k:v for k,v in p.items() if k!="attestation"}; d=hashlib.sha256(json.dumps(b,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest(); w=(p.get("writer_lock") or {}).get("observed"); sys.exit(1) if p.get("status")!="pass" or a.get("algorithm")!="sha256" or a.get("digest")!=d or w not in {"available","contended"} else print(1 if w=="contended" else 0)')" || {
+    echo 'Gate 4C rejected: writer-lock receipt is missing or invalid' >&2
+    return 1
+  }
+  case "$phase" in
+    candidate-ready|rollback-ready) [ "$writer_owners" = 1 ] || return 1 ;;
+    old-stopped|candidate-stopped|rollback-stopped) [ "$writer_owners" = 0 ] || return 1 ;;
+    candidate-failed) : ;;
+  esac
+  if [ -f gate4c-cluster-observations.json ]; then
+    set -- --previous gate4c-cluster-observations.json --overwrite
+  else
+    set --
+  fi
+  python scripts/nct_kubernetes_upgrade.py observe-cluster \
+    --scenario-id "$GATE4C_SCENARIO" --phase "$phase" \
+    --ready-pods "$ready" --writer-owners "$writer_owners" \
+    --writer-receipt "$writer_receipt" \
+    --deployment-uid "$DEPLOYMENT_UID" --deployment-generation "$generation" \
+    --pod-uid "$pod_uid" --node-uid "$node_uid" \
+    --storage-attachment-identity "$attachment" --pvc-uid "$pvc_uid" \
+    --bound-volume-uid "$pv_uid" "$@" --output gate4c-cluster-observations.json
+}
+gate4c_probe_writer () {
+  phase="$1"; expected="$2"; image="$3"; app_version="$4"; build_id="$5"
+  generation="$6"; pod_uid="$7"; node_name="$8"; node_uid="$9"; shift 9
+  attachment="$1"; stem="$2"
+  probe_pvc="${GATE4C_PROBE_PVC:-$RESTORE_PVC}"
+  probe_class="${GATE4C_PROBE_CLASS:-$RESTORE_CLASS}"
+  probe_size="${GATE4C_PROBE_SIZE:-$RESTORE_SIZE}"
+  probe_pvc_uid="${GATE4C_PROBE_PVC_UID:-$RESTORE_PVC_UID}"
+  probe_pv_uid="${GATE4C_PROBE_PV_UID:-$RESTORE_PV_UID}"
+  probe_report="${GATE4C_PROBE_REPORT:-$RESTORE_REPORT}"
+  probe_report_digest="${GATE4C_PROBE_REPORT_DIGEST:-$RESTORE_REPORT_DIGEST}"
+  python scripts/render_kubernetes_single_replica.py writer-lock-probe \
+    --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$image" \
+    --pvc-name "$probe_pvc" --storage-class "$probe_class" --storage-size "$probe_size" \
+    --pvc-uid "$probe_pvc_uid" --bound-volume-uid "$probe_pv_uid" \
+    --storage-report "$probe_report" --storage-report-digest "$probe_report_digest" \
+    --expect "$expected" --scenario-id "$GATE4C_SCENARIO" --scenario-kind guarded-upgrade \
+    --phase "$phase" --application-version "$app_version" --build-id "$build_id" \
+    --deployment-uid "$DEPLOYMENT_UID" --deployment-generation "$generation" \
+    --pod-uid "$pod_uid" --node-name "$node_name" --node-uid "$node_uid" \
+    --storage-attachment-identity "$attachment" --output "${stem}-job.json"
+  kubectl apply -f "${stem}-job.json"
+  writer_job="$(STEM="$stem" python -c 'import json,os; print(next(x["metadata"]["name"] for x in json.load(open(os.environ["STEM"]+"-job.json"))["items"] if x["kind"]=="Job"))')"
+  kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$writer_job" --timeout=90s
+  kubectl -n "$NCT_NAMESPACE" logs "job/$writer_job" > "${stem}-receipt.json"
+}
+```
+
+After the old Pod has disappeared, create the required released-writer receipt and first
+cluster observation:
+
+```sh
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+python scripts/render_kubernetes_single_replica.py writer-lock-probe \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --expect available --scenario-id "$GATE4C_SCENARIO" --scenario-kind guarded-upgrade \
+  --phase old-writer-released --application-version "$OLD_APP_VERSION" \
+  --build-id "$OLD_BUILD_ID" --deployment-uid "$DEPLOYMENT_UID" \
+  --deployment-generation "$DEPLOYMENT_GENERATION" --pod-uid "$OLD_POD_UID" \
+  --node-name "$OLD_NODE_NAME" --node-uid "$OLD_NODE_UID" \
+  --storage-attachment-identity "$STORAGE_ATTACHMENT_ID" \
+  --output gate4c-old-writer-released-job.json
+kubectl apply -f gate4c-old-writer-released-job.json
+OLD_LOCK_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-old-writer-released-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$OLD_LOCK_JOB" --timeout=90s
+kubectl -n "$NCT_NAMESPACE" logs "job/$OLD_LOCK_JOB" > gate4c-old-writer-released-receipt.json
+gate4c_observe old-stopped 0 gate4c-old-writer-released-receipt.json \
+  "$DEPLOYMENT_GENERATION" "$OLD_POD_UID" "$OLD_NODE_UID" \
+  "$STORAGE_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+```
+
+Now run the complete Gate 4A cold-backup procedure with `OLD_IMAGE`. It must create a
+fresh `backup_verified` receipt for this exact image, build, source PVC/PV, qualification
+report, archive, and inventory root before any candidate write. Keep the backup receipt,
+manifest, archive, and their separately recorded digests outside every NCT data claim.
+
+Export the exact stored Gate 4A manifest through a one-purpose read-only Job. This Job
+has no API token or writeable volume:
+
+```sh
+python scripts/render_kubernetes_single_replica.py upgrade-backup-manifest \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NEW_IMAGE" \
+  --backup-id "$BACKUP_ID" --pvc-name "$BACKUP_PVC" \
+  --storage-class "$BACKUP_CLASS" --storage-size "$BACKUP_SIZE" \
+  --pvc-uid "$BACKUP_PVC_UID" --bound-volume-uid "$BACKUP_PV_UID" \
+  --storage-report "$BACKUP_REPORT" --storage-report-digest "$BACKUP_REPORT_DIGEST" \
+  --output gate4c-backup-manifest-job.json
+kubectl apply -f gate4c-backup-manifest-job.json
+BACKUP_MANIFEST_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-backup-manifest-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$BACKUP_MANIFEST_JOB" --timeout=90s
+kubectl -n "$NCT_NAMESPACE" logs "job/$BACKUP_MANIFEST_JOB" > gate4a-backup-manifest.json
+```
+
+### 4. Inspect the cold source and run fail-closed preflight
+
+The inspection Job opens no application database for writing. It first acquires the
+existing writer lock, hashes the bounded data tree, checks database integrity and the
+image-owned schema ledger, verifies every registered artifact, rejects active work, and
+records exact Kubernetes and storage identities.
+
+```sh
+python scripts/render_kubernetes_single_replica.py upgrade-inspection \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --scenario-id "$GATE4C_SCENARIO" --phase before-upgrade \
+  --runtime-image-id "$OLD_RUNTIME_IMAGE_ID" --contract-digest "$OLD_CONTRACT_DIGEST" \
+  --deployment-uid "$DEPLOYMENT_UID" --deployment-generation "$DEPLOYMENT_GENERATION" \
+  --pod-uid "$OLD_POD_UID" --node-name "$OLD_NODE_NAME" --node-uid "$OLD_NODE_UID" \
+  --storage-attachment-identity "$STORAGE_ATTACHMENT_ID" \
+  --output gate4c-before-inspection-job.json
+kubectl apply -f gate4c-before-inspection-job.json
+BEFORE_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-before-inspection-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$BEFORE_JOB" --timeout=330s
+kubectl -n "$NCT_NAMESPACE" logs "job/$BEFORE_JOB" > gate4c-before-inspection.json
+
+python scripts/nct_kubernetes_upgrade.py plan \
+  --scenario-id "$GATE4C_SCENARIO" --old-image "$OLD_IMAGE" --new-image "$NEW_IMAGE" \
+  --old-contract gate4c-old-contract.json --new-contract gate4c-new-contract.json \
+  --before-inspection gate4c-before-inspection.json \
+  --backup-receipt gate4a-backup-receipt.json \
+  --backup-manifest gate4a-backup-manifest.json \
+  --backup-receipt-digest "$BACKUP_RECEIPT_DIGEST" \
+  --expected-candidate-generation "$((DEPLOYMENT_GENERATION + 1))" \
+  --expected-rollback-generation "$((DEPLOYMENT_GENERATION + 2))" \
+  --output gate4c-plan.json
+```
+
+The plan says `direct` only for an exact unchanged schema, data layout, and migration
+plan that the old image declares readable and writable. `restore` means the separate
+empty-target restore is required. Unknown means blocked; it never means compatible.
+
+If preflight fails, do not start the candidate. Reinspect the complete stopped tree. The
+old image may restart on it only after the before/after inventory roots prove that no
+candidate mutation occurred.
+
+### 5. Start exactly one candidate and verify it
+
+Record a `preflight-passed` event, render the normal single-replica Deployment with
+`NEW_IMAGE`, and apply it only after the old Pod and every inspection Job have ended.
+The Deployment remains `Recreate` with one replica. Startup writes a durable migration
+ledger before other schema initialization. Readiness stays unavailable until the
+migration and recovery sequence completes. An interrupted attempt is resumed through
+the same idempotent migration identifier and attempt count.
+
+```sh
+export OLD_APP_VERSION="$(python -c 'import json; print(json.load(open("gate4c-old-contract.json"))["application_version"])')"
+export OLD_BUILD_ID="$(python -c 'import json; print(json.load(open("gate4c-old-contract.json"))["build_id"])')"
+export NEW_APP_VERSION="$(python -c 'import json; print(json.load(open("gate4c-new-contract.json"))["application_version"])')"
+export NEW_BUILD_ID="$(python -c 'import json; print(json.load(open("gate4c-new-contract.json"))["build_id"])')"
+python scripts/render_kubernetes_single_replica.py deployment \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NEW_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --output gate4c-candidate-deployment.json
+kubectl apply -f gate4c-candidate-deployment.json
+kubectl -n "$NCT_NAMESPACE" rollout status "deployment/$NCT_NAME" --timeout=300s
+
+export CANDIDATE_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" -o jsonpath='{.items[0].metadata.name}')"
+export CANDIDATE_POD_UID="$(kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o jsonpath='{.metadata.uid}')"
+export CANDIDATE_NODE_NAME="$(kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o jsonpath='{.spec.nodeName}')"
+export CANDIDATE_NODE_UID="$(kubectl get node "$CANDIDATE_NODE_NAME" -o jsonpath='{.metadata.uid}')"
+export CANDIDATE_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+export CANDIDATE_GENERATION="$(kubectl -n "$NCT_NAMESPACE" get deployment "$NCT_NAME" -o jsonpath='{.metadata.generation}')"
+export CANDIDATE_ATTACHMENT_ID='REPLACE_WITH_CURRENT_ATTACHMENT_FROM_STORAGE_OPERATOR'
+gate4c_capture_checks after-upgrade gate4c-after selected-evidence-after.bin
+gate4c_probe_writer candidate-writer-active contended "$NEW_IMAGE" "$NEW_APP_VERSION" \
+  "$NEW_BUILD_ID" "$CANDIDATE_GENERATION" "$CANDIDATE_POD_UID" \
+  "$CANDIDATE_NODE_NAME" "$CANDIDATE_NODE_UID" "$CANDIDATE_ATTACHMENT_ID" \
+  gate4c-candidate-writer-active
+gate4c_observe candidate-ready 1 gate4c-candidate-writer-active-receipt.json \
+  "$CANDIDATE_GENERATION" "$CANDIDATE_POD_UID" \
+  "$CANDIDATE_NODE_UID" "$CANDIDATE_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+```
+
+After the candidate becomes Ready, record its Pod, node, runtime image ID, Deployment
+generation, attachment identity, and the exact PVC/PV identities. Verify the same
+existing account, retained history, table counts, and evidence URL. Scale the candidate
+to zero, prove its writer released, then render `upgrade-inspection` again using
+`--phase after-upgrade`, `NEW_IMAGE`, `NEW_CONTRACT_DIGEST`, and the new runtime
+identities. Preserve a failed candidate claim; do not repair it in place for acceptance.
+
+```sh
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete \
+  pod -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+python scripts/render_kubernetes_single_replica.py writer-lock-probe \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NEW_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --expect available --scenario-id "$GATE4C_SCENARIO" --scenario-kind guarded-upgrade \
+  --phase candidate-writer-released --application-version "$NEW_APP_VERSION" \
+  --build-id "$NEW_BUILD_ID" --deployment-uid "$DEPLOYMENT_UID" \
+  --deployment-generation "$CANDIDATE_GENERATION" --pod-uid "$CANDIDATE_POD_UID" \
+  --node-name "$CANDIDATE_NODE_NAME" --node-uid "$CANDIDATE_NODE_UID" \
+  --storage-attachment-identity "$CANDIDATE_ATTACHMENT_ID" \
+  --output gate4c-candidate-writer-released.json
+kubectl apply -f gate4c-candidate-writer-released.json
+CANDIDATE_LOCK_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-candidate-writer-released.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$CANDIDATE_LOCK_JOB" --timeout=90s
+kubectl -n "$NCT_NAMESPACE" logs "job/$CANDIDATE_LOCK_JOB" > gate4c-candidate-writer-released-receipt.json
+gate4c_observe candidate-stopped 0 gate4c-candidate-writer-released-receipt.json \
+  "$CANDIDATE_GENERATION" "$CANDIDATE_POD_UID" \
+  "$CANDIDATE_NODE_UID" "$CANDIDATE_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+
+python scripts/render_kubernetes_single_replica.py upgrade-inspection \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NEW_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --scenario-id "$GATE4C_SCENARIO" --phase after-upgrade \
+  --runtime-image-id "$CANDIDATE_RUNTIME_IMAGE_ID" --contract-digest "$NEW_CONTRACT_DIGEST" \
+  --deployment-uid "$DEPLOYMENT_UID" --deployment-generation "$CANDIDATE_GENERATION" \
+  --pod-uid "$CANDIDATE_POD_UID" --node-name "$CANDIDATE_NODE_NAME" \
+  --node-uid "$CANDIDATE_NODE_UID" --storage-attachment-identity "$CANDIDATE_ATTACHMENT_ID" \
+  --output gate4c-after-inspection-job.json
+kubectl apply -f gate4c-after-inspection-job.json
+AFTER_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-after-inspection-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$AFTER_JOB" --timeout=330s
+kubectl -n "$NCT_NAMESPACE" logs "job/$AFTER_JOB" > gate4c-after-inspection.json
+```
+
+### 6. Exercise the rollback branch selected by preflight
+
+For `direct`, the old image may reopen the current claim only after the candidate Pod is
+gone, its writer is released, and the plan explicitly contains
+`"direct_rollback_authorized": true`. Start one old-image Pod, verify it, stop it, and
+record an `after-rollback` inspection on the same PVC.
+
+```sh
+python -c 'import json,sys; p=json.load(open("gate4c-plan.json")); sys.exit(0 if p.get("direct_rollback_authorized") is True and p.get("rollback_decision")=="direct" else 1)'
+python scripts/render_kubernetes_single_replica.py deployment \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --output gate4c-direct-rollback-deployment.json
+kubectl apply -f gate4c-direct-rollback-deployment.json
+kubectl -n "$NCT_NAMESPACE" rollout status "deployment/$NCT_NAME" --timeout=300s
+export ROLLBACK_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" -o jsonpath='{.items[0].metadata.name}')"
+export ROLLBACK_POD_UID="$(kubectl -n "$NCT_NAMESPACE" get pod "$ROLLBACK_POD" -o jsonpath='{.metadata.uid}')"
+export ROLLBACK_NODE_NAME="$(kubectl -n "$NCT_NAMESPACE" get pod "$ROLLBACK_POD" -o jsonpath='{.spec.nodeName}')"
+export ROLLBACK_NODE_UID="$(kubectl get node "$ROLLBACK_NODE_NAME" -o jsonpath='{.metadata.uid}')"
+export ROLLBACK_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$ROLLBACK_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+export ROLLBACK_GENERATION="$(kubectl -n "$NCT_NAMESPACE" get deployment "$NCT_NAME" -o jsonpath='{.metadata.generation}')"
+export ROLLBACK_ATTACHMENT_ID='REPLACE_WITH_CURRENT_ATTACHMENT_FROM_STORAGE_OPERATOR'
+gate4c_capture_checks after-rollback gate4c-rollback selected-evidence-rollback.bin
+gate4c_probe_writer rollback-writer-active contended "$OLD_IMAGE" "$OLD_APP_VERSION" \
+  "$OLD_BUILD_ID" "$ROLLBACK_GENERATION" "$ROLLBACK_POD_UID" \
+  "$ROLLBACK_NODE_NAME" "$ROLLBACK_NODE_UID" "$ROLLBACK_ATTACHMENT_ID" \
+  gate4c-rollback-writer-active
+gate4c_observe rollback-ready 1 gate4c-rollback-writer-active-receipt.json \
+  "$ROLLBACK_GENERATION" "$ROLLBACK_POD_UID" \
+  "$ROLLBACK_NODE_UID" "$ROLLBACK_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+python scripts/render_kubernetes_single_replica.py writer-lock-probe \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --expect available --scenario-id "$GATE4C_SCENARIO" --scenario-kind guarded-upgrade \
+  --phase rollback-writer-released --application-version "$OLD_APP_VERSION" \
+  --build-id "$OLD_BUILD_ID" --deployment-uid "$DEPLOYMENT_UID" \
+  --deployment-generation "$ROLLBACK_GENERATION" --pod-uid "$ROLLBACK_POD_UID" \
+  --node-name "$ROLLBACK_NODE_NAME" --node-uid "$ROLLBACK_NODE_UID" \
+  --storage-attachment-identity "$ROLLBACK_ATTACHMENT_ID" \
+  --output gate4c-rollback-writer-released-job.json
+kubectl apply -f gate4c-rollback-writer-released-job.json
+ROLLBACK_LOCK_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-rollback-writer-released-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$ROLLBACK_LOCK_JOB" --timeout=90s
+kubectl -n "$NCT_NAMESPACE" logs "job/$ROLLBACK_LOCK_JOB" > gate4c-rollback-writer-released-receipt.json
+gate4c_observe rollback-stopped 0 gate4c-rollback-writer-released-receipt.json \
+  "$ROLLBACK_GENERATION" "$ROLLBACK_POD_UID" \
+  "$ROLLBACK_NODE_UID" "$ROLLBACK_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+python scripts/render_kubernetes_single_replica.py upgrade-inspection \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --scenario-id "$GATE4C_SCENARIO" --phase after-rollback \
+  --runtime-image-id "$ROLLBACK_RUNTIME_IMAGE_ID" --contract-digest "$OLD_CONTRACT_DIGEST" \
+  --deployment-uid "$DEPLOYMENT_UID" --deployment-generation "$ROLLBACK_GENERATION" \
+  --pod-uid "$ROLLBACK_POD_UID" --node-name "$ROLLBACK_NODE_NAME" --node-uid "$ROLLBACK_NODE_UID" \
+  --storage-attachment-identity "$ROLLBACK_ATTACHMENT_ID" \
+  --output gate4c-rollback-inspection-job.json
+kubectl apply -f gate4c-rollback-inspection-job.json
+ROLLBACK_INSPECTION_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-rollback-inspection-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$ROLLBACK_INSPECTION_JOB" --timeout=330s
+kubectl -n "$NCT_NAMESPACE" logs "job/$ROLLBACK_INSPECTION_JOB" > gate4c-rollback-inspection.json
+```
+
+For `restore`, keep the failed or successfully upgraded claim unchanged. Create and
+qualify a new empty PVC/PV with a new attachment identity. Run the Gate 4A restore from
+the pre-upgrade backup into that target and verify its restore receipt. Start the exact
+old image on only that restored target. Verify readiness, the existing account, retained
+history, and the same evidence download, then stop it and record an `after-rollback`
+inspection. The verifier rejects a source, backup, candidate, or restore target with
+overlapping immutable identities.
+
+```sh
+python -c 'import json,sys; p=json.load(open("gate4c-plan.json")); sys.exit(0 if p.get("rollback_decision")=="restore" else 1)'
+export ROLLBACK_PVC='nct-gate4c-rollback-restore'
+export ROLLBACK_CLASS="$RESTORE_CLASS"
+export ROLLBACK_SIZE="$RESTORE_SIZE"
+```
+
+Run Gate 4A steps 2 through 6 exactly as written in this document, substituting
+`ROLLBACK_PVC` for the empty restore target. Those steps create and verify the new claim,
+set `ROLLBACK_PVC_UID`, `ROLLBACK_PV_UID`, `ROLLBACK_REPORT`, and
+`ROLLBACK_REPORT_DIGEST`, and produce `gate4a-restore-receipt.json` plus its separately
+retained digest. Stop unless that receipt says `restore_verification_passed`. Then run:
+
+```sh
+python scripts/render_kubernetes_single_replica.py deployment \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$OLD_IMAGE" \
+  --pvc-name "$ROLLBACK_PVC" --storage-class "$ROLLBACK_CLASS" --storage-size "$ROLLBACK_SIZE" \
+  --pvc-uid "$ROLLBACK_PVC_UID" --bound-volume-uid "$ROLLBACK_PV_UID" \
+  --storage-report "$ROLLBACK_REPORT" --storage-report-digest "$ROLLBACK_REPORT_DIGEST" \
+  --output gate4c-restored-rollback-deployment.json
+kubectl apply -f gate4c-restored-rollback-deployment.json
+kubectl -n "$NCT_NAMESPACE" rollout status "deployment/$NCT_NAME" --timeout=300s
+export ROLLBACK_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" -o jsonpath='{.items[0].metadata.name}')"
+export ROLLBACK_POD_UID="$(kubectl -n "$NCT_NAMESPACE" get pod "$ROLLBACK_POD" -o jsonpath='{.metadata.uid}')"
+export ROLLBACK_NODE_NAME="$(kubectl -n "$NCT_NAMESPACE" get pod "$ROLLBACK_POD" -o jsonpath='{.spec.nodeName}')"
+export ROLLBACK_NODE_UID="$(kubectl get node "$ROLLBACK_NODE_NAME" -o jsonpath='{.metadata.uid}')"
+export ROLLBACK_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$ROLLBACK_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+export ROLLBACK_GENERATION="$(kubectl -n "$NCT_NAMESPACE" get deployment "$NCT_NAME" -o jsonpath='{.metadata.generation}')"
+export ROLLBACK_ATTACHMENT_ID='REPLACE_WITH_CURRENT_ATTACHMENT_FROM_STORAGE_OPERATOR'
+gate4c_capture_checks after-rollback gate4c-rollback selected-evidence-rollback.bin
+GATE4C_PROBE_PVC="$ROLLBACK_PVC" GATE4C_PROBE_CLASS="$ROLLBACK_CLASS" \
+  GATE4C_PROBE_SIZE="$ROLLBACK_SIZE" GATE4C_PROBE_PVC_UID="$ROLLBACK_PVC_UID" \
+  GATE4C_PROBE_PV_UID="$ROLLBACK_PV_UID" GATE4C_PROBE_REPORT="$ROLLBACK_REPORT" \
+  GATE4C_PROBE_REPORT_DIGEST="$ROLLBACK_REPORT_DIGEST" \
+  gate4c_probe_writer rollback-writer-active contended "$OLD_IMAGE" "$OLD_APP_VERSION" \
+  "$OLD_BUILD_ID" "$ROLLBACK_GENERATION" "$ROLLBACK_POD_UID" \
+  "$ROLLBACK_NODE_NAME" "$ROLLBACK_NODE_UID" "$ROLLBACK_ATTACHMENT_ID" \
+  gate4c-rollback-writer-active
+gate4c_observe rollback-ready 1 gate4c-rollback-writer-active-receipt.json \
+  "$ROLLBACK_GENERATION" "$ROLLBACK_POD_UID" \
+  "$ROLLBACK_NODE_UID" "$ROLLBACK_ATTACHMENT_ID" "$ROLLBACK_PVC_UID" "$ROLLBACK_PV_UID"
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+```
+
+Run the exact `rollback-writer-released` probe and `after-rollback` inspection commands
+from the direct branch above, substituting `ROLLBACK_PVC`, `ROLLBACK_CLASS`,
+`ROLLBACK_SIZE`, `ROLLBACK_PVC_UID`, `ROLLBACK_PV_UID`, `ROLLBACK_REPORT`, and
+`ROLLBACK_REPORT_DIGEST`. The output filenames stay
+`gate4c-rollback-writer-released-receipt.json` and
+`gate4c-rollback-inspection.json`; the verifier binds both to the fresh restored target.
+After the released-writer receipt is saved, record the final stopped observation:
+
+```sh
+gate4c_observe rollback-stopped 0 gate4c-rollback-writer-released-receipt.json \
+  "$ROLLBACK_GENERATION" "$ROLLBACK_POD_UID" \
+  "$ROLLBACK_NODE_UID" "$ROLLBACK_ATTACHMENT_ID" "$ROLLBACK_PVC_UID" "$ROLLBACK_PV_UID"
+```
+
+### 7. Create the ordered event and web-check records, then verify
+
+Use UTC timestamps that strictly increase. A restore exercise requires this order:
+
+```json
+{
+  "scenario_id": "upgrade-REPLACE_DATE-REPLACE_UNIQUE_SUFFIX",
+  "events": [
+    {"event":"old-writer-released","at":"REPLACE_UTC"},
+    {"event":"backup-verified","at":"REPLACE_LATER_UTC"},
+    {"event":"preflight-passed","at":"REPLACE_LATER_UTC"},
+    {"event":"candidate-started","at":"REPLACE_LATER_UTC"},
+    {"event":"candidate-ready","at":"REPLACE_LATER_UTC"},
+    {"event":"candidate-writer-released","at":"REPLACE_LATER_UTC"},
+    {"event":"failed-claim-preserved","at":"REPLACE_LATER_UTC"},
+    {"event":"restore-target-verified","at":"REPLACE_LATER_UTC"},
+    {"event":"old-started-on-restored-data","at":"REPLACE_LATER_UTC"},
+    {"event":"rollback-ready","at":"REPLACE_LATER_UTC"}
+  ]
+}
+```
+
+A direct rollback uses the same first six events, then these exact final events:
+
+```json
+{
+  "scenario_id": "upgrade-REPLACE_DATE-REPLACE_UNIQUE_SUFFIX",
+  "events": [
+    {"event":"old-writer-released","at":"REPLACE_UTC"},
+    {"event":"backup-verified","at":"REPLACE_LATER_UTC"},
+    {"event":"preflight-passed","at":"REPLACE_LATER_UTC"},
+    {"event":"candidate-started","at":"REPLACE_LATER_UTC"},
+    {"event":"candidate-ready","at":"REPLACE_LATER_UTC"},
+    {"event":"candidate-writer-released","at":"REPLACE_LATER_UTC"},
+    {"event":"old-started-on-current-data","at":"REPLACE_LATER_UTC"},
+    {"event":"rollback-ready","at":"REPLACE_LATER_UTC"}
+  ]
+}
+```
+
+Each web-check file records its phase, HTTP startup and readiness status, and whether an
+existing account signed in, for example:
+
+```json
+{"phase":"after-upgrade","startup_status":200,"readiness_status":200,"existing_account_signin":true}
+```
+
+The `gate4c_observe` calls create five ordered samples: old stopped, candidate Ready or
+failed, candidate stopped, rollback Ready, and rollback stopped. Each sample carries the
+exact Deployment generation, Pod, node, attachment, PVC, PV, Ready-Pod count, and writer
+count. The helper derives the writer count from the matching attested lock-probe receipt;
+it never copies the Ready-Pod count. A failed candidate may have zero or one measured
+writer owner, depending on whether its process has exited. The verifier rejects missing
+phases, identity changes, reordered timestamps, or any count above one.
+
+For a successful candidate, run the final verifier with the three cold inspection
+receipts, both active-writer receipts, all three released-writer receipts, cluster
+observations, event record, three web checks, and three downloads. Each observation is
+bound to its exact lock receipt rather than a copied readiness count. The restore branch
+also supplies the actual Gate 4A
+restore receipt and its separately retained digest:
+
+```sh
+set --
+if python -c 'import json,sys; sys.exit(0 if json.load(open("gate4c-plan.json"))["rollback_decision"]=="restore" else 1)'; then
+  set -- --restore-receipt gate4a-restore-receipt.json \
+    --restore-receipt-digest "$RESTORE_RECEIPT_DIGEST"
+fi
+python scripts/nct_kubernetes_upgrade.py verify \
+  --plan gate4c-plan.json \
+  --before-inspection gate4c-before-inspection.json \
+  --after-inspection gate4c-after-inspection.json \
+  --rollback-inspection gate4c-rollback-inspection.json \
+  --old-lock-receipt gate4c-old-writer-released-receipt.json \
+  --candidate-active-lock-receipt gate4c-candidate-writer-active-receipt.json \
+  --candidate-lock-receipt gate4c-candidate-writer-released-receipt.json \
+  --rollback-active-lock-receipt gate4c-rollback-writer-active-receipt.json \
+  --rollback-lock-receipt gate4c-rollback-writer-released-receipt.json \
+  --cluster-observations gate4c-cluster-observations.json \
+  --events gate4c-events.json \
+  --before-web-check gate4c-before-web.json \
+  --after-web-check gate4c-after-web.json \
+  --rollback-web-check gate4c-rollback-web.json \
+  --evidence-before selected-evidence-before.bin \
+  --evidence-after selected-evidence-after.bin \
+  --evidence-rollback selected-evidence-rollback.bin \
+  "$@" \
+  --output gate4c-final-receipt.json
+```
+
+If the candidate never becomes Ready, do not create a passing after-upgrade inspection.
+Use this bounded capture for its last Pod/runtime identities, then scale it to zero, prove
+`candidate-writer-released`, and inspect the preserved claim with
+`--phase failed-candidate`. Save that output as `gate4c-failed-inspection.json`, then run:
+
+```sh
+export CANDIDATE_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" -o jsonpath='{.items[0].metadata.name}')"
+test -n "$CANDIDATE_POD" || { echo 'Gate 4C rejected: no candidate Pod identity exists'; exit 1; }
+export CANDIDATE_POD_UID="$(kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o jsonpath='{.metadata.uid}')"
+export CANDIDATE_NODE_NAME="$(kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o jsonpath='{.spec.nodeName}')"
+export CANDIDATE_RUNTIME_IMAGE_ID="$(kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o jsonpath='{.status.containerStatuses[0].imageID}')"
+export CANDIDATE_GENERATION="$(kubectl -n "$NCT_NAMESPACE" get deployment "$NCT_NAME" -o jsonpath='{.metadata.generation}')"
+test -n "$CANDIDATE_POD_UID" && test -n "$CANDIDATE_NODE_NAME" && test -n "$CANDIDATE_RUNTIME_IMAGE_ID" || \
+  { echo 'Gate 4C rejected: candidate runtime identities are incomplete'; exit 1; }
+export CANDIDATE_NODE_UID="$(kubectl get node "$CANDIDATE_NODE_NAME" -o jsonpath='{.metadata.uid}')"
+export CANDIDATE_ATTACHMENT_ID='REPLACE_WITH_CURRENT_ATTACHMENT_FROM_STORAGE_OPERATOR'
+test -n "$CANDIDATE_NODE_UID" && test -n "$CANDIDATE_ATTACHMENT_ID" || \
+  { echo 'Gate 4C rejected: node or attachment identity is incomplete'; exit 1; }
+kubectl -n "$NCT_NAMESPACE" get pod "$CANDIDATE_POD" -o json > gate4c-candidate-pod-status.json
+export FAILURE_OBSERVED_AT="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+export STARTUP_STATUS="$(curl --silent --output gate4c-failed-startup-body.txt --write-out '%{http_code}' --cacert "$TRUSTED_CA" "$NCT_BASE_URL/health/startup" || true)"
+export READINESS_STATUS="$(curl --silent --output gate4c-failed-readiness-body.txt --write-out '%{http_code}' --cacert "$TRUSTED_CA" "$NCT_BASE_URL/health/readiness" || true)"
+python -c 'import json,os; p=json.load(open("gate4c-candidate-pod-status.json")); c=p["status"]["containerStatuses"][0]; t=c.get("state",{}).get("terminated") or c.get("lastState",{}).get("terminated") or {}; json.dump({"scenario_id":os.environ["GATE4C_SCENARIO"],"phase":"candidate-failure","observed_at":os.environ["FAILURE_OBSERVED_AT"],"runtime":{"pod_uid":os.environ["CANDIDATE_POD_UID"],"image_id":os.environ["CANDIDATE_RUNTIME_IMAGE_ID"]},"container":{"terminated":bool(t),"exit_code":int(t.get("exitCode",0)),"reason":t.get("reason") or c.get("state",{}).get("waiting",{}).get("reason","")},"startup_status":int(os.environ["STARTUP_STATUS"] or 0),"readiness_status":int(os.environ["READINESS_STATUS"] or 0)},open("gate4c-candidate-failure-evidence.json","w"))'
+gate4c_probe_writer candidate-writer-active observe "$NEW_IMAGE" \
+  "$NEW_APP_VERSION" "$NEW_BUILD_ID" "$CANDIDATE_GENERATION" \
+  "$CANDIDATE_POD_UID" "$CANDIDATE_NODE_NAME" "$CANDIDATE_NODE_UID" \
+  "$CANDIDATE_ATTACHMENT_ID" gate4c-candidate-writer-active
+gate4c_observe candidate-failed 0 gate4c-candidate-writer-active-receipt.json \
+  "$CANDIDATE_GENERATION" "$CANDIDATE_POD_UID" \
+  "$CANDIDATE_NODE_UID" "$CANDIDATE_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+```
+
+Run the exact `candidate-writer-released` probe shown in step 5, then record the stopped
+sample before inspection:
+
+```sh
+gate4c_observe candidate-stopped 0 gate4c-candidate-writer-released-receipt.json \
+  "$CANDIDATE_GENERATION" "$CANDIDATE_POD_UID" \
+  "$CANDIDATE_NODE_UID" "$CANDIDATE_ATTACHMENT_ID" "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+```
+
+Now create the failed inspection and failure receipt:
+
+```sh
+python scripts/render_kubernetes_single_replica.py upgrade-inspection \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NEW_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" --storage-size "$RESTORE_SIZE" \
+  --pvc-uid "$RESTORE_PVC_UID" --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --scenario-id "$GATE4C_SCENARIO" --phase failed-candidate \
+  --runtime-image-id "$CANDIDATE_RUNTIME_IMAGE_ID" --contract-digest "$NEW_CONTRACT_DIGEST" \
+  --deployment-uid "$DEPLOYMENT_UID" --deployment-generation "$CANDIDATE_GENERATION" \
+  --pod-uid "$CANDIDATE_POD_UID" --node-name "$CANDIDATE_NODE_NAME" \
+  --node-uid "$CANDIDATE_NODE_UID" --storage-attachment-identity "$CANDIDATE_ATTACHMENT_ID" \
+  --output gate4c-failed-inspection-job.json
+kubectl apply -f gate4c-failed-inspection-job.json
+FAILED_INSPECTION_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4c-failed-inspection-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$FAILED_INSPECTION_JOB" --timeout=330s
+kubectl -n "$NCT_NAMESPACE" logs "job/$FAILED_INSPECTION_JOB" > gate4c-failed-inspection.json
+python scripts/nct_kubernetes_upgrade.py record-failure \
+  --scenario-id "$GATE4C_SCENARIO" --image "$NEW_IMAGE" \
+  --contract gate4c-new-contract.json \
+  --failed-inspection gate4c-failed-inspection.json \
+  --failure-stage during-migration --failure-evidence gate4c-candidate-failure-evidence.json \
+  --output gate4c-candidate-failure.json
+```
+
+If no candidate Pod, runtime image ID, node, or attachment identity ever exists, the
+failed-candidate acceptance path cannot be proven. Preserve the scheduler and container
+events, keep the candidate unapplied or scaled to zero, and record the exercise as
+rejected. Do not create a final Gate 4C receipt. The old copy may use the unchanged source
+only after a second cold inventory matches the preflight inventory exactly; otherwise use
+the verified Gate 4A restore path on a fresh target.
+
+The failed branch always preserves the candidate claim and restores the cold backup to
+the fresh qualified target, even when preflight would have allowed direct rollback. Run
+the restore rollback commands above, use the restore event template with
+`candidate-failed` in place of `candidate-ready`, then verify with:
+
+```sh
+python scripts/nct_kubernetes_upgrade.py verify \
+  --plan gate4c-plan.json --before-inspection gate4c-before-inspection.json \
+  --failed-inspection gate4c-failed-inspection.json \
+  --candidate-failure gate4c-candidate-failure.json \
+  --rollback-inspection gate4c-rollback-inspection.json \
+  --old-lock-receipt gate4c-old-writer-released-receipt.json \
+  --candidate-active-lock-receipt gate4c-candidate-writer-active-receipt.json \
+  --candidate-lock-receipt gate4c-candidate-writer-released-receipt.json \
+  --rollback-active-lock-receipt gate4c-rollback-writer-active-receipt.json \
+  --rollback-lock-receipt gate4c-rollback-writer-released-receipt.json \
+  --cluster-observations gate4c-cluster-observations.json --events gate4c-events.json \
+  --restore-receipt gate4a-restore-receipt.json \
+  --restore-receipt-digest "$RESTORE_RECEIPT_DIGEST" \
+  --before-web-check gate4c-before-web.json --rollback-web-check gate4c-rollback-web.json \
+  --evidence-before selected-evidence-before.bin \
+  --evidence-rollback selected-evidence-rollback.bin \
+  --output gate4c-final-receipt.json
+```
+
+Stop immediately for active work, maintenance, a missing backup proof, insufficient
+space, incompatible storage, overlapping Pods or writers, rolling replacement, a
+changed identity, incomplete migration ledger, failed database or artifact verification,
+reduced retained counts, failed sign-in/readiness, or a changed evidence download. Save
+the reports and receipts outside all claims. SHA-256 detects change but is not an
+authenticated signature.
 
 Forced termination, rescheduling, node loss, backup, restore, upgrade, and rollback are
 Kubernetes acceptance gate 4. Until those tests pass, this package must not be described

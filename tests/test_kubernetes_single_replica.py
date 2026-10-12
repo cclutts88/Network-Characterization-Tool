@@ -194,6 +194,82 @@ def test_deployment_is_one_analysis_only_replica_and_uses_exact_report(tmp_path:
     assert items["Service"]["spec"]["type"] == "ClusterIP"
 
 
+def test_upgrade_inspection_job_is_bounded_cold_and_has_no_api_access(tmp_path: Path) -> None:
+    value = args(
+        tmp_path,
+        scenario_id="upgrade-check-20261012",
+        phase="before-upgrade",
+        runtime_image_id="docker-pullable://registry.example/nct@sha256:" + "a" * 64,
+        contract_digest="b" * 64,
+        deployment_uid="dddddddd-2222-4333-8444-555555555555",
+        deployment_generation=9,
+        pod_uid="eeeeeeee-2222-4333-8444-555555555555",
+        node_name="worker-a.example",
+        node_uid="ffffffff-2222-4333-8444-555555555555",
+        storage_attachment_identity="csi-attachment-12345678",
+        max_files=10_000,
+        max_bytes=1024**3,
+        validation_copy_size="2Gi",
+        max_validation_bytes=1024**3,
+        max_seconds=240,
+    )
+    report = write_report(value)
+    document = renderer.upgrade_inspection_resources(value)
+    items = items_by_kind(document)
+    job = items["Job"]
+    pod = job["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert pod["automountServiceAccountToken"] is False
+    assert pod["nodeName"] == "worker-a.example"
+    assert container["command"] == ["python", "/opt/nct/tools/nct_kubernetes_upgrade.py"]
+    assert container["args"][0] == "inspect"
+    assert "--contract-digest" in container["args"]
+    assert container["terminationMessagePolicy"] == "File"
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert job["spec"]["activeDeadlineSeconds"] == 270
+    assert job["metadata"]["annotations"]["nct.openai.com/storage-evidence-digest"] == report["attestation"]["digest"]
+    assert all(item["kind"] not in {"Role", "RoleBinding", "Secret"} for item in document["items"])
+
+
+def test_upgrade_contract_job_reads_only_the_exact_image(tmp_path: Path) -> None:
+    value = argparse.Namespace(
+        name="nct-analysis", namespace="nct",
+        image="registry.example/nct@sha256:" + "a" * 64,
+        output=tmp_path / "contract-job.json", overwrite=False,
+    )
+    renderer._validate_args(value)
+    document = renderer.upgrade_contract_resources(value)
+    items = items_by_kind(document)
+    pod = items["Job"]["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert pod["automountServiceAccountToken"] is False
+    assert "persistentVolumeClaim" not in json.dumps(document)
+    assert container["image"] == value.image
+    assert container["args"] == ["contract", "--output", "/tmp/nct-image-contract.json"]
+    assert container["terminationMessagePolicy"] == "File"
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+
+
+def test_upgrade_backup_manifest_job_is_read_only_bounded_and_has_no_api_access(tmp_path: Path) -> None:
+    value = args(tmp_path, backup_id="backup-20261012")
+    report = write_report(value)
+    renderer._validate_args(value)
+    document = renderer.upgrade_backup_manifest_resources(value)
+    items = items_by_kind(document)
+    job = items["Job"]
+    pod = job["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert pod["automountServiceAccountToken"] is False
+    assert container["volumeMounts"] == [{"name": "backup", "mountPath": "/backup", "readOnly": True}]
+    assert pod["volumes"][0]["persistentVolumeClaim"] == {"claimName": value.pvc_name, "readOnly": True}
+    assert container["command"][-1] == value.backup_id
+    assert job["metadata"]["annotations"]["nct.openai.com/storage-evidence-digest"] == report["attestation"]["digest"]
+    assert all(item["kind"] not in {"Role", "RoleBinding", "Secret"} for item in document["items"])
+
+
 def test_writer_lock_probe_is_exact_unprivileged_and_has_no_api_access(tmp_path: Path) -> None:
     value = args(
         tmp_path,
@@ -226,6 +302,32 @@ def test_writer_lock_probe_is_exact_unprivileged_and_has_no_api_access(tmp_path:
     assert "--expect" in container["args"] and "contended" in container["args"]
     assert job["metadata"]["annotations"]["nct.openai.com/storage-evidence-digest"] == report["attestation"]["digest"]
     assert all(item["kind"] not in {"Role", "RoleBinding", "Secret"} for item in document["items"])
+
+
+def test_guarded_upgrade_writer_probe_can_measure_without_guessing(tmp_path: Path) -> None:
+    value = args(
+        tmp_path,
+        scenario_id="upgrade-20261012",
+        scenario_kind="guarded-upgrade",
+        expect="observe",
+        phase="candidate-writer-active",
+        application_version="0.14.0-dev",
+        build_id="build-123",
+        deployment_uid="dddddddd-2222-4333-8444-555555555555",
+        deployment_generation=8,
+        pod_uid="eeeeeeee-2222-4333-8444-555555555555",
+        node_name="worker-a.example",
+        node_uid="ffffffff-2222-4333-8444-555555555555",
+        storage_attachment_identity="csi-attachment-12345678",
+    )
+    write_report(value)
+
+    document = renderer.writer_lock_probe_resources(value)
+    container = items_by_kind(document)["Job"]["spec"]["template"]["spec"]["containers"][0]
+
+    assert "--expect" in container["args"]
+    assert "observe" in container["args"]
+    assert "candidate-writer-active" in container["args"]
 
 
 def test_pre_replacement_lock_probe_targets_destination_without_future_pod(tmp_path: Path) -> None:

@@ -53,6 +53,11 @@ from app.runtime_trends import (
     stop_runtime_trends,
 )
 from app.writer_guard import acquire_application_writer_guard
+from app.schema_compatibility import (
+    begin_schema_migration,
+    complete_schema_migration,
+    fail_schema_migration,
+)
 from app.active_collection import (
     active_collection_enabled,
     active_collection_status,
@@ -1370,11 +1375,13 @@ async def lifespan(_: FastAPI):
     startup_succeeded = False
     primary_error: BaseException | None = None
     collection_enabled = False
+    schema_migration = None
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         collection_enabled = active_collection_enabled()
         writer_guard = acquire_application_writer_guard(DB_PATH)
         configure_database(DB_PATH)
+        schema_migration = begin_schema_migration(DB_PATH)
         init_storage()
         init_poc_storage()
         retire_legacy_scan_analysis_cache(DB_PATH)
@@ -1399,6 +1406,7 @@ async def lifespan(_: FastAPI):
         init_evidence_scope_assignment_storage(DB_PATH)
         init_automated_nmap_foundation_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
+        complete_schema_migration(DB_PATH, schema_migration)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
         resume_storage_jobs()
         background_workers_started = not compaction_recovery.get("recovery_required")
@@ -1420,6 +1428,7 @@ async def lifespan(_: FastAPI):
         yield
     except BaseException as exc:
         primary_error = exc
+        fail_schema_migration(DB_PATH, schema_migration, exc)
         mark_failed()
         raise
     finally:
@@ -2041,8 +2050,9 @@ def nmap_observation_scope_assign(
             reason=payload.reason,
             whole_artifact_confirmed=payload.whole_artifact_confirmed,
         )
+        response = get_manual_nmap_assignment_status(DB_PATH, observation_id)
         start_derived_job_worker(DB_PATH, DATA_DIR)
-        return get_manual_nmap_assignment_status(DB_PATH, observation_id)
+        return response
     except (KeyError, ValueError) as exc:
         raise _nmap_assignment_error(exc) from exc
 
@@ -2062,10 +2072,11 @@ def nmap_observation_scope_correct(
             reason=payload.reason,
             whole_artifact_confirmed=payload.whole_artifact_confirmed,
         )
-        start_derived_job_worker(DB_PATH, DATA_DIR)
-        return get_manual_nmap_assignment_status(
+        response = get_manual_nmap_assignment_status(
             DB_PATH, eligible["artifact_observation_id"],
         )
+        start_derived_job_worker(DB_PATH, DATA_DIR)
+        return response
     except (KeyError, ValueError) as exc:
         raise _nmap_assignment_error(exc) from exc
 

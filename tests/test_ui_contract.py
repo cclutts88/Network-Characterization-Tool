@@ -54,14 +54,19 @@ def test_system_health_explains_bounded_calculation_status():
     assert "Separate backup and empty restore targets" in html
     assert "The live source and backup are never overwritten" in html
     assert "Failure and replacement package" in html
+    assert "Guarded upgrade and rollback package" in html
     assert "externally fenced node loss" in html
     assert "Node loss never triggers automatic failover" in html
+    assert "Direct rollback is allowed only when the old image itself proves" in html
+    assert "restoring the backup returns NCT to the recorded backup time" in html
     assert "Restore now" not in html
-    assert "kubernetesRecoveryPanel:['Kubernetes backup and recovery readiness'" in SHELL_SCRIPT
+    assert "kubernetesRecoveryPanel:['Kubernetes backup, failure, upgrade, and rollback readiness'" in SHELL_SCRIPT
     assert "kubernetesRecoverySummary:['Administrator cold recovery instructions'" in SHELL_SCRIPT
     assert "kubernetesFailureSummary:['Failure and replacement instructions'" in SHELL_SCRIPT
+    assert "kubernetesUpgradeSummary:['Guarded upgrade and rollback instructions'" in SHELL_SCRIPT
     assert 'id="kubernetesRecoverySummary"' in storage_page().body.decode()
     assert 'id="kubernetesFailureSummary"' in storage_page().body.decode()
+    assert 'id="kubernetesUpgradeSummary"' in storage_page().body.decode()
     assert "sign-in, readiness, and one evidence download" in SHELL_SCRIPT
     guide = how_nct_works_page().body.decode()
     assert "Kubernetes cold recovery" in guide
@@ -70,6 +75,8 @@ def test_system_health_explains_bounded_calculation_status():
     assert "Kubernetes failure and replacement testing" in guide
     assert "A running attempt must return as Interrupted" in guide
     assert "must first prove the old node is fenced" in guide
+    assert "Kubernetes guarded upgrade and rollback" in guide
+    assert "old image's own contract" in guide
     assert "Live performance and reliability" in html
     assert "Unsupported measurements say Unavailable instead of showing zero" in html
     assert "Reading it does not start a scan, contact a network target, or change retained evidence" in html
