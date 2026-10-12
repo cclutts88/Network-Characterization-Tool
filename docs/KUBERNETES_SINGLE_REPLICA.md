@@ -318,6 +318,324 @@ Confirm all of the following:
 Do not use a rolling update, set replicas above one, add an autoscaler, or add raw-network
 capabilities to this profile.
 
+## Gate 4A cold backup and isolated restore
+
+Gate 4A is an administrator recovery exercise. It is separate from System Health's
+storage dry run, Artifact Registry backfill, exact-content compaction, pod replacement,
+and image rollback. The recovery tools never call `kubectl`, never contact a network
+target, and never overwrite the live source or an existing restore target.
+
+The exercise requires three separately qualified storage objects:
+
+1. the current NCT data claim as the **source**;
+2. a different claim as the **backup target**; and
+3. a third, empty claim as the **restore target**.
+
+Names are not sufficient. Immediately before each render and apply, record the
+namespace, claim UID, bound-volume UID, storage class, requested size, and passing
+qualification report digest for every mounted object. Save the exact image digest,
+application version, build ID, generated Jobs, backup receipt, restore receipt, and
+command output outside the three claims. Backup data contains analyst accounts,
+preferences, reports, and retained evidence; protect it as sensitive operational data.
+
+Start from an administrator workstation that has `kubectl`, Python 3, the NCT source
+package, the Gate 3C source qualification report, and access to the intended namespace.
+Use a private working directory. Set these values first; do not paste Secret content:
+
+```sh
+export NCT_NAMESPACE='nct'
+export NCT_NAME='nct-analysis'
+export NCT_IMAGE='registry.example/nct@sha256:REPLACE_WITH_EXACT_DIGEST'
+export NCT_APP_VERSION='REPLACE_WITH_IMAGE_VERSION'
+export NCT_BUILD_ID='REPLACE_WITH_IMAGE_BUILD_ID'
+export SOURCE_PVC='nct-data'
+export SOURCE_CLASS='REPLACE_WITH_APPROVED_STORAGE_CLASS'
+export SOURCE_SIZE='20Gi'
+export SOURCE_REPORT='./source-storage-report.json'
+export SOURCE_REPORT_DIGEST='REPLACE_WITH_SAVED_REPORT_DIGEST'
+export BACKUP_PVC='nct-gate4a-backup'
+export BACKUP_CLASS="$SOURCE_CLASS"
+export BACKUP_SIZE='50Gi'
+export RESTORE_PVC='nct-gate4a-restore'
+export RESTORE_CLASS="$SOURCE_CLASS"
+export RESTORE_SIZE='20Gi'
+export BACKUP_ID="backup-$(date -u +%Y%m%d-%H%M%S)"
+```
+
+The examples below intentionally stop after each important proof. Read the displayed
+identity and receipt before continuing. A failed command is a stop condition.
+
+The backup claim must have room for the private source snapshot and an uncompressed
+archive at the same time, plus manifest, receipt, and filesystem overhead. Plan for more
+than twice the retained source bytes; the example uses 50 GiB for a source claim that
+may hold 20 GiB. The backup tool performs a bounded free-space preflight and stops before
+creating an archive when the measured free space cannot cover that minimum.
+
+### 0. Create and qualify the separate claims
+
+Create the backup claim:
+
+```sh
+python scripts/render_kubernetes_single_replica.py claim \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" \
+  --pvc-name "$BACKUP_PVC" --storage-class "$BACKUP_CLASS" \
+  --storage-size "$BACKUP_SIZE" --output gate4a-backup-claim.json
+kubectl apply -f gate4a-backup-claim.json
+kubectl -n "$NCT_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Bound \
+  "pvc/$BACKUP_PVC" --timeout=180s
+export BACKUP_PVC_UID="$(kubectl -n "$NCT_NAMESPACE" get pvc "$BACKUP_PVC" -o jsonpath='{.metadata.uid}')"
+export BACKUP_PV="$(kubectl -n "$NCT_NAMESPACE" get pvc "$BACKUP_PVC" -o jsonpath='{.spec.volumeName}')"
+export BACKUP_PV_UID="$(kubectl get pv "$BACKUP_PV" -o jsonpath='{.metadata.uid}')"
+python scripts/render_kubernetes_single_replica.py qualification \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NCT_IMAGE" \
+  --pvc-name "$BACKUP_PVC" --storage-class "$BACKUP_CLASS" \
+  --storage-size "$BACKUP_SIZE" --pvc-uid "$BACKUP_PVC_UID" \
+  --bound-volume-uid "$BACKUP_PV_UID" --mount-path /backup \
+  --output gate4a-backup-qualification.json
+export BACKUP_QUAL_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4a-backup-qualification.json"))["items"] if x["kind"]=="Job"))')"
+kubectl apply -f gate4a-backup-qualification.json
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$BACKUP_QUAL_JOB" --timeout=180s
+kubectl -n "$NCT_NAMESPACE" logs "job/$BACKUP_QUAL_JOB" > gate4a-backup-storage-report.json
+export BACKUP_REPORT='./gate4a-backup-storage-report.json'
+export BACKUP_REPORT_DIGEST="$(python -c 'import json; print(json.load(open("gate4a-backup-storage-report.json"))["attestation"]["digest"])')"
+```
+
+Create and qualify the restore claim with the same sequence and these substitutions:
+
+```sh
+python scripts/render_kubernetes_single_replica.py claim \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" \
+  --storage-size "$RESTORE_SIZE" --output gate4a-restore-claim.json
+kubectl apply -f gate4a-restore-claim.json
+kubectl -n "$NCT_NAMESPACE" wait --for=jsonpath='{.status.phase}'=Bound \
+  "pvc/$RESTORE_PVC" --timeout=180s
+export RESTORE_PVC_UID="$(kubectl -n "$NCT_NAMESPACE" get pvc "$RESTORE_PVC" -o jsonpath='{.metadata.uid}')"
+export RESTORE_PV="$(kubectl -n "$NCT_NAMESPACE" get pvc "$RESTORE_PVC" -o jsonpath='{.spec.volumeName}')"
+export RESTORE_PV_UID="$(kubectl get pv "$RESTORE_PV" -o jsonpath='{.metadata.uid}')"
+python scripts/render_kubernetes_single_replica.py qualification \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NCT_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" \
+  --storage-size "$RESTORE_SIZE" --pvc-uid "$RESTORE_PVC_UID" \
+  --bound-volume-uid "$RESTORE_PV_UID" --mount-path /restore \
+  --output gate4a-restore-qualification.json
+export RESTORE_QUAL_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4a-restore-qualification.json"))["items"] if x["kind"]=="Job"))')"
+kubectl apply -f gate4a-restore-qualification.json
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$RESTORE_QUAL_JOB" --timeout=180s
+kubectl -n "$NCT_NAMESPACE" logs "job/$RESTORE_QUAL_JOB" > gate4a-restore-storage-report.json
+export RESTORE_REPORT='./gate4a-restore-storage-report.json'
+export RESTORE_REPORT_DIGEST="$(python -c 'import json; print(json.load(open("gate4a-restore-storage-report.json"))["attestation"]["digest"])')"
+```
+
+Re-read the source identity immediately before stopping NCT:
+
+```sh
+export SOURCE_PVC_UID="$(kubectl -n "$NCT_NAMESPACE" get pvc "$SOURCE_PVC" -o jsonpath='{.metadata.uid}')"
+export SOURCE_PV="$(kubectl -n "$NCT_NAMESPACE" get pvc "$SOURCE_PVC" -o jsonpath='{.spec.volumeName}')"
+export SOURCE_PV_UID="$(kubectl get pv "$SOURCE_PV" -o jsonpath='{.metadata.uid}')"
+printf 'source=%s/%s backup=%s/%s restore=%s/%s\n' \
+  "$SOURCE_PVC_UID" "$SOURCE_PV_UID" "$BACKUP_PVC_UID" "$BACKUP_PV_UID" \
+  "$RESTORE_PVC_UID" "$RESTORE_PV_UID"
+```
+
+### 1. Stop the writer
+
+Resolve queued or running work, scale the NCT Deployment to zero, and wait until no NCT
+pod remains. Do not rely on ReadWriteOnce or the displayed replica count alone. The
+backup process opens and holds NCT's writer lock for the complete capture and fails if
+another process still owns it.
+
+```sh
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+test -z "$(kubectl -n "$NCT_NAMESPACE" get pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" \
+  -o name)" || { printf '%s\n' 'STOP: an NCT pod still exists' >&2; exit 1; }
+```
+
+### 2. Render the backup Job
+
+Use `scripts/render_kubernetes_recovery.py backup --help` for the complete argument
+list. Supply the exact image digest; source and backup claim details; both qualification
+reports and their separately recorded digests; one new lowercase backup ID; the
+application version and build ID; and an unused output path. The renderer validates both
+reports and creates a bounded Job with no API token, RBAC, Secret, Linux capability, or
+automatic cleanup. It does not apply the Job.
+
+The Job mounts the source at `/data` and separate backup storage at `/backup`. It rejects
+active work, writer contention, changed storage identities, unsafe links or special
+files, path or case collisions, and configured file, byte, time, or report limits. It
+captures the complete data tree through protected file handles into a private snapshot,
+then validates only that snapshot rather than opening the live SQLite database. It includes
+the database, WAL/SHM side files, artifacts,
+imports, scan and device evidence, jobs, packages, reports, preferences, and offline
+reference data. Only the fixed runtime writer-lock file is excluded. Hard-linked paths
+are materialized as separate regular archive members so every pathname remains present.
+
+The completed backup contains a byte and SHA-256 manifest for every pathname, a complete
+inventory digest, the archive digest, database, Artifact Registry, supported retained
+evidence, and observation baselines, storage identities, both qualification-report
+digests, image/build identity, and a detached receipt. The tool rereads the stored
+archive before it reports `backup_verified`. These digests detect change but are not
+cryptographic signatures; retain the receipt and digests separately.
+
+```sh
+python scripts/render_kubernetes_recovery.py backup \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NCT_IMAGE" \
+  --backup-id "$BACKUP_ID" --application-version "$NCT_APP_VERSION" --build-id "$NCT_BUILD_ID" \
+  --source-pvc-name "$SOURCE_PVC" --source-storage-class "$SOURCE_CLASS" \
+  --source-storage-size "$SOURCE_SIZE" --source-pvc-uid "$SOURCE_PVC_UID" \
+  --source-bound-volume-uid "$SOURCE_PV_UID" --source-storage-report "$SOURCE_REPORT" \
+  --source-storage-report-digest "$SOURCE_REPORT_DIGEST" \
+  --backup-pvc-name "$BACKUP_PVC" --backup-storage-class "$BACKUP_CLASS" \
+  --backup-storage-size "$BACKUP_SIZE" --backup-pvc-uid "$BACKUP_PVC_UID" \
+  --backup-bound-volume-uid "$BACKUP_PV_UID" --backup-storage-report "$BACKUP_REPORT" \
+  --backup-storage-report-digest "$BACKUP_REPORT_DIGEST" --output gate4a-backup-job.json
+export BACKUP_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4a-backup-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl apply -f gate4a-backup-job.json
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$BACKUP_JOB" --timeout=14520s
+kubectl -n "$NCT_NAMESPACE" logs "job/$BACKUP_JOB" > gate4a-backup-receipt.json
+grep -q '"status": "backup_verified"' gate4a-backup-receipt.json
+export BACKUP_RECEIPT_DIGEST="$(python -c 'import json; print(json.load(open("gate4a-backup-receipt.json"))["receipt_sha256"])')"
+```
+
+**Stop here** unless the receipt says `backup_verified` and its digest has been copied
+to protected storage outside all three claims.
+
+### 3. Render the restore Job
+
+Create and qualify a new empty target. Re-read all three storage UIDs, then use
+`scripts/render_kubernetes_recovery.py restore --help`. Supply the source, backup, and
+target identities and qualification reports plus the same backup ID. The renderer
+rejects reused identities. The restore Job mounts backup storage read-only and never
+mounts the live source.
+
+Restore fails closed for a nonempty target, changed identity, missing or extra manifest
+entry, traversal, link, special file, duplicate, case collision, archive tampering,
+truncation, over-limit expansion, interrupted write, database corruption, foreign-key
+failure, changed table baseline, or mismatched registered artifact. A failed or
+interrupted target is retained for inspection and must not be reused; start again with a
+fresh empty qualified target. The live source and backup are never deleted or changed.
+
+```sh
+python scripts/render_kubernetes_recovery.py restore \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NCT_IMAGE" \
+  --backup-id "$BACKUP_ID" --backup-receipt-digest "$BACKUP_RECEIPT_DIGEST" \
+  --source-pvc-name "$SOURCE_PVC" --source-storage-class "$SOURCE_CLASS" \
+  --source-storage-size "$SOURCE_SIZE" --source-pvc-uid "$SOURCE_PVC_UID" \
+  --source-bound-volume-uid "$SOURCE_PV_UID" --source-storage-report "$SOURCE_REPORT" \
+  --source-storage-report-digest "$SOURCE_REPORT_DIGEST" \
+  --backup-pvc-name "$BACKUP_PVC" --backup-storage-class "$BACKUP_CLASS" \
+  --backup-storage-size "$BACKUP_SIZE" --backup-pvc-uid "$BACKUP_PVC_UID" \
+  --backup-bound-volume-uid "$BACKUP_PV_UID" --backup-storage-report "$BACKUP_REPORT" \
+  --backup-storage-report-digest "$BACKUP_REPORT_DIGEST" \
+  --target-pvc-name "$RESTORE_PVC" --target-storage-class "$RESTORE_CLASS" \
+  --target-storage-size "$RESTORE_SIZE" --target-pvc-uid "$RESTORE_PVC_UID" \
+  --target-bound-volume-uid "$RESTORE_PV_UID" --target-storage-report "$RESTORE_REPORT" \
+  --target-storage-report-digest "$RESTORE_REPORT_DIGEST" --output gate4a-restore-job.json
+export RESTORE_JOB="$(python -c 'import json; print(next(x["metadata"]["name"] for x in json.load(open("gate4a-restore-job.json"))["items"] if x["kind"]=="Job"))')"
+kubectl apply -f gate4a-restore-job.json
+kubectl -n "$NCT_NAMESPACE" wait --for=condition=complete "job/$RESTORE_JOB" --timeout=14520s
+export RESTORE_POD="$(kubectl -n "$NCT_NAMESPACE" get pod -l "job-name=$RESTORE_JOB" -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n "$NCT_NAMESPACE" get pod "$RESTORE_POD" \
+  -o jsonpath='{.status.containerStatuses[0].state.terminated.message}' \
+  > gate4a-restore-receipt.json
+grep -q '"status": "restore_verification_passed"' gate4a-restore-receipt.json
+export RESTORE_RECEIPT_DIGEST="$(python -c 'import json; print(json.load(open("gate4a-restore-receipt.json"))["receipt_sha256"])')"
+```
+
+The same receipt is also in the Job log, but the terminated-container message is the
+Job's durable in-cluster copy while the Job and Pod are retained. Copy the receipt and
+its digest to protected storage outside all three claims.
+
+**Stop here** unless the receipt says `restore_verification_passed`. Preserve any failed
+target and create a different empty target before retrying.
+
+### 4. Verify the restored application
+
+`restore_verification_passed` proves byte-exact pre-start restoration, database
+integrity, baseline equality, and registered artifact hashes. It is not the final Gate
+4A result. Render the normal one-replica Deployment against the restore target and use
+the **same exact image digest**. Then verify all of the following:
+
+- startup and readiness succeed;
+- an existing administrator can sign in;
+- the stored database/table baselines remain present;
+- retained scans, device collections, reports, jobs, and observations remain visible;
+- no incomplete work became complete;
+- at least one retained evidence file downloads with its recorded SHA-256; and
+- the restore claim and bound-volume UIDs match the saved report, Job, and Deployment.
+
+Stop the restored application after the exercise and preserve the source, backup, target,
+Jobs, logs, manifests, and receipts until review is complete. A passing Gate 4A exercise
+on one exact cluster and storage set does not prove forced termination, rescheduling,
+node loss, upgrade, rollback, Range, mission, or multi-replica readiness.
+
+Render the normal Gate 3C Deployment with the restore claim's identity and qualification
+report and the same image. Do **not** supply `--bootstrap-secret`: the administrator
+account must be present in the restored data. Creating a new bootstrap account could hide
+an incomplete account restore. Apply it only after the offline restore receipt passes,
+review the generated document before applying it, and wait for the replacement:
+
+```sh
+python scripts/render_kubernetes_single_replica.py deployment \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NCT_IMAGE" \
+  --pvc-name "$RESTORE_PVC" --storage-class "$RESTORE_CLASS" \
+  --storage-size "$RESTORE_SIZE" --pvc-uid "$RESTORE_PVC_UID" \
+  --bound-volume-uid "$RESTORE_PV_UID" \
+  --storage-report "$RESTORE_REPORT" \
+  --storage-report-digest "$RESTORE_REPORT_DIGEST" \
+  --output gate4a-restored-deployment.json
+python -m json.tool gate4a-restored-deployment.json
+kubectl apply -f gate4a-restored-deployment.json
+kubectl -n "$NCT_NAMESPACE" rollout status "deployment/$NCT_NAME" --timeout=180s
+```
+
+Run the startup, readiness, sign-in, retained-history, and evidence-download checks above.
+**Stop and preserve the restored target** if the existing administrator cannot sign in;
+do not create or inject a replacement account. After the checks pass, stop the test copy
+before returning to the source:
+
+```sh
+kubectl -n "$NCT_NAMESPACE" scale "deployment/$NCT_NAME" --replicas=0
+kubectl -n "$NCT_NAMESPACE" wait --for=delete pod \
+  -l "app.kubernetes.io/name=$NCT_NAME,app.kubernetes.io/component=analysis" --timeout=180s
+```
+
+To return to the unchanged source, first re-read its live claim and bound-volume UIDs and
+compare them with the identity inside the saved source qualification report. Stop if
+either value changed:
+
+```sh
+export CURRENT_SOURCE_PVC_UID="$(kubectl -n "$NCT_NAMESPACE" get pvc "$SOURCE_PVC" -o jsonpath='{.metadata.uid}')"
+export CURRENT_SOURCE_PV="$(kubectl -n "$NCT_NAMESPACE" get pvc "$SOURCE_PVC" -o jsonpath='{.spec.volumeName}')"
+export CURRENT_SOURCE_PV_UID="$(kubectl get pv "$CURRENT_SOURCE_PV" -o jsonpath='{.metadata.uid}')"
+export SAVED_SOURCE_PVC_UID="$(python -c 'import json,os; v=json.loads(json.load(open(os.environ["SOURCE_REPORT"]))["declared"]["storage_identity"]); print(v["pvc_uid"])')"
+export SAVED_SOURCE_PV_UID="$(python -c 'import json,os; v=json.loads(json.load(open(os.environ["SOURCE_REPORT"]))["declared"]["storage_identity"]); print(v["bound_volume_uid"])')"
+test "$CURRENT_SOURCE_PVC_UID" = "$SOURCE_PVC_UID" \
+  && test "$CURRENT_SOURCE_PVC_UID" = "$SAVED_SOURCE_PVC_UID" \
+  && test "$CURRENT_SOURCE_PV_UID" = "$SOURCE_PV_UID" \
+  && test "$CURRENT_SOURCE_PV_UID" = "$SAVED_SOURCE_PV_UID" \
+  || { printf '%s\n' 'STOP: source storage identity changed' >&2; exit 1; }
+python scripts/render_kubernetes_single_replica.py deployment \
+  --name "$NCT_NAME" --namespace "$NCT_NAMESPACE" --image "$NCT_IMAGE" \
+  --pvc-name "$SOURCE_PVC" --storage-class "$SOURCE_CLASS" \
+  --storage-size "$SOURCE_SIZE" --pvc-uid "$SOURCE_PVC_UID" \
+  --bound-volume-uid "$SOURCE_PV_UID" \
+  --storage-report "$SOURCE_REPORT" \
+  --storage-report-digest "$SOURCE_REPORT_DIGEST" \
+  --output gate4a-source-deployment.json
+python -m json.tool gate4a-source-deployment.json
+kubectl apply -f gate4a-source-deployment.json
+kubectl -n "$NCT_NAMESPACE" rollout status "deployment/$NCT_NAME" --timeout=180s
+```
+
+Again verify startup, readiness, existing-administrator sign-in, retained history, and
+one evidence download. Never mount source and restore claims into two running NCT
+Deployments at the same time. Do not delete any claim or Job until the reviewer accepts
+the saved receipts and the original source has passed all checks again.
+
 ## Upgrade and rollback boundary
 
 Before an upgrade, record the current image digest, qualified storage identity, report
@@ -330,7 +648,7 @@ Forced termination, rescheduling, node loss, backup, restore, upgrade, and rollb
 Kubernetes acceptance gate 4. Until those tests pass, this package must not be described
 as Range-ready or mission-ready.
 
-## What a successful gate proves
+## What successful Gate 3C proves
 
 This profile proves one analysis-only NCT copy on the named cluster and exact tested
 volume. It does not prove multiple-copy operation, live collection, general

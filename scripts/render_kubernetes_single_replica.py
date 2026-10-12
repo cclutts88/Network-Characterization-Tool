@@ -74,11 +74,12 @@ def _immutable_id(value: str, label: str) -> str:
 
 
 def storage_identity(args: argparse.Namespace) -> str:
+    mount_path = getattr(args, "mount_path", "/data")
     value = {
         "access_mode": "ReadWriteOnce",
         "executor_gid": RUN_AS_GID,
         "executor_uid": RUN_AS_UID,
-        "mount_path": "/data",
+        "mount_path": mount_path,
         "namespace": args.namespace,
         "pvc": args.pvc_name,
         "pvc_uid": args.pvc_uid,
@@ -193,14 +194,14 @@ def qualification_resources(args: argparse.Namespace) -> dict:
                         "image": args.image,
                         "imagePullPolicy": "IfNotPresent",
                         "command": ["python", "/opt/nct/tools/qualify_kubernetes_storage.py"],
-                        "args": ["--root", "/data", "--storage-identity", identity],
+                        "args": ["--root", args.mount_path, "--storage-identity", identity],
                         "securityContext": _container_security(),
                         "resources": {
                             "requests": {"cpu": "50m", "memory": "64Mi"},
                             "limits": {"cpu": "500m", "memory": "256Mi"},
                         },
                         "volumeMounts": [
-                            {"name": "data", "mountPath": "/data"},
+                            {"name": "data", "mountPath": args.mount_path},
                             {"name": "tmp", "mountPath": "/tmp"},
                         ],
                     }],
@@ -407,6 +408,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         args.bound_volume_uid = _immutable_id(args.bound_volume_uid, "bound volume UID")
     if getattr(args, "bootstrap_secret", None):
         args.bootstrap_secret = _name(args.bootstrap_secret, "bootstrap Secret name")
+    mount_path = getattr(args, "mount_path", "/data")
+    if mount_path not in {"/data", "/backup", "/restore"}:
+        raise RenderError("mount path must be /data, /backup, or /restore")
+    args.mount_path = mount_path
 
 
 def _write_output(path: Path, value: dict, overwrite: bool) -> None:
@@ -455,6 +460,7 @@ def _parser() -> argparse.ArgumentParser:
     add_common(claim, image=False, identity=False)
     qualification = subparsers.add_parser("qualification")
     add_common(qualification, image=True, identity=True)
+    qualification.add_argument("--mount-path", choices=("/data", "/backup", "/restore"), default="/data")
     deployment = subparsers.add_parser("deployment")
     add_common(deployment, image=True, identity=True)
     deployment.add_argument("--storage-report", type=Path, required=True)

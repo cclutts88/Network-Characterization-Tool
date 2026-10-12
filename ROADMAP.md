@@ -2035,6 +2035,42 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     gate 3C package; it does not claim a cluster apply, HTTPS installation, backup or
     restore proof, Range readiness, mission readiness, multi-replica safety or availability
     on `main`. Those remain later Kubernetes acceptance gates.
+    **2026-10-12 Kubernetes recovery gate 4A start:** Reconcile the Kubernetes
+    architecture status with completed Gate 3C, then begin the first bounded Gate 4
+    slice: cold backup plus isolated restore verification. This administrator workflow
+    must prove the NCT writer is stopped, retain the exact qualified source identity,
+    store the backup outside the live data claim, reject unsafe files and nonempty restore
+    targets, create a hash-backed manifest, restore into a separate empty target, and
+    verify database integrity and retained evidence without changing the live source or
+    backup. System Health may report readable readiness and recorded verification
+    results, but it must not expose a novice-facing restore action. Forced termination,
+    rescheduling, node loss, upgrade, and compatible rollback remain separate Gate 4
+    slices. Independent start review and novice-operator review are required before this
+    slice can be called complete.
+    **2026-10-12 Kubernetes recovery gate 4A foundation-package completion:** The
+    administrator package now renders bounded non-root cold-backup and isolated-restore
+    Jobs for three separately qualified storage identities. Backup requires the existing
+    stopped-writer lock, rejects saved active work, captures the source through protected
+    file handles, creates and verifies the archive before SQLite validation can change
+    the private validation copy, checks free capacity for the temporary snapshot plus
+    uncompressed archive, and durably commits the manifest and detached receipt. Restore
+    requires the separately retained receipt digest, read-only backup storage and a
+    different empty qualified target; it validates bounded paths, types, modes, hashes,
+    database integrity, table/schema baselines, registered artifacts, observations and
+    supported retained-evidence references, then writes a Kubernetes termination receipt.
+    The runbook now includes exact stop, identity, capacity, backup, restore, same-image
+    startup, existing-account sign-in, evidence-download, shutdown and safe source-return
+    steps. System Health and How NCT Works explain the boundary without exposing a restore
+    button. Hard-linked source paths are deliberately restored as separate byte-identical
+    regular files, and SHA-256 digests provide integrity evidence rather than authenticated
+    signatures. Focused primary validation passed **119 tests**; the full isolated Docker
+    suite passed **1,321 tests with 15 skips** and one existing dependency warning; a real
+    non-root UID/GID 10001 container wrote the bounded termination receipt; independent
+    reviewer validation passed **158 tests** and returned **CLEAR — DOCUMENTED DEVIATION**;
+    novice-operator review returned **CLEAR**. This is a foundation-only implementation
+    package. Gate 4A remains started until the exact-cluster backup, isolated restore,
+    application startup, sign-in and retained-evidence exercise succeeds. It does not
+    claim Kubernetes, Range, mission, upgrade, node-loss, rollback or `main` readiness.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

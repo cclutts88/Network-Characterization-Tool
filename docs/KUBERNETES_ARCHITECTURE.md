@@ -194,8 +194,11 @@ Kubernetes capability advances only through reviewed gates:
 2. Side-effect-free startup, readiness and liveness endpoints.
 3. Single-replica Kubernetes manifests with least-privilege permissions and qualified
    durable storage.
-4. Forced termination, rescheduling, node-loss, backup, restore, upgrade and rollback
-   tests with retained evidence verification.
+4. Failure and recovery acceptance, split into reviewed sub-gates while aggregate Gate 4
+   remains open:
+   - **4A:** cold backup, isolated restore, and retained-evidence verification;
+   - **4B:** forced termination, replacement, rescheduling, and node loss;
+   - **4C:** upgrade, schema compatibility, image rollback, and data rollback.
 5. Optional Kubernetes health adapter with denied-access, timeout, truncation and
    no-Metrics-API tests.
 6. Cross-process worker leases, fencing and singleton-operation coordination.
@@ -209,17 +212,30 @@ Gate 2 provides side-effect-free lifecycle probes with explicit recovery and shu
 semantics. Application-side gate 3A now adds a process-lifetime writer guard acquired
 before SQLite opens, atomic shutdown admission fences for local writer families, and
 fail-closed retention when shutdown cannot prove every writer stopped. Gate 3B provides
-the bounded exact-mount qualification tool. Gate 3C is in progress: claim creation is
-separate from qualification, and the report, Job, and Deployment bind both the
-immutable claim UID and bound-volume UID. The generated web
+the bounded exact-mount qualification tool. Gate 3C is complete on the foundation
+branch: claim creation is separate from qualification, and the report, Job, and
+Deployment bind both the immutable claim UID and bound-volume UID. The generated web
 profile is one analysis-only replica with `Recreate`, forced local authentication, no
 API token or RBAC, no Linux capabilities, and exact qualification-report binding. Active
 Nmap, schedules and device contact are disabled in both the interface and server routes;
 a future collection worker requires its own reviewed placement and privilege profile.
-Gate 3 remains open until this package and its exact storage environment complete the
-deployment acceptance checks. Gates 4 through 9 also remain open. Completing gates 1,
-2, 3A or 3B does not make this build Kubernetes-ready. See
+Gate 3C's final image and exact mounted-storage exercise passed its package acceptance
+checks. This completes the foundation package, but exact-cluster apply, HTTPS, and
+exact-volume deployment acceptance remain open. Gate 4 remains open for cold backup and
+isolated restore proof, forced termination, rescheduling, node loss, upgrade, and
+compatible rollback. Gates 5 through 9 also remain open. Completing the foundation
+packages for gates 1 through 3 does not make this build Kubernetes-ready, Range-ready,
+or mission-ready. See
 `docs/KUBERNETES_SINGLE_REPLICA.md`.
+
+The foundation package for Gate 4A now provides the reviewed cold-backup and isolated-
+restore Jobs, validation tool, receipts, capacity boundary and complete administrator
+runbook. Its independent quality gate is **CLEAR — DOCUMENTED DEVIATION**: hard-linked
+paths restore as separate byte-identical regular files, and SHA-256 receipts detect
+change without providing authenticated signatures. Gate 4A acceptance remains open until
+the complete runbook succeeds against the exact cluster, image and three qualified
+volumes, including restored startup, existing-account sign-in and retained-evidence
+download. This package status does not change the open Gate 4 aggregate or later gates.
 
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.

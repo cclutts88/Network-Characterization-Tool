@@ -61,12 +61,12 @@ def _fingerprint(path: Path) -> list[int]:
     return [value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns]
 
 
-def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
+def evidence_references(db_path: Path, *, data_root: Path | None = None) -> tuple[list[dict], list[str], int]:
     # Import lazily to avoid changing the existing collection module dependency graph.
     from app.poc import ARTIFACT_FILES
     from app.device_configs import ARTIFACT_NAMES, UPLOADED_ARTIFACT_RE, COLLECTION_ARTIFACT_RE
 
-    root = db_path.parent
+    root = data_root or db_path.parent
     references, issues = [], []
     active = 0
     scan_manifests = {}
@@ -180,6 +180,11 @@ def evidence_references(db_path: Path) -> tuple[list[dict], list[str], int]:
                                    **({"expected_hash": registered[filename]} if filename in registered else {})})
     for digest, filename, stored_path, imported_at in imports:
         path = Path(stored_path)
+        if data_root is not None and path.is_absolute():
+            try:
+                path = root / path.relative_to("/data")
+            except ValueError:
+                pass
         if not _safe_file(path, root):
             issues.append(f"Missing or unsafe imported evidence: {digest}")
             continue

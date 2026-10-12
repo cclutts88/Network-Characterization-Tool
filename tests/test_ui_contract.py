@@ -5,6 +5,7 @@ from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
 from app.hostname_ui import hostname_page
+from app.how_nct_works_ui import how_nct_works_page
 from app.network_map_ui import network_map_page
 from app.network_scope_ui import network_scope_page
 from app.reachability_ui import reachability_page
@@ -48,6 +49,17 @@ def test_recursive_note_changes_preview_exact_scope_and_report_results():
 
 def test_system_health_explains_bounded_calculation_status():
     html = storage_page().body.decode()
+    assert "Kubernetes backup and recovery readiness" in html
+    assert "Not verified on this installation" in html
+    assert "Separate backup and empty restore targets" in html
+    assert "The live source and backup are never overwritten" in html
+    assert "Restore now" not in html
+    assert "kubernetesRecoveryPanel:['Kubernetes backup and recovery readiness'" in SHELL_SCRIPT
+    assert "sign-in, readiness, and one evidence download" in SHELL_SCRIPT
+    guide = how_nct_works_page().body.decode()
+    assert "Kubernetes cold recovery" in guide
+    assert "protected file handles into a private snapshot" in guide
+    assert "writes a receipt to the Kubernetes termination record" in guide
     assert "Live performance and reliability" in html
     assert "Unsupported measurements say Unavailable instead of showing zero" in html
     assert "Reading it does not start a scan, contact a network target, or change retained evidence" in html
