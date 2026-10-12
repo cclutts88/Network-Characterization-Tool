@@ -51,6 +51,11 @@ def _name(value: str, label: str) -> str:
     return value
 
 
+def _suffixed_name(base: str, suffix: str) -> str:
+    value = f"{base[: 63 - len(suffix) - 1].rstrip('-')}-{suffix}"
+    return _name(value, "generated name")
+
+
 def _dns(value: str, label: str) -> str:
     if len(value) > 253 or not DNS_RE.fullmatch(value):
         raise RenderError(f"{label} must be a Kubernetes DNS name")
@@ -121,6 +126,156 @@ def _service_account(args: argparse.Namespace) -> dict:
         "metadata": _metadata(f"{args.name}-runtime", args.namespace),
         "automountServiceAccountToken": False,
     }
+
+
+def health_adapter_resources(args: argparse.Namespace) -> dict:
+    """Render the isolated, read-only Kubernetes status adapter."""
+    adapter_name = _suffixed_name(args.name, "health-adapter")
+    account_name = _suffixed_name(args.name, "health-reader")
+    role_name = _suffixed_name(args.name, "health-read")
+    labels = {
+        "app.kubernetes.io/name": args.name,
+        "app.kubernetes.io/component": "health-adapter",
+    }
+    account = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": _metadata(account_name, args.namespace, labels),
+        "automountServiceAccountToken": False,
+    }
+    rules = [
+        {
+            "apiGroups": ["apps"],
+            "resources": ["deployments"],
+            "resourceNames": [args.name],
+            "verbs": ["get"],
+        },
+        {
+            "apiGroups": ["apps"],
+            "resources": ["replicasets"],
+            "verbs": ["list"],
+        },
+        {
+            "apiGroups": [""],
+            "resources": ["pods"],
+            "verbs": ["list"],
+        },
+    ]
+    if args.enable_metrics:
+        rules.append({
+            "apiGroups": ["metrics.k8s.io"],
+            "resources": ["pods"],
+            "verbs": ["list"],
+        })
+    role = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": _metadata(role_name, args.namespace, labels),
+        "rules": rules,
+    }
+    binding = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": _metadata(role_name, args.namespace, labels),
+        "subjects": [{"kind": "ServiceAccount", "name": account_name, "namespace": args.namespace}],
+        "roleRef": {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "Role",
+            "name": role_name,
+        },
+    }
+    token_volume = {
+        "name": "kube-api-access",
+        "projected": {
+            "defaultMode": 288,
+            "sources": [
+                {"serviceAccountToken": {"path": "token", "expirationSeconds": 3600}},
+                {
+                    "configMap": {
+                        "name": "kube-root-ca.crt",
+                        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                    },
+                },
+                {
+                    "downwardAPI": {
+                        "items": [{
+                            "path": "namespace",
+                            "fieldRef": {"apiVersion": "v1", "fieldPath": "metadata.namespace"},
+                        }],
+                    },
+                },
+            ],
+        },
+    }
+    adapter = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": _metadata(adapter_name, args.namespace, labels),
+        "spec": {
+            "replicas": 1,
+            "revisionHistoryLimit": 1,
+            "strategy": {"type": "Recreate"},
+            "selector": {"matchLabels": labels},
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": {
+                    "serviceAccountName": account_name,
+                    "automountServiceAccountToken": False,
+                    "terminationGracePeriodSeconds": 10,
+                    "securityContext": _pod_security(),
+                    "containers": [{
+                        "name": "health-adapter",
+                        "image": args.image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["python", "/opt/nct/tools/nct_kubernetes_health_adapter.py"],
+                        "env": [
+                            {"name": "NCT_KUBERNETES_NAME", "value": args.name},
+                            {"name": "NCT_KUBERNETES_NAMESPACE", "value": args.namespace},
+                            {
+                                "name": "NCT_KUBERNETES_METRICS_ENABLED",
+                                "value": "1" if args.enable_metrics else "0",
+                            },
+                        ],
+                        "ports": [{"name": "http", "containerPort": 8090, "protocol": "TCP"}],
+                        "securityContext": _container_security(),
+                        "resources": {
+                            "requests": {"cpu": "25m", "memory": "32Mi"},
+                            "limits": {"cpu": "250m", "memory": "128Mi"},
+                        },
+                        "readinessProbe": {
+                            "httpGet": {"path": "/healthz", "port": "http"},
+                            "periodSeconds": 10,
+                            "failureThreshold": 3,
+                            "timeoutSeconds": 1,
+                        },
+                        "livenessProbe": {
+                            "httpGet": {"path": "/healthz", "port": "http"},
+                            "periodSeconds": 20,
+                            "failureThreshold": 3,
+                            "timeoutSeconds": 1,
+                        },
+                        "volumeMounts": [{
+                            "name": "kube-api-access",
+                            "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                            "readOnly": True,
+                        }],
+                    }],
+                    "volumes": [token_volume],
+                },
+            },
+        },
+    }
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": _metadata(adapter_name, args.namespace, labels),
+        "spec": {
+            "type": "ClusterIP",
+            "selector": labels,
+            "ports": [{"name": "http", "port": 8090, "targetPort": "http", "protocol": "TCP"}],
+        },
+    }
+    return _resource_list([account, role, binding, adapter, service])
 
 
 def _pvc(args: argparse.Namespace) -> dict:
@@ -717,6 +872,12 @@ def deployment_resources(args: argparse.Namespace) -> dict:
         {"name": "NCT_STORAGE_IDENTITY", "value": identity},
         {"name": "NCT_STORAGE_REPORT_DIGEST", "value": args.storage_report_digest},
     ]
+    if getattr(args, "enable_kubernetes_health", False):
+        env.extend([
+            {"name": "NCT_KUBERNETES_HEALTH_ENABLED", "value": "1"},
+            {"name": "NCT_KUBERNETES_NAME", "value": args.name},
+            {"name": "NCT_KUBERNETES_NAMESPACE", "value": args.namespace},
+        ])
     mounts = [
         {"name": "data", "mountPath": "/data"},
         {"name": "tmp", "mountPath": "/tmp"},
@@ -947,6 +1108,14 @@ def _parser() -> argparse.ArgumentParser:
     deployment.add_argument("--storage-report", type=Path, required=True)
     deployment.add_argument("--storage-report-digest", required=True)
     deployment.add_argument("--bootstrap-secret")
+    deployment.add_argument("--enable-kubernetes-health", action="store_true")
+    health_adapter = subparsers.add_parser("health-adapter")
+    health_adapter.add_argument("--name", default="nct-analysis")
+    health_adapter.add_argument("--namespace", required=True)
+    health_adapter.add_argument("--image", required=True)
+    health_adapter.add_argument("--enable-metrics", action="store_true")
+    health_adapter.add_argument("--output", type=Path, required=True)
+    health_adapter.add_argument("--overwrite", action="store_true")
     lock_probe = subparsers.add_parser("writer-lock-probe")
     add_common(lock_probe, image=True, identity=True)
     lock_probe.add_argument("--storage-report", type=Path, required=True)
@@ -1046,6 +1215,8 @@ def main() -> int:
             value = qualification_resources(args)
         elif args.command == "deployment":
             value = deployment_resources(args)
+        elif args.command == "health-adapter":
+            value = health_adapter_resources(args)
         elif args.command == "writer-lock-probe":
             value = writer_lock_probe_resources(args)
         elif args.command == "upgrade-inspection":

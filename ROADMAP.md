@@ -411,6 +411,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-12 | Kubernetes acceptance gate 5 | Let the NCT application use a namespace-scoped read-only Kubernetes client | Keep all Kubernetes credentials out of the NCT application. Run the optional reader as a separate bounded workload with a dedicated projected short-lived token, namespace Role and ServiceAccount; NCT consumes only its coarse sanitized status over a fixed internal service name | A token in the NCT web container would unnecessarily expand the consequence of an application compromise, and a sidecar could couple adapter failure to NCT Pod readiness. Kubernetes RBAC also cannot restrict list permission by labels, so application filtering alone cannot make a shared namespace least privilege | The first profile requires an NCT-only namespace. In a shared namespace the credential can technically list other Deployments, ReplicaSets and Pods even though the adapter requests fixed labels, validates the exact Deployment ownership chain and returns no identifiers or raw objects. Metrics permission is a separate opt-in. Local tests cannot prove target-cluster authorization, namespace isolation, API networking or Metrics API behavior; exact-cluster denied, timeout, truncation and no-metrics exercises remain required. |
 | 2026-10-12 | Kubernetes acceptance gate 4C | Permit an ordinary image rollback after testing a candidate image | Default to restore-based rollback. Direct rollback is machine-authorized only when the old image's own contract proves that it can both read and write the exact current schema version, uses the same evidence-layout contract, and shares the completed migration-plan digest. Changed or unknown compatibility preserves the candidate claim and restores the verified pre-upgrade backup into a separate empty qualified target | Commit `cb7453e` had no authoritative global schema-compatibility contract. SQLite `user_version` and a schema fingerprint can detect a difference but cannot prove semantic read/write compatibility, and the existing startup schema work spans multiple module-owned transactions. A new image cannot safely declare an old image compatible on its behalf | Application startup now owns a versioned schema contract and durable migration ledger, remains unready until migration completion, and fails closed on unreadable saved state. The Gate 4C administrator package binds exact images, builds, runtime identities, storage, backup, schema, registered evidence, counts, access checks and downloads. The foundation package cannot prove Kubernetes scheduling or CSI behavior; compatible and restore-required branches still require exact-cluster exercises. See `docs/KUBERNETES_SINGLE_REPLICA.md` |
 | 2026-10-10 | Kubernetes acceptance gate 3C | Let the first single-replica web Deployment retain active scan and device-collection capability | Make the first Kubernetes web profile analysis only: exactly one `Recreate` replica, forced local authentication, no API token or RBAC, all Linux capabilities dropped, and server/UI enforcement that disables Nmap, scheduled execution, SSH device contact and packet capture. Keep import, upload, saved-evidence processing, analysis and portable scan-package creation available. A later collection worker must receive a separately reviewed placement and minimum-privilege profile | Web replicas cannot assume mission-network reachability and must not automatically inherit raw-network privileges. Combining the first SQLite/PVC acceptance gate with active collection would hide a materially different security and placement boundary | The renderer requires one exact image digest and a matching passing exact-PVC qualification report from the same numeric user/group. The built-in guide, System Health, scan and device pages expose the analysis-only boundary. This does not block the standalone profile and does not establish live collection, Range, mission or multi-replica readiness. See `docs/KUBERNETES_SINGLE_REPLICA.md` |
 | 2026-10-10 | Deployment architecture | Keep Kubernetes, external databases and server infrastructure outside the requirements for core offline use | Preserve the standalone single-container profile while requiring new runtime, job, storage, identity, health and deployment designs to remain compatible with a future Kubernetes profile. The initial Kubernetes profile remains exactly one NCT application replica; multi-replica operation is blocked until cross-process leases, singleton-operation coordination and a reviewed shared database/artifact design exist | The user wants the full platform developed with Kubernetes capabilities in mind without losing disconnected-Range operation or forcing a cluster onto small deployments | Provider-neutral local health comes first, followed by an optional namespace-scoped Kubernetes adapter. SQLite volumes must pass lock, atomic-rename, `fsync` and WAL/SHM qualification; RWO alone is insufficient. Upgrades must prevent an older image from opening an incompatible newer schema. See `docs/KUBERNETES_ARCHITECTURE.md` |
@@ -2176,6 +2177,47 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     Local tests cannot prove Kubernetes scheduling, CSI behavior, or authenticate
     administrator-collected external records. This does not claim Range, mission,
     multi-replica, `main`, or exact-cluster readiness.
+    **2026-10-12 Kubernetes health-adapter gate 5 start:** Add an optional,
+    namespace-scoped, read-only cluster-health provider without making Kubernetes a
+    core dependency. The adapter must query only the configured NCT Deployment,
+    ReplicaSet, and Pod labels; return only coarse non-secret counts and readiness;
+    enforce strict request-time, response-size, and item-count limits; and show denied,
+    missing, malformed, oversized, or timed-out access as Unavailable rather than zero.
+    Metrics API access is a second explicit opt-in and must remain separately
+    unavailable when absent. The standalone local provider remains authoritative and
+    unchanged when the adapter is disabled or unavailable. The generated deployment
+    may receive only a dedicated namespace Role and ServiceAccount for the selected
+    opt-in; it must not read Secrets, ConfigMaps, logs, exec endpoints, unrelated
+    objects, or other namespaces, and it must not inspect, use, or return arbitrary
+    annotations received in bounded Kubernetes objects. System Health and the
+    Operator Guide must explain the distinction between application health, Kubernetes
+    workload status, and optional resource metrics. Independent security/architecture
+    review and novice-operator review are required before completion.
+    **2026-10-12 Kubernetes health-adapter gate 5 foundation-package completion:**
+    NCT now keeps its application Pod token-free and reads only the adapter's bounded,
+    sanitized status over a fixed internal service name. The separately rendered
+    adapter follows the exact Deployment-to-ReplicaSet-to-Pod ownership chain, rejects
+    mismatched or excess objects, disables redirects and environment proxies, verifies
+    the mounted cluster CA, and enforces a 2.5-second total deadline plus request,
+    response-byte and item-count ceilings. Concurrent refreshes share one sample;
+    expired waiters fail Unavailable rather than receiving stale status as current.
+    Ready counts require both a Running Pod and Ready=True. Metrics remain a separate
+    opt-in and incomplete Pod coverage withholds CPU and memory values instead of
+    displaying zero. System Health distinguishes Not configured, Available, Partial and
+    Unavailable, retains the last successful application-session sample, and provides
+    dedicated hover/focus guidance for Deployment counts, resource measurements and
+    terminology. The generated administrator runbook verifies required exact-object and
+    list permissions as well as denied Deployment-list, Secret, ConfigMap, watch, logs,
+    exec and all-namespace access. Focused validation passes **128 tests with 1 skip**;
+    the complete isolated Docker suite passes **1,406 tests with 15 skips** and one
+    existing dependency warning. The disposable standalone preview passed readiness,
+    table-order, horizontal-overflow, contextual-guide, polling and browser-console
+    checks. Independent quality gate: **CLEAR — DOCUMENTED DEVIATION**. Novice-operator
+    gate: **CLEAR**. The completed foundation package is available only on
+    `foundation/evidence-engine-v2`; exact-cluster RBAC, namespace isolation, API path,
+    Metrics API, timeout and truncation exercises remain required before Gate 5 itself
+    can close. This does not claim Kubernetes, Range, mission, multi-replica or `main`
+    readiness.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

@@ -130,5 +130,5 @@ def test_analysis_only_mode_is_visible_on_scan_device_and_system_health_pages() 
     assert "Kubernetes · one replica · analysis only" not in health_html
     assert 'id="deploymentProfile"' in health_html
     assert 'id="activeCollection"' in health_html
-    assert "Optional Kubernetes health adapter" in health_html
-    assert "deployment profile remains active" in health_html
+    assert "Optional Kubernetes status" in health_html
+    assert "standalone/local health remains active" in health_html

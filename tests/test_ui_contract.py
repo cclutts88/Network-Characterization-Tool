@@ -95,6 +95,20 @@ def test_system_health_explains_bounded_calculation_status():
     assert "keeps no long-term telemetry" in html
     assert "'Live performance and reliability'" in SHELL_SCRIPT
     assert "Unavailable does not mean zero" in SHELL_SCRIPT
+    assert "Optional Kubernetes status" in html
+    assert "Kubernetes is not required for standalone NCT" in html
+    assert "Deployment and pods" in html
+    assert "Optional pod resource measurements" in html
+    assert "Ready does not prove evidence freshness" in html
+    assert "Unavailable — this cluster did not provide pod CPU or memory measurements" in html
+    assert "kubernetesStatusPanel:['Optional Kubernetes status'" in SHELL_SCRIPT
+    assert "kubernetesDeploymentGuide:['Deployment and pods'" in SHELL_SCRIPT
+    assert "kubernetesMetricsGuide:['Optional pod resource measurements'" in SHELL_SCRIPT
+    assert "kubernetesStatusMeaningSummary:['Kubernetes status terms'" in SHELL_SCRIPT
+    assert "summary,[data-guide-context]" in SHELL_SCRIPT
+    assert "Opening this disclosure only reveals help text" in SHELL_SCRIPT
+    assert "never receives a Kubernetes API token" in guide
+    assert "it never means zero Pods or a failed deployment" in guide
     assert "panel?actionGuideFor(panel):null" in SHELL_SCRIPT
     assert "Evidence intake status" in html
     assert "Processing is local and never starts a scan or contacts a device" in html

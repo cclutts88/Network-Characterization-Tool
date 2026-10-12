@@ -113,7 +113,8 @@ The Kubernetes adapter must:
 - use a dedicated read-only ServiceAccount;
 - be limited to one configured namespace and fixed NCT labels;
 - read only approved Deployment, ReplicaSet and Pod status fields;
-- never read Secrets, arbitrary annotations, logs, exec endpoints or unrelated objects;
+- never read Secrets, logs, exec endpoints or unrelated objects, and never inspect, use,
+  or return arbitrary annotations present in bounded Kubernetes responses;
 - enforce strict item, response-size and time limits;
 - return coarse non-secret status to the browser;
 - report denied, missing or timed-out access as **Unavailable**, not zero;
@@ -283,5 +284,35 @@ old image. The final verifier also requires the real Gate 4A restore receipt for
 branches, phase-bound released-writer receipts, and ordered cluster samples with at most
 one Ready Pod and one writer owner.
 
+Gate 5 uses a separate optional adapter workload. The NCT application Pod retains its
+token-free runtime ServiceAccount and never calls the Kubernetes API. The adapter has a
+dedicated ServiceAccount, one namespace Role, a projected short-lived token and no NCT
+data volume. It may only get or list Deployments, ReplicaSets and Pods; Metrics API Pod
+access is a second explicit opt-in. The adapter requests the fixed NCT labels, then
+requires the exact configured Deployment UID to own every accepted ReplicaSet and an
+accepted ReplicaSet UID to own every accepted Pod. A matching label without that owner
+chain fails closed. It returns only coarse counts and current aggregate resource use.
+
+Kubernetes RBAC cannot restrict list access by labels. This first profile therefore
+requires an NCT-only namespace. In a shared namespace the adapter credential could
+technically list unrelated objects even though its client supplies the fixed selector,
+rejects unrelated ownership and never returns names, UIDs, nodes, images, annotations,
+logs, commands, environment values or raw responses. The adapter disables redirects and
+environment proxies, verifies the mounted cluster CA, uses a fixed API destination, and
+enforces four requests, 32 items per list, 256 KiB per response, 512 KiB total response
+data and a 2.5-second total budget. Pagination, excess data, malformed ownership,
+denial, timeout and API loss become **Unavailable**, never zero. A 15-second cache and
+single-flight sampling prevent browser refreshes from multiplying API requests.
+Adapter delay or failure does not affect NCT startup, readiness, liveness, local health,
+work admission or evidence handling.
+
 Only the completed profile may be claimed. Single-replica Kubernetes success does not
 establish multi-replica, Range or mission readiness.
+
+The Gate 5 foundation package is complete and independently reviewed on
+`foundation/evidence-engine-v2`. That package supplies the bounded adapter, rendered
+RBAC and Service, application-side cached reader, System Health presentation, Operator
+Guide topics, denial/timeout/truncation tests and exact-cluster acceptance procedure.
+Gate 5 acceptance remains open until those procedures pass on the named NCT-only
+namespace and exact cluster; package completion does not establish cluster, Range,
+mission, multi-replica or stable-`main` readiness.

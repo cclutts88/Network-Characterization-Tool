@@ -2043,6 +2043,90 @@ Forced termination, rescheduling, node loss, backup, restore, upgrade, and rollb
 Kubernetes acceptance gate 4. Until those tests pass, this package must not be described
 as Range-ready or mission-ready.
 
+## Optional read-only Kubernetes status adapter — Gate 5
+
+This gate is optional. Standalone NCT does not need Kubernetes status. The adapter is a
+separate workload because the NCT application must never receive a Kubernetes API token
+and adapter failure must never make the NCT Pod unready. Use a namespace dedicated to
+NCT. Kubernetes Role rules cannot restrict list permission by labels, so a shared
+namespace would let the credential technically list other Deployments, ReplicaSets and
+Pods even though the adapter requests and accepts only the fixed NCT ownership chain.
+
+The default package reads Deployment, ReplicaSet and Pod status only. Add the metrics
+flag only when the cluster Metrics API is installed and the administrator accepts that
+separate permission. Missing or denied metrics leave Deployment and Pod status available
+and display resource measurements as Unavailable.
+
+Render the adapter without pod resource metrics:
+
+```bash
+python scripts/render_kubernetes_single_replica.py health-adapter \
+  --name "$NCT_NAME" \
+  --namespace "$NCT_NAMESPACE" \
+  --image "$NCT_IMAGE" \
+  --output nct-kubernetes-health-adapter.json
+```
+
+To opt in to current aggregate NCT Pod CPU and memory, add
+`--enable-metrics`. Render the NCT Deployment with the fixed internal adapter address by
+adding `--enable-kubernetes-health` to the existing `deployment` command. That flag adds
+only the adapter name and namespace to NCT; it does not change the NCT ServiceAccount,
+mount a token, add RBAC, or make cluster status part of NCT readiness.
+
+Before applying anything, review the rendered resources. The adapter package must contain
+one dedicated ServiceAccount, Role, RoleBinding, Deployment and Service. Its Role must
+contain only `get` and `list` for Deployments, ReplicaSets and Pods, plus Pods in the
+`metrics.k8s.io` API group only when requested. It must contain no wildcard, Secret,
+ConfigMap, event, log, exec, attach, port-forward, discovery or cluster-wide permission.
+
+```bash
+kubectl -n "$NCT_NAMESPACE" apply -f nct-kubernetes-health-adapter.json
+kubectl -n "$NCT_NAMESPACE" auth can-i get "deployment/$NCT_NAME" \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i list replicasets \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i list pods \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i list deployments \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i get secrets \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i get configmaps \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i watch pods \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i get pods --subresource=log \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl -n "$NCT_NAMESPACE" auth can-i create pods --subresource=exec \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+kubectl auth can-i list pods --all-namespaces \
+  --as="system:serviceaccount:$NCT_NAMESPACE:${NCT_NAME}-health-reader"
+```
+
+The exact Deployment, ReplicaSet-list and Pod-list results should be `yes`. Deployment
+list, Secret, ConfigMap, watch, log, exec and all-namespace checks must be `no`.
+Apply the separately rendered NCT Deployment after those checks. In Settings / System
+Health, **Optional Kubernetes status** must show one of these states:
+
+- **Not configured:** no adapter request was attempted; local health remains active.
+- **Available:** the current bounded Deployment, Pod and optional metric reads succeeded.
+- **Partial:** Deployment and Pod status is available; pod resource measurements are
+  unavailable.
+- **Unavailable:** access was denied, timed out, malformed, incomplete or could not be
+  read. Cluster state is unknown; this never means zero Pods or a failed deployment.
+
+Verify denied access, a stopped adapter, an unavailable Metrics API, more than 32 matching
+objects, paginated results and an API response that exceeds the fixed bound. NCT startup,
+readiness, liveness, local CPU and memory, saved work, and evidence operations must remain
+unchanged in every case. The adapter uses at most four API requests, 32 items per list,
+256 KiB per response, 512 KiB in one sample and 2.5 seconds total; it caches samples for
+15 seconds and combines simultaneous reads. It returns no Kubernetes object names, UIDs,
+node details, images, annotations, logs, commands, environment values or raw responses.
+
+Local package tests cannot prove the target cluster's RBAC enforcement, namespace
+isolation, API path, Metrics API or network behavior. Gate 5 remains open until the exact
+cluster exercises above pass and the results are retained with the installation record.
+
 ## What successful Gate 3C proves
 
 This profile proves one analysis-only NCT copy on the named cluster and exact tested

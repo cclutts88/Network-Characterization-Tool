@@ -9,6 +9,7 @@ import threading
 import time
 
 from app.database import connect_database
+from app.kubernetes_health_client import kubernetes_health_snapshot
 
 
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
@@ -299,11 +300,7 @@ class LocalRuntimeHealthProvider:
             "refresh_after_seconds": 5,
             "measurements": measurements,
             "workload": workload,
-            "orchestrator": {
-                "provider": "kubernetes",
-                "status": "not_configured",
-                "summary": "Kubernetes status is not configured for this deployment.",
-            },
+            "orchestrator": kubernetes_health_snapshot(),
         }
 
 

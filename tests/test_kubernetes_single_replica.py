@@ -194,6 +194,81 @@ def test_deployment_is_one_analysis_only_replica_and_uses_exact_report(tmp_path:
     assert items["Service"]["spec"]["type"] == "ClusterIP"
 
 
+def test_optional_health_adapter_is_isolated_and_least_privilege(tmp_path: Path) -> None:
+    value = argparse.Namespace(
+        name="nct-analysis",
+        namespace="nct",
+        image="registry.example/nct@sha256:" + "a" * 64,
+        enable_metrics=False,
+        output=tmp_path / "health-adapter.json",
+        overwrite=False,
+    )
+    renderer._validate_args(value)
+    document = renderer.health_adapter_resources(value)
+    items = {item["kind"]: item for item in document["items"] if item["kind"] != "Service"}
+    account = items["ServiceAccount"]
+    role = items["Role"]
+    binding = items["RoleBinding"]
+    deployment = items["Deployment"]
+    pod = deployment["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+
+    assert account["metadata"]["name"] == "nct-analysis-health-reader"
+    assert account["automountServiceAccountToken"] is False
+    assert binding["roleRef"] == {
+        "apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": "nct-analysis-health-read",
+    }
+    assert role["rules"] == [
+        {"apiGroups": ["apps"], "resources": ["deployments"], "resourceNames": ["nct-analysis"], "verbs": ["get"]},
+        {"apiGroups": ["apps"], "resources": ["replicasets"], "verbs": ["list"]},
+        {"apiGroups": [""], "resources": ["pods"], "verbs": ["list"]},
+    ]
+    assert all(set(rule["verbs"]) <= {"get", "list"} for rule in role["rules"])
+    assert all("secrets" not in rule["resources"] and "configmaps" not in rule["resources"] for rule in role["rules"])
+    assert pod["serviceAccountName"] == "nct-analysis-health-reader"
+    assert pod["automountServiceAccountToken"] is False
+    assert container["command"] == ["python", "/opt/nct/tools/nct_kubernetes_health_adapter.py"]
+    assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+    assert container["volumeMounts"] == [{
+        "name": "kube-api-access",
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "readOnly": True,
+    }]
+    projected = pod["volumes"][0]["projected"]
+    assert projected["sources"][0]["serviceAccountToken"]["expirationSeconds"] == 3600
+    assert "persistentVolumeClaim" not in json.dumps(deployment)
+    assert "ANALYZER_DATA_DIR" not in json.dumps(deployment)
+
+
+def test_metrics_permission_is_separate_explicit_opt_in(tmp_path: Path) -> None:
+    value = argparse.Namespace(
+        name="nct-analysis", namespace="nct",
+        image="registry.example/nct@sha256:" + "a" * 64,
+        enable_metrics=True, output=tmp_path / "health-metrics.json", overwrite=False,
+    )
+    renderer._validate_args(value)
+    document = renderer.health_adapter_resources(value)
+    role = next(item for item in document["items"] if item["kind"] == "Role")
+    assert role["rules"][-1] == {
+        "apiGroups": ["metrics.k8s.io"], "resources": ["pods"], "verbs": ["list"],
+    }
+
+
+def test_nct_deployment_can_use_adapter_without_receiving_api_token(tmp_path: Path) -> None:
+    value = args(tmp_path, enable_kubernetes_health=True)
+    write_report(value)
+    document = renderer.deployment_resources(value)
+    pod = items_by_kind(document)["Deployment"]["spec"]["template"]["spec"]
+    env = {item["name"]: item.get("value") for item in pod["containers"][0]["env"]}
+
+    assert pod["serviceAccountName"] == "nct-analysis-runtime"
+    assert pod["automountServiceAccountToken"] is False
+    assert not any(volume["name"] == "kube-api-access" for volume in pod["volumes"])
+    assert env["NCT_KUBERNETES_HEALTH_ENABLED"] == "1"
+    assert env["NCT_KUBERNETES_NAME"] == "nct-analysis"
+    assert env["NCT_KUBERNETES_NAMESPACE"] == "nct"
+
+
 def test_upgrade_inspection_job_is_bounded_cold_and_has_no_api_access(tmp_path: Path) -> None:
     value = args(
         tmp_path,
@@ -489,3 +564,4 @@ def test_runtime_image_contains_exact_qualifier_path() -> None:
     assert "COPY scripts/qualify_kubernetes_storage.py /opt/nct/tools/qualify_kubernetes_storage.py" in dockerfile
     assert "COPY scripts/probe_nct_writer_lock.py /opt/nct/tools/probe_nct_writer_lock.py" in dockerfile
     assert "COPY scripts/nct_kubernetes_failure_evidence.py /opt/nct/tools/nct_kubernetes_failure_evidence.py" in dockerfile
+    assert "COPY scripts/nct_kubernetes_health_adapter.py /opt/nct/tools/nct_kubernetes_health_adapter.py" in dockerfile

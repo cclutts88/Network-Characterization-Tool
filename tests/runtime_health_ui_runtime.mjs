@@ -79,6 +79,29 @@ await eval(`(async () => {
   assert.equal(byId('runtimeProcessMemoryNearMax').textContent,'10 sec');
   assert.equal(byId('runtimeContainerCpuBasis').textContent,'Basis: 2-CPU container allowance');
   assert.equal(byId('runtimeTrendStatus').textContent,'Window: 3 of 720 samples · 5 seconds apart · Near max: at least 95% · Resets on restart');
+  assert.match(byId('kubernetesStatus').textContent,/Not configured/);
+  assert.equal(byId('kubernetesExpected').textContent,'—');
+  assert.equal(byId('kubernetesMetricsUnavailable').hidden,false);
+
+  const cluster=(${sample.toString()})('available');
+  cluster.orchestrator={
+    status:'partial', sampled_at:'2026-10-12T12:00:00+00:00',
+    last_successful_sampled_at:'2026-10-12T12:00:00+00:00',
+    deployment:{status:'available',expected_instances:1,instances_found:1,ready_instances:1,starting_or_not_ready:0,ending:0},
+    metrics:{status:'unavailable'},
+  };
+  renderRuntimeHealth(cluster);
+  assert.match(byId('kubernetesStatus').textContent,/Partial/);
+  assert.equal(byId('kubernetesReady').textContent,'1');
+  assert.match(byId('kubernetesMetricsMessage').textContent,/did not provide pod CPU or memory/);
+  assert.equal(byId('kubernetesCpuRow').hidden,true);
+  cluster.orchestrator.status='available';
+  cluster.orchestrator.metrics={status:'available',reported_instances:1,observed_instances:1,cpu_millicores:125,memory_bytes:67108864};
+  renderRuntimeHealth(cluster);
+  assert.equal(byId('kubernetesCpu').textContent,'125 millicores');
+  assert.equal(byId('kubernetesMemory').textContent,'64.0 MiB');
+  assert.equal(byId('kubernetesCpuRow').hidden,false);
+  assert.equal(byId('kubernetesMetricsUnavailable').hidden,true);
 
   const failed=(${sample.toString()})('unavailable');
   for(const item of Object.values(failed.trends.metrics))Object.assign(item,{status:'unavailable',available_samples:0,current:null,average:null,maximum:null,longest_near_peak_seconds:0});

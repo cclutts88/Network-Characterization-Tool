@@ -160,3 +160,23 @@ def test_snapshot_does_not_create_missing_database_or_walk_data(tmp_path):
     assert after == before
     assert nested.read_bytes() == b"evidence"
 
+
+def test_unavailable_kubernetes_adapter_does_not_change_local_measurements(monkeypatch, tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    _health_tables(db_path)
+    monkeypatch.setattr(runtime_health, "kubernetes_health_snapshot", lambda: {
+        "provider": "kubernetes",
+        "status": "unavailable",
+        "sampled_at": None,
+        "last_successful_sampled_at": None,
+        "deployment": {"status": "unavailable"},
+        "metrics": {"status": "unavailable"},
+    })
+
+    result = runtime_health.LocalRuntimeHealthProvider().snapshot(db_path, tmp_path)
+
+    assert result["orchestrator"]["status"] == "unavailable"
+    assert result["provider"] == "local"
+    assert result["measurements"]["data_filesystem"]["status"] == "available"
+    assert result["workload"]["status"] == "available"
+
