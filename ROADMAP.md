@@ -485,21 +485,34 @@ A roadmap item should only be marked complete when:
   checksum, pass local exact-package gates, and pass the unmodified
   `sha256sum -c` checks on the API 1.39 Range before upgrade. Operators are explicitly
   told to stop and obtain a corrected release rather than edit checksum files in place.
-- **2026-10-13 expedited Range deployment — documented packaging deviation:** At the
-  user's request to prioritize getting the build onto the Range, the already verified
-  `phase2-r7` extraction was used after preserving the original checksum files and
-  converting only their CRLF metadata to LF in the isolated staging directory. The
-  manifest entry for the changed inner checksum sidecar was refreshed, then all **21**
-  package files and the image archive passed `sha256sum -c` before any Docker action.
-  The legacy upgrade completed successfully on Docker API 1.39. NCT now reports version
-  `0.16.0`, build `phase2-r4`, source `99d8e03`, uses
-  `/var/lib/nct/data -> /data`, serves HTTPS on `10.101.35.15:8445`, and retained the
-  prior container, a data backup and an upgrade receipt for rollback. Normal saved-data
-  API requests return successfully. Process CPU and memory measurements render in aligned
-  System Health tables, but container CPU and memory still report **Unavailable** on this
-  Range; resource acceptance therefore remains open. The deployment is usable for testing
-  but is not mission-ready or fully Range-accepted. The source-side `phase2-r8` LF package
-  correction remains the clean future-transfer path.
+- **2026-10-13 expedited Range deployment — documented packaging deviation:** The user
+  explicitly directed that the verified build be deployed now and the packaging be made
+  perfect later. This superseded the preceding r7 stop only for this one Range event. The
+  original **97,224,297-byte** r7 ZIP remained unchanged at SHA-256
+  `84c0b059b9dcafde08b4b04954cdff10a63c8655081ed7d09f37deff65ef619f`.
+  In the isolated extraction at
+  `/root/nct-package-20261013T193725Z/NCT-Air-Gapped-Range-Deployment`, exactly two
+  metadata files were normalized: `PACKAGE-MANIFEST.sha256` and
+  `offline-images/nct-range-images.tar.sha256`. Their originals were preserved beside
+  them as `.original` files with SHA-256
+  `6655e614d9a730044da61eb364acdb291648faff719dea09dc42294db3828fb` and
+  `f9681304db65a9750b899b2acbd34f640b972ca27e544374946a406a32496802`.
+  The LF versions were
+  `9a70427a7ae4cb37cfc2c2dbab89e1bb86e0b8104cc41aa30bcce88cbac676e321`
+  and `0aac69776004f944037fbcc6408d8c0dee286be5f112ccc95378b4ebcbcb742792`;
+  the manifest entry for the changed inner sidecar was refreshed. All **21** payload
+  hashes and the unchanged image archive then passed `sha256sum -c` before Docker.
+  The legacy upgrade completed successfully on API 1.39 with application build
+  `phase2-r4` from `99d8e03`, `/var/lib/nct/data -> /data`, HTTPS at
+  `10.101.35.15:8445`, backup
+  `/var/lib/nct/deployment/backups/nct-data-20261013T194204Z.tar.gz`, stopped rollback
+  container `nct-upgrade-rollback-20261013T194204Z`, and receipt
+  `/var/lib/nct/deployment/upgrade-20261013T194204Z.receipt`. Health and normal saved-data
+  requests pass. Process CPU and memory render, but container CPU and memory remain
+  **Unavailable**. The cgroup capability and full Range acceptance therefore did not
+  pass; no permission change or host-mount workaround is authorized. This is an installed,
+  acceptance-incomplete testing state, not mission-ready. The LF-only `phase2-r8` package
+  and unmodified Range preflight remain mandatory future cleanup.
 
 ## Field feedback correction cycle — 2026-10-08
 
