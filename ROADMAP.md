@@ -290,6 +290,16 @@ A roadmap item should only be marked complete when:
   final outer ZIP checksum and independent package gate are recorded after archive
   sealing. This remains a foundation transfer candidate pending target-Range acceptance,
   not mission-ready or available on `main`.
+- **2026-10-13 package documentation gate correction:** The first replacement archive
+  (`phase2-r2`, outer SHA-256
+  `6ba9bc54eeab8a6baa949630fc641d1166998eaea281867bdafe17fc5ff193d5`)
+  is withdrawn. Its application image and manifest were valid, but the packaged script
+  README was copied from the source checkout and pointed a novice operator to one wrong
+  relative Quickstart path and Kubernetes files that were not delivered in the air-gapped
+  bundle. A separate package-safe README template now names only delivered operator
+  material, has a regression check, and is used for `phase2-r3`. The immutable application
+  image remains `0.16.0-range-test-20261013-phase2-r2`; no application bytes or retained
+  evidence changed for this documentation-only package correction.
 
 ## Field feedback correction cycle — 2026-10-08
 

@@ -15,6 +15,7 @@ START_SCRIPTS = (
     SCRIPTS / "nct-start-docker.sh",
     SCRIPTS / "nct-start-compose.sh",
 )
+PACKAGE_SCRIPTS_README = ROOT / "docs" / "RANGE_PACKAGE_SCRIPTS_README.md"
 
 
 def _embedded_python(name: str) -> str:
@@ -95,6 +96,15 @@ def test_quick_start_selects_one_of_the_three_launch_paths():
     assert "API **1.41 or newer**" in content
     assert "API **1.39 or 1.40**" in content
     assert "older than **1.39**" in content
+
+
+def test_packaged_scripts_readme_references_only_delivered_operator_material():
+    content = PACKAGE_SCRIPTS_README.read_text(encoding="utf-8")
+    assert "../AIR-GAPPED-RANGE-QUICKSTART.md" in content
+    assert "../docs/AIR_GAPPED_RANGE_QUICKSTART.md" not in content
+    assert "qualify_kubernetes_storage.py" not in content
+    assert "render_kubernetes_single_replica.py" not in content
+    assert "KUBERNETES_SINGLE_REPLICA.md" not in content
 
 
 def test_volume_migration_is_verified_and_retains_rollback_sources():
