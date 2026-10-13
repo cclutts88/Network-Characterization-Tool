@@ -28,6 +28,33 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert "body.nct-notes-shared-open>main" in SESSION_SCRIPT
 
 
+def test_active_scan_has_a_bounded_provisional_discovery_workspace():
+    html = operator_page().body.decode()
+
+    assert 'id="liveDiscoveriesPanel"' in html
+    assert "Live discoveries" in html
+    assert "Provisional host and port observations" in html
+    assert "Nmap has fully closed" in SHELL_SCRIPT
+    assert 'class="live-discoveries-scroll"' in html
+    assert "position:sticky;top:0" in html
+    assert "/live-discoveries" in html
+    assert "function renderLiveDiscoveries" in html
+    assert "function renderLiveDiscoveryFinal" in html
+    assert "The scan continues unchanged" in html
+    assert "loadLiveDiscoveries(runId,revision)" in html
+    assert "liveDiscoveryInFlight&&liveDiscoveryRunId===runId" in html
+    assert "signal:controller.signal" in html
+
+
+def test_active_scan_explains_active_targets_and_finalized_host_records():
+    html = operator_page().body.decode()
+
+    assert "Active is how many targets Nmap is working on now" in html
+    assert "finalized of" in html
+    assert "`${active} active; ${completed} finalized of ${total}" in html
+    assert "The phase percentage can move while finalized stays at zero" in SHELL_SCRIPT
+
+
 def test_recursive_note_changes_preview_exact_scope_and_report_results():
     assert "/branch-preview`" in SESSION_SCRIPT
     assert "branch_revision:preview.branch_revision" in SESSION_SCRIPT

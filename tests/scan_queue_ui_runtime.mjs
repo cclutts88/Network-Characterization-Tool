@@ -9,6 +9,14 @@ function handler(name) {
   return match[0];
 }
 
+function functionBlock(name, nextName) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `Could not find ${name} in app/ui.py`);
+  const end = source.indexOf(`\nfunction ${nextName}(`, start);
+  assert.notEqual(end, -1, `Could not find function after ${name} in app/ui.py`);
+  return source.slice(start, end);
+}
+
 await eval(`(async () => {
   let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
@@ -160,6 +168,37 @@ await eval(`(async () => {
   assert.equal(currentId,'live-run','opening history must not replace the active scan identity');
   assert.equal(currentLive,true,'opening history must not stop active scan polling');
   assert.match(detail.innerHTML,/Retained scan/,'retained details should render inside Scan History');
+})()`);
+
+await eval(`(async () => {
+  let currentId='run-one',activeViewRevision=1,liveDiscoveryController=null,liveDiscoveryInFlight=null,liveDiscoveryRunId=null;
+  const requests=[];
+  const fetch=(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}));
+  const controls=new Map();
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:''});return controls.get(id)};
+  const rendered=[];
+  const renderLiveDiscoveries=data=>rendered.push(data.run);
+  ${functionBlock("cancelLiveDiscoveryRequest", "renderCurrentProgress")}
+  const first=loadLiveDiscoveries('run-one',1);
+  const duplicate=loadLiveDiscoveries('run-one',1);
+  assert.equal(first,duplicate,'a delayed live request must be reused for the same run');
+  assert.equal(requests.length,1,'polling must not pile up live discovery reads');
+  currentId='run-two';activeViewRevision=2;
+  const second=loadLiveDiscoveries('run-two',2);
+  assert.equal(requests.length,2,'a new run must start one new live read');
+  assert.equal(requests[0].options.signal.aborted,true,'changing runs must abort the old live read');
+  requests[0].resolve({ok:true,json:async()=>({run:'obsolete'})});
+  requests[1].resolve({ok:true,json:async()=>({run:'current'})});
+  await Promise.all([first,duplicate,second]);
+  assert.deepEqual(rendered,['current'],'an obsolete live response must not replace the current run');
+  currentId='run-three';activeViewRevision=3;
+  const terminalPending=loadLiveDiscoveries('run-three',3);
+  assert.equal(requests.length,3);
+  cancelLiveDiscoveryRequest();
+  assert.equal(requests[2].options.signal.aborted,true,'ending a run must abort its pending live read');
+  requests[2].resolve({ok:true,json:async()=>({run:'ended'})});
+  await terminalPending;
+  assert.deepEqual(rendered,['current'],'an ended run must not render a late live response');
 })()`);
 
 console.log("Scan queue UI runtime regressions passed");

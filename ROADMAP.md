@@ -343,21 +343,29 @@ A roadmap item should only be marked complete when:
   individually reviewable/retryable. This is a documented supersession of the earlier
   one-run-at-a-time operator burden while preserving explicit consent and evidence
   provenance; automatic historical adoption remains prohibited.
-- **2026-10-13 live scan discovery workspace started:** A future transfer will place a
-  bounded **Live discoveries** panel beside Active Scan. It reads only fully closed host
-  elements already written by the exact active Nmap attempt, presents provisional host,
-  port, protocol and service rows, and never starts another command or publishes
-  evidence/CVE/correlation claims. The panel is locked to the Active Scan section's
-  height; only its table scrolls, with sticky aligned headings. It stacks at narrow
-  widths while keeping that height bound. Parse/cache failures remain isolated from scan
-  control, terminal runs clear provisional state, and successful completion replaces it
-  with finalized retained-evidence links and counts.
-- **2026-10-13 active-scan progress clarification:** Keep Nmap's finalized-host count
-  separate from phase progress and provisional discoveries. The active view will report
-  the responsive hosts in the current phase, the hosts Nmap has finalized, the current
-  phase percentage, and the number of hosts with provisional discoveries as separate
-  facts. NCT will not infer a completed-host count from Nmap's percentage output or
-  present a provisional row as retained evidence.
+- **2026-10-13 live scan discovery workspace completed in foundation:** The Active Scan
+  workspace now places a bounded **Live discoveries** panel beside the active-run card.
+  Its read-only endpoint opens the active run folder and known Nmap phase files with
+  directory-bound, no-follow, nonblocking handles, verifies regular files after opening,
+  reads at most 8 MiB per file, parses only fully closed host elements, and caps the view at 512 hosts
+  or 2,000 rows. It presents provisional host,
+  port, protocol, scanner-reported state and service fingerprints without starting a
+  command, writing evidence, or publishing CVE/correlation claims. The panel is locked
+  to the Active Scan card's current height; its table scrolls independently with sticky
+  aligned headings and stacks at narrow widths under the same height bound. Read/parse
+  failures remain isolated from scan control and visibly retry. A terminal run closes the
+  provisional view and links to finalized retained evidence when available. Addresses
+  sort as numeric IPv4/IPv6 values instead of text, and each active run permits only one
+  in-flight live read; switching or finishing a run cancels the prior display request.
+- **2026-10-13 active-scan progress clarification completed in foundation:** Nmap's
+  finalized-host count remains separate from phase progress and provisional discoveries.
+  The active view reports responsive hosts selected for the phase, hosts Nmap has
+  finalized, phase percentage, active targets and the separate provisional-discovery
+  count. It does not infer completed hosts from Nmap's percentage or present a
+  provisional row as retained evidence. The visible and accessible progress label now
+  states active targets and finalized records separately. Operators may therefore see
+  the phase bar move while the finalized-host count remains zero; the Guide explains
+  that boundary.
 - **2026-10-13 whole-tool loading feedback started:** Add one shared activity bar below
   the fixed header on every page so slower page loads, evidence reads and saves do not
   look frozen or blank. It will track concurrent same-page requests and ordinary

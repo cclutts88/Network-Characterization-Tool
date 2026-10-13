@@ -47,6 +47,7 @@ from app.scan_profiles import (
     scan_display_name,
 )
 from app.scan_progress import latest_nmap_status, new_scan_progress, update_scan_progress
+from app.live_scan_discoveries import UnsafeLiveScanPath, live_scan_discoveries
 from app.nmap_presence import nmap_presence_counts
 from app.saved_networks import (
     SavedNetworkArchive,
@@ -6575,6 +6576,32 @@ def scan_queue_status(request: Request) -> dict:
         "queued_count": sum(item.get("status") == "queued" for item in runs),
         "runs": runs,
     }
+
+
+@router.get("/scan-runs/{run_id}/live-discoveries")
+def scan_run_live_discoveries(run_id: str) -> dict:
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise HTTPException(status_code=422, detail="Invalid scan run id")
+    manifest = get_scan_run_plan(run_id, DB_PATH)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Scan run not found")
+    if manifest.get("status") not in {
+        "dispatching", "running", "awaiting_fallback_approval"
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Live discoveries are available only while this scan is active",
+        )
+    try:
+        result = live_scan_discoveries(DATA_DIR / RUNS_DIR_NAME / run_id)
+    except UnsafeLiveScanPath as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    result.update({
+        "run_id": run_id,
+        "status": manifest.get("status"),
+        "phase": (manifest.get("progress") or {}).get("phase"),
+    })
+    return result
 
 
 @router.get("/scan-runs/{run_id}/audit")
