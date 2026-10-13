@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from app import main
+import app.reachability as reachability_module
 from app.network_evidence_cache import NetworkEvidenceSnapshot
 from app.iptables_policy import parse_iptables_policy
 from app.reachability import (
@@ -1797,6 +1800,284 @@ COMMIT
 
     assert result["matches"][0]["exposure"]["classification"] == "external_reachable"
     assert "not proof" in result["exposure_disclaimer"]
+
+
+def test_searchsploit_exposure_reuses_one_exact_endpoint_evaluation(monkeypatch):
+    calls = []
+
+    def evaluated(**values):
+        calls.append((values["source_text"], values["destination_text"], values["protocol"], values["port"]))
+        return {
+            "outcome": "Unknown",
+            "confidence": "low",
+            "explanation": "No retained path decision.",
+            "evidence": [],
+            "caveats": [],
+        }
+
+    monkeypatch.setattr("app.reachability.evaluate_reachability", evaluated)
+    duplicate_endpoint = {
+        "ip": "10.90.0.10", "protocol": "tcp", "port": 443,
+        "candidate_count": 1, "candidates": [{"edb_id": "1"}],
+    }
+    result = classify_searchsploit_exposure(
+        {"matches": [
+            {**duplicate_endpoint, "match_key": "first"},
+            {**duplicate_endpoint, "match_key": "second"},
+        ]},
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[],
+    )
+
+    assert len(calls) == len(SAVED) + 1
+    assert len(result["matches"]) == 2
+    assert result["matches"][0]["exposure"] == result["matches"][1]["exposure"]
+    assert result["matches"][0]["exposure"] is not result["matches"][1]["exposure"]
+    assert result["exposure_facets"][0]["match_count"] == 2
+
+
+def test_reachability_request_indexes_preserve_exact_evidence_result():
+    raw = evaluate_reachability(
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        hunting=HUNTING,
+        saved_networks=SAVED,
+        device_analyses=[DEVICE],
+    )
+    indexed_hunting, indexed_devices = reachability_module._prepare_reachability_inputs(
+        HUNTING, [DEVICE],
+    )
+    indexed = evaluate_reachability(
+        source_text="10.80.0.25",
+        destination_text="10.90.0.10",
+        protocol="tcp",
+        port=443,
+        hunting=indexed_hunting,
+        saved_networks=SAVED,
+        device_analyses=indexed_devices,
+    )
+
+    assert indexed == raw
+
+
+@pytest.mark.parametrize(
+    "findings",
+    [
+        [
+            {"ip": "10.90.0.10", "protocol": "tcp", "port": "not-a-port", "state": "open"},
+            {"ip": "10.90.0.10", "protocol": "tcp", "port": 443, "state": "open"},
+        ],
+        [
+            {"ip": "10.90.0.10", "protocol": "tcp", "port": 70000, "state": "open"},
+        ],
+    ],
+)
+def test_malformed_retained_service_rows_are_visible_and_conservative(findings):
+    hunting = {"hosts": HUNTING["hosts"], "findings": findings}
+    raw = evaluate_reachability(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=hunting,
+        saved_networks=SAVED, device_analyses=[DEVICE],
+    )
+    indexed_hunting, indexed_devices = reachability_module._prepare_reachability_inputs(
+        hunting, [DEVICE],
+    )
+    indexed = evaluate_reachability(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=indexed_hunting,
+        saved_networks=SAVED, device_analyses=indexed_devices,
+    )
+
+    assert indexed == raw
+    assert raw["outcome"] == "Unknown"
+    assert raw["service_observation"] == "evidence_conflict"
+    assert any(
+        item["title"] == "Retained service evidence needs review"
+        for item in raw["evidence"]
+    )
+    assert any("invalid port identifier" in item for item in raw["caveats"])
+
+
+def test_malformed_service_row_for_other_protocol_does_not_poison_selected_service():
+    hunting = {
+        "hosts": HUNTING["hosts"],
+        "findings": [
+            {"ip": "10.90.0.10", "protocol": "udp", "port": "bad", "state": "open"},
+            HUNTING["findings"][0],
+        ],
+    }
+    prepared_hunting, prepared_devices = reachability_module._prepare_reachability_inputs(
+        hunting, [DEVICE],
+    )
+
+    result = evaluate_reachability(
+        source_text="10.80.0.25", destination_text="10.90.0.10",
+        protocol="tcp", port=443, hunting=prepared_hunting,
+        saved_networks=SAVED, device_analyses=prepared_devices,
+    )
+
+    assert result["outcome"] == "Expected Allowed"
+    assert result["service_observation"] == "observed_exposed"
+
+
+def test_request_indexes_preserve_nat_policy_route_tie_chain_and_malformed_route_results():
+    dnat_policy = parse_iptables_policy("""*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -i outside -p tcp --dport 8443 -j DNAT --to-destination 10.90.0.10:443
+COMMIT
+*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i outside -o servers -p tcp -d 10.90.0.10/32 --dport 443 -j ACCEPT
+COMMIT
+""")
+    dnat_device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "route_analysis": {"routes": [
+            {"network": "0.0.0.0/0", "interface": "outside"},
+            {"network": "10.90.0.0/24", "interface": "servers", "direct": True},
+        ]},
+        "policy": {"firewall_acl": [], "iptables": dnat_policy},
+    }
+    snat_policy = parse_iptables_policy("""*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.80.0.0/24 -o outside -j MASQUERADE
+COMMIT
+*filter
+:FORWARD DROP [0:0]
+-A FORWARD -i inside -o outside -p tcp --dport 443 -j ACCEPT
+COMMIT
+""")
+    snat_device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "address": "10.80.0.1/24", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "outside", "address": "198.51.100.2/24", "network": "198.51.100.0/24", "role": "external"},
+        ],
+        "route_analysis": {"routes": [{"network": "0.0.0.0/0", "interface": "outside"}]},
+        "policy": {"firewall_acl": [], "iptables": snat_policy},
+    }
+    applied_device = {
+        **DEVICE,
+        "interfaces": [
+            {"name": "inside", "network": "10.80.0.0/24", "role": "internal"},
+            {"name": "servers", "network": "10.90.0.0/24", "role": "internal"},
+        ],
+        "policy": {"firewall_acl": [], "applied": parse_vendor_policy("""ip access-list extended USERS
+ permit tcp any host 10.90.0.10 eq 443
+ deny ip any any
+!
+interface inside
+ ip access-group USERS in
+""")},
+    }
+    tied_device = {
+        **DEVICE,
+        "route_analysis": {"routes": [
+            {"network": "not-a-network", "via": "10.80.0.9", "interface": "inside"},
+            {"network": "10.90.0.0/24", "via": "10.80.0.2", "interface": "inside", "metric": 10},
+            {"network": "10.90.0.0/24", "via": "10.80.0.3", "interface": "inside", "metric": 20},
+        ]},
+    }
+    edge = {
+        "run_id": "edge", "device": {"name": "edge", "address": "10.0.0.1", "type": "router"},
+        "interfaces": [
+            {"name": "outside", "network": "198.51.100.0/24", "role": "external"},
+            {"name": "transit", "network": "10.0.12.0/30", "address": "10.0.12.1"},
+        ],
+        "external_wan_gateway": {"node_id": "ip:10.0.0.1"},
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "via": "10.0.12.2", "interface": "transit"}]},
+        "policy": {"firewall_acl": []},
+    }
+    distribution = {
+        "run_id": "distribution", "device": {"name": "distribution", "address": "10.0.12.2", "type": "router"},
+        "interfaces": [
+            {"name": "uplink", "network": "10.0.12.0/30", "address": "10.0.12.2"},
+            {"name": "servers", "network": "10.90.0.0/24", "address": "10.90.0.1"},
+        ],
+        "route_analysis": {"routes": [{"network": "10.90.0.0/24", "interface": "servers", "direct": True}]},
+        "policy": {"firewall_acl": []},
+    }
+    cases = [
+        ("dnat", {"source_text": "Internet", "destination_text": "198.51.100.10", "port": 8443, "device_analyses": [dnat_device]}),
+        ("snat", {"destination_text": "Internet", "hunting": {"hosts": [], "findings": []}, "device_analyses": [snat_device]}),
+        ("applied-policy", {"device_analyses": [applied_device]}),
+        ("route-tie-malformed", {"device_analyses": [tied_device]}),
+        ("chained-next-hop", {"source_text": "Internet", "device_analyses": [edge, distribution]}),
+    ]
+    defaults = {
+        "source_text": "10.80.0.25", "destination_text": "10.90.0.10",
+        "protocol": "tcp", "port": 443, "hunting": HUNTING,
+        "saved_networks": SAVED, "device_analyses": [DEVICE],
+    }
+    for label, overrides in cases:
+        values = {**defaults, **overrides}
+        raw = evaluate_reachability(**values)
+        prepared_hunting, prepared_devices = reachability_module._prepare_reachability_inputs(
+            values["hunting"], values["device_analyses"],
+        )
+        indexed = evaluate_reachability(
+            **{**values, "hunting": prepared_hunting, "device_analyses": prepared_devices}
+        )
+        assert indexed == raw, label
+
+
+def test_searchsploit_exposure_indexes_large_retained_route_table():
+    count = 300
+    routes = [
+        {
+            "network": f"10.90.{index % 256}.0/24",
+            "via": "192.0.2.1",
+            "interface": "inside",
+            "line": f"route {index}",
+        }
+        for index in range(500)
+    ]
+    routes.append({
+        "network": "0.0.0.0/0", "via": "192.0.2.1",
+        "interface": "outside", "line": "default route",
+    })
+    device = {
+        "run_id": "large-route-fixture",
+        "device": {"name": "edge", "address": "192.0.2.2", "type": "router"},
+        "interfaces": [
+            {"name": "outside", "network": "192.0.2.0/24", "role": "external"},
+            {"name": "inside", "network": "10.0.0.0/8", "role": "internal"},
+        ],
+        "route_analysis": {"routes": routes},
+        "policy": {},
+    }
+    hosts = []
+    findings = []
+    matches = []
+    for index in range(1, count + 1):
+        address = f"10.90.{(index - 1) // 254}.{((index - 1) % 254) + 1}"
+        finding = {
+            "host_key": f"ip:{address}", "ip": address, "protocol": "tcp",
+            "port": 443, "service": "https", "state": "open",
+        }
+        hosts.append({"host_key": finding["host_key"], "ip": address})
+        findings.append(finding)
+        matches.append({**finding, "candidate_count": 1, "candidates": [{"edb_id": str(index)}]})
+
+    started = time.perf_counter()
+    result = classify_searchsploit_exposure(
+        {"matches": matches},
+        hunting={"hosts": hosts, "findings": findings},
+        saved_networks=[{"saved_network_id": "servers", "name": "Servers", "cidr": "10.90.0.0/16"}],
+        device_analyses=[device],
+    )
+    elapsed = time.perf_counter() - started
+
+    assert len(result["matches"]) == count
+    assert all(item["exposure"]["external"] for item in result["matches"])
+    assert elapsed < 2.0
 
 
 def test_source_exposure_report_groups_unique_services_and_preserves_evidence_objects():

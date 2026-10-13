@@ -834,6 +834,42 @@ A roadmap item should only be marked complete when:
     independent quality gate returned **CLEAR** after three findings involving stale LFA
     refresh, unstable-source error handling, and built-in guidance were corrected. This
     work is foundation-only and is not available on `main` or the installed Range image.
+  - [x] Seventh bounded correction completed after the installed Range build
+    `0.16.0-range-test-20261013-phase2-r4` timed out while opening Hunt / Network
+    Evidence. The page stopped waiting after 90 seconds and incorrectly described the
+    timeout as unavailable verified evidence. A candidate-rich isolated reproduction
+    with 1,000 service endpoints, one Saved Network, and 1,001 retained routes required
+    51.92 seconds for exposure classification alone. Profiling traced the dominant work
+    to reparsing and rescanning every retained route for every candidate/source pair;
+    the earlier 4,188-host browser benchmark did not contain this retained-candidate
+    and route workload. Correct the repeated calculation with request-local indexes and
+    unique-endpoint reuse while preserving exact saved candidate assessments, all
+    retained route/policy conclusions, complete response content, and read-only/no-network
+    behavior. The implemented correction now builds request-local host, service, route,
+    policy, and unique-endpoint indexes, while retaining a conservative visible conflict
+    when malformed saved service evidence prevents a definite answer. Raw and indexed
+    results are required to remain exactly equal across destination/source translation,
+    vendor policy, equal-prefix route priority, chained next hops, and malformed service
+    and route inputs. The same isolated workload now completes exposure classification
+    in 0.572 seconds, approximately 90 times faster than the 51.92-second baseline.
+    Hunt now shows elapsed read-only loading feedback, aborts superseded requests,
+    distinguishes timeouts from missing evidence, and retains the exact kind and time of
+    the last successfully loaded view. Its constrained tables scroll internally with
+    sticky headings at narrow widths whether the Guide is open or closed. The retained
+    scan selector accepts both the current paged response and the legacy list response;
+    selector failures stay beside that control and cannot replace the network-wide load
+    status. This directly corrects the Range `items.map is not a function` startup error.
+    The focused regression set passes **166 tests with 1 skipped**, and a populated
+    browser check has confirmed network-wide results, clean console output, horizontal
+    and vertical table scrolling, and sticky headings. The direct focused-scan startup
+    path is covered by a browser-runtime regression proving that a failed later refresh
+    identifies the exact retained view and its load time. The complete Docker suite
+    passes **1,589 tests with 16 skipped** plus one existing dependency warning; the
+    host browser-runtime regression passes separately. The novice acceptance pass and
+    independent quality gate both returned **CLEAR**. Specialized revision-bound Hunt
+    server paging and bounded exports remain a later sub-gate. Replacement-package
+    qualification remains separate from this implementation completion. This work is
+    foundation-only and is not yet installed on the Range.
 
 ### Deviation history
 

@@ -295,7 +295,8 @@ def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     html = hunting_page().body.decode()
     assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
-    assert ".table-wrap thead th{position:sticky;top:var(--hunt-result-offset,420px);z-index:70;background:var(--panel)" in html
+    assert ".table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
+    assert ".table-wrap thead th{position:sticky;top:0;z-index:70;background:var(--panel)" in html
 
 
 def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
@@ -1045,7 +1046,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert '<details class="panel" data-workspace-card="network-overview" open>' not in html
     assert 'id="huntQuickSearch" class="panel hunt-quick-search"' in html
     assert "repeat(auto-fit,minmax(min(100%,420px),1fr))" in html
-    assert "Network-wide evidence is unavailable until NCT can read a verified retained source." in html
+    assert "Loading the newest completed scan for each network scope" in html
+    assert "Loading retained network evidence" in html
     assert html.index('id="search"') < html.index('id="networkFiltersPanel"')
     assert "search:['Quick filter hosts and services'" in SHELL_SCRIPT
     assert 'id="activeFilterSummary"' in html
@@ -1076,10 +1078,11 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'prepareDatasetPreview' in html
     assert '<details class="panel" data-workspace-card="capability-datasets"><summary>Capability datasets</summary>' in html
     assert "Hosts and services stay in one bulk table" in html
-    assert "body.nct-guide-open #systemsPanel .table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
-    assert "@media(min-width:851px){body.nct-guide-open #systemsPanel .table-wrap" in html
+    assert ".table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
+    assert "overflow-x:auto;overflow-y:visible" not in html
+    assert ".table-wrap{overflow:visible}" not in html
     assert "max-width:1600px" not in html
-    assert "body.nct-guide-open #systemsPanel .table-wrap thead th{top:0}" in html
+    assert "body.nct-guide-open #systemsPanel .table-wrap thead th" not in html
     assert 'aria-label="Hunt capability evidence table"' in html
     assert 'aria-label="Hunt host and device inventory table"' in html
     assert "#systemsPanel .table-wrap:focus{outline:2px solid var(--accent)" in html
@@ -1196,6 +1199,17 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "renderSearchSploit(data.searchsploit" in html
     assert "runSearchSploit" not in html
     assert "function beginHuntSelection()" in html
+    assert "Loading retained Network Evidence — read only; no network contact" in html
+    assert "if(huntRequestController)huntRequestController.abort()" in html
+    assert "did not finish within" in html
+    assert "Your retained evidence was not changed" in html
+    assert "loadedViewReceipt" in html
+    assert "remains visible" in html
+    assert "Retry network view" in html
+    assert 'id="candidateStatus" class="status" role="status"' in html
+    assert "comparisonCandidateItems(data)" in html
+    assert "/api/scan-comparisons/candidates?limit=100&offset=0" in html
+    assert ".status.loading::after" in html
     assert "searchsploitRevision" in html
     assert "await loadSearchSploitStatus()" in html
     assert "function responseJson(response,label='Request')" in html
@@ -1205,6 +1219,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="manageExploitReferences"' in html
     assert 'href="/settings/system-health#offlineExploitDb"' in html
     assert "manageExploitReferences:['Manage offline exploit references'" in SHELL_SCRIPT
+    assert "Refresh Hunt evidence" in SHELL_SCRIPT
+    assert "Only one network-wide Hunt load remains active in this browser" in SHELL_SCRIPT
+    assert "'/hunt':{" not in SHELL_SCRIPT
     assert "'/hunting':{" in SHELL_SCRIPT
     assert "This shortcut only opens settings" in SHELL_SCRIPT
     assert 'id="searchsploitOnline"' not in html

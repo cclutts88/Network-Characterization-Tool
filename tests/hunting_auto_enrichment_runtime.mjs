@@ -15,13 +15,15 @@ function syncHandler(name) {
 }
 
 await eval(`(async () => {
-  let searchsploitRevision=0,huntRevision=0;
+  let searchsploitRevision=0,huntRevision=0,huntRequestController=null,loadedViewReceipt=null,current=null;
   const requests=[];
-  const controls=new Map([['comparisonPanel',{classList:{add(){}}}]]);
-  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',classList:{add(){}}});return controls.get(id)};
+  const controls=new Map([['comparisonPanel',{classList:{add(){},contains(){return false}}}]]);
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',classList:{add(){},contains(){return false}}});return controls.get(id)};
   const encodeURIComponent=value=>String(value);
-  const timedJson=(endpoint)=>new Promise(resolve=>requests.push({endpoint,resolve}));
+  const timedJson=(endpoint,options={})=>new Promise(resolve=>requests.push({endpoint,signal:options.signal,resolve}));
   const setStatus=()=>{};
+  const startHuntLoadStatus=()=>{};
+  const stopHuntLoadStatus=()=>{};
   const history={replaceState(){}};
   const location={hash:'#huntOverview'};
   const rendered=[],candidates=[];
@@ -31,6 +33,8 @@ await eval(`(async () => {
   ${handler("loadNetwork")}
   const older=loadNetwork(),newer=loadNetwork();
   assert.deepEqual(requests.map(item=>item.endpoint),['/api/hunting/network','/api/hunting/network']);
+  assert.equal(requests[0].signal.aborted,true,'a newer network load must cancel the older request');
+  assert.equal(requests[1].signal.aborted,false);
   requests[1].resolve({response:{ok:true},data:{view:'newer',searchsploit:{view:'saved-newer'}}});
   await newer;
   requests[0].resolve({response:{ok:true},data:{view:'older',searchsploit:{view:'saved-older'}}});
@@ -40,12 +44,13 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let searchsploitRevision=0,huntRevision=0;
+  let searchsploitRevision=0,huntRevision=0,huntRequestController=null;
   const requests=[];
   const controls=new Map([['currentRun',{value:'A'}]]);
   const $=id=>controls.get(id)||{classList:{add(){}},textContent:'',className:''};
   const fetch=url=>new Promise(resolve=>requests.push({url,resolve}));
   const setStatus=()=>{};
+  const stopHuntLoadStatus=()=>{};
   const encodeURIComponent=value=>String(value);
   const location={hash:'#huntOverview'};
   const history={replaceState(){}};
@@ -63,6 +68,37 @@ await eval(`(async () => {
   await older;
   assert.deepEqual(rendered,['B'],'an obsolete Hunt evidence response must not replace the newer selection');
   assert.deepEqual(candidates,['saved-B'],'only the current evidence selection may render its saved candidate assessment');
+})()`);
+
+await eval(`(async () => {
+  let searchsploitRevision=0,huntRevision=0,huntRequestController=null,loadedViewReceipt=null,current=null,lastTone='',statuses=[];
+  const controls=new Map([['comparisonPanel',{classList:{add(){}}}],['refreshNetwork',{disabled:false,textContent:''}],['huntSubtitle',{textContent:''}],['status',{classList:{contains:value=>value===lastTone}}]]);
+  const $=id=>controls.get(id);
+  const location={search:'?run=retained-run',hash:'#huntOverview'};
+  const history={replaceState(){}};
+  const loadCandidates=()=>{};
+  const loadSearchSploitStatus=async()=>{};
+  const requestAnimationFrame=callback=>callback();
+  const encodeURIComponent=value=>String(value);
+  const renderHunt=data=>{current=data};
+  const renderSearchSploit=()=>{};
+  const setStatus=(message,tone='')=>{statuses.push(message);lastTone=tone};
+  const startHuntLoadStatus=()=>{};
+  const stopHuntLoadStatus=()=>{controls.get('refreshNetwork').disabled=false};
+  let call=0;
+  const timedJson=async endpoint=>{call+=1;if(call===1)return{response:{ok:true},data:{view:'focused'}};throw new Error('network refresh failed')};
+  ${handler("beginHuntSelection", "function")}
+  ${handler("loadNetwork")}
+  ${handler("start")}
+  await start();
+  assert.equal(loadedViewReceipt?.kind,'focused','initial focused loads must retain their exact view receipt');
+  assert.equal(loadedViewReceipt?.label,'focused scan Network Evidence');
+  const focusedTime=loadedViewReceipt.at.toLocaleTimeString();
+  await loadNetwork();
+  assert.match(statuses.at(-1),/network refresh failed/);
+  assert.match(statuses.at(-1),/focused scan Network Evidence/);
+  assert.ok(statuses.at(-1).includes(focusedTime),'failed refresh must name when the retained focused view loaded');
+  assert.match(controls.get('huntSubtitle').textContent,/focused scan Network Evidence/);
 })()`);
 
 await eval(`(() => {
@@ -141,6 +177,45 @@ await eval(`(() => {
 })()`);
 
 console.log("Hunt saved candidate runtime regressions passed");
+
+await eval(`(async () => {
+  const controls=new Map([
+    ['currentRun',{value:'',innerHTML:'',disabled:true}],
+    ['baselineRun',{value:'',innerHTML:'',disabled:false}],
+    ['compare',{disabled:false}],
+    ['candidateStatus',{textContent:'',className:''}]
+  ]);
+  const $=id=>controls.get(id);
+  const scanRef=item=>({selection:item.selection_run_id,detail:item.selection_run_id});
+  const esc=value=>String(value??'');
+  const location={search:''};
+  const URLSearchParams=globalThis.URLSearchParams;
+  let candidates=[],mainStatusCalls=0;
+  const setStatus=()=>mainStatusCalls++;
+  const responses=[];
+  const fetch=async()=>responses.shift();
+  const reply=value=>({ok:true,status:200,url:'/api/scan-comparisons/candidates',redirected:false,text:async()=>JSON.stringify(value)});
+  ${syncHandler("comparisonCandidateItems")}
+  ${syncHandler("optionRows")}
+  ${syncHandler("refreshBaselines")}
+  ${handler("responseJson")}
+  ${handler("loadCandidates")}
+  responses.push(reply({items:[{selection_run_id:'run-2'},{selection_run_id:'run-1'}],unavailable:[],pagination:{total:2}}));
+  await loadCandidates();
+  assert.deepEqual(candidates.map(item=>item.selection_run_id),['run-2','run-1']);
+  assert.match(controls.get('currentRun').innerHTML,/run-2/);
+  assert.equal(controls.get('currentRun').disabled,false);
+  assert.match(controls.get('candidateStatus').textContent,/2 retained scans are available/);
+  assert.equal(mainStatusCalls,0,'scan-list success must not overwrite Network Evidence status');
+  responses.push(reply([{selection_run_id:'legacy-run'}]));
+  await loadCandidates();
+  assert.deepEqual(candidates.map(item=>item.selection_run_id),['legacy-run'],'legacy bare-array responses remain supported');
+  responses.push(reply({items:null}));
+  await loadCandidates();
+  assert.equal(controls.get('currentRun').disabled,true);
+  assert.match(controls.get('candidateStatus').textContent,/retained scan list could not be opened/i);
+  assert.equal(mainStatusCalls,0,'scan-list failure must stay in its own status area');
+})()`);
 
 await eval(`(() => {
   const controls=new Map([['category',{value:''}],['datasetPreview',{innerHTML:''}]]);

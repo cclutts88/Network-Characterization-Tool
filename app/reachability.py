@@ -55,6 +55,95 @@ def _is_external_endpoint(endpoint: Endpoint) -> bool:
     return endpoint.kind == "external" or endpoint.external
 
 
+def _parsed_network(item: dict) -> ipaddress.IPv4Network | None:
+    prepared = item.get("_reachability_network")
+    if isinstance(prepared, ipaddress.IPv4Network):
+        return prepared
+    try:
+        parsed = ipaddress.ip_network(str(item.get("network") or ""), strict=False)
+    except ValueError:
+        return None
+    return parsed if parsed.version == 4 else None
+
+
+def _retained_service_port(item: dict) -> tuple[int | None, bool]:
+    """Return a usable service port and whether retained input is malformed."""
+    raw_port = item.get("port")
+    if raw_port in (None, "") and item.get("evidence_kind") == "device_configuration":
+        return None, False
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError):
+        return None, True
+    if not 1 <= port <= 65535:
+        return None, True
+    return port, False
+
+
+def _prepare_reachability_inputs(
+    hunting: dict, device_analyses: list[dict],
+) -> tuple[dict, list[dict]]:
+    """Build request-local indexes without changing retained or cached evidence."""
+    hosts_by_ip: dict[str, dict] = {}
+    for item in hunting.get("hosts") or []:
+        if item.get("ip"):
+            hosts_by_ip.setdefault(str(item.get("ip")), item)
+    findings_by_endpoint: dict[tuple[str, str, int], dict] = {}
+    finding_conflicts_by_host_protocol: dict[tuple[str, str], list[dict]] = {}
+    for item in hunting.get("findings") or []:
+        if not item.get("ip"):
+            continue
+        address = str(item.get("ip"))
+        protocol = str(item.get("protocol") or "tcp").lower()
+        item_port, malformed = _retained_service_port(item)
+        if malformed:
+            finding_conflicts_by_host_protocol.setdefault(
+                (address, protocol), []
+            ).append(item)
+            continue
+        if item_port is None:
+            continue
+        key = (address, protocol, item_port)
+        findings_by_endpoint.setdefault(key, item)
+    prepared_hunting = {
+        **hunting,
+        "_reachability_hosts_by_ip": hosts_by_ip,
+        "_reachability_findings_by_endpoint": findings_by_endpoint,
+        "_reachability_finding_conflicts_by_host_protocol": (
+            finding_conflicts_by_host_protocol
+        ),
+    }
+    prepared_devices = []
+    for analysis in device_analyses:
+        copied = dict(analysis)
+        interfaces = []
+        for original in analysis.get("interfaces") or []:
+            item = dict(original)
+            parsed = _parsed_network(item)
+            if parsed is not None:
+                item["_reachability_network"] = parsed
+            interfaces.append(item)
+        copied["interfaces"] = interfaces
+        route_analysis = dict(analysis.get("route_analysis") or {})
+        routes = []
+        lookup: dict[int, dict[int, list[dict]]] = {}
+        for route_order, original in enumerate(route_analysis.get("routes") or []):
+            route = dict(original)
+            route["_reachability_order"] = route_order
+            parsed = _parsed_network(route)
+            if parsed is not None:
+                route["_reachability_network"] = parsed
+                lookup.setdefault(parsed.prefixlen, {}).setdefault(
+                    int(parsed.network_address), []
+                ).append(route)
+            routes.append(route)
+        route_analysis["routes"] = routes
+        copied["route_analysis"] = route_analysis
+        copied["_reachability_route_lookup"] = lookup
+        prepared_devices.append(copied)
+    return prepared_hunting, prepared_devices
+
+
 def _network_for(endpoint: Endpoint, saved_networks: list[dict]) -> dict | None:
     if _is_external_endpoint(endpoint) or endpoint.value is None:
         return None
@@ -81,6 +170,9 @@ def _endpoint_has_retained_internal_context(
 ) -> bool:
     if endpoint.value is None or _network_for(endpoint, saved_networks):
         return endpoint.value is not None
+    host_index = hunting.get("_reachability_hosts_by_ip")
+    if endpoint.kind == "host" and isinstance(host_index, dict):
+        return str(endpoint.value) in host_index
     for host in hunting.get("hosts") or []:
         try:
             address = ipaddress.ip_address(str(host.get("ip") or ""))
@@ -95,10 +187,10 @@ def _endpoint_has_retained_internal_context(
     for analysis in device_analyses:
         for interface in analysis.get("interfaces") or []:
             try:
-                network = ipaddress.ip_network(
-                    str(interface.get("network") or ""), strict=False
-                )
-            except ValueError:
+                network = _parsed_network(interface)
+            except (TypeError, ValueError):
+                continue
+            if network is None:
                 continue
             if (
                 endpoint.kind == "host" and endpoint.value in network
@@ -110,9 +202,14 @@ def _endpoint_has_retained_internal_context(
 
 
 def _destination_matches(route_network: str, destination: Endpoint) -> bool:
-    try:
-        route = ipaddress.ip_network(route_network, strict=False)
-    except ValueError:
+    if isinstance(route_network, ipaddress.IPv4Network):
+        route = route_network
+    else:
+        try:
+            route = ipaddress.ip_network(route_network, strict=False)
+        except ValueError:
+            return False
+    if route.version != 4:
         return False
     if destination.kind == "external":
         return route.prefixlen == 0
@@ -121,6 +218,25 @@ def _destination_matches(route_network: str, destination: Endpoint) -> bool:
     if destination.kind == "host":
         return destination.value in route
     return destination.value.subnet_of(route) or destination.value.overlaps(route)
+
+
+def _routes_for_destination(analysis: dict, destination: Endpoint) -> list[dict]:
+    lookup = analysis.get("_reachability_route_lookup")
+    if destination.kind == "host" and destination.value is not None and isinstance(lookup, dict):
+        address = int(destination.value)
+        matches = []
+        for prefix in range(32, -1, -1):
+            mask = ((1 << prefix) - 1) << (32 - prefix) if prefix else 0
+            matches.extend(lookup.get(prefix, {}).get(address & mask, []))
+        return sorted(matches, key=lambda item: item.get("_reachability_order", 0))
+    return [
+        item
+        for item in (analysis.get("route_analysis") or {}).get("routes") or []
+        if _destination_matches(
+            item.get("_reachability_network") or str(item.get("network") or ""),
+            destination,
+        )
+    ]
 
 
 def _is_transit_device(analysis: dict) -> bool:
@@ -225,8 +341,10 @@ def _source_attached(source: Endpoint, analysis: dict) -> bool:
         return False
     for item in interfaces:
         try:
-            network = ipaddress.ip_network(str(item.get("network") or ""), strict=False)
-        except ValueError:
+            network = _parsed_network(item)
+        except (TypeError, ValueError):
+            continue
+        if network is None:
             continue
         if source.kind == "host" and source.value in network:
             return True
@@ -310,10 +428,8 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
         route_analyses, _ = _external_ingress_analyses(device_analyses)
     for analysis in route_analyses:
         device = analysis.get("device") or {}
-        for route in (analysis.get("route_analysis") or {}).get("routes") or []:
+        for route in _routes_for_destination(analysis, destination):
             network = str(route.get("network") or "")
-            if not _destination_matches(network, destination):
-                continue
             via = str(route.get("via") or "").strip()
             if via and not route.get("interface"):
                 try:
@@ -347,8 +463,9 @@ def _matching_routes(source: Endpoint, destination: Endpoint, device_analyses: l
                 continue
             seen.add(key)
             try:
-                prefix = ipaddress.ip_network(network, strict=False).prefixlen
-            except ValueError:
+                parsed_network = _parsed_network(route)
+                prefix = parsed_network.prefixlen if parsed_network is not None else -1
+            except (TypeError, ValueError):
                 prefix = -1
             candidates.append({
                 "device": device.get("name") or device.get("address") or "Network device",
@@ -516,13 +633,45 @@ def _service_observation(destination: Endpoint, protocol: str, port: int, huntin
     if destination.kind != "host" or destination.value is None:
         return {"state": "not_applicable", "host": None, "finding": None}
     address = str(destination.value)
-    host = next((item for item in hunting.get("hosts") or [] if str(item.get("ip")) == address), None)
-    finding = next((
-        item for item in hunting.get("findings") or []
-        if str(item.get("ip")) == address
-        and str(item.get("protocol") or "tcp").lower() == protocol
-        and int(item.get("port") or 0) == port
-    ), None)
+    hosts_by_ip = hunting.get("_reachability_hosts_by_ip")
+    findings_by_endpoint = hunting.get("_reachability_findings_by_endpoint")
+    finding_conflict_index = hunting.get(
+        "_reachability_finding_conflicts_by_host_protocol"
+    )
+    host = (
+        hosts_by_ip.get(address)
+        if isinstance(hosts_by_ip, dict)
+        else next((
+            item for item in hunting.get("hosts") or []
+            if str(item.get("ip")) == address
+        ), None)
+    )
+    conflicts = []
+    if isinstance(findings_by_endpoint, dict):
+        finding = findings_by_endpoint.get((address, protocol, port))
+        if isinstance(finding_conflict_index, dict):
+            conflicts = list(finding_conflict_index.get((address, protocol)) or [])
+    else:
+        finding = None
+        for item in hunting.get("findings") or []:
+            if (
+                str(item.get("ip")) != address
+                or str(item.get("protocol") or "tcp").lower() != protocol
+            ):
+                continue
+            item_port, malformed = _retained_service_port(item)
+            if malformed:
+                conflicts.append(item)
+            elif item_port == port and finding is None:
+                finding = item
+    if conflicts:
+        return {
+            "state": "evidence_conflict",
+            "host": host,
+            "finding": None,
+            "coverage": None,
+            "conflicts": conflicts,
+        }
     if finding and str(finding.get("state") or "").casefold() == "open|filtered":
         return {
             "state": "observed_inconclusive",
@@ -534,11 +683,24 @@ def _service_observation(destination: Endpoint, protocol: str, port: int, huntin
     if finding:
         return {"state": "observed_exposed", "host": host, "finding": finding, "coverage": None}
     if host:
-        observed = next((
-            item for item in host.get("observed_ports") or []
-            if str(item.get("protocol") or "").lower() == protocol
-            and int(item.get("port") or 0) == port
-        ), None)
+        observed = None
+        observed_conflicts = []
+        for item in host.get("observed_ports") or []:
+            if str(item.get("protocol") or "").lower() != protocol:
+                continue
+            item_port, malformed = _retained_service_port(item)
+            if malformed:
+                observed_conflicts.append(item)
+            elif item_port == port and observed is None:
+                observed = item
+        if observed_conflicts:
+            return {
+                "state": "evidence_conflict",
+                "host": host,
+                "finding": None,
+                "coverage": None,
+                "conflicts": observed_conflicts,
+            }
         if observed and str(observed.get("state") or "").lower() in {
             "open", "open|filtered"
         }:
@@ -678,14 +840,16 @@ def _destination_nat_translations(
         candidates = []
         step_unresolved = []
         for index, analysis in remaining:
+            policies = analysis.get("policy") or {}
+            iptables = policies.get("iptables") or {}
+            applied = policies.get("applied") or {}
+            if not iptables.get("nat_rules") and not applied.get("nat_rules"):
+                continue
             if not (
                 _source_attached(source, analysis)
                 or _source_attached(current_destination, analysis)
             ):
                 continue
-            policies = analysis.get("policy") or {}
-            iptables = policies.get("iptables") or {}
-            applied = policies.get("applied") or {}
             device = analysis.get("device") or {}
             device_name = device.get("name") or device.get("address") or "Network device"
             input_interface = _endpoint_interface(source, analysis)
@@ -794,11 +958,13 @@ def _source_nat_translations(
         candidates = []
         step_unresolved = []
         for index, analysis in remaining:
-            if not _source_attached(current_source, analysis):
-                continue
             policies = analysis.get("policy") or {}
             iptables = policies.get("iptables") or {}
             applied = policies.get("applied") or {}
+            if not iptables.get("nat_rules") and not applied.get("nat_rules"):
+                continue
+            if not _source_attached(current_source, analysis):
+                continue
             device = analysis.get("device") or {}
             device_name = device.get("name") or device.get("address") or "Network device"
             input_interface = _endpoint_interface(current_source, analysis)
@@ -871,17 +1037,12 @@ def _egress_interface(destination: Endpoint, analysis: dict) -> str | None:
     connected = _endpoint_interface(destination, analysis)
     if connected:
         return connected
-    routes = [
-        item for item in (analysis.get("route_analysis") or {}).get("routes") or []
-        if _destination_matches(str(item.get("network") or ""), destination)
-    ]
+    routes = _routes_for_destination(analysis, destination)
     if not routes:
         return None
     def prefix(item: dict) -> int:
-        try:
-            return ipaddress.ip_network(str(item.get("network") or ""), strict=False).prefixlen
-        except ValueError:
-            return -1
+        parsed = _parsed_network(item)
+        return parsed.prefixlen if parsed is not None else -1
     return str(max(routes, key=prefix).get("interface") or "") or None
 
 
@@ -994,6 +1155,14 @@ def _policy_decisions(
 
     if destination.kind != "host" or destination.value is None:
         return decisions, unresolved
+    legacy_analyses = [
+        analysis for analysis in device_analyses
+        if not ((analysis.get("policy") or {}).get("iptables") or {}).get("rules")
+        and not ((analysis.get("policy") or {}).get("applied") or {}).get("rules")
+        and (analysis.get("policy") or {}).get("firewall_acl")
+    ]
+    if not legacy_analyses:
+        return decisions, unresolved
     destination_ip = str(destination.value)
     pattern = re.compile(
         rf"\b(?P<action>permit|deny)\s+{re.escape(protocol)}\s+"
@@ -1001,13 +1170,7 @@ def _policy_decisions(
         rf"host\s+{re.escape(destination_ip)}\s+(?:eq\s+)?{port}\b",
         re.I,
     )
-    for analysis in device_analyses:
-        analyzed_policy = analysis.get("policy") or {}
-        if (
-            (analyzed_policy.get("iptables") or {}).get("rules")
-            or (analyzed_policy.get("applied") or {}).get("rules")
-        ):
-            continue
+    for analysis in legacy_analyses:
         device = analysis.get("device") or {}
         for item in (analysis.get("policy") or {}).get("firewall_acl") or []:
             line = str(item.get("evidence") or item.get("line") or "")
@@ -1257,6 +1420,25 @@ def _evaluate_reachability_single(
                 protocol=protocol, port=effective_port,
             ),
         })
+    elif service["state"] == "evidence_conflict":
+        count = len(service.get("conflicts") or [])
+        evidence.append({
+            "kind": "service",
+            "title": "Retained service evidence needs review",
+            "effect": (
+                "NCT found retained service evidence with an invalid port identifier. "
+                "It kept that evidence visible and did not treat another row as authoritative."
+            ),
+            "detail": (
+                f"{count} retained {protocol.upper()} service row"
+                f"{'s have' if count != 1 else ' has'} an invalid port identifier."
+            ),
+        })
+        caveats.append(
+            "Retained service evidence for this host and protocol contains an invalid "
+            "port identifier. NCT cannot safely determine the selected service state "
+            "until that source evidence is reviewed or reprocessed."
+        )
     elif service["state"] == "not_exposed":
         coverage = service["coverage"] or {}
         scan_type = coverage.get("scan_type") or {}
@@ -1458,6 +1640,12 @@ def _evaluate_reachability_single(
     elif nat_unresolved or translation_conflict or source_translation_conflict or redirect_present:
         outcome, confidence = "Unknown", "low"
         explanation = "NAT changes or may change the selected flow before forwarded policy is evaluated."
+    elif service["state"] == "evidence_conflict":
+        outcome, confidence = "Unknown", "low"
+        explanation = (
+            "Retained service evidence contains an invalid port identifier, so NCT "
+            "did not infer the selected service state."
+        )
     elif spanning_tree_blocked:
         outcome, confidence = "Expected Blocked", "high"
         explanation = (
@@ -3574,8 +3762,12 @@ def classify_searchsploit_exposure(
     device_analyses: list[dict],
 ) -> dict:
     """Attach conservative retained-path classifications to SearchSploit matches."""
+    indexed_hunting, indexed_devices = _prepare_reachability_inputs(
+        hunting, device_analyses,
+    )
     classified_matches = []
     facet_counts: dict[str, dict] = {}
+    exposure_by_endpoint: dict[tuple[str, str, int], dict] = {}
     for original in enrichment.get("matches") or []:
         match = dict(original)
         try:
@@ -3594,14 +3786,30 @@ def classify_searchsploit_exposure(
                 "internal": [],
             }
         else:
+            endpoint_key = (destination, protocol, port)
+            cached_exposure = exposure_by_endpoint.get(endpoint_key)
+            if cached_exposure is not None:
+                exposure = deepcopy(cached_exposure)
+                match["exposure"] = exposure
+                classified_matches.append(match)
+                key = str(exposure["classification"])
+                facet = facet_counts.setdefault(key, {
+                    "classification": key,
+                    "label": exposure["label"],
+                    "match_count": 0,
+                    "candidate_count": 0,
+                })
+                facet["match_count"] += 1
+                facet["candidate_count"] += int(match.get("candidate_count") or 0)
+                continue
             external_result = evaluate_reachability(
                 source_text="Internet",
                 destination_text=destination,
                 protocol=protocol,
                 port=port,
-                hunting=hunting,
+                hunting=indexed_hunting,
                 saved_networks=saved_networks,
-                device_analyses=device_analyses,
+                device_analyses=indexed_devices,
                 _include_path_options=False,
             )
             external = _compact_exposure_result(
@@ -3621,9 +3829,9 @@ def classify_searchsploit_exposure(
                         destination_text=destination,
                         protocol=protocol,
                         port=port,
-                        hunting=hunting,
+                        hunting=indexed_hunting,
                         saved_networks=saved_networks,
-                        device_analyses=device_analyses,
+                        device_analyses=indexed_devices,
                         _include_path_options=False,
                     )
                 except ValueError:
@@ -3639,6 +3847,7 @@ def classify_searchsploit_exposure(
                 ))
             summary = _exposure_summary(external, internal)
             exposure = {**summary, "external": external, "internal": internal}
+            exposure_by_endpoint[endpoint_key] = deepcopy(exposure)
         match["exposure"] = exposure
         classified_matches.append(match)
         key = str(exposure["classification"])
