@@ -458,6 +458,22 @@ A roadmap item should only be marked complete when:
   explicitly stops this release's Range acceptance without inviting permission or host
   mount workarounds. The unchanged `phase2-r4` application image must be resealed with the
   corrected guide and pass fresh novice and independent package gates.
+- **2026-10-13 corrected full Range package sealed:**
+  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r7.zip` is the transfer
+  candidate. It is **97,224,297 bytes** with SHA-256
+  `84c0b059b9dcafde08b4b04954cdff10a63c8655081ed7d09f37deff65ef619f`.
+  The package binds guide checkpoint `6eaa30323d56a4b7a312da638066c2540cbbe6ba`
+  to the unchanged tested `phase2-r4` application image from
+  `99d8e03b826c05a719d541923a66cf3f5b597224`. A fresh extraction verified all
+  **21** manifest-bound files, all **18** source-to-package mappings, all **14**
+  delivered shell scripts, and the **97,955,840-byte** offline image archive with
+  SHA-256 `8c24bbf6691ad1b6881fc8bc6b60c46549e23e6e43aea3d24662aafa86fd366d`.
+  The archive declares only the tested NCT image and `caddy:2-alpine`. The novice
+  operator and independent exact-package gates are **CLEAR**. This package is
+  transfer-ready, but remains pending installation, sign-in, preserved-data checks,
+  Range container CPU/memory confirmation, approved scope-handoff validation, device
+  history retest and rollback readiness. It is not yet Range-accepted, mission-ready or
+  available on `main`.
 
 ## Field feedback correction cycle — 2026-10-08
 
