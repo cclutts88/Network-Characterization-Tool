@@ -420,8 +420,9 @@ def corpus_files() -> tuple[dict[str, bytes], dict]:
             "hosts_added": ["10.30.0.65"],
             "hosts_no_longer_confirmed": ["10.30.0.64"],
             "version_changes": 1,
-            "ports_added": 2,
-            "ports_no_longer_observed": 1,
+            "ports_added": 0,
+            "ports_no_longer_observed": 0,
+            "ports_not_assessed": 3,
             "exact_duplicate_files": ["nmap/history_before.xml", "nmap/history_before_duplicate.xml"],
         },
         "devices": {

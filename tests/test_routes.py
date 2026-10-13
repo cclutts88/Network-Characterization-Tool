@@ -495,7 +495,7 @@ def test_import_history_raw_xml_and_both_csv_exports():
     assert len(port_download) <= 64
 
 
-def test_automatic_run_comparison_uses_latest_completed_same_scope():
+def test_automatic_run_comparison_uses_latest_completed_same_scope(monkeypatch):
     def manifest(run_id: str, when: str, targets: list[str]) -> dict:
         return {
             "run_id": run_id,
@@ -525,12 +525,62 @@ def test_automatic_run_comparison_uses_latest_completed_same_scope():
     baseline = manifest(baseline_id, "2030-01-01T10:00:00+00:00", ["198.51.100.0/24"])
     unrelated = manifest(unrelated_id, "2030-01-01T11:00:00+00:00", ["203.0.113.0/24"])
     current = manifest(current_id, "2030-01-01T12:00:00+00:00", ["198.51.100.0/24"])
-    before_xml = ROUTE_XML.replace(b'portid="443"', b'portid="80"').replace(b'name="https"', b'name="http"')
-    for item, xml in ((baseline, before_xml), (unrelated, ROUTE_XML), (current, ROUTE_XML)):
-        insert_scan_run_manifest(item)
-        directory = run_directory(item["run_id"])
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / "scan.xml").write_bytes(xml)
+    def retained(item: dict, port_number: int, service: str) -> dict:
+        description = {
+            "group_id": f"run:{item['run_id']}",
+            "run_ids": [item["run_id"]],
+            "created_at": item["created_at"],
+            "completed_at": item["completed_at"],
+            "display_name": item["display_name"],
+            "scope": {
+                "fingerprint": "same-scope" if item is not unrelated else "other-scope",
+                "targets": item["targets"],
+            },
+            "saved_networks": [],
+        }
+        return {
+            "manifests": [item],
+            "group": description,
+            "analysis": {
+                "coverage": item["coverage"],
+                "hosts": [{
+                    "ip": "192.0.2.10",
+                    "observed_ports": [{
+                        "protocol": "tcp", "port": port_number, "state": "open",
+                        "service": service,
+                    }],
+                }],
+            },
+            "provenance": {"composition_version": "test", "children": []},
+        }
+
+    saved = {
+        baseline_id: retained(baseline, 80, "http"),
+        unrelated_id: retained(unrelated, 443, "https"),
+        current_id: retained(current, 443, "https"),
+    }
+    monkeypatch.setattr(
+        "app.main.load_prepared_scan_group",
+        lambda db_path, data_dir, run_id: saved[run_id],
+    )
+    monkeypatch.setattr(
+        "app.main.list_prepared_scan_groups",
+        lambda db_path, data_dir, limit=25, offset=0: {
+            "items": [saved[current_id], saved[unrelated_id], saved[baseline_id]][offset:offset + limit],
+            "unavailable": [],
+            "pagination": {"limit": limit, "offset": offset, "total": 3, "has_more": offset + limit < 3},
+        },
+    )
+    monkeypatch.setattr(
+        "app.main.list_prepared_scan_group_metadata",
+        lambda db_path: [
+            {
+                "manifests": item["manifests"], "group": item["group"],
+                "selection_run_id": item["group"]["run_ids"][-1],
+            }
+            for item in (saved[current_id], saved[unrelated_id], saved[baseline_id])
+        ],
+    )
 
     with TestClient(app) as client:
         response = client.get(f"/api/scan-runs/{current_id}/comparison")
@@ -543,11 +593,12 @@ def test_automatic_run_comparison_uses_latest_completed_same_scope():
     data = response.json()
     assert data["status"] == "baseline_found"
     assert data["baseline"]["run_ids"] == [baseline_id]
-    assert data["summary"]["ports_added"] == 1
-    assert data["summary"]["ports_removed"] == 1
+    assert data["summary"]["ports_added"] == 0
+    assert data["summary"]["ports_removed"] == 0
+    assert data["summary"]["ports_not_assessed"] == 2
     assert candidates.status_code == 200
     candidate = next(
-        item for item in candidates.json()
+        item for item in candidates.json()["items"]
         if item["selection_run_id"] == current_id
     )
     assert "Standard v1" in candidate["comparison_name"]
@@ -558,6 +609,151 @@ def test_automatic_run_comparison_uses_latest_completed_same_scope():
     assert selected.json()["evidence"]["after"]["sources"][0]["url"].endswith(
         f"/{current_id}/artifacts/xml"
     )
+
+
+def test_network_changes_pages_metadata_and_loads_only_selected_pairs(monkeypatch):
+    metadata = []
+    saved = {}
+    for scope_index in range(100):
+        for sequence in (1, 0):
+            run_id = f"{scope_index * 2 + sequence + 1:032x}"
+            when = f"2030-01-{scope_index % 28 + 1:02d}T00:00:0{sequence}+00:00"
+            manifest = {
+                "run_id": run_id, "status": "completed", "created_at": when,
+                "completed_at": when, "targets": [f"10.{scope_index}.0.0/16"],
+                "coverage": {"targets": [f"10.{scope_index}.0.0/16"], "protocols": ["TCP"]},
+            }
+            group = {
+                "group_id": f"run:{run_id}", "run_ids": [run_id],
+                "created_at": when, "completed_at": when,
+                "display_name": f"Scope {scope_index}", "saved_networks": [],
+                "scope": {"fingerprint": f"scope-{scope_index}", "targets": manifest["targets"]},
+            }
+            retained = {
+                "manifests": [manifest], "group": group,
+                "analysis": {"coverage": manifest["coverage"], "hosts": []},
+                "provenance": {"composition_version": "test", "children": []},
+            }
+            saved[run_id] = retained
+            metadata.append({
+                "manifests": [manifest], "group": group, "selection_run_id": run_id,
+            })
+    metadata.sort(
+        key=lambda item: (item["group"]["completed_at"], item["group"]["group_id"]),
+        reverse=True,
+    )
+    opened = []
+    monkeypatch.setattr("app.main.list_prepared_scan_group_metadata", lambda db_path: metadata)
+    monkeypatch.setattr(
+        "app.main.load_prepared_scan_group",
+        lambda db_path, data_dir, run_id: opened.append(run_id) or saved[run_id],
+    )
+
+    with TestClient(app) as client:
+        first = client.get("/api/analysis/network-changes?limit=3&offset=0")
+        revision = first.json()["pagination"]["selection_revision"]
+        assert len(opened) == 6
+        opened.clear()
+        response = client.get(
+            f"/api/analysis/network-changes?limit=3&offset=6&revision={revision}"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"]["limit"] == 3
+    assert payload["pagination"]["offset"] == 6
+    assert payload["pagination"]["total"] == 100
+    assert payload["pagination"]["has_more"] is True
+    assert len(payload["pagination"]["selection_revision"]) == 64
+    assert len(payload["scopes"]) == 3
+    assert len(opened) == 6
+
+
+def test_network_changes_rejects_offset_page_without_selection_revision(monkeypatch):
+    monkeypatch.setattr("app.main.list_prepared_scan_group_metadata", lambda db_path: [])
+    with TestClient(app) as client:
+        response = client.get("/api/analysis/network-changes?limit=5&offset=5")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "selection_revision_required"
+
+
+def test_network_changes_rejects_offset_page_when_history_revision_changes(monkeypatch):
+    def item(run_id: str, scope: str, when: str) -> dict:
+        manifest = {
+            "run_id": run_id, "status": "completed", "created_at": when,
+            "completed_at": when, "targets": [scope],
+        }
+        group = {
+            "group_id": f"run:{run_id}", "run_ids": [run_id],
+            "created_at": when, "completed_at": when, "display_name": run_id,
+            "saved_networks": [], "scope": {"fingerprint": scope, "targets": [scope]},
+        }
+        return {"manifests": [manifest], "group": group, "selection_run_id": run_id}
+    history = [
+        item("1" * 32, "10.1.0.0/16", "2030-01-02T00:00:00+00:00"),
+        item("2" * 32, "10.2.0.0/16", "2030-01-01T00:00:00+00:00"),
+    ]
+    monkeypatch.setattr("app.main.list_prepared_scan_group_metadata", lambda db_path: list(history))
+    monkeypatch.setattr(
+        "app.main.load_prepared_scan_group",
+        lambda db_path, data_dir, run_id: {
+            **next(value for value in history if value["selection_run_id"] == run_id),
+            "analysis": {"hosts": []},
+            "provenance": {"composition_version": "test", "children": []},
+        },
+    )
+    with TestClient(app) as client:
+        first = client.get("/api/analysis/network-changes?limit=1&offset=0")
+        revision = first.json()["pagination"]["selection_revision"]
+        history.insert(0, item("3" * 32, "10.3.0.0/16", "2030-01-03T00:00:00+00:00"))
+        second = client.get(
+            f"/api/analysis/network-changes?limit=1&offset=1&revision={revision}"
+        )
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"]["code"] == "selection_changed"
+
+
+def test_selected_comparison_rejects_unbounded_interactive_detail(monkeypatch):
+    first_id, second_id = "c1" * 16, "d1" * 16
+    def retained(run_id: str, when: str) -> dict:
+        manifest = {
+            "run_id": run_id, "status": "completed", "created_at": when,
+            "completed_at": when, "targets": ["192.0.2.0/24"],
+            "coverage": {"targets": ["192.0.2.0/24"], "protocols": ["TCP"]},
+        }
+        return {
+            "manifests": [manifest],
+            "group": {
+                "group_id": f"run:{run_id}", "run_ids": [run_id],
+                "created_at": when, "completed_at": when, "display_name": run_id,
+                "saved_networks": [],
+                "scope": {"fingerprint": "same", "targets": ["192.0.2.0/24"]},
+            },
+            "analysis": {"hosts": []},
+            "provenance": {"composition_version": "test", "children": []},
+        }
+    saved = {
+        first_id: retained(first_id, "2030-01-01T00:00:00+00:00"),
+        second_id: retained(second_id, "2030-01-02T00:00:00+00:00"),
+    }
+    monkeypatch.setattr(
+        "app.main.load_prepared_scan_group",
+        lambda db_path, data_dir, run_id: saved[run_id],
+    )
+    monkeypatch.setattr(
+        "app.main.compare_analyses",
+        lambda *args, **kwargs: {
+            "summary": {}, "protocol_deltas": [], "hosts_removed": [],
+            "hosts_changed": [], "hosts_added": [{}] * 2001, "evidence": {},
+        },
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/scan-comparisons/compare?first={first_id}&second={second_id}"
+        )
+    assert response.status_code == 422
+    assert "too large" in response.json()["detail"]
 
 
 def device_password_plan() -> dict:

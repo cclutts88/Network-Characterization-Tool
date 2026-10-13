@@ -420,6 +420,7 @@ def run_once(
             "version_changes": comparison["summary"]["service_changes"],
             "ports_added": comparison["summary"]["ports_added"],
             "ports_no_longer_observed": comparison["summary"]["ports_removed"],
+            "ports_not_assessed": comparison["summary"]["ports_not_assessed"],
         }
         history_expected = {
             "hosts_added": len(expected_history["hosts_added"]),
@@ -427,6 +428,7 @@ def run_once(
             "version_changes": expected_history["version_changes"],
             "ports_added": expected_history["ports_added"],
             "ports_no_longer_observed": expected_history["ports_no_longer_observed"],
+            "ports_not_assessed": expected_history["ports_not_assessed"],
         }
         if history_actual != history_expected:
             raise AssertionError(f"History comparison oracle mismatch: {history_actual}")

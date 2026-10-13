@@ -2160,8 +2160,8 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert "Previous scans" not in html
     assert 'id="automatedHistory"' not in html
     assert 'class="panel previous-scans-panel"' not in html
-    assert "Affected hosts and evidence" in html
-    assert "Port state, service, product, or version changes" in html
+    assert "Affected addresses and evidence" in html
+    assert "Explicit source-reported port, service, product, or version changes" in html
     assert "Traceroute path change" in html
     assert "renderComparisonDetails" in html
 
@@ -2257,17 +2257,22 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "[data-last-open-service]" in SHELL_SCRIPT
     assert "A later closed result or narrower scan does not erase" in SHELL_SCRIPT
     assert "body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
+    assert "@media(min-width:1101px){body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "html[data-nct-density=compact] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "html[data-nct-density=spacious] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "--nct-guide-reserve" in SHELL_SCRIPT
+    assert "Build network change view" in SHELL_SCRIPT
+    assert "Loads the first five Network Scopes" in SHELL_SCRIPT
+    assert "loaded counts cover only the scopes shown so far" in SHELL_SCRIPT
+    assert "Compare the selected saved analyses" in SHELL_SCRIPT
     assert "Review affected hosts" in SHELL_SCRIPT
     assert "Last confirmed observation" in html
     assert "Latest supported observation" in html
     assert "Successful records whose order is uncertain" in html
     assert "At least one successful record has no trustworthy collection window" in html
     assert "That missing time could fall before, between, or after the displayed rows" in html
-    assert "this does not prove the device joined or left the live network" in html
-    assert "newly confirmed hosts" in html
+    assert "They do not prove a live device joined, left, or changed identity" in html
+    assert "confirmed only later" in html
     assert "Saved evidence windows, not live status" in html
     assert "processedEvidenceSource(record.source)" in html
     assert "data-latest-page" in html

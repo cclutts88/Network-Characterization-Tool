@@ -85,6 +85,7 @@ def _expected_correctness() -> dict:
             "version_changes": history["version_changes"],
             "ports_added": history["ports_added"],
             "ports_no_longer_observed": history["ports_no_longer_observed"],
+            "ports_not_assessed": history["ports_not_assessed"],
         },
         "enrichment": {
             "cold_search_calls": oracle["enrichment"]["unique_product_version_queries"],

@@ -65,8 +65,9 @@ def test_phase0_core_worker_runs_exact_corpus_with_predeclared_limits(tmp_path):
         "hosts_added": 1,
         "hosts_no_longer_confirmed": 1,
         "version_changes": 1,
-        "ports_added": 2,
-        "ports_no_longer_observed": 1,
+        "ports_added": 0,
+        "ports_no_longer_observed": 0,
+        "ports_not_assessed": 3,
     }
     assert result["correctness"]["enrichment"]["cold_search_calls"] == 24
     assert result["correctness"]["enrichment"]["warm_search_calls"] == 0

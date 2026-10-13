@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from app.comparison import (
+    ComparisonLimitExceeded,
     compare_analyses,
     coverage_warnings,
     describe_run_group,
@@ -259,8 +262,9 @@ def test_comparison_surfaces_ports_identity_mac_and_route_evidence():
     result = compare_analyses(before, after)
     changed = result["hosts_changed"][0]
 
-    assert result["summary"]["ports_added"] == 1
-    assert result["summary"]["ports_removed"] == 1
+    assert result["summary"]["ports_added"] == 0
+    assert result["summary"]["ports_removed"] == 0
+    assert result["summary"]["ports_not_assessed"] == 2
     assert "mac" in changed["identity_changes"]
     assert changed["route_change"] is not None
 
@@ -291,3 +295,92 @@ def test_comparison_distinguishes_port_state_changes_and_links_evidence():
     assert changed["port_state_changes"][0]["after"] == "filtered"
     assert changed["service_changes"][0]["changed_fields"] == ["state", "reason"]
     assert changed["evidence"]["before"]["sources"][0]["url"] == "/before.xml"
+
+
+def coverage(protocol: str, ports: str, *, successful: bool = True) -> dict:
+    values = [int(value) for value in ports.split(",")]
+    return {
+        "protocols": [protocol.upper()],
+        "completion": {"successful": successful},
+        "scan_types": [{
+            "protocol": protocol.upper(), "services": ports,
+            "service_list_exact": True,
+            "service_intervals": [{"start": value, "end": value} for value in values],
+        }],
+    }
+
+
+def test_comparison_requires_explicit_later_state_before_no_longer_observed():
+    before = {
+        "coverage": coverage("tcp", "22,80"),
+        "hosts": [{
+            "ip": "192.0.2.10",
+            "observed_ports": [
+                {"protocol": "tcp", "port": 22, "state": "open", "service": "ssh"},
+                {"protocol": "tcp", "port": 80, "state": "open", "service": "http"},
+            ],
+        }],
+    }
+    narrower = {
+        "coverage": coverage("tcp", "22"),
+        "hosts": [{
+            "ip": "192.0.2.10",
+            "observed_ports": [
+                {"protocol": "tcp", "port": 22, "state": "open", "service": "ssh"},
+            ],
+        }],
+    }
+    result = compare_analyses(before, narrower)
+    changed = result["hosts_changed"][0]
+    omitted = next(item for item in changed["port_deltas"] if item["port"] == 80)
+    assert omitted["classification"] == "not_assessed"
+    assert result["summary"]["ports_removed"] == 0
+    assert result["summary"]["ports_not_assessed"] == 1
+
+    explicit_closed = {
+        "coverage": coverage("tcp", "22,80"),
+        "hosts": [{
+            "ip": "192.0.2.10",
+            "observed_ports": [
+                {"protocol": "tcp", "port": 22, "state": "open", "service": "ssh"},
+                {"protocol": "tcp", "port": 80, "state": "closed", "service": "http"},
+            ],
+        }],
+    }
+    closed = compare_analyses(before, explicit_closed)
+    delta = next(item for item in closed["hosts_changed"][0]["port_deltas"] if item["port"] == 80)
+    assert delta["classification"] == "no_longer_observed"
+    assert closed["summary"]["ports_removed"] == 1
+
+
+def test_comparison_exposes_protocol_coverage_without_claiming_device_identity():
+    before = {
+        "coverage": coverage("tcp", "443"),
+        "hosts": [{"ip": "192.0.2.10", "mac": "00:11:22:33:44:55", "observed_ports": []}],
+    }
+    after = {
+        "coverage": coverage("udp", "53"),
+        "hosts": [{"ip": "192.0.2.10", "mac": "00:11:22:33:44:66", "observed_ports": []}],
+    }
+    result = compare_analyses(before, after)
+    by_protocol = {item["protocol"]: item for item in result["protocol_deltas"]}
+    assert by_protocol["tcp"]["classification"] == "not_assessed_later"
+    assert by_protocol["udp"]["classification"] == "newly_assessed"
+    assert "mac" in result["hosts_changed"][0]["identity_changes"]
+
+
+@pytest.mark.parametrize("scenario", ["added", "removed", "changed"])
+def test_comparison_stops_oversized_port_details_during_construction(scenario):
+    ports = [
+        {"protocol": "tcp", "port": port, "state": "open", "service": "test"}
+        for port in range(1, 10_002)
+    ]
+    large_host = {"ip": "192.0.2.10", "observed_ports": ports}
+    if scenario == "added":
+        before, after = {"hosts": []}, {"hosts": [large_host]}
+    elif scenario == "removed":
+        before, after = {"hosts": [large_host]}, {"hosts": []}
+    else:
+        before, after = {"hosts": [large_host]}, {"hosts": [large_host]}
+    with pytest.raises(ComparisonLimitExceeded):
+        compare_analyses(before, after, max_port_details=10_000)

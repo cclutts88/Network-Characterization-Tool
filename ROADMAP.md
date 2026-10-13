@@ -152,6 +152,63 @@ A roadmap item should only be marked complete when:
   foundation-only capability; it is not on `main`, is not Range-ready proof, and does
   not implement optional callsign display.
 
+## Phase 2 historical analysis and comparison closeout — 2026-10-12
+
+- [~] Phase 2 Step 7 started from commit `c908e80`. Verify that opening a completed
+  historical scan restores its retained analysis without contacting the network or
+  silently substituting another scan, and make the boundary between retained source
+  analysis and current analyst presentation decisions clear to the operator.
+- [~] Phase 2 Step 8 started in parallel because it consumes the same retained scan
+  records. Verify two-scan comparison for hosts, ports, protocols, service/product
+  fingerprints, versions, OS, MAC and identity, including source links, coverage
+  limits, same-scope selection and plain-language interpretation. Completion requires
+  focused and full tests, browser checks, novice-operator review, independent quality
+  gate, and an exact commit reference here.
+- These steps remain foundation-only while in progress. They do not change `main`,
+  contact a live network, or establish Range readiness.
+- Start-gate review halted the first implementation because opening and comparison
+  could still parse or publish during a read, prepared groups were discovered through
+  a newest-5,000-run window, current analyst decisions could be mistaken for immutable
+  scanner facts, and omitted ports could be mislabeled as removed. The corrected path
+  now requires already-completed versioned base-analysis results, verifies every exact
+  group chunk and both retained copies, composes those child results deterministically
+  with `nmap-group-composition:1`, and returns explicit saved-result provenance. Missing,
+  stale, changed, incomplete, or unprepared evidence fails closed with a Prepare,
+  Retry, or Backfill action instead of being recalculated by a GET request.
+- Historical comparison uses exact-address source-reported attributes. Hostname, MAC,
+  vendor and OS changes do not claim that the same physical device changed because
+  DHCP and address reuse can produce the same pattern. Current analyst decisions remain
+  a separate annotation layer, explicit protocol coverage is reported, and a missing
+  individual port row remains Not assessed unless exact retained evidence proves a
+  later state. Physical-device reconciliation and automatic historical conversion stay
+  later roadmap work. Manual imported XML remains available through processed evidence;
+  automated Scan History reopen and compare use the durable prepared-results path.
+- Independent closeout review halted the first corrected build again because a saved
+  database row could name another run inside its manifest, stale jobs could control the
+  recovery message, live offset paging was not bound to one history selection, added and
+  removed host ports bypassed the response limit, and the metadata selector still made
+  per-run database queries. The closeout correction now binds every database row ID to
+  its embedded manifest ID (including grouped chunks), derives recovery state only from
+  the unique authoritative observation and current calculation contract, and stops host
+  and port detail while the comparison is being built. Network-wide changes load five
+  Network Scopes at a time under a selection revision; changed history rejects the next
+  page and tells the operator to rebuild. The selector uses one joined indexed metadata
+  query, then revalidates current computation identity without opening result payloads or
+  evidence files. This bounded interactive contract does not remove evidence; an
+  oversized comparison asks the analyst to narrow the Network Scope or choose smaller
+  saved scans.
+- A second closeout review accepted the source binding, stale-job isolation and
+  construction-time comparison limits, then halted paging and scale completion because
+  a caller could omit the selection revision after page one and the earlier benchmark
+  measured mostly unprepared history below the declared ceiling. Later pages now require
+  the exact 64-character selection revision and fail with rebuild guidance when it is
+  missing or changed. The reviewed ceiling is now 5,000 retained runs and 5,000 prepared
+  groups. A production-selector test builds 5,000 fully prepared, authority-bound groups,
+  validates every current calculation identity, and materializes all metadata in **2.21
+  seconds** while enforcing a **less-than-5-second** request bound and a **less-than-64
+  MiB traced Python-allocation** bound. History beyond that ceiling fails closed with an
+  explicit limit message instead of creating an unbounded request.
+
 ## Field feedback correction cycle — 2026-10-08
 
 - [x] Captured the complete Teams operator-feedback window from 2026-09-28 12:23
@@ -3886,8 +3943,8 @@ high-volume passive evidence.
    evidence and an analysis-ready aggregate, preserve a successful protocol when its
    peer fails, and pass deterministic top-1,000 TCP plus top-100 UDP execution. The
    equivalent full live workload remains a Range acceptance check.
-7. Make historical Analyze reopen full persisted analysis.
-8. Expand scan comparison:
+7. [~] Make historical Analyze reopen full persisted analysis.
+8. [~] Expand scan comparison:
    - hosts
    - ports
    - protocols

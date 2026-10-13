@@ -169,6 +169,12 @@ from app.nmap_base_analysis import (
     analyze_scan_run_nmap_base,
     retire_legacy_scan_analysis_cache,
 )
+from app.retained_scan_analysis import (
+    RetainedScanAnalysisUnavailable,
+    load_prepared_scan_group,
+    list_prepared_scan_group_metadata,
+    list_prepared_scan_groups,
+)
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting import (
@@ -270,6 +276,7 @@ from app.scan_profiles import (
     scan_display_name,
 )
 from app.comparison import (
+    ComparisonLimitExceeded,
     compare_analyses,
     coverage_warnings,
     describe_run_group,
@@ -346,6 +353,7 @@ from app.shell_preferences import (
     publish_shared_theme,
     save_shell_preference,
 )
+import copy
 import hashlib
 import io
 import ipaddress
@@ -3078,37 +3086,67 @@ async def import_xml(request: Request, file: Annotated[UploadFile, File()]) -> d
 
 @app.get("/api/scan-runs/{run_id}/analysis")
 def analyze_scan_run(run_id: str) -> dict:
-    manifest = get_scan_run_plan(run_id)
-    if manifest is None:
-        raise HTTPException(status_code=404, detail="Scan run not found")
-    manifests = list_scan_run_plans(limit=5000)
-    group_key = run_group_key(manifest)
-    group = [item for item in manifests if run_group_key(item) == group_key]
-    if not group:
-        group = [manifest]
-    if not all((run_directory(item["run_id"]) / "scan.xml").is_file() for item in group):
-        raise HTTPException(status_code=409, detail="This scan does not have completed XML results yet")
     try:
-        analysis = _run_group_analysis(group)
-    except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    description = describe_run_group(group)
-    from app.network_map import build_topology
-    analysis = enrich_analysis_macs(
-        analysis,
-        build_topology(),
-        direct_source_label=description.get("display_name") or "Automated Nmap scan",
-        direct_source_url=f"/api/scan-runs/{run_id}/artifacts/xml",
-    )
-    apply_analysis_os_overrides(analysis, DB_PATH)
-    apply_analysis_host_identities(analysis, DB_PATH)
+        retained = load_prepared_scan_group(DB_PATH, DATA_DIR, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan run not found") from exc
+    except RetainedScanAnalysisUnavailable as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    group = retained["manifests"]
+    manifest = next(item for item in group if item["run_id"] == run_id)
+    analysis = retained["analysis"]
+    description = retained["group"]
+    current_annotations = _read_current_scan_annotations(analysis)
     return {
         "run_id": run_id,
         "display_name": manifest.get("display_name") or f"Scan {run_id[:8]}",
         "comparison_name": _comparison_name(group, description),
         "metadata": {**manifest, "group": description},
         "analysis": analysis,
+        "saved_result_provenance": retained["provenance"],
+        "current_annotations": current_annotations,
     }
+
+
+def _read_current_scan_annotations(analysis: dict) -> list[dict]:
+    """Read current analyst decisions without initializing or mutating storage."""
+    if not DB_PATH.is_file():
+        return []
+    hosts = analysis.get("hosts") or []
+    annotations: dict[str, dict] = {
+        str(host.get("ip") or ""): {"ip": str(host.get("ip") or "")}
+        for host in hosts if host.get("ip")
+    }
+    if not annotations:
+        return []
+    with connect_database(DB_PATH, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        tables = {
+            row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        if "analyst_host_identities" in tables:
+            for row in db.execute("SELECT * FROM analyst_host_identities").fetchall():
+                value = dict(row)
+                if value.get("ip") in annotations:
+                    annotations[value["ip"]]["analyst_hostname"] = value
+        if "host_os_overrides" in tables:
+            by_mac = {
+                str(host.get("mac") or "").lower(): str(host.get("ip") or "")
+                for host in hosts if host.get("mac") and host.get("ip")
+            }
+            for row in db.execute("SELECT * FROM host_os_overrides").fetchall():
+                value = dict(row)
+                ip = str(value.get("ip") or "") or by_mac.get(str(value.get("mac") or "").lower(), "")
+                if ip in annotations:
+                    annotations[ip]["analyst_os_override"] = value
+    return [
+        value for value in annotations.values()
+        if len(value) > 1
+    ]
 
 
 def _run_group_analysis(manifests: list[dict]) -> dict:
@@ -3178,6 +3216,63 @@ def _comparison_name(manifests: list[dict], description: dict | None = None) -> 
     scope = ", ".join(description.get("scope", {}).get("targets") or []) or "scope unavailable"
     completed = description.get("completed_at") or description.get("created_at") or "time unavailable"
     return f"{description.get('display_name') or 'Scan'} · {mode} · {completed} · {scope} · {profile_label}"
+
+
+def _prepared_scan_group_or_http(run_id: str) -> dict:
+    try:
+        return load_prepared_scan_group(DB_PATH, DATA_DIR, run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan run not found") from exc
+    except RetainedScanAnalysisUnavailable as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+MAX_COMPARISON_HOST_DETAILS = 2_000
+MAX_COMPARISON_PORT_DETAILS = 10_000
+
+
+def _enforce_comparison_bounds(result: dict) -> None:
+    """Keep one interactive response within reviewed memory and display bounds."""
+    host_rows = sum(
+        len(result.get(key) or [])
+        for key in ("hosts_added", "hosts_removed", "hosts_changed")
+    )
+    port_rows = sum(len(host.get("ports") or []) for host in (result.get("hosts_added") or []))
+    port_rows += sum(len(host.get("ports") or []) for host in (result.get("hosts_removed") or []))
+    port_rows += sum(
+        len(host.get("port_deltas") or []) + len(host.get("service_changes") or [])
+        for host in (result.get("hosts_changed") or [])
+    )
+    if host_rows > MAX_COMPARISON_HOST_DETAILS or port_rows > MAX_COMPARISON_PORT_DETAILS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This comparison is too large for one interactive page. Narrow the "
+                "Network Scope or compare smaller saved scans."
+            ),
+        )
+
+
+def _bounded_compare(*args, **kwargs) -> dict:
+    try:
+        result = compare_analyses(
+            *args,
+            **kwargs,
+            max_host_details=MAX_COMPARISON_HOST_DETAILS,
+            max_port_details=MAX_COMPARISON_PORT_DETAILS,
+        )
+    except ComparisonLimitExceeded as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This comparison is too large for one interactive page. Narrow the "
+                "Network Scope or compare smaller saved scans."
+            ),
+        ) from exc
+    _enforce_comparison_bounds(result)
+    return result
 
 
 def _hunting_group(selected_id: str) -> list[dict]:
@@ -3636,35 +3731,83 @@ def download_hostname_accountability(evidence_id: str) -> FileResponse:
 
 
 @app.get("/api/analysis/network-changes")
-def analyze_current_network_changes() -> dict:
-    """Compare the newest two complete observations for each exact scan scope."""
-    manifests = list_scan_run_plans(limit=5000)
-    for manifest in manifests:
-        manifest["_comparison_xml_available"] = (
-            run_directory(manifest["run_id"]) / "scan.xml"
-        ).is_file()
-    groups = [
-        group for group in group_run_manifests(manifests)
-        if group_is_comparable(group)
-    ]
-    groups.sort(
-        key=lambda group: describe_run_group(group).get("completed_at")
-        or describe_run_group(group).get("created_at") or "",
+def analyze_current_network_changes(
+    limit: int = Query(default=5, ge=1, le=10),
+    offset: int = Query(default=0, ge=0),
+    revision: str | None = Query(default=None, max_length=64),
+) -> dict:
+    """Compare prepared saved results without parsing or publishing on read."""
+    try:
+        metadata = list_prepared_scan_group_metadata(DB_PATH)
+    except RetainedScanAnalysisUnavailable as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    by_scope: dict[tuple[str, ...], list[dict]] = {}
+    for item in metadata:
+        by_scope.setdefault(_hunting_scope_tokens(item["manifests"]), []).append(item)
+    ordered_scopes = sorted(
+        by_scope.items(),
+        key=lambda entry: (
+            entry[1][0]["group"].get("completed_at")
+            or entry[1][0]["group"].get("created_at") or "",
+            entry[0],
+        ),
         reverse=True,
     )
-    by_scope: dict[tuple[str, ...], list[list[dict]]] = {}
-    for group in groups:
-        by_scope.setdefault(_hunting_scope_tokens(group), []).append(group)
+    selection_revision = hashlib.sha256(json.dumps([
+        {
+            "scope": list(scope_key),
+            "groups": [
+                {
+                    "group_id": item["group"].get("group_id"),
+                    "completed_at": item["group"].get("completed_at"),
+                    "created_at": item["group"].get("created_at"),
+                }
+                for item in scope_groups[:2]
+            ],
+        }
+        for scope_key, scope_groups in ordered_scopes
+    ], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if offset > 0 and revision is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "selection_revision_required",
+                "message": "Saved scan history pages must stay tied to one selection. Build the network change view again before loading more scopes.",
+            },
+        )
+    if revision is not None and revision != selection_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "selection_changed",
+                "message": "Saved scan history changed. Build the network change view again before loading more scopes.",
+            },
+        )
+    total_scopes = len(ordered_scopes)
+    selected_scopes = ordered_scopes[offset:offset + limit]
 
     summary_keys = (
         "hosts_added", "hosts_removed", "hosts_changed", "ports_added",
-        "ports_removed", "port_state_changes", "identity_changes", "route_changes",
+        "ports_removed", "ports_not_assessed", "ports_unchanged", "port_state_changes",
+        "identity_changes", "route_changes",
     )
     aggregate = {key: 0 for key in summary_keys}
     scopes = []
-    for scope_groups in by_scope.values():
-        after_group = scope_groups[0]
-        after_description = describe_run_group(after_group)
+    unavailable = []
+    for _scope_key, scope_groups in selected_scopes:
+        try:
+            after_item = load_prepared_scan_group(
+                DB_PATH, DATA_DIR, scope_groups[0]["selection_run_id"],
+            )
+        except (KeyError, RetainedScanAnalysisUnavailable) as exc:
+            unavailable.append({
+                "run_id": scope_groups[0]["selection_run_id"], "reason": str(exc),
+            })
+            continue
+        after_group = after_item["manifests"]
+        after_description = after_item["group"]
         scope_item = {
             "scope": after_description.get("scope") or {},
             "saved_networks": after_description.get("saved_networks") or [],
@@ -3681,13 +3824,28 @@ def analyze_current_network_changes() -> dict:
                 "baseline": None,
             })
             continue
-        before_group = scope_groups[1]
-        before_description = describe_run_group(before_group)
+        try:
+            before_item = load_prepared_scan_group(
+                DB_PATH, DATA_DIR, scope_groups[1]["selection_run_id"],
+            )
+        except (KeyError, RetainedScanAnalysisUnavailable) as exc:
+            unavailable.append({
+                "run_id": scope_groups[1]["selection_run_id"], "reason": str(exc),
+            })
+            scopes.append({
+                **scope_item,
+                "status": "baseline_unavailable",
+                "message": "The prepared baseline could not be verified. Review Scan History.",
+                "baseline": scope_groups[1]["group"],
+            })
+            continue
+        before_group = before_item["manifests"]
+        before_description = before_item["group"]
         before_evidence = _comparison_evidence(before_group, before_description)
         after_evidence = _comparison_evidence(after_group, after_description)
-        comparison = compare_analyses(
-            _run_group_analysis(before_group),
-            _run_group_analysis(after_group),
+        comparison = _bounded_compare(
+            before_item["analysis"],
+            after_item["analysis"],
             before_evidence=before_evidence,
             after_evidence=after_evidence,
         )
@@ -3709,11 +3867,16 @@ def analyze_current_network_changes() -> dict:
             "after": after_description,
             "coverage_compatible": not warnings,
             "coverage_warnings": warnings,
+            "saved_result_provenance": {
+                "before": before_item["provenance"],
+                "after": after_item["provenance"],
+            },
             **comparison,
         })
     return {
         "status": "network_changes_complete",
-        "scope_count": len(scopes),
+        "scope_count": total_scopes,
+        "page_scope_count": len(scopes),
         "compared_scope_count": sum(
             item["status"] == "comparison_complete" for item in scopes
         ),
@@ -3722,6 +3885,14 @@ def analyze_current_network_changes() -> dict:
         ),
         "summary": aggregate,
         "scopes": scopes,
+        "unavailable_saved_analyses": unavailable,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "total": total_scopes,
+            "has_more": offset + len(selected_scopes) < total_scopes,
+            "selection_revision": selection_revision,
+        },
     }
 
 
@@ -4336,11 +4507,12 @@ def simulate_retained_change_scenario(query: ReachabilityChangeScenarioQuery) ->
 def compare_hunting_scans(before: str, after: str) -> dict:
     if before == after:
         raise HTTPException(status_code=422, detail="Choose two different scans")
-    before_group, after_group = _hunting_group(before), _hunting_group(after)
-    before_description = describe_run_group(before_group)
-    after_description = describe_run_group(after_group)
+    before_saved = _prepared_scan_group_or_http(before)
+    after_saved = _prepared_scan_group_or_http(after)
+    before_group, after_group = before_saved["manifests"], after_saved["manifests"]
+    before_description, after_description = before_saved["group"], after_saved["group"]
     before_result = build_hunting_analysis(
-        _run_group_analysis_with_overrides(before_group),
+        before_saved["analysis"],
         evidence={
             **before_description,
             "comparison_name": _comparison_name(before_group, before_description),
@@ -4349,7 +4521,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
         subnets=_hunting_subnets(before_group),
     )
     after_result = build_hunting_analysis(
-        _run_group_analysis_with_overrides(after_group),
+        after_saved["analysis"],
         evidence={
             **after_description,
             "comparison_name": _comparison_name(after_group, after_description),
@@ -4364,6 +4536,10 @@ def compare_hunting_scans(before: str, after: str) -> dict:
         **compare_hunting_results(before_result, after_result),
         "coverage_compatible": not warnings,
         "coverage_warnings": warnings,
+        "saved_result_provenance": {
+            "before": before_saved["provenance"],
+            "after": after_saved["provenance"],
+        },
     }
 
 
@@ -4457,17 +4633,15 @@ def searchsploit_hunting_scan(run_id: str) -> dict:
 
 
 @app.get("/api/scan-comparisons/candidates")
-def comparison_candidates() -> list[dict]:
-    manifests = list_scan_run_plans(limit=5000)
-    for manifest in manifests:
-        manifest["_comparison_xml_available"] = (
-            run_directory(manifest["run_id"]) / "scan.xml"
-        ).is_file()
+def comparison_candidates(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    page = list_prepared_scan_groups(DB_PATH, DATA_DIR, limit=limit, offset=offset)
     candidates = []
-    for group in group_run_manifests(manifests):
-        if not group_is_comparable(group):
-            continue
-        description = describe_run_group(group)
+    for retained in page["items"]:
+        group = retained["manifests"]
+        description = retained["group"]
         first = group[0]
         candidates.append({
             **description,
@@ -4479,38 +4653,30 @@ def comparison_candidates() -> list[dict]:
             "profile_version": first.get("profile_version"),
             "coverage": representative_coverage(group),
             "evidence": _comparison_evidence(group, description),
+            "saved_result_provenance": retained["provenance"],
         })
-    return sorted(candidates, key=lambda item: item.get("completed_at") or item.get("created_at") or "", reverse=True)
+    return {
+        "items": candidates,
+        "unavailable": page.get("unavailable") or [],
+        "pagination": page["pagination"],
+    }
 
 
 @app.get("/api/scan-comparisons/compare")
 def compare_selected_scan_groups(first: str, second: str) -> dict:
-    manifests = list_scan_run_plans(limit=5000)
-    for manifest in manifests:
-        manifest["_comparison_xml_available"] = (
-            run_directory(manifest["run_id"]) / "scan.xml"
-        ).is_file()
-    selected_groups = []
-    for selected_id in (first, second):
-        group = next(
-            (items for items in group_run_manifests(manifests) if any(item.get("run_id") == selected_id for item in items)),
-            None,
-        )
-        if group is None:
-            raise HTTPException(status_code=404, detail="One or both automated scans were not found")
-        if not group_is_comparable(group):
-            raise HTTPException(status_code=409, detail="Both scans must be completed and retain XML for every chunk")
-        selected_groups.append(group)
-    if run_group_key(selected_groups[0][0]) == run_group_key(selected_groups[1][0]):
+    selected = [_prepared_scan_group_or_http(first), _prepared_scan_group_or_http(second)]
+    selected_groups = [item["manifests"] for item in selected]
+    if selected[0]["group"]["group_id"] == selected[1]["group"]["group_id"]:
         raise HTTPException(status_code=422, detail="Choose two different scans")
-    selected_groups.sort(key=lambda group: describe_run_group(group).get("completed_at") or describe_run_group(group).get("created_at") or "")
+    selected.sort(key=lambda item: item["group"].get("completed_at") or item["group"].get("created_at") or "")
+    selected_groups = [item["manifests"] for item in selected]
     before_group, after_group = selected_groups
-    before_description, after_description = describe_run_group(before_group), describe_run_group(after_group)
+    before_description, after_description = selected[0]["group"], selected[1]["group"]
     before_evidence = _comparison_evidence(before_group, before_description)
     after_evidence = _comparison_evidence(after_group, after_description)
-    result = compare_analyses(
-        _run_group_analysis(before_group),
-        _run_group_analysis(after_group),
+    result = _bounded_compare(
+        selected[0]["analysis"],
+        selected[1]["analysis"],
         before_evidence=before_evidence,
         after_evidence=after_evidence,
     )
@@ -4523,55 +4689,47 @@ def compare_selected_scan_groups(first: str, second: str) -> dict:
         "after": {**after_description, "comparison_name": _comparison_name(after_group, after_description)},
         "coverage_compatible": not warnings,
         "coverage_warnings": warnings,
+        "saved_result_provenance": {
+            "before": selected[0]["provenance"],
+            "after": selected[1]["provenance"],
+        },
         **result,
     }
 
 
 @app.get("/api/scan-runs/{run_id}/comparison")
 def compare_scan_run_to_previous_scope(run_id: str) -> dict:
-    manifests = list_scan_run_plans(limit=5000)
-    for manifest in manifests:
-        manifest["_comparison_xml_available"] = (
-            run_directory(manifest["run_id"]) / "scan.xml"
-        ).is_file()
+    current = _prepared_scan_group_or_http(run_id)
+    current_description = current["group"]
+    current_time = current_description.get("completed_at") or current_description.get("created_at") or ""
+    fingerprint = (current_description.get("scope") or {}).get("fingerprint")
     try:
-        selected = select_same_scope_baseline(run_id, manifests)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Scan run not found") from exc
-
-    status = selected["status"]
-    if status != "baseline_found":
-        messages = {
-            "current_running": "This scan or one of its chunks is still running.",
-            "current_incomplete": (
-                "This scan batch is incomplete or does not have XML evidence for every chunk."
-            ),
-            "no_baseline": (
-                "No earlier completed scan has the same effective target scope after exclusions."
-            ),
-        }
+        metadata = list_prepared_scan_group_metadata(DB_PATH)
+    except RetainedScanAnalysisUnavailable as exc:
+        raise HTTPException(
+            status_code=422, detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    baseline_metadata = next((
+        item for item in metadata
+        if item["group"].get("group_id") != current_description.get("group_id")
+        and (item["group"].get("scope") or {}).get("fingerprint") == fingerprint
+        and (item["group"].get("completed_at") or item["group"].get("created_at") or "") < current_time
+    ), None)
+    if baseline_metadata is None:
         return {
-            "status": status,
-            "message": messages[status],
-            "current": selected["current"],
+            "status": "no_baseline",
+            "message": "No earlier prepared saved analysis has the same effective target scope after exclusions.",
+            "current": current_description,
             "baseline": None,
         }
-
-    before_manifests = selected.pop("baseline_manifests")
-    after_manifests = selected.pop("current_manifests")
-    try:
-        before_analysis = _run_group_analysis(before_manifests)
-        after_analysis = _run_group_analysis(after_manifests)
-    except (OSError, ValueError, FileNotFoundError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="The selected comparison evidence is incomplete or unreadable",
-        ) from exc
-    before_evidence = _comparison_evidence(before_manifests, selected["baseline"])
-    after_evidence = _comparison_evidence(after_manifests, selected["current"])
-    result = compare_analyses(
-        before_analysis,
-        after_analysis,
+    baseline = _prepared_scan_group_or_http(baseline_metadata["selection_run_id"])
+    before_manifests, after_manifests = baseline["manifests"], current["manifests"]
+    before_description, after_description = baseline["group"], current_description
+    before_evidence = _comparison_evidence(before_manifests, before_description)
+    after_evidence = _comparison_evidence(after_manifests, after_description)
+    result = _bounded_compare(
+        baseline["analysis"],
+        current["analysis"],
         before_evidence=before_evidence,
         after_evidence=after_evidence,
     )
@@ -4581,11 +4739,15 @@ def compare_scan_run_to_previous_scope(run_id: str) -> dict:
     )
     return {
         "status": "baseline_found",
-        "message": "Compared with the latest completed scan of the same effective scope.",
-        "current": selected["current"],
-        "baseline": selected["baseline"],
+        "message": "Compared with the latest earlier prepared saved analysis of the same effective scope.",
+        "current": current_description,
+        "baseline": before_description,
         "coverage_compatible": not warnings,
         "coverage_warnings": warnings,
+        "saved_result_provenance": {
+            "before": baseline["provenance"],
+            "after": current["provenance"],
+        },
         **result,
     }
 

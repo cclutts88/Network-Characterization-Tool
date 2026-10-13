@@ -169,6 +169,7 @@ def test_phase0_history_has_known_changes_and_exact_duplicate(tmp_path):
     assert comparison["summary"]["hosts_removed"] == 1
     assert comparison["summary"]["ports_added"] == manifest["oracle"]["history"]["ports_added"]
     assert comparison["summary"]["ports_removed"] == manifest["oracle"]["history"]["ports_no_longer_observed"]
+    assert comparison["summary"]["ports_not_assessed"] == manifest["oracle"]["history"]["ports_not_assessed"]
     assert comparison["summary"]["service_changes"] == manifest["oracle"]["history"]["version_changes"]
 
 

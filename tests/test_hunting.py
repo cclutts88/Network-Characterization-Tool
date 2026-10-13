@@ -473,6 +473,47 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     monkeypatch.setattr("app.main.list_scan_run_plans", lambda limit=5000: manifests)
     monkeypatch.setattr("app.main.run_directory", lambda run_id: tmp_path / run_id)
     monkeypatch.setattr("app.network_map.build_topology", lambda: {"nodes": []})
+    def saved(manifest, analysis):
+        return {
+            "manifests": [manifest],
+            "group": {
+                "group_id": f"run:{manifest['run_id']}",
+                "run_ids": [manifest["run_id"]],
+                "created_at": manifest["created_at"],
+                "completed_at": manifest["completed_at"],
+                "display_name": manifest["display_name"],
+                "scope": {"fingerprint": "10.0.0.0/24", "targets": manifest["targets"]},
+                "saved_networks": [],
+            },
+            "analysis": analysis,
+            "provenance": {"composition_version": "test", "children": []},
+        }
+    retained = {
+        before_id: saved(manifests[1], {"hosts": [host("10.0.0.10", [port(80, "http", "nginx")])]}),
+        after_id: saved(manifests[0], {"hosts": [host("10.0.0.10", [port(2222, "ssh", "OpenSSH")])]}),
+    }
+    monkeypatch.setattr(
+        "app.main.load_prepared_scan_group",
+        lambda db_path, data_dir, run_id: retained[run_id],
+    )
+    monkeypatch.setattr(
+        "app.main.list_prepared_scan_groups",
+        lambda db_path, data_dir, limit=25, offset=0: {
+            "items": [retained[after_id], retained[before_id]][offset:offset + limit],
+            "unavailable": [],
+            "pagination": {"limit": limit, "offset": offset, "total": 2, "has_more": offset + limit < 2},
+        },
+    )
+    monkeypatch.setattr(
+        "app.main.list_prepared_scan_group_metadata",
+        lambda db_path: [
+            {
+                "manifests": item["manifests"], "group": item["group"],
+                "selection_run_id": item["group"]["run_ids"][-1],
+            }
+            for item in (retained[after_id], retained[before_id])
+        ],
+    )
 
     with TestClient(app) as client:
         analysis = client.get(f"/api/hunting/{after_id}")
@@ -517,8 +558,9 @@ def test_hunting_api_uses_retained_scan_groups(tmp_path, monkeypatch):
     assert network_changes.json()["scope_count"] == 1
     assert network_changes.json()["compared_scope_count"] == 1
     assert network_changes.json()["summary"]["hosts_changed"] == 1
-    assert network_changes.json()["summary"]["ports_added"] == 1
-    assert network_changes.json()["summary"]["ports_removed"] == 1
+    assert network_changes.json()["summary"]["ports_added"] == 0
+    assert network_changes.json()["summary"]["ports_removed"] == 0
+    assert network_changes.json()["summary"]["ports_not_assessed"] == 2
 
 
 def test_analyze_network_controls_keep_routes_separate_from_policy(monkeypatch):

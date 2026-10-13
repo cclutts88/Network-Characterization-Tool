@@ -12,6 +12,10 @@ from typing import Iterable
 from app.ip_sort import ip_sort_key
 
 
+class ComparisonLimitExceeded(ValueError):
+    """A comparison would exceed the reviewed interactive response bounds."""
+
+
 TERMINAL_STATES = {
     "completed",
     "completed_without_nmap",
@@ -491,6 +495,59 @@ def _port_inventory(host: dict) -> dict[tuple[str, int], dict]:
     return {_port_key(port): port for port in values}
 
 
+def _analysis_protocols(analysis: dict) -> set[str]:
+    return {
+        str(value).lower()
+        for value in (analysis.get("coverage") or {}).get("protocols", []) or []
+        if str(value).strip()
+    }
+
+
+def _explicit_port_assessed(analysis: dict, protocol: str, port: int) -> tuple[bool, str]:
+    coverage = analysis.get("coverage") or {}
+    completion = coverage.get("completion") or {}
+    if not completion.get("successful"):
+        return False, "The source did not prove successful completion"
+    matches = [
+        item for item in coverage.get("scan_types", []) or []
+        if str(item.get("protocol") or "").lower() == protocol
+    ]
+    if len(matches) != 1:
+        return False, f"Exact {protocol.upper()} coverage is unavailable"
+    item = matches[0]
+    if not item.get("service_list_exact"):
+        return False, "The requested port list is not exact"
+    intervals = item.get("service_intervals") or []
+    if not any(int(value.get("start", 1)) <= port <= int(value.get("end", -1)) for value in intervals):
+        return False, f"{protocol.upper()} port {port} was outside the selected ports"
+    return True, f"The source successfully and explicitly assessed {protocol.upper()} port {port}"
+
+
+def _protocol_deltas(before_analysis: dict, after_analysis: dict) -> list[dict]:
+    before = _analysis_protocols(before_analysis)
+    after = _analysis_protocols(after_analysis)
+    return [
+        {
+            "protocol": protocol,
+            "before_assessed": protocol in before,
+            "after_assessed": protocol in after,
+            "classification": (
+                "assessed_in_both" if protocol in before and protocol in after
+                else "newly_assessed" if protocol in after
+                else "not_assessed_later"
+            ),
+            "reason": (
+                "Both saved results include this protocol"
+                if protocol in before and protocol in after
+                else "Only the later saved result includes this protocol"
+                if protocol in after
+                else "The later saved result did not assess this protocol"
+            ),
+        }
+        for protocol in sorted(before | after)
+    ]
+
+
 def _trace_evidence(host: dict) -> dict | None:
     trace = host.get("trace")
     if not trace:
@@ -515,6 +572,8 @@ def compare_analyses(
     *,
     before_evidence: dict | None = None,
     after_evidence: dict | None = None,
+    max_host_details: int | None = None,
+    max_port_details: int | None = None,
 ) -> dict:
     before = {
         canonical_host_key(host): host
@@ -528,13 +587,83 @@ def compare_analyses(
     }
     added_keys = sorted(set(after) - set(before), key=ip_sort_key)
     removed_keys = sorted(set(before) - set(after), key=ip_sort_key)
+    host_detail_count = len(added_keys) + len(removed_keys)
+    if max_host_details is not None and host_detail_count > max_host_details:
+        raise ComparisonLimitExceeded("The comparison contains too many host details")
+    port_detail_count = sum(
+        len(_port_inventory(after[key])) for key in added_keys
+    ) + sum(
+        len(_port_inventory(before[key])) for key in removed_keys
+    )
+    if max_port_details is not None and port_detail_count > max_port_details:
+        raise ComparisonLimitExceeded("The comparison contains too many port details")
     changed = []
+    unchanged_port_count = 0
     for key in sorted(set(before) & set(after), key=ip_sort_key):
         old_host, new_host = before[key], after[key]
         old_ports = _port_inventory(old_host)
         new_ports = _port_inventory(new_host)
-        added_ports = [_service_evidence(new_ports[item]) for item in sorted(set(new_ports) - set(old_ports))]
-        removed_ports = [_service_evidence(old_ports[item]) for item in sorted(set(old_ports) - set(new_ports))]
+        added_ports = []
+        removed_ports = []
+        not_assessed_ports = []
+        port_deltas = []
+        for port_key in sorted(set(old_ports) | set(new_ports)):
+            old_port, new_port = old_ports.get(port_key), new_ports.get(port_key)
+            protocol, port = port_key
+            if old_port is None or new_port is None:
+                port_detail_count += 1
+                if max_port_details is not None and port_detail_count > max_port_details:
+                    raise ComparisonLimitExceeded("The comparison contains too many port details")
+                missing_analysis = before_analysis if old_port is None else after_analysis
+                assessed, reason = _explicit_port_assessed(missing_analysis, protocol, port)
+                # A missing explicit row cannot establish the omitted state because
+                # the reusable base result deliberately does not invent extraport
+                # attribution. Preserve the port as Not assessed even if the scan
+                # selected it; processed scoped receipts can provide stronger proof.
+                classification = "not_assessed"
+                reason = (
+                    f"{reason}; no explicit source-reported state was retained"
+                    if assessed else reason
+                )
+                item = {
+                    "protocol": protocol,
+                    "port": port,
+                    "before": _service_evidence(old_port) if old_port else None,
+                    "after": _service_evidence(new_port) if new_port else None,
+                    "classification": classification,
+                    "reason": reason,
+                }
+                not_assessed_ports.append(item)
+                port_deltas.append(item)
+                continue
+            old_evidence, new_evidence = _service_evidence(old_port), _service_evidence(new_port)
+            if old_evidence == new_evidence:
+                classification = "unchanged"
+                reason = "Both saved results explicitly reported the same state and fingerprint"
+                unchanged_port_count += 1
+            elif old_evidence.get("state") == "open" and new_evidence.get("state") in {"closed", "filtered"}:
+                assessed, reason = _explicit_port_assessed(after_analysis, protocol, port)
+                classification = "no_longer_observed" if assessed else "not_assessed"
+                if classification == "no_longer_observed":
+                    removed_ports.append(old_evidence)
+            elif old_evidence.get("state") in {"closed", "filtered"} and new_evidence.get("state") == "open":
+                assessed, reason = _explicit_port_assessed(before_analysis, protocol, port)
+                classification = "newly_observed" if assessed else "not_assessed"
+                if classification == "newly_observed":
+                    added_ports.append(new_evidence)
+            else:
+                classification = "changed"
+                reason = "Both saved results explicitly reported this port with different fields"
+            port_deltas.append({
+                "protocol": protocol, "port": port,
+                "before": old_evidence, "after": new_evidence,
+                "classification": classification, "reason": reason,
+            })
+            port_detail_count += 1
+            if max_port_details is not None and port_detail_count > max_port_details:
+                raise ComparisonLimitExceeded("The comparison contains too many port details")
+            if classification == "not_assessed":
+                not_assessed_ports.append(port_deltas[-1])
         service_changes = []
         port_state_changes = []
         for port_key in sorted(set(old_ports) & set(new_ports)):
@@ -552,6 +681,9 @@ def compare_analyses(
                     "after": new_service,
                     "changed_fields": changed_fields,
                 })
+                port_detail_count += 1
+                if max_port_details is not None and port_detail_count > max_port_details:
+                    raise ComparisonLimitExceeded("The comparison contains too many port details")
                 if "state" in changed_fields:
                     port_state_changes.append({
                         "protocol": port_key[0],
@@ -575,13 +707,18 @@ def compare_analyses(
             {"before": old_trace, "after": new_trace}
             if old_trace != new_trace else None
         )
-        if added_ports or removed_ports or service_changes or identity_changes or route_change:
+        if added_ports or removed_ports or not_assessed_ports or service_changes or identity_changes or route_change:
+            host_detail_count += 1
+            if max_host_details is not None and host_detail_count > max_host_details:
+                raise ComparisonLimitExceeded("The comparison contains too many host details")
             changed.append({
                 "key": key,
                 "ip": new_host.get("ip") or old_host.get("ip"),
                 "hostname": new_host.get("hostname") or old_host.get("hostname"),
                 "added_ports": added_ports,
                 "removed_ports": removed_ports,
+                "not_assessed_ports": not_assessed_ports,
+                "port_deltas": port_deltas,
                 "service_changes": service_changes,
                 "port_state_changes": port_state_changes,
                 "identity_changes": identity_changes,
@@ -609,6 +746,8 @@ def compare_analyses(
             "hosts_changed": len(changed),
             "ports_added": sum(len(host["added_ports"]) for host in changed),
             "ports_removed": sum(len(host["removed_ports"]) for host in changed),
+            "ports_not_assessed": sum(len(host["not_assessed_ports"]) for host in changed),
+            "ports_unchanged": unchanged_port_count,
             "service_changes": sum(len(host["service_changes"]) for host in changed),
             "port_state_changes": sum(len(host["port_state_changes"]) for host in changed),
             "identity_changes": sum(len(host["identity_changes"]) for host in changed),
@@ -619,5 +758,6 @@ def compare_analyses(
         "hosts_added": [public_host(after[key], key) for key in added_keys],
         "hosts_removed": [public_host(before[key], key) for key in removed_keys],
         "hosts_changed": changed,
+        "protocol_deltas": _protocol_deltas(before_analysis, after_analysis),
         "evidence": {"before": before_evidence, "after": after_evidence},
     }
