@@ -2064,6 +2064,75 @@ def device_collection_directory(run_id: str, config_dir: Path | None = None) -> 
     return candidate
 
 
+def recover_interrupted_device_collections(
+    config_dir: Path | None = None,
+) -> dict[str, list[str]]:
+    """Close device-contact records that a restarted process cannot safely resume."""
+    root = (config_dir or CONFIG_DIR).resolve()
+    recovered: list[str] = []
+    unreadable: list[str] = []
+    if not root.exists():
+        return {"interrupted_run_ids": recovered, "unreadable_run_ids": unreadable}
+    for manifest_path in sorted(root.glob("*/manifest.json")):
+        run_dir = manifest_path.parent
+        if (
+            run_dir.is_symlink()
+            or manifest_path.is_symlink()
+            or not RUN_ID_RE.fullmatch(run_dir.name)
+        ):
+            unreadable.append(run_dir.name)
+            continue
+        try:
+            if run_dir.resolve() != root / run_dir.name:
+                unreadable.append(run_dir.name)
+                continue
+        except OSError:
+            unreadable.append(run_dir.name)
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            unreadable.append(manifest_path.parent.name)
+            continue
+        if manifest.get("status") not in {"running", "waiting_for_password"}:
+            continue
+        run_id = str(manifest.get("run_id") or "")
+        if run_id != run_dir.name or not RUN_ID_RE.fullmatch(run_id):
+            unreadable.append(run_dir.name)
+            continue
+        completed_at = utc_now()
+        previous_status = str(manifest.get("status") or "running")
+        manifest.update(
+            {
+                "status": "interrupted",
+                "success": False,
+                "completed_at": completed_at,
+                "output_complete": False,
+                "credentials_stored": False,
+                "recovery_required": True,
+                "interruption_reason": (
+                    "NCT restarted while device contact was active or waiting for an "
+                    "interactive password. The contact will not resume automatically. "
+                    "The former SSH or capture process may still require administrator "
+                    "verification. Partial files remain unregistered until termination "
+                    "and stable-file checks are proven; then start a new collection."
+                ),
+                "previous_runtime_status": previous_status,
+                "summary_verification_status": "not_available",
+                "summary_verification_detail": (
+                    "Interrupted device contact may have left files that are still "
+                    "changing. NCT retained them in place but did not register or trust "
+                    "them as completed evidence."
+                ),
+            }
+        )
+        manifest.pop("password", None)
+        manifest.pop("key_path", None)
+        _write_json_atomic(manifest_path, manifest)
+        recovered.append(run_id)
+    return {"interrupted_run_ids": recovered, "unreadable_run_ids": unreadable}
+
+
 def _read_summary_text(run_dir: Path, filenames: list[str]) -> tuple[str, str | None, bool]:
     for filename in filenames:
         path = run_dir / filename
@@ -3410,6 +3479,8 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                     "collection_profile_version", "collection_profile",
                     "remote_cleanup_status", "command_history_status",
                     "summary_verification_status", "summary_verification_detail",
+                    "recovery_required", "interruption_reason",
+                    "previous_runtime_status",
                 )
             }
             from app.derived_jobs import device_summary_job_for_run

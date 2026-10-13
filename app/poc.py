@@ -659,27 +659,39 @@ def add_global_no_strike(
         result = _store_global_no_strike_in_transaction(
             db, [*current, *requested], request.changed_by, action="add"
         )
-    _cancel_active_runs_for_new_exclusions(
-        requested,
-        revision=result["revision"],
-        changed_by=request.changed_by,
-        db_path=db_path,
-    )
+        cancellation_records = _persist_active_run_cancellations_in_transaction(
+            db,
+            requested,
+            revision=result["revision"],
+            changed_by=request.changed_by,
+        )
+    # Signal workers only after the exclusion and every durable cancellation request
+    # have committed together. A failed write rolls the whole safety change back.
+    for run_id, _intersecting, _cause in cancellation_records:
+        with ACTIVE_RUNS_LOCK:
+            control = ACTIVE_RUNS.get(run_id)
+        if control is not None:
+            control.cancel_event.set()
     return result
 
 
-def _cancel_active_runs_for_new_exclusions(
-    entries: list[str], *, revision: int, changed_by: str, db_path: Path = DB_PATH
-) -> None:
-    """Promptly stop active contact when a new shared boundary intersects it."""
+def _persist_active_run_cancellations_in_transaction(
+    db, entries: list[str], *, revision: int, changed_by: str
+) -> list[tuple[str, list[str], dict]]:
+    """Atomically bind a new safety boundary to every affected active run."""
     exclusions = [ipaddress.ip_network(item, strict=False) for item in entries]
-    with ACTIVE_RUNS_LOCK:
-        active = list(ACTIVE_RUNS.items())
     cancellation_records = []
-    for run_id, control in active:
-        manifest = get_scan_run_plan(run_id, db_path)
-        if manifest is None:
+    rows = db.execute(
+        """SELECT manifest_json FROM scan_runs
+             WHERE json_extract(manifest_json, '$.status')
+                   IN ('running', 'awaiting_fallback_approval')
+             ORDER BY created_at ASC, rowid ASC"""
+    ).fetchall()
+    for row in rows:
+        manifest = json.loads(row[0])
+        if manifest.get("status") not in {"running", "awaiting_fallback_approval"}:
             continue
+        run_id = manifest["run_id"]
         targets = [
             ipaddress.ip_network(item, strict=False)
             for item in manifest.get("targets") or []
@@ -699,30 +711,101 @@ def _cancel_active_runs_for_new_exclusions(
             "requested_at": requested_at,
             "requested_by": changed_by,
         }
-        # Stop every intersecting control before any database write can fail.
-        # Persistence below is provenance for the already-issued safety signal.
-        control.cancel_event.set()
-        manifest["safety_cancellation_requested"] = cause
-        manifest["cancellation_cause"] = "global_no_strike"
-        cancellation_records.append((run_id, manifest, intersecting))
-    for run_id, manifest, intersecting in cancellation_records:
-        try:
-            update_scan_run_manifest(manifest, db_path)
-        except Exception:
-            pass
-        try:
-            append_scan_audit(
-                db_path,
-                run_id=run_id,
-                event="safety_cancellation_requested",
-                actor=changed_by,
-                details=(
-                    f"Global No-Strike revision {revision} intersects this run: "
-                    + ", ".join(intersecting)
-                ),
-            )
-        except Exception:
-            pass
+        _request_scan_cancellation_in_transaction(
+            db,
+            run_id,
+            requested_by=changed_by,
+            cause="global_no_strike",
+            detail=json.dumps(cause, sort_keys=True),
+            requested_at=cause["requested_at"],
+        )
+        db.execute(
+            """INSERT INTO scan_run_audit (
+                   run_id, event, actor, changed_at, details
+               ) VALUES (?, 'safety_cancellation_requested', ?, ?, ?)""",
+            (
+                run_id,
+                changed_by,
+                cause["requested_at"],
+                f"Global No-Strike revision {revision} intersects this run: "
+                + ", ".join(intersecting),
+            ),
+        )
+        cancellation_records.append((run_id, intersecting, cause))
+    return cancellation_records
+
+
+def _request_scan_cancellation_in_transaction(
+    db,
+    run_id: str,
+    *,
+    requested_by: str,
+    cause: str,
+    detail: str = "",
+    requested_at: str | None = None,
+) -> bool:
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("Invalid scan run identifier")
+    at = requested_at or utc_now()
+    existing = db.execute(
+        "SELECT cancellation_requested_at FROM scan_run_control WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    if existing and existing[0]:
+        return True
+    db.execute(
+        """INSERT INTO scan_run_control(
+               run_id, cancellation_requested_at, cancellation_requested_by,
+               cancellation_cause, cancellation_detail
+           ) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(run_id) DO UPDATE SET
+               cancellation_requested_at = excluded.cancellation_requested_at,
+               cancellation_requested_by = excluded.cancellation_requested_by,
+               cancellation_cause = excluded.cancellation_cause,
+               cancellation_detail = excluded.cancellation_detail,
+               cancellation_acknowledged_at = NULL""",
+        (run_id, at, requested_by[:100], cause[:100], detail[:2000]),
+    )
+    return True
+
+
+def request_scan_cancellation(
+    run_id: str,
+    *,
+    requested_by: str,
+    cause: str,
+    detail: str = "",
+    requested_at: str | None = None,
+    db_path: Path = DB_PATH,
+) -> bool:
+    """Persist one idempotent cancellation request outside mutable scan progress."""
+    init_poc_storage(db_path)
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("Invalid scan run identifier")
+    at = requested_at or utc_now()
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        return _request_scan_cancellation_in_transaction(
+            db,
+            run_id,
+            requested_by=requested_by,
+            cause=cause,
+            detail=detail,
+            requested_at=at,
+        )
+
+
+def scan_cancellation_requested(run_id: str, db_path: Path = DB_PATH) -> bool:
+    """Read the durable cancellation signal used by workers in every process."""
+    init_poc_storage(db_path)
+    with connect_database(db_path, read_only=True) as db:
+        row = db.execute(
+            """SELECT cancellation_requested_at
+                 FROM scan_run_control WHERE run_id = ?
+                   AND cancellation_acknowledged_at IS NULL""",
+            (run_id,),
+        ).fetchone()
+    return bool(row and row[0])
 
 
 def effective_no_strike(
@@ -1276,6 +1359,25 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                     value_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     updated_by TEXT NOT NULL
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scan_run_control (
+                    run_id TEXT PRIMARY KEY,
+                    cancellation_requested_at TEXT,
+                    cancellation_requested_by TEXT,
+                    cancellation_cause TEXT,
+                    cancellation_detail TEXT,
+                    cancellation_acknowledged_at TEXT,
+                    CHECK (
+                        cancellation_requested_at IS NULL
+                        OR (
+                            cancellation_requested_by IS NOT NULL
+                            AND cancellation_cause IS NOT NULL
+                        )
+                    )
                 )
                 """
             )
@@ -1898,13 +2000,25 @@ def set_scan_schedule_enabled(
                 and schedule.get("batch_status")
                 in {
                     "paused_after_current_chunk",
-                    "interrupted_paused",
                     "failed_to_dispatch",
                 }
             )
             if resuming:
                 schedule["batch_status"] = "recovery_pending"
                 schedule["resume_after_chunk"] = completed_chunks
+                schedule["next_run_at"] = utc_now()
+            elif schedule.get("batch_status") == "recovery_review_required":
+                schedule["batch_status"] = None
+                schedule["active_batch_id"] = None
+                schedule["active_chunk_number"] = None
+                schedule["active_chunk_count"] = None
+                schedule["completed_chunk_count"] = 0
+                schedule["resume_after_chunk"] = 0
+                schedule["active_target_chunks"] = None
+                schedule["last_dispatch_note"] = (
+                    "Review completed; the interrupted occurrence remains closed. "
+                    "A new occurrence will use the current saved schedule."
+                )
                 schedule["next_run_at"] = utc_now()
             elif not schedule.get("next_run_at"):
                 schedule["next_run_at"] = utc_now()
@@ -2253,6 +2367,31 @@ def with_queue_state(
     result["queue_waiting_count"] = len(queued_ids)
     result.setdefault("owner", result.get("created_by") or result.get("operator"))
     result.setdefault("requested_by", result.get("created_by") or result.get("operator"))
+    with connect_database(db_path, read_only=True) as db:
+        control = db.execute(
+            """SELECT cancellation_requested_at, cancellation_requested_by,
+                      cancellation_cause, cancellation_detail,
+                      cancellation_acknowledged_at
+                 FROM scan_run_control WHERE run_id = ?""",
+            (result.get("run_id"),),
+        ).fetchone()
+    if control and control[0]:
+        result.update(
+            {
+                "cancellation_requested_at": control[0],
+                "cancellation_requested_by": control[1],
+                "cancellation_cause": control[2],
+                "cancellation_detail": control[3],
+                "cancellation_acknowledged_at": control[4],
+            }
+        )
+        if control[2] == "global_no_strike" and control[3]:
+            try:
+                result["safety_cancellation_requested"] = json.loads(control[3])
+            except json.JSONDecodeError:
+                result["safety_cancellation_requested"] = {
+                    "detail": control[3]
+                }
     return result
 
 
@@ -2812,6 +2951,7 @@ def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
     try:
         with connect_database(db_path) as db:
             db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM scan_run_control WHERE run_id = ?", (run_id,))
             db.execute("DELETE FROM scan_runs WHERE run_id = ?", (run_id,))
     except sqlite3.IntegrityError as exc:
         raise RuntimeError(
@@ -2836,6 +2976,7 @@ def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
     try:
         with connect_database(db_path) as db:
             db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM scan_run_control")
             db.execute("DELETE FROM scan_runs")
             try:
                 db.execute("DELETE FROM imports")
@@ -3119,7 +3260,10 @@ def execute_scan_run(
                             db_path=db_path, data_dir=data_dir,
                         )
                     return ("completed" if code in allowed_exit_codes else "failed", code)
-                if control.cancel_event.is_set():
+                if control.cancel_event.is_set() or scan_cancellation_requested(
+                    run_id, db_path
+                ):
+                    control.cancel_event.set()
                     terminate_process(process)
                     return "cancelled", process.poll()
                 if time.monotonic() >= deadline:
@@ -3262,7 +3406,10 @@ def execute_scan_run(
                             db_path=db_path, data_dir=data_dir,
                         )
                         while not control.fallback_decision_event.is_set():
-                            if control.cancel_event.is_set():
+                            if control.cancel_event.is_set() or scan_cancellation_requested(
+                                run_id, db_path
+                            ):
+                                control.cancel_event.set()
                                 manifest["status"], run_phases = "cancelled", False
                                 break
                             sleep_fn(0.2)
@@ -4077,35 +4224,18 @@ def recover_scheduler_state(
             )
         ]
         schedule["recovery_count"] = int(schedule.get("recovery_count") or 0) + 1
-        has_frozen_chunks = bool(schedule.get("active_target_chunks"))
-        if schedule.get("enabled") and has_frozen_chunks:
-            schedule["batch_status"] = "recovery_pending"
-            schedule["next_run_at"] = recovered_at
-            schedule["last_dispatch_note"] = (
-                f"Restart recovery will resume after {completed} completed chunk(s)"
-            )
-            details = (
-                f"Recovered an interrupted batch; {completed} completed chunk(s) "
-                "will not be repeated"
-            )
-        elif schedule.get("enabled"):
-            schedule["enabled"] = False
-            schedule["batch_status"] = "recovery_review_required"
-            schedule["next_run_at"] = None
-            schedule["last_dispatch_note"] = (
-                "Interrupted legacy occurrence paused because its original chunk plan "
-                "was not retained; review it and start a new occurrence"
-            )
-            details = (
-                "Paused an interrupted legacy batch because its original target chunks "
-                "were unavailable and could not be resumed safely"
-            )
-        else:
-            schedule["batch_status"] = "interrupted_paused"
-            schedule["last_dispatch_note"] = (
-                f"Interrupted after {completed} completed chunk(s); enable to resume"
-            )
-            details = "Recorded an interrupted batch while the schedule was paused"
+        schedule["enabled"] = False
+        schedule["batch_status"] = "recovery_review_required"
+        schedule["next_run_at"] = None
+        schedule["last_dispatch_note"] = (
+            f"Restart interrupted this occurrence after {completed} completed "
+            "chunk(s). NCT will not resume network contact automatically. Review "
+            "the retained runs, then start a new occurrence when authorized."
+        )
+        details = (
+            "Paused an interrupted batch for operator review; network contact never "
+            "transfers or resumes from restart recovery"
+        )
         _append_schedule_history(
             schedule,
             "restart_recovery",
@@ -4832,15 +4962,28 @@ def cancel_scan_run(run_id: str, request: Request) -> dict:
         )
         dispatch_next_queued_run(db_path=DB_PATH, data_dir=DATA_DIR)
         return {"run_id": run_id, "status": "cancelled"}
-    if control is None or manifest["status"] not in {"queued", "running", "awaiting_fallback_approval"}:
+    if manifest["status"] not in {"queued", "running", "awaiting_fallback_approval"}:
         raise HTTPException(status_code=409, detail="Scan run is not active")
-    control.cancel_event.set()
+    if scan_cancellation_requested(run_id, DB_PATH):
+        return {"run_id": run_id, "status": "cancellation_requested"}
+    requested_at = utc_now()
+    request_scan_cancellation(
+        run_id,
+        requested_by=actor,
+        cause="operator",
+        detail="Cancellation requested for the active analyzer process",
+        requested_at=requested_at,
+        db_path=DB_PATH,
+    )
+    if control is not None:
+        control.cancel_event.set()
     append_scan_audit(
         DB_PATH,
         run_id=run_id,
         event="cancellation_requested",
         actor=actor,
         details="Cancellation requested for the active analyzer process",
+        changed_at=requested_at,
     )
     return {"run_id": run_id, "status": "cancellation_requested"}
 

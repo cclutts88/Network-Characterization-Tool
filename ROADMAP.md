@@ -2293,6 +2293,59 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     qualify shared database and artifact storage before any multi-replica deployment.
     No Range, mission, `main`, multi-replica, scan-transfer, schedule-transfer or
     device-contact-transfer readiness is claimed.
+    **2026-10-12 cross-process coordination gate 6 network-contact package start:**
+    Extend the common database-time lease and fencing contract to active Nmap,
+    scheduled occurrences and interactive device contact. Every attempt requires one
+    durable identity, opaque owner and fencing epoch. Unstarted work may move after
+    expiry; once Nmap, FPING, tcpdump, SSH, SCP or another network-contact phase starts,
+    expiry becomes Needs attention and never authorizes automatic resume or transfer.
+    Cancellation remains requested until the owning worker proves every child process
+    stopped. Final status, evidence registration, authority activation and lease release
+    must publish together under the current fence; a stale worker may retain partial
+    files but cannot label them complete. Scheduled occurrences must freeze exact scope,
+    profile, exclusions, chunks, actor and due time under a unique durable key, prevent
+    duplicate dispatch, bound missed occurrences and pause later work after an ambiguous
+    active chunk. Interactive passwords remain memory-only and owner-bound. Kubernetes
+    active collection remains disabled until placement, privileges and credential
+    routing are separately proven. Start quality gate: **CLEAR — DOCUMENTED DEVIATION**.
+    The first correction removes legacy automatic scheduled-batch resume: restart now
+    pauses the occurrence for review and requires an explicit new occurrence.
+    **2026-10-12 Gate 6 network-contact restart/operator correction:** The novice
+    walkthrough halted this subgate because waiting scans did not disclose their
+    post-restart behavior, interrupted scan and schedule states exposed internal labels,
+    active cancellation did not show its pending state, device password/contact records
+    could remain falsely active after restart, and the Schedules table could force
+    page-wide overflow. Waiting scans now state that they remain saved and may contact
+    the network automatically when capacity returns. Cancellation intent is retained in
+    a separate database control row that an older progress-manifest write cannot erase,
+    is visible as Cancelling, is polled by the owning worker even when the request came
+    through another process, and a Global No-Strike change writes the same durable stop
+    signal before notifying a local worker. Interrupted scans and schedule
+    occurrences show Needs attention and explicitly never resume; enabling or running a
+    recovered schedule starts a new occurrence. Startup converts saved device records in
+    Running or Waiting for password to Interrupted, removes any unexpected credential
+    fields, and leaves partial files unregistered until an administrator proves the old
+    SSH/capture process stopped and the files are stable. Recovery rejects mismatched,
+    escaping or symlinked collection paths before writing. Device contact stays separate
+    from retained-file analysis in Collection History. Every restart-interrupted
+    schedule enters review-required, even when it was already paused; re-enabling closes
+    the old occurrence and prepares a new one instead of resuming old chunks. The
+    schedule table now owns its horizontal scroller. A Global No-Strike addition and
+    every affected active-run cancellation now commit in one transaction; a fault on
+    the second cancellation write rolls the exclusion, every control row and every
+    audit event back before any local worker is signalled. Scan History no longer
+    claims that an old scanner or capture process stopped during restart. Its page and
+    contextual Guide both require administrator verification before partial files are
+    trusted. The Active Scans, Schedules and Device Collection Guides now carry the
+    same restart and network-contact boundaries shown on their pages. Focused
+    Linux/Docker validation passes **119 tests with 2 skips**; the final interface
+    subset passes **83 tests with 1 skip**. The complete isolated suite passes **1,437
+    tests with 15 skips** and one existing dependency warning. The fresh disposable
+    preview rendered Scans, Schedules and Device History with the Guide open, no
+    page-wide overflow or header displacement, and no browser warning or error.
+    Independent quality gate: **CLEAR**. Novice-operator gate: **CLEAR**. This
+    correction does not close Gate 6: durable occurrence/chunk claims and fenced
+    active scan/device publication remain in progress.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

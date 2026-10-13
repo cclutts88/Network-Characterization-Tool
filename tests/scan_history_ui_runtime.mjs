@@ -4,6 +4,10 @@ import fs from "node:fs";
 const source = fs.readFileSync(new URL("../app/ui.py", import.meta.url), "utf8");
 const analysisSource = fs.readFileSync(new URL("../app/analysis_ui.py", import.meta.url), "utf8");
 
+assert.ok(source.includes("NCT will not resume this scan after restart."));
+assert.ok(source.includes("verify that the former scanner or capture process stopped"));
+assert.ok(!source.includes("Stopped during restart; this scan will not resume."));
+
 function handler(name) {
   const match = source.match(new RegExp(`^async function ${name}\\(.*$`, "m"));
   assert.ok(match, `Could not find ${name} in app/ui.py`);

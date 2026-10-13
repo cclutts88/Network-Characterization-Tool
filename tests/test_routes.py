@@ -865,6 +865,10 @@ def test_device_page_has_one_time_password_dialog_and_reusable_collection_settin
     assert "credentials_stored" not in response.text
     assert "Secure password transport is mandatory" in response.text
     assert "loopback-only development address" in response.text
+    assert "Collection</strong> describes device contact" in response.text
+    assert "Saved analysis</strong> describes local work" in response.text
+    assert "will not restart that contact" in response.text
+    assert "former SSH or capture process stopped" in response.text
 
 
 def test_config_candidate_can_be_added_to_saved_networks_and_then_disappears(

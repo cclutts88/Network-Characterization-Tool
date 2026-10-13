@@ -282,6 +282,72 @@ def test_device_history_defers_artifact_lookup(tmp_path, monkeypatch):
     assert detail['commands'] and detail['artifacts']
 
 
+@pytest.mark.parametrize('runtime_status', ['running', 'waiting_for_password'])
+def test_restart_marks_device_contact_interrupted_without_retaining_password(
+    tmp_path, monkeypatch, runtime_status,
+):
+    root = tmp_path / 'device-configs'
+    run_id = ('a' if runtime_status == 'running' else 'b') * 32
+    folder = root / run_id
+    folder.mkdir(parents=True)
+    (folder / 'stdout.txt').write_text('partial retained device output')
+    (folder / 'manifest.json').write_text(json.dumps({
+        'run_id': run_id,
+        'created_at': '2026-10-12T01:00:00Z',
+        'status': runtime_status,
+        'operation': 'configuration_pull',
+        'vendor': 'cisco',
+        'device_type': 'router',
+        'device_address': '192.0.2.10',
+        'operator': 'analyst',
+        'credentials_stored': False,
+        'password': 'must-not-survive',
+    }))
+    monkeypatch.setattr(device_configs, 'CONFIG_DIR', root)
+    monkeypatch.setattr(device_configs, 'DB_PATH', tmp_path / 'analyzer.db')
+
+    result = device_configs.recover_interrupted_device_collections(root)
+    manifest = json.loads((folder / 'manifest.json').read_text())
+
+    assert result['interrupted_run_ids'] == [run_id]
+    assert manifest['status'] == 'interrupted'
+    assert manifest['output_complete'] is False
+    assert manifest['recovery_required'] is True
+    assert 'will not resume automatically' in manifest['interruption_reason']
+    assert manifest['previous_runtime_status'] == runtime_status
+    assert 'password' not in manifest
+    assert manifest['summary_verification_status'] == 'not_available'
+    assert not device_configs.DB_PATH.exists()
+
+
+def test_device_restart_recovery_rejects_mismatched_and_symlinked_paths(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / 'device-configs'
+    root.mkdir()
+    mismatched = root / ('c' * 32)
+    mismatched.mkdir()
+    (mismatched / 'manifest.json').write_text(json.dumps({
+        'run_id': 'd' * 32, 'status': 'running', 'credentials_stored': False,
+    }))
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'manifest.json').write_text(json.dumps({
+        'run_id': 'e' * 32, 'status': 'running', 'credentials_stored': False,
+    }))
+    symlinked = root / ('e' * 32)
+    symlinked.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(device_configs, 'CONFIG_DIR', root)
+    monkeypatch.setattr(device_configs, 'DB_PATH', tmp_path / 'analyzer.db')
+
+    result = device_configs.recover_interrupted_device_collections(root)
+
+    assert result['interrupted_run_ids'] == []
+    assert set(result['unreadable_run_ids']) == {'c' * 32, 'e' * 32}
+    assert json.loads((mismatched / 'manifest.json').read_text())['status'] == 'running'
+    assert json.loads((outside / 'manifest.json').read_text())['status'] == 'running'
+
+
 def test_selected_dns_names_visible_without_losing_scanner_evidence(tmp_path):
     path = tmp_path/'test.db'
     select_host_identity(path, ip='10.0.0.2', hostname='server.example', selection_source='dns', imported_by='analyst')

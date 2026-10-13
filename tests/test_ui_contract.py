@@ -367,6 +367,10 @@ def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
     assert "pinnedGuideTarget.classList.add('nct-guide-pinned-target')" in SHELL_SCRIPT
     assert "guide.classList.toggle('nct-guide-pinned',guidePinned)" in SHELL_SCRIPT
     assert "body.nct-shell>header{position:sticky!important;top:0!important" in SHELL_SCRIPT
+    assert "Waiting scans survive an NCT restart" in SHELL_SCRIPT
+    assert "that occurrence and its remaining chunks will not resume" in SHELL_SCRIPT
+    assert "former scanner or capture process stopped" in SHELL_SCRIPT
+    assert "Collection and saved-analysis states remain separate" in SHELL_SCRIPT
 
 
 def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():

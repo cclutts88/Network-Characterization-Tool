@@ -117,6 +117,7 @@ from app.poc import (
 )
 from app.device_configs import (
     CONFIG_DIR,
+    recover_interrupted_device_collections,
     router as device_config_router,
 )
 from app.device_evidence_catalog import (
@@ -1394,6 +1395,7 @@ async def lifespan(_: FastAPI):
         init_pipeline_intake_storage(DB_PATH)
         init_work_coordination_storage(DB_PATH)
         init_derived_job_storage(DB_PATH)
+        recover_interrupted_device_collections(CONFIG_DIR)
         reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
         init_auth_storage(DB_PATH)
         init_achievement_storage(DB_PATH)

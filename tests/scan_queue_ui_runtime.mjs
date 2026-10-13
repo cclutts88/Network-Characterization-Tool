@@ -10,7 +10,8 @@ function handler(name) {
 }
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0;
+  let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  const esc=value=>String(value??'');
   let resolveFetch,openedDuringFetch=false,renderedItem=null;
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',_html:'',set innerHTML(value){this._html=value;renderedItem={dataset:{queueRun:'pending'},open:false}},get innerHTML(){return this._html}});return controls.get(id)};
@@ -37,7 +38,8 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0;
+  let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  const esc=value=>String(value??'');
   const requests=[];
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',innerHTML:''});return controls.get(id)};
@@ -83,7 +85,8 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentId=null,currentLive=false,pollTimer=null,activeViewRevision=0,activeStatusRequestRevision=0,activeStatusAppliedRevision=0;
+  let queueLoadRevision=0,queueTimer=null,currentId=null,currentLive=false,pollTimer=null,activeViewRevision=0,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  const esc=value=>String(value??'');
   const requests=[];
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',innerHTML:''});return controls.get(id)};
@@ -112,7 +115,8 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentId='active-A',currentLive=true,pollTimer=null,activeViewRevision=1,activeStatusRequestRevision=0,activeStatusAppliedRevision=0;
+  let queueLoadRevision=0,queueTimer=null,currentId='active-A',currentLive=true,pollTimer=null,activeViewRevision=1,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  const esc=value=>String(value??'');
   const requests=[];
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',innerHTML:''});return controls.get(id)};

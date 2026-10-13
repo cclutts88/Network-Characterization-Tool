@@ -3,6 +3,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -453,7 +455,7 @@ def test_schedule_changes_retain_operator_audit_history(tmp_path):
     assert "builtin-comprehensive" in changed["profile_id"]
 
 
-def test_restart_recovery_resumes_after_completed_chunks(monkeypatch, tmp_path):
+def test_restart_recovery_never_resumes_network_contact_automatically(tmp_path):
     db_path = tmp_path / "analyzer.db"
     data_dir = tmp_path / "data"
     schedule = create_scan_schedule(
@@ -511,44 +513,13 @@ def test_restart_recovery_resumes_after_completed_chunks(monkeypatch, tmp_path):
     pending = poc.get_scan_schedule(schedule["schedule_id"], db_path)
 
     assert recovered["orphaned_run_ids"] == ["2" * 32]
-    assert pending["batch_status"] == "recovery_pending"
+    assert pending["enabled"] is False
+    assert pending["batch_status"] == "recovery_review_required"
     assert pending["resume_after_chunk"] == 1
     assert pending["active_target_chunks"] == frozen_chunks
     assert poc.get_scan_run_plan("2" * 32, db_path)["status"] == "interrupted"
-
-    add_global_no_strike(
-        NoStrikeUpdate(entries=["198.51.100.4"], changed_by="safety-officer"),
-        db_path,
-    )
-
-    captured = []
-    completed = {}
-
-    def fake_launch(request, **_kwargs):
-        captured.append(request.model_dump())
-        run_id = f"{len(captured) + 2:032x}"
-        completed[run_id] = {"run_id": run_id, "status": "completed"}
-        return {"run_id": run_id, "status": "queued"}
-
-    monkeypatch.setattr(poc, "launch_scan_run", fake_launch)
-    monkeypatch.setattr(
-        poc, "get_scan_run_plan", lambda run_id, _db_path: completed.get(run_id)
-    )
-    execute_schedule_batch(
-        schedule["schedule_id"],
-        "b" * 32,
-        advance_schedule=True,
-        db_path=db_path,
-        data_dir=data_dir,
-        sleep_fn=lambda _seconds: None,
-    )
-
-    assert [item["chunk_number"] for item in captured] == [2, 3]
-    assert [item["targets"] for item in captured] == frozen_chunks[1:]
-    assert all(item["no_strike"] == [] for item in captured)
-    finished = poc.get_scan_schedule(schedule["schedule_id"], db_path)
-    assert finished["last_occurrence_status"] == "completed"
-    assert finished["completed_chunk_count"] == 3
+    assert pending["next_run_at"] is None
+    assert "will not resume network contact automatically" in pending["last_dispatch_note"]
 
 
 def test_legacy_restart_without_frozen_chunks_pauses_for_review(tmp_path):
@@ -586,7 +557,52 @@ def test_legacy_restart_without_frozen_chunks_pauses_for_review(tmp_path):
 
     assert recovered["enabled"] is False
     assert recovered["batch_status"] == "recovery_review_required"
-    assert "original chunk plan" in recovered["last_dispatch_note"]
+    assert "will not resume network contact automatically" in recovered["last_dispatch_note"]
+
+
+def test_paused_restart_never_resumes_old_chunks_when_reenabled(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Paused restart safety",
+            created_by="analyst01",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["198.51.100.0/29"],
+            interface="eth0",
+            cadence="daily",
+            first_run_at=datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc),
+            chunk_size=3,
+            enabled=False,
+        ),
+        db_path,
+    )
+    old_chunks = [["198.51.100.1"], ["198.51.100.2"]]
+    schedule.update(
+        {
+            "batch_status": "running",
+            "active_batch_id": "f" * 32,
+            "active_chunk_number": 2,
+            "active_chunk_count": 2,
+            "completed_chunk_count": 1,
+            "active_target_chunks": old_chunks,
+        }
+    )
+    poc._store_scan_schedule(schedule, db_path)
+
+    recover_scheduler_state(db_path, tmp_path / "data")
+    recovered = poc.get_scan_schedule(schedule["schedule_id"], db_path)
+    assert recovered["batch_status"] == "recovery_review_required"
+    assert recovered["enabled"] is False
+
+    enabled = set_scan_schedule_enabled(
+        schedule["schedule_id"], True, "analyst01", db_path
+    )
+    assert enabled["batch_status"] is None
+    assert enabled["active_target_chunks"] is None
+    assert enabled["resume_after_chunk"] == 0
+    assert enabled["completed_chunk_count"] == 0
+    assert "interrupted occurrence remains closed" in enabled["last_dispatch_note"]
 
 
 def test_schedule_conflict_flag_counts_occurrences_not_retry_checks(tmp_path):
@@ -1013,6 +1029,73 @@ def test_new_global_rule_requests_cancellation_of_intersecting_active_run(tmp_pa
         poc.ACTIVE_RUNS.pop(run_id, None)
 
 
+def test_new_global_rule_persists_cancellation_for_another_worker_process(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    run_id = "c" * 32
+    insert_scan_run_manifest(
+        {
+            "run_id": run_id,
+            "created_at": "2026-09-27T00:00:00+00:00",
+            "status": "running",
+            "operator": "owner.one",
+            "owner": "owner.one",
+            "reason": "test",
+            "originating_host": "test-host",
+            "interface": "eth0",
+            "profile": "Custom",
+            "targets": ["198.51.100.0/30"],
+        },
+        db_path,
+    )
+
+    add_global_no_strike(
+        NoStrikeUpdate(entries=["198.51.100.2"], changed_by="analyst"), db_path
+    )
+
+    updated = poc.get_scan_run_plan(run_id, db_path)
+    assert updated["cancellation_requested_at"]
+    assert updated["cancellation_requested_by"] == "analyst"
+    assert poc.scan_cancellation_requested(run_id, db_path) is True
+
+
+def test_separate_process_cancellation_survives_stale_progress_manifest_write(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    run_id = "9" * 32
+    stale_manifest = {
+        "run_id": run_id,
+        "created_at": "2026-09-27T00:00:00+00:00",
+        "status": "running",
+        "operator": "owner.one",
+        "reason": "test",
+        "originating_host": "test-host",
+        "interface": "eth0",
+        "profile": "Custom",
+        "targets": ["198.51.100.1"],
+    }
+    insert_scan_run_manifest(stale_manifest, db_path)
+    code = (
+        "from pathlib import Path; "
+        "from app.poc import request_scan_cancellation; "
+        "request_scan_cancellation('" + run_id + "', requested_by='other-process', "
+        "cause='operator', db_path=Path(__import__('sys').argv[1]))"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(db_path)],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+    stale_manifest["progress"] = {"phase": "tcp", "percent": 50}
+    poc.update_scan_run_manifest(stale_manifest, db_path)
+
+    assert poc.scan_cancellation_requested(run_id, db_path) is True
+    visible = poc.get_scan_run_plan(run_id, db_path)
+    assert visible["cancellation_requested_by"] == "other-process"
+
+
 def test_safety_signal_reaches_every_active_run_when_provenance_writes_fail(
     tmp_path, monkeypatch
 ):
@@ -1054,6 +1137,66 @@ def test_safety_signal_reaches_every_active_run_when_provenance_writes_fail(
         )
         assert saved["entries"] == ["198.51.100.2/32"]
         assert all(control.cancel_event.is_set() for control in controls.values())
+    finally:
+        for run_id in run_ids:
+            poc.ACTIVE_RUNS.pop(run_id, None)
+
+
+def test_global_no_strike_rolls_back_if_any_active_cancellation_write_fails(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    run_ids = ["1" * 32, "2" * 32]
+    controls = {}
+    for run_id in run_ids:
+        insert_scan_run_manifest(
+            {
+                "run_id": run_id,
+                "created_at": "2026-09-27T00:00:00+00:00",
+                "status": "running",
+                "operator": "owner.one",
+                "owner": "owner.one",
+                "reason": "test",
+                "originating_host": "test-host",
+                "interface": "eth0",
+                "profile": "Custom",
+                "targets": ["198.51.100.0/30"],
+            },
+            db_path,
+        )
+        controls[run_id] = RunControl()
+        poc.ACTIVE_RUNS[run_id] = controls[run_id]
+    original = poc._request_scan_cancellation_in_transaction
+    calls = 0
+
+    def fail_second_write(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated second cancellation write failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        poc, "_request_scan_cancellation_in_transaction", fail_second_write
+    )
+    try:
+        with pytest.raises(RuntimeError, match="second cancellation write failure"):
+            add_global_no_strike(
+                NoStrikeUpdate(entries=["198.51.100.2"], changed_by="analyst"),
+                db_path,
+            )
+        assert get_global_no_strike(db_path)["entries"] == []
+        with connect_database(db_path, read_only=True) as db:
+            cancellation_count = db.execute(
+                "SELECT COUNT(*) FROM scan_run_control"
+            ).fetchone()[0]
+            audit_count = db.execute(
+                """SELECT COUNT(*) FROM scan_run_audit
+                     WHERE event = 'safety_cancellation_requested'"""
+            ).fetchone()[0]
+        assert cancellation_count == 0
+        assert audit_count == 0
+        assert all(not control.cancel_event.is_set() for control in controls.values())
     finally:
         for run_id in run_ids:
             poc.ACTIVE_RUNS.pop(run_id, None)
