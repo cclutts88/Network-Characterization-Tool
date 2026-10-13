@@ -66,6 +66,12 @@ from app.saved_networks import (
     update_saved_network_record,
 )
 from app.network_scopes import list_network_scopes
+from app.mission_environment import (
+    MissionEnvironmentConflict,
+    ReviewedMissionScope,
+    init_mission_environment_storage,
+    resolve_collection_mission_review,
+)
 from app.saved_network_scope_associations import (
     SavedNetworkScopeConflict,
     attach_scope_associations,
@@ -342,6 +348,7 @@ class ScanScheduleCreate(BaseModel):
     manual_targets: list[str] = Field(default_factory=list)
     saved_network_ids: list[str] = Field(default_factory=list)
     reviewed_scope_associations: list[ReviewedScopeAssociation] = Field(default_factory=list)
+    reviewed_mission_scopes: list[ReviewedMissionScope] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
     interface: str = Field(min_length=1, max_length=64)
     cadence: Literal[
@@ -466,6 +473,7 @@ class ScanRunPlan(BaseModel):
     manual_targets: list[str] = Field(default_factory=list)
     saved_network_ids: list[str] = Field(default_factory=list)
     reviewed_scope_associations: list[ReviewedScopeAssociation] = Field(default_factory=list)
+    reviewed_mission_scopes: list[ReviewedMissionScope] = Field(default_factory=list)
     no_strike: list[str] = Field(default_factory=list)
 
     @field_validator("operator", "name", "originating_host", "interface", "profile")
@@ -1327,6 +1335,9 @@ def build_scan_run_manifest(
         "reviewed_scope_associations": [
             item.model_dump() for item in plan.reviewed_scope_associations
         ],
+        "reviewed_mission_scopes": [
+            item.model_dump() for item in plan.reviewed_mission_scopes
+        ],
         "saved_networks": saved_network_snapshots,
         "target_selection": {
             "saved_networks": saved_network_snapshots,
@@ -1387,6 +1398,7 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
         configure_database(db_path)
         init_artifact_storage(db_path)
         init_saved_network_storage(db_path)
+        init_mission_environment_storage(db_path)
         init_scan_collaboration_storage(db_path)
         with connect_database(db_path) as db:
             db.execute(
@@ -1992,6 +2004,9 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "reviewed_scope_associations": [
             item.model_dump() for item in request.reviewed_scope_associations
         ],
+        "reviewed_mission_scopes": [
+            item.model_dump() for item in request.reviewed_mission_scopes
+        ],
         "no_strike": normalize_ipv4_networks(request.no_strike, "no-strike") if request.no_strike else [],
         "interface": request.interface,
         "cadence": request.cadence,
@@ -2060,6 +2075,16 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         definition["network_scope_status"] = (
             "pinned" if context is not None else "unscoped"
         )
+        mission_review = resolve_collection_mission_review(
+            db,
+            saved_network_ids=definition["saved_network_ids"],
+            manual_targets=definition["manual_targets"],
+            reviewed_scopes=definition["reviewed_mission_scopes"],
+            enforce_prohibited=bool(request.enabled),
+        )
+        definition["mission_environment_review"] = mission_review
+        definition["mission_environment_status"] = mission_review["decision"]
+        definition["definition_digest"] = definition_identity(definition)[1]
         db.execute(
             """
             INSERT INTO scan_schedules (
@@ -2127,6 +2152,22 @@ def set_scan_schedule_enabled(
                     "Review and close the interrupted occurrence before enabling future occurrences"
                 )
             resolve_schedule_scope_context_in_transaction(db, schedule_id)
+            resolve_reviewed_scope_context(
+                db,
+                saved_network_ids=list(schedule.get("saved_network_ids") or []),
+                manual_targets=list(schedule.get("manual_targets") or []),
+                reviewed_associations=list(
+                    schedule.get("reviewed_scope_associations") or []
+                ),
+            )
+            mission_review = resolve_collection_mission_review(
+                db,
+                saved_network_ids=list(schedule.get("saved_network_ids") or []),
+                manual_targets=list(schedule.get("manual_targets") or []),
+                reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
+            )
+            schedule["mission_environment_review"] = mission_review
+            schedule["mission_environment_status"] = mission_review["decision"]
         schedule["enabled"] = bool(enabled)
         actor = changed_by or schedule.get("last_changed_by") or schedule["created_by"]
         if enabled:
@@ -2295,11 +2336,33 @@ def insert_reviewed_scan_run(
     init_poc_storage(db_path)
     init_pipeline_intake_storage(db_path)
     reviewed = [item.model_dump() for item in plan.reviewed_scope_associations]
+    mission_reviewed = [item.model_dump() for item in plan.reviewed_mission_scopes]
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         if plan.scheduled and plan.schedule_id:
+            schedule_row = db.execute(
+                "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
+                (plan.schedule_id,),
+            ).fetchone()
+            if schedule_row is None:
+                raise MissionEnvironmentConflict("The saved schedule is no longer available")
+            schedule = json.loads(schedule_row[0])
+            resolve_reviewed_scope_context(
+                db,
+                saved_network_ids=list(schedule.get("saved_network_ids") or []),
+                manual_targets=list(schedule.get("manual_targets") or []),
+                reviewed_associations=list(
+                    schedule.get("reviewed_scope_associations") or []
+                ),
+            )
             context = resolve_schedule_scope_context_in_transaction(
                 db, plan.schedule_id
+            )
+            mission_review = resolve_collection_mission_review(
+                db,
+                saved_network_ids=list(schedule.get("saved_network_ids") or []),
+                manual_targets=list(schedule.get("manual_targets") or []),
+                reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
             )
         else:
             context = resolve_reviewed_scope_context(
@@ -2308,10 +2371,17 @@ def insert_reviewed_scan_run(
                 manual_targets=manifest.get("manual_targets") or [],
                 reviewed_associations=reviewed,
             )
+            mission_review = resolve_collection_mission_review(
+                db,
+                saved_network_ids=manifest.get("saved_network_ids") or [],
+                manual_targets=manifest.get("manual_targets") or [],
+                reviewed_scopes=mission_reviewed,
+            )
         manifest["network_scope_context"] = context
         manifest["network_scope_status"] = (
             "inherited" if context is not None else "unscoped"
         )
+        manifest["mission_environment_review"] = mission_review
         db.execute(
             """
             INSERT INTO scan_runs (
@@ -2472,6 +2542,33 @@ def publish_scan_contact_starting(
             manifest.clear()
             manifest.update(cancelled)
             return False
+        try:
+            context = resolve_reviewed_scope_context(
+                db,
+                saved_network_ids=list(manifest.get("saved_network_ids") or []),
+                manual_targets=list(manifest.get("manual_targets") or []),
+                reviewed_associations=list(
+                    manifest.get("reviewed_scope_associations") or []
+                ),
+            )
+            mission_review = resolve_collection_mission_review(
+                db,
+                saved_network_ids=list(manifest.get("saved_network_ids") or []),
+                manual_targets=list(manifest.get("manual_targets") or []),
+                reviewed_scopes=list(manifest.get("reviewed_mission_scopes") or []),
+            )
+        except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
+            blocked = _close_precontact_mission_block_on_connection(
+                db, manifest, str(exc)
+            )
+            manifest.clear()
+            manifest.update(blocked)
+            return False
+        manifest["network_scope_context"] = context
+        manifest["network_scope_status"] = (
+            "inherited" if context is not None else "unscoped"
+        )
+        manifest["mission_environment_review"] = mission_review
         manifest["started_at"] = utc_now()
         manifest["status"] = "running"
         if isinstance(scheduled_claim, dict):
@@ -2506,6 +2603,79 @@ def publish_scan_contact_starting(
             ),
         )
     return True
+
+
+def _close_precontact_mission_block_on_connection(
+    db,
+    manifest: dict,
+    detail: str,
+) -> dict:
+    """Fail a claimed run closed when its reviewed mission context changed."""
+    execution_claim = manifest.get("execution_claim")
+    if not isinstance(execution_claim, dict):
+        raise WorkLeaseConflict("The scan has no current execution fence")
+    changed_at = utc_now()
+    reason = (
+        "Blocked before network contact because Mission Environment review is no "
+        f"longer current: {detail}"
+    )[:500]
+    blocked = dict(manifest)
+    blocked.update({
+        "status": "blocked_mission_environment",
+        "completed_at": changed_at,
+        "success": False,
+        "execution_note": reason,
+    })
+    blocked.pop("started_at", None)
+    blocked.pop("execution_claim", None)
+    if isinstance(blocked.get("progress"), dict):
+        update_scan_progress(
+            blocked["progress"],
+            phase="blocked_mission_environment",
+            updated_at=changed_at,
+        )
+    scheduled_claim = manifest.get("work_claim")
+    if isinstance(scheduled_claim, dict):
+        publish_chunk_terminal_on_connection(
+            db,
+            occurrence_id=str(scheduled_claim["occurrence_id"]),
+            chunk_number=int(scheduled_claim["chunk_number"]),
+            terminal_state="cancelled",
+            reason=reason,
+            lease=scheduled_claim,
+            contact_started=False,
+        )
+    changed = db.execute(
+        """UPDATE scan_runs SET status = 'blocked_mission_environment',
+                                  manifest_json = ?
+             WHERE run_id = ? AND status = 'dispatching'
+               AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+        (
+            json.dumps(blocked, sort_keys=True),
+            blocked["run_id"],
+            str(execution_claim["lease_id"]),
+        ),
+    ).rowcount
+    if changed != 1:
+        raise WorkLeaseLost("This scan worker can no longer block stale mission work")
+    sync_scan_history_manifest(db, blocked)
+    release_work_lease_on_connection(
+        db,
+        execution_claim,
+        detail="Released after Mission Environment changed before contact",
+    )
+    db.execute(
+        """INSERT INTO scan_run_audit(
+               run_id, event, actor, changed_at, details
+           ) VALUES (?, 'blocked_mission_environment', ?, ?, ?)""",
+        (
+            blocked["run_id"],
+            blocked.get("owner") or blocked.get("executed_by") or "system",
+            changed_at,
+            reason,
+        ),
+    )
+    return blocked
 
 
 def _close_precontact_cancellation_on_connection(
@@ -4789,6 +4959,22 @@ def prepare_schedule_occurrence(
     scope_context = get_schedule_scope_context(
         db_path, schedule_id, require_active=True
     )
+    with connect_database(db_path) as mission_db:
+        mission_db.execute("BEGIN")
+        resolve_reviewed_scope_context(
+            mission_db,
+            saved_network_ids=list(schedule.get("saved_network_ids") or []),
+            manual_targets=list(schedule.get("manual_targets") or []),
+            reviewed_associations=list(
+                schedule.get("reviewed_scope_associations") or []
+            ),
+        )
+        mission_review = resolve_collection_mission_review(
+            mission_db,
+            saved_network_ids=list(schedule.get("saved_network_ids") or []),
+            manual_targets=list(schedule.get("manual_targets") or []),
+            reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
+        )
     moment = _as_utc(now or datetime.now(timezone.utc))
     if advance_schedule:
         if not schedule.get("enabled"):
@@ -4817,6 +5003,7 @@ def prepare_schedule_occurrence(
         "manual_targets": list(schedule.get("manual_targets") or []),
         "saved_networks": list(schedule.get("saved_networks") or []),
         "network_scope_context": scope_context,
+        "mission_environment_review": mission_review,
         "profile": {
             "profile_id": schedule["profile_id"],
             "profile_version": schedule["profile_version"],
@@ -4842,6 +5029,9 @@ def prepare_schedule_occurrence(
         },
     }
     frozen_scope_digest = content_digest(scope_context)
+    frozen_mission_digest = content_digest({
+        key: value for key, value in mission_review.items() if key != "certified_at"
+    })
 
     def recheck_external_inputs(connection) -> None:
         live_global = _global_no_strike_state_in_transaction(connection)
@@ -4855,6 +5045,26 @@ def prepare_schedule_occurrence(
         if content_digest(live_scope) != frozen_scope_digest:
             raise RuntimeError(
                 "The Network Scope context changed while this occurrence was prepared"
+            )
+        resolve_reviewed_scope_context(
+            connection,
+            saved_network_ids=list(schedule.get("saved_network_ids") or []),
+            manual_targets=list(schedule.get("manual_targets") or []),
+            reviewed_associations=list(
+                schedule.get("reviewed_scope_associations") or []
+            ),
+        )
+        live_mission = resolve_collection_mission_review(
+            connection,
+            saved_network_ids=list(schedule.get("saved_network_ids") or []),
+            manual_targets=list(schedule.get("manual_targets") or []),
+            reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
+        )
+        if content_digest({
+            key: value for key, value in live_mission.items() if key != "certified_at"
+        }) != frozen_mission_digest:
+            raise RuntimeError(
+                "The Mission Environment changed while this occurrence was prepared"
             )
 
     occurrence = prepare_occurrence(
@@ -5708,12 +5918,38 @@ def dispatch_due_schedules(
     if waiting:
         selected = waiting[0]
         try:
+            with connect_database(db_path) as db:
+                db.execute("BEGIN IMMEDIATE")
+                resolve_reviewed_scope_context(
+                    db,
+                    saved_network_ids=list(selected.get("saved_network_ids") or []),
+                    manual_targets=list(selected.get("manual_targets") or []),
+                    reviewed_associations=list(
+                        selected.get("reviewed_scope_associations") or []
+                    ),
+                )
+                resolve_collection_mission_review(
+                    db,
+                    saved_network_ids=list(selected.get("saved_network_ids") or []),
+                    manual_targets=list(selected.get("manual_targets") or []),
+                    reviewed_scopes=list(
+                        selected.get("reviewed_mission_scopes") or []
+                    ),
+                )
             started = _start_prepared_schedule_occurrence(
                 selected["schedule_id"],
                 selected["latest_occurrence"]["occurrence_id"],
                 db_path=db_path,
                 data_dir=DATA_DIR,
             )
+        except MissionEnvironmentConflict as exc:
+            blocked = get_scan_schedule(selected["schedule_id"], db_path) or selected
+            blocked["enabled"] = False
+            blocked["batch_status"] = "blocked_mission_environment"
+            blocked["last_occurrence_status"] = "blocked_mission_environment"
+            blocked["last_dispatch_note"] = str(exc)
+            _store_scan_schedule(blocked, db_path)
+            return []
         except RuntimeError:
             record_schedule_conflict(
                 selected,
@@ -5746,6 +5982,13 @@ def dispatch_due_schedules(
                 now=moment,
                 db_path=db_path,
             )
+        except MissionEnvironmentConflict as exc:
+            schedule["enabled"] = False
+            schedule["batch_status"] = "blocked_mission_environment"
+            schedule["last_occurrence_status"] = "blocked_mission_environment"
+            schedule["last_dispatch_note"] = str(exc)
+            _store_scan_schedule(schedule, db_path)
+            break
         except RuntimeError:
             record_schedule_conflict(
                 schedule,
@@ -6253,6 +6496,8 @@ def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> di
         return create_scan_schedule(request, DB_PATH)
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MissionEnvironmentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -6272,6 +6517,8 @@ def change_scan_schedule_state(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MissionEnvironmentConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -6309,6 +6556,8 @@ def run_saved_scan_schedule(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MissionEnvironmentConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

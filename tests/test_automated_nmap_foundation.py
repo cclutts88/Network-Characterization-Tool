@@ -125,6 +125,10 @@ def scoped_run(
             "association_id": association["association_id"],
             "revision": association["revision"],
         }],
+        reviewed_mission_scopes=[{
+            "scope_id": scope["scope_id"],
+            "version": 0,
+        }],
         capture=True,
         timeout_seconds=30,
     )

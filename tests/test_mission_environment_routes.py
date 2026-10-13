@@ -13,12 +13,13 @@ def test_local_operator_can_review_and_update_mission_environment(tmp_path, monk
     with local_client(tmp_path, monkeypatch) as client:
         page = client.get("/settings/mission-environment")
         assert page.status_code == 200
-        assert "Declaration only" in page.text
-        assert "not automatically enforced" in page.text
+        assert "Exact-scope collection gate active" in page.text
+        assert "Manual and unassociated targets remain Unknown" in page.text
         scope = client.post("/api/network-scopes", json={"label": "Range"}).json()
         initial = client.get("/api/mission-environment?limit=25").json()
         assert initial["can_edit"] is True
-        assert initial["declaration_only"] is True
+        assert initial["declaration_only"] is False
+        assert initial["collection_gate"] == "exact_saved_network_review"
         assert initial["scopes"][0]["nmap_authorization"] == "unknown"
 
         tool = client.patch("/api/mission-environment/tools/nmap", json={
@@ -61,7 +62,7 @@ def test_page_keeps_headers_before_rows_and_has_contextual_guidance(tmp_path, mo
     assert 'href="/settings/mission-environment">Mission Environment</a>' in SHELL_SCRIPT
     assert "location.pathname==='/settings/mission-environment'" in SHELL_SCRIPT
     assert "Review Network Scope coverage" in SHELL_SCRIPT
-    assert "Existing authorization procedures and No-Strike controls remain authoritative" in SHELL_SCRIPT
+    assert "No-Strike controls remain separately authoritative" in SHELL_SCRIPT
 
 
 @pytest.mark.parametrize(

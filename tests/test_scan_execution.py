@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,9 @@ from app.poc import (
     RunControl,
     ScanOptions,
     ScanRunRequest,
+    ScanScheduleCreate,
     add_global_no_strike,
+    create_scan_schedule,
     execute_scan_run,
     get_scan_run_plan,
     nmap_host_presence_counts,
@@ -230,13 +233,28 @@ def test_combined_top_ports_success_retains_context_and_publishes_both_protocols
 ):
     db_path = tmp_path / "nct.db"
     data_dir = tmp_path / "data"
+    schedule = create_scan_schedule(
+        ScanScheduleCreate(
+            name="Combined acceptance schedule",
+            created_by="crew.lead",
+            profile_id="builtin-standard",
+            profile_version=1,
+            targets=["192.0.2.10/32"],
+            manual_targets=["192.0.2.10/32"],
+            interface="eth0",
+            cadence="once",
+            first_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            enabled=True,
+        ),
+        db_path,
+    )
     request = ScanRunRequest(
         operator="analyst.one",
         created_by="analyst.one",
         scheduled=True,
         scheduled_by="crew.lead",
         executed_by="scheduler",
-        schedule_id="1" * 32,
+        schedule_id=schedule["schedule_id"],
         schedule_batch_id="2" * 32,
         chunk_number=1,
         chunk_count=1,
@@ -311,7 +329,7 @@ def test_combined_top_ports_success_retains_context_and_publishes_both_protocols
     assert completed["scheduled_by"] == "crew.lead"
     assert completed["executed_by"] == "scheduler"
     assert completed["targets"] == ["192.0.2.10/32"]
-    assert completed["schedule_id"] == "1" * 32
+    assert completed["schedule_id"] == schedule["schedule_id"]
     assert completed["schedule_batch_id"] == "2" * 32
     assert any(
         item["phase"] == "udp"

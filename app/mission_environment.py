@@ -13,6 +13,8 @@ import re
 import sqlite3
 import uuid
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.database import connect_database, initialize_once_per_database
 from app.network_scopes import init_network_scope_storage
 
@@ -41,6 +43,19 @@ DERIVED_PROHIBITED_FLAG = "active_scan_prohibited"
 
 class MissionEnvironmentConflict(ValueError):
     pass
+
+
+class MissionEnvironmentProhibited(MissionEnvironmentConflict):
+    """Raised before work is admitted when a reviewed scope prohibits Nmap."""
+
+
+class ReviewedMissionScope(BaseModel):
+    """The exact Mission Environment scope version an analyst reviewed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope_id: str = Field(min_length=1, max_length=100)
+    version: int = Field(ge=0)
 
 
 def _utc_now() -> str:
@@ -235,6 +250,147 @@ def _scope_snapshot(row: sqlite3.Row | None, scope: sqlite3.Row) -> dict:
         "created_by": row["created_by"], "updated_at": row["updated_at"],
         "updated_by": row["updated_by"],
     }
+
+
+def _mission_tool_rows(db: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    db.row_factory = sqlite3.Row
+    return {
+        row["tool_key"]: row
+        for row in db.execute("SELECT * FROM mission_environment_tools").fetchall()
+    }
+
+
+def resolve_collection_mission_review(
+    db: sqlite3.Connection,
+    *,
+    saved_network_ids: list[str],
+    manual_targets: list[str],
+    reviewed_scopes: list[dict],
+    enforce_prohibited: bool = True,
+) -> dict:
+    """Recheck reviewed Mission declarations while the caller holds a write lock.
+
+    Network context comes only from the selected Saved Network association leaves.
+    Manual targets and unassociated Saved Networks remain explicitly unknown even if
+    their addresses happen to overlap a declared scope.
+    """
+    db.row_factory = sqlite3.Row
+    unique_ids = list(dict.fromkeys(str(value) for value in saved_network_ids))
+    if len(unique_ids) > 100:
+        raise MissionEnvironmentConflict("Choose 100 or fewer Saved Networks")
+    if len(reviewed_scopes) > 100:
+        raise MissionEnvironmentConflict("Mission Environment review is too large")
+    submitted: dict[str, int] = {}
+    for item in reviewed_scopes:
+        scope_id = str(item.get("scope_id") or "")
+        version = item.get("version")
+        if not scope_id or isinstance(version, bool) or not isinstance(version, int) or version < 0:
+            raise MissionEnvironmentConflict("Mission Environment review is invalid")
+        if scope_id in submitted:
+            raise MissionEnvironmentConflict("Mission Environment review contains a duplicate scope")
+        submitted[scope_id] = version
+
+    scope_ids: set[str] = set()
+    unassociated: list[str] = []
+    for saved_network_id in unique_ids:
+        network = db.execute(
+            "SELECT active FROM saved_networks WHERE saved_network_id = ?",
+            (saved_network_id,),
+        ).fetchone()
+        if network is None or not bool(network[0]):
+            raise MissionEnvironmentConflict(
+                "A selected Saved Network was removed or changed; review the scan again"
+            )
+        association = db.execute(
+            """
+            SELECT current.scope_id
+            FROM saved_network_scope_associations current
+            WHERE current.saved_network_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM saved_network_scope_associations successor
+                  WHERE successor.predecessor_id = current.association_id
+              )
+            """,
+            (saved_network_id,),
+        ).fetchone()
+        if association is None or association[0] is None:
+            unassociated.append(saved_network_id)
+        else:
+            scope_ids.add(str(association[0]))
+
+    current_versions: dict[str, int] = {}
+    snapshots: list[dict] = []
+    for scope_id in sorted(scope_ids):
+        scope = db.execute(
+            "SELECT * FROM network_scopes WHERE scope_id = ?", (scope_id,)
+        ).fetchone()
+        if scope is None or not bool(scope["active"]):
+            raise MissionEnvironmentConflict(
+                "A selected Network Scope was archived; review the scan again"
+            )
+        row = db.execute(
+            "SELECT * FROM mission_scope_contexts WHERE scope_id = ?", (scope_id,)
+        ).fetchone()
+        snapshot = _scope_snapshot(row, scope)
+        current_versions[scope_id] = int(snapshot["version"])
+        snapshots.append(snapshot)
+    if submitted != current_versions:
+        raise MissionEnvironmentConflict(
+            "Mission Environment changed after review; review the scan again"
+        )
+
+    tools = _mission_tool_rows(db)
+    tool_snapshots = [
+        _tool_snapshot(tools.get(key), key, label)
+        for key, label in TOOL_DEFINITIONS
+    ]
+    available_tools = {
+        item["tool_key"]: item
+        for item in tool_snapshots
+        if item["availability"] == "available"
+    }
+    pivots = []
+    for snapshot in snapshots:
+        for tool_key in ("arkime", "kibana"):
+            coverage = snapshot[f"{tool_key}_coverage"]
+            tool = available_tools.get(tool_key)
+            if tool is None or coverage not in {"available", "partial"}:
+                continue
+            pivots.append({
+                "scope_id": snapshot["scope_id"],
+                "scope_label": snapshot["scope_label"],
+                "tool_key": tool_key,
+                "tool_label": tool["label"],
+                "coverage": coverage,
+                "access_method": tool["access_method"],
+                "tool_version": tool["version"],
+            })
+
+    prohibited = [
+        item for item in snapshots if item["nmap_authorization"] == "prohibited"
+    ]
+    unknown = bool(manual_targets or unassociated) or any(
+        item["nmap_authorization"] == "unknown" for item in snapshots
+    )
+    result = {
+        "decision": "prohibited" if prohibited else "unknown" if unknown else "reviewed",
+        "certified_at": _utc_now(),
+        "scopes": snapshots,
+        "tools": tool_snapshots,
+        "passive_pivots": pivots,
+        "manual_targets_unknown": bool(manual_targets),
+        "unassociated_saved_network_ids": unassociated,
+        "authorization_notice": (
+            "Mission Environment is an administrator-reviewed declaration. Existing "
+            "operator authorization and No-Strike controls remain authoritative."
+        ),
+    }
+    if prohibited and enforce_prohibited:
+        labels = ", ".join(item["scope_label"] for item in prohibited)
+        raise MissionEnvironmentProhibited(
+            f"Nmap is prohibited for the reviewed Network Scope: {labels}"
+        )
+    return result
 
 
 def _audit(db: sqlite3.Connection, *, kind: str, key: str, actor: str,

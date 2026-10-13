@@ -97,9 +97,11 @@ from app.how_nct_works_ui import how_nct_works_page
 from app.mission_environment_ui import mission_environment_page
 from app.mission_environment import (
     MissionEnvironmentConflict,
+    ReviewedMissionScope,
     get_mission_environment,
     init_mission_environment_storage,
     list_mission_history,
+    resolve_collection_mission_review,
     update_mission_tool,
     update_scope_context,
 )
@@ -115,6 +117,7 @@ from app.network_scopes import (
 from app.poc import (
     LEGACY_PROFILE_IDS,
     ScanOptions,
+    ReviewedScopeAssociation,
     get_global_no_strike,
     get_import_history_item,
     get_scan_profile,
@@ -131,6 +134,10 @@ from app.poc import (
     stop_schedule_batch_workers,
     with_host_count,
     with_queue_state,
+)
+from app.saved_network_scope_associations import (
+    SavedNetworkScopeConflict,
+    resolve_reviewed_scope_context,
 )
 from app.device_configs import (
     CONFIG_DIR,
@@ -506,6 +513,8 @@ class HostnameBulkSelectionRequest(BaseModel):
     source: Literal["nmap", "dhcp", "dns", "lldp", "cdp", "config"]
 
 class CampaignSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=100)
     profile: str = Field(default="standard", min_length=1, max_length=100)
     profile_id: str | None = Field(default=None, max_length=128)
@@ -515,6 +524,10 @@ class CampaignSpec(BaseModel):
     scheduled: bool = False
     scheduled_by: str | None = Field(default=None, max_length=100)
     terrain: list[TerrainSegment] = Field(min_length=1)
+    manual_targets: list[str] = Field(default_factory=list)
+    saved_network_ids: list[str] = Field(default_factory=list, max_length=100)
+    reviewed_scope_associations: list[ReviewedScopeAssociation] = Field(default_factory=list, max_length=100)
+    reviewed_mission_scopes: list[ReviewedMissionScope] = Field(default_factory=list, max_length=100)
     no_strike_mode: Literal["entered", "none"]
     no_strike: list[str] = Field(default_factory=list)
     chunking_enabled: bool = False
@@ -877,6 +890,58 @@ def campaign_chunking_enabled(spec: CampaignSpec) -> bool:
     return spec.chunking_enabled or legacy_chunk_request
 
 
+def _certify_campaign_mission_on_connection(spec: CampaignSpec, db) -> dict:
+    """Resolve one portable review while the caller owns the write transaction."""
+    submitted_targets = normalize_ipv4_networks(
+        [target for segment in spec.terrain for target in segment.targets], "target"
+    )
+    reviewed_associations = [
+        item.model_dump() for item in spec.reviewed_scope_associations
+    ]
+    reviewed_mission = [item.model_dump() for item in spec.reviewed_mission_scopes]
+    current_saved_targets = []
+    for saved_network_id in dict.fromkeys(spec.saved_network_ids):
+        row = db.execute(
+            "SELECT cidr, active FROM saved_networks WHERE saved_network_id = ?",
+            (saved_network_id,),
+        ).fetchone()
+        if row is None or not bool(row[1]):
+            raise MissionEnvironmentConflict(
+                "A selected Saved Network was removed or changed; review the package again"
+            )
+        current_saved_targets.append(str(row[0]))
+    explicit_selection = bool(spec.saved_network_ids or spec.manual_targets)
+    manual_targets = list(spec.manual_targets) if explicit_selection else submitted_targets
+    if explicit_selection:
+        expected_targets = normalize_ipv4_networks(
+            [*current_saved_targets, *manual_targets], "target"
+        )
+        if expected_targets != submitted_targets:
+            raise MissionEnvironmentConflict(
+                "Package targets changed after review; review the Saved Networks again"
+            )
+    resolve_reviewed_scope_context(
+        db,
+        saved_network_ids=list(spec.saved_network_ids),
+        manual_targets=manual_targets,
+        reviewed_associations=reviewed_associations,
+    )
+    return resolve_collection_mission_review(
+        db,
+        saved_network_ids=list(spec.saved_network_ids),
+        manual_targets=manual_targets,
+        reviewed_scopes=reviewed_mission,
+    )
+
+
+def certify_campaign_mission(spec: CampaignSpec) -> dict:
+    """Bind a portable preview/package to the exact reviewed Saved Networks."""
+    init_poc_storage(DB_PATH)
+    with connect_database(DB_PATH) as db:
+        db.execute("BEGIN IMMEDIATE")
+        return _certify_campaign_mission_on_connection(spec, db)
+
+
 def build_scan_plan(
     spec: CampaignSpec, global_state: dict | None = None
 ) -> tuple[list[str], list[str], list[dict]]:
@@ -967,6 +1032,7 @@ def build_scan_plan(
 def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
     if spec.scheduled and not (spec.scheduled_by or "").strip():
         raise ValueError("Scheduled packages must retain the scheduler identity")
+    mission_review = certify_campaign_mission(spec)
     global_state = get_global_no_strike(DB_PATH)
     no_strike, flags, scan_plan = build_scan_plan(spec, global_state)
     global_no_strike = global_state["entries"]
@@ -1031,6 +1097,15 @@ def build_package(spec: CampaignSpec) -> tuple[str, bytes]:
         "scheduled_by": spec.scheduled_by,
         "executed_by": spec.created_by,
         "execution_method": "generated_package",
+        "saved_network_ids": list(spec.saved_network_ids),
+        "manual_targets": list(spec.manual_targets),
+        "reviewed_scope_associations": [
+            item.model_dump() for item in spec.reviewed_scope_associations
+        ],
+        "reviewed_mission_scopes": [
+            item.model_dump() for item in spec.reviewed_mission_scopes
+        ],
+        "mission_environment_review": mission_review,
         "profile": profile["name"],
         "profile_id": profile["profile_id"],
         "profile_version": profile["version"],
@@ -1087,6 +1162,9 @@ Chunks: {len(chunks)}
 - This package is a static safety snapshot certified at generation time against
   global No-Strike revision {global_state['revision']}. Regenerate it after the
   shared No-Strike list changes.
+- Mission Environment was reviewed at generation time with decision
+  `{mission_review['decision']}`. Regenerate this package after a Saved Network,
+  Network Scope, or Mission Environment declaration changes.
 - TCP + UDP top-port scopes run as independent TCP and UDP phases so each selected count is preserved.
 - Chunks never mix terrain segments.
 - This application generated these commands; it did not execute Nmap.
@@ -1948,7 +2026,8 @@ def mission_environment_status(
     result["can_edit"] = not auth_enabled() or bool(
         analyst and analyst.get("role") == "admin"
     )
-    result["declaration_only"] = True
+    result["declaration_only"] = False
+    result["collection_gate"] = "exact_saved_network_review"
     return result
 
 
@@ -3106,11 +3185,16 @@ def create_package(http_request: Request, spec: CampaignSpec) -> StreamingRespon
             fields.append("scheduled_by")
         spec = bind_signed_in_actor(http_request, spec, *fields)
         filename, content = build_package(spec)
+        digest = sha256_bytes(content)
+        stored_name = f"{Path(filename).stem}-{digest[:12]}.zip"
+        with connect_database(DB_PATH) as db:
+            db.execute("BEGIN IMMEDIATE")
+            _certify_campaign_mission_on_connection(spec, db)
+            (PACKAGE_DIR / stored_name).write_bytes(content)
+    except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    digest = sha256_bytes(content)
-    stored_name = f"{Path(filename).stem}-{digest[:12]}.zip"
-    (PACKAGE_DIR / stored_name).write_bytes(content)
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/zip",
@@ -3124,8 +3208,11 @@ def create_package(http_request: Request, spec: CampaignSpec) -> StreamingRespon
 @app.post("/api/preview")
 def preview_commands(spec: CampaignSpec) -> dict:
     try:
+        mission_review = certify_campaign_mission(spec)
         _, flags, chunks = build_scan_plan(spec)
         profile = resolve_campaign_profile(spec)
+    except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     commands = [chunk["linux_command"] for chunk in chunks]
@@ -3145,6 +3232,7 @@ def preview_commands(spec: CampaignSpec) -> dict:
             {"protocol": phase["protocol"], "flags": phase["flags"]}
             for phase in (chunks[0]["nmap_phases"] if chunks else [])
         ],
+        "mission_environment_review": mission_review,
         "command_count": phase_count,
         "commands": commands,
         "copy_text": "\n".join(commands),

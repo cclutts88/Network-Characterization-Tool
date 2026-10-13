@@ -73,6 +73,11 @@ def assign(db_path: Path, network: dict, network_scope: dict, current=None):
 
 
 def scan_request(networks: list[dict], associations: list[dict], *, manual=None):
+    reviewed_mission_scopes = {
+        item["scope"]["scope_id"]: 0
+        for item in associations
+        if item.get("scope") is not None
+    }
     return ScanRunRequest(
         operator="analyst",
         created_by="analyst",
@@ -88,6 +93,10 @@ def scan_request(networks: list[dict], associations: list[dict], *, manual=None)
         reviewed_scope_associations=[
             {"association_id": item["association_id"], "revision": item["revision"]}
             for item in associations
+        ],
+        reviewed_mission_scopes=[
+            {"scope_id": scope_id, "version": version}
+            for scope_id, version in reviewed_mission_scopes.items()
         ],
         capture=True,
         timeout_seconds=30,
@@ -221,6 +230,10 @@ def test_schedule_pins_context_and_archived_scope_blocks_dispatch(tmp_path):
                     "revision": association["revision"],
                 }
             ],
+            reviewed_mission_scopes=[{
+                "scope_id": network_scope["scope_id"],
+                "version": 0,
+            }],
             interface="eth0",
             first_run_at=datetime.now(timezone.utc) + timedelta(hours=1),
         ),
@@ -230,28 +243,30 @@ def test_schedule_pins_context_and_archived_scope_blocks_dispatch(tmp_path):
     assert pinned["scope_id"] == network_scope["scope_id"]
     replacement_scope = scope(db_path, "AFB Dev Replacement")
     assign(db_path, network, replacement_scope, association)
-    scheduled_run = prepare_scan_run(
-        ScanRunRequest(
-            operator="analyst",
-            created_by="analyst",
-            scheduled=True,
-            scheduled_by="analyst",
-            executed_by="scheduler",
-            schedule_id=schedule["schedule_id"],
-            name="Dev baseline",
-            originating_host="scheduler",
-            interface="eth0",
-            profile="Standard",
-            profile_id="builtin-standard",
-            profile_version=2,
-            targets=[network["cidr"]],
-            capture=True,
-            timeout_seconds=30,
-        ),
-        db_path,
-        interfaces={"eth0"},
-    )
-    assert get_run_scope_context(db_path, scheduled_run["run_id"]) == pinned
+    with pytest.raises(SavedNetworkScopeConflict, match="changed after review"):
+        prepare_scan_run(
+            ScanRunRequest(
+                operator="analyst",
+                created_by="analyst",
+                scheduled=True,
+                scheduled_by="analyst",
+                executed_by="scheduler",
+                schedule_id=schedule["schedule_id"],
+                name="Dev baseline",
+                originating_host="scheduler",
+                interface="eth0",
+                profile="Standard",
+                profile_id="builtin-standard",
+                profile_version=2,
+                targets=[network["cidr"]],
+                capture=True,
+                timeout_seconds=30,
+            ),
+            db_path,
+            interfaces={"eth0"},
+        )
+    with connect_database(db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0] == 0
 
     archive_network_scope(
         db_path,
@@ -598,6 +613,10 @@ def test_archived_scope_schedule_enable_returns_conflict_without_state_change(
             reviewed_scope_associations=[{
                 "association_id": association["association_id"],
                 "revision": association["revision"],
+            }],
+            reviewed_mission_scopes=[{
+                "scope_id": network_scope["scope_id"],
+                "version": 0,
             }],
             interface="eth0",
             first_run_at=datetime.now(timezone.utc) + timedelta(hours=1),

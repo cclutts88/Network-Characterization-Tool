@@ -895,6 +895,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-13 | Phase 3.6 adaptive collection | Let Mission Environment guide collection and show relevant pivots | Enforce the first adaptive gate only where the operator selected exact Saved Network records and reviewed their current Network Scope associations and Mission Environment declaration versions. Any reviewed Nmap-prohibited scope blocks preview, portable package generation, active-run admission, enabled schedule creation, schedule enabling, manual occurrence creation and final waiting-occurrence dispatch. Manual targets and unassociated Saved Networks remain Unknown even when their CIDRs overlap a scope. Arkime/Kibana guidance appears only when the tool is declared available and that exact scope declares available or partial coverage | Addresses, CIDRs, names, previous evidence and tool installation cannot safely establish mission authorization. Exact Saved Network leaves plus optimistic versions provide a reviewable boundary that can be rechecked in the same transaction before accepted work is retained or contact can begin | This supersedes only the non-enforcement portion of the declaration-first deviation below. Authorized remains descriptive and does not grant permission; existing operator authorization and No-Strike controls remain authoritative. Multi-scope selections are reviewed separately and one prohibited scope blocks the complete request. Actual Arkime/Kibana queries, evidence ingestion and broader analysis adaptation remain open, so Phase 3 is still incomplete |
 | 2026-10-13 | Phase 3 Mission Environment authorization | Use Mission Environment declarations to guide collection and analysis | The first slice stores and displays administrator-reviewed availability, coverage, authorization and blind-spot declarations. It does not grant permission, block scans, or change analysis. Existing authorization procedures and No-Strike controls remain authoritative | A durable, reviewable declaration layer must exist before it can safely affect network contact. Inferring permission from installed tools, addresses, names, targets or old evidence could authorize activity that an operator did not approve | Unknown is the default; Nmap-prohibited is derived into the blind-spot view; later reviewed gates must add scope-aware warnings/enforcement, adaptive pivots and Arkime/Kibana use. This is an accepted declaration-first deviation and Phase 3 remains incomplete until those gates pass |
 | 2026-10-12 | Gate 7 shared storage | Make PostgreSQL or object storage a dependency for ordinary standalone NCT, or place SQLite behind a sidecar/network service | Preserve embedded SQLite plus local content-addressed files for standalone and single-replica operation. Select PostgreSQL as the future multi-replica transactional authority and an S3-compatible immutable content-addressed object API as its artifact authority. Keep the profile disabled until implementation plus Gate 8 concurrency/failure testing passes | The approved offline package must remain portable and efficient. SQLite cannot safely provide multi-replica transactional authority through a sidecar, while a shared writable filesystem would leave artifact behavior tied to path and mount semantics. PostgreSQL supplies shared transactions and database time; the object contract supplies immutable conditional creation without making listing authoritative | Migration is offline into an empty target with a verified cold backup, exact artifact inventory, stable-ID preservation, a cutover receipt and no dual writes. Before the target admits a write, cut back to the unchanged source is allowed. After any target write, preserve the target and restore/reconcile through a separate reviewed generation; automatic reverse migration is not claimed. See `docs/SHARED_STORAGE_ARCHITECTURE.md`. |
 | 2026-10-12 | Gate 6 scheduled occurrence controls | Treat pausing a schedule as a stop request for any occurrence that has not started its next chunk | Define Pause future occurrences as a cadence control only. An already-created occurrence retains its complete frozen chunk plan and may continue; stopping that occurrence uses the scan cancellation path. Protect the cadence control with a monotonic control revision so worker progress cannot overwrite a concurrent pause. If ownership is lost after contact, later chunks remain blocked until an administrator verifies the former scanner stopped and records a reviewed closure; the ambiguous chunk never reopens | A durable occurrence is one authorized execution with one immutable plan. Silently changing or partly discarding that plan when the reusable cadence is paused would make the occurrence record disagree with what was authorized. Operators also need separate, explicit meaning for pausing future work and stopping contact already assigned | Schedule actions and the Operator Guide state the boundary. Reviewed closure records actor, reason and confirmation, cancels only unstarted chunks, clears exact recovery blocks and leaves future cadence paused. Tests must retain pause-race, recovery-closure and later-chunk blocking coverage. |
@@ -4361,8 +4362,9 @@ high-volume passive evidence.
 **Purpose:** Teach NCT what collection tools exist, what is authorized, and what
 cannot be seen.
 
-**Implementation status (partial Phase 3 declaration and visibility slice completed
-2026-10-13):** Foundation-only on `foundation/evidence-engine-v2`. Settings / Mission
+**Implementation status (partial Phase 3 declaration, visibility and exact-scope
+collection gate completed 2026-10-13):** Foundation-only on
+`foundation/evidence-engine-v2`. Settings / Mission
 Environment now retains explicit tool availability, version and non-secret access
 descriptions; per-Network Scope Nmap, Arkime, Kibana and configuration coverage;
 Nmap authorization descriptions; device-evidence depth; fixed blind spots; reasons;
@@ -4373,30 +4375,41 @@ administrators (or the trusted local operator when authentication is disabled) m
 attributed changes. Archived scopes keep their declarations and history but reject
 new changes. The active-scan-prohibited blind spot is derived from the single Nmap
 authorization value so the two displays cannot disagree. Schema contract v5 provides
-a restart-safe migration from v4 and fails closed on unrecognized drift.
+a restart-safe migration from v4 and fails closed on unrecognized drift. New scan
+work now rechecks exact selected Saved Network associations and Mission Environment
+versions before it can be retained or contact can begin. A reviewed prohibited scope
+blocks preview, portable package generation, active-run admission, runnable schedules
+and dispatch. Manual and unassociated targets remain explicitly Unknown.
 
-**Accepted declaration-first deviation:** “Authorized” is an
-administrator-recorded description, not permission granted by NCT. “Prohibited” and
-“Unknown” are displayed but are not automatically enforced by this slice. Existing
-scan authorization procedures and No-Strike controls remain authoritative. The
+**Accepted authorization boundary:** “Authorized” is an administrator-recorded
+description, not permission granted by NCT. “Prohibited” is enforced only after exact
+Saved Network, Network Scope and declaration-version review; “Unknown” remains visible
+and does not imply permission. Existing scan authorization procedures and No-Strike
+controls remain authoritative. The
 implementation does not infer authorization from installed software, addresses,
 CIDRs, names, Saved Networks, targets, prior evidence, or scan history. Scope-based
-scanner warnings and enforcement, adaptive pivots, Arkime/Kibana integration, and use
-of these declarations by analysis remain later gates. Phase 3, Range readiness and
-mission readiness remain open until that integration and enforcement are separately
-reviewed.
+scanner warnings, collection enforcement and relevant passive-pivot guidance now use
+exact reviewed Saved Network context. Actual Arkime/Kibana queries and ingestion,
+evidence-driven coverage, automatic stale/gap detection and broader analysis adaptation
+remain later gates. Phase 3, Range readiness and mission readiness remain open.
 
-**Validation:** focused Mission Environment, schema-v5 migration/recovery, role,
-Network Scope, scan and No-Strike checks passed. After correcting two test-fixture
-assumptions and strengthening non-secret field validation, the exact-container full
-suite passes **1,606 tests with 16 skipped** and one existing dependency warning.
-Browser validation on an isolated fresh database created a
-scope, saved a prohibited Nmap declaration, displayed the derived blind spot, kept
-headers aligned inside the scrollable coverage table, and saved tool availability
-without granting authorization. The novice operator gate passed at desktop and
-900-pixel widths with a clean console and correctly explained the declaration-only
-boundary. The independent quality gate returned **CLEAR — DOCUMENTED DEVIATION**
-after independently passing 38 focused checks. Phase 3 integration and enforcement
+**Validation:** compile checks and **231 focused Mission Environment, scope, package,
+scan-execution, schedule, pipeline, profile and UI checks passed**. The exact-container
+full suite passes **1,614 tests with 16 skipped** and one existing dependency warning.
+Two deliberate race tests change the reviewed declaration after queue admission and
+during portable-package assembly. The final pre-contact transaction blocks the run
+before `started_at`, tcpdump or Nmap, releases its leases and retains the reason. The
+final package transaction rejects the stale review and writes no ZIP. Browser
+validation on the isolated `mission-gate-final2-20261013` build showed the exact scope,
+declaration version, prohibited warning and relevant Arkime pivot; disabled Run,
+Package and Preview actions; explicit Unknown for manual targets; aligned headers and
+readable guidance at desktop and 900-pixel widths; and no console warnings or errors.
+Hunt also completed its initial network-evidence load without the legacy `items.map`
+failure or timeout. The novice operator gate returned **PASS**. The independent quality
+gate first halted for the two race windows above, then returned **CLEAR — DOCUMENTED
+DEVIATION** after independently passing 18 final boundary checks. Actual Arkime/Kibana
+queries and ingestion, evidence-driven coverage, stale/gap detection and broader
+analysis adaptation remain open, so Phase 3, Range readiness and mission readiness
 remain open.
 
 ## 3.1 Mission Environment settings
@@ -4416,8 +4429,9 @@ Under the settings/hamburger menu, define the hunt environment:
 
 ## 3.2 Authorization scope
 
-- [x] Explicit per-Network Scope Nmap authorization description with Unknown default.
-  Automated warnings/enforcement remain open.
+- [x] Explicit per-Network Scope Nmap authorization description with Unknown default,
+  plus exact Saved Network collection warnings and prohibited-scope enforcement.
+  Manual/unassociated targets remain Unknown; broader analysis adaptation remains open.
 
 Examples:
 
@@ -4472,6 +4486,20 @@ Explicitly model:
 - Unsupported parser/field mapping
 
 ## 3.6 Adaptive UI
+
+[x] **Exact-scope adaptive collection gate completed 2026-10-13.** Resolve every
+selected Saved Network through its current reviewed Network Scope and Mission
+Environment declaration. Relevant passive pivots require both tool availability and
+per-scope coverage. A known Nmap-prohibited scope must block runnable previews, active
+run admission, portable packages, enabled schedules, manual schedule starts and final
+dispatch using one server-side decision. Association and declaration versions are
+rechecked before admission/contact and retained with accepted work. Manual,
+unassociated and mixed manual portions remain Unknown and never inherit permission
+from a matching CIDR. No-Strike and the established operator authorization process
+remain separately authoritative. A prohibited paused schedule may be retained as a
+clearly blocked planning record, but enabling, manual occurrence creation, cadence
+dispatch and a previously prepared waiting occurrence all recheck the live decision
+before a worker can start. Actual passive-tool integration and evidence use remain open.
 
 Only show relevant pivots for the configured environment.
 
