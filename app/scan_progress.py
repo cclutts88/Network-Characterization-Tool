@@ -109,6 +109,7 @@ def update_scan_progress(
     progress: dict,
     *,
     phase: str | None = None,
+    reset_phase_metrics: bool = False,
     hosts_completed: int | None = None,
     hosts_total: int | None = None,
     hosts_up: int | None = None,
@@ -124,6 +125,16 @@ def update_scan_progress(
 ) -> bool:
     """Update counters safely and report whether a visible value changed."""
     before = dict(progress)
+    if reset_phase_metrics:
+        progress.update(
+            {
+                "activity": None,
+                "active_hosts": 0,
+                "phase_percent": None,
+                "eta_clock": None,
+                "remaining_seconds": None,
+            }
+        )
     if phase is not None:
         progress["phase"] = phase
     if hosts_total is not None:

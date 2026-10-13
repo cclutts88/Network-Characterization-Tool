@@ -4311,6 +4311,7 @@ def execute_scan_run(
                     persist_scan_progress(
                         manifest, phase=phase_name, hosts_completed=0,
                         hosts_total=hosts_total, hosts_up=0,
+                        reset_phase_metrics=True,
                         db_path=db_path, data_dir=data_dir,
                     )
                     phase_status, phase_exit = watch_process(
@@ -4349,11 +4350,13 @@ def execute_scan_run(
 
                 if successful_xml:
                     persist_scan_progress(
-                        manifest, phase="merge", db_path=db_path, data_dir=data_dir
+                        manifest, phase="merge", reset_phase_metrics=True,
+                        db_path=db_path, data_dir=data_dir
                     )
                     merge_nmap_xml(successful_xml, run_dir / "scan.xml")
                     persist_scan_progress(
-                        manifest, phase="analysis", db_path=db_path, data_dir=data_dir
+                        manifest, phase="analysis", reset_phase_metrics=True,
+                        db_path=db_path, data_dir=data_dir
                     )
                     successful_protocols = [
                         item["protocol"]

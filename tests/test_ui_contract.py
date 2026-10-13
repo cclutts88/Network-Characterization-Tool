@@ -549,8 +549,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Downloaded packages are fixed snapshots" in html
     assert "Preview is advisory; NCT rechecks before active contact" in html
     assert "Pause and require operator approval before Nmap" in html
-    assert "Estimated time left" in html
+    assert "Estimated time left in this phase" in html
     assert "Timeout limit in" in html
+    assert "Estimated time left in this phase applies only to the active discovery, TCP, or UDP phase" in SHELL_SCRIPT
     assert 'for="timeout">Run timeout (minutes)' in html
     assert 'id="timeout" type="number" min="1" max="60" step="1" value="45"' in html
     assert "You can stop the scan at any time from Current run" in html
@@ -1547,6 +1548,11 @@ def test_scan_history_uses_open_details_for_retained_evidence_files():
     assert "It does not replace the live Active Scan view or rerun Nmap" in SHELL_SCRIPT
     assert "Load evidence files" not in html
     assert "data-evidence=" not in html
+    assert "Analysis-ready scan evidence (XML)" in html
+    assert "TCP evidence (XML)" in html
+    assert "UDP evidence (XML)" in html
+    assert "This TCP + UDP run is partial." in html
+    assert "The analysis-ready XML merges both completed phases." in html
     assert "async function loadScanEvidence" not in html
     assert 'data-hunt="${esc(run.run_id)}">Hunt</button>' in html
     assert '/hunting?run=${encodeURIComponent(b.dataset.hunt)}#huntOverview' in html

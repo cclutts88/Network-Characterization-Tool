@@ -112,6 +112,46 @@ A roadmap item should only be marked complete when:
 - User acceptance: provide a disposable running preview with scenarios and expected
   results; development verification does not imply user, Range, or main acceptance.
 
+## Phase 2 scan workflow closeout — 2026-10-12
+
+- [x] Phase 2 Steps 3–6 acceptance completed. Existing profile, identity, scheduling,
+  progress, timeout, split-protocol, retained-evidence and partial-result behavior is
+  closed with one deterministic successful combined-run regression covering
+  discovery, top-1,000 TCP, top-100 UDP, merge and terminal publication. The check also
+  verifies retained profile/version/operator/target/schedule context and that a new
+  phase cannot display the preceding phase's ETA.
+- **Planned approach:** list FPING and traceroute as separate saved-profile classes,
+  retain creator/callsign together as scan authority, and require the full live
+  top-1,000 TCP plus top-100 UDP run for foundation completion.
+- **Implemented/revised approach:** FPING discovery and traceroute remain immutable
+  options within versioned TCP, UDP, TCP+UDP, ICS-oriented and custom profiles;
+  canonical usernames remain the audit authority while the optional display callsign
+  remains Phase 8 presentation work; deterministic combined execution is the
+  foundation gate and the full live port-count run remains a Range acceptance test.
+- **Reason and impact:** profile options preserve one exact versioned command context
+  without creating misleading duplicate profile kinds, audit identity cannot depend on
+  a mutable display alias, and a deterministic regression can validate failure-prone
+  phase handoffs without making normal development contact a live network. No schema
+  migration is required. The analyst capability is unchanged; Range acceptance still
+  must prove the complete live workload in its authorized environment.
+- **Independent gate at start:** **CLEAR — DOCUMENTED DEVIATION**. At that gate,
+  completion remained open until the success-path regression, focused/full tests,
+  visible guidance check and final independent review passed.
+- **Completion:** the deterministic success path now proves discovery → top-1,000 TCP
+  → top-100 UDP → merge → terminal publication, both protocol evidence files, the
+  analysis-ready aggregate, exact non-partial protocol coverage, and retained profile,
+  version, operator, target and schedule context. Every phase clears the prior phase's
+  activity and ETA while retaining elapsed time and the complete-run timeout. Active
+  Scan guidance distinguishes those timers. Evidence downloads use plain labels and
+  correctly distinguish TCP-only, UDP-only, complete combined and partial combined
+  runs. Docker focused gate: **94 passed, 1 Node-only skip**; complete Docker suite:
+  **1,513 passed, 16 skipped**; host Node rendering regression, isolated browser
+  guidance/layout and console checks, and diff validation passed. Novice operator:
+  **CLEAR** after two wording corrections. Independent quality gate: **CLEAR —
+  DOCUMENTED DEVIATION** after correcting single-protocol artifact wording. This is
+  foundation-only capability; it is not on `main`, is not Range-ready proof, and does
+  not implement optional callsign display.
+
 ## Field feedback correction cycle — 2026-10-08
 
 - [x] Captured the complete Teams operator-feedback window from 2026-09-28 12:23
@@ -3828,7 +3868,7 @@ high-volume passive evidence.
    contextual-guide and console checks passed. No architecture deviation; timing,
    restart, rollback and static-package boundaries are documented in the built-in
    guide.
-3. Saved scan profiles:
+3. [x] Saved scan profiles:
    - TCP
    - UDP
    - TCP + UDP
@@ -3836,9 +3876,16 @@ high-volume passive evidence.
    - Traceroute
    - ICS-oriented
    - Custom
-4. Retain scan creator/callsign, profile, target, protocol, scheduling context.
-5. Improve progress and bounded ETA.
-6. Resolve combined TCP/UDP reliability issues.
+4. [x] Retain canonical scan creator, profile, target, protocol and scheduling context.
+   Optional callsign display remains Phase 8 presentation and never replaces the
+   canonical audit identity.
+5. [x] Improve progress and bounded ETA. The Nmap estimate is explicitly scoped to the
+   active discovery/TCP/UDP phase; the hard timeout remains a separate complete-run
+   safety boundary.
+6. [x] Resolve combined TCP/UDP reliability issues. Split phases retain separate
+   evidence and an analysis-ready aggregate, preserve a successful protocol when its
+   peer fails, and pass deterministic top-1,000 TCP plus top-100 UDP execution. The
+   equivalent full live workload remains a Range acceptance check.
 7. Make historical Analyze reopen full persisted analysis.
 8. Expand scan comparison:
    - hosts

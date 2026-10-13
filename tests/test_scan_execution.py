@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import app.poc as poc
 from app.poc import (
     NoStrikeUpdate,
     RunControl,
@@ -19,6 +20,7 @@ from app.poc import (
 
 DISCOVERY_XML = b'''<?xml version="1.0"?><nmaprun scanner="nmap"><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/></host><runstats><finished time="1"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
 TCP_XML = b'''<?xml version="1.0"?><nmaprun scanner="nmap"><scaninfo type="syn" protocol="tcp"/><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="tcp" portid="443"><state state="open"/></port></ports></host><runstats><finished time="2"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
+UDP_XML = b'''<?xml version="1.0"?><nmaprun scanner="nmap"><scaninfo type="udp" protocol="udp"/><host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><ports><port protocol="udp" portid="53"><state state="open"/></port></ports></host><runstats><finished time="3"/><hosts up="1" down="0" total="1"/></runstats></nmaprun>'''
 
 
 class FakeProcess:
@@ -221,6 +223,110 @@ def test_udp_failure_preserves_tcp_xml_as_analyzable_partial_result(tmp_path):
     canonical = data_dir / "scan-runs" / manifest["run_id"] / "scan.xml"
     assert canonical.is_file()
     assert 'protocol="tcp" portid="443"' in canonical.read_text(encoding="utf-8")
+
+
+def test_combined_top_ports_success_retains_context_and_publishes_both_protocols(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "nct.db"
+    data_dir = tmp_path / "data"
+    request = ScanRunRequest(
+        operator="analyst.one",
+        created_by="analyst.one",
+        scheduled=True,
+        scheduled_by="crew.lead",
+        executed_by="scheduler",
+        schedule_id="1" * 32,
+        schedule_batch_id="2" * 32,
+        chunk_number=1,
+        chunk_count=1,
+        batch_hosts_total=1,
+        name="Combined acceptance",
+        reason="Verify the complete retained combined scan workflow",
+        originating_host="test-host",
+        interface="eth0",
+        profile="Combined acceptance profile",
+        scan_options=ScanOptions(
+            protocol="tcp_udp",
+            tcp_scope="top_1000",
+            udp_scope="top_100",
+            discovery_mode="nmap",
+        ),
+        targets=["192.0.2.10/32"],
+        capture=True,
+        timeout_seconds=30,
+    )
+    manifest = prepare_scan_run(request, db_path, interfaces={"eth0"})
+    launched: list[str] = []
+    phase_publications: list[dict] = []
+    original_publish = poc.update_scan_progress_manifest
+
+    def record_progress(current: dict, path: Path):
+        phase_publications.append(dict(current["progress"]))
+        return original_publish(current, path)
+
+    monkeypatch.setattr(poc, "update_scan_progress_manifest", record_progress)
+
+    def fake_popen(argv, *, cwd: Path, **_kwargs):
+        command = " ".join(str(item) for item in argv)
+        launched.append(command)
+        if command.startswith("tcpdump"):
+            return FakeProcess(None)
+        if "discovery.xml" in command:
+            (cwd / "discovery.xml").write_bytes(DISCOVERY_XML)
+        elif "tcp-scan.xml" in command:
+            (cwd / "tcp-scan.xml").write_bytes(TCP_XML)
+        elif "udp-scan.xml" in command:
+            (cwd / "udp-scan.xml").write_bytes(UDP_XML)
+        else:
+            raise AssertionError(command)
+        return FakeProcess(0)
+
+    execute_scan_run(
+        manifest["run_id"], RunControl(), db_path=db_path, data_dir=data_dir,
+        popen_factory=fake_popen, sleep_fn=lambda _seconds: None,
+    )
+
+    completed = get_scan_run_plan(manifest["run_id"], db_path)
+    commands = {
+        phase["name"]: phase["command_argv"]
+        for phase in completed["execution_phases"]
+    }
+    assert commands["tcp"][commands["tcp"].index("--top-ports") + 1] == "1000"
+    assert commands["udp"][commands["udp"].index("--top-ports") + 1] == "100"
+    assert [phase["status"] for phase in completed["execution_phases"]] == [
+        "completed", "completed"
+    ]
+    assert any("discovery.xml" in command for command in launched)
+    assert any("tcp-scan.xml" in command for command in launched)
+    assert any("udp-scan.xml" in command for command in launched)
+    assert completed["status"] == "completed"
+    assert completed["success"] is True
+    assert completed.get("partial_results") is not True
+    assert completed["coverage"]["actual_protocols"] == ["TCP", "UDP"]
+    assert completed["coverage"]["partial_results"] is False
+    assert completed["profile_id"] == "inline-custom"
+    assert completed["profile_version"] == 1
+    assert completed["created_by"] == "analyst.one"
+    assert completed["scheduled_by"] == "crew.lead"
+    assert completed["executed_by"] == "scheduler"
+    assert completed["targets"] == ["192.0.2.10/32"]
+    assert completed["schedule_id"] == "1" * 32
+    assert completed["schedule_batch_id"] == "2" * 32
+    assert any(
+        item["phase"] == "udp"
+        and item["remaining_seconds"] is None
+        and item["phase_percent"] is None
+        for item in phase_publications
+    )
+    run_dir = data_dir / "scan-runs" / manifest["run_id"]
+    assert (run_dir / "tcp-scan.xml").is_file()
+    assert (run_dir / "udp-scan.xml").is_file()
+    merged = (run_dir / "scan.xml").read_text(encoding="utf-8")
+    assert 'protocol="tcp" portid="443"' in merged
+    assert 'protocol="udp" portid="53"' in merged
+    registered = {item["filename"] for item in completed["artifact_registry"]["files"]}
+    assert {"tcp-scan.xml", "udp-scan.xml", "scan.xml"}.issubset(registered)
 
 
 @pytest.mark.parametrize(

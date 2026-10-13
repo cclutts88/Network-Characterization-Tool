@@ -77,3 +77,34 @@ def test_progress_clamps_nmap_counters_and_tracks_whole_scheduled_batch():
     update_scan_progress(progress, hosts_completed=999, hosts_up=999)
     assert progress["hosts_completed"] == 50
     assert progress["hosts_up"] == 50
+
+
+def test_starting_a_new_phase_clears_only_the_previous_phase_estimate():
+    progress = new_scan_progress(1, phase="tcp")
+    update_scan_progress(
+        progress,
+        activity="SYN Stealth Scan",
+        active_hosts=1,
+        phase_percent=75,
+        eta_clock="12:34",
+        remaining_seconds=30,
+        elapsed_seconds=10,
+        deadline_remaining_seconds=500,
+    )
+
+    update_scan_progress(
+        progress,
+        phase="udp",
+        reset_phase_metrics=True,
+        hosts_completed=0,
+        hosts_up=0,
+    )
+
+    assert progress["phase"] == "udp"
+    assert progress["activity"] is None
+    assert progress["active_hosts"] == 0
+    assert progress["phase_percent"] is None
+    assert progress["eta_clock"] is None
+    assert progress["remaining_seconds"] is None
+    assert progress["elapsed_seconds"] == 10
+    assert progress["deadline_remaining_seconds"] == 500
