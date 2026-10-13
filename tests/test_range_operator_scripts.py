@@ -132,7 +132,7 @@ def test_quick_start_requires_release_specific_scope_handoff_acceptance():
     )
     normalized = " ".join(content.split())
 
-    assert "phase2-r6" in content
+    assert "phase2-r7" in content
     assert "phase2-r4" in content
     assert "$NCT_WORKDIR/RELEASE-RECEIPT.txt" in content
     assert "Saved scope handoff needs correction" in content
@@ -146,6 +146,25 @@ def test_quick_start_requires_release_specific_scope_handoff_acceptance():
     assert content.index("RELEASE-RECEIPT.txt") < content.index(
         "Verify this release's Network Scope handoff correction"
     )
+
+
+def test_quick_start_requires_range_container_resource_acceptance():
+    content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(content.split())
+
+    assert "Verify container CPU and memory on this Range host" in content
+    assert "Settings → System Health" in content
+    assert "at least the second five-second sample" in normalized
+    assert "NCT process" in content
+    assert "Container CPU row" in content
+    assert "Current" in content and "Average" in content and "Maximum" in content
+    assert "Time near max" in content
+    assert "may correctly be `0 sec`" in normalized
+    assert "Unavailable container CPU or memory does not pass" in normalized
+    assert "stop acceptance" in content
+    assert "Do not change container permissions or mount host files" in normalized
 
 
 def test_packaged_scripts_readme_references_only_delivered_operator_material():

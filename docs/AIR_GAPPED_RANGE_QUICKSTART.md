@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r6.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r7.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r6.zip
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r7.zip
 checksum_file="$package_zip.sha256"
 if [ -f "$checksum_file" ]; then
     (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
@@ -286,8 +286,8 @@ following:
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
-The ZIP name ends in `phase2-r6`, while the build ID ends in `phase2-r4`.
-This is expected. `phase2-r6` identifies this package and its corrected operator
+The ZIP name ends in `phase2-r7`, while the build ID ends in `phase2-r4`.
+This is expected. `phase2-r7` identifies this package and its corrected operator
 guide. `phase2-r4` identifies the tested application image
 inside the package. Open `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it
 lists this same package revision, image name, build ID, and source commit before
@@ -307,6 +307,28 @@ Then verify the saved information in the browser:
    not contact a device. Record live collection as **not yet validated**. You
    may upload and inspect an approved retained configuration to verify the
    non-contact analysis path, but that does not prove live collection works.
+
+### Verify container CPU and memory on this Range host
+
+1. Open **Settings → System Health**, then find **Live performance and
+   reliability**.
+2. CPU may initially say **Warming up**. Leave the panel visible through at
+   least the second five-second sample.
+3. Confirm that the **NCT process** and **Container** rows stay aligned under
+   the CPU and Memory headings.
+4. In the Container CPU row, confirm **Current**, **Average**, and **Maximum**
+   contain percentages and that a visible Basis explains whether the percentage
+   uses one CPU or a container CPU allowance.
+5. In the Container Memory row, confirm **Current**, **Average**, and
+   **Maximum** contain plausible memory amounts and the panel shows no raw
+   error text. **Time near max** may correctly be `0 sec`; that is not a
+   failure.
+
+**Unavailable** is an honest unknown value and never means zero. However,
+Unavailable container CPU or memory does not pass this release's Range
+acceptance check. Record what the panel shows, stop acceptance, and have the
+Range administrator review the Docker/Linux resource-counter access. Do not
+change container permissions or mount host files as a workaround.
 
 ### Verify this release's Network Scope handoff correction
 

@@ -447,6 +447,17 @@ A roadmap item should only be marked complete when:
   dependency warning. The novice gate and independent quality gate are **CLEAR**. The
   correction remains foundation-only and awaits the exact `phase2-r4` image and
   `phase2-r6` archive checks; it is not yet installed on the Range or available on `main`.
+- **2026-10-13 Range resource-acceptance guide correction:** The sealed `phase2-r6`
+  package is withdrawn before transfer. Its application image, archive, manifest and
+  checksums passed, but the novice package gate found that the Quickstart did not turn the
+  receipt's pending Range CPU/memory confirmation into an executable acceptance check.
+  The `phase2-r7` guide now directs the operator to System Health, waits through the CPU
+  warm-up sample, checks aligned process/container rows, CPU current/average/maximum and
+  basis, memory current/average/maximum, plausible values and raw errors, and explains
+  that zero seconds near maximum is valid. Unavailable remains an honest unknown but now
+  explicitly stops this release's Range acceptance without inviting permission or host
+  mount workarounds. The unchanged `phase2-r4` application image must be resealed with the
+  corrected guide and pass fresh novice and independent package gates.
 
 ## Field feedback correction cycle — 2026-10-08
 
