@@ -300,6 +300,22 @@ A roadmap item should only be marked complete when:
   material, has a regression check, and is used for `phase2-r3`. The immutable application
   image remains `0.16.0-range-test-20261013-phase2-r2`; no application bytes or retained
   evidence changed for this documentation-only package correction.
+- **2026-10-13 replacement transfer candidate sealed:**
+  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r3.zip` is the only current
+  transfer candidate from this correction cycle. Its outer SHA-256 is
+  `40761f189e1ef5412c5a7de9b8231cf2d8089c5a347db32c207adae41068333d`;
+  its 21-entry package manifest and inner image SHA-256
+  `029862f812ca5e09397026a49e418a33aa26521f0dad94cfd705ae321d65a8b5`
+  were reverified after a fresh extraction. The complete suite passes 1,549 tests with
+  16 skipped; 53 Range launcher/operator tests pass; all 14 packaged shell scripts pass
+  syntax validation. The novice operator gate is CLEAR after confirming the contextual
+  Host Inventory and LFA Guide topics on their visible controls. The independent package
+  gate is CLEAR after separately checking ZIP path safety and uniqueness, all manifest
+  hashes, both checksums, the package-only README, image identity, receipt bindings, 17
+  package tests, and packaged script syntax. This is committed and development/transfer
+  ready on `foundation/evidence-engine-v2`; target installation, HTTPS/sign-in, and
+  administrator-approved acceptance checks are still required before calling it
+  Range-accepted or mission-ready. It is not available on `main`.
 
 ## Field feedback correction cycle — 2026-10-08
 
