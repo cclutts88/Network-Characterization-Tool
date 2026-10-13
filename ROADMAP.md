@@ -2808,6 +2808,54 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
      live-online claim. Device observations, exact Last Seen, and automatic service
      absence remain open.
 
+   **2026-10-12 last-confirmed-open service slice start:** Add one lazy, read-only
+   service detail for an exact Network Scope, IP endpoint, transport and port. It will
+   select only successful supported Nmap receipts that explicitly reported the exact
+   requested port open with eligible coverage, retain tied/touching/overlapping and
+   unknown-time source windows without inventing an instant, and keep later closed or
+   Not assessed state separate from the earlier positive evidence. Every row must retain
+   its exact assignment, assessment, encounter, source link, collection window and
+   extraction facts. This slice may not merge IPs, create physical-device identity,
+   claim live state, prove disappearance, infer DHCP continuity, read artifact bytes,
+   hash or parse XML, create jobs, backfill or write. Candidate ceilings must fail before
+   JSON decoding; follow-on pages bind to the exact current assignment-set revision.
+   Independent architecture start gate: **CLEAR**. Physical-device reconciliation and
+   exact Last Seen remain open pending a separately reviewed stable-identity contract.
+
+   **2026-10-12 quality-gate correction resolved:** Independent final review halted
+   this slice before completion because the new selector rejected supported port `0`,
+   and because exact-coverage and revision-bound timed/uncertain paging needed direct
+   adversarial tests. The selector now follows the existing `0..65535` service
+   contract. An authenticated API test proves eligible UDP/0 evidence; malformed
+   explicit coverage cannot create a claim; and tied timed plus uncertain-time pages
+   are deterministic, nonduplicating and rejected after an assignment correction.
+   Independent re-review returned **CLEAR**.
+
+   **2026-10-12 last-confirmed-open service slice completion:**
+   `last-confirmed-open-service-observation:1` now provides a lazy detail inside each
+   latest source-reported service row for one exact Network Scope, IP address,
+   protocol and port. It selects only current unsuperseded, successfully completed
+   supported Nmap receipts with strict versioned coverage and an explicit `open`
+   state. A later closed or Not assessed result stays visible as the current saved
+   state without erasing earlier positive evidence. Tied, touching and transitively
+   overlapping source windows remain grouped; any successful open report without a
+   trustworthy source window blocks an unqualified last claim and remains separately
+   paged. Results preserve assignment, assessment, encounter, extraction location,
+   source collection window and direct retained-source links. Reads use one database
+   snapshot, bind follow-on pages to the current assignment-set revision, enforce both
+   5,000-candidate ceilings before stored JSON decoding, and perform no source-file
+   reads, hashing, XML parsing, backfill, jobs, network contact or writes. Focused
+   Docker validation: **141 passed**. Complete Docker regression: **1,511 passed,
+   15 skipped**, with the existing Starlette dependency warning. Host Node syntax
+   validation passed. An isolated browser check confirmed a newest **Not assessed**
+   443/tcp row can open its earlier confirmed-open source window, retained-source link,
+   cautious explanation and contextual Guide with no browser-console errors. The
+   novice operator gate and independent final quality gate are both **CLEAR**. This is
+   still a source window rather than live truth, physical-device identity, DHCP
+   continuity, disappearance proof or an exact Last Seen timestamp. The capability
+   remains foundation-branch development work; it is not Range-ready, mission-ready
+   or available on `main`.
+
    **2026-10-04 nested-slice completion:** `latest-supported-nmap-observations:1`
    now powers a lazy Processed Evidence view for one exact Network Scope and IP address.
    It separately shows the latest supported source window and last confirmed positive

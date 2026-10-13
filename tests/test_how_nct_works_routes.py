@@ -85,6 +85,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Versioned coverage receipts retain successful completion" in html
     assert "Latest supported and last confirmed Nmap source windows" in html
     assert "last confirmed positive observation" in html
+    assert "Per-service last confirmed open source windows" in html
+    assert "later closed or narrower scans do not erase" in html
+    assert "saved evidence windows rather than a live check or exact Last Seen time" in html
     assert "source-reported MAC/IP associations within one scope" in html
     assert "Current reported service state" in html
     assert "did not assess the port" in html

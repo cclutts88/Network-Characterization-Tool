@@ -23,9 +23,11 @@ MAX_CURRENT_SERVICE_CANDIDATES = 5000
 MAX_CURRENT_SERVICE_EVIDENCE = 250
 MAX_CURRENT_SERVICE_KEYS = 10000
 MAX_CURRENT_SERVICE_PAGE = 100
+MAX_LAST_OPEN_SERVICE_CANDIDATES = 5000
 LATEST_OBSERVATION_SELECTION_CONTRACT = "latest-supported-nmap-observations:1"
 MAC_ASSOCIATION_SELECTION_CONTRACT = "source-reported-mac-address-associations:1"
 CURRENT_SERVICE_STATE_CONTRACT = "current-reported-service-state:1"
+LAST_OPEN_SERVICE_CONTRACT = "last-confirmed-open-service-observation:1"
 
 
 class FoundationEvidenceConflict(ValueError):
@@ -1298,6 +1300,136 @@ def get_foundation_current_service_states(
             "physical_device_identity": False,
             "exact_last_seen_timestamp": False,
             "absence_or_disappearance": False,
+        },
+    }
+
+
+_EXACT_SERVICE_CANDIDATES_SQL = _PRIMARY_CTE + """
+SELECT DISTINCT receipt.assessment_id, service.entity_id AS service_id,
+       receipt.facts_json
+FROM primary_links
+JOIN service_entities service
+  ON service.host_id = ? AND service.protocol = ? AND service.port = ?
+JOIN service_receipts receipt
+  ON receipt.assessment_id = primary_links.assessment_id
+ AND receipt.service_id = service.entity_id
+ORDER BY receipt.assessment_id, service.entity_id
+LIMIT ?
+"""
+
+
+def get_foundation_last_open_service_observations(
+    db_path: Path, scope_id: str, entity_id: str, protocol: str, port: int, *,
+    limit: int = 10, offset: int = 0,
+    unknown_offset: int = 0, expected_revision: str | None = None,
+) -> dict:
+    """Return the last saved source window explicitly reporting one service open."""
+    limit, offset = _page(limit, offset, MAX_RECEIPT_PAGE)
+    _, unknown_offset = _page(limit, unknown_offset, MAX_RECEIPT_PAGE)
+    protocol = str(protocol or "").strip().lower()
+    if protocol not in {"tcp", "udp", "sctp"}:
+        raise ValueError("protocol must be TCP, UDP, or SCTP")
+    if type(port) is not int or not 0 <= port <= 65535:
+        raise ValueError("port must be between 0 and 65535")
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        scope_row = db.execute(
+            """SELECT scope_id, label, description, version, active
+               FROM network_scopes WHERE scope_id = ?""",
+            (scope_id,),
+        ).fetchone()
+        endpoint = db.execute(
+            """SELECT entity_id, address FROM endpoint_entities
+               WHERE entity_id = ? AND scope_id = ?""",
+            (entity_id, scope_id),
+        ).fetchone()
+        if scope_row is None or endpoint is None:
+            raise KeyError("Processed endpoint not found in this Network Scope")
+        rows = db.execute(
+            _LATEST_OBSERVATION_CANDIDATES_SQL,
+            (scope_id, entity_id, NMAP_ENDPOINT_PARSER,
+             MAX_LAST_OPEN_SERVICE_CANDIDATES + 1),
+        ).fetchall()
+        if len(rows) > MAX_LAST_OPEN_SERVICE_CANDIDATES:
+            raise ValueError(
+                "Last-open service selection exceeds the reviewed per-address "
+                "source-record bound; no partial result was produced"
+            )
+        selection_revision = _assignment_set_revision(rows)
+        if expected_revision is not None and expected_revision != selection_revision:
+            raise FoundationEvidenceConflict(
+                "The current scope assignments changed; refresh last-open evidence"
+            )
+        service_rows = db.execute(
+            _EXACT_SERVICE_CANDIDATES_SQL,
+            (scope_id, NMAP_ENDPOINT_PARSER, entity_id, protocol, port,
+             MAX_LAST_OPEN_SERVICE_CANDIDATES + 1),
+        ).fetchall()
+        if len(service_rows) > MAX_LAST_OPEN_SERVICE_CANDIDATES:
+            raise ValueError(
+                "Last-open service selection exceeds the reviewed explicit-service "
+                "bound; no partial result was produced"
+            )
+
+    explicit = {
+        row["assessment_id"]: {
+            "service_id": row["service_id"], "facts": _json(row["facts_json"]),
+        }
+        for row in service_rows
+    }
+    timed: list[dict] = []
+    unknown: list[dict] = []
+    excluded_count = 0
+    for row in rows:
+        record, interval, completed = _supported_observation_candidate(row)
+        service = explicit.get(record["assessment"]["assessment_id"])
+        if not completed or service is None:
+            excluded_count += 1
+            continue
+        record["endpoint_facts"] = _json(row["endpoint_facts_json"])
+        eligible, _reason = _coverage_for_explicit(
+            record, "Selected", protocol, port,
+        )
+        if not eligible or _reported_state(service["facts"]) != "open":
+            excluded_count += 1
+            continue
+        record["explicit_service"] = service
+        candidate = {"record": record, "interval": interval}
+        if interval is None:
+            unknown.append(record)
+        else:
+            timed.append(candidate)
+    unknown.sort(key=lambda item: (
+        item["assessment"]["assessment_id"], item["assignment"]["assignment_id"],
+    ))
+    group = _slice_observation_group(
+        _latest_observation_group(timed, len(unknown)), limit=limit, offset=offset,
+    )
+    unknown_page = unknown[unknown_offset:unknown_offset + limit]
+    return {
+        "contract": LAST_OPEN_SERVICE_CONTRACT,
+        "scope": _scope(scope_row),
+        "endpoint": {"entity_id": endpoint["entity_id"], "address": endpoint["address"]},
+        "service": {"protocol": protocol, "port": port},
+        "last_confirmed_open_source_window": group,
+        "unknown_time_records": unknown_page,
+        "unknown_time_pagination": {
+            "limit": limit, "offset": unknown_offset, "total": len(unknown),
+            "has_more": unknown_offset + len(unknown_page) < len(unknown),
+        },
+        "selection_revision": selection_revision,
+        "excluded_record_count": excluded_count,
+        "read_only": True,
+        "claims": {
+            "last_confirmed_open_source_window": bool(
+                group["record_count"] and group["status"] in {"ordered", "overlapping"}
+            ),
+            "live_or_current_network_truth": False,
+            "physical_device_identity": False,
+            "exact_last_seen_timestamp": False,
+            "absence_or_disappearance": False,
+            "dhcp_or_address_continuity": False,
         },
     }
 

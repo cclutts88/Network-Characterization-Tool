@@ -26,6 +26,7 @@ from app.foundation_evidence import (
     get_foundation_current_service_states,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
+    get_foundation_last_open_service_observations,
     get_foundation_mac_associations,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
@@ -1958,6 +1959,29 @@ def foundation_evidence_current_service_states(
     try:
         return get_foundation_current_service_states(
             DB_PATH, scope_id, entity_id, limit=limit, offset=offset,
+            expected_revision=selection_revision,
+        )
+    except FoundationEvidenceConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise _network_scope_error(exc) from exc
+
+
+@app.get(
+    "/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}"
+    "/services/{protocol}/{port}/last-confirmed-open"
+)
+def foundation_evidence_last_confirmed_open_service(
+    scope_id: str, entity_id: str, protocol: str, port: int,
+    limit: int = Query(default=10, ge=1, le=25),
+    offset: int = Query(default=0, ge=0),
+    unknown_offset: int = Query(default=0, ge=0),
+    selection_revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    try:
+        return get_foundation_last_open_service_observations(
+            DB_PATH, scope_id, entity_id, protocol, port, limit=limit,
+            offset=offset, unknown_offset=unknown_offset,
             expected_revision=selection_revision,
         )
     except FoundationEvidenceConflict as exc:

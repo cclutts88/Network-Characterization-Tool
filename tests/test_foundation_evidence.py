@@ -12,6 +12,7 @@ from app.foundation_evidence import (
     get_foundation_current_service_states,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
+    get_foundation_last_open_service_observations,
     get_foundation_mac_associations,
     get_foundation_receipt_services,
     get_foundation_scope_evidence,
@@ -355,6 +356,10 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
             f"/api/foundation-evidence/scopes/{lab['scope_id']}"
             f"/endpoints/{entity_id}/current-service-states"
         )
+        last_open = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}"
+            f"/endpoints/{entity_id}/services/tcp/22/last-confirmed-open"
+        )
         mac_associations = client.get(
             f"/api/foundation-evidence/scopes/{lab['scope_id']}/mac-associations",
             params={"mac": "00:11:22:33:44:55"},
@@ -370,6 +375,9 @@ def test_routes_are_viewer_readable_and_do_not_expose_mutation_methods(tmp_path,
     assert current_services.status_code == 200
     assert current_services.json()["contract"] == "current-reported-service-state:1"
     assert current_services.json()["read_only"] is True
+    assert last_open.status_code == 200
+    assert last_open.json()["contract"] == "last-confirmed-open-service-observation:1"
+    assert last_open.json()["read_only"] is True
     assert mac_associations.status_code == 200
     assert mac_associations.json()["read_only"] is True
     assert missing.status_code == 404
@@ -410,14 +418,18 @@ def test_read_model_opens_database_read_only(tmp_path, monkeypatch):
     current_services = evidence.get_foundation_current_service_states(
         db, lab["scope_id"], scoped["endpoints"][0]["entity_id"],
     )
+    last_open = evidence.get_foundation_last_open_service_observations(
+        db, lab["scope_id"], scoped["endpoints"][0]["entity_id"], "tcp", 22,
+    )
     associations = evidence.get_foundation_mac_associations(
         db, lab["scope_id"], "00:11:22:33:44:55",
     )
     assert catalog["read_only"] is True
     assert latest["read_only"] is True
     assert current_services["read_only"] is True
+    assert last_open["read_only"] is True
     assert associations["read_only"] is True
-    assert calls == [True, True, True, True, True, True, True]
+    assert calls == [True, True, True, True, True, True, True, True]
 
 
 def test_scope_read_is_one_snapshot_when_a_correction_commits_mid_read(tmp_path, monkeypatch):
@@ -1000,6 +1012,300 @@ def _current_for(db, destination, **page):
         db, destination["scope_id"], scoped["endpoints"][0]["entity_id"],
         **page,
     )
+
+
+def _last_open_for(db, destination, protocol="tcp", port=22, **page):
+    scoped = get_foundation_scope_evidence(db, destination["scope_id"])
+    assert len(scoped["endpoints"]) == 1
+    return get_foundation_last_open_service_observations(
+        db, destination["scope_id"], scoped["endpoints"][0]["entity_id"],
+        protocol, port, **page,
+    )
+
+
+def test_last_open_service_keeps_prior_positive_after_later_closed(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    earlier = observation(db, "upload:last-open-earlier", content=lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=100,
+    ))
+    later = observation(db, "upload:last-open-later", content=lifecycle_xml(
+        [22], [("tcp", 22, "closed")], start=200,
+    ))
+    for item in (earlier, later):
+        process(db, assign(db, item, lab))
+
+    result = _last_open_for(db, lab)
+    group = result["last_confirmed_open_source_window"]
+    assert result["contract"] == "last-confirmed-open-service-observation:1"
+    assert group["status"] == "ordered"
+    assert group["record_count"] == 1
+    assert group["records"][0]["source"]["observation_id"] == earlier["observation_id"]
+    assert group["records"][0]["explicit_service"]["facts"]["state"]["state"] == "open"
+    assert result["claims"] == {
+        "last_confirmed_open_source_window": True,
+        "live_or_current_network_truth": False,
+        "physical_device_identity": False,
+        "exact_last_seen_timestamp": False,
+        "absence_or_disappearance": False,
+        "dhcp_or_address_continuity": False,
+    }
+
+
+def test_last_open_service_groups_overlap_and_unknown_time_blocks_last_claim(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    for index, content in enumerate((
+        lifecycle_xml([22], [("tcp", 22, "open")], start=100,
+                      host_start=101, host_end=115, finish=116),
+        lifecycle_xml([22], [("tcp", 22, "open")], start=105,
+                      host_start=110, host_end=120, finish=121),
+    )):
+        process(db, assign(db, observation(
+            db, f"upload:last-open-overlap-{index}", content=content,
+        ), lab))
+    overlapping = _last_open_for(db, lab)
+    assert overlapping["last_confirmed_open_source_window"]["status"] == "overlapping"
+    assert overlapping["last_confirmed_open_source_window"]["record_count"] == 2
+
+    unknown_xml = lifecycle_xml(
+        [22], [("tcp", 22, "open")], start=300,
+    ).replace(b' starttime="301" endtime="309"', b'')
+    process(db, assign(db, observation(
+        db, "upload:last-open-unknown", content=unknown_xml,
+    ), lab))
+    uncertain = _last_open_for(db, lab)
+    assert uncertain["last_confirmed_open_source_window"]["status"] == "time_uncertain"
+    assert uncertain["claims"]["last_confirmed_open_source_window"] is False
+    assert uncertain["unknown_time_pagination"]["total"] == 1
+
+
+def test_last_open_service_is_protocol_specific_and_revision_bound(tmp_path):
+    db = tmp_path / "nct.db"
+    first, second = scope(db, "First"), scope(db, "Second")
+    successful = XML.replace(
+        b'<finished time="110" timestr="done"/>',
+        b'<finished time="110" timestr="done" exit="success"/>',
+    )
+    item = observation(db, "upload:last-open-protocol", content=successful)
+    assignment = assign(db, item, first)
+    process(db, assignment)
+    tcp = _last_open_for(db, first, protocol="tcp", port=53)
+    udp = _last_open_for(db, first, protocol="udp", port=53)
+    assert tcp["last_confirmed_open_source_window"]["record_count"] == 1
+    assert udp["last_confirmed_open_source_window"]["record_count"] == 0
+    revision = tcp["selection_revision"]
+    entity_id = tcp["endpoint"]["entity_id"]
+    correct_artifact_scope(
+        db, expected_assignment_id=assignment["assignment_id"],
+        destination_scope_id=second["scope_id"], actor="analyst",
+        reason="Corrected exact context", whole_artifact_confirmed=True,
+    )
+    with pytest.raises(FoundationEvidenceConflict):
+        get_foundation_last_open_service_observations(
+            db, first["scope_id"], entity_id, "tcp", 53,
+            expected_revision=revision,
+        )
+
+
+def test_last_open_service_api_accepts_explicit_open_port_zero(tmp_path, monkeypatch):
+    import app.main as main
+
+    db = tmp_path / "nct.db"
+    monkeypatch.setattr(main, "DB_PATH", db)
+    monkeypatch.setattr(main, "auth_enabled", lambda: True)
+    monkeypatch.setattr(
+        main, "session_identity",
+        lambda *args: {"username": "viewer", "display_name": "Viewer", "role": "viewer"},
+    )
+    lab = scope(db, "Lab")
+    process(db, assign(db, observation(
+        db, "upload:last-open-port-zero",
+        content=lifecycle_xml(
+            [0], [("udp", 0, "open")], start=100, protocol="udp",
+        ),
+    ), lab))
+    scoped = get_foundation_scope_evidence(db, lab["scope_id"])
+    entity_id = scoped["endpoints"][0]["entity_id"]
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            f"/api/foundation-evidence/scopes/{lab['scope_id']}"
+            f"/endpoints/{entity_id}/services/udp/0/last-confirmed-open"
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["service"] == {"protocol": "udp", "port": 0}
+    assert result["last_confirmed_open_source_window"]["record_count"] == 1
+    assert result["claims"]["last_confirmed_open_source_window"] is True
+
+
+def test_last_open_service_checks_source_bound_before_json_decode(tmp_path, monkeypatch):
+    from app import foundation_evidence as evidence
+
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    for index in range(2):
+        process(db, assign(db, observation(
+            db, f"upload:last-open-bound-{index}",
+            content=lifecycle_xml([22], [("tcp", 22, "open")], start=100 + 20 * index),
+        ), lab))
+    monkeypatch.setattr(evidence, "MAX_LAST_OPEN_SERVICE_CANDIDATES", 1)
+    monkeypatch.setattr(
+        evidence, "_json",
+        lambda raw: (_ for _ in ()).throw(AssertionError("decoded before bound")),
+    )
+    with pytest.raises(ValueError, match="source-record bound"):
+        _last_open_for(db, lab)
+
+
+def test_last_open_service_keeps_duplicate_encounters_and_ignores_narrower_later_scan(
+    tmp_path,
+):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    open_xml = lifecycle_xml([22], [("tcp", 22, "open")], start=100)
+    for source_ref in ("upload:last-open-first", "upload:last-open-second"):
+        process(db, assign(db, observation(db, source_ref, content=open_xml), lab))
+    process(db, assign(db, observation(
+        db, "upload:last-open-narrower",
+        content=lifecycle_xml([80], [("tcp", 80, "open")], start=300),
+    ), lab))
+
+    result = _last_open_for(db, lab)
+    group = result["last_confirmed_open_source_window"]
+    assert group["status"] == "overlapping"
+    assert group["record_count"] == 2
+    assert {
+        item["source"]["source_ref"] for item in group["records"]
+    } == {"upload:last-open-first", "upload:last-open-second"}
+    assert result["excluded_record_count"] == 1
+
+
+def test_last_open_service_requires_strict_boolean_completion(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    processing = process(db, assign(db, observation(
+        db, "upload:last-open-string-completion",
+        content=lifecycle_xml([22], [("tcp", 22, "open")], start=100),
+    ), lab))
+    with sqlite3.connect(db) as connection:
+        # Simulate a malformed legacy row that bypassed today's immutable writer.
+        connection.execute("DROP TRIGGER entity_assessments_no_update")
+        connection.execute(
+            """UPDATE entity_assessments
+               SET payload_json = json_set(
+                   payload_json, '$.facts.coverage.completion.successful', 'true'
+               )
+               WHERE assessment_id = ?""",
+            (processing["assessment_id"],),
+        )
+
+    result = _last_open_for(db, lab)
+    assert result["last_confirmed_open_source_window"]["record_count"] == 0
+    assert result["claims"]["last_confirmed_open_source_window"] is False
+
+
+def test_last_open_service_rejects_explicit_open_without_supported_coverage(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    processing = process(db, assign(db, observation(
+        db, "upload:last-open-invalid-coverage",
+        content=lifecycle_xml([22], [("tcp", 22, "open")], start=100),
+    ), lab))
+    with sqlite3.connect(db) as connection:
+        # Simulate malformed legacy coverage that today's immutable writer rejects.
+        connection.execute("DROP TRIGGER endpoint_receipts_no_update")
+        connection.execute(
+            """UPDATE endpoint_receipts
+               SET facts_json = json_set(
+                   facts_json,
+                   '$.port_coverage.protocols.tcp.explicit_observation_eligible',
+                   json('false')
+               )
+               WHERE assessment_id = ?""",
+            (processing["assessment_id"],),
+        )
+
+    result = _last_open_for(db, lab)
+    assert result["last_confirmed_open_source_window"]["record_count"] == 0
+    assert result["excluded_record_count"] == 1
+    assert result["claims"]["last_confirmed_open_source_window"] is False
+
+
+def test_last_open_service_pages_timed_and_unknown_records_and_rejects_stale_pages(
+    tmp_path,
+):
+    db = tmp_path / "nct.db"
+    first, second = scope(db, "First"), scope(db, "Second")
+    assignments = []
+    for index in range(3):
+        item = observation(
+            db, f"upload:last-open-page-timed-{index}",
+            content=lifecycle_xml([22], [("tcp", 22, "open")], start=100),
+        )
+        assignment = assign(db, item, first)
+        assignments.append(assignment)
+        process(db, assignment)
+    for index in range(2):
+        content = lifecycle_xml(
+            [22], [("tcp", 22, "open")], start=300 + index * 20,
+        ).replace(
+            f' starttime="{301 + index * 20}" endtime="{309 + index * 20}"'.encode(),
+            b'',
+        )
+        process(db, assign(db, observation(
+            db, f"upload:last-open-page-unknown-{index}", content=content,
+        ), first))
+
+    timed_a = _last_open_for(db, first, limit=1, offset=0, unknown_offset=0)
+    revision = timed_a["selection_revision"]
+    timed_b = _last_open_for(
+        db, first, limit=1, offset=1, unknown_offset=0,
+        expected_revision=revision,
+    )
+    unknown_b = _last_open_for(
+        db, first, limit=1, offset=0, unknown_offset=1,
+        expected_revision=revision,
+    )
+    assert timed_a["last_confirmed_open_source_window"]["pagination"] == {
+        "limit": 1, "offset": 0, "total": 3, "has_more": True,
+    }
+    assert timed_b["last_confirmed_open_source_window"]["pagination"] == {
+        "limit": 1, "offset": 1, "total": 3, "has_more": True,
+    }
+    assert (
+        timed_a["last_confirmed_open_source_window"]["records"][0]["source"]["observation_id"]
+        != timed_b["last_confirmed_open_source_window"]["records"][0]["source"]["observation_id"]
+    )
+    assert timed_a["unknown_time_pagination"] == {
+        "limit": 1, "offset": 0, "total": 2, "has_more": True,
+    }
+    assert unknown_b["unknown_time_pagination"] == {
+        "limit": 1, "offset": 1, "total": 2, "has_more": False,
+    }
+    assert (
+        timed_a["unknown_time_records"][0]["source"]["observation_id"]
+        != unknown_b["unknown_time_records"][0]["source"]["observation_id"]
+    )
+
+    correct_artifact_scope(
+        db, expected_assignment_id=assignments[0]["assignment_id"],
+        destination_scope_id=second["scope_id"], actor="analyst",
+        reason="Correct one paged source", whole_artifact_confirmed=True,
+    )
+    entity_id = timed_a["endpoint"]["entity_id"]
+    with pytest.raises(FoundationEvidenceConflict):
+        get_foundation_last_open_service_observations(
+            db, first["scope_id"], entity_id, "tcp", 22,
+            limit=1, offset=1, expected_revision=revision,
+        )
+    with pytest.raises(FoundationEvidenceConflict):
+        get_foundation_last_open_service_observations(
+            db, first["scope_id"], entity_id, "tcp", 22,
+            limit=1, unknown_offset=1, expected_revision=revision,
+        )
 
 
 def test_current_service_state_uses_latest_ordered_coverage_per_protocol_port(tmp_path):

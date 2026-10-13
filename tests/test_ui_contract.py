@@ -2226,6 +2226,13 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "/latest-observations?${params}" in html
     assert "Open latest source-reported service state" in html
     assert "/current-service-states?${params}" in html
+    assert "Open last confirmed open source window" in html
+    assert "/last-confirmed-open?${params}" in html
+    assert "The saved Nmap source explicitly reported this port" in html
+    assert "not a live check or exact Last Seen time" in html
+    assert "data-last-open-service" in html
+    assert "target.dataset.lastOpenRequest!==request" in html
+    assert "data-last-open-page" in html
     assert "A later scan that did not assess a port shows Not assessed" in html
     assert "Why this source was selected" in html
     current_service_renderer = html.split("function renderCurrentServiceStates", 1)[1].split(
@@ -2240,6 +2247,9 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "Open supporting source evidence" in SHELL_SCRIPT
     assert ".processed-evidence-current-services details > summary" in SHELL_SCRIPT
     assert "collection window and the retained evidence link" in SHELL_SCRIPT
+    assert "Last confirmed open source window" in SHELL_SCRIPT
+    assert "[data-last-open-service]" in SHELL_SCRIPT
+    assert "A later closed result or narrower scan does not erase" in SHELL_SCRIPT
     assert "body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "html[data-nct-density=compact] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "html[data-nct-density=spacious] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
