@@ -277,6 +277,19 @@ A roadmap item should only be marked complete when:
   with 16 skipped. Browser console and novice-operator checks were clear. A replacement
   immutable image and transfer archive remain required before Range transfer; the
   withdrawn archive remains prohibited.
+- **2026-10-13 replacement Range image and package gate:** Immutable image
+  `network-characterization-tool:0.16.0-range-test-20261013-phase2-r2` is bound to
+  correction commit `aab6e6f603df18ba568808cdf26f18ad4384c9a2`. Its health endpoint reports
+  version `0.16.0`, the expected build ID and that exact commit. The image passed the
+  operator's isolated one-scan API checks, and offline archive SHA-256
+  `029862f812ca5e09397026a49e418a33aa26521f0dad94cfd705ae321d65a8b5`
+  loaded with `caddy:2-alpine` into a separate empty Docker engine; the archive-loaded
+  NCT image then started and passed health and Analyze page checks. Range launch scripts
+  and the quickstart now identify the replacement image/archive, 52 deployment checks
+  pass, and all 14 source plus 14 packaged shell scripts pass syntax validation. The
+  final outer ZIP checksum and independent package gate are recorded after archive
+  sealing. This remains a foundation transfer candidate pending target-Range acceptance,
+  not mission-ready or available on `main`.
 
 ## Field feedback correction cycle — 2026-10-08
 
