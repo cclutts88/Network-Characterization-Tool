@@ -10,6 +10,7 @@ from app.schema_compatibility import (
     DATA_LAYOUT_CONTRACT,
     LEGACY_MIGRATION_ID,
     MIGRATION_ID,
+    SCHEDULED_WORK_MIGRATION_ID,
     SchemaCompatibilityError,
     WORK_COORDINATION_MIGRATION_ID,
     begin_schema_migration,
@@ -30,8 +31,8 @@ def _create_verified_version_two_fixture(db_path: Path) -> None:
     init_work_coordination_storage(db_path)
     with sqlite3.connect(db_path) as db:
         db.execute(
-            "DELETE FROM nct_schema_migrations WHERE migration_id = ?",
-            (MIGRATION_ID,),
+            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?)",
+            (SCHEDULED_WORK_MIGRATION_ID, MIGRATION_ID),
         )
         fingerprint = schema_fingerprint(db)
         db.execute(
@@ -79,7 +80,7 @@ def test_schema_contract_migration_records_completed_fingerprint(tmp_path: Path)
     complete_schema_migration(db_path, attempt)
 
     state = schema_state(db_path)
-    assert state["schema_version"] == 3
+    assert state["schema_version"] == 4
     assert state["data_layout_contract"] == DATA_LAYOUT_CONTRACT
     assert state["migration_plan_digest"] == migration_plan_digest()
     assert state["schema_fingerprint_matches"] is True
@@ -112,10 +113,11 @@ def test_interrupted_schema_migration_retries_idempotently(tmp_path: Path) -> No
     assert current["status"] == "completed"
 
 
-def test_interrupted_version_two_to_three_ddl_resumes_exact_lineage(
+def test_interrupted_version_two_upgrade_resumes_exact_lineage(
     tmp_path: Path,
 ) -> None:
     from app.scheduled_work import init_scheduled_work_storage
+    from app.device_contact_work import init_device_contact_work_storage
 
     db_path = tmp_path / "analyzer.db"
     _create_verified_version_two_fixture(db_path)
@@ -130,18 +132,20 @@ def test_interrupted_version_two_to_three_ddl_resumes_exact_lineage(
     assert retry is not None
     assert retry.attempt == 2
     init_scheduled_work_storage(db_path)
+    init_device_contact_work_storage(db_path)
     complete_schema_migration(db_path, retry)
 
     state = schema_state(db_path)
-    assert state["schema_version"] == 3
+    assert state["schema_version"] == 4
     assert state["schema_fingerprint_matches"] is True
     assert [item["migration_id"] for item in state["migration_ledger"]] == [
         LEGACY_MIGRATION_ID,
         WORK_COORDINATION_MIGRATION_ID,
+        SCHEDULED_WORK_MIGRATION_ID,
         MIGRATION_ID,
     ]
     assert [item["status"] for item in state["migration_ledger"]] == [
-        "completed", "completed", "completed",
+        "completed", "completed", "completed", "completed",
     ]
     assert state["migration_ledger"][-1]["attempts"] == 2
     assert begin_schema_migration(db_path) is None
@@ -165,11 +169,21 @@ def test_interrupted_version_three_checkpoint_rejects_later_schema_drift(
 
 
 def test_verified_version_one_database_upgrades_with_complete_lineage(tmp_path: Path) -> None:
+    from app.device_contact_work import init_device_contact_work_storage
+    from app.scheduled_work import init_scheduled_work_storage
+
     db_path = tmp_path / "analyzer.db"
     begin_schema_migration(db_path)
     with sqlite3.connect(db_path) as db:
         fingerprint = schema_fingerprint(db)
-        db.execute("DELETE FROM nct_schema_migrations WHERE migration_id = 'nct-work-coordination-v2'")
+        db.execute(
+            """DELETE FROM nct_schema_migrations
+                 WHERE migration_id IN (
+                    'nct-work-coordination-v2',
+                    'nct-scheduled-occurrences-v3',
+                    'nct-device-contact-fencing-v4'
+                 )"""
+        )
         db.execute(
             """UPDATE nct_schema_state
                   SET schema_contract_version = 1, schema_version = 1,
@@ -179,13 +193,16 @@ def test_verified_version_one_database_upgrades_with_complete_lineage(tmp_path: 
     upgrade = begin_schema_migration(db_path)
     assert upgrade is not None
     init_work_coordination_storage(db_path)
+    init_scheduled_work_storage(db_path)
+    init_device_contact_work_storage(db_path)
     complete_schema_migration(db_path, upgrade)
     state = schema_state(db_path)
-    assert state["schema_version"] == 3
+    assert state["schema_version"] == 4
     assert [item["migration_id"] for item in state["migration_ledger"]] == [
         "nct-foundation-data-contract-v1",
         "nct-work-coordination-v2",
         "nct-scheduled-occurrences-v3",
+        "nct-device-contact-fencing-v4",
     ]
 
 
@@ -250,9 +267,9 @@ def test_incomplete_or_mismatched_completed_ledger_fails_closed(
 
 def test_image_contract_is_self_verifying_and_build_bound() -> None:
     contract = image_schema_contract()
-    assert contract["schema_contract_version"] == 3
-    assert contract["writable_schema_version"] == 3
-    assert contract["readable_schema_versions"] == [1, 2, 3]
+    assert contract["schema_contract_version"] == 4
+    assert contract["writable_schema_version"] == 4
+    assert contract["readable_schema_versions"] == [1, 2, 3, 4]
     assert len(contract["contract_digest"]) == 64
     assert contract["build_id"]
     assert contract["build_commit"]

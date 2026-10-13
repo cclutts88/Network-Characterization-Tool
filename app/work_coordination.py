@@ -402,6 +402,47 @@ def release_work_lease(
         return release_work_lease_on_connection(connection, lease, detail=detail)
 
 
+def recover_abandoned_work_lease_on_connection(
+    connection: sqlite3.Connection,
+    lease: WorkLease | dict[str, object],
+    *,
+    recovery_required: bool,
+    detail: str,
+) -> str:
+    """Close an exact former-process claim without treating expiry as ownership."""
+    key = str(lease.lease_key if isinstance(lease, WorkLease) else lease["lease_key"])
+    lease_id = str(lease.lease_id if isinstance(lease, WorkLease) else lease["lease_id"])
+    owner = str(lease.owner_id if isinstance(lease, WorkLease) else lease["lease_owner"])
+    epoch = int(lease.fencing_epoch if isinstance(lease, WorkLease) else lease["lease_epoch"])
+    now, _ = _db_time(connection, DEFAULT_LEASE_SECONDS)
+    state = "recovery_required" if recovery_required else "released"
+    changed = connection.execute(
+        """UPDATE work_leases
+              SET lease_id = NULL, owner_id = NULL, state = ?,
+                  renewed_at = ?, expires_at = NULL, released_at = ?,
+                  recovery_reason = ?
+            WHERE lease_key = ? AND lease_id = ? AND owner_id = ?
+              AND fencing_epoch = ? AND state = 'active'""",
+        (
+            state, now, now, detail[:500] if recovery_required else None,
+            key, lease_id, owner, epoch,
+        ),
+    ).rowcount
+    if changed != 1:
+        raise WorkLeaseLost("The former saved-work claim no longer matches")
+    _event(
+        connection,
+        lease_key=key,
+        fencing_epoch=epoch,
+        lease_id=None if recovery_required else lease_id,
+        owner_id=None if recovery_required else owner,
+        event_kind="recovery_required" if recovery_required else "released",
+        recorded_at=now,
+        detail=detail,
+    )
+    return now
+
+
 def clear_work_recovery(
     db_path: Path,
     lease_key: str,

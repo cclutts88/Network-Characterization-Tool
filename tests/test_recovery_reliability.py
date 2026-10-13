@@ -368,7 +368,7 @@ def test_cisco_key_collection_retains_history_first(tmp_path, monkeypatch):
     monkeypatch.setattr(device_configs, 'start_accountability_capture', lambda *args: (None, None, None))
     monkeypatch.setattr(device_configs, 'stop_accountability_capture', lambda *args: None)
     monkeypatch.setattr(device_configs, 'capture_is_valid', lambda *args: True)
-    def collect(prefix, commands, output):
+    def collect(prefix, commands, output, fence=None):
         assert commands[0] == 'show history all'
         output.write_text('===== show history all =====\n1 show version\n===== show running-config =====\nhostname test-router\nend\n')
         return '', 0, [], None, False
@@ -610,10 +610,10 @@ def test_interactive_collection_preserves_history_even_when_config_fails(tmp_pat
     from types import SimpleNamespace
     plan = device_configs.DeviceConfigPlan(vendor='cisco', device_type='router', device_address='10.0.0.1', username='operator', authentication_mode='password_prompt', operator='analyst', originating_host='test', accountability_interface='eth0')
     preview = device_configs.build_plan(plan)
-    session = SimpleNamespace(plan=plan, preview=preview, run_dir=tmp_path)
+    session = SimpleNamespace(plan=plan, preview=preview, run_dir=tmp_path, fence=None)
     monkeypatch.setattr(device_configs, '_control_ssh_args', lambda *_: ['ssh','target'])
     monkeypatch.setattr(device_configs, '_finish_interactive_session', lambda _, **kwargs: kwargs)
-    def collect(prefix, commands, output):
+    def collect(prefix, commands, output, fence=None):
         assert commands[0] == 'show history all'
         output.write_text('===== show history all =====\n1 show version\n===== show running-config =====\n[NCT] no usable output\n')
         return '', 0, ['show running-config'], 'Running configuration unavailable', False

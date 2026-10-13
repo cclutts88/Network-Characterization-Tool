@@ -112,16 +112,28 @@ def test_interactive_finalization_uses_same_verified_authority(tmp_path, monkeyp
     preview = device_configs.build_plan(plan)
     run_dir = config_dir / preview["run_id"]
     run_dir.mkdir(parents=True)
-    (run_dir / preview["local_output_name"]).write_text(CONFIG)
-    (run_dir / "stdout.txt").write_text("preview\n")
-    (run_dir / "command-history.txt").write_text("10 show version\n")
+    fence = device_configs.acquire_device_contact_fence(
+        preview["run_id"],
+        operation_kind="interactive_configuration_pull",
+        subject_key="10.88.0.1:22",
+        request={"device_address": "10.88.0.1"},
+        created_by="analyst",
+        db_path=db_path,
+    )
+    work_dir = device_configs._device_contact_staging_dir(run_dir, fence)
+    (work_dir / preview["local_output_name"]).write_text(CONFIG)
+    (work_dir / "stdout.txt").write_text("preview\n")
+    (work_dir / "command-history.txt").write_text("10 show version\n")
     manifest = device_configs.manifest_for(
         plan, preview, "running", operation="interactive_configuration_pull"
     )
     session = SimpleNamespace(
         session_id="interactive-test", plan=plan, preview=preview,
-        run_dir=run_dir, manifest=manifest,
+        retained_run_dir=run_dir, run_dir=work_dir, manifest=manifest,
+        fence=fence, closed=False,
     )
+    device_configs.publish_device_contact_starting(run_dir, manifest, fence)
+    device_configs.publish_device_contact_active(run_dir, manifest, fence)
     result = device_configs._finish_interactive_session(
         session,
         status="completed",

@@ -238,14 +238,14 @@ def _register_record(
     scope_context: dict | None = None,
     pipeline_policy_version: int | None = None,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict:
     init_artifact_storage(db_path, artifact_root)
     if pipeline_policy_version is not None:
         from app.pipeline_intake import init_pipeline_intake_storage
 
         init_pipeline_intake_storage(db_path)
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
+    def register(db: sqlite3.Connection) -> dict:
         if transaction_guard is not None:
             transaction_guard(db)
         return _register_record_on_connection(
@@ -265,6 +265,11 @@ def _register_record(
             scope_context=scope_context,
             pipeline_policy_version=pipeline_policy_version,
         )
+    if connection is not None:
+        return register(connection)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        return register(db)
 
 
 @guarded_evidence_mutation(lambda *args, **kwargs: kwargs["db_path"])
@@ -333,6 +338,7 @@ def register_artifact_file(
     expected_size_bytes: int | None = None,
     pipeline_policy_version: int | None = None,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     before = source_path.stat()
@@ -378,6 +384,7 @@ def register_artifact_file(
         scope_context=scope_context,
         pipeline_policy_version=pipeline_policy_version,
         transaction_guard=transaction_guard,
+        connection=connection,
     )
     record["physical_created"] = physical_created
     return record
@@ -407,25 +414,31 @@ def link_artifact(record: dict, destination: Path) -> str:
 def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                              source_kind: str, filenames,
                              expected_files: dict[str, dict] | None = None,
-                             transaction_guard: Callable[[sqlite3.Connection], None] | None = None) -> None:
+                             transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+                             connection: sqlite3.Connection | None = None,
+                             strict: bool = False) -> None:
     """Called after writers close, never from history/read endpoints."""
     records, errors = [], []
-    scope_context = get_run_scope_context(db_path, manifest["run_id"])
+    scope_context = (
+        get_run_scope_context(db_path, manifest["run_id"])
+        if source_kind in {"nmap_run", "nmap_import"}
+        else None
+    )
     for filename in dict.fromkeys(filenames):
         path = run_dir / filename
         if filename == "manifest.json" or not path.is_file() or path.is_symlink():
             if expected_files is not None and filename != "manifest.json":
-                errors.append({
-                    "filename": filename,
-                    "error": "Expected retained evidence is unavailable",
-                })
+                detail = "Expected retained evidence is unavailable"
+                if strict:
+                    raise ValueError(f"{filename}: {detail}")
+                errors.append({"filename": filename, "error": detail})
             continue
         expected = (expected_files or {}).get(filename)
         if expected_files is not None and expected is None:
-            errors.append({
-                "filename": filename,
-                "error": "Retained evidence is outside the frozen verification contract",
-            })
+            detail = "Retained evidence is outside the frozen verification contract"
+            if strict:
+                raise ValueError(f"{filename}: {detail}")
+            errors.append({"filename": filename, "error": detail})
             continue
         try:
             record = register_artifact_file(
@@ -439,6 +452,7 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                 expected_sha256=(expected or {}).get("sha256"),
                 expected_size_bytes=(expected or {}).get("size_bytes"),
                 transaction_guard=transaction_guard,
+                connection=connection,
             )
             record["storage_mode"] = link_artifact(record, path)
             records.append({
@@ -449,14 +463,16 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                 "storage_mode": record["storage_mode"],
             })
         except (OSError, ValueError, sqlite3.Error) as exc:
+            if strict:
+                raise
             errors.append({"filename": filename, "error": str(exc)})
     if expected_files is not None:
         attempted = {name for name in dict.fromkeys(filenames) if name != "manifest.json"}
         for filename in sorted(set(expected_files) - attempted):
-            errors.append({
-                "filename": filename,
-                "error": "Frozen retained evidence was not selected for registration",
-            })
+            detail = "Frozen retained evidence was not selected for registration"
+            if strict:
+                raise ValueError(f"{filename}: {detail}")
+            errors.append({"filename": filename, "error": detail})
     manifest["artifact_registry"] = {"files": records, "errors": errors,
                                      "status": "partial" if errors else "complete"}
 

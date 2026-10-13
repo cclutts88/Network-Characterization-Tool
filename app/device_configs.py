@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -31,6 +31,7 @@ from app.active_collection import require_active_collection
 from app.database import connect_database
 from app.evidence_maintenance import guarded_evidence_mutation
 from app.artifacts import (
+    init_artifact_storage,
     link_artifact,
     register_artifact_file,
     register_finalized_files,
@@ -50,6 +51,7 @@ from app.device_collection_authority import (
     begin_manual_upload_authority,
     collected_device_manifest_semantics,
     get_device_collection_authority,
+    init_device_collection_authority_storage,
     require_active_snapshot,
     require_available_collection,
     tombstone_device_collection,
@@ -70,6 +72,33 @@ from app.device_collection_profiles import (
 )
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from app.network_scopes import get_network_scope
+from app.device_contact_work import (
+    DeviceContactClaim,
+    DeviceContactConflict,
+    assert_device_contact_claim,
+    assert_device_contact_claim_on_connection,
+    claim_device_contact_run,
+    close_device_contact_after_review,
+    commit_device_contact_publication_on_connection,
+    create_device_contact_run,
+    device_contact_cancellation_requested,
+    get_device_contact_run,
+    get_device_contact_attempt_for_review,
+    list_open_device_contact_runs,
+    list_unsynced_device_contact_presentations,
+    mark_device_contact_active,
+    mark_device_contact_presentation_synced,
+    mark_device_contact_starting,
+    publish_device_contact_terminal,
+    prepare_device_contact_publication,
+    publish_device_contact_files_moved,
+    recover_abandoned_device_contact,
+    renew_device_contact_claim,
+    request_device_contact_cancellation,
+)
+from app.work_coordination import (
+    WorkLeaseLost,
+)
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
@@ -93,6 +122,9 @@ UPLOADED_ARTIFACT_RE = re.compile(r"^uploaded-[A-Za-z0-9_.-]{1,100}$")
 COLLECTION_ARTIFACT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}-config\.txt$")
 COLLECTION_COPY_CHUNK_BYTES = 1024 * 1024
 PASSWORD_SESSION_TTL_SECONDS = 90
+DEVICE_CONTACT_LEASE_SECONDS = 60
+DEVICE_CONTACT_RENEW_SECONDS = 15
+DEVICE_CONTACT_OWNER_ID = f"device-process:{os.getpid()}:{uuid.uuid4().hex}"
 CISCO_COLLECTION_TIMEOUT_SECONDS = 600
 MAX_ADDITIONAL_COMMANDS = 20
 PROFILE_SETTING_FIELDS = (
@@ -119,6 +151,311 @@ def _write_json_atomic(path: Path, value: dict) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+@dataclass
+class DeviceContactFence:
+    db_path: Path
+    claim: DeviceContactClaim
+    _stop: threading.Event = field(default_factory=threading.Event)
+    _lost: threading.Event = field(default_factory=threading.Event)
+    _cancel_requested: threading.Event = field(default_factory=threading.Event)
+    _thread: threading.Thread | None = None
+    _process_lock: threading.Lock = field(default_factory=threading.Lock)
+    _processes: list[object] = field(default_factory=list)
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._renew_loop,
+            name=(
+                f"device-contact-{self.claim.run_id[:8]}-"
+                f"{self.claim.attempt_number}"
+            ),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _renew_loop(self) -> None:
+        next_renewal = time.monotonic() + DEVICE_CONTACT_RENEW_SECONDS
+        while not self._stop.wait(0.5):
+            try:
+                if device_contact_cancellation_requested(self.db_path, self.claim):
+                    self._cancel_requested.set()
+                    self._terminate_processes()
+                    return
+                if time.monotonic() >= next_renewal:
+                    self.claim = renew_device_contact_claim(
+                        self.db_path,
+                        self.claim,
+                        lease_seconds=DEVICE_CONTACT_LEASE_SECONDS,
+                    )
+                    next_renewal = time.monotonic() + DEVICE_CONTACT_RENEW_SECONDS
+            except (DeviceContactConflict, WorkLeaseLost, sqlite3.Error):
+                self._lost.set()
+                self._terminate_processes()
+                return
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
+
+    def assert_on_connection(self, connection: sqlite3.Connection) -> None:
+        if self._lost.is_set():
+            raise WorkLeaseLost("This process lost device-contact ownership")
+        assert_device_contact_claim_on_connection(connection, self.claim)
+
+    def assert_current(self) -> None:
+        if self._lost.is_set():
+            raise WorkLeaseLost("This process lost device-contact ownership")
+        assert_device_contact_claim(self.db_path, self.claim)
+
+    def claim_summary(self) -> dict[str, object]:
+        return {
+            "run_id": self.claim.run_id,
+            "attempt_number": self.claim.attempt_number,
+            "run_lease": self.claim.run_lease.as_claim(),
+            "capacity_lease": self.claim.capacity_lease.as_claim(),
+        }
+
+    def cancellation_requested(self) -> bool:
+        if self._cancel_requested.is_set():
+            return True
+        requested = device_contact_cancellation_requested(self.db_path, self.claim)
+        if requested:
+            self._cancel_requested.set()
+            self._terminate_processes()
+        return requested
+
+    def assert_contact_allowed(self) -> None:
+        self.assert_current()
+        if self.cancellation_requested():
+            raise DeviceContactConflict("Cancellation is pending for this device contact")
+
+    def register_process(self, process: object | None) -> None:
+        if process is None:
+            return
+        with self._process_lock:
+            self._processes.append(process)
+        if self._lost.is_set() or self._cancel_requested.is_set():
+            self._terminate_processes()
+
+    def unregister_process(self, process: object | None) -> None:
+        if process is None:
+            return
+        with self._process_lock:
+            self._processes = [item for item in self._processes if item is not process]
+
+    def request_stop(self) -> None:
+        self._cancel_requested.set()
+        self._terminate_processes()
+
+    def _terminate_processes(self) -> None:
+        with self._process_lock:
+            processes = list(self._processes)
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+            except (AttributeError, OSError):
+                continue
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    process.wait(timeout=2)
+            except (AttributeError, OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                    process.wait(timeout=2)
+                except (AttributeError, OSError, subprocess.TimeoutExpired):
+                    pass
+
+
+def acquire_device_contact_fence(
+    run_id: str,
+    *,
+    operation_kind: str,
+    subject_key: str,
+    request: dict[str, object],
+    created_by: str,
+    db_path: Path | None = None,
+) -> DeviceContactFence:
+    db_path = DB_PATH if db_path is None else db_path
+    create_device_contact_run(
+        db_path,
+        operation_kind=operation_kind,
+        subject_key=subject_key,
+        request=request,
+        created_by=created_by,
+        run_id=run_id,
+    )
+    claim = claim_device_contact_run(
+        db_path,
+        run_id,
+        owner_id=DEVICE_CONTACT_OWNER_ID,
+        lease_seconds=DEVICE_CONTACT_LEASE_SECONDS,
+    )
+    fence = DeviceContactFence(db_path, claim)
+    fence.start()
+    return fence
+
+
+def publish_device_contact_starting(
+    run_dir: Path, manifest: dict, fence: DeviceContactFence
+) -> None:
+    if not mark_device_contact_starting(fence.db_path, fence.claim):
+        raise DeviceContactConflict("The device contact was cancelled before it started")
+    manifest["contact_phase"] = "contact_starting"
+    manifest["contact_started_at"] = utc_now()
+    manifest["work_claim"] = fence.claim_summary()
+    _write_json_atomic(run_dir / "manifest.json", manifest)
+
+
+def publish_device_contact_active(
+    run_dir: Path, manifest: dict, fence: DeviceContactFence
+) -> None:
+    mark_device_contact_active(fence.db_path, fence.claim)
+    manifest["contact_phase"] = "contact_active"
+    manifest["work_claim"] = fence.claim_summary()
+    _write_json_atomic(run_dir / "manifest.json", manifest)
+
+
+def _device_contact_staging_dir(
+    run_dir: Path, fence: DeviceContactFence,
+) -> Path:
+    staging_root = run_dir / ".attempts"
+    staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if staging_root.is_symlink() or staging_root.resolve().parent != run_dir.resolve():
+        raise DeviceContactConflict("Device-contact staging path is unsafe")
+    staging = staging_root / str(fence.claim.attempt_number)
+    staging.mkdir(mode=0o700, exist_ok=False)
+    if staging.is_symlink() or staging.resolve().parent != staging_root.resolve():
+        raise DeviceContactConflict("Device-contact attempt path is unsafe")
+    return staging
+
+
+def _promote_device_contact_files(
+    staging: Path, run_dir: Path, fence: DeviceContactFence,
+) -> str:
+    """Promote only stable regular files after every contact process is reaped."""
+    fence.assert_contact_allowed()
+    if staging.is_symlink() or not staging.is_dir():
+        raise DeviceContactConflict("Device-contact staging directory is unavailable")
+    inventory: list[dict[str, object]] = []
+    source_paths: list[tuple[Path, str, int]] = []
+    allowed_names = set(ARTIFACT_NAMES) - {"manifest.json"}
+    for path in sorted(staging.iterdir(), key=lambda item: item.name):
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or (
+                not COLLECTION_ARTIFACT_RE.fullmatch(path.name)
+                and path.name not in allowed_names
+            )
+        ):
+            raise DeviceContactConflict("Device-contact staging contains an unsafe file")
+        before = path.stat()
+        digest, size = sha256_file(path)
+        after = path.stat()
+        if (
+            before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+        ) != (
+            after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        ) or size != after.st_size:
+            raise DeviceContactConflict("A device-contact file changed during promotion")
+        inventory.append({"filename": path.name, "sha256": digest, "size_bytes": size})
+        source_paths.append((path, digest, size))
+    publication_id = prepare_device_contact_publication(
+        fence.db_path, fence.claim, inventory
+    )
+
+    def move_files() -> None:
+        for path, digest, size in source_paths:
+            destination = run_dir / path.name
+            if destination.exists() or destination.is_symlink():
+                raise DeviceContactConflict("A retained device-contact filename already exists")
+            os.replace(path, destination)
+            promoted_digest, promoted_size = sha256_file(destination)
+            if (promoted_digest, promoted_size) != (digest, size):
+                raise DeviceContactConflict("A promoted device-contact file failed verification")
+
+    publish_device_contact_files_moved(
+        fence.db_path, fence.claim, publication_id, move_files
+    )
+    return publication_id
+
+
+def finalize_device_contact(
+    run_dir: Path,
+    manifest: dict,
+    fence: DeviceContactFence,
+    publication_id: str | None,
+) -> bool:
+    """Publish retained evidence only while this process owns the exact contact."""
+    try:
+        # Complete every schema initializer before taking the one terminal writer
+        # transaction; nested setup connections cannot run under that lock.
+        init_artifact_storage(fence.db_path)
+        init_device_collection_authority_storage(fence.db_path)
+        from app.pipeline_intake import init_pipeline_intake_storage
+        from app.device_evidence_catalog import ensure_device_evidence_catalog_schema
+
+        init_pipeline_intake_storage(fence.db_path)
+        with connect_database(fence.db_path) as setup_connection:
+            ensure_device_evidence_catalog_schema(setup_connection)
+        verified = False
+
+        def publish(connection: sqlite3.Connection) -> None:
+            nonlocal verified
+            verified = _finalize_device_collection(
+                run_dir,
+                manifest,
+                transaction_guard=fence.assert_on_connection,
+                publication_guard=None,
+                connection=connection,
+                strict=True,
+                start_worker=False,
+                write_manifest=False,
+            )
+            manifest["work_claim"] = fence.claim_summary()
+            if publication_id is not None:
+                commit_device_contact_publication_on_connection(
+                    connection, fence.claim, publication_id
+                )
+
+        status = str(manifest.get("status") or "failed")
+        outcome = (
+            "complete" if status == "completed"
+            else "cancelled" if status in {"cancelled", "expired"}
+            else "failed"
+        )
+        manifest["contact_phase"] = (
+            "complete" if outcome == "complete" else "contact_stopped"
+        )
+        publish_device_contact_terminal(
+            fence.db_path,
+            fence.claim,
+            outcome=outcome,
+            reason=f"Device contact ended {status}",
+            transaction_callback=publish if publication_id is not None else None,
+            terminal_manifest=manifest,
+        )
+        fence.stop()
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+        mark_device_contact_presentation_synced(
+            fence.db_path, fence.claim.run_id
+        )
+        if verified:
+            from app.derived_jobs import start_derived_job_worker
+
+            try:
+                start_derived_job_worker(DB_PATH, DB_PATH.parent)
+            except Exception:
+                pass
+        return verified
+    except BaseException:
+        fence.stop()
+        raise
 
 
 def _abandon_manual_upload(db_path: Path, run_id: str, run_dir: Path) -> None:
@@ -1095,11 +1432,21 @@ class DeviceDeleteConfirmation(BaseModel):
     confirmation: str = Field(min_length=1, max_length=100)
 
 
+class DeviceContactReviewClosure(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=3, max_length=500)
+    former_processes_stopped: bool
+    files_stable: bool
+    disposition: Literal["cancelled", "failed"] = "failed"
+
+
 @dataclass
 class InteractiveSshSession:
     session_id: str
     plan: DeviceConfigPlan
     preview: dict
+    retained_run_dir: Path
     run_dir: Path
     control_dir: Path
     control_path: Path
@@ -1108,8 +1455,12 @@ class InteractiveSshSession:
     capture_process: object
     capture_stderr: object
     manifest: dict
+    fence: DeviceContactFence
+    session_owner: str
     created_monotonic: float = field(default_factory=time.monotonic)
     timer: threading.Timer | None = None
+    action_lock: threading.Lock = field(default_factory=threading.Lock)
+    closed: bool = False
 
 
 _INTERACTIVE_SESSIONS: dict[str, InteractiveSshSession] = {}
@@ -1140,6 +1491,7 @@ def _read_pty(session: InteractiveSshSession, timeout: float) -> str:
     deadline = time.monotonic() + timeout
     output = bytearray()
     while time.monotonic() < deadline:
+        session.fence.assert_contact_allowed()
         if session.control_path.exists():
             break
         if session.master_process.poll() is not None:
@@ -1163,41 +1515,30 @@ def _read_pty(session: InteractiveSshSession, timeout: float) -> str:
 def _control_check(session: InteractiveSshSession) -> bool:
     if not session.control_path.exists():
         return False
-    checked = subprocess.run(
+    checked = _run_fenced_process(
         [
             "ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port),
             "-O", "check", f"{session.plan.username}@{session.plan.device_address}",
         ],
-        capture_output=True,
+        session.fence,
         timeout=5,
-        check=False,
     )
     return checked.returncode == 0
 
 
 def _close_interactive_resources(session: InteractiveSshSession) -> None:
-    target = f"{session.plan.username}@{session.plan.device_address}"
     if session.timer is not None:
         session.timer.cancel()
-    if session.control_path.exists():
-        subprocess.run(
-            ["ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port), "-O", "exit", target],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-    if session.master_process.poll() is None:
-        session.master_process.terminate()
-        try:
-            session.master_process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            session.master_process.kill()
-            session.master_process.wait(timeout=3)
+    # Terminating the locally owned control master closes the transport without
+    # starting a fresh remote command after cancellation or ownership loss.
+    _stop_owned_process(session.master_process)
+    session.fence.unregister_process(session.master_process)
     try:
         os.close(session.pty_fd)
     except OSError:
         pass
     stop_accountability_capture(session.capture_process, session.capture_stderr)
+    session.fence.unregister_process(session.capture_process)
     shutil.rmtree(session.control_dir, ignore_errors=True)
 
 
@@ -1211,10 +1552,17 @@ def _finish_interactive_session(
     exit_code: int | None = None,
     extra: dict | None = None,
 ) -> dict:
+    if getattr(session, "closed", False):
+        raise WorkLeaseLost("This interactive SSH session is already closed")
+    session.closed = True
     with _INTERACTIVE_SESSIONS_LOCK:
         _INTERACTIVE_SESSIONS.pop(session.session_id, None)
     _close_interactive_resources(session)
-    if failure_class != "accountability_capture_problem" and not capture_is_valid(session.run_dir):
+    if (
+        status != "cancelled"
+        and failure_class != "accountability_capture_problem"
+        and not capture_is_valid(session.run_dir)
+    ):
         status = "failed"
         failure_class = "accountability_capture_problem"
         stderr = (stderr + "\n" if stderr else "") + "Mandatory tcpdump accountability did not produce a valid PCAP."
@@ -1237,13 +1585,20 @@ def _finish_interactive_session(
     session.manifest["output_complete"] = (
         status == "completed" and not bool(session.manifest.get("output_truncated"))
     )
-    _finalize_device_collection(session.run_dir, session.manifest)
     stdout = stdout_path.read_text(errors="replace")[:200_000]
+    publication_id = None
+    if status != "cancelled":
+        publication_id = _promote_device_contact_files(
+            session.run_dir, session.retained_run_dir, session.fence
+        )
+    finalize_device_contact(
+        session.retained_run_dir, session.manifest, session.fence, publication_id
+    )
     return {
         **session.manifest,
         "stdout": stdout,
         "stderr": stderr[:50_000],
-        "artifacts": artifact_records(session.preview["run_id"], session.run_dir),
+        "artifacts": artifact_records(session.preview["run_id"], session.retained_run_dir),
     }
 
 
@@ -1252,12 +1607,15 @@ def _expire_interactive_session(session_id: str) -> None:
         session = _INTERACTIVE_SESSIONS.get(session_id)
     if session is None or time.monotonic() - session.created_monotonic < PASSWORD_SESSION_TTL_SECONDS:
         return
-    _finish_interactive_session(
-        session,
-        status="expired",
-        stderr="The password prompt expired before the operator completed authentication.",
-        failure_class="authentication_expired",
-    )
+    with session.action_lock:
+        if session.closed:
+            return
+        _finish_interactive_session(
+            session,
+            status="expired",
+            stderr="The password prompt expired before the operator completed authentication.",
+            failure_class="authentication_expired",
+        )
 
 
 def _control_ssh_args(session: InteractiveSshSession) -> list[str]:
@@ -1280,6 +1638,76 @@ def _limit_retained_collection_file(path: Path) -> bool:
     return True
 
 
+def _stop_owned_process(process: object | None) -> None:
+    if process is None:
+        return
+    try:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+    except (AttributeError, OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _run_fenced_process(
+    args: list[str],
+    fence: DeviceContactFence,
+    *,
+    input_text: str | None = None,
+    output_path: Path | None = None,
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run one contact child with bounded cancellation and ownership checks."""
+    fence.assert_contact_allowed()
+    output_handle = None
+    try:
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_handle = output_path.open("w", encoding="utf-8", errors="replace")
+        process = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+            stdout=output_handle if output_handle is not None else subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        fence.register_process(process)
+        deadline = time.monotonic() + timeout
+        pending_input = input_text
+        while True:
+            fence.assert_contact_allowed()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_owned_process(process)
+                raise subprocess.TimeoutExpired(args, timeout)
+            try:
+                stdout, stderr = process.communicate(
+                    input=pending_input, timeout=min(0.25, remaining)
+                )
+                break
+            except subprocess.TimeoutExpired:
+                pending_input = None
+                continue
+        fence.assert_contact_allowed()
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=int(process.returncode or 0),
+            stdout=stdout or "",
+            stderr=stderr or "",
+        )
+    finally:
+        if "process" in locals():
+            _stop_owned_process(process)
+            fence.unregister_process(process)
+        if output_handle is not None:
+            output_handle.close()
+
+
 def _file_has_useful_device_output(path: Path) -> bool:
     if not path.is_file():
         return False
@@ -1296,20 +1724,26 @@ def _file_has_useful_device_output(path: Path) -> bool:
 
 
 def _stream_command_to_file(
-    args: list[str], *, input_text: str | None, output_path: Path, timeout: int
+    args: list[str], *, input_text: str | None, output_path: Path, timeout: int,
+    fence: DeviceContactFence | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Send SSH stdout directly to retained storage instead of holding it in memory."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", errors="replace") as output:
-        completed = subprocess.run(
-            args,
-            input=input_text,
-            stdout=output,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            check=False,
+    if fence is not None:
+        completed = _run_fenced_process(
+            args, fence, input_text=input_text, output_path=output_path, timeout=timeout
         )
+    else:
+        with output_path.open("w", encoding="utf-8", errors="replace") as output:
+            completed = subprocess.run(
+                args,
+                input=input_text,
+                stdout=output,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
     return completed, _limit_retained_collection_file(output_path)
 
 
@@ -1344,6 +1778,7 @@ def _capture_history_to_file(
     ssh_args: list[str],
     history_input: str | None,
     output_path: Path,
+    fence: DeviceContactFence | None = None,
 ) -> tuple[str, str, bool]:
     """Capture history first; preserve an explicit unavailable record on failure."""
     try:
@@ -1352,6 +1787,7 @@ def _capture_history_to_file(
             input_text=history_input,
             output_path=output_path,
             timeout=45,
+            fence=fence,
         )
         value = _read_text_prefix(output_path, MAX_RESPONSE_OUTPUT_CHARS).strip()
         if completed.returncode == 0 and value:
@@ -1420,12 +1856,15 @@ def _read_cisco_pty_until_prompt(
     master_fd: int,
     process: subprocess.Popen[bytes],
     timeout: float,
+    fence: DeviceContactFence | None = None,
 ) -> tuple[str, str | None, bool]:
     """Read one Cisco shell response through its PTY until the next device prompt."""
     deadline = time.monotonic() + max(0.1, timeout)
     output = bytearray()
     prompt: str | None = None
     while time.monotonic() < deadline:
+        if fence is not None:
+            fence.assert_contact_allowed()
         ready, _, _ = select.select(
             [master_fd], [], [], min(0.25, max(0.0, deadline - time.monotonic()))
         )
@@ -1452,7 +1891,8 @@ def _read_cisco_pty_until_prompt(
 
 
 def _collect_cisco_command_outputs(
-    ssh_prefix: list[str], commands: list[str]
+    ssh_prefix: list[str], commands: list[str],
+    fence: DeviceContactFence | None = None,
 ) -> tuple[dict[str, str], set[str], str, int, str | None]:
     """Run Cisco commands one at a time, waiting for the prompt after every command."""
     pager_commands = {"terminal length 0", "terminal pager 0"}
@@ -1488,10 +1928,13 @@ def _collect_cisco_command_outputs(
             stderr=slave_fd,
             close_fds=True,
         )
+        if fence is not None:
+            fence.register_process(process)
         os.close(slave_fd)
         slave_fd = -1
         initial, _prompt, ready = _read_cisco_pty_until_prompt(
-            master_fd, process, min(30.0, max(0.1, deadline - time.monotonic()))
+            master_fd, process, min(30.0, max(0.1, deadline - time.monotonic())),
+            fence,
         )
         transcript_tail = initial[-4000:]
         if not ready:
@@ -1501,7 +1944,7 @@ def _collect_cisco_command_outputs(
                 break
             os.write(master_fd, (command + "\n").encode())
             response, _prompt, complete = _read_cisco_pty_until_prompt(
-                master_fd, process, max(0.1, deadline - time.monotonic())
+                master_fd, process, max(0.1, deadline - time.monotonic()), fence
             )
             transcript_tail = (transcript_tail + response)[-4000:]
             if not complete:
@@ -1543,16 +1986,21 @@ def _collect_cisco_command_outputs(
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=3)
+        if fence is not None:
+            fence.unregister_process(process)
 
 
 def _run_cisco_command_sequence(
-    ssh_prefix: list[str], commands: list[str]
+    ssh_prefix: list[str], commands: list[str],
+    fence: DeviceContactFence | None = None,
 ) -> tuple[str, str, int, list[str], str | None]:
     """Collect every Cisco command through one prompt-gated interactive shell."""
     pager_commands = {"terminal length 0", "terminal pager 0"}
     requested_commands = [command for command in commands if command not in pager_commands]
     outputs, responded, transcript_tail, exit_code, transport_error = (
         _collect_cisco_command_outputs(ssh_prefix, commands)
+        if fence is None
+        else _collect_cisco_command_outputs(ssh_prefix, commands, fence)
     )
     sections = [
         f"===== {command} =====\n{outputs.get(command, '').rstrip()}\n"
@@ -1586,13 +2034,16 @@ def _run_cisco_command_sequence(
 
 
 def _run_cisco_command_sequence_to_file(
-    ssh_prefix: list[str], commands: list[str], output_path: Path
+    ssh_prefix: list[str], commands: list[str], output_path: Path,
+    fence: DeviceContactFence | None = None,
 ) -> tuple[str, int, list[str], str | None, bool]:
     """Retain one prompt-gated Cisco shell response for each requested command."""
     pager_commands = {"terminal length 0", "terminal pager 0"}
     requested_commands = [command for command in commands if command not in pager_commands]
     outputs, responded, _transcript_tail, exit_code, transport_error = (
         _collect_cisco_command_outputs(ssh_prefix, commands)
+        if fence is None
+        else _collect_cisco_command_outputs(ssh_prefix, commands, fence)
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", errors="replace") as retained:
@@ -1657,6 +2108,7 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 _control_ssh_args(session) + [history_remote],
                 history_input,
                 history_path,
+                session.fence,
             )
             if history_error:
                 stderr_parts.append(f"Command history: {history_error}")
@@ -1666,28 +2118,24 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             remote_input, remote_command = _interactive_collection_command(
                 plan, preview["collection_commands"], remote_output
             )
-            collected = subprocess.run(
+            collected = _run_fenced_process(
                 _control_ssh_args(session) + [remote_command],
-                input=remote_input,
-                capture_output=True,
-                text=True,
+                session.fence,
+                input_text=remote_input,
                 timeout=120,
-                check=False,
             )
             exit_code = collected.returncode
             if collected.stderr:
                 stderr_parts.append(collected.stderr[:20_000])
             if collected.returncode != 0:
                 raise RuntimeError("The remote collection command returned a non-zero result.")
-            copied = subprocess.run(
+            copied = _run_fenced_process(
                 [
                     "scp", "-q", "-P", str(plan.ssh_port), "-o", f"ControlPath={session.control_path}",
                     f"{target}:{remote_output}", str(local_output),
                 ],
-                capture_output=True,
-                text=True,
+                session.fence,
                 timeout=60,
-                check=False,
             )
             if copied.stderr:
                 stderr_parts.append(copied.stderr[:20_000])
@@ -1697,7 +2145,8 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             transfer_method = "ssh_command_sequence"
             command_stderr, exit_code, failed_commands, collection_error, output_truncated = (
                 _run_cisco_command_sequence_to_file(
-                    _control_ssh_args(session), preview["commands"], local_output
+                    _control_ssh_args(session), preview["commands"], local_output,
+                    session.fence,
                 )
             )
             if command_stderr:
@@ -1728,6 +2177,7 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
                 input_text=remote_input,
                 output_path=local_output,
                 timeout=120,
+                fence=session.fence,
             )
             exit_code = collected.returncode
             if collected.stderr:
@@ -1745,6 +2195,13 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
         status = "timed_out"
         failure_class = "network_connection_problem"
         stderr_parts.append("The device collection timed out.")
+    except DeviceContactConflict as exc:
+        if session.fence.cancellation_requested():
+            status = "cancelled"
+            failure_class = "operator_cancelled"
+            stderr_parts.append("The operator cancelled the device collection.")
+        else:
+            raise
     except (FileNotFoundError, RuntimeError, OSError) as exc:
         status = "failed"
         failure_class = "remote_command_failed"
@@ -1756,17 +2213,15 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             )
         if remote_created:
             try:
-                cleaned = subprocess.run(
+                session.fence.assert_contact_allowed()
+                cleaned = _run_fenced_process(
                     _control_ssh_args(session) + [f"rm -f -- {shlex.quote(remote_output)}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                    check=False,
+                    session.fence, timeout=20,
                 )
                 cleanup_status = "completed" if cleaned.returncode == 0 else "failed"
                 if cleaned.stderr:
                     stderr_parts.append(cleaned.stderr[:4000])
-            except (FileNotFoundError, subprocess.TimeoutExpired):
+            except (FileNotFoundError, subprocess.TimeoutExpired, DeviceContactConflict, WorkLeaseLost):
                 cleanup_status = "failed"
                 stderr_parts.append("Remote temporary-file cleanup could not be confirmed.")
     return _finish_interactive_session(
@@ -1904,19 +2359,37 @@ def _unavailable_summary_detail(manifest: dict) -> str:
     )
 
 
-def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
+def _finalize_device_collection(
+    run_dir: Path,
+    manifest: dict,
+    *,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    publication_guard: Callable[[], None] | None = None,
+    connection: sqlite3.Connection | None = None,
+    strict: bool = False,
+    start_worker: bool = True,
+    write_manifest: bool = True,
+) -> bool:
     """Register and activate a completed collection without invalidating evidence on failure."""
+    if publication_guard is not None:
+        publication_guard()
     filenames = [item["name"] for item in artifact_records(manifest["run_id"], run_dir)]
     if not _verified_collection_eligible(manifest):
         register_finalized_files(
-            DB_PATH, run_dir, manifest, "device_collection", filenames
+            DB_PATH, run_dir, manifest, "device_collection", filenames,
+            transaction_guard=transaction_guard,
+            connection=connection,
+            strict=strict,
         )
         manifest["summary_verification_status"] = "not_available"
         manifest["summary_verification_detail"] = (
             "Verified analysis requires a completed, untruncated collection. "
             "The retained files remain available for review."
         )
-        _write_json_atomic(run_dir / "manifest.json", manifest)
+        if publication_guard is not None:
+            publication_guard()
+        if write_manifest:
+            _write_json_atomic(run_dir / "manifest.json", manifest)
         return False
     try:
         current_contract = _collection_verification_contract(
@@ -1935,11 +2408,16 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
         manifest["summary_verification_detail"] = (
             "NCT is verifying the exact retained files used for analysis."
         )
-        _write_json_atomic(run_dir / "manifest.json", manifest)
+        if publication_guard is not None:
+            publication_guard()
+        if write_manifest:
+            _write_json_atomic(run_dir / "manifest.json", manifest)
         begin_collected_device_authority(
             DB_PATH,
             manifest["run_id"],
             marked_by=str(manifest.get("operator") or "local-operator"),
+            transaction_guard=transaction_guard,
+            connection=connection,
         )
         expected_files = {
             item["filename"]: item for item in current_contract["files"]
@@ -1947,8 +2425,14 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
         register_finalized_files(
             DB_PATH, run_dir, manifest, "device_collection", filenames,
             expected_files=expected_files,
+            transaction_guard=transaction_guard,
+            connection=connection,
+            strict=strict,
         )
-        _write_json_atomic(run_dir / "manifest.json", manifest)
+        if publication_guard is not None:
+            publication_guard()
+        if write_manifest:
+            _write_json_atomic(run_dir / "manifest.json", manifest)
         from app.device_summary_result import capture_collected_device_snapshot
 
         post_filenames = [
@@ -1961,7 +2445,8 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
                 "Registered evidence does not match the frozen verification contract"
             )
         snapshot = capture_collected_device_snapshot(
-            DB_PATH, manifest["run_id"], run_dir
+            DB_PATH, manifest["run_id"], run_dir, connection=connection,
+            manifest_override=manifest if not write_manifest else None,
         )
         selection = current_contract["selection"]
         snapshot_selection = snapshot["selection_shape"]
@@ -1994,23 +2479,31 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
         manifest["summary_verification_detail"] = (
             "The exact retained files are verified and queued for reusable analysis."
         )
-        _write_json_atomic(run_dir / "manifest.json", manifest)
+        if publication_guard is not None:
+            publication_guard()
+        if write_manifest:
+            _write_json_atomic(run_dir / "manifest.json", manifest)
         activate_collected_device_authority(
             DB_PATH,
             manifest["run_id"],
             manifest=manifest,
             inputs=snapshot["authority_inputs"],
+            transaction_guard=transaction_guard,
+            connection=connection,
         )
-        from app.derived_jobs import start_derived_job_worker
+        if start_worker:
+            from app.derived_jobs import start_derived_job_worker
 
-        try:
-            start_derived_job_worker(DB_PATH, DB_PATH.parent)
-        except Exception:
-            # The durable pending intent survives a local worker-start failure.
-            # Startup or a later explicit retry can resume it without recollection.
-            pass
+            try:
+                start_derived_job_worker(DB_PATH, DB_PATH.parent)
+            except Exception:
+                # The durable pending intent survives a local worker-start failure.
+                # Startup or a later explicit retry can resume it without recollection.
+                pass
         return True
     except (DeviceCollectionIntegrityError, OSError, ValueError, sqlite3.Error) as exc:
+        if strict:
+            raise
         authority = get_device_collection_authority(DB_PATH, manifest["run_id"])
         if authority is not None and authority.get("state") == "active" and "snapshot" in locals():
             try:
@@ -2049,7 +2542,10 @@ def _finalize_device_collection(run_dir: Path, manifest: dict) -> bool:
             "analysis. Retry verification locally; the device will not be contacted again."
         )
         manifest["summary_verification_error"] = str(exc)[:500]
-        _write_json_atomic(run_dir / "manifest.json", manifest)
+        if publication_guard is not None:
+            publication_guard()
+        if write_manifest:
+            _write_json_atomic(run_dir / "manifest.json", manifest)
         return False
 
 
@@ -2067,14 +2563,127 @@ def device_collection_directory(run_id: str, config_dir: Path | None = None) -> 
 def recover_interrupted_device_collections(
     config_dir: Path | None = None,
 ) -> dict[str, list[str]]:
-    """Close device-contact records that a restarted process cannot safely resume."""
+    """Reconcile durable contact work first, then presentation-only legacy manifests."""
     root = (config_dir or CONFIG_DIR).resolve()
     recovered: list[str] = []
     unreadable: list[str] = []
+    durable_ids: set[str] = set()
+
+    def safe_run_directory(run_id: str) -> Path | None:
+        candidate = root / run_id
+        try:
+            if (
+                not RUN_ID_RE.fullmatch(run_id)
+                or not candidate.is_dir()
+                or candidate.is_symlink()
+                or candidate.resolve() != candidate
+            ):
+                return None
+        except OSError:
+            return None
+        return candidate
+
+    def read_manifest(run_dir: Path, run_id: str) -> dict | None:
+        path = run_dir / "manifest.json"
+        if path.is_symlink() or not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if value.get("run_id") != run_id:
+            return None
+        return value
+
+    def mark_presentation_interrupted(
+        run_dir: Path, manifest: dict, *, needs_review: bool,
+    ) -> None:
+        previous_status = str(manifest.get("status") or "running")
+        manifest.update({
+            "status": "interrupted",
+            "success": False,
+            "completed_at": utc_now(),
+            "output_complete": False,
+            "credentials_stored": False,
+            "recovery_required": needs_review,
+            "interruption_reason": (
+                "NCT restarted during device-contact work. Device contact will not resume "
+                "automatically from this presentation record. Work that stopped before contact is "
+                "closed and must be started again with fresh settings and credentials. Work that may "
+                "have contacted a device requires administrator review."
+            ),
+            "previous_runtime_status": previous_status,
+            "summary_verification_status": "not_available",
+            "summary_verification_detail": (
+                "Interrupted device-contact files are not registered or trusted as "
+                "completed evidence until durable recovery finishes."
+            ),
+        })
+        manifest.pop("password", None)
+        manifest.pop("key_path", None)
+        _write_json_atomic(run_dir / "manifest.json", manifest)
+
+    if DB_PATH.exists():
+        try:
+            pending_presentations = list_unsynced_device_contact_presentations(DB_PATH)
+        except sqlite3.Error:
+            pending_presentations = []
+        for pending in pending_presentations:
+            run_id = str(pending["run_id"])
+            run_dir = safe_run_directory(run_id)
+            manifest = pending.get("manifest")
+            if (
+                run_dir is None
+                or not isinstance(manifest, dict)
+                or manifest.get("run_id") != run_id
+            ):
+                unreadable.append(run_id)
+                continue
+            try:
+                _write_json_atomic(run_dir / "manifest.json", manifest)
+                mark_device_contact_presentation_synced(DB_PATH, run_id)
+                recovered.append(run_id)
+            except (OSError, sqlite3.Error, DeviceContactConflict):
+                unreadable.append(run_id)
+        try:
+            durable_runs = list_open_device_contact_runs(DB_PATH)
+        except sqlite3.Error:
+            durable_runs = []
+        for durable in durable_runs:
+            run_id = str(durable["run_id"])
+            durable_ids.add(run_id)
+            run_dir = safe_run_directory(run_id)
+            manifest = read_manifest(run_dir, run_id) if run_dir is not None else None
+            unsafe_state = run_dir is None or manifest is None
+            unfinished_publication = durable.get("publication_state") not in {None, "committed"}
+            state = str(durable["state"])
+            recovery_state = state
+            if durable.get("active_attempt_number") is not None:
+                try:
+                    recovery_state = recover_abandoned_device_contact(
+                        DB_PATH,
+                        run_id,
+                        former_process_ended=True,
+                        force_review=unsafe_state or unfinished_publication,
+                    )
+                except (KeyError, ValueError, sqlite3.Error, DeviceContactConflict):
+                    unreadable.append(run_id)
+                    continue
+            needs_review = recovery_state == "needs_attention"
+            if unsafe_state:
+                unreadable.append(run_id)
+            elif manifest is not None:
+                mark_presentation_interrupted(
+                    run_dir, manifest, needs_review=needs_review
+                )
+            recovered.append(run_id)
+
     if not root.exists():
         return {"interrupted_run_ids": recovered, "unreadable_run_ids": unreadable}
     for manifest_path in sorted(root.glob("*/manifest.json")):
         run_dir = manifest_path.parent
+        if run_dir.name in durable_ids:
+            continue
         if (
             run_dir.is_symlink()
             or manifest_path.is_symlink()
@@ -2094,41 +2703,15 @@ def recover_interrupted_device_collections(
         except (OSError, json.JSONDecodeError):
             unreadable.append(manifest_path.parent.name)
             continue
-        if manifest.get("status") not in {"running", "waiting_for_password"}:
+        if manifest.get("status") not in {
+            "preparing", "running", "waiting_for_password"
+        }:
             continue
         run_id = str(manifest.get("run_id") or "")
         if run_id != run_dir.name or not RUN_ID_RE.fullmatch(run_id):
             unreadable.append(run_dir.name)
             continue
-        completed_at = utc_now()
-        previous_status = str(manifest.get("status") or "running")
-        manifest.update(
-            {
-                "status": "interrupted",
-                "success": False,
-                "completed_at": completed_at,
-                "output_complete": False,
-                "credentials_stored": False,
-                "recovery_required": True,
-                "interruption_reason": (
-                    "NCT restarted while device contact was active or waiting for an "
-                    "interactive password. The contact will not resume automatically. "
-                    "The former SSH or capture process may still require administrator "
-                    "verification. Partial files remain unregistered until termination "
-                    "and stable-file checks are proven; then start a new collection."
-                ),
-                "previous_runtime_status": previous_status,
-                "summary_verification_status": "not_available",
-                "summary_verification_detail": (
-                    "Interrupted device contact may have left files that are still "
-                    "changing. NCT retained them in place but did not register or trust "
-                    "them as completed evidence."
-                ),
-            }
-        )
-        manifest.pop("password", None)
-        manifest.pop("key_path", None)
-        _write_json_atomic(manifest_path, manifest)
+        mark_presentation_interrupted(run_dir, manifest, needs_review=True)
         recovered.append(run_id)
     return {"interrupted_run_ids": recovered, "unreadable_run_ids": unreadable}
 
@@ -2892,6 +3475,21 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
+    fence = acquire_device_contact_fence(
+        preview_data["run_id"],
+        operation_kind="interactive_configuration_pull",
+        subject_key=f"{plan.device_address}:{plan.ssh_port}",
+        request={
+            "device_address": plan.device_address,
+            "ssh_port": plan.ssh_port,
+            "username": plan.username,
+            "vendor": plan.vendor,
+            "device_types": list(plan.device_types),
+            "authentication_mode": "password_prompt",
+        },
+        created_by=plan.operator,
+        db_path=DB_PATH,
+    )
     manifest = manifest_for(
         plan,
         preview_data,
@@ -2899,8 +3497,12 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
         operation="interactive_configuration_pull",
         credential_transport="https",
         credential_retention="none",
+        contact_phase="not_started",
+        work_claim=fence.claim_summary(),
     )
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    fence.assert_current()
+    _write_json_atomic(run_dir / "manifest.json", manifest)
+    work_dir = _device_contact_staging_dir(run_dir, fence)
     capture_process = None
     capture_stderr = None
     control_dir: Path | None = None
@@ -2908,7 +3510,9 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     slave_fd: int | None = None
     master_process: subprocess.Popen[bytes] | None = None
     try:
-        capture_process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
+        publish_device_contact_starting(run_dir, manifest, fence)
+        capture_process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, work_dir)
+        fence.register_process(capture_process)
         control_dir = Path(tempfile.mkdtemp(prefix=f"nct-ssh-{preview_data['run_id'][:12]}-", dir="/tmp"))
         control_dir.chmod(0o700)
         control_path = control_dir / "control.sock"
@@ -2926,6 +3530,8 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
             stderr=slave_fd,
             close_fds=True,
         )
+        fence.register_process(master_process)
+        publish_device_contact_active(run_dir, manifest, fence)
         os.close(slave_fd)
         slave_fd = None
         session_id = uuid.uuid4().hex
@@ -2933,7 +3539,8 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
             session_id=session_id,
             plan=plan,
             preview=preview_data,
-            run_dir=run_dir,
+            retained_run_dir=run_dir,
+            run_dir=work_dir,
             control_dir=control_dir,
             control_path=control_path,
             master_process=master_process,
@@ -2941,6 +3548,8 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
             capture_process=capture_process,
             capture_stderr=capture_stderr,
             manifest=manifest,
+            fence=fence,
+            session_owner=_device_profile_actor(request),
         )
         prompt_output = _read_pty(session, 12)
         if _control_check(session):
@@ -2975,7 +3584,7 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
                 f"{plan.username}@{plan.device_address}."
             ),
         }
-    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+    except (FileNotFoundError, OSError, RuntimeError, ValueError, DeviceContactConflict) as exc:
         if slave_fd is not None:
             os.close(slave_fd)
         if master_fd is not None:
@@ -2983,25 +3592,35 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
                 os.close(master_fd)
             except OSError:
                 pass
-        if master_process is not None and master_process.poll() is None:
-            master_process.terminate()
+        _stop_owned_process(master_process)
+        fence.unregister_process(master_process)
         stop_accountability_capture(capture_process, capture_stderr)
+        fence.unregister_process(capture_process)
         if control_dir is not None:
             shutil.rmtree(control_dir, ignore_errors=True)
+        cancelled = (
+            isinstance(exc, DeviceContactConflict)
+            and fence.cancellation_requested()
+        )
         manifest.update(
             {
-                "status": "failed",
+                "status": "cancelled" if cancelled else "failed",
                 "completed_at": utc_now(),
-                "failure_class": "session_start_failed",
+                "failure_class": "operator_cancelled" if cancelled else "session_start_failed",
                 "credentials_stored": False,
             }
         )
-        (run_dir / "stderr.txt").write_text(str(exc)[:50_000])
-        (run_dir / "stdout.txt").write_text("")
-        register_finalized_files(DB_PATH, run_dir, manifest, "device_collection",
-                                 [item["name"] for item in artifact_records(preview_data["run_id"], run_dir)])
-        (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        raise HTTPException(status_code=502, detail="The interactive SSH session could not be started") from exc
+        (work_dir / "stderr.txt").write_text(str(exc)[:50_000])
+        (work_dir / "stdout.txt").write_text("")
+        publication_id = (
+            None if cancelled else _promote_device_contact_files(work_dir, run_dir, fence)
+        )
+        finalize_device_contact(run_dir, manifest, fence, publication_id)
+        detail = (
+            "The interactive SSH session was cancelled"
+            if cancelled else "The interactive SSH session could not be started"
+        )
+        raise HTTPException(status_code=409 if cancelled else 502, detail=detail) from exc
 
 
 @router.post("/interactive/{session_id}/password")
@@ -3017,47 +3636,322 @@ def submit_interactive_password(
         session = _INTERACTIVE_SESSIONS.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="The SSH password prompt is no longer active")
-    if time.monotonic() - session.created_monotonic >= PASSWORD_SESSION_TTL_SECONDS:
-        _expire_interactive_session(session_id)
-        raise HTTPException(status_code=410, detail="The SSH password prompt expired; start a new session")
-    password_bytes = bytearray(submission.password.get_secret_value().encode("utf-8"))
-    try:
-        os.write(session.pty_fd, password_bytes + b"\n")
-    finally:
-        for index in range(len(password_bytes)):
-            password_bytes[index] = 0
-        del password_bytes
-        del submission
-    authentication_output = _read_pty(session, 15)
-    if not _control_check(session):
-        message = "SSH authentication failed. Recheck the username and password, then start a new session."
-        if session.master_process.poll() is None:
-            message = "SSH did not finish authentication before the prompt timed out."
-        return _finish_interactive_session(
-            session,
-            status="failed",
-            stderr=message,
-            failure_class="authentication_failed",
-            exit_code=session.master_process.poll(),
-            extra={"authentication_output_retained": False},
+    actor = _device_profile_actor(request)
+    if actor != session.session_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the analyst who started this password prompt can complete it",
         )
-    del authentication_output
-    return _run_interactive_collection(session)
+    with session.action_lock:
+        try:
+            if session.closed:
+                raise HTTPException(status_code=409, detail="The SSH password prompt is already closed")
+            session.fence.assert_contact_allowed()
+            if time.monotonic() - session.created_monotonic >= PASSWORD_SESSION_TTL_SECONDS:
+                _finish_interactive_session(
+                    session,
+                    status="expired",
+                    stderr="The password prompt expired before the operator completed authentication.",
+                    failure_class="authentication_expired",
+                )
+                raise HTTPException(status_code=410, detail="The SSH password prompt expired; start a new session")
+            password_bytes = bytearray(submission.password.get_secret_value().encode("utf-8"))
+            try:
+                os.write(session.pty_fd, password_bytes + b"\n")
+            finally:
+                for index in range(len(password_bytes)):
+                    password_bytes[index] = 0
+                del password_bytes
+                del submission
+            authentication_output = _read_pty(session, 15)
+            session.fence.assert_contact_allowed()
+            if not _control_check(session):
+                message = "SSH authentication failed. Recheck the username and password, then start a new session."
+                if session.master_process.poll() is None:
+                    message = "SSH did not finish authentication before the prompt timed out."
+                return _finish_interactive_session(
+                    session,
+                    status="failed",
+                    stderr=message,
+                    failure_class="authentication_failed",
+                    exit_code=session.master_process.poll(),
+                    extra={"authentication_output_retained": False},
+                )
+            del authentication_output
+            return _run_interactive_collection(session)
+        except DeviceContactConflict:
+            if session.fence.cancellation_requested() and not session.closed:
+                return _finish_interactive_session(
+                    session,
+                    status="cancelled",
+                    stderr="The operator cancelled the device collection.",
+                    failure_class="operator_cancelled",
+                )
+            raise
+        except WorkLeaseLost:
+            if not session.closed:
+                session.closed = True
+                with _INTERACTIVE_SESSIONS_LOCK:
+                    _INTERACTIVE_SESSIONS.pop(session.session_id, None)
+                _close_interactive_resources(session)
+            raise HTTPException(
+                status_code=409,
+                detail="Device-contact ownership was lost. The interrupted record requires review.",
+            )
 
 
 @router.post("/interactive/{session_id}/cancel")
-def cancel_interactive_session(session_id: str) -> dict:
+def cancel_interactive_session(session_id: str, request: Request) -> dict:
     with _INTERACTIVE_SESSIONS_LOCK:
         session = _INTERACTIVE_SESSIONS.get(session_id)
     if session is None:
         return {"status": "closed", "message": "The SSH password prompt is already closed."}
-    result = _finish_interactive_session(
-        session,
-        status="cancelled",
-        stderr="The operator cancelled the SSH password prompt.",
-        failure_class="operator_cancelled",
+    actor = _device_profile_actor(request)
+    if actor != session.session_owner:
+        raise HTTPException(status_code=403, detail="Only the analyst who started this session can cancel it")
+    request_device_contact_cancellation(
+        DB_PATH,
+        session.fence.claim.run_id,
+        requested_by=actor,
+        reason="The operator cancelled the interactive device collection.",
     )
+    session.fence.request_stop()
+    with session.action_lock:
+        if session.closed:
+            return {"status": "closed", "message": "The SSH password prompt is already closed."}
+        result = _finish_interactive_session(
+            session,
+            status="cancelled",
+            stderr="The operator cancelled the SSH password prompt.",
+            failure_class="operator_cancelled",
+        )
     return {"status": result["status"], "run_id": result["run_id"], "message": "The SSH session was closed."}
+
+
+@router.post("/contact-runs/{run_id}/cancel")
+def cancel_device_contact_run(run_id: str, request: Request) -> dict:
+    """Save a stop request even when another application process owns contact."""
+    actor = _device_profile_actor(request)
+    try:
+        request_device_contact_cancellation(
+            DB_PATH,
+            run_id,
+            requested_by=actor,
+            reason="The operator requested that this device collection stop.",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Device collection contact record not found") from exc
+    except DeviceContactConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    with _INTERACTIVE_SESSIONS_LOCK:
+        session = next(
+            (value for value in _INTERACTIVE_SESSIONS.values()
+             if value.fence.claim.run_id == run_id),
+            None,
+        )
+    if session is not None:
+        session.fence.request_stop()
+        with session.action_lock:
+            if not session.closed:
+                _finish_interactive_session(
+                    session,
+                    status="cancelled",
+                    stderr="The operator cancelled the device collection.",
+                    failure_class="operator_cancelled",
+                )
+    return {
+        "status": "cancelling",
+        "run_id": run_id,
+        "message": "Cancellation is saved until the owning worker proves device contact stopped.",
+    }
+
+
+def _device_contact_admin(request: Request) -> str:
+    if auth_enabled():
+        analyst = getattr(request.state, "analyst", None)
+        if analyst is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if analyst.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Administrator role required")
+        return str(analyst["username"])
+    return signed_in_username(request) or "local-administrator"
+
+
+def _review_stable_collection_files(
+    run_dir: Path, attempt_number: int,
+) -> dict[str, object]:
+    """Hash retained and attempt-private files twice before a safety closure."""
+    attempt_root = run_dir / ".attempts" / str(attempt_number)
+    if (run_dir / ".attempts").is_symlink() or attempt_root.is_symlink():
+        raise DeviceContactConflict("Attempt-private evidence path is unsafe")
+
+    def snapshot() -> list[dict[str, object]]:
+        candidates: list[tuple[str, Path]] = []
+        for path in sorted(run_dir.iterdir(), key=lambda item: item.name):
+            if path.name in {"manifest.json", ".attempts"}:
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise DeviceContactConflict("Retained review path is unsafe")
+            candidates.append((f"retained/{path.name}", path))
+        if attempt_root.exists():
+            if not attempt_root.is_dir():
+                raise DeviceContactConflict("Attempt-private evidence path is unsafe")
+            for path in sorted(attempt_root.iterdir(), key=lambda item: item.name):
+                if path.is_symlink() or not path.is_file():
+                    raise DeviceContactConflict("Attempt-private evidence contains an unsafe path")
+                candidates.append((f"attempt/{attempt_number}/{path.name}", path))
+        if len(candidates) > 100:
+            raise DeviceContactConflict("Too many partial files require administrator review")
+        files: list[dict[str, object]] = []
+        total_bytes = 0
+        for label, path in candidates:
+            before = path.stat()
+            digest, size = sha256_file(path)
+            after = path.stat()
+            if (
+                before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+            ) != (
+                after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+            ):
+                raise DeviceContactConflict("A device-contact file changed during review")
+            total_bytes += size
+            if total_bytes > 1024 * 1024 * 1024:
+                raise DeviceContactConflict("Partial device-contact evidence exceeds the review limit")
+            files.append({
+                "filename": label,
+                "sha256": digest,
+                "size_bytes": size,
+                "mtime_ns": after.st_mtime_ns,
+                "ctime_ns": after.st_ctime_ns,
+            })
+        return files
+
+    first = snapshot()
+    time.sleep(0.25)
+    second = snapshot()
+    if first != second:
+        raise DeviceContactConflict(
+            "Device-contact files changed between stability observations"
+        )
+    if not second:
+        raise DeviceContactConflict("No retained or attempt-private files were available to review")
+    return {
+        "attempt_number": attempt_number,
+        "files": second,
+        "file_count": len(second),
+        "stability_interval_ms": 250,
+        "reviewed_at": utc_now(),
+    }
+
+
+def _review_unavailable_collection_tree(run_id: str) -> dict[str, object]:
+    """Record two stable observations without following an absent or unsafe tree."""
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise DeviceContactConflict("The device-contact run identifier is invalid")
+    root = CONFIG_DIR.resolve()
+    candidate = root / run_id
+
+    def snapshot() -> dict[str, object]:
+        try:
+            stat = candidate.lstat()
+        except FileNotFoundError:
+            return {"state": "absent"}
+        except OSError as exc:
+            return {"state": "unreadable", "error": type(exc).__name__}
+        state = "unsafe" if candidate.is_symlink() or not candidate.is_dir() else "available"
+        if state == "available":
+            try:
+                if candidate.resolve() != candidate:
+                    state = "unsafe"
+            except OSError:
+                state = "unreadable"
+        return {
+            "state": state,
+            "mode": stat.st_mode,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns,
+        }
+
+    first = snapshot()
+    time.sleep(0.25)
+    second = snapshot()
+    if first != second:
+        raise DeviceContactConflict(
+            "The unavailable device-contact evidence path changed during review"
+        )
+    if second.get("state") == "available":
+        raise DeviceContactConflict(
+            "The retained collection directory became available; review its files instead"
+        )
+    return {
+        "evidence_tree_status": second["state"],
+        "evidence_tree_observation": second,
+        "files": [],
+        "file_count": 0,
+        "stability_interval_ms": 250,
+        "reviewed_at": utc_now(),
+        "adoption_status": "not_adopted",
+    }
+
+
+@router.post("/contact-runs/{run_id}/review-close")
+def review_close_device_contact_run(
+    run_id: str,
+    payload: DeviceContactReviewClosure,
+    request: Request,
+) -> dict:
+    actor = _device_contact_admin(request)
+    try:
+        attempt = get_device_contact_attempt_for_review(DB_PATH, run_id)
+        if attempt is None:
+            raise DeviceContactConflict("The interrupted attempt is unavailable")
+        try:
+            run_dir = device_collection_directory(run_id)
+        except ValueError:
+            run_dir = CONFIG_DIR.resolve() / run_id
+        if run_dir.is_dir() and not run_dir.is_symlink() and run_dir.resolve() == run_dir:
+            file_review = _review_stable_collection_files(
+                run_dir, int(attempt["attempt_number"])
+            )
+        else:
+            file_review = _review_unavailable_collection_tree(run_id)
+        review_id = close_device_contact_after_review(
+            DB_PATH,
+            run_id,
+            reviewed_by=actor,
+            reason=payload.reason,
+            former_processes_stopped=payload.former_processes_stopped,
+            files_stable=payload.files_stable,
+            file_review=file_review,
+            disposition=payload.disposition,
+        )
+    except (ValueError, DeviceContactConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if run_dir.is_dir() and not run_dir.is_symlink():
+        manifest_path = run_dir / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest.update({
+                "status": "closed_after_admin_review",
+                "review_id": review_id,
+                "reviewed_at": utc_now(),
+                "reviewed_by": actor,
+                "review_reason": payload.reason,
+                "review_disposition": payload.disposition,
+                "recovery_required": False,
+            })
+            _write_json_atomic(manifest_path, manifest)
+        except (OSError, json.JSONDecodeError):
+            # The durable database review remains authoritative if the presentation
+            # manifest is unavailable after the review transaction commits.
+            pass
+    return {
+        "status": "closed_after_admin_review",
+        "run_id": run_id,
+        "review_id": review_id,
+        "message": "Interrupted device contact was closed after administrator review.",
+    }
 
 
 @router.post("/preflight")
@@ -3082,8 +3976,29 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
-    manifest = manifest_for(plan, preview_data, "running", operation="ssh_preflight", key_status=key["status"])
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    fence = acquire_device_contact_fence(
+        preview_data["run_id"],
+        operation_kind="ssh_preflight",
+        subject_key=f"{plan.device_address}:{plan.ssh_port}",
+        request={
+            "device_address": plan.device_address,
+            "ssh_port": plan.ssh_port,
+            "username": plan.username,
+            "vendor": plan.vendor,
+            "device_types": list(plan.device_types),
+            "authentication_mode": "key",
+        },
+        created_by=plan.operator,
+        db_path=DB_PATH,
+    )
+    manifest = manifest_for(
+        plan, preview_data, "preparing", operation="ssh_preflight",
+        key_status=key["status"], contact_phase="not_started",
+        work_claim=fence.claim_summary(),
+    )
+    fence.assert_current()
+    _write_json_atomic(run_dir / "manifest.json", manifest)
+    work_dir = _device_contact_staging_dir(run_dir, fence)
     args = [
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new", "-p", str(plan.ssh_port),
@@ -3095,9 +4010,13 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     capture_stderr = None
     exit_code = None
     try:
-        process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
+        publish_device_contact_starting(run_dir, manifest, fence)
+        manifest["status"] = "running"
+        process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, work_dir)
+        fence.register_process(process)
+        publish_device_contact_active(run_dir, manifest, fence)
         try:
-            checked = subprocess.run(args, capture_output=True, text=True, timeout=20, check=False)
+            checked = _run_fenced_process(args, fence, timeout=20)
             exit_code = checked.returncode
             stderr = checked.stderr[:4000]
             if checked.returncode == 0:
@@ -3108,19 +4027,38 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
             result.update({"status": "blocked", "failure_class": "network_connection_problem", "message": "SSH preflight timed out after 20 seconds."})
         except FileNotFoundError:
             result.update({"status": "blocked", "failure_class": "remote_command_failed", "message": "SSH client is not available in the analyzer."})
+        except DeviceContactConflict:
+            if fence.cancellation_requested():
+                result.update({"status": "cancelled", "failure_class": "operator_cancelled", "message": "The operator cancelled SSH preflight."})
+            else:
+                raise
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         result.update({"status": "blocked", "failure_class": "accountability_capture_problem", "message": f"Mandatory tcpdump accountability could not start: {exc}"})
     finally:
         stop_accountability_capture(process, capture_stderr)
-    if result.get("failure_class") != "accountability_capture_problem" and not capture_is_valid(run_dir):
+        fence.unregister_process(process)
+    if (
+        result.get("status") != "cancelled"
+        and result.get("failure_class") != "accountability_capture_problem"
+        and not capture_is_valid(work_dir)
+    ):
         result.update({"status": "blocked", "failure_class": "accountability_capture_problem", "message": "Mandatory tcpdump accountability did not produce a valid PCAP."})
+    manifest_status = (
+        "completed" if result.get("status") == "ready"
+        else "cancelled" if result.get("status") == "cancelled"
+        else "failed"
+    )
     manifest.update({
-        "status": "completed" if result.get("status") == "ready" else "failed",
+        "status": manifest_status,
         "completed_at": utc_now(),
         "exit_code": exit_code,
         "failure_class": result.get("failure_class"),
     })
-    _finalize_device_collection(run_dir, manifest)
+    publication_id = (
+        None if manifest_status == "cancelled"
+        else _promote_device_contact_files(work_dir, run_dir, fence)
+    )
+    finalize_device_contact(run_dir, manifest, fence, publication_id)
     result["accountability_run_id"] = preview_data["run_id"]
     result["accountability_artifacts"] = artifact_records(preview_data["run_id"], run_dir)
     return result
@@ -3143,9 +4081,30 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
-    local_output = run_dir / preview_data["local_output_name"]
-    manifest = manifest_for(plan, preview_data, "running", operation="configuration_pull", key_status=key["status"])
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    fence = acquire_device_contact_fence(
+        preview_data["run_id"],
+        operation_kind="configuration_pull",
+        subject_key=f"{plan.device_address}:{plan.ssh_port}",
+        request={
+            "device_address": plan.device_address,
+            "ssh_port": plan.ssh_port,
+            "username": plan.username,
+            "vendor": plan.vendor,
+            "device_types": list(plan.device_types),
+            "authentication_mode": "key",
+        },
+        created_by=plan.operator,
+        db_path=DB_PATH,
+    )
+    manifest = manifest_for(
+        plan, preview_data, "preparing", operation="configuration_pull",
+        key_status=key["status"], contact_phase="not_started",
+        work_claim=fence.claim_summary(),
+    )
+    fence.assert_current()
+    _write_json_atomic(run_dir / "manifest.json", manifest)
+    work_dir = _device_contact_staging_dir(run_dir, fence)
+    local_output = work_dir / preview_data["local_output_name"]
     stdout = ""
     stderr = ""
     exit_code = None
@@ -3154,23 +4113,29 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     output_truncated = False
     process = None
     capture_stderr = None
-    history_path = run_dir / "command-history.txt"
+    history_path = work_dir / "command-history.txt"
     history_status = "not_collected"
     history_truncated = False
     if key["status"] in {"missing", "unreadable", "invalid"}:
         stderr = key["message"]
         failure_class = "local_key_problem"
-        (run_dir / "stdout.txt").write_text("")
-        (run_dir / "stderr.txt").write_text(stderr)
+        (work_dir / "stdout.txt").write_text("")
+        (work_dir / "stderr.txt").write_text(stderr)
         manifest.update({"status": status, "completed_at": utc_now(), "exit_code": exit_code, "failure_class": failure_class})
-        _finalize_device_collection(run_dir, manifest)
+        publication_id = _promote_device_contact_files(work_dir, run_dir, fence)
+        finalize_device_contact(run_dir, manifest, fence, publication_id)
         return {**manifest, "stdout": stdout, "stderr": stderr, "scp_command": preview_data["scp_command"], "artifacts": artifact_records(preview_data["run_id"], run_dir)}
     try:
-        process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, run_dir)
+        publish_device_contact_starting(run_dir, manifest, fence)
+        manifest["status"] = "running"
+        process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, work_dir)
+        fence.register_process(process)
+        publish_device_contact_active(run_dir, manifest, fence)
         try:
             if plan.vendor == "cisco":
                 stderr, exit_code, failed_commands, collection_error, output_truncated = _run_cisco_command_sequence_to_file(
-                    preview_data["ssh_args"][:-1], preview_data["commands"], local_output
+                    preview_data["ssh_args"][:-1], preview_data["commands"], local_output,
+                    fence,
                 )
                 status = "failed" if collection_error else "completed"
                 failure_class = "empty_collection_output" if collection_error else None
@@ -3196,6 +4161,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
                     preview_data["history_ssh_args"],
                     preview_data["history_input"],
                     history_path,
+                    fence,
                 )
                 if history_error:
                     stderr = f"Command history: {history_error}"
@@ -3204,6 +4170,7 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
                     input_text=preview_data["remote_input"],
                     output_path=local_output,
                     timeout=120,
+                    fence=fence,
                 )
                 collection_stderr = completed.stderr[:50_000]
                 stderr = (stderr + "\n" if stderr and collection_stderr else stderr) + collection_stderr
@@ -3227,19 +4194,31 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
             stderr = "SSH client is not available in the analyzer."
             status = "failed"
             failure_class = "remote_command_failed"
+        except DeviceContactConflict:
+            if fence.cancellation_requested():
+                stderr = "The operator cancelled the device collection."
+                status = "cancelled"
+                failure_class = "operator_cancelled"
+            else:
+                raise
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         stderr = f"Mandatory tcpdump accountability could not start: {exc}"
         status = "failed"
         failure_class = "accountability_capture_problem"
     finally:
         stop_accountability_capture(process, capture_stderr)
-    if failure_class != "accountability_capture_problem" and not capture_is_valid(run_dir):
+        fence.unregister_process(process)
+    if (
+        status != "cancelled"
+        and failure_class != "accountability_capture_problem"
+        and not capture_is_valid(work_dir)
+    ):
         status = "failed"
         failure_class = "accountability_capture_problem"
         stderr = (stderr + "\n" if stderr else "") + "Mandatory tcpdump accountability did not produce a valid PCAP."
     stdout = _read_text_prefix(local_output, MAX_RESPONSE_OUTPUT_CHARS)
-    (run_dir / "stdout.txt").write_text(stdout)
-    (run_dir / "stderr.txt").write_text(stderr)
+    (work_dir / "stdout.txt").write_text(stdout)
+    (work_dir / "stderr.txt").write_text(stderr)
     manifest.update({
         "status": status,
         "completed_at": utc_now(),
@@ -3254,7 +4233,11 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         "command_history_truncated": history_truncated,
         "command_history_artifact": "command-history.txt",
     })
-    _finalize_device_collection(run_dir, manifest)
+    publication_id = (
+        None if status == "cancelled"
+        else _promote_device_contact_files(work_dir, run_dir, fence)
+    )
+    finalize_device_contact(run_dir, manifest, fence, publication_id)
     return {
         **manifest,
         "stdout": stdout[:MAX_RESPONSE_OUTPUT_CHARS],
@@ -3483,6 +4466,49 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
                     "previous_runtime_status",
                 )
             }
+            contact_work = (
+                get_device_contact_run(DB_PATH, record["run_id"])
+                if value.get("operation") in {
+                    "ssh_preflight", "configuration_pull",
+                    "interactive_configuration_pull",
+                }
+                else None
+            )
+            if contact_work is not None:
+                durable_state = str(contact_work["state"])
+                if contact_work["cancellation_requested"] and durable_state not in {
+                    "complete", "cancelled", "failed",
+                }:
+                    contact_label = "Cancelling"
+                elif durable_state == "needs_attention":
+                    contact_label = "Interrupted — Needs attention"
+                elif value.get("status") == "waiting_for_password":
+                    contact_label = "Waiting for password"
+                elif durable_state in {"preparing", "waiting"}:
+                    contact_label = "Getting ready"
+                elif durable_state in {"contact_starting", "contact_active"}:
+                    contact_label = "Contact active"
+                elif value.get("status") == "closed_after_admin_review":
+                    contact_label = "Closed after administrator review"
+                else:
+                    contact_label = {
+                        "complete": "Complete",
+                        "cancelled": "Cancelled",
+                        "failed": "Failed",
+                    }.get(durable_state, "Status unavailable")
+                record["contact_state"] = contact_label
+                record["contact_detail"] = contact_work.get("status_reason") or (
+                    "Device contact is protected by a saved cross-process ownership record."
+                )
+                record["contact_cancellation_requested"] = bool(
+                    contact_work["cancellation_requested"]
+                )
+                record["contact_review_required"] = durable_state == "needs_attention"
+            else:
+                record["contact_state"] = None
+                record["contact_detail"] = None
+                record["contact_cancellation_requested"] = False
+                record["contact_review_required"] = bool(record.get("recovery_required"))
             from app.derived_jobs import device_summary_job_for_run
             from app.pipeline_intake import (
                 COLLECTED_DEVICE_INTENT,

@@ -402,6 +402,7 @@ def analyze_manual_upload_summary(
 
 def _registered_collection_file(
     db_path: Path, run_id: str, run_dir: Path, record: dict, label: str,
+    *, connection=None,
 ) -> dict:
     filename = record.get("filename")
     observation_id = record.get("observation_id")
@@ -414,8 +415,8 @@ def _registered_collection_file(
         or not isinstance(expected_size, int) or expected_size < 0
     ):
         raise ValueError(f"{label} registration is incomplete")
-    with connect_database(db_path, read_only=True) as db:
-        row = db.execute(
+    def load_row(db):
+        return db.execute(
             """SELECT observation.sha256, observation.source_kind,
                       observation.source_ref, artifact.size_bytes,
                       artifact.canonical_path
@@ -424,6 +425,11 @@ def _registered_collection_file(
                WHERE observation.observation_id = ?""",
             (observation_id,),
         ).fetchone()
+    if connection is None:
+        with connect_database(db_path, read_only=True) as db:
+            row = load_row(db)
+    else:
+        row = load_row(connection)
     if row is None or tuple(row[:4]) != (
         expected_sha256, "device_collection", run_id, expected_size,
     ):
@@ -447,14 +453,22 @@ def _registered_collection_file(
     }
 
 
-def capture_collected_device_snapshot(db_path: Path, run_id: str, run_dir: Path) -> dict:
+def capture_collected_device_snapshot(
+    db_path: Path, run_id: str, run_dir: Path, *, connection=None,
+    manifest_override: dict | None = None,
+) -> dict:
     """Freeze the exact files and selection rules for one completed SSH collection."""
     manifest_path = run_dir / "manifest.json"
-    manifest_bytes = _stable_file_bytes(manifest_path, "Device collection manifest")
-    try:
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Device collection manifest is unreadable") from exc
+    manifest_from_disk = manifest_override is None
+    if manifest_override is None:
+        manifest_bytes = _stable_file_bytes(manifest_path, "Device collection manifest")
+        try:
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Device collection manifest is unreadable") from exc
+    else:
+        manifest = json.loads(json.dumps(manifest_override))
+        manifest_bytes = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
     if manifest.get("run_id") != run_id:
         raise ValueError("Device collection manifest does not match its collection")
     semantics = collected_device_manifest_semantics(manifest)
@@ -492,10 +506,12 @@ def capture_collected_device_snapshot(db_path: Path, run_id: str, run_dir: Path)
     configuration = _registered_collection_file(
         db_path, run_id, run_dir,
         registered.get(configuration_candidates[0]) or {}, "Configuration evidence",
+        connection=connection,
     )
     raw = _registered_collection_file(
         db_path, run_id, run_dir,
         registered.get(raw_candidates[0]) or {}, "Raw output evidence",
+        connection=connection,
     )
     configuration_prefix = configuration["bytes"][:MAX_SUMMARY_TEXT_BYTES]
     raw_prefix = raw["bytes"][:MAX_SUMMARY_TEXT_BYTES]
@@ -506,6 +522,7 @@ def capture_collected_device_snapshot(db_path: Path, run_id: str, run_dir: Path)
         history = _registered_collection_file(
             db_path, run_id, run_dir,
             registered.get("command-history.txt") or {}, "Command history evidence",
+            connection=connection,
         )
         history_text = history["bytes"][:MAX_RESPONSE_OUTPUT_CHARS].decode(
             "utf-8", errors="replace"
@@ -567,7 +584,10 @@ def capture_collected_device_snapshot(db_path: Path, run_id: str, run_dir: Path)
         }
         for item in authority_inputs
     }
-    if _stable_file_bytes(manifest_path, "Device collection manifest") != manifest_bytes:
+    if (
+        manifest_from_disk
+        and _stable_file_bytes(manifest_path, "Device collection manifest") != manifest_bytes
+    ):
         raise ValueError("Device collection manifest changed during verification")
     return {
         "run_id": run_id,

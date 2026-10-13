@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Callable
 
 from app.artifacts import init_artifact_storage, utc_now
 from app.database import connect_database, initialize_once_per_database
@@ -222,6 +224,8 @@ def begin_manual_upload_authority(
 
 def begin_collected_device_authority(
     db_path: Path, run_id: str, *, marked_by: str = "local-operator",
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict:
     """Create or resume the preparation record for one successful collection."""
     init_device_collection_authority_storage(db_path)
@@ -234,8 +238,11 @@ def begin_collected_device_authority(
 
     init_pipeline_intake_storage(db_path)
     created_at = utc_now()
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
+    with (nullcontext(connection) if connection is not None else connect_database(db_path)) as db:
+        if connection is None:
+            db.execute("BEGIN IMMEDIATE")
+        if transaction_guard is not None:
+            transaction_guard(db)
         authority = _authority_record(_authority_row(db, run_id))
         if authority is None:
             db.execute(
@@ -264,6 +271,8 @@ def begin_collected_device_authority(
             raise DeviceCollectionIntegrityError(
                 "Preparing device collection authority has an unsupported revision"
             )
+    if connection is not None:
+        return _authority_record(_authority_row(connection, run_id)) or {}
     return get_device_collection_authority(db_path, run_id) or {}
 
 
@@ -510,6 +519,8 @@ def activate_collected_device_authority(
     *,
     manifest: dict,
     inputs: list[dict],
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict:
     """Activate exact multi-file authority for one completed SSH collection."""
     init_device_collection_authority_storage(db_path)
@@ -543,8 +554,11 @@ def activate_collected_device_authority(
     semantics_json = _canonical_json(semantics)
     semantics_sha256 = _digest_text(semantics_json)
     activated_at = utc_now()
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
+    with (nullcontext(connection) if connection is not None else connect_database(db_path)) as db:
+        if connection is None:
+            db.execute("BEGIN IMMEDIATE")
+        if transaction_guard is not None:
+            transaction_guard(db)
         authority = _authority_record(_authority_row(db, run_id))
         if authority is None:
             raise DeviceCollectionIntegrityError("Device collection authority is missing")
@@ -589,6 +603,8 @@ def activate_collected_device_authority(
         if current is None:
             raise DeviceCollectionIntegrityError("Device collection activation lost its authority")
         record_device_evidence_activation(db, manifest, current)
+    if connection is not None:
+        return _authority_record(_authority_row(connection, run_id)) or {}
     return get_device_collection_authority(db_path, run_id) or {}
 
 

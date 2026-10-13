@@ -2396,6 +2396,114 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     — DOCUMENTED DEVIATION**. Novice-operator gate: **CLEAR**. Overall Gate 6 remains
     open for interactive device-contact fencing. Gate 7 shared database/artifact
     storage qualification and any multi-replica claim remain later work.
+    **2026-10-12 Gate 6 interactive device-contact fencing start:** Apply the
+    reviewed database-time ownership and fencing contract to password-prompt SSH,
+    key-based configuration pulls and SSH preflight accountability. Each retained
+    contact attempt must carry one durable run identity and exact lease claim while
+    passwords remain only in the owning process memory. Starting tcpdump, SSH or SCP
+    moves the attempt across the no-automatic-takeover boundary. A lost owner may not
+    register files, activate verified device authority or publish completion; restart
+    leaves post-contact work Needs attention until an administrator verifies every
+    former process stopped and the retained files are stable. Final publication must
+    recheck the current fence at every database mutation and release only that exact
+    claim. Key and interactive paths must retain the same evidence meaning and plain
+    operator guidance. This package does not enable Kubernetes active collection or
+    make a multi-replica claim; Gate 7 shared storage qualification remains next.
+    **2026-10-12 Gate 6 interactive device-contact fencing implementation
+    correction:** Schema contract v4 now retains immutable device-contact runs,
+    exact attempts, durable cancellation controls and attributed administrator
+    reviews. Password-prompt SSH, key-based pulls and SSH preflight share one
+    device-contact capacity lease plus one run lease, renew both while owned, and
+    commit the no-takeover contact boundary before tcpdump or SSH begins. Output is
+    written to an attempt-private directory and only stable, regular files are
+    promoted after child processes are stopped. Artifact observations, eligible
+    device authority and intake activation, terminal attempt state, cancellation
+    acknowledgement and both lease releases now share one terminal database
+    transaction. Startup may release one definitely pre-contact attempt, but any
+    attempt that reached contact becomes Interrupted — Needs attention and requires
+    an administrator to confirm former processes stopped and retained files are
+    stable. The Device Collection page keeps its active stop control available after
+    password submission and distinguishes Getting ready, Waiting for password,
+    Contact active, Cancelling, Interrupted — Needs attention and Closed after
+    administrator review from Saved analysis. Focused integration validation is in
+    progress; Gate 6 remains open until the complete suite, rendered browser,
+    independent reviewer and novice-operator checks pass.
+    **2026-10-12 Gate 6 device-contact quality-gate halt:** The first complete
+    integration pass found one outdated interactive-finalization regression test
+    (**1 failed, 1,468 passed, 15 skipped**) and the independent reviewer returned
+    **HALTED FOR REVIEW**. Database schema v4, dual leases, password ownership and
+    terminal transaction guards passed review, but live contact publication is not
+    yet safe to complete. Corrections in progress cover realistic capture-file
+    promotion, interactive output after promotion, immediate cancellation and lease-
+    loss process shutdown, fenced/recoverable filesystem publication, database-first
+    restart recovery, review of attempt-private partial evidence, and end-to-end
+    contact-path tests. The novice review also found unclear collapsed status text,
+    password-stage wording and administrator-review visibility; those operator-facing
+    corrections are being applied in the same gate. No downstream Gate 7 work begins
+    until these findings are independently cleared.
+    **2026-10-12 Gate 6 device-contact halt correction progress:** Live publication
+    now accepts the capture diagnostic produced by every real tcpdump start, reads
+    interactive output before private files move, and records an exact durable file
+    inventory before any retained-path rename. Promotion runs under the exact live
+    dual claim; terminal database publication marks that receipt committed, while the
+    presentation manifest is written only after the database transaction succeeds.
+    Blocking SSH, SCP and Cisco-shell children are supervised with bounded ownership
+    and cancellation checks, and cancellation or lease loss terminates and reaps the
+    processes before any later contact or remote cleanup step. Restart reconciliation
+    enumerates durable work first, so missing, corrupt or unsafe presentation files
+    cannot hide a contact record. Administrator closure binds to the exact interrupted
+    attempt and hashes retained plus attempt-private files twice across a time interval
+    with symlink, count and size limits. The novice wording/status/role findings are
+    corrected. Expanded focused validation is **69 passed, 1 skipped** with one existing
+    dependency warning; independent reviewer and novice rechecks remain in progress.
+    **2026-10-12 Gate 6 device-contact final halt corrections in progress:** The
+    reviewer recheck confirmed the process fencing, cancellation, promotion,
+    database-first recovery and exact-file review corrections, then retained the halt
+    for three narrower restart cases. A restart before contact now closes the original
+    attempt as Stopped before contact and directs the analyst to start a new collection
+    with fresh settings and credentials; NCT never reconstructs credentials or starts
+    network contact automatically. Terminal database publication now retains the exact
+    final presentation receipt and startup repairs an interrupted manifest write from
+    that committed receipt. Missing, unreadable or unsafe evidence trees remain
+    untrusted, but an administrator can record two stable filesystem observations and
+    close the exact safety block without adopting any file as evidence. Regression
+    coverage for these cases and complete password, key-preflight and key-collection
+    endpoint lifecycles now passes **75 tests with 1 skipped** and one existing
+    dependency warning. The HTTP checks also verified that the one-time password is
+    absent from responses, durable records, retained files and SQLite files, corrected
+    local-session ownership continuity, and confirmed terminal contact state in both
+    the database and retained presentation. Novice-operator recheck: **CLEAR**. The
+    independent final quality-gate recheck is in progress.
+    **2026-10-12 Gate 6 interrupted-upgrade correction:** The final reviewer pass
+    found that an interrupted v3-to-v4 database could retain the first partial
+    device-contact table without the two terminal-presentation repair fields. The v4
+    initializer now completes those missing fields idempotently before the migration
+    fingerprint is finalized. Its restart regression proves the fields exist, then
+    performs terminal publication and the unsynced-presentation repair cycle on the
+    recovered database. The first complete-suite rerun also exposed four older Cisco
+    test doubles that used the unfenced two-argument helper shape; the compatibility
+    path now retains that call shape when no contact fence is supplied. Focused schema
+    and Cisco validation passes **11 tests**. Complete-suite rerun and independent
+    reviewer clearance remain required before Gate 6 closes.
+    **2026-10-12 Gate 6 interactive device-contact fencing complete:** Password-
+    prompt SSH, key preflight and key collection now use the same durable dual-lease
+    boundary, supervise and stop owned child processes, journal exact file promotion,
+    publish verified evidence and terminal state together, and repair post-commit
+    presentation failures after restart. Passwords remain process-only. Post-contact
+    ownership loss retains partial files privately and blocks further device contact
+    until an attributed administrator review; missing and unsafe evidence trees can be
+    closed without trusting or adopting them. A pre-contact restart closes the original
+    attempt and requires a new operator-started collection rather than reconstructing
+    credentials or contacting the device automatically. This is the accepted safety
+    deviation. The complete isolated Docker suite passes **1,481 tests with 15
+    skips** and one existing dependency warning. Focused contact/recovery/schema/UI
+    validation passes **75 tests with 1 skip**; recovered-schema/Cisco compatibility
+    passes **11 tests**. The disposable final image starts cleanly, the Device
+    Collections page and Operator Guide render correctly, and no server error appears
+    during the browser check. Independent quality gate: **CLEAR — DOCUMENTED
+    DEVIATION**. Novice-operator gate: **CLEAR**. The work remains foundation-only;
+    it is committed development capability, not Range-ready or available on `main`.
+    Gate 7 shared database and artifact-storage qualification is next.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

@@ -12,16 +12,18 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 
 
-SCHEMA_CONTRACT_VERSION = 3
-WRITABLE_SCHEMA_VERSION = 3
-READABLE_SCHEMA_VERSIONS = (1, 2, 3)
+SCHEMA_CONTRACT_VERSION = 4
+WRITABLE_SCHEMA_VERSION = 4
+READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4)
 DATA_LAYOUT_CONTRACT = "nct-data-layout-v1"
 LEGACY_MIGRATION_ID = "nct-foundation-data-contract-v1"
 WORK_COORDINATION_MIGRATION_ID = "nct-work-coordination-v2"
-MIGRATION_ID = "nct-scheduled-occurrences-v3"
+SCHEDULED_WORK_MIGRATION_ID = "nct-scheduled-occurrences-v3"
+MIGRATION_ID = "nct-device-contact-fencing-v4"
 MIGRATION_PLAN = (
     LEGACY_MIGRATION_ID,
     WORK_COORDINATION_MIGRATION_ID,
+    SCHEDULED_WORK_MIGRATION_ID,
     MIGRATION_ID,
 )
 
@@ -169,35 +171,30 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                     raise SchemaCompatibilityError(
                         "The saved schema fingerprint does not match the live database."
                     )
-                current = [row for row in ledger if row[0] == MIGRATION_ID]
-                coordination = [
-                    row for row in ledger
-                    if row[0] == WORK_COORDINATION_MIGRATION_ID
-                ]
-                legacy = [row for row in ledger if row[0] == LEGACY_MIGRATION_ID]
+                by_id = {row[0]: row for row in ledger}
                 unknown = [row for row in ledger if row[0] not in MIGRATION_PLAN]
                 unfinished = [row for row in ledger if row[2] == "started"]
-                if (
-                    len(current) != 1
-                    or current[0] != (
-                        MIGRATION_ID, WRITABLE_SCHEMA_VERSION, "completed", recorded
+                expected = {
+                    migration_id: (index, "completed")
+                    for index, migration_id in enumerate(MIGRATION_PLAN, start=1)
+                }
+                ledger_valid = len(by_id) == len(MIGRATION_PLAN)
+                for migration_id, (target, status) in expected.items():
+                    row = by_id.get(migration_id)
+                    ledger_valid = ledger_valid and row is not None and (
+                        row[1] == target
+                        and row[2] == status
+                        and bool(row[3])
                     )
-                    or len(coordination) != 1
-                    or coordination[0][1] != 2
-                    or coordination[0][2] != "completed"
-                    or not coordination[0][3]
-                    or len(legacy) != 1
-                    or legacy[0][1] != 1
-                    or legacy[0][2] != "completed"
-                    or not legacy[0][3]
-                    or unknown
-                    or unfinished
-                ):
+                current = by_id.get(MIGRATION_ID)
+                if current is None or current[3] != recorded:
+                    ledger_valid = False
+                if not ledger_valid or unknown or unfinished:
                     raise SchemaCompatibilityError(
                         "The saved migration ledger is incomplete or inconsistent."
                     )
                 return None
-            elif int(schema_version) in {1, 2}:
+            elif int(schema_version) in {1, 2, 3}:
                 live_fingerprint = schema_fingerprint(connection)
                 recorded = connection.execute(
                     "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton = 1"
@@ -207,11 +204,6 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                               after_schema_fingerprint
                          FROM nct_schema_migrations WHERE migration_id = ?""",
                     (MIGRATION_ID,),
-                ).fetchone()
-                legacy = connection.execute(
-                    """SELECT status, after_schema_fingerprint
-                         FROM nct_schema_migrations WHERE migration_id = ?""",
-                    (LEGACY_MIGRATION_ID,),
                 ).fetchone()
                 if not recorded or recorded != live_fingerprint:
                     resumable_failure = (
@@ -224,18 +216,38 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         raise SchemaCompatibilityError(
                             "The saved schema fingerprint does not match the live database."
                         )
-                if legacy != ("completed", recorded):
-                    if int(schema_version) == 1:
+                prior_ids = MIGRATION_PLAN[:int(schema_version)]
+                prior_rows = connection.execute(
+                    """SELECT migration_id, target_schema_version, status,
+                              after_schema_fingerprint
+                         FROM nct_schema_migrations"""
+                ).fetchall()
+                allowed_ids = set(MIGRATION_PLAN)
+                if any(row[0] not in allowed_ids for row in prior_rows):
+                    raise SchemaCompatibilityError(
+                        "The saved migration ledger is incomplete or inconsistent."
+                    )
+                prior_by_id = {row[0]: row for row in prior_rows}
+                for target, migration_id in enumerate(prior_ids, start=1):
+                    row = prior_by_id.get(migration_id)
+                    if (
+                        row is None
+                        or row[1] != target
+                        or row[2] != "completed"
+                        or not row[3]
+                        or (target == int(schema_version) and row[3] != recorded)
+                    ):
                         raise SchemaCompatibilityError(
                             "The saved migration ledger is incomplete or inconsistent."
                         )
-                if int(schema_version) == 2:
-                    coordination = connection.execute(
-                        """SELECT status, after_schema_fingerprint
-                             FROM nct_schema_migrations WHERE migration_id = ?""",
-                        (WORK_COORDINATION_MIGRATION_ID,),
-                    ).fetchone()
-                    if coordination != ("completed", recorded):
+                for target, migration_id in enumerate(
+                    MIGRATION_PLAN[int(schema_version):-1],
+                    start=int(schema_version) + 1,
+                ):
+                    row = prior_by_id.get(migration_id)
+                    if row is not None and row != (
+                        migration_id, target, "completed", recorded
+                    ):
                         raise SchemaCompatibilityError(
                             "The saved migration ledger is incomplete or inconsistent."
                         )
@@ -287,6 +299,29 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                        error_summary = NULL""",
                 (
                     WORK_COORDINATION_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
+                    now, now, now, before, before,
+                ),
+            )
+        if current_version in {0, 1, 2}:
+            connection.execute(
+                """INSERT INTO nct_schema_migrations(
+                       migration_id, target_schema_version, originating_build_id,
+                       originating_build_commit, status, attempts, first_started_at,
+                       last_started_at, completed_at, before_schema_fingerprint,
+                       after_schema_fingerprint, error_summary
+                   ) VALUES (?, 3, ?, ?, 'completed', 1, ?, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(migration_id) DO UPDATE SET
+                       target_schema_version = 3,
+                       originating_build_id = excluded.originating_build_id,
+                       originating_build_commit = excluded.originating_build_commit,
+                       status = 'completed', attempts = MAX(attempts, 1),
+                       last_started_at = excluded.last_started_at,
+                       completed_at = excluded.completed_at,
+                       before_schema_fingerprint = excluded.before_schema_fingerprint,
+                       after_schema_fingerprint = excluded.after_schema_fingerprint,
+                       error_summary = NULL""",
+                (
+                    SCHEDULED_WORK_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
                     now, now, now, before, before,
                 ),
             )
@@ -432,6 +467,7 @@ def schema_state(db_path: Path) -> dict[str, object]:
                     WHEN 'nct-foundation-data-contract-v1' THEN 1
                     WHEN 'nct-work-coordination-v2' THEN 2
                     WHEN 'nct-scheduled-occurrences-v3' THEN 3
+                    WHEN 'nct-device-contact-fencing-v4' THEN 4
                     ELSE 99 END,
                     first_started_at, migration_id"""
         ).fetchall()
