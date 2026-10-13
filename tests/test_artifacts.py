@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.artifacts import (
     artifact_storage_summary,
     get_artifact,
@@ -117,4 +119,30 @@ def test_identical_files_from_different_sources_share_one_canonical_artifact(tmp
     assert {item["source_kind"] for item in retained["observations"]} == {
         "nmap_scan",
         "device_config_upload",
+    }
+
+
+def test_artifact_transaction_guard_runs_inside_write_transaction(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    source = tmp_path / "guarded.xml"
+    source.write_text("<nmaprun/>", encoding="utf-8")
+
+    def reject(connection) -> None:
+        assert connection.in_transaction is True
+        raise RuntimeError("ownership changed")
+
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        register_artifact_file(
+            db_path=db_path,
+            source_path=source,
+            source_kind="nmap_scan",
+            source_ref="guarded-run",
+            original_filename="scan.xml",
+            transaction_guard=reject,
+        )
+
+    assert artifact_storage_summary(db_path) == {
+        "unique_artifact_count": 0,
+        "unique_artifact_bytes": 0,
+        "observation_count": 0,
     }

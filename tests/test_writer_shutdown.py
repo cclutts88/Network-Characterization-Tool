@@ -143,9 +143,9 @@ def test_scan_admission_cannot_cross_shutdown_fence(tmp_path: Path, monkeypatch)
     run_id = "a" * 32
     poc.resume_scan_workers()
     monkeypatch.setattr(poc, "evidence_mutations_blocked", lambda _path: False)
-    monkeypatch.setattr(poc, "_queued_run_ids", lambda _path: [run_id])
     monkeypatch.setattr(
-        poc, "get_scan_run_plan", lambda *_args: {"run_id": run_id, "status": "queued"},
+        poc, "claim_next_queued_scan",
+        lambda *_args: {"run_id": run_id, "status": "dispatching"},
     )
     monkeypatch.setattr(poc, "with_queue_state", lambda manifest, _path: manifest)
     monkeypatch.setattr(poc, "_new_scan_worker_thread", lambda *_args, **_kwargs: fake)
@@ -178,6 +178,17 @@ def test_schedule_admission_cannot_cross_shutdown_fence(tmp_path: Path, monkeypa
     monkeypatch.setattr(poc, "get_schedule_scope_context", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(poc, "schedule_target_chunks", lambda *_args: [["192.0.2.1"]])
     monkeypatch.setattr(poc, "_store_scan_schedule", lambda value, _path: value)
+    monkeypatch.setattr(
+        poc,
+        "prepare_schedule_occurrence",
+        lambda *_args, **_kwargs: {
+            "occurrence_id": "c" * 32,
+            "batch_id": "c" * 32,
+            "status": "waiting",
+            "created": True,
+            "chunk_count": 1,
+        },
+    )
     monkeypatch.setattr(poc, "_new_schedule_batch_thread", lambda *_args, **_kwargs: fake)
     try:
         stopped = _assert_shutdown_waits_for_atomic_admission(

@@ -245,6 +245,7 @@ def _register_record(
 
         init_pipeline_intake_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
         if transaction_guard is not None:
             transaction_guard(db)
         return _register_record_on_connection(
@@ -405,7 +406,8 @@ def link_artifact(record: dict, destination: Path) -> str:
 @guarded_evidence_mutation(lambda db_path, *args, **kwargs: db_path)
 def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                              source_kind: str, filenames,
-                             expected_files: dict[str, dict] | None = None) -> None:
+                             expected_files: dict[str, dict] | None = None,
+                             transaction_guard: Callable[[sqlite3.Connection], None] | None = None) -> None:
     """Called after writers close, never from history/read endpoints."""
     records, errors = [], []
     scope_context = get_run_scope_context(db_path, manifest["run_id"])
@@ -436,6 +438,7 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
                 run_id=manifest["run_id"], scope_context=scope_context,
                 expected_sha256=(expected or {}).get("sha256"),
                 expected_size_bytes=(expected or {}).get("size_bytes"),
+                transaction_guard=transaction_guard,
             )
             record["storage_mode"] = link_artifact(record, path)
             records.append({

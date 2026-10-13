@@ -107,12 +107,13 @@ def test_manual_scans_join_fifo_queue_instead_of_being_rejected(monkeypatch, tmp
     assert started == [first["run_id"]]
     assert first["owner"] == "alpha"
     assert second["owner"] == "bravo"
-    assert second["queue_position"] == 2
+    assert second["queue_position"] == 1
     with poc.ACTIVE_RUNS_LOCK:
         poc.ACTIVE_RUNS.pop(first["run_id"], None)
     first_manifest = poc.get_scan_run_plan(first["run_id"], db_path)
     first_manifest["status"] = "completed"
-    poc.update_scan_run_manifest(first_manifest, db_path)
+    first_manifest["completed_at"] = poc.utc_now()
+    poc.publish_scan_terminal(first_manifest, db_path=db_path)
     poc.dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
     assert started == [first["run_id"], second["run_id"]]
 

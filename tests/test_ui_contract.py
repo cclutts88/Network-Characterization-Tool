@@ -368,7 +368,7 @@ def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
     assert "guide.classList.toggle('nct-guide-pinned',guidePinned)" in SHELL_SCRIPT
     assert "body.nct-shell>header{position:sticky!important;top:0!important" in SHELL_SCRIPT
     assert "Waiting scans survive an NCT restart" in SHELL_SCRIPT
-    assert "that occurrence and its remaining chunks will not resume" in SHELL_SCRIPT
+    assert "the occurrence becomes Interrupted — Needs attention" in SHELL_SCRIPT
     assert "former scanner or capture process stopped" in SHELL_SCRIPT
     assert "Collection and saved-analysis states remain separate" in SHELL_SCRIPT
 
@@ -471,20 +471,29 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "chunking_enabled" in html
     assert "showChunkingOptions" in html
     assert "size===256" in html
-    assert "One continuous unchunked scan queued" in html
+    assert "One new unchunked occurrence saved" in html
     assert "Pause between chunks (seconds)" in html
     assert "Custom hours" in html
     assert '<option value="monthly">Monthly</option>' in html
     assert "Hours between scans" in html
     assert "Every few minutes" not in html
     assert "cadence_hours" in html
-    assert "Scheduling conflict" in html
-    assert "Delayed occurrences" in html
-    assert "Consider changing this schedule time" in html
+    assert "Repeated delays — review schedule" in html
+    assert "Delayed — scanner busy" in html
+    assert "Review occurrences" in html
+    assert "occurrences.map" in html
+    assert "Getting ready to scan" in html
+    assert "Network contact has not started yet" in html
+    assert "Started automatically" in html
+    assert "Started manually" in html
+    assert "Active collection is disabled in this deployment" in html
+    assert "On a collection-enabled NCT" in SHELL_SCRIPT
+    assert "instead of a backlog" in html
+    assert "Technical identity" in html
     assert "conflict_flagged" in html
     assert "Owner / audit" in html
     assert "recorded change" in html
-    assert "last_occurrence_status" in html
+    assert "latest_occurrence" in html
     assert "chunk_delay_seconds" in html
     assert "Chunks never overlap" in html
     assert 'id="currentProgress"' in html
@@ -493,7 +502,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Waiting scans run in order after the active scan" in html
     assert "Cancel pending scan" in html
     assert "waiting=runs.filter(run=>run.status==='queued')" in html
-    assert "active=runs.find(run=>['running','awaiting_fallback_approval'].includes(run.status))" in html
+    assert "active=runs.find(run=>['dispatching','running','awaiting_fallback_approval'].includes(run.status))" in html
     assert "openWaiting=new Set" in html
     assert "item.open=openWaiting.has(item.dataset.queueRun)" in html
     assert "Waiting scans are shown below and will start in queue order." in html
@@ -501,7 +510,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Retained waiting scans cannot start in this analysis-only deployment" in html
     assert "function showActiveEmpty" in html
     assert "currentLive=false" in html
-    assert "currentLive=['running','awaiting_fallback_approval'].includes(state)" in html
+    assert "currentLive=['dispatching','running','awaiting_fallback_approval'].includes(state)" in html
     assert "currentLive=['queued','running','awaiting_fallback_approval'].includes(state)" not in html
     assert 'role="progressbar"' in html
     assert 'id="currentHostsLabel">confirmed responsive hosts' in html

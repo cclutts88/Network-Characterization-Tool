@@ -13,6 +13,7 @@ import socket
 import sqlite3
 import subprocess
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -98,12 +99,42 @@ from app.scan_history_index import (
     sync_scan_history_manifest,
 )
 from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
+from app.scheduled_work import (
+    abandon_chunk_after_worker_error,
+    WorkLeaseConflict,
+    bind_chunk_scan_run_on_connection,
+    claim_next_chunk,
+    close_reviewed_occurrence,
+    content_digest,
+    definition_identity,
+    get_occurrence,
+    init_scheduled_work_storage,
+    list_schedule_occurrences,
+    migrate_legacy_schedules,
+    prepare_occurrence,
+    publish_chunk_terminal,
+    publish_chunk_terminal_on_connection,
+    recover_schedule_occurrences,
+    register_schedule_definition_on_connection,
+    mark_chunk_contact_starting_on_connection,
+)
+from app.work_coordination import (
+    WorkLease,
+    WorkLeaseLost,
+    WorkRecoveryRequired,
+    acquire_work_lease_on_connection,
+    assert_work_lease_on_connection,
+    init_work_coordination_storage,
+    release_work_lease_on_connection,
+    renew_work_lease,
+)
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
 RUNS_DIR_NAME = "scan-runs"
 MAX_EXPANDED_ADDRESSES = 65536
 MAX_ACTIVE_RUNS = 1
+SCAN_CAPACITY_LEASE_KEY = "scan-capacity:primary"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # A few early proof-of-concept imports were persisted with a truncated digest.
 # Keep the normal SHA-256 validation strict for new artifacts, but allow the
@@ -351,6 +382,41 @@ class ScheduleProfileChange(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("The analyst changing the schedule is required")
+        return cleaned
+
+
+class ScheduleRunNow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(min_length=16, max_length=100)
+    requested_by: str | None = Field(default=None, max_length=100)
+
+    @field_validator("request_id", "requested_by")
+    @classmethod
+    def clean_run_now_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("This field cannot be blank")
+        return cleaned
+
+
+class ScheduleRecoveryReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewed_by: str | None = Field(default=None, max_length=100)
+    reason: str = Field(min_length=8, max_length=500)
+    confirmed_former_contact_stopped: bool
+
+    @field_validator("reviewed_by", "reason")
+    @classmethod
+    def clean_recovery_review(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("This field cannot be blank")
         return cleaned
 
 
@@ -684,12 +750,12 @@ def _persist_active_run_cancellations_in_transaction(
     rows = db.execute(
         """SELECT manifest_json FROM scan_runs
              WHERE json_extract(manifest_json, '$.status')
-                   IN ('running', 'awaiting_fallback_approval')
+                   IN ('dispatching', 'running', 'awaiting_fallback_approval')
              ORDER BY created_at ASC, rowid ASC"""
     ).fetchall()
     for row in rows:
         manifest = json.loads(row[0])
-        if manifest.get("status") not in {"running", "awaiting_fallback_approval"}:
+        if manifest.get("status") not in {"dispatching", "running", "awaiting_fallback_approval"}:
             continue
         run_id = manifest["run_id"]
         targets = [
@@ -1109,6 +1175,8 @@ def build_scan_run_manifest(
     timeout_seconds: int | None = None,
     status: str = "planned",
     db_path: Path = DB_PATH,
+    reserved_run_id: str | None = None,
+    work_claim: dict | None = None,
 ) -> dict:
     # New clients send resolved ``targets`` for legacy preview/package paths as
     # well as explicit Saved Network IDs.  When IDs are present, only the
@@ -1208,7 +1276,7 @@ def build_scan_run_manifest(
         "application_version": APP_VERSION,
         "build_id": BUILD_ID,
         "build_commit": BUILD_COMMIT,
-        "run_id": uuid.uuid4().hex,
+        "run_id": reserved_run_id or uuid.uuid4().hex,
         "name": plan.name,
         "display_name": display_name,
         "created_at": created_at,
@@ -1280,6 +1348,7 @@ def build_scan_run_manifest(
         "exact_capture_command": shlex.join(capture_argv) if capture_argv else None,
         "artifacts": [],
         "progress": progress,
+        "work_claim": work_claim,
     }
 
 
@@ -1563,6 +1632,8 @@ def init_poc_storage(db_path: Path = DB_PATH) -> None:
                         ),
                     ),
                 )
+        init_scheduled_work_storage(db_path)
+        migrate_legacy_schedules(db_path)
         init_scan_history_index_storage(db_path)
         init_scan_scope_context_storage(db_path)
         info = db_path.stat()
@@ -1749,15 +1820,29 @@ def _next_month(moment: datetime, anchor_day: int) -> datetime:
     return moment.replace(year=year, month=month, day=day)
 
 
+def _month_from_anchor(anchor: datetime, months: int, anchor_day: int) -> datetime:
+    absolute = anchor.year * 12 + (anchor.month - 1) + max(0, int(months))
+    year, month_index = divmod(absolute, 12)
+    month = month_index + 1
+    day = min(anchor_day, calendar.monthrange(year, month)[1])
+    return anchor.replace(year=year, month=month, day=day)
+
+
 def next_schedule_time(schedule: dict, after: datetime) -> datetime | None:
     """Advance a schedule after dispatch, preserving its original cadence."""
     if schedule["cadence"] == "once":
         return None
     current = _as_utc(schedule["next_run_at"])
     if schedule["cadence"] == "monthly":
-        anchor_day = _as_utc(schedule.get("first_run_at") or current).day
-        while current <= after:
-            current = _next_month(current, anchor_day)
+        anchor = _as_utc(schedule.get("first_run_at") or current)
+        anchor_day = anchor.day
+        after = _as_utc(after)
+        month_distance = max(
+            0, (after.year - anchor.year) * 12 + after.month - anchor.month
+        )
+        current = _month_from_anchor(anchor, month_distance, anchor_day)
+        if current <= after:
+            current = _month_from_anchor(anchor, month_distance + 1, anchor_day)
         return current
     delta = {
         "interval": timedelta(minutes=int(schedule.get("interval_minutes") or 60)),
@@ -1766,8 +1851,10 @@ def next_schedule_time(schedule: dict, after: datetime) -> datetime | None:
         "daily": timedelta(days=1),
         "weekly": timedelta(weeks=1),
     }[schedule["cadence"]]
-    while current <= after:
-        current += delta
+    after = _as_utc(after)
+    if current <= after:
+        steps = int((after - current) // delta) + 1
+        current += delta * steps
     return current
 
 
@@ -1809,6 +1896,23 @@ def _append_schedule_history(
 def _store_scan_schedule(schedule: dict, db_path: Path = DB_PATH) -> dict:
     schedule["updated_at"] = utc_now()
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
+            (schedule["schedule_id"],),
+        ).fetchone()
+        if row is None:
+            raise KeyError("Scan schedule not found")
+        current = json.loads(row[0])
+        current_control_revision = int(current.get("control_revision") or 0)
+        supplied_control_revision = int(schedule.get("control_revision") or 0)
+        if current_control_revision > supplied_control_revision:
+            for key in (
+                "enabled", "next_run_at", "control_revision",
+                "modification_history", "last_changed_by", "last_changed_at",
+            ):
+                if key in current:
+                    schedule[key] = current[key]
         db.execute(
             """
             UPDATE scan_schedules
@@ -1853,6 +1957,8 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
     created_at = utc_now()
     definition = {
         "schema_version": 5,
+        "definition_version": 1,
+        "control_revision": 1,
         "schedule_id": uuid.uuid4().hex,
         "name": request.name,
         "created_at": created_at,
@@ -1926,6 +2032,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "recovery_count": 0,
         "implementation_status": "active_scheduler",
     }
+    definition["definition_digest"] = definition_identity(definition)[1]
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         context = resolve_reviewed_scope_context(
@@ -1951,6 +2058,9 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
                 definition["profile_version"], json.dumps(definition, sort_keys=True),
             ),
         )
+        register_schedule_definition_on_connection(
+            db, definition, created_by=definition["created_by"]
+        )
         insert_schedule_scope_context(db, definition["schedule_id"], context)
     return definition
 
@@ -1966,6 +2076,11 @@ def list_scan_schedules(db_path: Path = DB_PATH) -> list[dict]:
         if schedule.get("last_run_id"):
             run = get_scan_run_plan(schedule["last_run_id"], db_path)
             schedule["last_run_status"] = run.get("status") if run else "not_found"
+        occurrences = list_schedule_occurrences(
+            db_path, schedule["schedule_id"], limit=5
+        )
+        schedule["occurrences"] = occurrences
+        schedule["latest_occurrence"] = occurrences[0] if occurrences else None
     return schedules
 
 
@@ -1987,6 +2102,15 @@ def set_scan_schedule_enabled(
         schedule = json.loads(row[0])
         previous = bool(schedule.get("enabled"))
         if enabled:
+            unresolved = db.execute(
+                """SELECT 1 FROM scan_schedule_occurrences
+                     WHERE schedule_id = ? AND state = 'needs_attention' LIMIT 1""",
+                (schedule_id,),
+            ).fetchone()
+            if unresolved is not None:
+                raise RuntimeError(
+                    "Review and close the interrupted occurrence before enabling future occurrences"
+                )
             resolve_schedule_scope_context_in_transaction(db, schedule_id)
         schedule["enabled"] = bool(enabled)
         actor = changed_by or schedule.get("last_changed_by") or schedule["created_by"]
@@ -2030,6 +2154,7 @@ def set_scan_schedule_enabled(
                         schedule, datetime.now(timezone.utc)
                     ).isoformat()
         if previous != bool(enabled):
+            schedule["control_revision"] = int(schedule.get("control_revision") or 0) + 1
             _append_schedule_history(
                 schedule,
                 "enabled" if enabled else "paused",
@@ -2063,6 +2188,13 @@ def change_scan_schedule_profile(
             raise RuntimeError(
                 "Pause and wait for the active scheduled batch to finish before changing its profile"
             )
+    if any(
+        item["state"] in {"waiting", "preparing", "active", "needs_attention"}
+        for item in list_schedule_occurrences(db_path, schedule_id, limit=100)
+    ):
+        raise RuntimeError(
+            "Review or finish the current occurrence before changing this schedule's profile"
+        )
     profile = get_scan_profile(request.profile_id, request.profile_version, db_path)
     if profile is None:
         raise ValueError("The selected saved profile version does not exist")
@@ -2079,15 +2211,41 @@ def change_scan_schedule_profile(
                 else "require_approval"
             ),
             "profile_changed_at": utc_now(),
+            "definition_version": int(schedule.get("definition_version") or 1) + 1,
         }
     )
+    schedule["definition_digest"] = definition_identity(schedule)[1]
     _append_schedule_history(
         schedule,
         "profile_changed",
         request.changed_by,
         f"Changed pinned profile from {previous_profile} to {profile['name']} v{profile['version']}",
     )
-    return _store_scan_schedule(schedule, db_path)
+    schedule["updated_at"] = utc_now()
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError("Scan schedule not found")
+        current = json.loads(row[0])
+        if int(current.get("definition_version") or 1) + 1 != schedule["definition_version"]:
+            raise RuntimeError("The schedule changed while its profile was being updated")
+        db.execute(
+            """UPDATE scan_schedules
+                  SET name = ?, profile_id = ?, profile_version = ?, definition_json = ?
+                WHERE schedule_id = ?""",
+            (
+                schedule["name"], schedule["profile_id"], schedule["profile_version"],
+                json.dumps(schedule, sort_keys=True), schedule_id,
+            ),
+        )
+        register_schedule_definition_on_connection(
+            db, schedule, created_by=request.changed_by
+        )
+    return schedule
 
 
 def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
@@ -2116,6 +2274,7 @@ def insert_reviewed_scan_run(
     db_path: Path = DB_PATH,
     *,
     audit_event: str | None = None,
+    scheduled_chunk_claim: tuple[str, int, WorkLease] | None = None,
 ) -> None:
     """Atomically recheck reviewed context, retain the run, and snapshot context."""
     init_poc_storage(db_path)
@@ -2152,6 +2311,15 @@ def insert_reviewed_scan_run(
                 manifest["profile"], json.dumps(manifest, sort_keys=True),
             ),
         )
+        if scheduled_chunk_claim is not None:
+            occurrence_id, chunk_number, lease = scheduled_chunk_claim
+            bind_chunk_scan_run_on_connection(
+                db,
+                occurrence_id=occurrence_id,
+                chunk_number=chunk_number,
+                scan_run_id=manifest["run_id"],
+                lease=lease,
+            )
         sync_scan_history_manifest(db, manifest)
 
         insert_run_scope_context(db, manifest["run_id"], context)
@@ -2183,19 +2351,45 @@ def insert_reviewed_scan_run(
             )
 
 
+def _assert_manifest_fences_on_connection(db, manifest: dict) -> None:
+    execution_claim = manifest.get("execution_claim")
+    if isinstance(execution_claim, dict):
+        assert_work_lease_on_connection(db, execution_claim)
+    scheduled_claim = manifest.get("work_claim")
+    if isinstance(scheduled_claim, dict):
+        assert_work_lease_on_connection(db, scheduled_claim)
+
+
 def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
     init_pipeline_intake_storage(db_path)
     with connect_database(db_path) as db:
-        db.execute(
-            """
-            UPDATE scan_runs SET status = ?, manifest_json = ? WHERE run_id = ?
-            """,
-            (
-                manifest["status"],
-                json.dumps(manifest, sort_keys=True),
-                manifest["run_id"],
-            ),
-        )
+        db.execute("BEGIN IMMEDIATE")
+        _assert_manifest_fences_on_connection(db, manifest)
+        execution_claim = manifest.get("execution_claim")
+        if isinstance(execution_claim, dict):
+            changed = db.execute(
+                """UPDATE scan_runs SET status = ?, manifest_json = ?
+                     WHERE run_id = ?
+                       AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+                (
+                    manifest["status"], json.dumps(manifest, sort_keys=True),
+                    manifest["run_id"], str(execution_claim["lease_id"]),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise WorkLeaseLost(
+                    "This scan worker can no longer update the saved scan"
+                )
+        else:
+            db.execute(
+                """UPDATE scan_runs SET status = ?, manifest_json = ?
+                     WHERE run_id = ?""",
+                (
+                    manifest["status"],
+                    json.dumps(manifest, sort_keys=True),
+                    manifest["run_id"],
+                ),
+            )
         sync_scan_history_manifest(db, manifest)
         registered_aggregate_count = int(db.execute(
             """SELECT COUNT(*) FROM artifact_observations
@@ -2211,6 +2405,370 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
             and (registered_aggregate_count > 0 or artifact_registration_finished)
         ):
             record_automated_nmap_intent(db, manifest["run_id"])
+
+
+def publish_scan_contact_starting(
+    manifest: dict, *, db_path: Path = DB_PATH
+) -> bool:
+    """Publish scan running state and scheduled contact start atomically."""
+    execution_claim = manifest.get("execution_claim")
+    if not isinstance(execution_claim, dict):
+        raise WorkLeaseConflict("The scan has no current execution fence")
+    scheduled_claim = manifest.get("work_claim")
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        _assert_manifest_fences_on_connection(db, manifest)
+        cancellation = db.execute(
+            """SELECT cancellation_requested_at, cancellation_requested_by,
+                      cancellation_cause, cancellation_detail
+                 FROM scan_run_control
+                WHERE run_id = ? AND cancellation_requested_at IS NOT NULL
+                  AND cancellation_acknowledged_at IS NULL""",
+            (manifest["run_id"],),
+        ).fetchone()
+        if cancellation is not None:
+            cancelled = _close_precontact_cancellation_on_connection(
+                db, manifest, cancellation
+            )
+            manifest.clear()
+            manifest.update(cancelled)
+            return False
+        manifest["started_at"] = utc_now()
+        manifest["status"] = "running"
+        if isinstance(scheduled_claim, dict):
+            mark_chunk_contact_starting_on_connection(
+                db,
+                occurrence_id=str(scheduled_claim["occurrence_id"]),
+                chunk_number=int(scheduled_claim["chunk_number"]),
+                lease=scheduled_claim,
+            )
+        changed = db.execute(
+            """UPDATE scan_runs SET status = 'running', manifest_json = ?
+                 WHERE run_id = ? AND status = 'dispatching'
+                   AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+            (
+                json.dumps(manifest, sort_keys=True),
+                manifest["run_id"],
+                str(execution_claim["lease_id"]),
+            ),
+        ).rowcount
+        if changed != 1:
+            raise WorkLeaseLost("This scan worker can no longer start network contact")
+        sync_scan_history_manifest(db, manifest)
+        db.execute(
+            """INSERT INTO scan_run_audit(
+                   run_id, event, actor, changed_at, details
+               ) VALUES (?, 'started', ?, ?, ?)""",
+            (
+                manifest["run_id"],
+                manifest.get("owner") or manifest.get("executed_by") or "system",
+                manifest["started_at"],
+                "Analyzer capacity assigned; scan execution started",
+            ),
+        )
+    return True
+
+
+def _close_precontact_cancellation_on_connection(
+    db,
+    manifest: dict,
+    cancellation,
+) -> dict:
+    """Close a dispatching run without contact while both current fences are held."""
+    execution_claim = manifest.get("execution_claim")
+    if not isinstance(execution_claim, dict):
+        raise WorkLeaseConflict("The scan has no current execution fence")
+    requested_at, requested_by, cause, detail = cancellation
+    changed_at = utc_now()
+    reason = (
+        "Cancelled before network contact"
+        + (f" by {requested_by}" if requested_by else "")
+        + (f": {detail}" if detail else "")
+    )[:500]
+    cancelled = dict(manifest)
+    cancelled.update({
+        "status": "cancelled",
+        "completed_at": changed_at,
+        "success": False,
+        "execution_note": reason,
+        "cancellation_cause": cause,
+        "cancellation_requested_at": requested_at,
+    })
+    cancelled.pop("started_at", None)
+    cancelled.pop("execution_claim", None)
+    if isinstance(cancelled.get("progress"), dict):
+        update_scan_progress(
+            cancelled["progress"], phase="cancelled", updated_at=changed_at
+        )
+    scheduled_claim = manifest.get("work_claim")
+    if isinstance(scheduled_claim, dict):
+        publish_chunk_terminal_on_connection(
+            db,
+            occurrence_id=str(scheduled_claim["occurrence_id"]),
+            chunk_number=int(scheduled_claim["chunk_number"]),
+            terminal_state="cancelled",
+            reason=reason,
+            lease=scheduled_claim,
+            contact_started=False,
+        )
+    changed = db.execute(
+        """UPDATE scan_runs SET status = 'cancelled', manifest_json = ?
+             WHERE run_id = ? AND status = 'dispatching'
+               AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+        (
+            json.dumps(cancelled, sort_keys=True),
+            cancelled["run_id"],
+            str(execution_claim["lease_id"]),
+        ),
+    ).rowcount
+    if changed != 1:
+        raise WorkLeaseLost("This scan worker can no longer close the cancelled run")
+    sync_scan_history_manifest(db, cancelled)
+    release_work_lease_on_connection(
+        db, execution_claim, detail="Cancelled before network contact"
+    )
+    db.execute(
+        """UPDATE scan_run_control SET cancellation_acknowledged_at = ?
+             WHERE run_id = ? AND cancellation_acknowledged_at IS NULL""",
+        (changed_at, cancelled["run_id"]),
+    )
+    db.execute(
+        """INSERT INTO scan_run_audit(
+               run_id, event, actor, changed_at, details
+           ) VALUES (?, 'cancelled', ?, ?, ?)""",
+        (
+            cancelled["run_id"], requested_by or "system", changed_at, reason,
+        ),
+    )
+    return cancelled
+
+
+def requeue_scan_after_precontact_failure(
+    manifest: dict,
+    *,
+    reason: str,
+    db_path: Path = DB_PATH,
+    automatic_retry_limit: int = 1,
+    retry_if_clear: bool = True,
+) -> bool:
+    """Release current fences and retain the same run for one bounded safe retry."""
+    execution_claim = manifest.get("execution_claim")
+    if not isinstance(execution_claim, dict):
+        return False
+    if manifest.get("started_at") or manifest.get("status") != "dispatching":
+        return False
+    failure_count = int(manifest.get("precontact_start_failure_count") or 0) + 1
+    scheduled_claim = manifest.get("work_claim")
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        _assert_manifest_fences_on_connection(db, manifest)
+        cancellation = db.execute(
+            """SELECT cancellation_requested_at, cancellation_requested_by,
+                      cancellation_cause, cancellation_detail
+                 FROM scan_run_control
+                WHERE run_id = ? AND cancellation_requested_at IS NOT NULL
+                  AND cancellation_acknowledged_at IS NULL""",
+            (manifest["run_id"],),
+        ).fetchone()
+        if cancellation is not None:
+            retained = _close_precontact_cancellation_on_connection(
+                db, manifest, cancellation
+            )
+            manifest.clear()
+            manifest.update(retained)
+            return True
+        if not retry_if_clear:
+            return False
+        if failure_count > max(0, int(automatic_retry_limit)):
+            manifest["precontact_start_failure_count"] = failure_count
+            return False
+        retained = dict(manifest)
+        retained["status"] = "queued"
+        retained["precontact_start_failure_count"] = failure_count
+        retained["last_precontact_start_error"] = str(reason)[:500]
+        retained.pop("execution_claim", None)
+        if isinstance(scheduled_claim, dict):
+            row = db.execute(
+                """SELECT state, contact_phase FROM scan_schedule_chunks
+                     WHERE occurrence_id = ? AND chunk_number = ?""",
+                (
+                    str(scheduled_claim["occurrence_id"]),
+                    int(scheduled_claim["chunk_number"]),
+                ),
+            ).fetchone()
+            if row is None or row[0] != "preparing" or row[1] != "preparing":
+                return False
+            db.execute(
+                """UPDATE scan_schedule_chunks
+                      SET state = 'waiting', contact_phase = 'not_started',
+                          status_reason = ?
+                    WHERE occurrence_id = ? AND chunk_number = ?""",
+                (
+                    f"Local start failed before network contact; retry {failure_count} of {automatic_retry_limit}",
+                    str(scheduled_claim["occurrence_id"]),
+                    int(scheduled_claim["chunk_number"]),
+                ),
+            )
+            db.execute(
+                """UPDATE scan_schedule_occurrences
+                      SET state = 'waiting', status_reason = ?
+                    WHERE occurrence_id = ?""",
+                (
+                    "Local start failed before network contact; the same saved run is waiting for one safe retry",
+                    str(scheduled_claim["occurrence_id"]),
+                ),
+            )
+        changed = db.execute(
+            """UPDATE scan_runs SET status = 'queued', manifest_json = ?
+                 WHERE run_id = ? AND status = 'dispatching'
+                   AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+            (
+                json.dumps(retained, sort_keys=True),
+                retained["run_id"],
+                str(execution_claim["lease_id"]),
+            ),
+        ).rowcount
+        if changed != 1:
+            raise WorkLeaseLost("This scan worker can no longer retain a safe retry")
+        sync_scan_history_manifest(db, retained)
+        if isinstance(scheduled_claim, dict):
+            release_work_lease_on_connection(
+                db,
+                scheduled_claim,
+                detail="Released after local failure before network contact",
+            )
+        release_work_lease_on_connection(
+            db,
+            execution_claim,
+            detail="Released after local failure before network contact",
+        )
+        db.execute(
+            """INSERT INTO scan_run_audit(
+                   run_id, event, actor, changed_at, details
+               ) VALUES (?, 'precontact_retry_saved', ?, ?, ?)""",
+            (
+                retained["run_id"],
+                retained.get("owner") or retained.get("executed_by") or "system",
+                utc_now(),
+                str(reason)[:500],
+            ),
+        )
+    manifest.clear()
+    manifest.update(retained)
+    return True
+
+
+def publish_scheduled_scan_terminal(
+    manifest: dict,
+    claim: dict,
+    *,
+    db_path: Path = DB_PATH,
+) -> str:
+    """Publish scheduled scan authority, chunk state, and fence release together."""
+    status = str(manifest["status"])
+    if status in {"completed", "completed_without_nmap"}:
+        chunk_state = "complete"
+    elif status == "cancelled":
+        chunk_state = "cancelled"
+    else:
+        chunk_state = "needs_attention"
+    reason = manifest.get("error") or manifest.get("execution_note") or (
+        f"Scan ended {status}"
+    )
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        _assert_manifest_fences_on_connection(db, manifest)
+        execution_claim = manifest.get("execution_claim")
+        if not isinstance(execution_claim, dict):
+            raise WorkLeaseConflict("The scheduled scan has no execution fence")
+        changed = db.execute(
+            """UPDATE scan_runs SET status = ?, manifest_json = ?
+                WHERE run_id = ?
+                  AND json_extract(manifest_json, '$.work_claim.lease_id') = ?
+                  AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+            (
+                status,
+                json.dumps(manifest, sort_keys=True),
+                manifest["run_id"],
+                str(claim["lease_id"]),
+                str(execution_claim["lease_id"]),
+            ),
+        ).rowcount
+        if changed != 1:
+            raise WorkLeaseConflict(
+                "This scheduled scan can no longer publish its terminal evidence"
+            )
+        sync_scan_history_manifest(db, manifest)
+        registered_aggregate_count = int(db.execute(
+            """SELECT COUNT(*) FROM artifact_observations
+               WHERE source_kind = 'nmap_scan' AND source_ref = ?
+                 AND original_filename = 'scan.xml'""",
+            (manifest["run_id"],),
+        ).fetchone()[0])
+        if status == "completed" and (
+            registered_aggregate_count > 0
+            or isinstance(manifest.get("artifact_registry"), dict)
+        ):
+            record_automated_nmap_intent(db, manifest["run_id"])
+        occurrence_state = publish_chunk_terminal_on_connection(
+            db,
+            occurrence_id=str(claim["occurrence_id"]),
+            chunk_number=int(claim["chunk_number"]),
+            terminal_state=chunk_state,
+            reason=str(reason),
+            lease=claim,
+        )
+        release_work_lease_on_connection(
+            db, execution_claim, detail=f"Scan ended {status}"
+        )
+        db.execute(
+            """INSERT INTO scan_run_audit(
+                   run_id, event, actor, changed_at, details
+               ) VALUES (?, ?, ?, ?, ?)""",
+            (
+                manifest["run_id"], status,
+                manifest.get("owner") or manifest.get("executed_by") or "system",
+                manifest["completed_at"], str(reason)[:500],
+            ),
+        )
+    return occurrence_state
+
+
+def publish_scan_terminal(manifest: dict, *, db_path: Path = DB_PATH) -> None:
+    """Publish an unscheduled terminal scan and release shared capacity atomically."""
+    execution_claim = manifest.get("execution_claim")
+    if not isinstance(execution_claim, dict):
+        update_scan_run_manifest(manifest, db_path)
+        return
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        _assert_manifest_fences_on_connection(db, manifest)
+        changed = db.execute(
+            """UPDATE scan_runs SET status = ?, manifest_json = ?
+                 WHERE run_id = ?
+                   AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+            (
+                manifest["status"], json.dumps(manifest, sort_keys=True),
+                manifest["run_id"], str(execution_claim["lease_id"]),
+            ),
+        ).rowcount
+        if changed != 1:
+            raise WorkLeaseLost("This scan worker can no longer publish its result")
+        sync_scan_history_manifest(db, manifest)
+        registered_aggregate_count = int(db.execute(
+            """SELECT COUNT(*) FROM artifact_observations
+                 WHERE source_kind = 'nmap_scan' AND source_ref = ?
+                   AND original_filename = 'scan.xml'""",
+            (manifest["run_id"],),
+        ).fetchone()[0])
+        if manifest["status"] == "completed" and (
+            registered_aggregate_count > 0
+            or isinstance(manifest.get("artifact_registry"), dict)
+        ):
+            record_automated_nmap_intent(db, manifest["run_id"])
+        release_work_lease_on_connection(
+            db, execution_claim, detail=f"Scan ended {manifest['status']}"
+        )
 
 
 class NoScannableTargetsError(RuntimeError):
@@ -2322,8 +2880,9 @@ def certify_scan_contact_phase(
             (run_dir / "discovery-targets.txt").write_text(
                 "\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8"
             )
-        write_manifest_file(manifest, data_dir)
     update_scan_run_manifest(manifest, db_path)
+    if run_dir.exists():
+        write_manifest_file(manifest, data_dir)
     append_scan_audit(
         db_path,
         run_id=manifest["run_id"],
@@ -2405,6 +2964,9 @@ def prepare_scan_run(
     request: ScanRunRequest,
     db_path: Path = DB_PATH,
     interfaces: set[str] | None = None,
+    *,
+    reserved_run_id: str | None = None,
+    scheduled_chunk_claim: tuple[str, int, WorkLease] | None = None,
 ) -> dict:
     validate_runtime_interface(request.interface, interfaces)
     manifest = build_scan_run_manifest(
@@ -2413,8 +2975,23 @@ def prepare_scan_run(
         timeout_seconds=request.timeout_seconds,
         status="queued",
         db_path=db_path,
+        reserved_run_id=reserved_run_id,
+        work_claim=(
+            {
+                **scheduled_chunk_claim[2].as_claim(),
+                "occurrence_id": scheduled_chunk_claim[0],
+                "chunk_number": int(scheduled_chunk_claim[1]),
+            }
+            if scheduled_chunk_claim is not None else None
+        ),
     )
-    insert_reviewed_scan_run(manifest, request, db_path, audit_event="queued")
+    insert_reviewed_scan_run(
+        manifest,
+        request,
+        db_path,
+        audit_event="queued",
+        scheduled_chunk_claim=scheduled_chunk_claim,
+    )
     return manifest
 
 
@@ -2446,7 +3023,7 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int
 def list_active_scan_run_plans(db_path: Path = DB_PATH) -> list[dict]:
     """Return all queued or executing runs without applying a history window first."""
     init_poc_storage(db_path)
-    active_states = ("queued", "running", "awaiting_fallback_approval")
+    active_states = ("queued", "dispatching", "running", "awaiting_fallback_approval")
     placeholders = ",".join("?" for _ in active_states)
     with connect_database(db_path) as db:
         rows = db.execute(
@@ -2626,7 +3203,7 @@ def attribute_scan_run_networks(
     manifest = get_scan_run_plan(run_id, db_path)
     if manifest is None:
         raise KeyError("Scan run not found")
-    if manifest.get("status") in {"queued", "running", "awaiting_fallback_approval"}:
+    if manifest.get("status") in {"queued", "dispatching", "running", "awaiting_fallback_approval"}:
         raise RuntimeError("Wait for the scan to finish before changing its network attribution")
 
     target_cidrs = {
@@ -2857,6 +3434,82 @@ def run_directory(run_id: str, data_dir: Path = DATA_DIR) -> Path:
     return candidate
 
 
+PRECONTACT_RUN_FILES = frozenset({
+    "targets.txt", "discovery-targets.txt", "no-strike.txt", "manifest.json",
+})
+PRECONTACT_TEMP_PREFIX = ".nct-precontact-"
+
+
+def _write_text_atomic(path: Path, value: str) -> None:
+    """Replace one small retained metadata file without following an old hard link."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=PRECONTACT_TEMP_PREFIX,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def prepare_scan_run_directory(manifest: dict, data_dir: Path = DATA_DIR) -> Path:
+    """Create or safely reuse only this run's known pre-contact planning folder."""
+    run_id = str(manifest["run_id"])
+    root = scan_data_root(data_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    raw_path = root / run_id
+    if raw_path.is_symlink():
+        raise RuntimeError("The saved pre-contact scan folder is a symbolic link")
+    run_dir = run_directory(run_id, data_dir)
+    if not run_dir.exists():
+        run_dir.mkdir()
+        return run_dir
+    if not run_dir.is_dir():
+        raise RuntimeError("The saved pre-contact scan path is not a directory")
+    if manifest.get("status") != "dispatching" or manifest.get("started_at"):
+        raise RuntimeError("An existing scan folder cannot be reused after contact started")
+    for child in run_dir.iterdir():
+        if child.is_symlink() or not child.is_file():
+            raise RuntimeError(
+                "The saved pre-contact scan folder contains an unsafe path"
+            )
+        if child.name.startswith(PRECONTACT_TEMP_PREFIX):
+            child.unlink()
+            continue
+        if child.name not in PRECONTACT_RUN_FILES:
+            raise RuntimeError(
+                f"The saved pre-contact scan folder contains unexpected output: {child.name}"
+            )
+    retained_manifest = run_dir / "manifest.json"
+    if retained_manifest.is_file():
+        try:
+            retained = json.loads(retained_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "The saved pre-contact scan manifest cannot be verified"
+            ) from exc
+        if (
+            retained.get("run_id") != run_id
+            or retained.get("started_at")
+            or retained.get("status") not in {"queued", "dispatching"}
+        ):
+            raise RuntimeError(
+                "The saved pre-contact scan manifest does not match reusable work"
+            )
+    return run_dir
+
+
 def _delete_challenge_key(scope: str, identifier: str | None = None) -> str:
     return f"{scope}:{identifier or '*'}"
 
@@ -2922,6 +3575,10 @@ def delete_scan_schedule(
             raise RuntimeError(
                 "An active scheduled batch must finish or stop before its schedule can be deleted"
             )
+    if list_schedule_occurrences(db_path, schedule_id, limit=1):
+        raise RuntimeError(
+            "This schedule has retained occurrence history and cannot be deleted. Pause future occurrences instead."
+        )
     if not consume_delete_challenge("schedule", schedule_id, confirmation):
         raise PermissionError("The confirmation string is invalid or expired")
     with connect_database(db_path) as db:
@@ -3060,8 +3717,7 @@ def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
 
 def write_manifest_file(manifest: dict, data_dir: Path = DATA_DIR) -> None:
     path = run_directory(manifest["run_id"], data_dir) / "manifest.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_text_atomic(path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
 def persist_scan_progress(
@@ -3139,7 +3795,9 @@ def terminate_process(process: object | None, grace_seconds: float = 3.0) -> Non
         pass
 
 
-def collect_artifacts(manifest: dict, data_dir: Path = DATA_DIR) -> None:
+def collect_artifacts(
+    manifest: dict, data_dir: Path = DATA_DIR, *, write_file: bool = True
+) -> None:
     run_dir = run_directory(manifest["run_id"], data_dir)
     artifacts = []
     for name, (filename, media_type) in ARTIFACT_FILES.items():
@@ -3165,7 +3823,8 @@ def collect_artifacts(manifest: dict, data_dir: Path = DATA_DIR) -> None:
         }
     )
     manifest["artifacts"] = artifacts
-    write_manifest_file(manifest, data_dir)
+    if write_file:
+        write_manifest_file(manifest, data_dir)
 
 
 def artifact_path(
@@ -3198,33 +3857,53 @@ def execute_scan_run(
     manifest = get_scan_run_plan(run_id, db_path)
     if manifest is None:
         return
-    run_dir = run_directory(run_id, data_dir)
-    run_dir.mkdir(parents=True, exist_ok=False)
-    (run_dir / "targets.txt").write_text("\n".join(manifest["targets"]) + "\n", encoding="utf-8")
+    if not isinstance(manifest.get("execution_claim"), dict):
+        claimed = claim_next_queued_scan(db_path)
+        if claimed is None or claimed.get("run_id") != run_id:
+            return
+        manifest = claimed
+    execution_claim = manifest["execution_claim"]
+    scheduled_claim = manifest.get("work_claim")
+    last_fence_renewal = time.monotonic()
+
+    def renew_execution_fences(*, force: bool = False) -> None:
+        nonlocal execution_claim, scheduled_claim, last_fence_renewal
+        now = time.monotonic()
+        if not force and now - last_fence_renewal < 10:
+            return
+        execution_claim = renew_work_lease(
+            db_path, execution_claim, lease_seconds=30
+        ).as_claim()
+        manifest["execution_claim"] = execution_claim
+        if isinstance(scheduled_claim, dict):
+            renewed = renew_work_lease(
+                db_path, scheduled_claim, lease_seconds=30
+            ).as_claim()
+            scheduled_claim = {
+                **renewed,
+                "occurrence_id": scheduled_claim["occurrence_id"],
+                "chunk_number": scheduled_claim["chunk_number"],
+            }
+            manifest["work_claim"] = scheduled_claim
+        last_fence_renewal = now
+
+    run_dir = prepare_scan_run_directory(manifest, data_dir)
+    _write_text_atomic(
+        run_dir / "targets.txt", "\n".join(manifest["targets"]) + "\n"
+    )
     if manifest.get("discovery_mode") == "fping":
         discovery_targets = expanded_discovery_targets(
             manifest["targets"], manifest.get("no_strike") or []
         )
-        (run_dir / "discovery-targets.txt").write_text(
+        _write_text_atomic(
+            run_dir / "discovery-targets.txt",
             "\n".join(discovery_targets) + ("\n" if discovery_targets else ""),
-            encoding="utf-8",
         )
-    (run_dir / "no-strike.txt").write_text(
+    _write_text_atomic(
+        run_dir / "no-strike.txt",
         "\n".join(manifest.get("no_strike") or [])
         + ("\n" if manifest.get("no_strike") else ""),
-        encoding="utf-8",
     )
-    manifest["started_at"] = utc_now()
-    manifest["status"] = "running"
-    append_scan_audit(
-        db_path,
-        run_id=run_id,
-        event="started",
-        actor=manifest.get("owner") or manifest.get("executed_by") or "system",
-        details="Analyzer capacity assigned; scan execution started",
-        changed_at=manifest["started_at"],
-    )
-    persist_scan_progress(manifest, phase="discovery", db_path=db_path, data_dir=data_dir)
     started = time.monotonic()
     deadline = started + int(manifest["timeout_seconds"])
     exit_code = None
@@ -3241,6 +3920,7 @@ def execute_scan_run(
         track_nmap: bool,
     ) -> tuple[str, int | None]:
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
+            renew_execution_fences(force=True)
             process = popen_factory(
                 argv,
                 cwd=run_dir,
@@ -3252,6 +3932,7 @@ def execute_scan_run(
             setattr(control, process_attr, process)
             last_progress_check = 0.0
             while True:
+                renew_execution_fences()
                 code = process.poll()
                 if code is not None:
                     if track_nmap:
@@ -3287,15 +3968,88 @@ def execute_scan_run(
                     last_progress_check = now
                 sleep_fn(0.2)
 
+    # Everything above this point is retained local planning only.  Keep the
+    # contact transition outside the execution try/finally so a local failure
+    # before the atomic publication reaches the worker wrapper and can retain
+    # the same run for its one bounded, fenced retry.
     try:
         certify_scan_contact_phase(
             manifest, "queue_start", db_path=db_path, data_dir=data_dir
+        )
+    except NoScannableTargetsError as exc:
+        if requeue_scan_after_precontact_failure(
+            manifest,
+            reason=str(exc),
+            db_path=db_path,
+            retry_if_clear=False,
+        ):
+            write_manifest_file(manifest, data_dir)
+        else:
+            manifest["status"] = "stopped_no_targets"
+            manifest["error"] = str(exc)
+            manifest["completed_at"] = utc_now()
+            manifest["success"] = False
+            update_scan_progress(
+                manifest["progress"],
+                phase="stopped_no_targets",
+                updated_at=manifest["completed_at"],
+            )
+            if isinstance(scheduled_claim, dict):
+                with connect_database(db_path) as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    _assert_manifest_fences_on_connection(db, manifest)
+                    publish_chunk_terminal_on_connection(
+                        db,
+                        occurrence_id=str(scheduled_claim["occurrence_id"]),
+                        chunk_number=int(scheduled_claim["chunk_number"]),
+                        terminal_state="cancelled",
+                        reason=str(exc),
+                        lease=scheduled_claim,
+                        contact_started=False,
+                    )
+                    execution_claim = manifest["execution_claim"]
+                    changed = db.execute(
+                        """UPDATE scan_runs SET status = ?, manifest_json = ?
+                             WHERE run_id = ? AND status = 'dispatching'
+                               AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+                        (
+                            manifest["status"], json.dumps(manifest, sort_keys=True),
+                            manifest["run_id"], str(execution_claim["lease_id"]),
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise WorkLeaseLost(
+                            "This scan worker can no longer stop the excluded run"
+                        )
+                    sync_scan_history_manifest(db, manifest)
+                    release_work_lease_on_connection(
+                        db, execution_claim,
+                        detail="Stopped before contact because no targets remain",
+                    )
+            else:
+                publish_scan_terminal(manifest, db_path=db_path)
+            write_manifest_file(manifest, data_dir)
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+        return
+    if not publish_scan_contact_starting(manifest, db_path=db_path):
+        write_manifest_file(manifest, data_dir)
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+        return
+
+    try:
+        persist_scan_progress(
+            manifest, phase="discovery", db_path=db_path, data_dir=data_dir
         )
         capture_error_path = run_dir / "capture-stderr.txt"
         with capture_error_path.open("wb") as capture_error_handle:
             def start_capture(label: str = "the scan") -> None:
                 if not manifest["capture_requested"]:
                     return
+                renew_execution_fences(force=True)
                 control.capture_process = popen_factory(
                     manifest["capture_command_argv"], cwd=run_dir,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -3629,19 +4383,35 @@ def execute_scan_run(
             update_scan_progress(
                 progress, phase=manifest["status"], updated_at=utc_now()
             )
-        register_finalized_files(db_path, run_dir, manifest, "nmap_scan",
-                                 [item[0] for item in ARTIFACT_FILES.values()])
-        collect_artifacts(manifest, data_dir)
-        update_scan_run_manifest(manifest, db_path)
-        start_derived_job_worker(db_path, data_dir)
-        append_scan_audit(
+        scheduled_claim = manifest.get("work_claim")
+        register_finalized_files(
             db_path,
-            run_id=run_id,
-            event=manifest["status"],
-            actor=manifest.get("owner") or manifest.get("executed_by") or "system",
-            details=manifest.get("error") or manifest.get("execution_note") or "Scan execution finished",
-            changed_at=manifest["completed_at"],
+            run_dir,
+            manifest,
+            "nmap_scan",
+            [item[0] for item in ARTIFACT_FILES.values()],
+            transaction_guard=(
+                (lambda db: _assert_manifest_fences_on_connection(db, manifest))
+            ),
         )
+        collect_artifacts(manifest, data_dir, write_file=False)
+        if isinstance(scheduled_claim, dict):
+            publish_scheduled_scan_terminal(
+                manifest, scheduled_claim, db_path=db_path
+            )
+        else:
+            publish_scan_terminal(manifest, db_path=db_path)
+        write_manifest_file(manifest, data_dir)
+        start_derived_job_worker(db_path, data_dir)
+        if not isinstance(scheduled_claim, dict):
+            append_scan_audit(
+                db_path,
+                run_id=run_id,
+                event=manifest["status"],
+                actor=manifest.get("owner") or manifest.get("executed_by") or "system",
+                details=manifest.get("error") or manifest.get("execution_note") or "Scan execution finished",
+                changed_at=manifest["completed_at"],
+            )
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
         dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
@@ -3654,9 +4424,17 @@ def launch_scan_run(
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
     interfaces: set[str] | None = None,
+    reserved_run_id: str | None = None,
+    scheduled_chunk_claim: tuple[str, int, WorkLease] | None = None,
 ) -> dict:
     """Persist one scan in the shared FIFO queue and dispatch it when capacity is free."""
-    manifest = prepare_scan_run(request, db_path, interfaces)
+    manifest = prepare_scan_run(
+        request,
+        db_path,
+        interfaces,
+        reserved_run_id=reserved_run_id,
+        scheduled_chunk_claim=scheduled_chunk_claim,
+    )
     dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
     return get_scan_run_plan(manifest["run_id"], db_path) or with_queue_state(manifest, db_path)
 
@@ -3672,12 +4450,30 @@ def _scan_worker_entry(
     try:
         execute_scan_run(run_id, control, db_path=db_path, data_dir=data_dir)
     except EvidenceMaintenanceBlocked:
+        manifest = get_scan_run_plan(run_id, db_path)
+        claim = (manifest or {}).get("work_claim")
+        if manifest is not None and isinstance(claim, dict):
+            manifest["status"] = "failed"
+            manifest["success"] = False
+            manifest["completed_at"] = utc_now()
+            manifest["error"] = "Evidence maintenance blocked scheduled scan startup"
+            publish_scheduled_scan_terminal(manifest, claim, db_path=db_path)
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
         return
     except Exception as exc:
         manifest = get_scan_run_plan(run_id, db_path)
+        if manifest is not None and requeue_scan_after_precontact_failure(
+            manifest,
+            reason=f"{type(exc).__name__}: {exc}",
+            db_path=db_path,
+        ):
+            with ACTIVE_RUNS_LOCK:
+                ACTIVE_RUNS.pop(run_id, None)
+            dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+            return
         if manifest is not None and manifest.get("status") in {
+            "dispatching",
             "queued",
             "running",
             "awaiting_fallback_approval",
@@ -3692,21 +4488,85 @@ def _scan_worker_entry(
                     phase="failed",
                     updated_at=manifest["completed_at"],
                 )
-            update_scan_run_manifest(manifest, db_path)
-            append_scan_audit(
-                db_path,
-                run_id=run_id,
-                event="failed",
-                actor="system",
-                details=manifest["error"],
-                changed_at=manifest["completed_at"],
-            )
+            claim = manifest.get("work_claim")
+            if isinstance(claim, dict):
+                publish_scheduled_scan_terminal(manifest, claim, db_path=db_path)
+            else:
+                publish_scan_terminal(manifest, db_path=db_path)
+                append_scan_audit(
+                    db_path,
+                    run_id=run_id,
+                    event="failed",
+                    actor="system",
+                    details=manifest["error"],
+                    changed_at=manifest["completed_at"],
+                )
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUNS.pop(run_id, None)
         dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
     finally:
         with ACTIVE_RUNS_LOCK:
             ACTIVE_RUN_THREADS.pop(run_id, None)
+
+
+def claim_next_queued_scan(db_path: Path = DB_PATH) -> dict | None:
+    """Atomically reserve shared scan capacity and one FIFO run across processes."""
+    init_work_coordination_storage(db_path)
+    owner_id = f"scan-worker:{uuid.uuid4().hex}"
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            """SELECT manifest_json FROM scan_runs
+                 WHERE status = 'queued' ORDER BY rowid LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            return None
+        manifest = json.loads(row[0])
+        scheduled_claim = manifest.get("work_claim")
+        if isinstance(scheduled_claim, dict):
+            try:
+                assert_work_lease_on_connection(db, scheduled_claim)
+            except WorkLeaseConflict:
+                return None
+            chunk = db.execute(
+                """SELECT state, contact_phase, scan_run_id
+                     FROM scan_schedule_chunks
+                    WHERE occurrence_id = ? AND chunk_number = ?""",
+                (
+                    str(scheduled_claim.get("occurrence_id") or ""),
+                    int(scheduled_claim.get("chunk_number") or 0),
+                ),
+            ).fetchone()
+            if (
+                chunk is None or chunk[0] != "preparing"
+                or chunk[1] not in {"not_started", "preparing"}
+                or chunk[2] != manifest["run_id"]
+            ):
+                return None
+        try:
+            execution = acquire_work_lease_on_connection(
+                db,
+                lease_key=SCAN_CAPACITY_LEASE_KEY,
+                work_kind="scan_execution",
+                work_id=manifest["run_id"],
+                owner_id=owner_id,
+                lease_seconds=30,
+                expired_policy="recovery_required",
+            )
+        except WorkLeaseConflict:
+            return None
+        manifest["execution_claim"] = execution.as_claim()
+        manifest["status"] = "dispatching"
+        manifest["dispatching_at"] = utc_now()
+        changed = db.execute(
+            """UPDATE scan_runs SET status = 'dispatching', manifest_json = ?
+                 WHERE run_id = ? AND status = 'queued'""",
+            (json.dumps(manifest, sort_keys=True), manifest["run_id"]),
+        ).rowcount
+        if changed != 1:
+            raise WorkLeaseConflict("The queued scan changed before dispatch")
+        sync_scan_history_manifest(db, manifest)
+        return manifest
 
 
 def dispatch_next_queued_run(
@@ -3720,11 +4580,8 @@ def dispatch_next_queued_run(
             return None
         if len(ACTIVE_RUNS) >= MAX_ACTIVE_RUNS:
             return None
-        queued_ids = _queued_run_ids(db_path)
-        if not queued_ids:
-            return None
-        manifest = get_scan_run_plan(queued_ids[0], db_path)
-        if manifest is None or manifest.get("status") != "queued":
+        manifest = claim_next_queued_scan(db_path)
+        if manifest is None:
             return None
         control = RunControl()
         worker = _new_scan_worker_thread(
@@ -3744,7 +4601,12 @@ def dispatch_next_queued_run(
         manifest["status"] = "failed"
         manifest["error"] = "The scan worker could not be started"
         manifest["completed_at"] = utc_now()
-        update_scan_run_manifest(manifest, db_path)
+        if isinstance(manifest.get("work_claim"), dict):
+            publish_scheduled_scan_terminal(
+                manifest, manifest["work_claim"], db_path=db_path
+            )
+        else:
+            publish_scan_terminal(manifest, db_path=db_path)
         append_scan_audit(
             db_path,
             run_id=manifest["run_id"],
@@ -3775,9 +4637,13 @@ def _new_scan_worker_thread(
 
 
 def schedule_target_chunks(
-    schedule: dict, db_path: Path = DB_PATH
+    schedule: dict, db_path: Path = DB_PATH, *, global_no_strike: list[str] | None = None
 ) -> list[list[str]]:
-    no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
+    if global_no_strike is None:
+        no_strike, _ = effective_no_strike(schedule.get("no_strike") or [], db_path)
+    else:
+        combined = [*global_no_strike, *(schedule.get("no_strike") or [])]
+        no_strike = normalize_ipv4_networks(combined, "no-strike") if combined else []
     chunking_enabled = bool(
         schedule.get("chunking_enabled", "chunk_size" in schedule)
     )
@@ -3789,6 +4655,169 @@ def schedule_target_chunks(
     )
     size = int(schedule.get("chunk_size") or 256)
     return [addresses[index:index + size] for index in range(0, len(addresses), size)]
+
+
+def _schedule_due_window(schedule: dict, moment: datetime) -> dict:
+    """Coalesce every overdue cadence point into one latest occurrence."""
+    first_due = _as_utc(schedule["next_run_at"])
+    moment = _as_utc(moment)
+    if first_due > moment:
+        raise ValueError("This schedule is not due yet")
+    cadence = schedule["cadence"]
+    if cadence == "once":
+        latest_due = first_due
+        skipped = 0
+        next_due = None
+    elif cadence == "monthly":
+        anchor = _as_utc(schedule.get("first_run_at") or first_due)
+        distance = max(
+            0, (moment.year - first_due.year) * 12 + moment.month - first_due.month
+        )
+        anchor_distance = (
+            (first_due.year - anchor.year) * 12 + first_due.month - anchor.month
+        )
+        latest_due = _month_from_anchor(anchor, anchor_distance + distance, anchor.day)
+        if latest_due > moment:
+            distance -= 1
+            latest_due = _month_from_anchor(
+                anchor, anchor_distance + max(0, distance), anchor.day
+            )
+        skipped = max(0, distance)
+        next_due = _month_from_anchor(
+            anchor, anchor_distance + max(0, distance) + 1, anchor.day
+        )
+    else:
+        delta = {
+            "interval": timedelta(minutes=int(schedule.get("interval_minutes") or 60)),
+            "custom_hours": timedelta(hours=int(schedule.get("cadence_hours") or 2)),
+            "hourly": timedelta(hours=1),
+            "daily": timedelta(days=1),
+            "weekly": timedelta(weeks=1),
+        }[cadence]
+        skipped = int((moment - first_due) // delta)
+        latest_due = first_due + delta * skipped
+        next_due = latest_due + delta
+    return {
+        "first_missed_due_at": first_due.isoformat(),
+        "latest_missed_due_at": latest_due.isoformat(),
+        "skipped_due_count": skipped,
+        "due_at": latest_due.isoformat(),
+        "next_due_at": next_due.isoformat() if next_due else None,
+    }
+
+
+def prepare_schedule_occurrence(
+    schedule_id: str,
+    *,
+    advance_schedule: bool,
+    trigger_key: str,
+    actor: str,
+    now: datetime | None = None,
+    db_path: Path = DB_PATH,
+) -> dict:
+    schedule = get_scan_schedule(schedule_id, db_path)
+    if schedule is None:
+        raise KeyError("Scan schedule not found")
+    scope_context = get_schedule_scope_context(
+        db_path, schedule_id, require_active=True
+    )
+    moment = _as_utc(now or datetime.now(timezone.utc))
+    if advance_schedule:
+        if not schedule.get("enabled"):
+            raise RuntimeError("This schedule is paused")
+        if not schedule.get("next_run_at"):
+            raise RuntimeError("This schedule has no future due time")
+        due = _schedule_due_window(schedule, moment)
+        trigger_kind = "scheduled"
+    else:
+        due = {
+            "first_missed_due_at": None,
+            "latest_missed_due_at": None,
+            "skipped_due_count": 0,
+            "due_at": moment.isoformat(),
+            "next_due_at": schedule.get("next_run_at"),
+        }
+        trigger_kind = "manual"
+    global_no_strike = get_global_no_strike(db_path)
+    chunks = schedule_target_chunks(
+        schedule, db_path, global_no_strike=global_no_strike["entries"]
+    )
+    if not chunks:
+        raise ValueError("No addresses remain after no-strike filtering")
+    frozen = {
+        "resolved_targets": list(schedule.get("targets") or []),
+        "manual_targets": list(schedule.get("manual_targets") or []),
+        "saved_networks": list(schedule.get("saved_networks") or []),
+        "network_scope_context": scope_context,
+        "profile": {
+            "profile_id": schedule["profile_id"],
+            "profile_version": schedule["profile_version"],
+            "profile_name": schedule.get("profile_name"),
+            "settings": schedule.get("profile_snapshot") or {},
+        },
+        "schedule_no_strike": list(schedule.get("no_strike") or []),
+        "global_no_strike": global_no_strike,
+        "contact_policy": {
+            "interface": schedule["interface"],
+            "timeout_seconds": int(schedule.get("timeout_seconds") or 2700),
+            "fallback_policy": schedule.get("fallback_policy", "require_approval"),
+            "capture": True,
+            "chunking_enabled": bool(schedule.get("chunking_enabled")),
+            "chunk_size": int(schedule.get("chunk_size") or 256),
+            "chunk_delay_seconds": int(schedule.get("chunk_delay_seconds") or 0),
+        },
+        "authorization": {
+            "created_by": schedule["created_by"],
+            "executed_by": actor,
+            "reason": schedule["reason"],
+            "originating_host": schedule["originating_host"],
+        },
+    }
+    frozen_scope_digest = content_digest(scope_context)
+
+    def recheck_external_inputs(connection) -> None:
+        live_global = _global_no_strike_state_in_transaction(connection)
+        if int(live_global["revision"]) != int(global_no_strike["revision"]):
+            raise RuntimeError(
+                "The Global No-Strike list changed while this occurrence was prepared"
+            )
+        live_scope = resolve_schedule_scope_context_in_transaction(
+            connection, schedule_id
+        )
+        if content_digest(live_scope) != frozen_scope_digest:
+            raise RuntimeError(
+                "The Network Scope context changed while this occurrence was prepared"
+            )
+
+    occurrence = prepare_occurrence(
+        db_path,
+        schedule=schedule,
+        due_at=due["due_at"],
+        trigger_kind=trigger_kind,
+        trigger_key=trigger_key,
+        actor=actor,
+        frozen_contract=frozen,
+        chunks=chunks,
+        next_due_at=due["next_due_at"],
+        first_missed_due_at=due["first_missed_due_at"],
+        latest_missed_due_at=due["latest_missed_due_at"],
+        skipped_due_count=due["skipped_due_count"],
+        transaction_guard=recheck_external_inputs,
+    )
+    return {
+        "schedule_id": schedule_id,
+        "occurrence_id": occurrence.occurrence_id,
+        "batch_id": occurrence.occurrence_id,
+        "status": occurrence.state,
+        "created": occurrence.created,
+        "chunk_count": occurrence.chunk_count,
+        "chunking_enabled": bool(
+            schedule.get("chunking_enabled", "chunk_size" in schedule)
+        ),
+        "chunk_size": int(schedule.get("chunk_size") or 256),
+        "chunk_delay_seconds": int(schedule.get("chunk_delay_seconds") or 0),
+        "skipped_due_count": int(due["skipped_due_count"]),
+    }
 
 
 def _scheduled_request(
@@ -3834,6 +4863,186 @@ def _scheduled_request(
     )
 
 
+def _execute_durable_schedule_occurrence(
+    schedule_id: str,
+    occurrence_id: str,
+    *,
+    db_path: Path,
+    data_dir: Path,
+    sleep_fn: Callable[[float], None],
+) -> None:
+    successful_states = {"completed", "completed_without_nmap"}
+    terminal_states = successful_states | {
+        "failed", "cancelled", "timed_out", "stopped_no_targets", "interrupted"
+    }
+    occurrence = get_occurrence(db_path, occurrence_id)
+    schedule = get_scan_schedule(schedule_id, db_path)
+    if occurrence is None or schedule is None:
+        return
+    chunks = [item["targets"] for item in occurrence["chunks"]]
+    total = len(chunks)
+    batch_hosts_total = sum(target_address_count(chunk) for chunk in chunks)
+    owner_id = f"schedule:{schedule_id}:{uuid.uuid4().hex}"
+    occurrence_run_ids = [
+        item["scan_run_id"] for item in occurrence["chunks"] if item.get("scan_run_id")
+    ]
+    schedule.update({
+        "batch_status": "preparing",
+        "active_batch_id": occurrence_id,
+        "active_chunk_count": total,
+        "last_occurrence_started_at": occurrence.get("started_at") or utc_now(),
+        "last_occurrence_status": "preparing",
+        "last_occurrence_batch_id": occurrence_id,
+        "last_occurrence_run_ids": occurrence_run_ids,
+        "last_dispatch_note": f"Preparing chunk 1 of {total}",
+    })
+    _store_scan_schedule(schedule, db_path)
+    while True:
+        claimed = claim_next_chunk(
+            db_path, occurrence_id, owner_id=owner_id, lease_seconds=30
+        )
+        if claimed is None:
+            break
+        chunk, lease = claimed
+        index = int(chunk["chunk_number"])
+        targets = list(chunk["targets"])
+        existing_run_id = chunk.get("scan_run_id")
+        try:
+            if existing_run_id:
+                run = get_scan_run_plan(existing_run_id, db_path)
+                if run is None:
+                    raise RuntimeError("The scan bound to this schedule chunk is missing")
+            else:
+                reserved_run_id = uuid.uuid4().hex
+                run = launch_scan_run(
+                    _scheduled_request(
+                        schedule,
+                        targets,
+                        batch_id=occurrence_id,
+                        chunk_number=index,
+                        chunk_count=total,
+                        batch_hosts_total=batch_hosts_total,
+                        batch_hosts_completed_before=sum(
+                            target_address_count(item) for item in chunks[: index - 1]
+                        ),
+                        db_path=db_path,
+                    ),
+                    db_path=db_path,
+                    data_dir=data_dir,
+                    reserved_run_id=reserved_run_id,
+                    scheduled_chunk_claim=(occurrence_id, index, lease),
+                )
+        except Exception as exc:
+            abandon_chunk_after_worker_error(
+                db_path,
+                occurrence_id=occurrence_id,
+                chunk_number=index,
+                lease=lease,
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        # The scan worker now owns contact and renews both execution fences.
+        schedule = get_scan_schedule(schedule_id, db_path) or schedule
+        schedule["batch_status"] = "active"
+        schedule["active_chunk_number"] = index
+        schedule["last_run_id"] = run["run_id"]
+        schedule["last_run_at"] = utc_now()
+        schedule["last_run_status"] = run["status"]
+        schedule["run_count"] = int(schedule.get("run_count") or 0) + (
+            0 if run["run_id"] in occurrence_run_ids else 1
+        )
+        if run["run_id"] not in occurrence_run_ids:
+            occurrence_run_ids.append(run["run_id"])
+        schedule["last_occurrence_run_ids"] = occurrence_run_ids
+        schedule["last_occurrence_status"] = "active"
+        schedule["last_dispatch_note"] = f"Scanning chunk {index} of {total}"
+        _store_scan_schedule(schedule, db_path)
+        last_renewal = time.monotonic()
+        while True:
+            current = get_scan_run_plan(run["run_id"], db_path)
+            if current and current.get("status") in terminal_states:
+                break
+            if time.monotonic() - last_renewal >= 10:
+                lease = renew_work_lease(db_path, lease, lease_seconds=30)
+                last_renewal = time.monotonic()
+            sleep_fn(1)
+        schedule = get_scan_schedule(schedule_id, db_path) or schedule
+        schedule["last_run_status"] = current["status"]
+        durable = get_occurrence(db_path, occurrence_id)
+        durable_chunk = next(
+            (
+                item for item in (durable or {}).get("chunks", [])
+                if item["chunk_number"] == index
+            ),
+            None,
+        )
+        if current["status"] in successful_states:
+            if not durable_chunk or durable_chunk["state"] != "complete":
+                publish_chunk_terminal(
+                    db_path,
+                    occurrence_id=occurrence_id,
+                    chunk_number=index,
+                    terminal_state="complete",
+                    reason=f"Scan {current['status']}",
+                    lease=lease,
+                )
+            schedule["completed_chunk_count"] = index
+            schedule["last_dispatch_note"] = f"Chunk {index} of {total} complete"
+            _store_scan_schedule(schedule, db_path)
+        else:
+            if not durable_chunk or durable_chunk["state"] not in {
+                "needs_attention", "cancelled"
+            }:
+                publish_chunk_terminal(
+                    db_path,
+                    occurrence_id=occurrence_id,
+                    chunk_number=index,
+                    terminal_state=(
+                        "cancelled" if current["status"] == "cancelled"
+                        else "needs_attention"
+                    ),
+                    reason=(
+                        f"Chunk {index} ended {current['status']}; later chunks will not start"
+                    ),
+                    lease=lease,
+                )
+            cancelled = current["status"] == "cancelled"
+            schedule["batch_status"] = "cancelled" if cancelled else "needs_attention"
+            schedule["enabled"] = False
+            schedule["last_occurrence_status"] = "cancelled" if cancelled else "needs_attention"
+            schedule["last_occurrence_completed_at"] = utc_now()
+            schedule["last_dispatch_note"] = (
+                f"Chunk {index} cancelled; later chunks will not start"
+                if cancelled
+                else f"Chunk {index} ended {current['status']} — review before new contact"
+            )
+            _store_scan_schedule(schedule, db_path)
+            return
+        if index < total:
+            delay = int(schedule.get("chunk_delay_seconds") or 0)
+            schedule["next_chunk_at"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=delay)
+            ).replace(microsecond=0).isoformat()
+            _store_scan_schedule(schedule, db_path)
+            if delay:
+                sleep_fn(delay)
+    final = get_occurrence(db_path, occurrence_id)
+    schedule = get_scan_schedule(schedule_id, db_path) or schedule
+    if final and final["state"] == "complete":
+        schedule["batch_status"] = "complete"
+        schedule["active_batch_id"] = None
+        schedule["active_chunk_number"] = total
+        schedule["completed_chunk_count"] = total
+        schedule["resume_after_chunk"] = 0
+        schedule["active_target_chunks"] = None
+        schedule["next_chunk_at"] = None
+        schedule["occurrence_count"] = int(schedule.get("occurrence_count") or 0) + 1
+        schedule["last_occurrence_status"] = "complete"
+        schedule["last_occurrence_completed_at"] = final.get("completed_at") or utc_now()
+        schedule["last_dispatch_note"] = f"All {total} chunks complete"
+        _store_scan_schedule(schedule, db_path)
+
+
 @guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
 def execute_schedule_batch(
     schedule_id: str,
@@ -3849,6 +5058,15 @@ def execute_schedule_batch(
         "failed", "cancelled", "timed_out", "stopped_no_targets"
     }
     try:
+        if get_occurrence(db_path, batch_id) is not None:
+            _execute_durable_schedule_occurrence(
+                schedule_id,
+                batch_id,
+                db_path=db_path,
+                data_dir=data_dir,
+                sleep_fn=sleep_fn,
+            )
+            return
         schedule = get_scan_schedule(schedule_id, db_path)
         if schedule is None:
             return
@@ -3990,6 +5208,11 @@ def execute_schedule_batch(
             if following is None:
                 schedule["enabled"] = False
         _store_scan_schedule(schedule, db_path)
+    except WorkLeaseConflict:
+        # Another application process may have claimed this exact durable chunk
+        # after this process discovered it. The durable owner remains authoritative;
+        # a losing coordinator must not disable or relabel the schedule.
+        return
     except Exception as exc:
         schedule = get_scan_schedule(schedule_id, db_path)
         if schedule is not None:
@@ -4011,53 +5234,55 @@ def queue_scan_schedule_batch(
     schedule_id: str,
     *,
     advance_schedule: bool,
+    trigger_key: str | None = None,
+    actor: str = "scheduler",
+    now: datetime | None = None,
     db_path: Path = DB_PATH,
     data_dir: Path = DATA_DIR,
 ) -> dict:
     schedule = get_scan_schedule(schedule_id, db_path)
     if schedule is None:
         raise KeyError("Scan schedule not found")
-    get_schedule_scope_context(db_path, schedule_id, require_active=True)
-    recovering = schedule.get("batch_status") == "recovery_pending"
-    if recovering and not schedule.get("active_target_chunks"):
-        raise RuntimeError(
-            "This interrupted legacy schedule has no frozen chunk plan; review it and start a new occurrence"
-        )
-    chunks = (
-        schedule.get("active_target_chunks")
-        if recovering and schedule.get("active_target_chunks")
-        else schedule_target_chunks(schedule, db_path)
+    key = trigger_key or (
+        "cadence" if advance_schedule else uuid.uuid4().hex
     )
-    if not chunks:
-        raise ValueError("No addresses remain after no-strike filtering")
-    resume_after = (
-        min(max(int(schedule.get("resume_after_chunk") or 0), 0), len(chunks))
-        if recovering
-        else 0
+    prepared = prepare_schedule_occurrence(
+        schedule_id,
+        advance_schedule=advance_schedule,
+        trigger_key=key,
+        actor=actor,
+        now=now,
+        db_path=db_path,
     )
-    batch_id = uuid.uuid4().hex
-    schedule["batch_status"] = "queued"
-    schedule["active_batch_id"] = batch_id
-    schedule["active_chunk_number"] = resume_after
-    schedule["active_chunk_count"] = len(chunks)
-    schedule["completed_chunk_count"] = resume_after
-    schedule["resume_after_chunk"] = resume_after
-    schedule["active_target_chunks"] = chunks
-    schedule["last_dispatch_note"] = (
-        f"Recovery queued at chunk {resume_after + 1} of {len(chunks)}"
-        if recovering and resume_after < len(chunks)
-        else f"Queued {len(chunks)} sequential chunk(s)"
+    batch_id = prepared["occurrence_id"]
+    _start_prepared_schedule_occurrence(
+        schedule_id,
+        batch_id,
+        db_path=db_path,
+        data_dir=data_dir,
     )
+    return prepared
+
+
+def _start_prepared_schedule_occurrence(
+    schedule_id: str,
+    occurrence_id: str,
+    *,
+    db_path: Path,
+    data_dir: Path,
+) -> bool:
     with ACTIVE_SCHEDULE_BATCHES_LOCK:
         if _SCHEDULE_WORKER_SHUTDOWN.is_set():
             raise RuntimeError("The scan scheduler is shutting down")
+        if schedule_id in ACTIVE_SCHEDULE_BATCHES:
+            return False
         if ACTIVE_SCHEDULE_BATCHES:
             raise RuntimeError("Another scheduled batch is already active")
-        _store_scan_schedule(schedule, db_path)
         worker = _new_schedule_batch_thread(
             schedule_id,
-            batch_id,
-            advance_schedule=advance_schedule,
+            occurrence_id,
+            # Cadence advanced atomically when the occurrence was created.
+            advance_schedule=False,
             db_path=db_path,
             data_dir=data_dir,
         )
@@ -4069,17 +5294,7 @@ def queue_scan_schedule_batch(
             ACTIVE_SCHEDULE_BATCHES.discard(schedule_id)
             ACTIVE_SCHEDULE_THREADS.pop(schedule_id, None)
             raise
-    return {
-        "schedule_id": schedule_id,
-        "batch_id": batch_id,
-        "status": "queued",
-        "chunk_count": len(chunks),
-        "chunking_enabled": bool(
-            schedule.get("chunking_enabled", "chunk_size" in schedule)
-        ),
-        "chunk_size": int(schedule.get("chunk_size") or 256),
-        "chunk_delay_seconds": int(schedule.get("chunk_delay_seconds") or 0),
-    }
+    return True
 
 
 def _new_schedule_batch_thread(
@@ -4103,9 +5318,19 @@ def _new_schedule_batch_thread(
     )
 
 
-def run_scan_schedule_now(schedule_id: str, db_path: Path = DB_PATH) -> dict:
+def run_scan_schedule_now(
+    schedule_id: str,
+    *,
+    request_id: str,
+    requested_by: str,
+    db_path: Path = DB_PATH,
+) -> dict:
     return queue_scan_schedule_batch(
-        schedule_id, advance_schedule=False, db_path=db_path
+        schedule_id,
+        advance_schedule=False,
+        trigger_key=request_id,
+        actor=requested_by,
+        db_path=db_path,
     )
 
 
@@ -4115,6 +5340,7 @@ def record_schedule_conflict(
     db_path: Path = DB_PATH,
 ) -> dict:
     """Record one distinct delayed occurrence without counting scheduler retries."""
+    schedule = get_scan_schedule(str(schedule["schedule_id"]), db_path) or schedule
     if schedule.get("last_conflict_key") != conflict_key:
         schedule["conflict_count"] = int(schedule.get("conflict_count") or 0) + 1
         schedule["last_conflict_key"] = conflict_key
@@ -4122,6 +5348,97 @@ def record_schedule_conflict(
         schedule["conflict_flagged"] = schedule["conflict_count"] > 3
     schedule["last_dispatch_note"] = "Waiting for the analyzer scanner"
     return _store_scan_schedule(schedule, db_path)
+
+
+def recover_scan_execution_fence(db_path: Path = DB_PATH) -> dict | None:
+    """Recover the one shared scan slot after the former application owner ended."""
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            """SELECT work_id, fencing_epoch, lease_id, owner_id, state
+                 FROM work_leases WHERE lease_key = ?""",
+            (SCAN_CAPACITY_LEASE_KEY,),
+        ).fetchone()
+        if row is None or row[4] != "active":
+            return None
+        run_id, epoch, lease_id, owner_id, _state = row
+        run_row = db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if run_row is None:
+            safe_pre_contact = False
+            manifest = None
+        else:
+            manifest = json.loads(run_row[0])
+            work_claim = manifest.get("work_claim")
+            chunk = None
+            if isinstance(work_claim, dict):
+                chunk = db.execute(
+                    """SELECT state, contact_phase FROM scan_schedule_chunks
+                         WHERE occurrence_id = ? AND chunk_number = ?""",
+                    (
+                        str(work_claim.get("occurrence_id") or ""),
+                        int(work_claim.get("chunk_number") or 0),
+                    ),
+                ).fetchone()
+            safe_pre_contact = bool(
+                not manifest.get("started_at")
+                and (
+                    not isinstance(work_claim, dict)
+                    or (chunk and chunk[0] == "waiting" and chunk[1] == "not_started")
+                )
+            )
+        now = utc_now()
+        if safe_pre_contact and manifest is not None:
+            manifest["status"] = "queued"
+            manifest.pop("execution_claim", None)
+            db.execute(
+                """UPDATE work_leases
+                      SET lease_id = NULL, owner_id = NULL, state = 'released',
+                          expires_at = NULL, released_at = ?, renewed_at = ?,
+                          recovery_reason = NULL
+                    WHERE lease_key = ? AND fencing_epoch = ? AND state = 'active'""",
+                (now, now, SCAN_CAPACITY_LEASE_KEY, int(epoch)),
+            )
+            event_kind = "released"
+            detail = "Former application ended before network contact; queued scan retained"
+        else:
+            detail = "Former scan owner may have made network contact; manual review is required"
+            db.execute(
+                """UPDATE work_leases
+                      SET lease_id = NULL, owner_id = NULL,
+                          state = 'recovery_required', expires_at = NULL,
+                          released_at = ?, renewed_at = ?, recovery_reason = ?
+                    WHERE lease_key = ? AND fencing_epoch = ? AND state = 'active'""",
+                (now, now, detail, SCAN_CAPACITY_LEASE_KEY, int(epoch)),
+            )
+            event_kind = "recovery_required"
+            if manifest is not None:
+                manifest["status"] = "interrupted"
+                manifest["success"] = False
+                manifest["completed_at"] = now
+                manifest["error"] = detail
+        db.execute(
+            """INSERT INTO work_lease_events(
+                   event_id, lease_key, fencing_epoch, lease_id, owner_id,
+                   event_kind, recorded_at, detail
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                uuid.uuid4().hex, SCAN_CAPACITY_LEASE_KEY, int(epoch), lease_id,
+                owner_id, event_kind, now, detail,
+            ),
+        )
+        if manifest is not None:
+            db.execute(
+                """UPDATE scan_runs SET status = ?, manifest_json = ? WHERE run_id = ?""",
+                (manifest["status"], json.dumps(manifest, sort_keys=True), run_id),
+            )
+            sync_scan_history_manifest(db, manifest)
+        return {
+            "run_id": run_id,
+            "safe_pre_contact": safe_pre_contact,
+            "state": "queued" if safe_pre_contact else "interrupted",
+        }
 
 
 @guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", args[0] if args else DB_PATH))
@@ -4132,6 +5449,10 @@ def recover_scheduler_state(
     """Close orphaned work, preserve manual queue entries, and recover scheduled batches."""
     init_poc_storage(db_path)
     recovered_at = utc_now()
+    durable_needs_attention = recover_schedule_occurrences(
+        db_path, owner_process_ended=True
+    )
+    execution_recovery = recover_scan_execution_fence(db_path)
     with connect_database(db_path) as db:
         rows = db.execute("SELECT manifest_json FROM scan_runs").fetchall()
     manifests = [json.loads(row[0]) for row in rows]
@@ -4140,6 +5461,7 @@ def recover_scheduler_state(
     for manifest in manifests:
         if manifest.get("status") not in {
             "queued",
+            "dispatching",
             "running",
             "awaiting_fallback_approval",
         }:
@@ -4147,18 +5469,42 @@ def recover_scheduler_state(
         if (
             manifest.get("status") == "queued"
             and not manifest.get("started_at")
-            and not manifest.get("scheduled")
         ):
-            preserved_queue.append(manifest["run_id"])
-            append_scan_audit(
-                db_path,
-                run_id=manifest["run_id"],
-                event="queue_recovered",
-                actor="system",
-                details="Preserved unstarted manual request across analyzer restart",
-                changed_at=recovered_at,
-            )
-            continue
+            claim = manifest.get("work_claim")
+            preserve_scheduled = False
+            if manifest.get("scheduled") and isinstance(claim, dict):
+                occurrence = get_occurrence(
+                    db_path, str(claim.get("occurrence_id") or "")
+                )
+                chunk = next(
+                    (
+                        item for item in (occurrence or {}).get("chunks", [])
+                        if item["chunk_number"] == int(claim.get("chunk_number") or 0)
+                    ),
+                    None,
+                )
+                preserve_scheduled = bool(
+                    chunk
+                    and chunk["state"] == "waiting"
+                    and chunk["contact_phase"] == "not_started"
+                )
+            if manifest.get("scheduled") and not preserve_scheduled:
+                pass
+            else:
+                preserved_queue.append(manifest["run_id"])
+                append_scan_audit(
+                    db_path,
+                    run_id=manifest["run_id"],
+                    event="queue_recovered",
+                    actor="system",
+                    details=(
+                        "Preserved unstarted scheduled chunk across analyzer restart"
+                        if preserve_scheduled
+                        else "Preserved unstarted manual request across analyzer restart"
+                    ),
+                    changed_at=recovered_at,
+                )
+                continue
         manifest["status"] = "interrupted"
         manifest["success"] = False
         manifest["completed_at"] = recovered_at
@@ -4182,6 +5528,25 @@ def recover_scheduler_state(
     recovered_schedules = []
     for schedule in list_scan_schedules(db_path):
         active_batch_id = schedule.get("active_batch_id")
+        durable_occurrence = (
+            get_occurrence(db_path, active_batch_id) if active_batch_id else None
+        )
+        if durable_occurrence is not None:
+            if durable_occurrence["state"] == "needs_attention":
+                schedule["enabled"] = False
+                schedule["batch_status"] = "needs_attention"
+                schedule["last_occurrence_status"] = "needs_attention"
+                schedule["last_dispatch_note"] = durable_occurrence.get(
+                    "status_reason"
+                ) or "Interrupted occurrence needs review and will not resume"
+                _store_scan_schedule(schedule, db_path)
+                recovered_schedules.append(schedule["schedule_id"])
+            elif durable_occurrence["state"] == "waiting":
+                schedule["batch_status"] = "waiting"
+                schedule["last_occurrence_status"] = "waiting"
+                schedule["last_dispatch_note"] = "Due now — waiting for scanner"
+                _store_scan_schedule(schedule, db_path)
+            continue
         if not active_batch_id and schedule.get("batch_status") not in {
             "queued",
             "running",
@@ -4250,6 +5615,8 @@ def recover_scheduler_state(
         "orphaned_run_ids": orphaned,
         "preserved_queue_run_ids": preserved_queue,
         "recovered_schedule_ids": recovered_schedules,
+        "durable_needs_attention_occurrence_ids": durable_needs_attention,
+        "scan_execution_recovery": execution_recovery,
     }
 
 
@@ -4261,8 +5628,41 @@ def dispatch_due_schedules(
     dispatched = []
     with ACTIVE_SCHEDULE_BATCHES_LOCK:
         active_schedule_ids = set(ACTIVE_SCHEDULE_BATCHES)
+    schedules = list_scan_schedules(db_path)
+    waiting = [
+        schedule for schedule in schedules
+        if (schedule.get("latest_occurrence") or {}).get("state") == "waiting"
+        and schedule["schedule_id"] not in active_schedule_ids
+    ]
+    waiting.sort(
+        key=lambda item: (item["latest_occurrence"]["created_at"], item["schedule_id"])
+    )
+    if waiting:
+        selected = waiting[0]
+        try:
+            started = _start_prepared_schedule_occurrence(
+                selected["schedule_id"],
+                selected["latest_occurrence"]["occurrence_id"],
+                db_path=db_path,
+                data_dir=DATA_DIR,
+            )
+        except RuntimeError:
+            record_schedule_conflict(
+                selected,
+                f"occurrence:{selected['latest_occurrence']['occurrence_id']}",
+                db_path,
+            )
+            return []
+        if started:
+            return [{
+                "schedule_id": selected["schedule_id"],
+                "occurrence_id": selected["latest_occurrence"]["occurrence_id"],
+                "batch_id": selected["latest_occurrence"]["occurrence_id"],
+                "status": "waiting",
+                "created": False,
+            }]
     due = [
-        schedule for schedule in list_scan_schedules(db_path)
+        schedule for schedule in schedules
         if schedule.get("enabled") and schedule.get("next_run_at")
         and schedule["schedule_id"] not in active_schedule_ids
         and _as_utc(schedule["next_run_at"]) <= moment
@@ -4271,7 +5671,12 @@ def dispatch_due_schedules(
     for schedule in due[:1]:
         try:
             batch = queue_scan_schedule_batch(
-                schedule["schedule_id"], advance_schedule=True, db_path=db_path
+                schedule["schedule_id"],
+                advance_schedule=True,
+                trigger_key="cadence",
+                actor="scheduler",
+                now=moment,
+                db_path=db_path,
             )
         except RuntimeError:
             record_schedule_conflict(
@@ -4570,6 +5975,8 @@ def save_saved_network_and_context(
         raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -4798,6 +6205,8 @@ def change_scan_schedule_state(
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/scan-schedules/{schedule_id}/profile")
@@ -4816,15 +6225,47 @@ def repin_scan_schedule_profile(
 
 
 @router.post("/scan-schedules/{schedule_id}/run", status_code=202)
-def run_saved_scan_schedule(schedule_id: str) -> dict:
+def run_saved_scan_schedule(
+    schedule_id: str, http_request: Request, request: ScheduleRunNow | None = None
+) -> dict:
     require_active_collection()
     try:
-        return run_scan_schedule_now(schedule_id)
+        if request is None:
+            raise ValueError("A unique request identifier is required")
+        request = bind_signed_in_actor(http_request, request, "requested_by")
+        return run_scan_schedule_now(
+            schedule_id,
+            request_id=request.request_id,
+            requested_by=request.requested_by or "local-operator",
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scan-schedule-occurrences/{occurrence_id}/close-review")
+def close_interrupted_schedule_occurrence(
+    occurrence_id: str,
+    request: ScheduleRecoveryReview,
+    http_request: Request,
+) -> dict:
+    try:
+        request = bind_signed_in_actor(http_request, request, "reviewed_by")
+        return close_reviewed_occurrence(
+            DB_PATH,
+            occurrence_id,
+            reviewed_by=request.reviewed_by or "local-operator",
+            reason=request.reason,
+            confirmed_former_contact_stopped=request.confirmed_former_contact_stopped,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except WorkLeaseConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -4962,7 +6403,7 @@ def cancel_scan_run(run_id: str, request: Request) -> dict:
         )
         dispatch_next_queued_run(db_path=DB_PATH, data_dir=DATA_DIR)
         return {"run_id": run_id, "status": "cancelled"}
-    if manifest["status"] not in {"queued", "running", "awaiting_fallback_approval"}:
+    if manifest["status"] not in {"queued", "dispatching", "running", "awaiting_fallback_approval"}:
         raise HTTPException(status_code=409, detail="Scan run is not active")
     if scan_cancellation_requested(run_id, DB_PATH):
         return {"run_id": run_id, "status": "cancellation_requested"}
@@ -5052,7 +6493,7 @@ def scan_queue_status(request: Request) -> dict:
     runs = list_active_scan_run_plans(db_path=DB_PATH)
     runs.sort(
         key=lambda item: (
-            0 if item.get("status") in {"running", "awaiting_fallback_approval"} else 1,
+            0 if item.get("status") in {"dispatching", "running", "awaiting_fallback_approval"} else 1,
             int(item.get("queue_position") or 0),
             item.get("created_at") or "",
         )
