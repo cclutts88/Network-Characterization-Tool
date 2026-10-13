@@ -870,16 +870,26 @@ A roadmap item should only be marked complete when:
     server paging and bounded exports remain a later sub-gate. Replacement-package
     qualification remains separate from this implementation completion. This work is
     foundation-only and is not yet installed on the Range.
-  - [~] Eighth bounded correction packaging started for replacement transfer candidate
+  - [x] Eighth bounded correction packaging completed for replacement transfer candidate
     `phase2-r9`, carrying exact application image
     `0.16.0-range-test-20261013-phase2-r5` from reviewed source commit `46fbf1d`.
     Update every packaged operator script and the air-gapped guide to the exact image and
     package identities, preserve the existing host-folder upgrade and rollback workflow,
     export NCT with the required Caddy image, and verify the immutable archive, Linux
     checksums, shell syntax, exact-image health/build identity, Hunt automatic loading,
-    browser console, and package extraction before offering it for Range transfer. This
-    remains a transfer candidate until it passes installation, sign-in, preserved-data,
-    Range-host performance, rollback-readiness, and operator acceptance checks.
+    browser console, and package extraction before offering it for Range transfer. The
+    exact image and its archive-loaded copy both report version `0.16.0`, build ID
+    `0.16.0-range-test-20261013-phase2-r5`, source commit `46fbf1d`, and immutable image
+    ID `sha256:24e5b47e425aa219febf32169ce973fed1e251713ec1888a6b573bfe5335c84c`.
+    The exact-image Hunt page completed its automatic empty-data network-wide load with
+    no console warning or error. **89** focused Range-script/operator-guide tests pass;
+    every delivered shell script passes syntax validation. A fresh ZIP extraction passes
+    its 22-file manifest, embedded image checksum, Linux line-ending, current-identity,
+    and outer checksum checks. The final ZIP SHA-256 is
+    `253b889b59c2c3bcc3a382fc45450a248b9eeebc057d66e4f9e35f149b1c3e37`.
+    This remains a transfer candidate until it passes installation, sign-in,
+    preserved-data, Range-host Hunt performance, rollback-readiness, and operator
+    acceptance checks; it is not Range-accepted, mission-ready, or available on `main`.
 
 ### Deviation history
 
