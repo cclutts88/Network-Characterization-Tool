@@ -230,6 +230,24 @@ A roadmap item should only be marked complete when:
   health/browser checks, deployment-script tests, novice review and an independent
   package gate before transfer. Packaging does not establish target-Range, mission or
   `main` readiness.
+- **2026-10-13 controlled Range transfer-package completion:** Deployment-safety commit
+  `fe7cd83` adds fail-closed active-work checks for current database state and legacy
+  manifests, complete cold-backup inventories, verified automatic and manual rollback,
+  exact earlier-container/image/mount/port binding, custom-port preservation, and bounded
+  health probes. This deliberately follows the immutable application image source commit
+  `99191b49b5bbc0e79e7d20dce1975d7073a6d2c6`; the split identity is recorded in the
+  package receipt because no application bytes were rebuilt. Range deployment and
+  launcher validation passed **52 tests**; all **14** source and packaged shell scripts
+  passed syntax checks; the legacy password-wait blocking path and complete retained-data
+  snapshot ran against isolated data. The offline archive loaded in an isolated empty
+  engine and the archive-loaded image reported its expected health identity. Novice
+  operator: **CLEAR**. Independent quality gate: **CLEAR — DOCUMENTED DEVIATION**. The
+  final 22-file ZIP was extracted and reverified against its internal manifest; ZIP
+  SHA-256 `ebda09dd743740e8d51733649f4f4e4ea88f4fd1c245b006156d9fda8c8c97b1` is supplied
+  beside it. This is a verified transfer candidate on `foundation/evidence-engine-v2`,
+  not target-Range accepted, mission-ready, or available on `main`; installation,
+  sign-in, and any administrator-approved live Cisco collection remain target acceptance
+  checks.
 
 ## Field feedback correction cycle — 2026-10-08
 
