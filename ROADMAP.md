@@ -474,6 +474,17 @@ A roadmap item should only be marked complete when:
   Range container CPU/memory confirmation, approved scope-handoff validation, device
   history retest and rollback readiness. It is not yet Range-accepted, mission-ready or
   available on `main`.
+- **2026-10-13 live Range package-line-ending correction:** The `phase2-r7`
+  transfer candidate is withdrawn after its pre-upgrade check failed safely on the
+  recurring Range's older `sha256sum`. The ZIP and payload hashes were correct, but
+  Windows CRLF endings in the two checksum-list files were interpreted as part of each
+  filename. Removing carriage returns in a read-only pipeline proved all **21** package
+  files and the offline image archive still matched; no application image was loaded,
+  no upgrade ran, and `/var/lib/nct/data -> /data` remained untouched. The replacement
+  `phase2-r8` package must use LF-only internal checksum files, receive a new outer ZIP
+  checksum, pass local exact-package gates, and pass the unmodified
+  `sha256sum -c` checks on the API 1.39 Range before upgrade. Operators are explicitly
+  told to stop and obtain a corrected release rather than edit checksum files in place.
 
 ## Field feedback correction cycle — 2026-10-08
 

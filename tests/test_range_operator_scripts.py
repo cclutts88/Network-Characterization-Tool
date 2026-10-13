@@ -132,7 +132,7 @@ def test_quick_start_requires_release_specific_scope_handoff_acceptance():
     )
     normalized = " ".join(content.split())
 
-    assert "phase2-r7" in content
+    assert "phase2-r8" in content
     assert "phase2-r4" in content
     assert "$NCT_WORKDIR/RELEASE-RECEIPT.txt" in content
     assert "Saved scope handoff needs correction" in content
@@ -165,6 +165,20 @@ def test_quick_start_requires_range_container_resource_acceptance():
     assert "Unavailable container CPU or memory does not pass" in normalized
     assert "stop acceptance" in content
     assert "Do not change container permissions or mount host files" in normalized
+
+
+def test_quick_start_stops_on_internal_checksum_failure():
+    content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(content.split())
+
+    assert "internal package or image checksum" in normalized
+    assert "stop, preserve the package and the displayed output" in normalized
+    assert "Never edit or regenerate checksum files on the Range" in normalized
+    manifest_check = "sha256sum -c PACKAGE-MANIFEST.sha256 || exit 1"
+    assert manifest_check in content
+    assert content.index(manifest_check) < content.index("docker version --format")
 
 
 def test_packaged_scripts_readme_references_only_delivered_operator_material():

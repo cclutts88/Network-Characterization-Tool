@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r7.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r8.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r7.zip
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r8.zip
 checksum_file="$package_zip.sha256"
 if [ -f "$checksum_file" ]; then
     (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
@@ -58,6 +58,7 @@ else
     export NCT_WORKDIR=/root/NCT-Air-Gapped-Range-Deployment
 fi
 cd "$NCT_WORKDIR"
+sha256sum -c PACKAGE-MANIFEST.sha256 || exit 1
 ```
 
 What success looks like: when the small companion checksum file was uploaded,
@@ -65,8 +66,13 @@ the checksum comparison prints `OK`; otherwise the command displays the ZIP's
 SHA-256 so you can compare it with the value shown with the release. A missing
 companion checksum file does not stop installation, but a supplied checksum
 that fails does. Do not extract or run a file with a failed or mismatched
-checksum. The last command then returns to the prompt without an error. Run the
-following command to confirm the package contents are visible:
+checksum. After extraction, the final command verifies every delivered file and
+must print `OK` for each one before returning to the prompt. Run the following
+command to confirm the package contents are visible:
+
+If an internal package or image checksum reports a missing or mismatched file,
+stop, preserve the package and the displayed output, and obtain a corrected
+release. Never edit or regenerate checksum files on the Range.
 
 ```sh
 ls
@@ -286,8 +292,8 @@ following:
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
-The ZIP name ends in `phase2-r7`, while the build ID ends in `phase2-r4`.
-This is expected. `phase2-r7` identifies this package and its corrected operator
+The ZIP name ends in `phase2-r8`, while the build ID ends in `phase2-r4`.
+This is expected. `phase2-r8` identifies this package and its corrected operator
 guide. `phase2-r4` identifies the tested application image
 inside the package. Open `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it
 lists this same package revision, image name, build ID, and source commit before
