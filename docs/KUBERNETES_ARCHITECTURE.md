@@ -56,9 +56,12 @@ A Kubernetes manifest or successful pod start does not satisfy this gate.
 
 SQLite remains embedded in the NCT application for standalone and approved
 single-replica deployments. NCT must not put SQLite behind a custom network service or
-database sidecar. A future multiple-replica profile requires a separately reviewed,
-real shared transactional database; PostgreSQL is one possible candidate, not a selected
-dependency or approved design.
+database sidecar. Gate 7 selects PostgreSQL as the future multiple-replica transactional
+authority and an S3-compatible immutable content-addressed object API as its artifact
+authority. That decision does not enable multiple replicas: the adapters, migration,
+service qualification and Gate 8 concurrency/failure testing remain unfinished. The
+full decision and rollback boundary are recorded in
+`docs/SHARED_STORAGE_ARCHITECTURE.md`.
 
 ## Runtime and mission identity
 
@@ -215,10 +218,14 @@ publication. Retained-evidence analysis may be reclaimed only after expiry and m
 start a new attempt from immutable inputs. Network contact is never reassigned from an
 expiry alone. Compaction, backfill and migrations require reviewed recovery after
 uncertain ownership. Scheduler work requires unique durable occurrences and chunk
-claims in addition to any leader election. The first package covers the common contract,
-saved-analysis workers and storage-maintenance exclusion; scanning, scheduling and
-interactive device contact remain disabled in the Kubernetes profile and require their
-own completion package before Gate 6 can close.
+claims in addition to any leader election. The completed Gate 6 packages cover the
+common contract, saved-analysis workers, storage-maintenance exclusion, active Nmap,
+durable scheduled occurrences and interactive device contact. Network-contact work
+never transfers from lease expiry alone. A restart before device contact closes the
+original attempt and requires a new operator-started collection; a restart after
+possible contact requires attributed administrator review. The initial Kubernetes web
+profile remains analysis only because collection placement and privileges are a
+separate deployment decision.
 
 Acceptance status: gates 1 and 2 are implemented on `foundation/evidence-engine-v2`.
 Gate 1 provides the local provider and bounded administrator System Health display.
@@ -330,11 +337,12 @@ Gate 5 acceptance remains open until those procedures pass on the named NCT-only
 namespace and exact cluster; package completion does not establish cluster, Range,
 mission, multi-replica or stable-`main` readiness.
 
-The first Gate 6 package is complete and independently reviewed on
+Gate 6 is complete and independently reviewed on
 `foundation/evidence-engine-v2`. It provides the common database-time lease and
-fencing contract, one protected recovery attempt for retained-evidence analysis,
-strict recovery-required handling for storage maintenance, and bounded operator
-status. Overall Gate 6 remains open. Active Nmap, scheduled scans and interactive
-device contact still need their dedicated work-family package; none of those network
-activities transfer merely because ownership expires. Gate 7 and multi-replica work
-remain blocked until that package closes Gate 6.
+fencing contract, protected recovery for retained-evidence analysis, strict
+recovery-required handling for storage maintenance, durable scheduled occurrences,
+and dedicated active-Nmap and interactive-device-contact packages. None of those
+network activities transfer merely because ownership expires. Gate 7 may now define
+the shared database and artifact-storage boundary; multiple application replicas remain
+unsupported until that decision is implemented and Gate 8 concurrency and failure
+testing passes.

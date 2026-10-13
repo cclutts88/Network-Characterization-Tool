@@ -51,7 +51,7 @@ function sample(cpuStatus = "available") {
 await eval(`(async () => {
   const controls=new Map();
   const byId=id=>{if(!controls.has(id))controls.set(id,{textContent:'—'});return controls.get(id)};
-  const bytes=value=>value==null?'—':value+' B';
+  const bytes=value=>{if(value==null)return '—';const units=['B','KiB','MiB','GiB','TiB'];let i=0;while(value>=1024&&i<4){value/=1024;i++;}return value.toFixed(i?1:0)+' '+units[i];};
   const dateText=value=>value;
   const document={visibilityState:'visible'};
   const timers=[];

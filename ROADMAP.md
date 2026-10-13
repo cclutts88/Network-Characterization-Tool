@@ -411,6 +411,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-12 | Gate 7 shared storage | Make PostgreSQL or object storage a dependency for ordinary standalone NCT, or place SQLite behind a sidecar/network service | Preserve embedded SQLite plus local content-addressed files for standalone and single-replica operation. Select PostgreSQL as the future multi-replica transactional authority and an S3-compatible immutable content-addressed object API as its artifact authority. Keep the profile disabled until implementation plus Gate 8 concurrency/failure testing passes | The approved offline package must remain portable and efficient. SQLite cannot safely provide multi-replica transactional authority through a sidecar, while a shared writable filesystem would leave artifact behavior tied to path and mount semantics. PostgreSQL supplies shared transactions and database time; the object contract supplies immutable conditional creation without making listing authoritative | Migration is offline into an empty target with a verified cold backup, exact artifact inventory, stable-ID preservation, a cutover receipt and no dual writes. Before the target admits a write, cut back to the unchanged source is allowed. After any target write, preserve the target and restore/reconcile through a separate reviewed generation; automatic reverse migration is not claimed. See `docs/SHARED_STORAGE_ARCHITECTURE.md`. |
 | 2026-10-12 | Gate 6 scheduled occurrence controls | Treat pausing a schedule as a stop request for any occurrence that has not started its next chunk | Define Pause future occurrences as a cadence control only. An already-created occurrence retains its complete frozen chunk plan and may continue; stopping that occurrence uses the scan cancellation path. Protect the cadence control with a monotonic control revision so worker progress cannot overwrite a concurrent pause. If ownership is lost after contact, later chunks remain blocked until an administrator verifies the former scanner stopped and records a reviewed closure; the ambiguous chunk never reopens | A durable occurrence is one authorized execution with one immutable plan. Silently changing or partly discarding that plan when the reusable cadence is paused would make the occurrence record disagree with what was authorized. Operators also need separate, explicit meaning for pausing future work and stopping contact already assigned | Schedule actions and the Operator Guide state the boundary. Reviewed closure records actor, reason and confirmation, cancels only unstarted chunks, clears exact recovery blocks and leaves future cadence paused. Tests must retain pause-race, recovery-closure and later-chunk blocking coverage. |
 | 2026-10-12 | Kubernetes acceptance gate 5 | Let the NCT application use a namespace-scoped read-only Kubernetes client | Keep all Kubernetes credentials out of the NCT application. Run the optional reader as a separate bounded workload with a dedicated projected short-lived token, namespace Role and ServiceAccount; NCT consumes only its coarse sanitized status over a fixed internal service name | A token in the NCT web container would unnecessarily expand the consequence of an application compromise, and a sidecar could couple adapter failure to NCT Pod readiness. Kubernetes RBAC also cannot restrict list permission by labels, so application filtering alone cannot make a shared namespace least privilege | The first profile requires an NCT-only namespace. In a shared namespace the credential can technically list other Deployments, ReplicaSets and Pods even though the adapter requests fixed labels, validates the exact Deployment ownership chain and returns no identifiers or raw objects. Metrics permission is a separate opt-in. Local tests cannot prove target-cluster authorization, namespace isolation, API networking or Metrics API behavior; exact-cluster denied, timeout, truncation and no-metrics exercises remain required. |
 | 2026-10-12 | Kubernetes acceptance gate 4C | Permit an ordinary image rollback after testing a candidate image | Default to restore-based rollback. Direct rollback is machine-authorized only when the old image's own contract proves that it can both read and write the exact current schema version, uses the same evidence-layout contract, and shares the completed migration-plan digest. Changed or unknown compatibility preserves the candidate claim and restores the verified pre-upgrade backup into a separate empty qualified target | Commit `cb7453e` had no authoritative global schema-compatibility contract. SQLite `user_version` and a schema fingerprint can detect a difference but cannot prove semantic read/write compatibility, and the existing startup schema work spans multiple module-owned transactions. A new image cannot safely declare an old image compatible on its behalf | Application startup now owns a versioned schema contract and durable migration ledger, remains unready until migration completion, and fails closed on unreadable saved state. The Gate 4C administrator package binds exact images, builds, runtime identities, storage, backup, schema, registered evidence, counts, access checks and downloads. The foundation package cannot prove Kubernetes scheduling or CSI behavior; compatible and restore-required branches still require exact-cluster exercises. See `docs/KUBERNETES_SINGLE_REPLICA.md` |
@@ -2504,6 +2505,47 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     DEVIATION**. Novice-operator gate: **CLEAR**. The work remains foundation-only;
     it is committed development capability, not Range-ready or available on `main`.
     Gate 7 shared database and artifact-storage qualification is next.
+    **2026-10-12 Gate 7 shared-storage architecture start:** Define and validate the
+    storage boundary required before NCT can make any multi-replica claim while
+    preserving the approved standalone single-container SQLite profile. This gate
+    must select a shared database and artifact-store contract, state which evidence
+    remains exact bytes, define migration and rollback without silent deletion, and
+    prove that durable work fencing, observations, receipts and presentation repair
+    retain the same meaning across the boundary. It does not enable replicas merely
+    because a storage service exists, and it does not require Kubernetes for normal
+    disconnected use. The independent reviewer must clear the architecture and its
+    executable validation before downstream multi-replica or Arkime work relies on it.
+    **2026-10-12 Gate 7 architecture package in review:** The formal decision keeps
+    embedded SQLite and local content-addressed evidence for standalone and approved
+    single-replica operation. PostgreSQL is selected for future multi-replica
+    transactional authority, paired with an S3-compatible immutable object contract
+    keyed by SHA-256. The machine-readable contract keeps multiple replicas disabled,
+    forbids dual writing, defines offline empty-target cutover and separates pre-write
+    cutback from post-write restore/reconciliation. System Health explains the current
+    and selected future profiles with contextual Operator Guide detail. A storage audit
+    also corrected the guarded-upgrade inspector's obsolete Artifact Registry column;
+    a populated-registry regression now verifies exact bytes and observations instead
+    of exercising only an empty registry. Initial focused validation passes **7 tests**
+    with one existing dependency warning. Real disposable PostgreSQL and S3-compatible
+    service qualification, backend adapters, migration tooling and Gate 8 remain open;
+    this decision package makes no multi-replica readiness claim.
+    **2026-10-12 Gate 7 shared-storage decision package complete:** The reviewer
+    initially halted the gate because the Kubernetes architecture still described
+    PostgreSQL as only a candidate and the machine contract did not enumerate every
+    post-write rollback obligation. The documents now consistently point to the
+    selected Gate 7 design, and the contract requires export of post-cutover events,
+    preservation of the shared target, separate source restoration, later
+    reconciliation and an attributed decision receipt. Removing any of those
+    requirements invalidates the contract in tests. Focused storage, upgrade,
+    System Health and UI validation passes **136 tests** with one existing dependency
+    warning; the browser-side runtime-health regression also passes. An isolated
+    Docker preview renders the architecture panel and contextual Guide without browser
+    console errors. Independent quality gate: **CLEAR** after corrections.
+    Novice-operator gate: **CLEAR**. This completes the architecture decision only:
+    shared-service adapters, the offline migration command, disposable service
+    qualification and Gate 8 concurrency/failure/load testing remain open. Multiple
+    replicas remain disabled, and the capability remains foundation-only rather than
+    Range-ready or available on `main`.
 12. [~] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.

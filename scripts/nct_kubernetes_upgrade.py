@@ -305,7 +305,7 @@ def _database_observation(db_path: Path, root: Path, *, max_bytes: int) -> dict:
         artifact_bytes = 0
         if "artifact_registry" in tables:
             for sha256, stored_path, size_bytes in connection.execute(
-                "SELECT sha256, stored_path, size_bytes FROM artifact_registry ORDER BY sha256"
+                "SELECT sha256, canonical_path, size_bytes FROM artifact_registry ORDER BY sha256"
             ):
                 _check_deadline()
                 path = Path(stored_path)

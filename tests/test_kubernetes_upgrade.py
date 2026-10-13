@@ -11,6 +11,7 @@ import sys
 
 import pytest
 
+from app.artifacts import init_artifact_storage, register_artifact_bytes
 from app.schema_compatibility import begin_schema_migration, complete_schema_migration, image_schema_contract
 
 
@@ -143,6 +144,33 @@ def test_cold_inspection_binds_schema_inventory_and_writer_release(tmp_path: Pat
              for item in root.rglob("*") if item.is_file()}
     assert after == before
     assert list(args.validation_root.iterdir()) == []
+
+
+def test_cold_inspection_verifies_populated_artifact_registry(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / upgrade.WRITER_LOCK_NAME).write_bytes(b"")
+    db_path = root / "analyzer.db"
+    attempt = begin_schema_migration(db_path)
+    init_artifact_storage(db_path)
+    complete_schema_migration(db_path, attempt)
+    artifact = register_artifact_bytes(
+        db_path=db_path,
+        content=b"<nmaprun><host /></nmaprun>",
+        source_kind="nmap_import",
+        source_ref="gate7-populated-registry",
+        original_filename="evidence.xml",
+        actor="analyst.one",
+    )
+
+    result = upgrade.inspect_data(inspect_args(root, "before-upgrade"))
+
+    assert result["database"]["artifact_registry_verified"] == 1
+    assert result["database"]["table_counts"]["artifact_registry"] == 1
+    assert result["database"]["table_counts"]["artifact_observations"] == 1
+    assert result["database"]["artifact_registry_sha256"] == upgrade._digest([
+        {"sha256": artifact["sha256"], "size": artifact["size_bytes"]}
+    ])
 
 
 def test_inspection_blocks_active_writer_without_changing_data(tmp_path: Path) -> None:

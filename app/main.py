@@ -47,6 +47,7 @@ from app.storage_health import (
 from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
 from app.storage_ui import storage_page
 from app.runtime_health import runtime_health_snapshot
+from app.shared_storage_contract import shared_storage_status
 from app.runtime_trends import (
     runtime_trends_snapshot,
     start_runtime_trends,
@@ -1591,6 +1592,12 @@ def system_runtime_health(request: Request) -> dict:
     result["deployment"] = deployment_profile_status()
     result["active_collection"] = active_collection_status()
     return result
+
+
+@app.get("/api/system/storage-architecture")
+def system_storage_architecture(request: Request) -> dict:
+    require_storage_admin(request)
+    return shared_storage_status()
 
 
 @app.get("/api/system/analysis-status")
