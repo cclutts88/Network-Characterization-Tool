@@ -5,10 +5,15 @@ deployment automation retained for compatibility.
 
 ## Recommended reset workflow
 
+The authoritative instructions are in
+`../docs/AIR_GAPPED_RANGE_QUICKSTART.md`. Follow that guide from the beginning.
+This file is a short reference for the scripts and must not replace the required
+preflight and acceptance steps.
+
 1. Confirm Docker is available:
 
    ```bash
-   docker --version
+   docker version --format 'Server {{.Server.Version}} / API {{.Server.APIVersion}}'
    docker compose version
    ```
 
@@ -19,14 +24,17 @@ deployment automation retained for compatibility.
    ```
 
    No output means the default port is not currently listening. If 8445 is in
-   use, edit `HOST_PORT=8445` near the top of the selected start script and
-   choose an approved free port.
+   use, choose an approved free port and prefix the selected start command with
+   `NCT_HTTPS_PORT=APPROVED_PORT`.
 
-3. Choose one start script:
+3. Choose one start script using both the Docker server API and Compose result:
 
-   - `nct-start-compose.sh` when `docker compose version` succeeds.
-   - `nct-start-docker.sh` when the modern Docker CLI is present but Compose is not.
-   - `nct-start-legacy.sh` only for the older Range Docker engine compatibility path.
+   | What you see | Start script |
+   | --- | --- |
+   | API 1.41 or newer, and Compose works | `nct-start-compose.sh` |
+   | API 1.41 or newer, but Compose fails | `nct-start-docker.sh` |
+   | API 1.39 or 1.40 | `nct-start-legacy.sh` |
+   | API older than 1.39, or Docker fails | Stop and contact the Range administrator |
 
 4. Manage the Administrator with:
 
@@ -63,6 +71,13 @@ sh scripts/nct-set-admin-password.sh ADMIN_USERNAME [CONTAINER_NAME]
 
 For normal Administrator creation, replacement, rename, or password changes,
 prefer `nct-set-admin.sh`.
+
+After a host-folder upgrade fails acceptance, use the exact upgrade receipt
+with `nct-rollback-upgrade.sh`. The helper preserves the failed candidate,
+restores the verified cold backup, compares the complete restored inventory,
+verifies the exact earlier container, image, data-folder mount, and recorded web
+port, and starts the earlier container only after the checks pass. Follow the
+rollback section in the main quickstart rather than improvising recovery steps.
 
 ## Candidate Kubernetes storage check
 

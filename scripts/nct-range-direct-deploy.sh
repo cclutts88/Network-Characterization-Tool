@@ -5,7 +5,7 @@ set -eu
 server_ip="${1:-}"
 source_cidr="${2:-}"
 admin_user="${3:-}"
-image="network-characterization-tool:0.16.0-range-20261004-r2"
+image="network-characterization-tool:0.16.0-range-test-20261012-phase2"
 https_port="${4:-8445}"
 
 if [ -z "$server_ip" ] || [ -z "$source_cidr" ] || [ -z "$admin_user" ]; then
@@ -84,7 +84,7 @@ docker run -d --name nct --restart unless-stopped \
     --ssl-keyfile /run/tls/nct-server.key >/dev/null
 
 attempt=0
-until curl -kfsS "https://$server_ip:$https_port/health" >/dev/null 2>&1; do
+until curl --connect-timeout 2 --max-time 5 -kfsS "https://$server_ip:$https_port/health" >/dev/null 2>&1; do
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 30 ]; then
         printf '%s\n' "NCT did not become healthy. Review: docker logs nct" >&2
@@ -110,7 +110,7 @@ docker run -d --name nct --restart unless-stopped \
     --ssl-keyfile /run/tls/nct-server.key >/dev/null
 
 attempt=0
-until curl -kfsS "https://$server_ip:$https_port/health" >/dev/null 2>&1; do
+until curl --connect-timeout 2 --max-time 5 -kfsS "https://$server_ip:$https_port/health" >/dev/null 2>&1; do
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 30 ]; then
         printf '%s\n' "NCT did not become healthy after removing the bootstrap secret. Review: docker logs nct" >&2

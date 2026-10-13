@@ -1,4 +1,11 @@
+import hashlib
+import json
 from pathlib import Path
+import runpy
+import sqlite3
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,10 +17,21 @@ START_SCRIPTS = (
 )
 
 
+def _embedded_python(name: str) -> str:
+    content = (SCRIPTS / "nct-upgrade.sh").read_text(encoding="utf-8")
+    marker = f"{name}='\n"
+    return content.split(marker, 1)[1].split("\n'\n", 1)[0]
+
+
+def _run_embedded_python(name: str, data_root: Path) -> None:
+    code = _embedded_python(name).replace("/data", data_root.as_posix())
+    exec(compile(code, f"<{name}>", "exec"), {})
+
+
 def test_range_start_scripts_share_the_operator_facing_defaults():
     for script in START_SCRIPTS:
         content = script.read_text(encoding="utf-8")
-        assert "HOST_PORT=8445" in content
+        assert 'HOST_PORT="${NCT_HTTPS_PORT:-8445}"' in content
         assert "/root/NCT-Air-Gapped-Range-Deployment" in content
         assert 'PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"' in content
         assert 'DATA_DIR="$PERSIST_ROOT/data"' in content
@@ -27,6 +45,7 @@ def test_range_start_scripts_share_the_operator_facing_defaults():
         assert "verify_archive_checksum" in content
         assert "expected_checksum" in content
         assert "actual_checksum" in content
+        assert "curl --connect-timeout 2 --max-time 5" in content
 
 
 def test_legacy_workaround_is_not_applied_to_the_modern_docker_path():
@@ -66,6 +85,7 @@ def test_quick_start_selects_one_of_the_three_launch_paths():
     assert "docker version" in content
     assert "docker compose version" in content
     assert "PORT_8445_FREE" in content
+    assert "curl --connect-timeout 2 --max-time 5 -k https://RANGE_IP:8445/health" in content
     for script in START_SCRIPTS:
         assert script.name in content
     assert "nct-set-admin.sh" in content
@@ -95,16 +115,24 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
 
     assert 'mount_source' in content
     assert '"$mount_source" = "$DATA_DIR"' in content
-    assert "NCT has active work" in content
+    assert "NCT has active or unresolved work" in content
     assert 'tar -C "$PERSIST_ROOT" -czf "$backup" data' in content
     assert 'sha256sum "$backup"' in content
     assert "nct-upgrade-rollback-$timestamp" in content
     assert "Stored record count decreased" in content
-    assert 'NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
+    assert "Retained file changed or disappeared during upgrade" in content
+    assert "Registered artifact identity changed during upgrade" in content
+    assert '"artifact_registry": []' in content
+    assert 'PRAGMA integrity_check' in content
+    assert 'PRAGMA foreign_key_check' in content
+    assert 'NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
     assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
-    assert 'snapshot "$before" container' in content
+    assert 'snapshot "$before"' in content
+    assert content.index('docker stop "$CONTAINER"') < content.index('snapshot "$before"')
     assert 'snapshot "$after" container' in content
-    assert '("-wal", "-shm", "-journal")' in content
+    assert '"analyzer.db-wal"' in content
+    assert '"analyzer.db-shm"' in content
+    assert '"analyzer.db-journal"' in content
     assert content.index("trap restore_original EXIT") < content.index(
         'original_stopped=yes\n    docker stop "$CONTAINER"'
     )
@@ -112,9 +140,175 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert 'api_at_least "$server_api" 1.39' in content
     assert 'docker volume rm' not in content
     assert 'rm -rf' not in content
+    assert 'docker rm "$CONTAINER"' not in content
     assert "verify_archive_checksum" in content
     assert "expected_checksum" in content
     assert "actual_checksum" in content
+    for receipt_field in (
+        "rollback_container_id",
+        "rollback_image_id",
+        "rollback_data_mount_type",
+        "rollback_data_mount_source",
+        "rollback_host_port",
+        "candidate_host_port",
+    ):
+        assert f"printf '{receipt_field}=%s\\n'" in content
+    assert "verify_rollback_identity" in content
+
+
+def test_upgrade_script_blocks_durable_work_and_restores_before_old_code():
+    content = (SCRIPTS / "nct-upgrade.sh").read_text(encoding="utf-8")
+
+    for table in (
+        "pipeline_job_attempts",
+        "pipeline_admission_intents",
+        "device_contact_runs",
+        "device_contact_attempts",
+        "scan_schedule_occurrences",
+        "scan_schedule_chunks",
+        "work_leases",
+        "artifact_compaction_journal",
+    ):
+        assert table in content
+    assert "NCT has active or unresolved work" in content
+    assert 'failed_data="$PERSIST_ROOT/failed-upgrade-data-$timestamp"' in content
+    assert 'sha256sum -c "$backup.sha256"' in content
+    assert 'tar -C "$PERSIST_ROOT" -xzf "$backup"' in content
+    assert 'cmp -s "$before" "$restored_inventory"' in content
+    assert content.index('tar -C "$PERSIST_ROOT" -xzf "$backup"') < content.index(
+        'docker rename "$rollback" "$CONTAINER"'
+    )
+    assert "The old application was not started" in content
+
+
+def test_upgrade_active_check_detects_database_tracked_schedule_work(tmp_path: Path):
+    database = sqlite3.connect(tmp_path / "analyzer.db")
+    database.execute("CREATE TABLE scan_schedule_occurrences(state TEXT NOT NULL)")
+    database.execute("INSERT INTO scan_schedule_occurrences VALUES ('waiting')")
+    database.commit()
+    database.close()
+
+    helper = runpy.run_path(str(SCRIPTS / "nct-range-data-check.py"))
+    assert helper["active_work"](tmp_path) == [
+        {"source": "database", "table": "scan_schedule_occurrences", "count": 1}
+    ]
+    with pytest.raises(SystemExit) as stopped:
+        _run_embedded_python("active_check_code", tmp_path)
+    assert stopped.value.code == 42
+
+
+def test_upgrade_active_check_detects_legacy_password_prompt(tmp_path: Path):
+    manifest = tmp_path / "device_configs" / "legacy-run" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"status":"waiting_for_password"}', encoding="utf-8")
+
+    helper = runpy.run_path(str(SCRIPTS / "nct-range-data-check.py"))
+    assert helper["active_work"](tmp_path) == [
+        {"source": "manifest", "path": str(manifest), "state": "waiting_for_password"}
+    ]
+    with pytest.raises(SystemExit) as stopped:
+        _run_embedded_python("active_check_code", tmp_path)
+    assert stopped.value.code == 42
+
+
+def test_upgrade_snapshot_verifies_files_database_and_registered_artifacts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    retained = tmp_path / "imports" / "retained.xml"
+    retained.parent.mkdir()
+    retained.write_bytes(b"<nmaprun />")
+    artifact = tmp_path / "artifacts" / "aa" / "evidence.xml"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"evidence")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    database = sqlite3.connect(tmp_path / "analyzer.db")
+    database.execute(
+        "CREATE TABLE artifact_registry(sha256 TEXT PRIMARY KEY, size_bytes INTEGER, canonical_path TEXT)"
+    )
+    database.execute(
+        "INSERT INTO artifact_registry VALUES (?, ?, ?)",
+        (digest, artifact.stat().st_size, str(artifact)),
+    )
+    database.execute("CREATE TABLE saved_records(record_id TEXT PRIMARY KEY)")
+    database.execute("INSERT INTO saved_records VALUES ('record-1')")
+    database.commit()
+    database.close()
+
+    _run_embedded_python("snapshot_code", tmp_path)
+    snapshot = json.loads(capsys.readouterr().out)
+    helper = runpy.run_path(str(SCRIPTS / "nct-range-data-check.py"))
+    assert helper["snapshot"](tmp_path) == snapshot
+
+    assert snapshot["database"]["integrity"] == "ok"
+    assert snapshot["database"]["foreign_key_errors"] == []
+    assert snapshot["database"]["tables"]["saved_records"] == 1
+    assert snapshot["files"]["imports/retained.xml"]["sha256"] == hashlib.sha256(
+        retained.read_bytes()
+    ).hexdigest()
+    assert snapshot["artifact_registry"] == [
+        {"sha256": digest, "size": artifact.stat().st_size}
+    ]
+
+
+def test_quick_start_uses_executable_restore_path_and_correct_migration_step():
+    content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "step 3A migrated an old Docker volume" in content
+    assert "Roll back after step 3A migrated" in content
+    assert "nct-rollback-upgrade.sh RANGE_IP UPGRADE_RECEIPT" in content
+    assert "complete restored file and database inventory" in content
+    assert "do not guess" in content
+    assert "not contact a device" in content
+    assert "not yet validated" in content
+
+
+def test_manual_upgrade_rollback_restores_and_verifies_before_old_container_starts():
+    content = (SCRIPTS / "nct-rollback-upgrade.sh").read_text(encoding="utf-8")
+
+    assert 'DATA_CHECK="$WORKDIR/scripts/nct-range-data-check.py"' in content
+    assert "NCT has active or unresolved work" in content
+    assert 'docker rename "$CONTAINER" "$failed_container"' in content
+    assert 'mv "$DATA_DIR" "$failed_data"' in content
+    assert 'sha256sum -c "$checksum"' in content
+    assert 'tar -C "$PERSIST_ROOT" -xzf "$backup"' in content
+    assert 'cmp -s "$before" "$restored_inventory"' in content
+    for receipt_field in (
+        "rollback_container_id",
+        "rollback_image_id",
+        "rollback_data_mount_type",
+        "rollback_data_mount_source",
+        "rollback_host_port",
+    ):
+        assert f'{receipt_field}=$(receipt_value {receipt_field})' in content
+    assert "does not match the exact container recorded during upgrade" in content
+    assert '[ "${#value}" -eq 64 ]' in content
+    assert '*[!0-9a-f]*' in content
+    assert "does not use the exact image recorded during upgrade" in content
+    assert "data mount does not match the upgrade receipt" in content
+    assert 'https://$RANGE_IP:$rollback_host_port/health' in content
+    assert content.index('cmp -s "$before" "$restored_inventory"') < content.index(
+        'docker rename "$rollback" "$CONTAINER"'
+    )
+    assert 'docker rm' not in content
+    assert "The old application was not started" in content
+    assert "Docker could not stop the previous container" in content
+    assert "The previous container is still running" in content
+    assert "The previous container was stopped" in content
+    assert 'curl --connect-timeout 2 --max-time 5 -ksS' in content
+
+
+def test_manual_rollback_accepts_real_docker_container_id_format():
+    content = (SCRIPTS / "nct-rollback-upgrade.sh").read_text(encoding="utf-8")
+    function = "valid_container_id() {" + content.split("valid_container_id() {", 1)[1].split("\n}", 1)[0] + "\n}"
+    valid = "a" * 64
+    assert subprocess.run(
+        ["sh", "-c", f"{function}\nvalid_container_id {valid}"], check=False
+    ).returncode == 0
+    assert subprocess.run(
+        ["sh", "-c", f"{function}\nvalid_container_id sha256:{valid}"], check=False
+    ).returncode != 0
 
 
 def test_all_range_paths_ignore_checksum_file_line_endings():

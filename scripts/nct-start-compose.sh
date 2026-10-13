@@ -2,11 +2,11 @@
 set -eu
 
 # NCT WEB INTERFACE PORT -- change 8445 here if the port check shows a conflict.
-HOST_PORT=8445
+HOST_PORT="${NCT_HTTPS_PORT:-8445}"
 
 WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
-IMAGE="network-characterization-tool:0.16.0-range-20261004-r2"
+IMAGE="network-characterization-tool:0.16.0-range-test-20261012-phase2"
 CONTAINER="nct"
 DATA_DIR="$PERSIST_ROOT/data"
 RANGE_IP="${1:-}"
@@ -27,7 +27,7 @@ verify_archive_checksum() {
 }
 wait_for_health() {
     attempt=0
-    until curl -kfsS "https://$RANGE_IP:$HOST_PORT/health" >/dev/null 2>&1; do
+    until curl --connect-timeout 2 --max-time 5 -kfsS "https://$RANGE_IP:$HOST_PORT/health" >/dev/null 2>&1; do
         attempt=$((attempt + 1))
         [ "$attempt" -lt 30 ] || return 1
         sleep 1
@@ -51,7 +51,7 @@ verify_archive_checksum || die "The offline image archive checksum does not matc
 docker inspect "$CONTAINER" >/dev/null 2>&1 &&
     die "A container named $CONTAINER already exists. This script will not replace it."
 if ss -ltn | awk -v p="$HOST_PORT" 'NR > 1 && $4 ~ (":" p "$") { found=1 } END { exit(found ? 0 : 1) }'; then
-    die "TCP port $HOST_PORT is in use. Edit HOST_PORT=8445 near the top of this script."
+    die "TCP port $HOST_PORT is in use. Set NCT_HTTPS_PORT to an approved free port."
 fi
 
 docker load -i "$ARCHIVE"

@@ -261,7 +261,7 @@ def test_launcher_writes_atomic_promotion_receipts_after_full_acceptance():
     ):
         assert required in SCRIPT
     assert SCRIPT.index('write_promotion_receipt || rollback\n') > SCRIPT.index(
-        'curl --fail --silent --show-error "$access_url/health"'
+        'curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$access_url/health"'
     )
 
 

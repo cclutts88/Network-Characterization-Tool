@@ -223,6 +223,13 @@ A roadmap item should only be marked complete when:
   committed and suitable for controlled Range testing after packaging; it remains on
   `foundation/evidence-engine-v2`, is not on `main`, and is not yet Range-validated or
   mission-ready.
+- **2026-10-12 controlled Range transfer-package start:** Freeze the completed Phase 2
+  checkpoint for a manual air-gapped transfer. Build one immutable NCT image from exact
+  source commit `99191b49b5bbc0e79e7d20dce1975d7073a6d2c6`, retain the Caddy image,
+  include checksums and operator receipts, and require clean archive import, exact-image
+  health/browser checks, deployment-script tests, novice review and an independent
+  package gate before transfer. Packaging does not establish target-Range, mission or
+  `main` readiness.
 
 ## Field feedback correction cycle — 2026-10-08
 

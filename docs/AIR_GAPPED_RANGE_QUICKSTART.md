@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261004-r2.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261012-phase2.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-unzip NCT-Air-Gapped-Range-Deployment-0.16.0-20261004-r2.zip
+unzip NCT-Air-Gapped-Range-Deployment-0.16.0-20261012-phase2.zip
 cd /root/NCT-Air-Gapped-Range-Deployment
 ```
 
@@ -119,8 +119,9 @@ the old `nct-data` volume.
 
 What success looks like: the script prints a successful migration receipt and
 a rollback-container name. Write down both names. After a successful
-migration, use the **new installation** start in step 5; existing accounts and
-data will still be preserved.
+migration, continue to the port check in step 4, then use the **new
+installation** start in step 5. Existing accounts and data will still be
+preserved.
 
 ## 4. Confirm that the web port is available
 
@@ -132,8 +133,8 @@ ss -ltn | grep ':8445 ' || echo PORT_8445_FREE
 
 `PORT_8445_FREE` means the port is available. If the command shows another
 program already using 8445, stop and ask the Range administrator to select an
-approved unused port and update the `HOST_PORT=8445` line in the selected start
-script.
+approved unused port. In step 5, put `NCT_HTTPS_PORT=APPROVED_PORT` before the
+selected start command, replacing `APPROVED_PORT` with that port number.
 
 ## 5. Start a new or newly migrated installation
 
@@ -159,6 +160,13 @@ For `compose`:
 
 ```sh
 sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-compose.sh RANGE_IP
+```
+
+If step 4 selected a different approved port, prefix the selected command. For
+example:
+
+```sh
+NCT_HTTPS_PORT=APPROVED_PORT sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-legacy.sh RANGE_IP
 ```
 
 On a completely new installation, the script asks you to enter an
@@ -190,8 +198,8 @@ For current Docker without Compose, add `docker` instead.
 
 The upgrade will refuse to start if a scan or collection is running. It checks
 the packaged image, backs up the permanent data, retains the old container,
-starts NCT 0.16.0, and confirms that stored file and record counts did not go
-down.
+preserves the installation's current web port, starts NCT 0.16.0, and confirms
+that stored file and record counts did not go down.
 
 What success looks like: the script prints a successful upgrade receipt, a
 backup location, and a rollback-container name. Write down all three and keep
@@ -209,7 +217,9 @@ firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=APPROV
 firewall-cmd --reload
 ```
 
-If a different web port was approved, replace 8445 in the firewall rule.
+If the new-installation port check selected a different approved port, or the
+upgrade reported that it preserved a different port, replace 8445 in the
+firewall rule.
 
 ## 8. Open and sign in to NCT
 
@@ -222,6 +232,9 @@ https://RANGE_IP:8445
 Replace `RANGE_IP` with the server's address. The Range uses its own HTTPS
 certificate, so the browser may display the Range's expected certificate
 warning. Follow the site's approved procedure for reaching the login page.
+For an upgrade, use the exact address and port printed by the successful
+upgrade. For a new installation, if step 4 used a different approved web port,
+replace 8445 with that same port.
 
 For a new installation, sign in with the Administrator account created in
 step 5. For an upgrade, use an existing Administrator account. The username is
@@ -235,14 +248,17 @@ Run these checks in the Range terminal:
 docker ps --filter name=nct
 docker logs nct
 docker inspect nct --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
-curl -k https://RANGE_IP:8445/health
+curl --connect-timeout 2 --max-time 5 -k https://RANGE_IP:8445/health
 ```
 
-Replace `RANGE_IP` in the last command. Confirm all of the following:
+Replace `RANGE_IP` in the last command. For an upgrade, use the port printed by
+the successful upgrade. For a new installation, if step 4 used a different
+approved web port, replace 8445 with that same port. Confirm all of the
+following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-20261004-r2`;
+- the build ID is `0.16.0-range-test-20261012-phase2`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
@@ -251,8 +267,15 @@ Then verify the saved information in the browser:
 1. Open **Nmap Scans** and confirm the existing scan history is present.
 2. Open **Network Devices** and expand an existing collection.
 3. Download `manifest.json` and `stdout.txt`, and confirm both files save.
-4. Run the established read-only Cisco test collection. Confirm it completes,
-   displays non-blank output, and allows its saved configuration to download.
+4. If the Range administrator has provided an approved live-collection test
+   procedure, follow that procedure exactly. It must identify the approved
+   device, approved credentials, capture interface, authorization, and any
+   required No-Strike exclusion. Confirm the read-only Cisco collection
+   completes, displays non-blank output, and allows its saved configuration to
+   download. If those approved details are not available, do not guess and do
+   not contact a device. Record live collection as **not yet validated**. You
+   may upload and inspect an approved retained configuration to verify the
+   non-contact analysis path, but that does not prove live collection works.
 
 Do not accept the upgrade until all checks pass. Keep `/var/lib/nct` in the
 normal Range or Proxmox backup scope. The live data folder must stay on the
@@ -260,20 +283,51 @@ VM's local disk, not NFS, SMB, OneDrive, or another synchronized folder.
 
 ## 10. Roll back if the new release fails testing
 
-Only use this procedure after a failed acceptance check. Use the exact
-rollback-container name printed during migration or upgrade in place of
-`ROLLBACK_CONTAINER_NAME`:
+Only use this section after a failed acceptance check. First determine whether
+step 3A migrated an old Docker volume or step 6 upgraded an existing host-folder
+installation. The two rollback paths are different.
+
+### Roll back after step 3A migrated an old Docker volume
+
+The old container still points to the unchanged original Docker volume. Use the
+exact rollback-container name printed during migration in place of
+`ROLLBACK_CONTAINER_NAME`. Run these commands one at a time and stop if any
+command reports an error:
 
 ```sh
+rollback_time=$(date -u +%Y%m%dT%H%M%SZ)
 docker stop nct
-docker rm nct
+docker rename nct "nct-failed-$rollback_time"
 docker rename ROLLBACK_CONTAINER_NAME nct
 docker start nct
 ```
 
-This restores the earlier container. It does not erase the copied host-folder
-data, old Docker volume, or upgrade backup. Record the failure and preserve
-those items for investigation.
+This returns the earlier container to its unchanged original Docker volume.
+The failed host-folder copy and failed container remain preserved for
+investigation.
+
+### Roll back after step 6 upgraded a host-folder installation
+
+Do not start the earlier application against data opened by NCT 0.16.0. Use the
+exact upgrade receipt path printed by step 6 in place of `UPGRADE_RECEIPT`, then
+run:
+
+```sh
+sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-rollback-upgrade.sh RANGE_IP UPGRADE_RECEIPT
+```
+
+The helper refuses active or unresolved work, preserves the failed container
+and post-upgrade data, verifies the cold-backup checksum, restores it, compares
+the complete restored file and database inventory with the pre-upgrade
+inventory, verifies the exact retained container, image, and data-folder mount,
+and starts the earlier container only after those checks pass. It reads the
+original web port from the upgrade receipt, including when an approved port
+other than 8445 was used.
+If any check fails, it leaves the older application stopped and tells the
+administrator which recovery sources to preserve. A successful restore returns
+the application and data to the moment of the pre-upgrade backup, so information
+entered later will not appear. Keep the failed container and post-upgrade data
+for investigation.
 
 ## Administrator password help
 

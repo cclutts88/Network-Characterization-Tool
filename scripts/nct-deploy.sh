@@ -922,14 +922,14 @@ reported_build=$(docker exec "$container" python -c 'import json,urllib.request;
 if [ "$tls_enabled" = "yes" ]; then
     access_url="https://$bind_address:$https_port"
     if [ -n "$tls_ca" ]; then
-        curl --fail --silent --show-error --cacert "$tls_ca" "$access_url/health" >/dev/null || rollback
+        curl --connect-timeout 2 --max-time 5 --fail --silent --show-error --cacert "$tls_ca" "$access_url/health" >/dev/null || rollback
     else
-        curl --fail --silent --show-error --insecure "$access_url/health" >/dev/null || rollback
+        curl --connect-timeout 2 --max-time 5 --fail --silent --show-error --insecure "$access_url/health" >/dev/null || rollback
     fi
 else
     [ "$access" = "local" ] || warn "Direct LAN mode is HTTP only; use TLS before mission deployment."
     access_url="http://$bind_address:$app_port"
-    curl --fail --silent --show-error "$access_url/health" >/dev/null || rollback
+    curl --connect-timeout 2 --max-time 5 --fail --silent --show-error "$access_url/health" >/dev/null || rollback
 fi
 
 state_tmp="${state_file}.tmp.$$"
