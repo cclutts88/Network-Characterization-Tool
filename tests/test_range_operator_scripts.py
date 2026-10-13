@@ -258,6 +258,16 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert "verify_rollback_identity" in content
 
 
+def test_packaged_scripts_guide_explains_schema_preflight():
+    content = PACKAGE_SCRIPTS_README.read_text(encoding="utf-8")
+
+    assert "stopped-database WAL" in content
+    assert "checkpoint" in content
+    assert "nct-schema-preflight.py" in content
+    assert "data mounted read-only" in content
+    assert "restores the earlier container" in content
+
+
 def test_upgrade_script_blocks_durable_work_and_restores_before_old_code():
     content = (SCRIPTS / "nct-upgrade.sh").read_text(encoding="utf-8")
 

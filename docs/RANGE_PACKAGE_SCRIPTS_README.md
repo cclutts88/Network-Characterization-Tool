@@ -78,3 +78,11 @@ restores the verified cold backup, compares the complete restored inventory,
 verifies the exact earlier container, image, data-folder mount, and recorded web
 port, and starts the earlier container only after the checks pass. Follow the
 rollback section in the main quickstart rather than improvising recovery steps.
+
+Before an upgrade changes saved data, `nct-upgrade.sh` stops NCT, uses the
+retained original image to complete SQLite's normal stopped-database WAL
+checkpoint, and then runs `nct-schema-preflight.py` through the replacement
+image with the data mounted read-only. The audit records database integrity,
+fingerprints, migration history, originating build identity, known phase2
+maintenance tables, and the database SHA-256. Unknown, incomplete, or altered
+schema stops the upgrade and restores the earlier container.
