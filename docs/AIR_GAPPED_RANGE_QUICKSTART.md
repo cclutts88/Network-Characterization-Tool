@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r5.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r6.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r5.zip
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r6.zip
 checksum_file="$package_zip.sha256"
 if [ -f "$checksum_file" ]; then
     (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
@@ -282,13 +282,13 @@ following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-test-20261013-phase2-r3`;
+- the build ID is `0.16.0-range-test-20261013-phase2-r4`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
-The ZIP name ends in `phase2-r5`, while the build ID ends in `phase2-r3`.
-This is expected. `phase2-r5` identifies this package and its corrected operator
-guide. `phase2-r3` identifies the unchanged, already-tested application image
+The ZIP name ends in `phase2-r6`, while the build ID ends in `phase2-r4`.
+This is expected. `phase2-r6` identifies this package and its corrected operator
+guide. `phase2-r4` identifies the tested application image
 inside the package. Open `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it
 lists this same package revision, image name, build ID, and source commit before
 continuing.

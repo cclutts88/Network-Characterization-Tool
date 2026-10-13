@@ -58,6 +58,181 @@ def test_unavailable_cgroup_metrics_are_not_reported_as_zero(monkeypatch):
     assert runtime_health._container_cpu_allowance() is None
 
 
+def test_cgroup_v1_container_metrics_support_explicit_root_controller_paths(
+    monkeypatch, tmp_path,
+):
+    cgroup = tmp_path / "cgroup"
+    memory = cgroup / "memory"
+    cpu = cgroup / "cpu,cpuacct"
+    memory.mkdir(parents=True)
+    cpu.mkdir(parents=True)
+    (memory / "memory.usage_in_bytes").write_text("1048576\n", encoding="utf-8")
+    (memory / "memory.max_usage_in_bytes").write_text("2097152\n", encoding="utf-8")
+    (memory / "memory.limit_in_bytes").write_text("4194304\n", encoding="utf-8")
+    (cpu / "cpuacct.usage").write_text("2500000000\n", encoding="utf-8")
+    (cpu / "cpu.cfs_quota_us").write_text("200000\n", encoding="utf-8")
+    (cpu / "cpu.cfs_period_us").write_text("100000\n", encoding="utf-8")
+    proc_cgroup = tmp_path / "self.cgroup"
+    proc_cgroup.write_text("5:memory:/\n4:cpu,cpuacct:/\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", proc_cgroup)
+
+    result = runtime_health._container_memory()
+
+    assert result["status"] == "available"
+    assert result["current_bytes"] == 1048576
+    assert result["peak_bytes"] == 2097152
+    assert result["limit_bytes"] == 4194304
+    assert result["limited"] is True
+    assert result["source"] == "Linux control-group memory files"
+    assert runtime_health._container_cpu_usage_seconds() == 2.5
+    assert runtime_health._container_cpu_allowance() == 2.0
+
+
+def test_cgroup_v1_container_metrics_follow_kernel_reported_relative_path(
+    monkeypatch, tmp_path,
+):
+    cgroup = tmp_path / "cgroup"
+    memory = cgroup / "memory" / "docker" / "container-id"
+    cpu = cgroup / "cpu,cpuacct" / "docker" / "container-id"
+    memory.mkdir(parents=True)
+    cpu.mkdir(parents=True)
+    proc_cgroup = tmp_path / "self.cgroup"
+    proc_cgroup.write_text(
+        "5:memory:/docker/container-id\n4:cpu,cpuacct:/docker/container-id\n",
+        encoding="utf-8",
+    )
+    (memory / "memory.usage_in_bytes").write_text("1024\n", encoding="utf-8")
+    (memory / "memory.max_usage_in_bytes").write_text("2048\n", encoding="utf-8")
+    (memory / "memory.limit_in_bytes").write_text(
+        str((1 << 63) - 4096), encoding="utf-8",
+    )
+    (cpu / "cpuacct.usage").write_text("1000000000\n", encoding="utf-8")
+    (cpu / "cpu.cfs_quota_us").write_text("-1\n", encoding="utf-8")
+    (cpu / "cpu.cfs_period_us").write_text("100000\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", proc_cgroup)
+
+    result = runtime_health._container_memory()
+
+    assert result["status"] == "available"
+    assert result["current_bytes"] == 1024
+    assert result["peak_bytes"] == 2048
+    assert result["limit_bytes"] is None
+    assert result["limited"] is False
+    assert runtime_health._container_cpu_usage_seconds() == 1.0
+    assert runtime_health._container_cpu_allowance() is None
+
+
+def test_cgroup_v2_metrics_take_precedence_over_v1_fallback(monkeypatch, tmp_path):
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "memory.current").write_text("300\n", encoding="utf-8")
+    (cgroup / "memory.peak").write_text("400\n", encoding="utf-8")
+    (cgroup / "memory.max").write_text("max\n", encoding="utf-8")
+    (cgroup / "cpu.stat").write_text("usage_usec 500000\n", encoding="utf-8")
+    (cgroup / "cpu.max").write_text("100000 100000\n", encoding="utf-8")
+    v1_memory = cgroup / "memory"
+    v1_memory.mkdir()
+    (v1_memory / "memory.usage_in_bytes").write_text("999\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", tmp_path / "missing")
+
+    result = runtime_health._container_memory()
+
+    assert result["current_bytes"] == 300
+    assert result["peak_bytes"] == 400
+    assert result["limited"] is False
+    assert runtime_health._container_cpu_usage_seconds() == 0.5
+    assert runtime_health._container_cpu_allowance() == 1.0
+
+
+def test_cgroup_v1_rejects_unsafe_kernel_reported_relative_path(monkeypatch, tmp_path):
+    cgroup = tmp_path / "cgroup"
+    memory = cgroup / "memory"
+    memory.mkdir(parents=True)
+    proc_cgroup = tmp_path / "self.cgroup"
+    proc_cgroup.write_text("5:memory:/../../outside\n", encoding="utf-8")
+    (memory / "memory.usage_in_bytes").write_text("777\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "memory.usage_in_bytes").write_text("999\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", proc_cgroup)
+
+    assert runtime_health._container_memory()["status"] == "unavailable"
+
+
+def test_cgroup_v1_never_mixes_nested_and_controller_root_measurements(
+    monkeypatch, tmp_path,
+):
+    cgroup = tmp_path / "cgroup"
+    memory_root = cgroup / "memory"
+    memory_nested = memory_root / "docker" / "container-id"
+    cpu_root = cgroup / "cpu,cpuacct"
+    cpu_nested = cpu_root / "docker" / "container-id"
+    memory_nested.mkdir(parents=True)
+    cpu_nested.mkdir(parents=True)
+    proc_cgroup = tmp_path / "self.cgroup"
+    proc_cgroup.write_text(
+        "5:memory:/docker/container-id\n4:cpu,cpuacct:/docker/container-id\n",
+        encoding="utf-8",
+    )
+    (memory_nested / "memory.usage_in_bytes").write_text("1024\n", encoding="utf-8")
+    (memory_root / "memory.max_usage_in_bytes").write_text("9999\n", encoding="utf-8")
+    (memory_root / "memory.limit_in_bytes").write_text("9999\n", encoding="utf-8")
+    (cpu_nested / "cpuacct.usage").write_text("1000000000\n", encoding="utf-8")
+    (cpu_nested / "cpu.cfs_quota_us").write_text("200000\n", encoding="utf-8")
+    (cpu_root / "cpu.cfs_period_us").write_text("100000\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", proc_cgroup)
+
+    memory_result = runtime_health._container_memory()
+
+    assert memory_result["current_bytes"] == 1024
+    assert memory_result["peak_bytes"] is None
+    assert memory_result["limit_bytes"] is None
+    assert memory_result["limited"] is False
+    assert runtime_health._container_cpu_usage_seconds() == 1.0
+    assert runtime_health._container_cpu_allowance() is None
+
+
+def test_cgroup_v1_requires_readable_process_controller_identity(
+    monkeypatch, tmp_path,
+):
+    cgroup = tmp_path / "cgroup"
+    memory = cgroup / "memory"
+    cpu = cgroup / "cpu,cpuacct"
+    memory.mkdir(parents=True)
+    cpu.mkdir(parents=True)
+    (memory / "memory.usage_in_bytes").write_text("777\n", encoding="utf-8")
+    (cpu / "cpuacct.usage").write_text("1000000000\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", tmp_path / "missing")
+
+    assert runtime_health._container_memory()["status"] == "unavailable"
+    assert runtime_health._container_cpu_usage_seconds() is None
+
+
+def test_cgroup_v1_requires_requested_controller_in_process_identity(
+    monkeypatch, tmp_path,
+):
+    cgroup = tmp_path / "cgroup"
+    memory = cgroup / "memory"
+    cpu = cgroup / "cpu,cpuacct"
+    memory.mkdir(parents=True)
+    cpu.mkdir(parents=True)
+    (memory / "memory.usage_in_bytes").write_text("777\n", encoding="utf-8")
+    (cpu / "cpuacct.usage").write_text("1000000000\n", encoding="utf-8")
+    proc_cgroup = tmp_path / "self.cgroup"
+    proc_cgroup.write_text("7:blkio:/\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_health, "_CGROUP_ROOT", cgroup)
+    monkeypatch.setattr(runtime_health, "_PROC_SELF_CGROUP", proc_cgroup)
+
+    assert runtime_health._container_memory()["status"] == "unavailable"
+    assert runtime_health._container_cpu_usage_seconds() is None
+
+
 def test_database_size_uses_only_fixed_main_wal_and_shm_files(tmp_path):
     db_path = tmp_path / "analyzer.db"
     db_path.write_bytes(b"db")

@@ -13,6 +13,7 @@ from app.kubernetes_health_client import kubernetes_health_snapshot
 
 
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
+_PROC_SELF_CGROUP = Path("/proc/self/cgroup")
 _PROC_STATUS = Path("/proc/self/status")
 _MAX_KERNEL_FILE_BYTES = 64 * 1024
 _WORKLOAD_QUERY_BUDGET_SECONDS = 0.05
@@ -43,6 +44,46 @@ def _positive_int(text: str | None) -> int | None:
     except (TypeError, ValueError):
         return None
     return value if value >= 0 else None
+
+
+def _signed_int(text: str | None) -> int | None:
+    try:
+        return int((text or "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _v1_controller_relative_path(controller: str) -> tuple[bool, Path]:
+    """Return an explicitly reported, safe, bounded v1 controller-relative path."""
+    text = _read_fixed_text(_PROC_SELF_CGROUP)
+    if text is None:
+        return False, Path()
+    for line in text.splitlines():
+        hierarchy, separator, remainder = line.partition(":")
+        controllers, second_separator, raw_path = remainder.partition(":")
+        if not separator or not second_separator or not hierarchy.isdigit():
+            continue
+        if controller not in controllers.split(","):
+            continue
+        parts = [part for part in raw_path.replace("\\", "/").split("/") if part]
+        if any(part in {".", ".."} for part in parts) or len(parts) > 32:
+            return False, Path()
+        return True, Path(*parts) if parts else Path()
+    return False, Path()
+
+
+def _v1_controller_entry(
+    controller: str, mount_names: tuple[str, ...], filename: str,
+) -> tuple[Path, str] | None:
+    safe, relative = _v1_controller_relative_path(controller)
+    if not safe:
+        return None
+    for mount_name in mount_names:
+        directory = _CGROUP_ROOT / mount_name / relative
+        value = _read_fixed_text(directory / filename, 4096)
+        if value is not None:
+            return directory, value
+    return None
 
 
 def _process_memory() -> dict:
@@ -76,13 +117,38 @@ def _process_memory() -> dict:
 
 def _container_memory() -> dict:
     scope = "Current Linux control group"
-    source = "Linux cgroup v2 memory files"
-    current = _positive_int(_read_fixed_text(_CGROUP_ROOT / "memory.current", 4096))
-    peak = _positive_int(_read_fixed_text(_CGROUP_ROOT / "memory.peak", 4096))
-    maximum_text = _read_fixed_text(_CGROUP_ROOT / "memory.max", 4096)
+    source = "Linux control-group memory files"
+    current_text = _read_fixed_text(_CGROUP_ROOT / "memory.current", 4096)
+    if current_text is not None:
+        current = _positive_int(current_text)
+        peak = _positive_int(_read_fixed_text(_CGROUP_ROOT / "memory.peak", 4096))
+        maximum_text = _read_fixed_text(_CGROUP_ROOT / "memory.max", 4096)
+        maximum = (
+            None if (maximum_text or "").strip() == "max"
+            else _positive_int(maximum_text)
+        )
+    else:
+        mounts = ("memory",)
+        entry = _v1_controller_entry(
+            "memory", mounts, "memory.usage_in_bytes",
+        )
+        directory, current_text = entry if entry is not None else (None, None)
+        current = _positive_int(current_text)
+        peak = _positive_int(
+            _read_fixed_text(directory / "memory.max_usage_in_bytes", 4096)
+            if directory is not None else None
+        )
+        raw_maximum = _positive_int(
+            _read_fixed_text(directory / "memory.limit_in_bytes", 4096)
+            if directory is not None else None
+        )
+        # An effectively infinite v1 sentinel is not a real container limit.
+        maximum = (
+            None if raw_maximum is not None and raw_maximum >= 1 << 60
+            else raw_maximum
+        )
     if current is None:
         return _unavailable(scope=scope, unit="bytes", source=source)
-    maximum = None if (maximum_text or "").strip() == "max" else _positive_int(maximum_text)
     result = {
         "status": "available",
         "scope": scope,
@@ -98,24 +164,41 @@ def _container_memory() -> dict:
 
 def _container_cpu_usage_seconds() -> float | None:
     text = _read_fixed_text(_CGROUP_ROOT / "cpu.stat", 4096)
-    if text is None:
+    if text is not None:
+        for line in text.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[0] == "usage_usec":
+                value = _positive_int(fields[1])
+                return value / 1_000_000 if value is not None else None
         return None
-    for line in text.splitlines():
-        fields = line.split()
-        if len(fields) == 2 and fields[0] == "usage_usec":
-            value = _positive_int(fields[1])
-            return value / 1_000_000 if value is not None else None
-    return None
+    entry = _v1_controller_entry(
+        "cpuacct", ("cpu,cpuacct", "cpuacct,cpu", "cpuacct", "cpu"),
+        "cpuacct.usage",
+    )
+    value = _positive_int(entry[1] if entry is not None else None)
+    return value / 1_000_000_000 if value is not None else None
 
 
 def _container_cpu_allowance() -> float | None:
     text = _read_fixed_text(_CGROUP_ROOT / "cpu.max", 4096)
-    fields = text.split() if text else []
-    if len(fields) != 2 or fields[0] == "max":
-        return None
-    quota = _positive_int(fields[0])
-    period = _positive_int(fields[1])
-    if quota is None or not period:
+    if text is not None:
+        fields = text.split()
+        if len(fields) != 2 or fields[0] == "max":
+            return None
+        quota = _positive_int(fields[0])
+        period = _positive_int(fields[1])
+        if quota is None or not period:
+            return None
+        return quota / period
+    mounts = ("cpu,cpuacct", "cpuacct,cpu", "cpu")
+    entry = _v1_controller_entry("cpu", mounts, "cpu.cfs_quota_us")
+    directory, quota_text = entry if entry is not None else (None, None)
+    quota = _signed_int(quota_text)
+    period = _positive_int(
+        _read_fixed_text(directory / "cpu.cfs_period_us", 4096)
+        if directory is not None else None
+    )
+    if quota is None or quota < 0 or not period:
         return None
     return quota / period
 
@@ -307,7 +390,7 @@ class LocalRuntimeHealthProvider:
                 now=now,
                 used=container_used,
                 scope="Current Linux control group",
-                source="Linux cgroup v2 CPU usage over a monotonic interval",
+                source="Linux control-group CPU usage over a monotonic interval",
                 allowance=allowance,
             )
         measurements = {

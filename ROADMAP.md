@@ -422,6 +422,31 @@ A roadmap item should only be marked complete when:
   an improvised scan. The new package must be resealed and independently rechecked before
   it becomes the current transfer candidate. The currently installed Range remains unchanged until
   the newly sealed package is manually transferred and run.
+- **2026-10-13 Range container-resource compatibility correction started:** The installed
+  Range reports NCT process measurements but shows container CPU and memory as Unavailable.
+  On its older Docker stack this is consistent with the older Linux control-group counter
+  layout, while the current reader supports only the newer layout. Preserve the safe
+  Unavailable behavior for missing or malformed counters, add bounded read-only support
+  for both layouts (including
+  kernel-reported nested container paths and unlimited-resource sentinels), and test that
+  the newer layout remains preferred when both appear. This changes application bytes, so
+  the unsealed `phase2-r5` staging candidate is superseded. Rebuild the application as
+  `phase2-r4` and seal the complete corrected package as `phase2-r6`; do not patch the
+  installed Range container in place.
+- **2026-10-13 Range container-resource compatibility correction implemented:** System
+  Health now reads both newer and older Linux container counter layouts. Older-layout
+  readings require an explicit safe process-to-controller path from the kernel; missing,
+  unreadable, absent or unsafe identity stays Unavailable. Current, peak and limit memory
+  values remain bound to one exact directory, CPU quota and period remain together, root
+  counters require an explicit `/` record, and the newer layout retains priority. This
+  prevents host-wide or cross-container numbers from being presented as NCT container
+  use. The Operator Guide explains the expanded compatibility and preserves that
+  Unavailable never means zero. Focused application, UI, scope-handoff and Range checks
+  pass **140 tests**; the runtime browser regression and all source-script syntax checks
+  pass; the complete suite passes **1,570 tests** with **16 skipped** and one existing
+  dependency warning. The novice gate and independent quality gate are **CLEAR**. The
+  correction remains foundation-only and awaits the exact `phase2-r4` image and
+  `phase2-r6` archive checks; it is not yet installed on the Range or available on `main`.
 
 ## Field feedback correction cycle — 2026-10-08
 
