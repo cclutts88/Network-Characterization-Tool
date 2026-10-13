@@ -513,6 +513,24 @@ A roadmap item should only be marked complete when:
   pass; no permission change or host-mount workaround is authorized. This is an installed,
   acceptance-incomplete testing state, not mission-ready. The LF-only `phase2-r8` package
   and unmodified Range preflight remain mandatory future cleanup.
+- **2026-10-13 corrected portable Range package sealed and independently cleared:**
+  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r8.zip` is the clean
+  replacement transfer artifact. It is **97,224,500 bytes** with SHA-256
+  `a177b5b788a52601cd4ce8a883439ff84dfc8eb796a62716c58e479c6e86ce19`.
+  The package binds guide checkpoint `0572c1e83a6212c0aaee1f43bfceec82acd5660c`
+  to the unchanged tested `phase2-r4` application image from
+  `99d8e03b826c05a719d541923a66cf3f5b597224`. A fresh extraction verified one
+  safe package root, **22** unique archive entries, all **21** manifest-bound files,
+  all **18** source-to-package mappings, all **14** delivered shell scripts, and the
+  unchanged **97,955,840-byte** offline image archive with SHA-256
+  `8c24bbf6691ad1b6881fc8bc6b60c46549e23e6e43aea3d24662aafa86fd366d`.
+  The outer sidecar, package manifest and inner image sidecar contain no carriage
+  returns, end with a line feed, and pass unmodified GNU `sha256sum -c`. The novice
+  operator and independent exact-package gates are **CLEAR**. This package corrects
+  future transfer media only; the running Range remains the successfully installed
+  identical application image from the documented one-time r7 normalization event.
+  Container CPU and memory acceptance on that Range remains unresolved, so neither the
+  installed system nor this package is mission-ready or available on `main`.
 
 ## Field feedback correction cycle — 2026-10-08
 
