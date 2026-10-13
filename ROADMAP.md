@@ -539,6 +539,29 @@ A roadmap item should only be marked complete when:
   identical application image from the documented one-time r7 normalization event.
   Container CPU and memory acceptance on that Range remains unresolved, so neither the
   installed system nor this package is mission-ready or available on `main`.
+- **2026-10-13 phase3 Range schema-compatibility correction implemented locally:** The verified
+  `phase3-r1` package passed its outer and internal checks on the API 1.39 Range, loaded
+  the intended image, and then stopped safely before migration because the saved v4
+  schema fingerprint did not match the live database. The guarded upgrade restored the
+  original `phase2-r4` container and its verified pre-upgrade data. Local reproduction
+  with that exact prior image proves that normal phase2 SearchSploit caching, Artifact
+  Registry backfill, and exact-content compaction can create their supported tables
+  after v4 sealed its fingerprint. The correction must admit only complete, exact known
+  phase2 late-schema groups when removing an allowed subset reproduces the recorded v4
+  fingerprint; altered, incomplete, or unrelated schema changes must still fail closed.
+  Version 5 startup now initializes these supported schemas before sealing its new
+  fingerprint. No Range database marker is rewritten and no retained maintenance state
+  is deleted. The seven possible supported late-schema combinations, altered and
+  incomplete schemas, unrelated drift, data preservation, v1-through-v5 ledger, and
+  clean restart are covered by **29 passing focused tests**. The full Linux/Docker suite
+  passes with **1,625 passed and 16 skipped**. An isolated upgrade from the exact
+  `phase2-r4` image with rows in all three late-schema groups completed v5, retained all
+  rows, passed SQLite integrity and foreign-key checks, and restarted cleanly. The exact
+  corrected image also rendered System Health without visible or browser-console errors.
+  The failed `phase3-r1` package is withdrawn. Independent quality gate remains
+  **HALTED FOR REVIEW** until it verifies this exact diff and commit; Range acceptance
+  still requires a read-only database audit, replacement package, and fresh guarded
+  retry.
 
 ## Field feedback correction cycle — 2026-10-08
 

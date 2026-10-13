@@ -52,6 +52,10 @@ _SHUTTING_DOWN = False
 TERMINAL = {"completed", "completed_without_nmap", "failed", "cancelled", "interrupted", "uploaded", "timed_out"}
 COMPACTION_CONFIRMATION = "REMOVE VERIFIED DUPLICATE COPIES"
 MIN_COMPACTION_FREE_BYTES = 1024 * 1024
+_ARTIFACT_BACKFILL_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS artifact_backfill ("
+    "source_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, sha256 TEXT NOT NULL)"
+)
 
 
 def _read_db(db_path: Path):
@@ -301,6 +305,13 @@ def _init_compaction_journal(db_path: Path) -> None:
             """
         )
     _fsync_journal(db_path)
+
+
+def init_storage_health_storage(db_path: Path) -> None:
+    """Create maintenance state before the application schema is fingerprinted."""
+    _init_compaction_journal(db_path)
+    with connect_database(db_path) as db:
+        db.execute(_ARTIFACT_BACKFILL_SCHEMA)
 
 
 def _journal_item(
@@ -970,7 +981,7 @@ def backfill_storage(
     with publication() as db:
         if transaction_guard is not None:
             transaction_guard(db)
-        db.execute("CREATE TABLE IF NOT EXISTS artifact_backfill (source_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, sha256 TEXT NOT NULL)")
+        db.execute(_ARTIFACT_BACKFILL_SCHEMA)
     completed = skipped = 0
     for ref in references:
         if ownership_guard is not None:

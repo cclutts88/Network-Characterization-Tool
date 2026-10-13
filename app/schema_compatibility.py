@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from itertools import combinations
 import json
 from pathlib import Path
+import re
 import sqlite3
 import uuid
 
@@ -28,6 +30,61 @@ MIGRATION_PLAN = (
     DEVICE_CONTACT_MIGRATION_ID,
     MIGRATION_ID,
 )
+
+_LEGACY_V4_LATE_SCHEMA_GROUPS = (
+    frozenset({"searchsploit_query_cache", "searchsploit_query_cache_updated"}),
+    frozenset({"artifact_backfill"}),
+    frozenset({"artifact_compaction_journal"}),
+)
+_LEGACY_V4_LATE_SCHEMA_ROWS = {
+    "searchsploit_query_cache": (
+        "table",
+        "searchsploit_query_cache",
+        "searchsploit_query_cache",
+        """CREATE TABLE searchsploit_query_cache (
+               provider_key TEXT NOT NULL,
+               query TEXT NOT NULL,
+               candidates_json TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               PRIMARY KEY (provider_key, query)
+           )""",
+    ),
+    "searchsploit_query_cache_updated": (
+        "index",
+        "searchsploit_query_cache_updated",
+        "searchsploit_query_cache",
+        "CREATE INDEX searchsploit_query_cache_updated ON searchsploit_query_cache(updated_at)",
+    ),
+    "artifact_backfill": (
+        "table",
+        "artifact_backfill",
+        "artifact_backfill",
+        """CREATE TABLE artifact_backfill (
+               source_key TEXT PRIMARY KEY,
+               fingerprint TEXT NOT NULL,
+               sha256 TEXT NOT NULL
+           )""",
+    ),
+    "artifact_compaction_journal": (
+        "table",
+        "artifact_compaction_journal",
+        "artifact_compaction_journal",
+        """CREATE TABLE artifact_compaction_journal (
+               compaction_id TEXT NOT NULL,
+               item_id TEXT PRIMARY KEY,
+               source_path TEXT NOT NULL,
+               canonical_path TEXT NOT NULL,
+               recovery_path TEXT NOT NULL,
+               sha256 TEXT NOT NULL,
+               size_bytes INTEGER NOT NULL,
+               source_fingerprint_json TEXT NOT NULL,
+               canonical_fingerprint_json TEXT NOT NULL,
+               state TEXT NOT NULL,
+               detail TEXT,
+               updated_at TEXT NOT NULL
+           )""",
+    ),
+}
 
 
 class SchemaCompatibilityError(RuntimeError):
@@ -72,14 +129,61 @@ def image_schema_contract() -> dict[str, object]:
     return {**body, "contract_digest": _digest(body)}
 
 
-def schema_fingerprint(connection: sqlite3.Connection) -> str:
+def _schema_rows(connection: sqlite3.Connection) -> list[tuple]:
     rows = connection.execute(
         """SELECT type, name, tbl_name, COALESCE(sql, '')
              FROM sqlite_master
             WHERE name NOT LIKE 'sqlite_%'
             ORDER BY type, name, tbl_name, sql"""
     ).fetchall()
+    return [tuple(row) for row in rows]
+
+
+def schema_fingerprint(
+    connection: sqlite3.Connection,
+    *,
+    excluded_names: frozenset[str] = frozenset(),
+) -> str:
+    rows = [row for row in _schema_rows(connection) if row[1] not in excluded_names]
     return _digest([list(row) for row in rows])
+
+
+def _normalized_sql(value: str) -> str:
+    normalized = " ".join(str(value).split())
+    normalized = re.sub(r"\s*([(),])\s*", r"\1", normalized)
+    return normalized.casefold()
+
+
+def _matches_exact_legacy_v4_late_schema(
+    connection: sqlite3.Connection,
+    recorded_fingerprint: str,
+) -> bool:
+    """Recognize only complete phase2 schema groups created after v4 was sealed."""
+    by_name = {row[1]: row for row in _schema_rows(connection)}
+    complete_groups: list[frozenset[str]] = []
+    for group in _LEGACY_V4_LATE_SCHEMA_GROUPS:
+        present = group.intersection(by_name)
+        if present and present != group:
+            return False
+        if not present:
+            continue
+        for name in group:
+            actual = by_name[name]
+            expected = _LEGACY_V4_LATE_SCHEMA_ROWS[name]
+            if actual[:3] != expected[:3]:
+                return False
+            if _normalized_sql(actual[3]) != _normalized_sql(expected[3]):
+                return False
+        complete_groups.append(group)
+
+    for group_count in range(1, len(complete_groups) + 1):
+        for selected in combinations(complete_groups, group_count):
+            excluded = frozenset().union(*selected)
+            if schema_fingerprint(
+                connection, excluded_names=excluded
+            ) == recorded_fingerprint:
+                return True
+    return False
 
 
 def _ensure_storage(connection: sqlite3.Connection) -> None:
@@ -207,6 +311,12 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                          FROM nct_schema_migrations WHERE migration_id = ?""",
                     (MIGRATION_ID,),
                 ).fetchone()
+                recognized_legacy_v4_additions = (
+                    int(schema_version) == 4
+                    and bool(recorded)
+                    and recorded != live_fingerprint
+                    and _matches_exact_legacy_v4_late_schema(connection, recorded)
+                )
                 if not recorded or recorded != live_fingerprint:
                     resumable_failure = (
                         pending_current is not None
@@ -214,7 +324,7 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         and pending_current[1] == recorded
                         and pending_current[2] == live_fingerprint
                     )
-                    if not resumable_failure:
+                    if not resumable_failure and not recognized_legacy_v4_additions:
                         raise SchemaCompatibilityError(
                             "The saved schema fingerprint does not match the live database."
                         )

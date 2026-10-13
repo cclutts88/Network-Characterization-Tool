@@ -44,6 +44,7 @@ from app.nmap_assignment_workflow import (
     manual_nmap_assignment_for_processing,
 )
 from app.storage_health import (
+    init_storage_health_storage,
     recover_incomplete_compactions,
     resume_storage_jobs,
     start_storage_job,
@@ -271,6 +272,7 @@ from app.os_inference import infer_os_identity
 from app.searchsploit import (
     MAX_ARCHIVE_BYTES,
     enrich_hunting_with_searchsploit,
+    init_searchsploit_storage,
     install_searchsploit_archive,
     rollback_searchsploit_database,
     searchsploit_status,
@@ -1554,6 +1556,8 @@ async def lifespan(_: FastAPI):
         init_automated_nmap_foundation_storage(DB_PATH)
         init_automated_nmap_scope_correction_storage(DB_PATH)
         init_mission_environment_storage(DB_PATH)
+        init_searchsploit_storage(DB_PATH)
+        init_storage_health_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)

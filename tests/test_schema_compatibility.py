@@ -23,6 +23,11 @@ from app.schema_compatibility import (
     schema_fingerprint,
 )
 from app.work_coordination import init_work_coordination_storage
+from app.searchsploit import init_searchsploit_storage
+from app.storage_health import (
+    _init_compaction_journal,
+    init_storage_health_storage,
+)
 
 
 def _create_verified_version_two_fixture(db_path: Path) -> None:
@@ -230,6 +235,150 @@ def _create_verified_version_four_fixture(db_path: Path) -> None:
                       schema_fingerprint = ?""",
             (fingerprint,),
         )
+
+
+def _add_phase2_late_schema_group(db_path: Path, group: str) -> None:
+    if group == "searchsploit":
+        init_searchsploit_storage(db_path)
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                """INSERT INTO searchsploit_query_cache(
+                       provider_key, query, candidates_json, updated_at
+                   ) VALUES ('provider', 'query', '[]', '2026-10-13T00:00:00+00:00')"""
+            )
+        return
+    if group == "backfill":
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                "CREATE TABLE artifact_backfill (source_key TEXT PRIMARY KEY, "
+                "fingerprint TEXT NOT NULL, sha256 TEXT NOT NULL)"
+            )
+            db.execute(
+                "INSERT INTO artifact_backfill VALUES ('source', '[1, 2, 3]', 'abc')"
+            )
+        return
+    if group == "compaction":
+        _init_compaction_journal(db_path)
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                """INSERT INTO artifact_compaction_journal(
+                       compaction_id, item_id, source_path, canonical_path,
+                       recovery_path, sha256, size_bytes, source_fingerprint_json,
+                       canonical_fingerprint_json, state, detail, updated_at
+                   ) VALUES (
+                       'compaction', 'item', '/data/source', '/data/canonical',
+                       '/data/recovery', 'abc', 3, '{}', '{}', 'verified', NULL,
+                       '2026-10-13T00:00:00+00:00'
+                   )"""
+            )
+        return
+    raise AssertionError(f"unknown late schema group: {group}")
+
+
+@pytest.mark.parametrize("groups", [
+    ("searchsploit",),
+    ("backfill",),
+    ("compaction",),
+    ("searchsploit", "backfill"),
+    ("searchsploit", "compaction"),
+    ("backfill", "compaction"),
+    ("searchsploit", "backfill", "compaction"),
+])
+def test_verified_version_four_accepts_only_exact_phase2_late_schema_groups(
+    tmp_path: Path,
+    groups: tuple[str, ...],
+) -> None:
+    from app.mission_environment import init_mission_environment_storage
+
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    for group in groups:
+        _add_phase2_late_schema_group(db_path, group)
+    with sqlite3.connect(db_path) as db:
+        live_before = schema_fingerprint(db)
+
+    upgrade = begin_schema_migration(db_path)
+    assert upgrade is not None
+    with sqlite3.connect(db_path) as db:
+        before = db.execute(
+            "SELECT before_schema_fingerprint FROM nct_schema_migrations "
+            "WHERE migration_id = ?",
+            (MIGRATION_ID,),
+        ).fetchone()[0]
+    assert before == live_before
+
+    init_mission_environment_storage(db_path)
+    init_searchsploit_storage(db_path)
+    init_storage_health_storage(db_path)
+    complete_schema_migration(db_path, upgrade)
+
+    state = schema_state(db_path)
+    assert state["schema_version"] == 5
+    assert state["schema_fingerprint_matches"] is True
+    assert begin_schema_migration(db_path) is None
+    with sqlite3.connect(db_path) as db:
+        if "searchsploit" in groups:
+            assert db.execute(
+                "SELECT COUNT(*) FROM searchsploit_query_cache"
+            ).fetchone()[0] == 1
+        if "backfill" in groups:
+            assert db.execute(
+                "SELECT COUNT(*) FROM artifact_backfill"
+            ).fetchone()[0] == 1
+        if "compaction" in groups:
+            assert db.execute(
+                "SELECT COUNT(*) FROM artifact_compaction_journal"
+            ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("mutation", [
+    "CREATE TABLE artifact_backfill (source_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, sha256 TEXT NOT NULL, altered TEXT)",
+    "CREATE TABLE searchsploit_query_cache (provider_key TEXT NOT NULL, query TEXT NOT NULL, candidates_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (provider_key, query))",
+])
+def test_version_four_rejects_altered_or_incomplete_phase2_late_schema(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(mutation)
+    with pytest.raises(SchemaCompatibilityError, match="fingerprint"):
+        begin_schema_migration(db_path)
+
+
+def test_version_four_rejects_known_late_schema_plus_unexpected_drift(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    _add_phase2_late_schema_group(db_path, "searchsploit")
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE unexpected_schema(id INTEGER PRIMARY KEY)")
+    with pytest.raises(SchemaCompatibilityError, match="fingerprint"):
+        begin_schema_migration(db_path)
+
+
+def test_version_five_startup_owns_maintenance_schema_before_fingerprinting(
+    tmp_path: Path,
+) -> None:
+    from app.mission_environment import init_mission_environment_storage
+
+    db_path = tmp_path / "analyzer.db"
+    attempt = begin_schema_migration(db_path)
+    init_mission_environment_storage(db_path)
+    init_searchsploit_storage(db_path)
+    init_storage_health_storage(db_path)
+    complete_schema_migration(db_path, attempt)
+    before = schema_state(db_path)["live_schema_fingerprint"]
+
+    init_searchsploit_storage(db_path)
+    init_storage_health_storage(db_path)
+
+    after = schema_state(db_path)
+    assert after["live_schema_fingerprint"] == before
+    assert after["schema_fingerprint_matches"] is True
+    assert begin_schema_migration(db_path) is None
 
 
 def test_verified_version_four_upgrades_to_mission_environment_schema(tmp_path: Path) -> None:

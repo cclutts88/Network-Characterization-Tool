@@ -114,6 +114,11 @@ def _init_query_cache(db_path: Path | None = None) -> Path:
     return db_path
 
 
+def init_searchsploit_storage(db_path: Path | None = None) -> Path:
+    """Create the query cache before the application schema is fingerprinted."""
+    return _init_query_cache(db_path)
+
+
 def _load_query_cache(provider_key: str | None, queries: list[str]) -> dict[str, list[dict]]:
     if not provider_key or not queries:
         return {}
