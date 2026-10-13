@@ -870,6 +870,16 @@ A roadmap item should only be marked complete when:
     server paging and bounded exports remain a later sub-gate. Replacement-package
     qualification remains separate from this implementation completion. This work is
     foundation-only and is not yet installed on the Range.
+  - [~] Eighth bounded correction packaging started for replacement transfer candidate
+    `phase2-r9`, carrying exact application image
+    `0.16.0-range-test-20261013-phase2-r5` from reviewed source commit `46fbf1d`.
+    Update every packaged operator script and the air-gapped guide to the exact image and
+    package identities, preserve the existing host-folder upgrade and rollback workflow,
+    export NCT with the required Caddy image, and verify the immutable archive, Linux
+    checksums, shell syntax, exact-image health/build identity, Hunt automatic loading,
+    browser console, and package extraction before offering it for Range transfer. This
+    remains a transfer candidate until it passes installation, sign-in, preserved-data,
+    Range-host performance, rollback-readiness, and operator acceptance checks.
 
 ### Deviation history
 

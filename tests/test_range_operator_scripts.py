@@ -132,8 +132,8 @@ def test_quick_start_requires_release_specific_scope_handoff_acceptance():
     )
     normalized = " ".join(content.split())
 
-    assert "phase2-r8" in content
-    assert "phase2-r4" in content
+    assert "phase2-r9" in content
+    assert "phase2-r5" in content
     assert "$NCT_WORKDIR/RELEASE-RECEIPT.txt" in content
     assert "Saved scope handoff needs correction" in content
     assert "Repair saved scope handoff" in content
