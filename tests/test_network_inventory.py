@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.network_evidence_cache import NetworkEvidenceSourceChanged
 from app.network_inventory import (
+    NetworkEvidenceUnavailableError,
     StaleNetworkEvidenceError,
     filtered_network_inventory_ips,
     network_inventory_outliers,
@@ -143,6 +144,16 @@ def test_stale_revision_is_rejected_for_pages_lfa_and_export():
         filtered_network_inventory_ips(model, expected_revision="b" * 64)
 
 
+def test_unavailable_revision_is_explicit_for_pages_lfa_and_export():
+    model = {**_model(20), "source_revision": None}
+    with pytest.raises(NetworkEvidenceUnavailableError):
+        page_network_inventory(model, limit=10)
+    with pytest.raises(NetworkEvidenceUnavailableError):
+        network_inventory_outliers(model, threshold=20)
+    with pytest.raises(NetworkEvidenceUnavailableError):
+        filtered_network_inventory_ips(model)
+
+
 def test_lfa_uses_complete_filtered_subnet_independent_of_page_size():
     model = _model(300)
     first_page = page_network_inventory(
@@ -230,3 +241,19 @@ def test_current_network_projection_routes_report_unstable_sources_as_conflicts(
         response = client.get(path)
         assert response.status_code == 409
         assert "changed repeatedly" in response.json()["detail"]
+
+
+def test_current_network_projection_routes_report_unavailable_revision_as_conflict(
+    monkeypatch,
+):
+    model = {**_model(20), "source_revision": None}
+    monkeypatch.setattr("app.main._latest_network_evidence", lambda: model)
+    client = TestClient(app)
+    for path in (
+        "/api/analysis/network/page",
+        "/api/analysis/network/outliers",
+        "/api/analysis/network/ips",
+    ):
+        response = client.get(path)
+        assert response.status_code == 409
+        assert "could not be verified" in response.json()["detail"]

@@ -38,6 +38,21 @@ class NetworkEvidenceSnapshot:
     reason: str | None = None
 
 
+def _uncacheable_snapshot(
+    groups: list[list[dict]], reason: str,
+) -> NetworkEvidenceSnapshot:
+    """Keep the builder context contract even when exact reuse is unavailable."""
+    return NetworkEvidenceSnapshot(
+        None,
+        {
+            "groups": groups,
+            "oui": {"available": False, "paths": []},
+            "source_revision": None,
+        },
+        reason,
+    )
+
+
 @dataclass
 class _Flight:
     event: threading.Event
@@ -259,6 +274,7 @@ def _scan_artifact_rows(db: sqlite3.Connection, run_ids: set[str]) -> list[list]
                     JOIN artifact_registry artifact
                       ON artifact.sha256 = observation.sha256
                     WHERE observation.source_kind = 'nmap_scan'
+                      AND observation.original_filename = 'scan.xml'
                       AND observation.source_ref IN ({placeholders})
                     ORDER BY observation.source_ref, observation.observation_id""",
                 chunk,
@@ -362,7 +378,7 @@ def capture_network_evidence_snapshot(
     try:
         database = stable_path_identity(db_path)
     except OSError as exc:
-        return NetworkEvidenceSnapshot(None, [], str(exc))
+        return _uncacheable_snapshot([], str(exc))
 
     scan_rows = None
     manifest_index = None
@@ -387,8 +403,8 @@ def capture_network_evidence_snapshot(
                     ).fetchall()
                 ]
         except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
-            return NetworkEvidenceSnapshot(
-                None, [], f"Scan selection cannot be fingerprinted: {exc}"
+            return _uncacheable_snapshot(
+                [], f"Scan selection cannot be fingerprinted: {exc}"
             )
 
         manifests = prepare_manifests(raw_manifests, queued_ids)
@@ -409,8 +425,8 @@ def capture_network_evidence_snapshot(
             for row in topology_scan_rows["rows"]
         ]
     except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
-        return NetworkEvidenceSnapshot(
-            None, groups, f"Map scan selection cannot be fingerprinted: {exc}"
+        return _uncacheable_snapshot(
+            groups, f"Map scan selection cannot be fingerprinted: {exc}"
         )
     topology_ids = {
         str(manifest.get("run_id")) for manifest in topology_manifests
@@ -438,7 +454,9 @@ def capture_network_evidence_snapshot(
                 ),
             }
     except sqlite3.Error as exc:
-        return NetworkEvidenceSnapshot(None, groups, f"Mutable context cannot be fingerprinted: {exc}")
+        return _uncacheable_snapshot(
+            groups, f"Mutable context cannot be fingerprinted: {exc}"
+        )
 
     artifact_by_run: dict[str, list[list]] = {}
     canonical_by_digest: dict[str, dict] = {}
@@ -450,10 +468,10 @@ def capture_network_evidence_snapshot(
         try:
             identity = stable_file_identity(canonical_path)
         except OSError as exc:
-            return NetworkEvidenceSnapshot(None, groups, str(exc))
+            return _uncacheable_snapshot(groups, str(exc))
         if identity["sha256"] != digest or identity["size"] != size_bytes:
-            return NetworkEvidenceSnapshot(
-                None, groups, f"Canonical Nmap artifact does not match registry: {digest}"
+            return _uncacheable_snapshot(
+                groups, f"Canonical Nmap artifact does not match registry: {digest}"
             )
         canonical_by_digest[digest] = identity
 
@@ -461,8 +479,8 @@ def capture_network_evidence_snapshot(
     for run_id in sorted(relevant_run_ids):
         rows = artifact_by_run.get(run_id, [])
         if len(rows) > 1:
-            return NetworkEvidenceSnapshot(
-                None, groups, f"Scan {run_id} has ambiguous registered XML"
+            return _uncacheable_snapshot(
+                groups, f"Scan {run_id} has ambiguous registered XML"
             )
         path = run_directory(run_id) / "scan.xml"
         if not path.is_file():
@@ -471,10 +489,10 @@ def capture_network_evidence_snapshot(
         try:
             local = stable_file_identity(path)
         except OSError as exc:
-            return NetworkEvidenceSnapshot(None, groups, str(exc))
+            return _uncacheable_snapshot(groups, str(exc))
         if rows and (local["sha256"], local["size"]) != (str(rows[0][1]), int(rows[0][4])):
-            return NetworkEvidenceSnapshot(
-                None, groups, f"Run-local Nmap XML does not match registry: {run_id}"
+            return _uncacheable_snapshot(
+                groups, f"Run-local Nmap XML does not match registry: {run_id}"
             )
         nmap_inputs.append({
             "run_id": run_id,
@@ -485,7 +503,7 @@ def capture_network_evidence_snapshot(
 
     configuration_inputs, config_error = _configuration_inputs(config_dir)
     if config_error:
-        return NetworkEvidenceSnapshot(None, groups, config_error)
+        return _uncacheable_snapshot(groups, config_error)
 
     oui_identities: list[dict] = []
     for path in oui_search_paths():
@@ -494,7 +512,7 @@ def capture_network_evidence_snapshot(
         try:
             oui_identities.append(stable_file_identity(path))
         except OSError as exc:
-            return NetworkEvidenceSnapshot(None, groups, str(exc))
+            return _uncacheable_snapshot(groups, str(exc))
     oui_identity = {
         "available": bool(oui_identities),
         "paths": oui_identities,

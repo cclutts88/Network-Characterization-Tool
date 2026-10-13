@@ -121,6 +121,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Previously saved unregistered scan files remain readable" in html
     assert "add no operator action or button" in html
     assert "<strong>Current Network paging:</strong>" in html
+    assert "merged <code>scan.xml</code> is the analysis input" in html
+    assert "not mistaken for competing merged scan inputs" in html
     assert "no more than 100 matching hosts" in html
     assert "complete inventory before a page is selected" in html
     assert "tied to an exact source revision" in html

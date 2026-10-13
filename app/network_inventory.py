@@ -16,6 +16,10 @@ class StaleNetworkEvidenceError(ValueError):
     """The requested page belongs to an older exact-source network model."""
 
 
+class NetworkEvidenceUnavailableError(ValueError):
+    """Exact-source paging is unavailable until retained inputs are verifiable."""
+
+
 def _natural_key(value: Any) -> tuple:
     text = str(value or "")
     return tuple(
@@ -126,7 +130,9 @@ def _filtered_hosts(
 def _verify_revision(model: dict, expected_revision: str | None) -> str:
     revision = str(model.get("source_revision") or "")
     if not revision:
-        raise ValueError("Current Network source revision is unavailable")
+        raise NetworkEvidenceUnavailableError(
+            "Current Network source revision is unavailable because retained evidence could not be verified"
+        )
     if expected_revision and expected_revision != revision:
         raise StaleNetworkEvidenceError(
             "Current Network evidence changed while these pages were open"

@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.artifacts import init_artifact_storage, register_artifact_file
 from app.database import connect_database
@@ -164,6 +165,16 @@ def test_uncacheable_snapshot_never_creates_or_reuses_an_entry():
     assert cache.get(snapshot, build) == {"build": 1}
     assert cache.get(snapshot, build) == {"build": 2}
     assert cache.status()["entry_count"] == 0
+
+
+def test_missing_database_snapshot_preserves_builder_context_contract(tmp_path):
+    snapshot = _capture(tmp_path / "missing.db", tmp_path / "device-configs")
+    assert snapshot.key is None
+    assert snapshot.context == {
+        "groups": [],
+        "oui": {"available": False, "paths": []},
+        "source_revision": None,
+    }
 
 
 def _init_descriptor_database(db_path: Path) -> None:
@@ -475,12 +486,29 @@ def test_nmap_bytes_registration_and_corruption_change_cacheability(tmp_path):
     registered = capture()
     assert registered.key is not None and registered.key != changed.key
 
+    stdout_path = run_dir / "stdout.txt"
+    stdout_path.write_text("saved scan output", encoding="utf-8")
+    register_artifact_file(
+        db_path=db_path,
+        source_path=stdout_path,
+        source_kind="nmap_scan",
+        source_ref=run_id,
+        original_filename="stdout.txt",
+        media_type="text/plain",
+        actor="tester",
+    )
+    with_companion_artifact = capture()
+    assert with_companion_artifact.key is not None
+    assert with_companion_artifact.reason is None
+
     registered_times = xml_path.stat()
     xml_path.write_bytes(b"<nmaprun>C</nmaprun>")
     os.utime(xml_path, ns=(registered_times.st_atime_ns, registered_times.st_mtime_ns))
     corrupt = capture()
     assert corrupt.key is None
     assert "does not match registry" in str(corrupt.reason)
+    assert corrupt.context["groups"]
+    assert corrupt.context["source_revision"] is None
 
 
 def test_contract_bump_invalidates_descriptor(tmp_path, monkeypatch):
@@ -586,6 +614,86 @@ def test_real_empty_model_hits_then_exact_context_change_rebuilds(tmp_path, monk
     assert third["source"]["scan_count"] == 0
     assert third["source_revision"] != first["source_revision"]
     assert builds == ["topology", "topology"]
+
+
+def test_combined_scan_companion_xml_reaches_paged_inventory(tmp_path, monkeypatch):
+    import app.main as main
+
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    runs_dir = tmp_path / "runs"
+    run_id = "7" * 32
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True)
+    _init_descriptor_database(db_path)
+    manifest = {
+        "run_id": run_id,
+        "created_at": "2030-01-01T00:00:00+00:00",
+        "completed_at": "2030-01-01T00:01:00+00:00",
+        "status": "completed",
+        "success": True,
+        "targets": ["10.0.0.0/24"],
+    }
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO scan_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id, manifest["created_at"], "completed", "analyst", "reason",
+                "host", "eth0", "safe", json.dumps(manifest, sort_keys=True),
+            ),
+        )
+    for filename, content in (
+        ("scan.xml", b"<nmaprun><runstats><finished time='1'/></runstats></nmaprun>"),
+        ("tcp-scan.xml", b"<nmaprun><runstats><finished time='1'/></runstats></nmaprun>"),
+        ("udp-scan.xml", b"<nmaprun><runstats><finished time='1'/></runstats></nmaprun>"),
+    ):
+        path = run_dir / filename
+        path.write_bytes(content)
+        register_artifact_file(
+            db_path=db_path,
+            source_path=path,
+            source_kind="nmap_scan",
+            source_ref=run_id,
+            original_filename=filename,
+            media_type="application/xml",
+            actor="tester",
+        )
+
+    monkeypatch.setattr(
+        main,
+        "_capture_network_evidence_snapshot",
+        lambda: capture_network_evidence_snapshot(
+            db_path=db_path,
+            config_dir=config_dir,
+            run_directory=lambda value: runs_dir / value,
+            prepare_manifests=lambda manifests, _queued: manifests,
+            select_groups=lambda manifests: [[manifests[0]]],
+        ),
+    )
+    monkeypatch.setattr(
+        main,
+        "_build_latest_network_evidence",
+        lambda _groups: {
+            "hosts": [],
+            "findings": [],
+            "warnings": [],
+            "source": {"scope_summaries": []},
+            "host_count": 0,
+            "nmap_host_count": 0,
+            "configuration_device_count": 0,
+            "finding_count": 0,
+            "facets": {"subnets": []},
+        },
+    )
+    monkeypatch.setattr(main, "reset_oui_database_cache", lambda: None)
+    main._NETWORK_EVIDENCE_CACHE.clear()
+
+    response = TestClient(main.app).get("/api/analysis/network/page")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "analysis_network_page_complete"
+    assert payload["source_revision"] == main._capture_network_evidence_snapshot().key
+    assert len(payload["source_revision"]) == 64
 
 
 def test_map_boundary_selectors_share_deterministic_limits(tmp_path):

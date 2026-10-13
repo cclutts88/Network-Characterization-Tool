@@ -192,6 +192,7 @@ from app.network_evidence_cache import (
 )
 from app.network_inventory import (
     NETWORK_INVENTORY_SORTS,
+    NetworkEvidenceUnavailableError,
     StaleNetworkEvidenceError,
     filtered_network_inventory_ips,
     network_inventory_outliers,
@@ -3503,7 +3504,11 @@ def analyze_current_network() -> dict:
 
 
 def _current_network_revision_conflict(
-    exc: StaleNetworkEvidenceError | NetworkEvidenceSourceChanged,
+    exc: (
+        NetworkEvidenceUnavailableError
+        | StaleNetworkEvidenceError
+        | NetworkEvidenceSourceChanged
+    ),
 ) -> None:
     raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -3533,7 +3538,11 @@ def analyze_current_network_page(
             ),
             "status": "analysis_network_page_complete",
         }
-    except (StaleNetworkEvidenceError, NetworkEvidenceSourceChanged) as exc:
+    except (
+        NetworkEvidenceUnavailableError,
+        StaleNetworkEvidenceError,
+        NetworkEvidenceSourceChanged,
+    ) as exc:
         _current_network_revision_conflict(exc)
 
 
@@ -3551,7 +3560,11 @@ def analyze_current_network_outliers(
             subnet=subnet,
             expected_revision=revision,
         )
-    except (StaleNetworkEvidenceError, NetworkEvidenceSourceChanged) as exc:
+    except (
+        NetworkEvidenceUnavailableError,
+        StaleNetworkEvidenceError,
+        NetworkEvidenceSourceChanged,
+    ) as exc:
         _current_network_revision_conflict(exc)
 
 
@@ -3569,7 +3582,11 @@ def analyze_current_network_ips(
             subnet=subnet,
             expected_revision=revision,
         )
-    except (StaleNetworkEvidenceError, NetworkEvidenceSourceChanged) as exc:
+    except (
+        NetworkEvidenceUnavailableError,
+        StaleNetworkEvidenceError,
+        NetworkEvidenceSourceChanged,
+    ) as exc:
         _current_network_revision_conflict(exc)
 
 

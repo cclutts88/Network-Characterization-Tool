@@ -26,6 +26,18 @@ function analysisSyncHandler(name) {
   return match[0];
 }
 
+await eval(`(() => {
+  const esc=value=>String(value);
+  ${syncHandler("scanAnalyzeAction")}
+  const waiting=scanAnalyzeAction({run_id:'waiting',analysis_job_status:{current_job:null}});
+  assert.match(waiting,/disabled/);
+  assert.match(waiting,/Prepare from saved scan must finish/);
+  assert.ok(!waiting.includes('data-analyze='));
+  const ready=scanAnalyzeAction({run_id:'ready',analysis_job_status:{current_job:{latest_attempt:{state:'completed'}}}});
+  assert.match(ready,/data-analyze="ready"/);
+  assert.ok(!ready.includes('disabled'));
+})()`);
+
 await eval(`(async () => {
   let historyGroups=[{group_id:'g',runs:[{
     run_id:'scoped',

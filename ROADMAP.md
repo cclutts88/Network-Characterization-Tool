@@ -248,6 +248,35 @@ A roadmap item should only be marked complete when:
   not target-Range accepted, mission-ready, or available on `main`; installation,
   sign-in, and any administrator-approved live Cisco collection remain target acceptance
   checks.
+- **2026-10-13 Range candidate withdrawal and Host Inventory correction start:** The
+  hands-on preview exposed a retained-data-only failure after one normal combined TCP/UDP
+  scan: the exact-source selector treated every registered companion artifact for the
+  run as a competing `scan.xml`, then an uncacheable-snapshot context-shape mismatch
+  turned that verification refusal into a raw HTTP 500/JSON parsing message. Withdraw
+  ZIP SHA-256 `ebda09dd743740e8d51733649f4f4e4ea88f4fd1c245b006156d9fda8c8c97b1`;
+  it must not be installed on the Range. Correct the selector to identify only the merged
+  `scan.xml`, preserve one builder-context shape on every uncacheable path, return an
+  explicit conflict when exact-source paging/LFA/export cannot establish a revision,
+  validate against the operator's existing saved scan without new network contact, run
+  the broader novice workflow sweep, rebuild the immutable image and package under a new
+  identity, and repeat the complete transfer gate.
+- **2026-10-13 retained combined-scan correction complete:** The exact-source selector
+  now uses the run's merged `scan.xml` as the authoritative current-network input while
+  preserving TCP, UDP, discovery, packet-capture, console and target companion artifacts
+  as evidence. Every unavailable snapshot retains one documented context shape, and
+  exact-source Host Inventory paging, LFA and IP export now return an explicit conflict
+  instead of a raw server/JSON error when a revision cannot be verified. Validation used
+  an isolated copy of the operator's one saved combined scan and made no network contact:
+  Host Inventory returned 16 hosts from 1 scan, LFA returned 5 outliers across 2 eligible
+  groups, IP export returned 16 addresses, Hunt returned 16 hosts and 54 findings, Reach
+  returned 16 hosts, Map returned 21 nodes, and Scan History retained 1 grouped run.
+  Scan History now disables Analyze until the exact saved result has completed Prepare,
+  Hunt remains readable at narrower widths with the Operator Guide open, and the affected
+  guide topics explain their specific controls. Focused validation passed 111 tests, the
+  Scan History browser-runtime regression passed, and the full suite passed 1,548 tests
+  with 16 skipped. Browser console and novice-operator checks were clear. A replacement
+  immutable image and transfer archive remain required before Range transfer; the
+  withdrawn archive remains prohibited.
 
 ## Field feedback correction cycle — 2026-10-08
 

@@ -321,6 +321,14 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "Opens or closes the waiting-scan list" in SHELL_SCRIPT
     assert "Shows the saved target, profile version" in SHELL_SCRIPT
     assert "Removes this waiting scan before it begins network activity" in SHELL_SCRIPT
+    assert "Retained scans for this subnet" in SHELL_SCRIPT
+    assert "Prepare this saved scan for Analyze" in SHELL_SCRIPT
+    assert "Maximum peer-group frequency" in SHELL_SCRIPT
+    assert "Lower percentages show only rarer ports" in SHELL_SCRIPT
+    assert "Filter current evidence" in SHELL_SCRIPT
+    assert "Current Network subnet" in SHELL_SCRIPT
+    assert "Host Inventory rows per page" in SHELL_SCRIPT
+    assert "Organize the current inventory" in SHELL_SCRIPT
 
 
 def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
@@ -1003,6 +1011,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert '<details class="panel" data-workspace-card="network-overview">' in html
     assert '<details class="panel" data-workspace-card="network-overview" open>' not in html
     assert 'id="huntQuickSearch" class="panel hunt-quick-search"' in html
+    assert "repeat(auto-fit,minmax(min(100%,420px),1fr))" in html
+    assert "Network-wide evidence is unavailable until NCT can read a verified retained source." in html
     assert html.index('id="search"') < html.index('id="networkFiltersPanel"')
     assert "search:['Quick filter hosts and services'" in SHELL_SCRIPT
     assert 'id="activeFilterSummary"' in html
