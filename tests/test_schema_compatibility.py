@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from app.database import connect_database
 from app.schema_compatibility import (
     DATA_LAYOUT_CONTRACT,
     DEVICE_CONTACT_MIGRATION_ID,
@@ -21,6 +22,7 @@ from app.schema_compatibility import (
     migration_plan_digest,
     schema_state,
     schema_fingerprint,
+    schema_upgrade_preflight,
 )
 from app.work_coordination import init_work_coordination_storage
 from app.searchsploit import init_searchsploit_storage
@@ -379,6 +381,56 @@ def test_version_five_startup_owns_maintenance_schema_before_fingerprinting(
     assert after["live_schema_fingerprint"] == before
     assert after["schema_fingerprint_matches"] is True
     assert begin_schema_migration(db_path) is None
+
+
+def test_version_four_read_only_preflight_accepts_exact_late_schema_and_preserves_bytes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    for group in ("searchsploit", "backfill", "compaction"):
+        _add_phase2_late_schema_group(db_path, group)
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    before = db_path.read_bytes()
+
+    result = schema_upgrade_preflight(db_path)
+
+    assert result["status"] == "pass"
+    assert result["compatibility"] == "exact-known-phase2-late-schema"
+    assert result["schema_version"] == 4
+    assert result["integrity"] == "ok"
+    assert result["foreign_key_errors"] == []
+    assert result["known_late_schema_objects"] == [
+        "artifact_backfill",
+        "artifact_compaction_journal",
+        "searchsploit_query_cache",
+        "searchsploit_query_cache_updated",
+    ]
+    assert db_path.read_bytes() == before
+
+
+def test_version_four_read_only_preflight_rejects_unknown_drift(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE unexpected_schema(id INTEGER PRIMARY KEY)")
+
+    with pytest.raises(SchemaCompatibilityError, match="unrecognized"):
+        schema_upgrade_preflight(db_path)
+
+
+def test_version_four_read_only_preflight_rejects_incomplete_ledger(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "DELETE FROM nct_schema_migrations WHERE migration_id = ?",
+            (WORK_COORDINATION_MIGRATION_ID,),
+        )
+
+    with pytest.raises(SchemaCompatibilityError, match="ledger"):
+        schema_upgrade_preflight(db_path)
 
 
 def test_verified_version_four_upgrades_to_mission_environment_schema(tmp_path: Path) -> None:

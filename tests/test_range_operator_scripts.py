@@ -218,10 +218,19 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert '"artifact_registry": []' in content
     assert 'PRAGMA integrity_check' in content
     assert 'PRAGMA foreign_key_check' in content
+    assert 'SCHEMA_PREFLIGHT="$WORKDIR/scripts/nct-schema-preflight.py"' in content
+    assert '"$original_image_id" python -c' in content
+    assert 'PRAGMA wal_checkpoint(TRUNCATE)' in content
+    assert '"$DATA_DIR:/data:ro,Z"' in content
+    assert '"$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db' in content
+    assert 'schema_preflight=%s' in content
     assert 'NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
     assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
     assert 'snapshot "$before"' in content
     assert content.index('docker stop "$CONTAINER"') < content.index('snapshot "$before"')
+    assert content.index('PRAGMA wal_checkpoint(TRUNCATE)') < content.index(
+        'python /opt/nct-schema-preflight.py'
+    )
     assert 'snapshot "$after" container' in content
     assert '"analyzer.db-wal"' in content
     assert '"analyzer.db-shm"' in content

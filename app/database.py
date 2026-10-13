@@ -55,12 +55,16 @@ class DatabaseConnection(sqlite3.Connection):
 
 def connect_database(
     db_path: Path, *, read_only: bool = False,
+    immutable: bool = False,
     busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS,
 ) -> sqlite3.Connection:
     """Open an application connection with consistent lock handling."""
+    if immutable and not read_only:
+        raise ValueError("immutable database access must be read-only")
     busy_timeout_ms = max(0, int(busy_timeout_ms))
+    read_only_query = "?mode=ro&immutable=1" if immutable else "?mode=ro"
     connection = sqlite3.connect(
-        db_path.resolve().as_uri() + "?mode=ro" if read_only else db_path,
+        db_path.resolve().as_uri() + read_only_query if read_only else db_path,
         uri=read_only,
         timeout=busy_timeout_ms / 1000,
         factory=DatabaseConnection,

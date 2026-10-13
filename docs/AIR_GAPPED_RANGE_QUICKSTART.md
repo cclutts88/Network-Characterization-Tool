@@ -227,13 +227,21 @@ sh "$NCT_WORKDIR/scripts/nct-upgrade.sh" RANGE_IP legacy
 For current Docker without Compose, add `docker` instead.
 
 The upgrade will refuse to start if a scan or collection is running. It checks
-the packaged image, backs up the permanent data, retains the old container,
-preserves the installation's current web port, starts NCT 0.16.0, and confirms
-that stored file and record counts did not go down.
+the packaged image and stops the current NCT writer. The retained original image
+first completes SQLite's normal stopped-database checkpoint so the audit cannot
+miss recently committed records. The replacement image then audits the saved
+database through a read-only mount without changing it. The audit verifies database
+integrity, the complete saved migration history, and either the exact recorded
+version 4 structure or only the complete known phase2 maintenance tables. Any
+unknown, incomplete, or altered structure stops the upgrade and restores the
+original container. After the audit passes, the helper backs up the permanent
+data, retains the old container, preserves the installation's current web port,
+starts NCT 0.16.0, and confirms that stored file and record counts did not go
+down.
 
 What success looks like: the script prints a successful upgrade receipt, a
-backup location, and a rollback-container name. Write down all three and keep
-them until testing is complete.
+read-only schema-audit receipt, a backup location, and a rollback-container
+name. Write down all four and keep them until testing is complete.
 
 ## 7. Allow approved analysts through the Range firewall
 

@@ -186,6 +186,99 @@ def _matches_exact_legacy_v4_late_schema(
     return False
 
 
+def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
+    """Read-only proof that a saved v4 database is safe for this image to upgrade."""
+    if not db_path.is_file():
+        raise SchemaCompatibilityError("The saved NCT database was not found.")
+    wal_path = db_path.with_name(f"{db_path.name}-wal")
+    if wal_path.exists() and wal_path.stat().st_size:
+        raise SchemaCompatibilityError(
+            "The stopped database still has uncheckpointed WAL data."
+        )
+    connection = connect_database(db_path, read_only=True, immutable=True)
+    try:
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_key_errors = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
+        if integrity != "ok" or foreign_key_errors:
+            raise SchemaCompatibilityError(
+                "The saved database failed integrity or foreign-key validation."
+            )
+        state = connection.execute(
+            """SELECT schema_contract_version, schema_version, data_layout_contract,
+                      schema_fingerprint, originating_build_id, originating_build_commit
+                 FROM nct_schema_state WHERE singleton = 1"""
+        ).fetchone()
+        if state is None:
+            raise SchemaCompatibilityError("The saved schema state is missing.")
+        contract_version, schema_version, layout, recorded, build_id, build_commit = state
+        if int(contract_version) != 4 or int(schema_version) != 4:
+            raise SchemaCompatibilityError(
+                "This replacement package requires the verified phase2 version 4 schema."
+            )
+        if layout != DATA_LAYOUT_CONTRACT or not recorded:
+            raise SchemaCompatibilityError(
+                "The saved evidence layout or schema fingerprint is not compatible."
+            )
+        live = schema_fingerprint(connection)
+        compatibility = "recorded-fingerprint-match"
+        if live != recorded:
+            if not _matches_exact_legacy_v4_late_schema(connection, recorded):
+                raise SchemaCompatibilityError(
+                    "The saved schema differs from version 4 in an unrecognized way."
+                )
+            compatibility = "exact-known-phase2-late-schema"
+
+        ledger = connection.execute(
+            """SELECT migration_id, target_schema_version, status,
+                      after_schema_fingerprint
+                 FROM nct_schema_migrations ORDER BY target_schema_version, migration_id"""
+        ).fetchall()
+        expected_ids = MIGRATION_PLAN[:4]
+        if len(ledger) != len(expected_ids):
+            raise SchemaCompatibilityError(
+                "The saved version 4 migration ledger is incomplete or contains extra entries."
+            )
+        by_id = {row[0]: row for row in ledger}
+        for target, migration_id in enumerate(expected_ids, start=1):
+            row = by_id.get(migration_id)
+            if (
+                row is None
+                or int(row[1]) != target
+                or row[2] != "completed"
+                or not row[3]
+                or (target == 4 and row[3] != recorded)
+            ):
+                raise SchemaCompatibilityError(
+                    "The saved version 4 migration ledger is incomplete or inconsistent."
+                )
+
+        known_late_names = set(_LEGACY_V4_LATE_SCHEMA_ROWS)
+        present_late_names = sorted(
+            row[1] for row in _schema_rows(connection) if row[1] in known_late_names
+        )
+        return {
+            "status": "pass",
+            "compatibility": compatibility,
+            "schema_contract_version": int(contract_version),
+            "schema_version": int(schema_version),
+            "data_layout_contract": layout,
+            "recorded_schema_fingerprint": recorded,
+            "live_schema_fingerprint": live,
+            "originating_build_id": build_id,
+            "originating_build_commit": build_commit,
+            "known_late_schema_objects": present_late_names,
+            "migration_ids": [row[0] for row in ledger],
+            "integrity": integrity,
+            "foreign_key_errors": foreign_key_errors,
+        }
+    except sqlite3.Error as exc:
+        raise SchemaCompatibilityError(
+            f"The saved database could not be audited: {exc}"
+        ) from exc
+    finally:
+        connection.close()
+
+
 def _ensure_storage(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """

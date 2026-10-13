@@ -145,6 +145,23 @@ def test_application_database_calls_use_shared_lock_policy():
     assert offenders == []
 
 
+def test_immutable_database_access_is_read_only_and_requires_explicit_read_only(tmp_path: Path):
+    path = tmp_path / "immutable.db"
+    with connect_database(path) as db:
+        db.execute("CREATE TABLE retained(value TEXT NOT NULL)")
+        db.execute("INSERT INTO retained VALUES ('evidence')")
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="must be read-only"):
+        connect_database(path, immutable=True)
+    with connect_database(path, read_only=True, immutable=True) as db:
+        assert db.execute("SELECT value FROM retained").fetchone()[0] == "evidence"
+        with pytest.raises(sqlite3.OperationalError):
+            db.execute("INSERT INTO retained VALUES ('changed')")
+
+    assert path.read_bytes() == before
+
+
 def test_historical_device_collection_requires_verified_conversion(tmp_path):
     run_id, root, folder = collection(tmp_path)
     db_path = tmp_path/'test.db'

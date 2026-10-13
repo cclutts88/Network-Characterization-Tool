@@ -553,15 +553,21 @@ A roadmap item should only be marked complete when:
   fingerprint. No Range database marker is rewritten and no retained maintenance state
   is deleted. The seven possible supported late-schema combinations, altered and
   incomplete schemas, unrelated drift, data preservation, v1-through-v5 ledger, and
-  clean restart are covered by **29 passing focused tests**. The full Linux/Docker suite
-  passes with **1,625 passed and 16 skipped**. An isolated upgrade from the exact
+  clean restart are covered by **29 passing focused tests**. The final Linux/Docker suite,
+  including the replacement package's stopped-database audit, passes with **1,629 passed
+  and 16 skipped**. An isolated upgrade from the exact
   `phase2-r4` image with rows in all three late-schema groups completed v5, retained all
   rows, passed SQLite integrity and foreign-key checks, and restarted cleanly. The exact
   corrected image also rendered System Health without visible or browser-console errors.
-  The failed `phase3-r1` package is withdrawn. Independent quality gate remains
-  **HALTED FOR REVIEW** until it verifies this exact diff and commit; Range acceptance
-  still requires a read-only database audit, replacement package, and fresh guarded
-  retry.
+  The replacement upgrade helper now stops the old writer, completes a WAL checkpoint
+  through the retained original image, and then uses the replacement image to record a
+  SHA-256-bound, immutable read-only audit of database integrity, foreign keys, schema
+  fingerprints, the v1-through-v4 ledger, originating build, and exact known late-schema
+  objects. An isolated Docker read-only-mount exercise passed. The failed `phase3-r1`
+  package is withdrawn. The schema correction quality gate is **CLEAR — DOCUMENTED
+  DEVIATION** at commit `88a6322`; the package audit safeguard and exact replacement
+  package still require independent review. Range acceptance still requires the new
+  guarded retry and preserved-data/browser checks.
 
 ## Field feedback correction cycle — 2026-10-08
 

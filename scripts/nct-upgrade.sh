@@ -12,6 +12,7 @@ ARCHIVE="$WORKDIR/offline-images/nct-range-images.tar"
 CHECKSUM="$WORKDIR/offline-images/nct-range-images.tar.sha256"
 STATE_DIR="$PERSIST_ROOT/deployment"
 BACKUP_DIR="$STATE_DIR/backups"
+SCHEMA_PREFLIGHT="$WORKDIR/scripts/nct-schema-preflight.py"
 
 say() { printf '%s\n' "[NCT upgrade] $*"; }
 die() { printf '%s\n' "[NCT upgrade] ERROR: $*" >&2; exit 1; }
@@ -37,6 +38,7 @@ done
 docker info >/dev/null 2>&1 || die "Docker is not reachable."
 [ -f "$ARCHIVE" ] || die "Missing $ARCHIVE"
 [ -f "$CHECKSUM" ] || die "Missing $CHECKSUM"
+[ -f "$SCHEMA_PREFLIGHT" ] || die "Missing $SCHEMA_PREFLIGHT"
 verify_archive_checksum || die "The offline image archive checksum does not match."
 docker inspect "$CONTAINER" >/dev/null 2>&1 ||
     die "Container $CONTAINER was not found. Use a start script for a new installation."
@@ -131,6 +133,7 @@ chmod 700 "$PERSIST_ROOT" "$STATE_DIR" "$BACKUP_DIR"
 before="$BACKUP_DIR/pre-upgrade-$timestamp.json"
 after="$BACKUP_DIR/post-upgrade-$timestamp.json"
 backup="$BACKUP_DIR/nct-data-$timestamp.tar.gz"
+schema_preflight="$BACKUP_DIR/schema-preflight-$timestamp.json"
 
 snapshot_code='
 import hashlib, json, pathlib, sqlite3, sys
@@ -281,6 +284,25 @@ if [ "$was_running" = "true" ]; then
     docker stop "$CONTAINER" >/dev/null
 fi
 check_active sidecar
+say "Checkpointing the stopped database with the retained original image..."
+docker run --rm -v "$DATA_DIR:/data:Z" "$original_image_id" python -c '
+import pathlib, sqlite3
+path = pathlib.Path("/data/analyzer.db")
+if path.exists():
+    db = sqlite3.connect(path)
+    result = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    db.close()
+    if result is None or int(result[0]) != 0:
+        raise SystemExit(f"SQLite WAL checkpoint did not complete: {result}")
+' || die "The stopped database could not be checkpointed with the retained original image. The original NCT container will be restored."
+say "Auditing the stopped saved database with the replacement image (read-only)..."
+docker run --rm \
+    -e PYTHONPATH=/app \
+    -v "$DATA_DIR:/data:ro,Z" \
+    -v "$SCHEMA_PREFLIGHT:/opt/nct-schema-preflight.py:ro,Z" \
+    "$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db > "$schema_preflight" ||
+    die "The saved schema is not an exact supported upgrade source. The original NCT container will be restored."
+chmod 600 "$schema_preflight"
 snapshot "$before"
 tar -C "$PERSIST_ROOT" -czf "$backup" data
 chmod 600 "$backup"
@@ -333,6 +355,7 @@ receipt="$STATE_DIR/upgrade-$timestamp.receipt"
     printf 'data_directory=%s\n' "$DATA_DIR"
     printf 'backup=%s\n' "$backup"
     printf 'backup_checksum=%s\n' "$backup.sha256"
+    printf 'schema_preflight=%s\n' "$schema_preflight"
     printf 'rollback_container=%s\n' "$rollback"
     printf 'rollback_container_id=%s\n' "$original_container_id"
     printf 'rollback_image_id=%s\n' "$original_image_id"
@@ -349,5 +372,6 @@ upgrade_complete=yes
 trap - EXIT HUP INT TERM
 say "Upgrade verified. NCT is ready at https://$RANGE_IP:$candidate_host_port"
 say "Data backup: $backup"
+say "Read-only schema audit: $schema_preflight"
 say "Rollback container retained (stopped): $rollback"
 say "Receipt: $receipt"
