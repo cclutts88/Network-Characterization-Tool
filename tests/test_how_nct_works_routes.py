@@ -148,6 +148,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "foundation/evidence-engine-v2" in html
     assert 'href="/settings/system-health"' in html
     assert 'href="/settings/network-scopes"' in html
+    assert 'href="/settings/mission-environment"' in html
+    assert "Mission Environment declarations" in html
+    assert "not automatically enforced by this slice" in html
 
 
 def test_readme_escapes_build_identity():

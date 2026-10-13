@@ -22,6 +22,7 @@ from app.device_contact_work import (
     request_device_contact_cancellation,
 )
 from app.schema_compatibility import (
+    DEVICE_CONTACT_MIGRATION_ID,
     LEGACY_MIGRATION_ID,
     MIGRATION_ID,
     SCHEDULED_WORK_MIGRATION_ID,
@@ -190,8 +191,8 @@ def _create_verified_v3_fixture(db_path: Path) -> None:
     init_scheduled_work_storage(db_path)
     with sqlite3.connect(db_path) as connection:
         connection.execute(
-            "DELETE FROM nct_schema_migrations WHERE migration_id = ?",
-            (MIGRATION_ID,),
+            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?)",
+            (DEVICE_CONTACT_MIGRATION_ID, MIGRATION_ID),
         )
         fingerprint = schema_fingerprint(connection)
         connection.execute(
@@ -213,7 +214,9 @@ def _create_verified_v3_fixture(db_path: Path) -> None:
         )
 
 
-def test_v3_to_v4_interrupted_ddl_resumes_with_exact_lineage(tmp_path: Path) -> None:
+def test_v3_to_v5_interrupted_ddl_resumes_with_exact_lineage(tmp_path: Path) -> None:
+    from app.mission_environment import init_mission_environment_storage
+
     db_path = tmp_path / "analyzer.db"
     _create_verified_v3_fixture(db_path)
     first = begin_schema_migration(db_path)
@@ -251,6 +254,7 @@ def test_v3_to_v4_interrupted_ddl_resumes_with_exact_lineage(tmp_path: Path) -> 
     retry = begin_schema_migration(db_path)
     assert retry is not None and retry.attempt == 2
     init_device_contact_work_storage(db_path)
+    init_mission_environment_storage(db_path)
     complete_schema_migration(db_path, retry)
 
     with sqlite3.connect(db_path) as connection:
@@ -283,12 +287,13 @@ def test_v3_to_v4_interrupted_ddl_resumes_with_exact_lineage(tmp_path: Path) -> 
     assert list_unsynced_device_contact_presentations(db_path) == []
 
     state = schema_state(db_path)
-    assert state["schema_version"] == 4
+    assert state["schema_version"] == 5
     assert state["schema_fingerprint_matches"] is True
     assert [item["migration_id"] for item in state["migration_ledger"]] == [
         LEGACY_MIGRATION_ID,
         WORK_COORDINATION_MIGRATION_ID,
         SCHEDULED_WORK_MIGRATION_ID,
+        DEVICE_CONTACT_MIGRATION_ID,
         MIGRATION_ID,
     ]
     assert state["migration_ledger"][-1]["attempts"] == 2
@@ -298,10 +303,12 @@ def test_version_three_image_rejects_completed_version_four(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app import schema_compatibility
+    from app.mission_environment import init_mission_environment_storage
 
     db_path = tmp_path / "analyzer.db"
     attempt = begin_schema_migration(db_path)
     init_device_contact_work_storage(db_path)
+    init_mission_environment_storage(db_path)
     complete_schema_migration(db_path, attempt)
 
     monkeypatch.setattr(schema_compatibility, "SCHEMA_CONTRACT_VERSION", 3)

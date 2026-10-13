@@ -895,6 +895,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-13 | Phase 3 Mission Environment authorization | Use Mission Environment declarations to guide collection and analysis | The first slice stores and displays administrator-reviewed availability, coverage, authorization and blind-spot declarations. It does not grant permission, block scans, or change analysis. Existing authorization procedures and No-Strike controls remain authoritative | A durable, reviewable declaration layer must exist before it can safely affect network contact. Inferring permission from installed tools, addresses, names, targets or old evidence could authorize activity that an operator did not approve | Unknown is the default; Nmap-prohibited is derived into the blind-spot view; later reviewed gates must add scope-aware warnings/enforcement, adaptive pivots and Arkime/Kibana use. This is an accepted declaration-first deviation and Phase 3 remains incomplete until those gates pass |
 | 2026-10-12 | Gate 7 shared storage | Make PostgreSQL or object storage a dependency for ordinary standalone NCT, or place SQLite behind a sidecar/network service | Preserve embedded SQLite plus local content-addressed files for standalone and single-replica operation. Select PostgreSQL as the future multi-replica transactional authority and an S3-compatible immutable content-addressed object API as its artifact authority. Keep the profile disabled until implementation plus Gate 8 concurrency/failure testing passes | The approved offline package must remain portable and efficient. SQLite cannot safely provide multi-replica transactional authority through a sidecar, while a shared writable filesystem would leave artifact behavior tied to path and mount semantics. PostgreSQL supplies shared transactions and database time; the object contract supplies immutable conditional creation without making listing authoritative | Migration is offline into an empty target with a verified cold backup, exact artifact inventory, stable-ID preservation, a cutover receipt and no dual writes. Before the target admits a write, cut back to the unchanged source is allowed. After any target write, preserve the target and restore/reconcile through a separate reviewed generation; automatic reverse migration is not claimed. See `docs/SHARED_STORAGE_ARCHITECTURE.md`. |
 | 2026-10-12 | Gate 6 scheduled occurrence controls | Treat pausing a schedule as a stop request for any occurrence that has not started its next chunk | Define Pause future occurrences as a cadence control only. An already-created occurrence retains its complete frozen chunk plan and may continue; stopping that occurrence uses the scan cancellation path. Protect the cadence control with a monotonic control revision so worker progress cannot overwrite a concurrent pause. If ownership is lost after contact, later chunks remain blocked until an administrator verifies the former scanner stopped and records a reviewed closure; the ambiguous chunk never reopens | A durable occurrence is one authorized execution with one immutable plan. Silently changing or partly discarding that plan when the reusable cadence is paused would make the occurrence record disagree with what was authorized. Operators also need separate, explicit meaning for pausing future work and stopping contact already assigned | Schedule actions and the Operator Guide state the boundary. Reviewed closure records actor, reason and confirmation, cancels only unstarted chunks, clears exact recovery blocks and leaves future cadence paused. Tests must retain pause-race, recovery-closure and later-chunk blocking coverage. |
 | 2026-10-12 | Kubernetes acceptance gate 5 | Let the NCT application use a namespace-scoped read-only Kubernetes client | Keep all Kubernetes credentials out of the NCT application. Run the optional reader as a separate bounded workload with a dedicated projected short-lived token, namespace Role and ServiceAccount; NCT consumes only its coarse sanitized status over a fixed internal service name | A token in the NCT web container would unnecessarily expand the consequence of an application compromise, and a sidecar could couple adapter failure to NCT Pod readiness. Kubernetes RBAC also cannot restrict list permission by labels, so application filtering alone cannot make a shared namespace least privilege | The first profile requires an NCT-only namespace. In a shared namespace the credential can technically list other Deployments, ReplicaSets and Pods even though the adapter requests fixed labels, validates the exact Deployment ownership chain and returns no identifiers or raw objects. Metrics permission is a separate opt-in. Local tests cannot prove target-cluster authorization, namespace isolation, API networking or Metrics API behavior; exact-cluster denied, timeout, truncation and no-metrics exercises remain required. |
@@ -4360,7 +4361,48 @@ high-volume passive evidence.
 **Purpose:** Teach NCT what collection tools exist, what is authorized, and what
 cannot be seen.
 
+**Implementation status (partial Phase 3 declaration and visibility slice completed
+2026-10-13):** Foundation-only on `foundation/evidence-engine-v2`. Settings / Mission
+Environment now retains explicit tool availability, version and non-secret access
+descriptions; per-Network Scope Nmap, Arkime, Kibana and configuration coverage;
+Nmap authorization descriptions; device-evidence depth; fixed blind spots; reasons;
+optimistic versions; and immutable before/after audit history. Missing records are
+read-only Unknown / Unconfigured values and create no database rows. Authenticated
+viewers, analysts and administrators can read bounded pages and history;
+administrators (or the trusted local operator when authentication is disabled) make
+attributed changes. Archived scopes keep their declarations and history but reject
+new changes. The active-scan-prohibited blind spot is derived from the single Nmap
+authorization value so the two displays cannot disagree. Schema contract v5 provides
+a restart-safe migration from v4 and fails closed on unrecognized drift.
+
+**Accepted declaration-first deviation:** “Authorized” is an
+administrator-recorded description, not permission granted by NCT. “Prohibited” and
+“Unknown” are displayed but are not automatically enforced by this slice. Existing
+scan authorization procedures and No-Strike controls remain authoritative. The
+implementation does not infer authorization from installed software, addresses,
+CIDRs, names, Saved Networks, targets, prior evidence, or scan history. Scope-based
+scanner warnings and enforcement, adaptive pivots, Arkime/Kibana integration, and use
+of these declarations by analysis remain later gates. Phase 3, Range readiness and
+mission readiness remain open until that integration and enforcement are separately
+reviewed.
+
+**Validation:** focused Mission Environment, schema-v5 migration/recovery, role,
+Network Scope, scan and No-Strike checks passed. After correcting two test-fixture
+assumptions and strengthening non-secret field validation, the exact-container full
+suite passes **1,606 tests with 16 skipped** and one existing dependency warning.
+Browser validation on an isolated fresh database created a
+scope, saved a prohibited Nmap declaration, displayed the derived blind spot, kept
+headers aligned inside the scrollable coverage table, and saved tool availability
+without granting authorization. The novice operator gate passed at desktop and
+900-pixel widths with a clean console and correctly explained the declaration-only
+boundary. The independent quality gate returned **CLEAR — DOCUMENTED DEVIATION**
+after independently passing 38 focused checks. Phase 3 integration and enforcement
+remain open.
+
 ## 3.1 Mission Environment settings
+
+- [x] Foundation declaration UI, durable records, bounded history, role controls and
+  built-in operator guidance. Tool-specific integration remains open.
 
 Under the settings/hamburger menu, define the hunt environment:
 
@@ -4374,6 +4416,9 @@ Under the settings/hamburger menu, define the hunt environment:
 
 ## 3.2 Authorization scope
 
+- [x] Explicit per-Network Scope Nmap authorization description with Unknown default.
+  Automated warnings/enforcement remain open.
+
 Examples:
 
 ```text
@@ -4386,6 +4431,9 @@ NCT must never equate tool availability with authorization.
 
 ## 3.3 Device evidence availability
 
+- [x] Explicit device-evidence depth declaration with Unknown default. Automatic
+  comparison to retained collections remains open.
+
 Examples:
 
 - Full configuration
@@ -4396,6 +4444,9 @@ Examples:
 
 ## 3.4 Coverage matrix
 
+- [x] Bounded, scrollable Network Scope matrix with Nmap, Arkime, Kibana and
+  configuration columns. Evidence-driven coverage calculation remains open.
+
 Show per-network evidence availability:
 
 | Network | Nmap | Arkime | Kibana | Config |
@@ -4405,6 +4456,9 @@ Show per-network evidence availability:
 | Management | Available | None | Available | Partial |
 
 ## 3.5 Blind spots
+
+- [x] Fixed reviewed blind-spot declarations, with active-scan-prohibited derived
+  from Nmap authorization. Automated stale/gap detection remains open.
 
 Explicitly model:
 

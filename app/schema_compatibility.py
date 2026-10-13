@@ -12,18 +12,20 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 
 
-SCHEMA_CONTRACT_VERSION = 4
-WRITABLE_SCHEMA_VERSION = 4
-READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4)
+SCHEMA_CONTRACT_VERSION = 5
+WRITABLE_SCHEMA_VERSION = 5
+READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
 DATA_LAYOUT_CONTRACT = "nct-data-layout-v1"
 LEGACY_MIGRATION_ID = "nct-foundation-data-contract-v1"
 WORK_COORDINATION_MIGRATION_ID = "nct-work-coordination-v2"
 SCHEDULED_WORK_MIGRATION_ID = "nct-scheduled-occurrences-v3"
-MIGRATION_ID = "nct-device-contact-fencing-v4"
+DEVICE_CONTACT_MIGRATION_ID = "nct-device-contact-fencing-v4"
+MIGRATION_ID = "nct-mission-environment-v5"
 MIGRATION_PLAN = (
     LEGACY_MIGRATION_ID,
     WORK_COORDINATION_MIGRATION_ID,
     SCHEDULED_WORK_MIGRATION_ID,
+    DEVICE_CONTACT_MIGRATION_ID,
     MIGRATION_ID,
 )
 
@@ -194,7 +196,7 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         "The saved migration ledger is incomplete or inconsistent."
                     )
                 return None
-            elif int(schema_version) in {1, 2, 3}:
+            elif int(schema_version) in {1, 2, 3, 4}:
                 live_fingerprint = schema_fingerprint(connection)
                 recorded = connection.execute(
                     "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton = 1"
@@ -322,6 +324,29 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                        error_summary = NULL""",
                 (
                     SCHEDULED_WORK_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
+                    now, now, now, before, before,
+                ),
+            )
+        if current_version in {0, 1, 2, 3}:
+            connection.execute(
+                """INSERT INTO nct_schema_migrations(
+                       migration_id, target_schema_version, originating_build_id,
+                       originating_build_commit, status, attempts, first_started_at,
+                       last_started_at, completed_at, before_schema_fingerprint,
+                       after_schema_fingerprint, error_summary
+                   ) VALUES (?, 4, ?, ?, 'completed', 1, ?, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(migration_id) DO UPDATE SET
+                       target_schema_version = 4,
+                       originating_build_id = excluded.originating_build_id,
+                       originating_build_commit = excluded.originating_build_commit,
+                       status = 'completed', attempts = MAX(attempts, 1),
+                       last_started_at = excluded.last_started_at,
+                       completed_at = excluded.completed_at,
+                       before_schema_fingerprint = excluded.before_schema_fingerprint,
+                       after_schema_fingerprint = excluded.after_schema_fingerprint,
+                       error_summary = NULL""",
+                (
+                    DEVICE_CONTACT_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
                     now, now, now, before, before,
                 ),
             )
@@ -468,6 +493,7 @@ def schema_state(db_path: Path) -> dict[str, object]:
                     WHEN 'nct-work-coordination-v2' THEN 2
                     WHEN 'nct-scheduled-occurrences-v3' THEN 3
                     WHEN 'nct-device-contact-fencing-v4' THEN 4
+                    WHEN 'nct-mission-environment-v5' THEN 5
                     ELSE 99 END,
                     first_started_at, migration_id"""
         ).fetchall()

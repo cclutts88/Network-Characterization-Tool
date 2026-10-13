@@ -94,6 +94,15 @@ from app.derived_dependencies import (
     list_result_inputs,
 )
 from app.how_nct_works_ui import how_nct_works_page
+from app.mission_environment_ui import mission_environment_page
+from app.mission_environment import (
+    MissionEnvironmentConflict,
+    get_mission_environment,
+    init_mission_environment_storage,
+    list_mission_history,
+    update_mission_tool,
+    update_scope_context,
+)
 from app.network_scope_ui import network_scope_page
 from app.network_scopes import (
     NetworkScopeConflict,
@@ -578,6 +587,37 @@ class NetworkScopeUpdateRequest(BaseModel):
 
 class NetworkScopeArchiveRequest(BaseModel):
     expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class MissionToolUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=0)
+    availability: Literal["available", "unavailable", "unknown"]
+    version_text: str = Field(default="", max_length=120)
+    access_method: str = Field(default="", max_length=500)
+    notes: str = Field(default="", max_length=1000)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class MissionScopeUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=0)
+    nmap_coverage: Literal["available", "partial", "unavailable", "unknown"]
+    arkime_coverage: Literal["available", "partial", "unavailable", "unknown"]
+    kibana_coverage: Literal["available", "partial", "unavailable", "unknown"]
+    config_coverage: Literal["available", "partial", "unavailable", "unknown"]
+    nmap_authorization: Literal["authorized", "prohibited", "unknown"]
+    device_evidence: Literal[
+        "full_configuration", "partial_configuration", "command_output_only",
+        "analyst_known_manual", "unavailable", "unknown",
+    ]
+    blind_spots: list[Literal[
+        "no_passive_coverage", "missing_configuration", "unknown_nat",
+        "partial_route_knowledge", "telemetry_gap", "stale_evidence",
+        "unsupported_parser_field_mapping",
+    ]] = Field(default_factory=list, max_length=7)
+    notes: str = Field(default="", max_length=1000)
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -1435,6 +1475,7 @@ async def lifespan(_: FastAPI):
         init_evidence_scope_assignment_storage(DB_PATH)
         init_automated_nmap_foundation_storage(DB_PATH)
         init_automated_nmap_scope_correction_storage(DB_PATH)
+        init_mission_environment_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
@@ -1870,6 +1911,93 @@ def network_scope_history(scope_id: str, request: Request) -> list[dict]:
                for item in list_network_scopes(DB_PATH, include_archived=True)):
         raise HTTPException(status_code=404, detail="Network scope not found")
     return list_network_scope_history(DB_PATH, scope_id)
+
+
+def require_mission_environment_admin(request: Request) -> str:
+    if auth_enabled():
+        return require_admin(request)["username"]
+    return signed_in_username(request) or "local-operator"
+
+
+def _mission_environment_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    if isinstance(exc, MissionEnvironmentConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    message = str(exc)
+    status = 409 if "archived" in message.lower() else 422
+    return HTTPException(status_code=status, detail=message)
+
+
+@app.get("/settings/mission-environment", response_class=HTMLResponse)
+def mission_environment_settings() -> HTMLResponse:
+    return mission_environment_page()
+
+
+@app.get("/api/mission-environment")
+def mission_environment_status(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    include_archived: bool = False,
+) -> dict:
+    result = get_mission_environment(
+        DB_PATH, limit=limit, offset=offset, include_archived=include_archived,
+    )
+    analyst = request.state.analyst
+    result["can_edit"] = not auth_enabled() or bool(
+        analyst and analyst.get("role") == "admin"
+    )
+    result["declaration_only"] = True
+    return result
+
+
+@app.patch("/api/mission-environment/tools/{tool_key}")
+def mission_environment_tool_update(
+    tool_key: str, payload: MissionToolUpdateRequest, request: Request,
+) -> dict:
+    actor = require_mission_environment_admin(request)
+    try:
+        return update_mission_tool(
+            DB_PATH, tool_key, expected_version=payload.expected_version,
+            availability=payload.availability, version_text=payload.version_text,
+            access_method=payload.access_method, notes=payload.notes,
+            actor=actor, reason=payload.reason,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _mission_environment_error(exc) from exc
+
+
+@app.patch("/api/mission-environment/scopes/{scope_id}")
+def mission_environment_scope_update(
+    scope_id: str, payload: MissionScopeUpdateRequest, request: Request,
+) -> dict:
+    actor = require_mission_environment_admin(request)
+    try:
+        return update_scope_context(
+            DB_PATH, scope_id, expected_version=payload.expected_version,
+            nmap_coverage=payload.nmap_coverage,
+            arkime_coverage=payload.arkime_coverage,
+            kibana_coverage=payload.kibana_coverage,
+            config_coverage=payload.config_coverage,
+            nmap_authorization=payload.nmap_authorization,
+            device_evidence=payload.device_evidence,
+            blind_spots=list(payload.blind_spots), notes=payload.notes,
+            actor=actor, reason=payload.reason,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _mission_environment_error(exc) from exc
+
+
+@app.get("/api/mission-environment/{kind}/{key}/history")
+def mission_environment_history(
+    kind: Literal["tool", "scope"], key: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    return list_mission_history(
+        DB_PATH, kind=kind, key=key, limit=limit, offset=offset,
+    )
 
 
 def require_nmap_assignment_mutator(request: Request) -> str:
