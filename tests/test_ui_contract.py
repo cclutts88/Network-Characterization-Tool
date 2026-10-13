@@ -498,6 +498,9 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Chunks never overlap" in html
     assert 'id="currentProgress"' in html
     assert 'id="currentRunPanel"' in html
+    assert 'id="activeScanProgressMeaning" data-guide-context tabindex="0"' in html
+    assert "A restart can lose only the last few seconds shown here" in html
+    assert "activeScanProgressMeaning:['How live scan progress is saved'" in SHELL_SCRIPT
     assert 'id="pendingScansPanel"' in html
     assert "Waiting scans run in order after the active scan" in html
     assert "Cancel pending scan" in html

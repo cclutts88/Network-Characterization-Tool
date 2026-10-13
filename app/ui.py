@@ -167,6 +167,7 @@ def operator_page() -> HTMLResponse:
     <div class="two-column">
       <section class="panel" id="currentRunPanel">
         <h2 id="currentRunHeading">Active scan</h2>
+        <p class="hint" id="activeScanProgressMeaning" data-guide-context tabindex="0">Live progress is saved in short intervals. A restart can lose only the last few seconds shown here; contact state, stop requests, evidence, and the final result are saved immediately.</p>
         <div id="currentEmpty" class="meta">Checking the analyzer for an active scan.</div>
         <div id="current" class="hidden">
           <div><span id="currentStatus" class="pill">—</span> <strong id="currentName"></strong></div>

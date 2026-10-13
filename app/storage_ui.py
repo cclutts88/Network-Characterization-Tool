@@ -42,7 +42,7 @@ def storage_page() -> HTMLResponse:
 <section class="panel" id="storageArchitecturePanel" data-guide-context tabindex="0"><h2>Storage deployment architecture</h2>
 <p>NCT currently keeps its database and exact evidence bytes together in the standalone data folder. This remains the normal offline and single-instance design.</p>
 <dl><dt>Current database</dt><dd>Embedded SQLite</dd><dt>Current evidence storage</dt><dd>Local exact-content files</dd><dt>Multiple application instances</dt><dd><span class="state STALE">Disabled</span></dd><dt>Selected future design</dt><dd>PostgreSQL + shared immutable object storage</dd><dt>Migration method</dt><dd>Offline verified cutover · no dual writing</dd></dl>
-<details><summary>Why multiple instances are still disabled</summary><p>Selecting the design does not make it safe to run several NCT application instances. The shared services, offline migration, failure recovery, and concurrent-work behavior still require implementation and Gate 8 testing. Standalone NCT does not require those services.</p></details>
+<details><summary id="storageArchitectureMeaningSummary">Why multiple instances are still disabled</summary><p>Selecting the design does not make it safe to run several NCT application instances. The shared services, offline migration, failure recovery, and concurrent-work behavior still require implementation and Gate 8 testing. Standalone NCT does not require those services.</p></details>
 </section>
 <section class="panel" id="kubernetesStatusPanel"><h2>Optional Kubernetes status</h2>
 <p>Read-only status for the configured NCT namespace. Kubernetes is not required for standalone NCT. Opening or refreshing this panel does not scale, restart, create, or delete anything.</p>

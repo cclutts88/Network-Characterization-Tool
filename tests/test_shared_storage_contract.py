@@ -89,4 +89,7 @@ def test_system_health_explains_storage_architecture_and_guide() -> None:
     assert 'id="storageArchitecturePanel"' in html
     assert "PostgreSQL + shared immutable object storage" in html
     assert "Multiple application instances" in html
+    assert 'id="storageArchitectureMeaningSummary"' in html
     assert "storageArchitecturePanel:['Storage deployment architecture'" in SHELL_SCRIPT
+    assert "storageArchitectureMeaningSummary:['Why multiple instances are still disabled'" in SHELL_SCRIPT
+    assert "It does not enable PostgreSQL or shared object storage" in SHELL_SCRIPT

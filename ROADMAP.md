@@ -2546,7 +2546,7 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
     qualification and Gate 8 concurrency/failure/load testing remain open. Multiple
     replicas remain disabled, and the capability remains foundation-only rather than
     Range-ready or available on `main`.
-12. [~] SQLite WAL/busy-timeout/transaction remediation.
+12. [x] SQLite WAL/busy-timeout/transaction remediation.
    - [x] Confirmed WAL mode at application startup.
    - [x] Confirmed 30-second SQLite busy timeout.
    - [x] Removed repeated Saved Network schema/index DDL from normal access.
@@ -2567,7 +2567,7 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
      final startup/route tests passed. Auth/import schema setup is startup-only;
      existing collection/cache guards remain; backfill setup occurs only on explicit
      jobs. This does not claim all concurrent-write hazards or lock contention solved.
-   - [~] Review long write transactions and high-contention write paths. Started
+   - [x] Review long write transactions and high-contention write paths. Started
      deterministic simultaneous-edit checks for layouts, notes, and view preferences;
      inspect whether version validation and mutation form one protected operation.
      **QUALITY GATE: CLEAR:** all four simultaneous-edit reproductions (layout, note,
@@ -2664,6 +2664,62 @@ scale, Range, mission and stable-main acceptance remain later reviewed gates.
    WAL and a 30-second busy timeout were already present before this redesign; the
    remaining reliability work is focused on eliminating unnecessary writes and
    contention.
+   **2026-10-12 Step 12 closeout audit start:** Reconcile the remaining partial marker
+   against the completed request-path initialization audit, optimistic-write fixes,
+   bounded note-tree mutations and retained representative contention benchmark.
+   Reinspect explicit writer transactions for network contact, artifact reads, hashing,
+   subprocess waits or other unbounded work; require deterministic concurrency and
+   rollback coverage for any correction. Close only the foundation development gate
+   that is actually supported by evidence. Cold-cache, multi-process, production-scale,
+   Range and mission acceptance remain separately labeled and may not be inferred from
+   the local benchmark.
+   **2026-10-12 active-scan contention correction and Step 12 foundation closeout:**
+   The one-second process-supervision loop still checks durable cancellation,
+   timeout and ownership on every pass, while clock-only/Nmap display progress is now
+   published at most once every five seconds through an explicit fenced progress-only
+   path. That path updates the run manifest without deleting and recreating Scan History
+   membership rows. Contact start, operator-visible phase changes, cancellation, timeout,
+   failure, completion, evidence registration, scheduled-chunk state and lease release
+   retain immediate authoritative publication. A failed progress-only write keeps the
+   newest in-memory value and retries later; the separate cancellation control row and
+   execution fence remain authoritative. A crash can therefore omit only the last few
+   seconds of display progress. It cannot erase contact state, a saved stop request,
+   evidence, the terminal result or fencing history, and a contacted run becomes
+   **Interrupted — Needs attention** without automatically resuming contact.
+
+   Focused scan, queue/history, cancellation, scheduling, writer-shutdown,
+   collaboration and UI validation passed **170 tests** with one expected skip
+   and one existing dependency warning. Deterministic tests prove bounded progress
+   commits, retry after a simulated busy write, no Scan History membership rewrite,
+   exact terminal grouping/time/name/host count, immediate stop and timeout behavior,
+   durable cross-process cancellation and restart-safe contact recovery. The retained
+   disposable contention run executed 100 active-progress saves, 100 analyst-workspace
+   saves, 100 background-work lease renewals and 200 reads with zero lock/busy/timeout,
+   conflict or unexpected errors; exact final state and SQLite integrity passed. Worst
+   lane p95 was 3.879 ms and the slowest operation was 333.293 ms, within the declared
+   one-second p95 and five-second maximum limits. A deterministic start barrier proved
+   that the three writer lanes were active together and overlapped for 0.524178 seconds;
+   the synthetic scan published the normal contact-start state before progress. After
+   the first independent review, progress-only writes were also changed to require the
+   exact active execution fence, retry only positively identified SQLite busy/locked
+   errors, and surface every other database or manifest-file failure through terminal
+   handling. Missing, stale, released and replaced fence tests now fail closed.
+   Reproduction and full results are in
+   `scripts/benchmark_scan_progress_contention.py` and
+   `docs/scan_progress_contention_benchmark_2026-10-12.{json,md}`. This remains a local,
+   single-process development result; cold-cache, multi-process, production-scale,
+   Range, mission and future PostgreSQL performance remain unclaimed. Final independent
+   quality gate: **CLEAR** after the exact-fence, error-classification and deterministic-
+   overlap corrections. Novice Operator Guide gate: **CLEAR**. The complete Docker
+   regression suite passed **1,502 tests with 15 expected skips** and one existing
+   dependency warning; `git diff --check` passed with only line-ending notices. The
+   final isolated browser preview showed the visible, keyboard-focusable progress note
+   opening its dedicated contextual Guide explanation, with no console warnings or
+   errors; the novice live recheck was **CLEAR**. This
+   closes the Phase 1 embedded-SQLite development remediation gate. Explicit storage
+   maintenance remains governed by its separate singleton lease and recovery-required
+   contract, while cold-cache, multi-process, production, Range, mission and the future
+   PostgreSQL profile retain their own acceptance gates.
 13. [~] Current-state read models.
    - [x] Initial typed scoped-evidence read model and lazy operator explorer. This is
      evidence history only; automatic current-state selection remains planned.

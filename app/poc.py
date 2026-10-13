@@ -135,6 +135,20 @@ RUNS_DIR_NAME = "scan-runs"
 MAX_EXPANDED_ADDRESSES = 65536
 MAX_ACTIVE_RUNS = 1
 SCAN_CAPACITY_LEASE_KEY = "scan-capacity:primary"
+SCAN_PROGRESS_PUBLISH_INTERVAL_SECONDS = 5.0
+
+
+def is_transient_sqlite_contention(exc: sqlite3.OperationalError) -> bool:
+    """Return true only for SQLite busy/locked failures that are safe to retry."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int) and (code & 0xFF) in {
+        sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED,
+    }:
+        return True
+    message = str(exc).strip().lower()
+    return "database is locked" in message or "database table is locked" in message
+
+
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # A few early proof-of-concept imports were persisted with a truncated digest.
 # Keep the normal SHA-256 validation strict for new artifacts, but allow the
@@ -2407,6 +2421,30 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
             record_automated_nmap_intent(db, manifest["run_id"])
 
 
+def update_scan_progress_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
+    """Publish only the fenced run manifest; never rebuild Scan History here."""
+    execution_claim = manifest.get("execution_claim")
+    if not isinstance(execution_claim, dict):
+        raise WorkLeaseLost("Scan progress requires the current execution fence")
+    init_pipeline_intake_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        _assert_manifest_fences_on_connection(db, manifest)
+        changed = db.execute(
+            """UPDATE scan_runs SET status = ?, manifest_json = ?
+                 WHERE run_id = ?
+                   AND json_extract(manifest_json, '$.execution_claim.lease_id') = ?""",
+            (
+                manifest["status"], json.dumps(manifest, sort_keys=True),
+                manifest["run_id"], str(execution_claim["lease_id"]),
+            ),
+        ).rowcount
+        if changed != 1:
+            raise WorkLeaseLost(
+                "This scan worker can no longer publish scan progress"
+            )
+
+
 def publish_scan_contact_starting(
     manifest: dict, *, db_path: Path = DB_PATH
 ) -> bool:
@@ -3727,25 +3765,23 @@ def persist_scan_progress(
     data_dir: Path = DATA_DIR,
     **changes,
 ) -> bool:
-    """Persist a progress change to both the database and retained manifest."""
+    """Immediately publish visible progress without rebuilding Scan History."""
     changed = update_scan_progress(
         manifest["progress"], updated_at=utc_now(), **changes
     )
     if changed:
-        update_scan_run_manifest(manifest, db_path)
+        update_scan_progress_manifest(manifest, db_path)
         write_manifest_file(manifest, data_dir)
     return changed
 
 
-def refresh_nmap_progress(
+def read_nmap_progress(
     manifest: dict,
     output_path: Path,
     *,
     phase: str = "nmap",
-    db_path: Path = DB_PATH,
-    data_dir: Path = DATA_DIR,
 ) -> bool:
-    """Read the newest Nmap terminal status without interfering with its output."""
+    """Update in-memory Nmap progress without publishing or touching history."""
     try:
         with output_path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
@@ -3758,13 +3794,25 @@ def refresh_nmap_progress(
         return False
     if status is None:
         return False
-    return persist_scan_progress(
-        manifest,
-        phase=phase,
-        **status,
-        db_path=db_path,
-        data_dir=data_dir,
+    return update_scan_progress(
+        manifest["progress"], phase=phase, updated_at=utc_now(), **status
     )
+
+
+def refresh_nmap_progress(
+    manifest: dict,
+    output_path: Path,
+    *,
+    phase: str = "nmap",
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+) -> bool:
+    """Read and immediately publish the newest Nmap terminal status."""
+    changed = read_nmap_progress(manifest, output_path, phase=phase)
+    if changed:
+        update_scan_progress_manifest(manifest, db_path)
+        write_manifest_file(manifest, data_dir)
+    return changed
 
 
 def terminate_process(process: object | None, grace_seconds: float = 3.0) -> None:
@@ -3931,15 +3979,14 @@ def execute_scan_run(
             )
             setattr(control, process_attr, process)
             last_progress_check = 0.0
+            last_progress_publish = time.monotonic()
+            progress_dirty = False
             while True:
                 renew_execution_fences()
                 code = process.poll()
                 if code is not None:
                     if track_nmap:
-                        refresh_nmap_progress(
-                            manifest, stdout_path, phase=phase,
-                            db_path=db_path, data_dir=data_dir,
-                        )
+                        read_nmap_progress(manifest, stdout_path, phase=phase)
                     return ("completed" if code in allowed_exit_codes else "failed", code)
                 if control.cancel_event.is_set() or scan_cancellation_requested(
                     run_id, db_path
@@ -3953,18 +4000,35 @@ def execute_scan_run(
                 now = time.monotonic()
                 if now - last_progress_check >= 1:
                     if track_nmap:
-                        refresh_nmap_progress(
-                            manifest, stdout_path, phase=phase,
-                            db_path=db_path, data_dir=data_dir,
+                        progress_dirty = (
+                            read_nmap_progress(manifest, stdout_path, phase=phase)
+                            or progress_dirty
                         )
-                    persist_scan_progress(
-                        manifest,
+                    progress_dirty = update_scan_progress(
+                        manifest["progress"],
                         phase=phase,
                         elapsed_seconds=max(0, int(now - started)),
                         deadline_remaining_seconds=max(0, int(deadline - now)),
-                        db_path=db_path,
-                        data_dir=data_dir,
-                    )
+                        updated_at=utc_now(),
+                    ) or progress_dirty
+                    if (
+                        progress_dirty
+                        and now - last_progress_publish
+                        >= SCAN_PROGRESS_PUBLISH_INTERVAL_SECONDS
+                    ):
+                        try:
+                            update_scan_progress_manifest(manifest, db_path)
+                            write_manifest_file(manifest, data_dir)
+                        except sqlite3.OperationalError as exc:
+                            if not is_transient_sqlite_contention(exc):
+                                raise
+                            # Retain the newest in-memory progress and retry on the next
+                            # polling interval. Cancellation and ownership live in
+                            # separate durable rows and are never inferred from progress.
+                            pass
+                        else:
+                            progress_dirty = False
+                            last_progress_publish = now
                     last_progress_check = now
                 sleep_fn(0.2)
 

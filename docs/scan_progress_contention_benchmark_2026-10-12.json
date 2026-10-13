@@ -1,0 +1,54 @@
+{
+  "benchmark": "active scan progress plus workspace, lease heartbeat, and reads",
+  "checks": {
+    "final_progress_exact": true,
+    "heartbeat_exact": true,
+    "history_membership_unchanged": true,
+    "integrity_ok": true,
+    "max_under_five_seconds": true,
+    "no_errors": true,
+    "p95_under_one_second": true,
+    "workspace_exact": true,
+    "writer_lanes_overlapped": true
+  },
+  "cycles": 100,
+  "failures": [],
+  "limits": {
+    "max_ms": 5000,
+    "p95_ms": 1000,
+    "scope": "local single-process disposable SQLite development benchmark"
+  },
+  "overlap": {
+    "max_concurrent_writer_lanes": 3,
+    "writer_lanes": [
+      "heartbeat",
+      "progress",
+      "workspace"
+    ],
+    "writer_overlap_seconds": 0.524178
+  },
+  "passed": true,
+  "timings": {
+    "heartbeat": {
+      "count": 100,
+      "max_ms": 331.541,
+      "p95_ms": 3.879
+    },
+    "progress": {
+      "count": 100,
+      "max_ms": 333.293,
+      "p95_ms": 3.598
+    },
+    "read": {
+      "count": 200,
+      "max_ms": 3.648,
+      "p95_ms": 1.475
+    },
+    "workspace": {
+      "count": 100,
+      "max_ms": 181.295,
+      "p95_ms": 3.607
+    }
+  },
+  "wall_seconds": 0.782
+}
