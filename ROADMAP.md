@@ -154,12 +154,12 @@ A roadmap item should only be marked complete when:
 
 ## Phase 2 historical analysis and comparison closeout — 2026-10-12
 
-- [~] Phase 2 Step 7 started from commit `c908e80`. Verify that opening a completed
+- [x] Phase 2 Step 7 started from commit `c908e80`. Opening a completed
   historical scan restores its retained analysis without contacting the network or
-  silently substituting another scan, and make the boundary between retained source
+  silently substituting another scan, and makes the boundary between retained source
   analysis and current analyst presentation decisions clear to the operator.
-- [~] Phase 2 Step 8 started in parallel because it consumes the same retained scan
-  records. Verify two-scan comparison for hosts, ports, protocols, service/product
+- [x] Phase 2 Step 8 started in parallel because it consumes the same retained scan
+  records. Two-scan comparison now covers hosts, ports, protocols, service/product
   fingerprints, versions, OS, MAC and identity, including source links, coverage
   limits, same-scope selection and plain-language interpretation. Completion requires
   focused and full tests, browser checks, novice-operator review, independent quality
@@ -208,6 +208,21 @@ A roadmap item should only be marked complete when:
   seconds** while enforcing a **less-than-5-second** request bound and a **less-than-64
   MiB traced Python-allocation** bound. History beyond that ceiling fails closed with an
   explicit limit message instead of creating an unbounded request.
+- **Completion:** implementation commit `a6f4561` reopens only exact, verified,
+  current-version prepared results; keeps current analyst annotations separate; and
+  compares same-scope saved scan groups with coverage-aware host, port, protocol,
+  service/product, version, OS, MAC, identity and traceroute explanations. Network-wide
+  comparison loads five scopes at a time under one required history revision, and all
+  interactive host/port detail and retained-history work has tested fail-closed bounds.
+  Docker focused gate: **155 passed**. Complete Docker suite: **1,537 passed, 16
+  skipped**. The exact committed image identified as `a6f4561` passed an isolated
+  browser build/load check, the Network Changes empty-state workflow, updated contextual
+  Guide wording, and a zero-warning/zero-error browser-console check. Novice operator:
+  **CLEAR** after the paging and Guide corrections. Independent quality gate: **CLEAR —
+  DOCUMENTED DEVIATION** after three halt-and-correct cycles. This checkpoint is
+  committed and suitable for controlled Range testing after packaging; it remains on
+  `foundation/evidence-engine-v2`, is not on `main`, and is not yet Range-validated or
+  mission-ready.
 
 ## Field feedback correction cycle — 2026-10-08
 
@@ -3943,8 +3958,8 @@ high-volume passive evidence.
    evidence and an analysis-ready aggregate, preserve a successful protocol when its
    peer fails, and pass deterministic top-1,000 TCP plus top-100 UDP execution. The
    equivalent full live workload remains a Range acceptance check.
-7. [~] Make historical Analyze reopen full persisted analysis.
-8. [~] Expand scan comparison:
+7. [x] Make historical Analyze reopen full persisted analysis.
+8. [x] Expand scan comparison:
    - hosts
    - ports
    - protocols
