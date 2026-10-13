@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r4.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r5.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,7 +39,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r4.zip
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r5.zip
 checksum_file="$package_zip.sha256"
 if [ -f "$checksum_file" ]; then
     (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
@@ -286,6 +286,13 @@ following:
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
+The ZIP name ends in `phase2-r5`, while the build ID ends in `phase2-r3`.
+This is expected. `phase2-r5` identifies this package and its corrected operator
+guide. `phase2-r3` identifies the unchanged, already-tested application image
+inside the package. Open `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it
+lists this same package revision, image name, build ID, and source commit before
+continuing.
+
 Then verify the saved information in the browser:
 
 1. Open **Nmap Scans** and confirm the existing scan history is present.
@@ -300,6 +307,45 @@ Then verify the saved information in the browser:
    not contact a device. Record live collection as **not yet validated**. You
    may upload and inspect an approved retained configuration to verify the
    non-contact analysis path, but that does not prove live collection works.
+
+### Verify this release's Network Scope handoff correction
+
+First verify the affected saved scan without contacting the network:
+
+1. In **Nmap Scans**, open **Scan History** and find the completed scan that
+   shows **Saved scope handoff needs correction**.
+2. Confirm that the row names the Network Scope already saved with that scan.
+   Sign in as an Administrator, choose **Repair saved scope handoff**, enter a
+   clear reason, and confirm the action.
+3. Confirm that NCT reports **Scoped evidence ready · corrected handoff** after
+   local processing completes. The original failed handoff must remain in the
+   saved history. No new item should appear in Active Scans, because this repair
+   reads the retained file and does not run Nmap or contact the network.
+4. Open **Hunt → Network Evidence**. Confirm that the corrected scan is no
+   longer labeled as needing Network Scope context and that its retained
+   candidate-processing result is visible. A scan with no offline candidate
+   matches may correctly show zero candidates; that alone is not a failure.
+
+Stop the acceptance check if the saved scope shown for the scan is wrong, the
+retained file fails verification, the repair reports an error, or any network
+scan starts. Preserve the evidence and do not try to work around the error.
+
+The forward handoff can only be tested with a newly authorized scan. Do not run
+this check unless the Range administrator has explicitly approved the Saved
+Network, Network Scope, scan profile, timing, and any required No-Strike
+exclusions. When those details are approved:
+
+1. Run that exact saved scan and wait for it to complete.
+2. In **Scan History**, confirm that the completed row reaches **Scoped evidence
+   ready** without showing **Saved scope handoff needs correction** or **Network
+   Scope required**.
+3. Open **Hunt → Network Evidence** and confirm that candidate processing for
+   the new retained scan completed. Zero matching candidates is a valid result
+   when the observed products and versions have no match in the offline data.
+
+If the administrator has not approved this network-contact test, do not scan.
+Record the new-scan forward handoff as **not yet validated** and continue with
+the non-contact checks above.
 
 Do not accept the upgrade until all checks pass. Keep `/var/lib/nct` in the
 normal Range or Proxmox backup scope. The live data folder must stay on the

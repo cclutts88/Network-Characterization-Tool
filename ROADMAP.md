@@ -408,7 +408,19 @@ A roadmap item should only be marked complete when:
   the Range retains `/var/lib/nct/data`, users, scans, Network Scopes, offline Exploit-DB,
   HTTPS binding and an exact rollback image. Re-run image identity, archive load, package
   manifest/checksum, preserved-data upgrade, browser/API, novice-operator and independent
-  package gates before transfer. The currently installed Range remains unchanged until
+  package gates before transfer.
+- **2026-10-13 corrected package acceptance-guide revision:** The sealed `phase2-r4`
+  package is withdrawn before transfer. Its files, image archive, checksums and
+  independent package review were clear, but the novice gate found that the Quickstart
+  did not require the two release-specific Network Scope handoff checks from the receipt.
+  The replacement `phase2-r5` guide now directs the operator to the release receipt,
+  explains why the package revision is newer than the unchanged `phase2-r3` application
+  build, and makes the acceptance boundary explicit: repairing one affected retained
+  scan is local-only, while a new forward-handoff scan requires administrator approval
+  of the exact Saved Network, Network Scope, profile, timing and No-Strike controls.
+  Missing authorization records the live check as not yet validated; it does not invite
+  an improvised scan. The new package must be resealed and independently rechecked before
+  it becomes the current transfer candidate. The currently installed Range remains unchanged until
   the newly sealed package is manually transferred and run.
 
 ## Field feedback correction cycle — 2026-10-08

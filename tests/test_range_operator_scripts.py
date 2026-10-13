@@ -126,6 +126,28 @@ def test_quick_start_verifies_the_outer_package_before_extraction():
     assert "does not stop installation" in content
 
 
+def test_quick_start_requires_release_specific_scope_handoff_acceptance():
+    content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(content.split())
+
+    assert "phase2-r5" in content
+    assert "phase2-r3" in content
+    assert "$NCT_WORKDIR/RELEASE-RECEIPT.txt" in content
+    assert "Saved scope handoff needs correction" in content
+    assert "Repair saved scope handoff" in content
+    assert "Scoped evidence ready · corrected handoff" in content
+    assert "does not run Nmap or contact the network" in content
+    assert "must remain in the saved history" in normalized
+    assert "explicitly approved the Saved Network" in normalized
+    assert "Network Scope, scan profile, timing" in normalized
+    assert "not yet validated" in content
+    assert content.index("RELEASE-RECEIPT.txt") < content.index(
+        "Verify this release's Network Scope handoff correction"
+    )
+
+
 def test_packaged_scripts_readme_references_only_delivered_operator_material():
     content = PACKAGE_SCRIPTS_README.read_text(encoding="utf-8")
     assert "../AIR-GAPPED-RANGE-QUICKSTART.md" in content
