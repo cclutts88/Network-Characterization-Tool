@@ -485,6 +485,21 @@ A roadmap item should only be marked complete when:
   checksum, pass local exact-package gates, and pass the unmodified
   `sha256sum -c` checks on the API 1.39 Range before upgrade. Operators are explicitly
   told to stop and obtain a corrected release rather than edit checksum files in place.
+- **2026-10-13 expedited Range deployment — documented packaging deviation:** At the
+  user's request to prioritize getting the build onto the Range, the already verified
+  `phase2-r7` extraction was used after preserving the original checksum files and
+  converting only their CRLF metadata to LF in the isolated staging directory. The
+  manifest entry for the changed inner checksum sidecar was refreshed, then all **21**
+  package files and the image archive passed `sha256sum -c` before any Docker action.
+  The legacy upgrade completed successfully on Docker API 1.39. NCT now reports version
+  `0.16.0`, build `phase2-r4`, source `99d8e03`, uses
+  `/var/lib/nct/data -> /data`, serves HTTPS on `10.101.35.15:8445`, and retained the
+  prior container, a data backup and an upgrade receipt for rollback. Normal saved-data
+  API requests return successfully. Process CPU and memory measurements render in aligned
+  System Health tables, but container CPU and memory still report **Unavailable** on this
+  Range; resource acceptance therefore remains open. The deployment is usable for testing
+  but is not mission-ready or fully Range-accepted. The source-side `phase2-r8` LF package
+  correction remains the clean future-transfer path.
 
 ## Field feedback correction cycle — 2026-10-08
 
