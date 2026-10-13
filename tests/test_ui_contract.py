@@ -200,6 +200,12 @@ def test_scan_history_offers_durable_local_saved_analysis_work():
     assert "Load 25 older scans for this subnet" in html
     assert "/api/scan-history-groups?limit=100&offset=${offset}" in html
     assert "/runs?limit=25${suffix}" in html
+    assert "Saved scope handoff needs correction" in html
+    assert "data-scope-handoff-correct" in html
+    assert "/scope-handoff-corrections" in html
+    assert "The original failed decision remains in history" in html
+    assert "Repair saved scope handoff" in SHELL_SCRIPT
+    assert "does not choose or change a Network Scope" in SHELL_SCRIPT
     assert "cursor=${encodeURIComponent(group.next_cursor)}" in html
     assert "/api/scan-history-visible-runs?${params}" in html
     assert "history_also_covers:run.history_also_covers||[]" in html

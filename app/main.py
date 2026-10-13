@@ -14,6 +14,11 @@ from app.automated_nmap_foundation import (
     get_automated_scan_foundation_status,
     init_automated_nmap_foundation_storage,
 )
+from app.automated_nmap_scope_corrections import (
+    AutomatedNmapScopeCorrectionConflict,
+    correct_automated_nmap_scope_handoff,
+    init_automated_nmap_scope_correction_storage,
+)
 from app.evidence_scope_assignments import (
     EvidenceScopeConflict,
     assign_artifact_scope,
@@ -543,6 +548,13 @@ class LoginRequest(BaseModel):
 class SavedAnalysisJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_token: str = Field(min_length=1, max_length=200)
+
+
+class AutomatedNmapScopeCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_token: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=500)
+    confirmed: bool
 
 
 class StorageCompactionRequest(BaseModel):
@@ -1422,6 +1434,7 @@ async def lifespan(_: FastAPI):
         init_exposure_report_storage(DB_PATH)
         init_evidence_scope_assignment_storage(DB_PATH)
         init_automated_nmap_foundation_storage(DB_PATH)
+        init_automated_nmap_scope_correction_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
@@ -2178,6 +2191,39 @@ def automated_scan_foundation_process(
         if isinstance(exc, AutomatedNmapFoundationConflict):
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         raise _nmap_assignment_error(exc) from exc
+
+
+@app.post("/api/scan-runs/{run_id}/scope-handoff-corrections", status_code=202)
+def automated_scan_scope_handoff_correction(
+    run_id: str,
+    payload: AutomatedNmapScopeCorrectionRequest,
+    request: Request,
+) -> dict:
+    actor = require_admin(request)["username"]
+    if payload.confirmed is not True:
+        raise HTTPException(
+            status_code=422,
+            detail="Confirm that this correction uses the scan's exact retained Network Scope",
+        )
+    try:
+        correction = correct_automated_nmap_scope_handoff(
+            DB_PATH,
+            DATA_DIR,
+            run_id,
+            actor=actor,
+            reason=payload.reason,
+            request_token=payload.request_token,
+        )
+        return {
+            "correction": correction,
+            "status": get_automated_scan_foundation_status(DB_PATH, run_id),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except AutomatedNmapScopeCorrectionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _device_observation_error(exc: Exception) -> HTTPException:

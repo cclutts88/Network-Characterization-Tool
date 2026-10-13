@@ -66,6 +66,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Hunt reads that saved assessment" in html
     assert "does not claim that every historical scan or manual import already has one" in html
     assert "Historical adoption and refresh against a new dataset require separate explicit actions" in html
+    assert "Repair saved scope handoff" in html
+    assert "keeps the original failed admission in history" in html
+    assert "does not select or change a scope, contact the network, rerun Nmap" in html
     assert "candidates for analyst validation" in html
     assert "never executes exploit code or contacts a scanned system" in html
     assert "Viewer accounts can read shared evidence" in html

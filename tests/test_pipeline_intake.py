@@ -6,10 +6,23 @@ import sqlite3
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
 import app.derived_jobs as jobs
-from app.artifacts import register_artifact_bytes, register_artifact_file
-from app.automated_nmap_foundation import get_automated_scan_foundation_status
+from app.artifacts import (
+    register_artifact_bytes,
+    register_artifact_file,
+    register_finalized_files,
+)
+from app.automated_nmap_foundation import (
+    get_automated_scan_foundation_status,
+    init_automated_nmap_foundation_storage,
+)
+from app.automated_nmap_scope_corrections import (
+    AutomatedNmapScopeCorrectionConflict,
+    correct_automated_nmap_scope_handoff,
+    init_automated_nmap_scope_correction_storage,
+)
 from app.database import connect_database
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
 from app.network_scopes import create_network_scope
@@ -65,7 +78,9 @@ def manual_assignment(tmp_path: Path, *, marked: bool = True):
     return db_path, observation, scope, assignment
 
 
-def completed_automated_run(tmp_path: Path, *, finalize: bool = True):
+def completed_automated_run(
+    tmp_path: Path, *, finalize: bool = True, register_observation: bool = True,
+):
     db_path = tmp_path / "analyzer.db"
     network = create_saved_network(
         SavedNetworkCreate(
@@ -107,6 +122,65 @@ def completed_automated_run(tmp_path: Path, *, finalize: bool = True):
     run["completed_at"] = "2030-01-01T00:01:00+00:00"
     xml_path = tmp_path / "scan.xml"
     xml_path.write_bytes(XML)
+    observation = None
+    if register_observation:
+        observation = register_artifact_file(
+            db_path=db_path,
+            source_path=xml_path,
+            source_kind="nmap_scan",
+            source_ref=run["run_id"],
+            original_filename="scan.xml",
+            actor="analyst",
+            observed_at=run["completed_at"],
+            observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+            run_id=run["run_id"],
+            scope_context=get_run_scope_context(db_path, run["run_id"]),
+        )
+    if finalize:
+        update_scan_run_manifest(run, db_path)
+    return db_path, run, scope, observation
+
+
+def test_finalized_scan_registration_retains_its_reviewed_scope(tmp_path):
+    db_path, run, scope, _ = completed_automated_run(
+        tmp_path,
+        finalize=False,
+        register_observation=False,
+    )
+
+    register_finalized_files(
+        db_path,
+        tmp_path,
+        run,
+        "nmap_scan",
+        ["scan.xml"],
+    )
+    update_scan_run_manifest(run, db_path)
+    init_automated_nmap_foundation_storage(db_path)
+
+    status = get_automated_scan_foundation_status(db_path, run["run_id"])
+    intent = get_admission_intent(
+        db_path,
+        intent_kind=AUTOMATED_NMAP_INTENT,
+        source_id=run["run_id"],
+    )
+    assert run["artifact_registry"]["status"] == "complete"
+    assert status["eligible"] is True
+    assert status["scope_id"] == scope["scope_id"]
+    assert intent["state"] == "pending"
+    assert intent["scope_id"] == scope["scope_id"]
+
+
+def bad_scope_handoff(tmp_path: Path):
+    db_path, run, scope, _ = completed_automated_run(
+        tmp_path,
+        finalize=False,
+        register_observation=False,
+    )
+    run_dir = tmp_path / "scan-runs" / run["run_id"]
+    run_dir.mkdir(parents=True)
+    xml_path = run_dir / "scan.xml"
+    xml_path.write_bytes(XML)
     observation = register_artifact_file(
         db_path=db_path,
         source_path=xml_path,
@@ -116,12 +190,463 @@ def completed_automated_run(tmp_path: Path, *, finalize: bool = True):
         actor="analyst",
         observed_at=run["completed_at"],
         observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+        metadata={"relative_path": str(xml_path.relative_to(db_path.parent))},
         run_id=run["run_id"],
-        scope_context=get_run_scope_context(db_path, run["run_id"]),
+        scope_context=None,
     )
-    if finalize:
-        update_scan_run_manifest(run, db_path)
+    update_scan_run_manifest(run, db_path)
+    init_automated_nmap_foundation_storage(db_path)
+    init_automated_nmap_scope_correction_storage(db_path)
     return db_path, run, scope, observation
+
+
+def test_explicit_scope_handoff_correction_preserves_failed_intent_and_is_idempotent(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    db_path, run, scope, observation = bad_scope_handoff(tmp_path)
+    before = get_admission_intent(
+        db_path,
+        intent_kind=AUTOMATED_NMAP_INTENT,
+        source_id=run["run_id"],
+    )
+    assert before["state"] == "needs_scope"
+
+    first = correct_automated_nmap_scope_handoff(
+        db_path,
+        tmp_path,
+        run["run_id"],
+        actor="admin",
+        reason="Reviewed the retained A51 scope handoff",
+        request_token="scope-correction-1",
+    )
+    replay = correct_automated_nmap_scope_handoff(
+        db_path,
+        tmp_path,
+        run["run_id"],
+        actor="admin",
+        reason="Reviewed the retained A51 scope handoff",
+        request_token="scope-correction-1",
+    )
+
+    after = get_admission_intent(
+        db_path,
+        intent_kind=AUTOMATED_NMAP_INTENT,
+        source_id=run["run_id"],
+    )
+    status = get_automated_scan_foundation_status(db_path, run["run_id"])
+    assert after == before
+    assert replay == first
+    assert first["observation_id"] == observation["observation_id"]
+    assert first["corrected_contract"]["scope_id"] == scope["scope_id"]
+    assert status["eligible"] is True
+    assert status["scope_handoff_correction"]["state"] == "corrected"
+    assert status["processing_job"]["latest_attempt"]["state"] == "queued"
+    assert status["network_contact"] is False
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM automated_nmap_scope_corrections"
+        ).fetchone()[0] == 1
+        assert db.execute(
+            "SELECT COUNT(*) FROM artifact_observation_scope_contexts "
+            "WHERE observation_id = ?",
+            (observation["observation_id"],),
+        ).fetchone()[0] == 1
+        assert db.execute(
+            "SELECT COUNT(*) FROM pipeline_jobs WHERE source_run_id = ?",
+            (run["run_id"],),
+        ).fetchone()[0] == 1
+        assert db.execute(
+            "SELECT COUNT(*) FROM pipeline_job_attempts WHERE state = 'queued'"
+        ).fetchone()[0] == 1
+    with connect_database(db_path) as db:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            db.execute(
+                "UPDATE automated_nmap_scope_corrections SET reason = 'changed'"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            db.execute("DELETE FROM automated_nmap_scope_corrections")
+
+    with pytest.raises(
+        AutomatedNmapScopeCorrectionConflict, match="already has",
+    ):
+        correct_automated_nmap_scope_handoff(
+            db_path,
+            tmp_path,
+            run["run_id"],
+            actor="admin",
+            reason="A different request must not replace the first",
+            request_token="scope-correction-2",
+        )
+
+
+def test_scope_handoff_correction_replay_wakes_committed_job_after_start_failure(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+
+    db_path, run, _, _ = bad_scope_handoff(tmp_path)
+    monkeypatch.setattr(
+        jobs,
+        "searchsploit_provider_snapshot",
+        lambda: {
+            "available": False,
+            "provider": "SearchSploit / Exploit-DB",
+            "provider_key": None,
+            "message": "Offline data is not staged in this test",
+        },
+    )
+    starts = []
+
+    def recover_on_replay(path, data_dir):
+        starts.append(True)
+        if len(starts) == 1:
+            raise RuntimeError("injected post-commit worker start failure")
+        assert jobs.run_next_derived_job(path, data_dir) is True
+
+    monkeypatch.setattr(corrections, "start_derived_job_worker", recover_on_replay)
+    request = {
+        "actor": "admin",
+        "reason": "Verified retained scope after worker startup interruption",
+        "request_token": "scope-correction-worker-recovery",
+    }
+    with pytest.raises(RuntimeError, match="post-commit worker start failure"):
+        correct_automated_nmap_scope_handoff(
+            db_path, tmp_path, run["run_id"], **request,
+        )
+    with connect_database(db_path, read_only=True) as db:
+        committed = db.execute(
+            "SELECT correction_id, job_id FROM automated_nmap_scope_corrections"
+        ).fetchone()
+        assert committed is not None
+        assert db.execute(
+            "SELECT COUNT(*) FROM pipeline_jobs WHERE source_run_id = ?",
+            (run["run_id"],),
+        ).fetchone()[0] == 1
+
+    replay = correct_automated_nmap_scope_handoff(
+        db_path, tmp_path, run["run_id"], **request,
+    )
+
+    assert len(starts) == 2
+    assert replay["correction_id"] == committed[0]
+    assert replay["job_id"] == committed[1]
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT state FROM pipeline_job_attempts WHERE job_id = ?",
+            (committed[1],),
+        ).fetchone()[0] == "completed"
+        assert db.execute(
+            "SELECT COUNT(*) FROM automated_nmap_scope_corrections"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("unsafe_run_id", ["not-a-run-id", "../outside"])
+def test_scope_handoff_correction_rejects_malformed_or_traversal_run_id(
+    tmp_path, monkeypatch, unsafe_run_id,
+):
+    import app.automated_nmap_scope_corrections as corrections
+
+    db_path, _, _, _ = bad_scope_handoff(tmp_path)
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    with pytest.raises(
+        AutomatedNmapScopeCorrectionConflict, match="Invalid scan run identifier",
+    ):
+        correct_automated_nmap_scope_handoff(
+            db_path,
+            tmp_path,
+            unsafe_run_id,
+            actor="admin",
+            reason="Unsafe retained identity must fail closed",
+            request_token=f"unsafe-{unsafe_run_id}",
+        )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM automated_nmap_scope_corrections"
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pipeline_jobs'"
+        ).fetchone() is None
+
+
+def test_scope_handoff_correction_rejects_symlinked_run_directory(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+
+    db_path, run, _, _ = bad_scope_handoff(tmp_path)
+    run_dir = tmp_path / "scan-runs" / run["run_id"]
+    retained_elsewhere = tmp_path / "retained-elsewhere"
+    run_dir.rename(retained_elsewhere)
+    try:
+        run_dir.symlink_to(retained_elsewhere, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Symbolic links are unavailable: {exc}")
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+
+    with pytest.raises(
+        AutomatedNmapScopeCorrectionConflict, match="symbolic links",
+    ):
+        correct_automated_nmap_scope_handoff(
+            db_path,
+            tmp_path,
+            run["run_id"],
+            actor="admin",
+            reason="Symlinked retained evidence must fail closed",
+            request_token="scope-correction-symlink",
+        )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM automated_nmap_scope_corrections"
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pipeline_jobs'"
+        ).fetchone() is None
+
+
+def test_scope_handoff_correction_completes_local_foundation_and_queues_candidates(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+    import app.poc as poc
+
+    db_path, run, scope, observation = bad_scope_handoff(tmp_path)
+    before = get_admission_intent(
+        db_path,
+        intent_kind=AUTOMATED_NMAP_INTENT,
+        source_id=run["run_id"],
+    )
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    monkeypatch.setattr(
+        jobs,
+        "searchsploit_provider_snapshot",
+        lambda: {
+            "available": False,
+            "provider": "SearchSploit / Exploit-DB",
+            "provider_key": None,
+            "message": "Offline data is not staged in this test",
+        },
+    )
+
+    def unexpected_network_process(*_args, **_kwargs):
+        raise AssertionError("The correction must not start a scan or network process")
+
+    monkeypatch.setattr(poc.subprocess, "Popen", unexpected_network_process)
+    correction = correct_automated_nmap_scope_handoff(
+        db_path,
+        tmp_path,
+        run["run_id"],
+        actor="admin",
+        reason="End-to-end retained evidence verification",
+        request_token="scope-correction-end-to-end",
+    )
+    ready = get_automated_scan_foundation_status(db_path, run["run_id"])
+    assert ready["eligible"] is True
+    assert ready["scope_id"] == scope["scope_id"]
+    assert ready["network_contact"] is False
+
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+
+    complete = get_automated_scan_foundation_status(db_path, run["run_id"])
+    after = get_admission_intent(
+        db_path,
+        intent_kind=AUTOMATED_NMAP_INTENT,
+        source_id=run["run_id"],
+    )
+    assert after == before
+    assert complete["state"] == "foundation_complete"
+    assert complete["scope_handoff_correction"]["state"] == "corrected"
+    assert complete["network_contact"] is False
+    with connect_database(db_path, read_only=True) as db:
+        assessment = db.execute(
+            """SELECT assessment.artifact_observation_id, link.assignment_id
+               FROM entity_assessments assessment
+               JOIN assessment_scope_assignment_links link
+                 ON link.assessment_id = assessment.assessment_id"""
+        ).fetchone()
+        assert tuple(assessment) == (
+            observation["observation_id"], correction["assignment_id"],
+        )
+        candidate = db.execute(
+            """SELECT source_run_id, source_observation_id, source_kind, source_ref
+               FROM pipeline_jobs WHERE job_type = ?""",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()
+        assert tuple(candidate) == (
+            run["run_id"], observation["observation_id"],
+            "nmap_scan", run["run_id"],
+        )
+
+
+def test_scope_handoff_correction_rolls_back_if_canonical_evidence_changed(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    db_path, run, _, observation = bad_scope_handoff(tmp_path)
+    Path(observation["canonical_path"]).write_bytes(b"changed")
+
+    with pytest.raises(
+        AutomatedNmapScopeCorrectionConflict, match="canonical aggregate",
+    ):
+        correct_automated_nmap_scope_handoff(
+            db_path,
+            tmp_path,
+            run["run_id"],
+            actor="admin",
+            reason="Should fail closed",
+            request_token="scope-correction-drift",
+        )
+
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM automated_nmap_scope_corrections"
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM artifact_observation_scope_contexts "
+            "WHERE observation_id = ?",
+            (observation["observation_id"],),
+        ).fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM artifact_scope_assignments"
+        ).fetchone()[0] == 0
+
+
+def test_scope_handoff_correction_rolls_back_if_queueing_fails(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    db_path, run, _, observation = bad_scope_handoff(tmp_path)
+
+    def fail_queue(*_args, **_kwargs):
+        raise RuntimeError("injected correction queue failure")
+
+    monkeypatch.setattr(corrections, "_enqueue_automated_nmap_scope_job", fail_queue)
+    with pytest.raises(RuntimeError, match="injected correction queue failure"):
+        correct_automated_nmap_scope_handoff(
+            db_path,
+            tmp_path,
+            run["run_id"],
+            actor="admin",
+            reason="The transaction must roll back",
+            request_token="scope-correction-rollback",
+        )
+
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM automated_nmap_scope_corrections"
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM artifact_observation_scope_contexts "
+            "WHERE observation_id = ?",
+            (observation["observation_id"],),
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM artifact_scope_assignments"
+        ).fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
+
+
+def test_scope_handoff_correction_rejects_manifest_scope_drift(tmp_path, monkeypatch):
+    import app.automated_nmap_scope_corrections as corrections
+
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    db_path, run, _, observation = bad_scope_handoff(tmp_path)
+    with connect_database(db_path) as db:
+        row = db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run["run_id"],)
+        ).fetchone()
+        manifest = json.loads(row[0])
+        manifest["network_scope_context"]["scope_label"] = "Changed after scan"
+        db.execute(
+            "UPDATE scan_runs SET manifest_json = ? WHERE run_id = ?",
+            (json.dumps(manifest, sort_keys=True), run["run_id"]),
+        )
+
+    with pytest.raises(
+        AutomatedNmapScopeCorrectionConflict, match="manifest and retained",
+    ):
+        correct_automated_nmap_scope_handoff(
+            db_path,
+            tmp_path,
+            run["run_id"],
+            actor="admin",
+            reason="Must not use changed authority",
+            request_token="scope-correction-context-drift",
+        )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM artifact_observation_scope_contexts "
+            "WHERE observation_id = ?",
+            (observation["observation_id"],),
+        ).fetchone()[0] == 0
+
+
+def test_scope_handoff_correction_route_requires_admin_and_confirmation(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_scope_corrections as corrections
+    import app.main as main
+    import app.poc as poc
+
+    db_path, run, _, _ = bad_scope_handoff(tmp_path)
+    monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "auth_enabled", lambda: True)
+    monkeypatch.setattr(
+        main,
+        "session_identity",
+        lambda *_args: {
+            "username": "alice", "display_name": "Alice", "role": "analyst",
+        },
+    )
+    with TestClient(main.app) as client:
+        denied = client.post(
+            f"/api/scan-runs/{run['run_id']}/scope-handoff-corrections",
+            json={
+                "request_token": "route-correction-analyst",
+                "reason": "Analyst must not repair this handoff",
+                "confirmed": True,
+            },
+        )
+    assert denied.status_code == 403
+
+    monkeypatch.setattr(
+        main,
+        "session_identity",
+        lambda *_args: {
+            "username": "admin", "display_name": "Administrator", "role": "admin",
+        },
+    )
+    with TestClient(main.app) as client:
+        unconfirmed = client.post(
+            f"/api/scan-runs/{run['run_id']}/scope-handoff-corrections",
+            json={
+                "request_token": "route-correction-unconfirmed",
+                "reason": "Review requires explicit confirmation",
+                "confirmed": False,
+            },
+        )
+        corrected = client.post(
+            f"/api/scan-runs/{run['run_id']}/scope-handoff-corrections",
+            json={
+                "request_token": "route-correction-admin",
+                "reason": "Verified the exact retained scope handoff",
+                "confirmed": True,
+            },
+        )
+    assert unconfirmed.status_code == 422
+    assert corrected.status_code == 202
+    assert corrected.json()["correction"]["actor"] == "admin"
+    assert corrected.json()["status"]["scope_handoff_correction"]["state"] == "corrected"
 
 
 def test_new_manual_assignment_commits_pending_intent_but_history_stays_manual(tmp_path):

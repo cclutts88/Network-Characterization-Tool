@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r3.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r4.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,12 +39,34 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-unzip NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r3.zip
-cd /root/NCT-Air-Gapped-Range-Deployment
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase2-r4.zip
+checksum_file="$package_zip.sha256"
+if [ -f "$checksum_file" ]; then
+    (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
+else
+    actual_package_sha256=$(sha256sum "$package_zip" | awk '{print $1}')
+    echo "Package SHA-256: $actual_package_sha256"
+    echo "Compare this value with the SHA-256 shown with the release before continuing"
+fi
+if [ -e /root/NCT-Air-Gapped-Range-Deployment ]; then
+    staging_dir="/root/nct-package-$(date -u +%Y%m%dT%H%M%SZ)"
+    mkdir -m 0700 "$staging_dir"
+    unzip "$package_zip" -d "$staging_dir"
+    export NCT_WORKDIR="$staging_dir/NCT-Air-Gapped-Range-Deployment"
+else
+    unzip "$package_zip" -d /root
+    export NCT_WORKDIR=/root/NCT-Air-Gapped-Range-Deployment
+fi
+cd "$NCT_WORKDIR"
 ```
 
-What success looks like: the last command returns to the prompt without an
-error. Run the following command to confirm the package contents are visible:
+What success looks like: when the small companion checksum file was uploaded,
+the checksum comparison prints `OK`; otherwise the command displays the ZIP's
+SHA-256 so you can compare it with the value shown with the release. A missing
+companion checksum file does not stop installation, but a supplied checksum
+that fails does. Do not extract or run a file with a failed or mismatched
+checksum. The last command then returns to the prompt without an error. Run the
+following command to confirm the package contents are visible:
 
 ```sh
 ls
@@ -52,9 +74,11 @@ ls
 
 You should see `compose.range.yaml`, `offline-images`, and `scripts`.
 
-If the package must remain somewhere other than
-`/root/NCT-Air-Gapped-Range-Deployment`, stop here and ask the Range
-administrator to set `NCT_WORKDIR` to its full location.
+If an earlier package folder already exists, these commands leave it unchanged
+and extract the new release into a separate root-only staging folder. Keep this
+terminal open for the remaining steps because `NCT_WORKDIR` tells every helper
+which clean package to use. If you must open a new terminal, set `NCT_WORKDIR`
+again to the full path printed by `pwd` before running a helper.
 
 ## 2. Find which start method this server supports
 
@@ -110,7 +134,7 @@ docker volume inspect nct-data
 Then run:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-migrate-data.sh
+sh "$NCT_WORKDIR/scripts/nct-migrate-data.sh"
 ```
 
 The migration will refuse to start if NCT is busy. It stops and retains the old
@@ -147,26 +171,26 @@ matches the method selected in step 2:
 For `legacy`:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-legacy.sh RANGE_IP
+sh "$NCT_WORKDIR/scripts/nct-start-legacy.sh" RANGE_IP
 ```
 
 For `docker`:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-docker.sh RANGE_IP
+sh "$NCT_WORKDIR/scripts/nct-start-docker.sh" RANGE_IP
 ```
 
 For `compose`:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-compose.sh RANGE_IP
+sh "$NCT_WORKDIR/scripts/nct-start-compose.sh" RANGE_IP
 ```
 
 If step 4 selected a different approved port, prefix the selected command. For
 example:
 
 ```sh
-NCT_HTTPS_PORT=APPROVED_PORT sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-start-legacy.sh RANGE_IP
+NCT_HTTPS_PORT=APPROVED_PORT sh "$NCT_WORKDIR/scripts/nct-start-legacy.sh" RANGE_IP
 ```
 
 On a completely new installation, the script asks you to enter an
@@ -184,14 +208,14 @@ Use this step only when step 3 showed `/var/lib/nct/data -> /data`.
 Replace `RANGE_IP` with the server's real IP address:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-upgrade.sh RANGE_IP
+sh "$NCT_WORKDIR/scripts/nct-upgrade.sh" RANGE_IP
 ```
 
 The helper automatically chooses Compose when it is available. If step 2 told
 you to use `legacy`, add that word to the end:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-upgrade.sh RANGE_IP legacy
+sh "$NCT_WORKDIR/scripts/nct-upgrade.sh" RANGE_IP legacy
 ```
 
 For current Docker without Compose, add `docker` instead.
@@ -258,7 +282,7 @@ following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-test-20261013-phase2-r2`;
+- the build ID is `0.16.0-range-test-20261013-phase2-r3`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
@@ -313,7 +337,7 @@ exact upgrade receipt path printed by step 6 in place of `UPGRADE_RECEIPT`, then
 run:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-rollback-upgrade.sh RANGE_IP UPGRADE_RECEIPT
+sh "$NCT_WORKDIR/scripts/nct-rollback-upgrade.sh" RANGE_IP UPGRADE_RECEIPT
 ```
 
 The helper refuses active or unresolved work, preserves the failed container
@@ -334,13 +358,13 @@ for investigation.
 To list Administrator accounts and interactively set an account and password:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-set-admin.sh
+sh "$NCT_WORKDIR/scripts/nct-set-admin.sh"
 ```
 
 For emergency recovery, make sure a verified backup exists, then run:
 
 ```sh
-sh /root/NCT-Air-Gapped-Range-Deployment/scripts/nct-admin-recover.sh --admin-user ADMIN_USERNAME
+sh "$NCT_WORKDIR/scripts/nct-admin-recover.sh" --admin-user ADMIN_USERNAME
 ```
 
 Replace `ADMIN_USERNAME` with the actual account name. The recovery helper

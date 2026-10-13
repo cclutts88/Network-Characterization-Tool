@@ -316,6 +316,100 @@ A roadmap item should only be marked complete when:
   ready on `foundation/evidence-engine-v2`; target installation, HTTPS/sign-in, and
   administrator-approved acceptance checks are still required before calling it
   Range-accepted or mission-ready. It is not available on `main`.
+- **2026-10-13 target Range acceptance started:** The novice operator is exercising the
+  sealed `phase2-r3` package against the existing Range installation at `10.101.35.15`
+  using Docker API 1.39 and the `legacy` upgrade path. Preflight confirmed that the
+  running NCT container uses `/var/lib/nct/data -> /data`, HTTPS port 8445, and image
+  `network-characterization-tool:0.16.0-range-20261004-r2`. The default package folder
+  already contains the earlier release, so the reviewer cleared the Quickstart's
+  documented `NCT_WORKDIR` alternate-path mechanism with a new empty root-owned staging
+  folder; the earlier package folder remains untouched and releases cannot mix. The
+  live container and retained evidence were not changed during preflight. Acceptance
+  remains in progress until upgrade receipts, before/after inventories, existing-data
+  views, HTTPS/sign-in, health identity, logs, and rollback readiness are independently
+  verified.
+- **2026-10-13 historical CVE compatibility follow-up started:** The upgraded Range
+  preserved the active offline Exploit-DB and legacy query cache, but its seven retained
+  scan scopes predate immutable per-scan candidate assessments. Hunt therefore reports
+  them as `historical_unassessed` instead of displaying the candidate CVEs that the old
+  page could calculate from the shared cache. The current Range remains unchanged. A
+  future transfer will add an explicit administrator-confirmed bulk adoption workflow:
+  a read-only preview lists eligible, ineligible and already-complete scans, then a
+  separately attributed bounded request verifies and freezes each exact retained Nmap
+  artifact, unsuperseded scope assignment and active Exploit-DB identity before queueing
+  the existing scan-specific processing stages. It will never publish legacy cache rows
+  directly, contact the network, run from page reads/startup/upgrade, or silently switch
+  source, scope or dataset. Requests and items must be idempotent, restart-safe and
+  individually reviewable/retryable. This is a documented supersession of the earlier
+  one-run-at-a-time operator burden while preserving explicit consent and evidence
+  provenance; automatic historical adoption remains prohibited.
+- **2026-10-13 live scan discovery workspace started:** A future transfer will place a
+  bounded **Live discoveries** panel beside Active Scan. It reads only fully closed host
+  elements already written by the exact active Nmap attempt, presents provisional host,
+  port, protocol and service rows, and never starts another command or publishes
+  evidence/CVE/correlation claims. The panel is locked to the Active Scan section's
+  height; only its table scrolls, with sticky aligned headings. It stacks at narrow
+  widths while keeping that height bound. Parse/cache failures remain isolated from scan
+  control, terminal runs clear provisional state, and successful completion replaces it
+  with finalized retained-evidence links and counts.
+- **2026-10-13 active-scan progress clarification:** Keep Nmap's finalized-host count
+  separate from phase progress and provisional discoveries. The active view will report
+  the responsive hosts in the current phase, the hosts Nmap has finalized, the current
+  phase percentage, and the number of hosts with provisional discoveries as separate
+  facts. NCT will not infer a completed-host count from Nmap's percentage output or
+  present a provisional row as retained evidence.
+- **2026-10-13 whole-tool loading feedback started:** Add one shared activity bar below
+  the fixed header on every page so slower page loads, evidence reads and saves do not
+  look frozen or blank. It will track concurrent same-page requests and ordinary
+  navigation without inventing a percentage or completion time, delay briefly to avoid
+  flashing for fast work, expose plain Loading page/data or Saving change text, and
+  remain accessible with reduced motion. Background heartbeat polling may opt out, but
+  user-requested work may not. Rejected, aborted and overlapping requests must always
+  release their own activity state.
+- **2026-10-13 scoped automated-scan handoff defect found:** Target-Range validation of
+  run `2ad584f784884255b2da4467d0ab39a4` proved that the A51-ADM Saved Network,
+  association, Network Scope and immutable run snapshot were all retained correctly,
+  while the finalized aggregate `scan.xml` observation received no corresponding scope
+  context. The final-file registrar recognized legacy Nmap source labels but omitted the
+  active `nmap_scan` label. Automatic admission therefore failed closed as
+  `needs_scope`; ingestion and CVE candidate assessment did not start, and no evidence
+  was lost or reassigned. The forward correction now carries the exact retained run
+  scope into finalized `nmap_scan` observations and has a completion-path regression
+  test. Focused ingestion, scope and storage validation passes **84 tests**. This fix is
+  foundation-only and is not present in the installed Range image. The existing failed
+  handoff remains unchanged pending an independently reviewed, append-only and
+  idempotent reconciliation that preserves its original decision and will never infer a
+  different scope or adopt unrelated historical scans.
+- **2026-10-13 scoped automated-scan handoff correction implemented:** The correction
+  is a separate administrator-confirmed action for one selected affected run; it never
+  rewrites or deletes the original `needs_scope` admission. In one protected
+  transaction it requires completed database and manifest agreement, no manual targets,
+  one exact aggregate observation, matching immutable run context and frozen Saved
+  Network source, an active scope, the exact known failed-intake contract, verified
+  canonical and run-local SHA-256/size, and no earlier context, assignment, processing
+  job or correction. It then appends the missing context, inherited assignment, durable
+  job request and correction receipt together. The same attributed request is
+  idempotent and wakes the durable worker again after a post-commit startup interruption;
+  a different replay, malformed or traversing run identity, symlinked retained run path,
+  authority drift, content drift or queue failure stops or rolls back the entire action.
+  The completion-path regression proves that the queued local job reaches foundation
+  completion, retains the original failed admission unchanged and creates candidate work
+  from the exact observation and scope without starting a scan or other network process.
+  Scan History and the Operator Guide explain that no scope changes, scan, network
+  contact or historical bulk adoption occurs. Combined ingestion, storage, UI and
+  Range-operator validation passes **183 tests** with one dependency warning; the Scan
+  History Node runtime regression passes; the complete suite passes **1,562 tests** with
+  **16 skipped** and the same dependency warning. The novice-operator re-gate and
+  independent quality gate are both **CLEAR**. This is foundation-only and is not present
+  in the installed Range image or on `main`.
+- **2026-10-13 corrected full-package Range upgrade started:** Build a new immutable NCT
+  image and complete air-gapped package from the cleared scope-handoff checkpoint. Use
+  the existing package upgrade path rather than an in-container edit or clean install so
+  the Range retains `/var/lib/nct/data`, users, scans, Network Scopes, offline Exploit-DB,
+  HTTPS binding and an exact rollback image. Re-run image identity, archive load, package
+  manifest/checksum, preserved-data upgrade, browser/API, novice-operator and independent
+  package gates before transfer. The currently installed Range remains unchanged until
+  the newly sealed package is manually transferred and run.
 
 ## Field feedback correction cycle — 2026-10-08
 

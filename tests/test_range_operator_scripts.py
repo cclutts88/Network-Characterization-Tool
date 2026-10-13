@@ -98,6 +98,34 @@ def test_quick_start_selects_one_of_the_three_launch_paths():
     assert "older than **1.39**" in content
 
 
+def test_quick_start_keeps_an_existing_package_folder_separate():
+    content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if [ -e /root/NCT-Air-Gapped-Range-Deployment ]; then" in content
+    assert 'mkdir -m 0700 "$staging_dir"' in content
+    assert 'unzip "$package_zip" -d "$staging_dir"' in content
+    assert 'export NCT_WORKDIR="$staging_dir/NCT-Air-Gapped-Range-Deployment"' in content
+    assert "leave it unchanged" in content
+    assert 'sh "$NCT_WORKDIR/scripts/nct-upgrade.sh" RANGE_IP legacy' in content
+
+
+def test_quick_start_verifies_the_outer_package_before_extraction():
+    content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+
+    verify = 'checksum_file="$package_zip.sha256"'
+    extract = 'unzip "$package_zip"'
+    assert verify in content
+    assert content.index(verify) < content.index(extract)
+    assert '(cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1' in content
+    assert 'echo "Package SHA-256: $actual_package_sha256"' in content
+    assert "A missing" in content
+    assert "does not stop installation" in content
+
+
 def test_packaged_scripts_readme_references_only_delivered_operator_material():
     content = PACKAGE_SCRIPTS_README.read_text(encoding="utf-8")
     assert "../AIR-GAPPED-RANGE-QUICKSTART.md" in content
@@ -267,7 +295,7 @@ def test_quick_start_uses_executable_restore_path_and_correct_migration_step():
 
     assert "step 3A migrated an old Docker volume" in content
     assert "Roll back after step 3A migrated" in content
-    assert "nct-rollback-upgrade.sh RANGE_IP UPGRADE_RECEIPT" in content
+    assert 'sh "$NCT_WORKDIR/scripts/nct-rollback-upgrade.sh" RANGE_IP UPGRADE_RECEIPT' in content
     assert "complete restored file and database inventory" in content
     assert "do not guess" in content
     assert "not contact a device" in content

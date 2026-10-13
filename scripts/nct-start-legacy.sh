@@ -6,7 +6,7 @@ HOST_PORT="${NCT_HTTPS_PORT:-8445}"
 
 WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
-IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase2-r2"
+IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase2-r3"
 CONTAINER="nct"
 CONTAINER_PORT=8445
 DATA_DIR="$PERSIST_ROOT/data"

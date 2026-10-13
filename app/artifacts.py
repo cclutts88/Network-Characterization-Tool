@@ -421,7 +421,7 @@ def register_finalized_files(db_path: Path, run_dir: Path, manifest: dict,
     records, errors = [], []
     scope_context = (
         get_run_scope_context(db_path, manifest["run_id"])
-        if source_kind in {"nmap_run", "nmap_import"}
+        if source_kind in {"nmap_run", "nmap_scan", "nmap_import"}
         else None
     )
     for filename in dict.fromkeys(filenames):

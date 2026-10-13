@@ -232,6 +232,10 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
                WHERE run_id = ? ORDER BY rowid DESC LIMIT 1""",
             (run_id,),
         ).fetchone()
+        from app.automated_nmap_scope_corrections import (
+            scope_handoff_correction_status_on_connection,
+        )
+        handoff_correction = scope_handoff_correction_status_on_connection(db, run_id)
     from app.derived_jobs import nmap_scope_job_for_run
 
     job = nmap_scope_job_for_run(db_path, run_id)
@@ -264,6 +268,7 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
         "state": state,
         "processing_job": job,
         "admission_intent": admission_intent,
+        "scope_handoff_correction": handoff_correction,
         "latest_attempt": (
             {
                 "status": attempt["state"], "started_at": attempt["started_at"],
