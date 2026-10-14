@@ -580,8 +580,9 @@ A roadmap item should only be marked complete when:
   groups, checkpointed through the retained r4 image, and passed the replacement's
   immutable read-only audit with the r3 schema origin and r4 running identity recorded
   separately. A direct r2-created database is not this same exact v4 schema and fails
-  closed; it must first pass through a supported later phase2 upgrade rather than using
-  this replacement directly. The exact replacement image still requires rebuild and
+  closed. It requires a separate reviewed compatibility or migration path; merely
+  starting it with a later phase2 image does not reseal or make it eligible for this
+  replacement. The exact replacement image still requires rebuild and
   package qualification. The failed `phase3-r1` package is
   withdrawn. The schema correction quality gate is **CLEAR — DOCUMENTED DEVIATION** at
   commit `88a6322`; the strengthened package audit safeguard and exact replacement
