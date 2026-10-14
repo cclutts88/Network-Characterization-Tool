@@ -562,14 +562,18 @@ A roadmap item should only be marked complete when:
   The replacement upgrade helper now stops the old writer, completes a WAL checkpoint
   through the retained original image, and then uses the replacement image to record an
   immutable read-only audit of database integrity, foreign keys, schema fingerprints,
-  the exact v1-through-v4 migration-plan digest and ledger, the retained running build
-  identity, and exact known late-schema objects. Before the candidate can start, the
+  the exact v1-through-v4 migration-plan digest and ledger, the separately retained
+  running-build and schema-origin identities against the explicit supported phase2-r2
+  through phase2-r5 lineage, and exact known late-schema objects. A later supported v4
+  image may therefore open an unchanged schema created by an earlier supported v4 image,
+  while the v4 state and ledger must still agree on the actual schema origin. Before the candidate can start, the
   helper binds that report to the exact SHA-256 of `analyzer.db` in the complete
   pre-upgrade inventory and retains the report SHA-256 in the upgrade receipt. Deliberate
   changes to the state origin, v4 ledger origin, migration-plan digest, unknown schema,
   incomplete ledger, or report/database binding all stop the upgrade. The final
-  Linux/Docker suite now passes with **1,634 passed and 16 skipped**; **59 focused tests**
-  and Linux shell syntax validation also pass. The failed `phase3-r1` package is
+  Linux/Docker suite passes with **1,636 passed and 16 skipped**; **61 focused tests**
+  and Linux shell syntax validation also pass after this reviewer-led correction. The
+  exact replacement image still requires rebuild and package qualification. The failed `phase3-r1` package is
   withdrawn. The schema correction quality gate is **CLEAR — DOCUMENTED DEVIATION** at
   commit `88a6322`; the strengthened package audit safeguard and exact replacement
   package still require independent review. Range acceptance still requires the new

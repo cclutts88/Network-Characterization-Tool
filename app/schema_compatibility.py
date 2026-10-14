@@ -31,6 +31,27 @@ MIGRATION_PLAN = (
     MIGRATION_ID,
 )
 
+# Exact version-4 Range images that may have created or subsequently opened the
+# phase2 schema accepted by the phase3 replacement package.
+SUPPORTED_V4_RANGE_BUILDS = (
+    (
+        "0.16.0-range-test-20261013-phase2-r2",
+        "aab6e6f603df18ba568808cdf26f18ad4384c9a2",
+    ),
+    (
+        "0.16.0-range-test-20261013-phase2-r3",
+        "a4256d6f7fdd1bc02e465fbe57f9d738515a2960",
+    ),
+    (
+        "0.16.0-range-test-20261013-phase2-r4",
+        "99d8e03b826c05a719d541923a66cf3f5b597224",
+    ),
+    (
+        "0.16.0-range-test-20261013-phase2-r5",
+        "46fbf1d93dfe7bb53f89db931d423a91b3fba5ab",
+    ),
+)
+
 _LEGACY_V4_LATE_SCHEMA_GROUPS = (
     frozenset({"searchsploit_query_cache", "searchsploit_query_cache_updated"}),
     frozenset({"artifact_backfill"}),
@@ -240,14 +261,15 @@ def schema_upgrade_preflight(
             raise SchemaCompatibilityError(
                 "The saved version 4 migration plan does not match the supported lineage."
             )
-        if (
-            not expected_build_id
-            or not expected_build_commit
-            or build_id != expected_build_id
-            or build_commit != expected_build_commit
-        ):
+        running_origin = (expected_build_id, expected_build_commit)
+        schema_origin = (build_id, build_commit)
+        if running_origin not in SUPPORTED_V4_RANGE_BUILDS:
             raise SchemaCompatibilityError(
-                "The saved schema origin does not match the retained running build."
+                "The retained running build is not a supported version 4 Range source."
+            )
+        if schema_origin not in SUPPORTED_V4_RANGE_BUILDS:
+            raise SchemaCompatibilityError(
+                "The saved schema origin is not a supported version 4 Range source."
             )
         live = schema_fingerprint(connection)
         compatibility = "recorded-fingerprint-match"
@@ -302,6 +324,8 @@ def schema_upgrade_preflight(
             "live_schema_fingerprint": live,
             "originating_build_id": build_id,
             "originating_build_commit": build_commit,
+            "retained_running_build_id": expected_build_id,
+            "retained_running_build_commit": expected_build_commit,
             "known_late_schema_objects": present_late_names,
             "migration_ids": [row[0] for row in ledger],
             "integrity": integrity,

@@ -6,7 +6,6 @@ import sqlite3
 
 import pytest
 
-from app.build_info import BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 from app.schema_compatibility import (
     DATA_LAYOUT_CONTRACT,
@@ -15,6 +14,7 @@ from app.schema_compatibility import (
     MIGRATION_ID,
     MIGRATION_PLAN,
     SCHEDULED_WORK_MIGRATION_ID,
+    SUPPORTED_V4_RANGE_BUILDS,
     SchemaCompatibilityError,
     WORK_COORDINATION_MIGRATION_ID,
     begin_schema_migration,
@@ -224,28 +224,41 @@ def _create_verified_version_four_fixture(db_path: Path) -> None:
     assert attempt is not None
     complete_schema_migration(db_path, attempt)
     with sqlite3.connect(db_path) as db:
+        schema_build_id, schema_build_commit = SUPPORTED_V4_RANGE_BUILDS[0]
         db.execute("DELETE FROM nct_schema_migrations WHERE migration_id = ?", (MIGRATION_ID,))
         fingerprint = schema_fingerprint(db)
         db.execute(
             """UPDATE nct_schema_migrations
-                  SET after_schema_fingerprint = ?
+                  SET after_schema_fingerprint = ?,
+                      originating_build_id = ?, originating_build_commit = ?
                 WHERE migration_id = ?""",
-            (fingerprint, DEVICE_CONTACT_MIGRATION_ID),
+            (
+                fingerprint,
+                schema_build_id,
+                schema_build_commit,
+                DEVICE_CONTACT_MIGRATION_ID,
+            ),
         )
         db.execute(
             """UPDATE nct_schema_state
                   SET schema_contract_version = 4, schema_version = 4,
-                      migration_plan_digest = ?,
-                      schema_fingerprint = ?""",
-            (migration_plan_digest(MIGRATION_PLAN[:4]), fingerprint),
+                      migration_plan_digest = ?, schema_fingerprint = ?,
+                      originating_build_id = ?, originating_build_commit = ?""",
+            (
+                migration_plan_digest(MIGRATION_PLAN[:4]),
+                fingerprint,
+                schema_build_id,
+                schema_build_commit,
+            ),
         )
 
 
 def _schema_preflight(db_path: Path) -> dict[str, object]:
+    running_build_id, running_build_commit = SUPPORTED_V4_RANGE_BUILDS[2]
     return schema_upgrade_preflight(
         db_path,
-        expected_build_id=BUILD_ID,
-        expected_build_commit=BUILD_COMMIT,
+        expected_build_id=running_build_id,
+        expected_build_commit=running_build_commit,
     )
 
 
@@ -411,6 +424,8 @@ def test_version_four_read_only_preflight_accepts_exact_late_schema_and_preserve
     assert result["schema_version"] == 4
     assert result["integrity"] == "ok"
     assert result["foreign_key_errors"] == []
+    assert result["originating_build_id"] == SUPPORTED_V4_RANGE_BUILDS[0][0]
+    assert result["retained_running_build_id"] == SUPPORTED_V4_RANGE_BUILDS[2][0]
     assert result["known_late_schema_objects"] == [
         "artifact_backfill",
         "artifact_compaction_journal",
@@ -485,6 +500,40 @@ def test_version_four_read_only_preflight_rejects_changed_plan_digest(
 
     with pytest.raises(SchemaCompatibilityError, match="migration plan"):
         _schema_preflight(db_path)
+
+
+def test_version_four_read_only_preflight_rejects_consistent_unknown_origin(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE nct_schema_state SET originating_build_id = 'unknown-build', "
+            "originating_build_commit = 'unknown-commit'"
+        )
+        db.execute(
+            "UPDATE nct_schema_migrations SET originating_build_id = 'unknown-build', "
+            "originating_build_commit = 'unknown-commit' WHERE migration_id = ?",
+            (DEVICE_CONTACT_MIGRATION_ID,),
+        )
+
+    with pytest.raises(SchemaCompatibilityError, match="schema origin"):
+        _schema_preflight(db_path)
+
+
+def test_version_four_read_only_preflight_rejects_unknown_running_build(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+
+    with pytest.raises(SchemaCompatibilityError, match="retained running build"):
+        schema_upgrade_preflight(
+            db_path,
+            expected_build_id="unknown-build",
+            expected_build_commit="unknown-commit",
+        )
 
 
 def test_verified_version_four_upgrades_to_mission_environment_schema(tmp_path: Path) -> None:
