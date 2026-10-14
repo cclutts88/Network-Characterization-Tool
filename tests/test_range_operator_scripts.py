@@ -191,6 +191,8 @@ def test_range_data_checker_reads_live_wal_and_uses_immutable_only_when_requeste
         capsys.readouterr()
         _run_embedded_python("snapshot_code", tmp_path)
         embedded_live_snapshot = json.loads(capsys.readouterr().out)
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        checkpointed_stopped = helpers["active_work"](tmp_path, immutable=True)
     finally:
         writer.close()
 
@@ -200,6 +202,9 @@ def test_range_data_checker_reads_live_wal_and_uses_immutable_only_when_requeste
     assert immutable_snapshot["database"]["tables"]["scan_runs"] == 0
     assert active_exit.value.code == 42
     assert embedded_live_snapshot["database"]["tables"]["scan_runs"] == 1
+    assert checkpointed_stopped == [
+        {"source": "database", "table": "scan_runs", "count": 1}
+    ]
 
 
 @pytest.mark.parametrize("failure_step", ("stop", "rename", "move"))
@@ -368,6 +373,9 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert content.index('docker stop "$CONTAINER"') < content.index('snapshot "$before"')
     assert content.index('PRAGMA wal_checkpoint(TRUNCATE)') < content.index(
         'python /opt/nct-schema-preflight.py'
+    )
+    assert content.index('PRAGMA wal_checkpoint(TRUNCATE)') < content.index(
+        'check_active sidecar'
     )
     assert content.index('snapshot "$before"') < content.index(
         'schema_preflight_sha256=$(docker run'

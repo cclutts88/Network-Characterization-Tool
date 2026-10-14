@@ -331,7 +331,6 @@ if [ "$was_running" = "true" ]; then
     original_stopped=yes
     docker stop "$CONTAINER" >/dev/null
 fi
-check_active sidecar
 say "Checkpointing the stopped database with the retained original image..."
 docker run --rm -v "$DATA_DIR:/data:Z" "$original_image_id" python -c '
 import pathlib, sqlite3
@@ -343,6 +342,7 @@ if path.exists():
     if result is None or int(result[0]) != 0:
         raise SystemExit(f"SQLite WAL checkpoint did not complete: {result}")
 ' || die "The stopped database could not be checkpointed with the retained original image. The original NCT container will be restored."
+check_active sidecar
 say "Auditing the stopped saved database with the replacement image (read-only)..."
 docker run --rm \
     -e PYTHONPATH=/app \

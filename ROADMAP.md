@@ -637,8 +637,13 @@ A roadmap item should only be marked complete when:
   SQLite access inside the running container; immutable access is limited to stopped,
   checkpointed databases; failed candidates must be confirmed stopped, renamed, and
   moved aside before restoration; and the final restart rechecks status, build ID, and
-  build commit. Tests inject stop, rename, and move failures and prove that none can
-  extract a backup over the existing tree. A repeat end-to-end recovery passed, and a
+  build commit. A second review halt found that the ordinary upgrade's stopped
+  active-work check still preceded its WAL checkpoint. The helper now checkpoints
+  immediately after stopping the writer and only then performs the immutable stopped
+  check, closing the shutdown admission window. Tests retain active work only in WAL,
+  prove an immutable pre-checkpoint read cannot see it, then prove the checkpointed
+  stopped check does. Tests also inject stop, rename, and move failures and prove that
+  none can extract a backup over the existing tree. A repeat end-to-end recovery passed, and a
   forced candidate-health failure preserved both containers, restored the exact cold
   inventory, account, and healthy database, and left the incompatible source stopped.
   The combined recovery, package, and schema suite passes with **66 tests**; every shell
