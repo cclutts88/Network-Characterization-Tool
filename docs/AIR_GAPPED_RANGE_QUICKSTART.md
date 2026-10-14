@@ -23,7 +23,7 @@ Do not manually delete the current `nct` container or the `nct-data` volume.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r2.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip` uploaded to
   the Range server;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -39,12 +39,13 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r2.zip
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip
 checksum_file="$package_zip.sha256"
+actual_package_sha256=$(sha256sum "$package_zip" | awk '{print $1}')
+export NCT_PACKAGE_SHA256="$actual_package_sha256"
 if [ -f "$checksum_file" ]; then
     (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
 else
-    actual_package_sha256=$(sha256sum "$package_zip" | awk '{print $1}')
     echo "Package SHA-256: $actual_package_sha256"
     echo "Compare this value with the SHA-256 shown with the release before continuing"
 fi
@@ -243,6 +244,39 @@ What success looks like: the script prints a successful upgrade receipt, a
 read-only schema-audit receipt, a backup location, and a rollback-container
 name. Write down all four and keep them until testing is complete.
 
+### 6A. Recover when the retained phase2 container cannot restart
+
+Use this path only when the existing `nct` container is stopped or repeatedly
+restarting with a saved-schema fingerprint error and the ordinary upgrade did
+not create a new schema-audit record. Do not delete or rename the old container
+or `/var/lib/nct/data`.
+
+Keep the same terminal used in step 1 so `NCT_WORKDIR` and
+`NCT_PACKAGE_SHA256` are still set. For the older Range Docker engine, run:
+
+```sh
+sh "$NCT_WORKDIR/scripts/nct-recover-unhealthy-upgrade.sh" RANGE_IP legacy
+```
+
+Replace `RANGE_IP` with the server's real address. This helper rechecks every
+package file and the image archive before loading anything. It stops the failed
+restart loop, confirms no other running container has the data folder mounted,
+checkpoints the stopped database, checks for unresolved work, and audits the
+saved schema through a read-only mount. It then creates a cold backup, extracts
+that backup separately, and compares the complete extracted inventory before it
+can retain the old container and start the replacement.
+
+If replacement validation fails after the new application may have written,
+the helper preserves the failed container and data, restores and verifies the
+cold backup, and leaves the incompatible old image stopped. It never starts the
+old image against replacement-written data.
+
+What success looks like: the helper verifies retained files, registered
+artifacts, database record counts, accounts, image identity, mount, port, build,
+health, and one restart. It prints a recovery receipt, backup, read-only schema
+audit, and stopped source-container name. Keep all four until Range acceptance
+is complete.
+
 ## 7. Allow approved analysts through the Range firewall
 
 Skip this step if the existing Range firewall rule already allows the approved
@@ -296,11 +330,11 @@ following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-test-20261013-phase3-r2`;
+- the build ID is `0.16.0-range-test-20261013-phase3-r3`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
-Both the ZIP name and build ID end in `phase3-r2`. Open
+Both the ZIP name and build ID end in `phase3-r3`. Open
 `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it lists this same package
 revision, image name, build ID, and source commit before continuing.
 

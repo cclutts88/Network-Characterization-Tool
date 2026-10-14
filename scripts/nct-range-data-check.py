@@ -53,7 +53,7 @@ def active_work(root: Path) -> list[dict]:
     db_path = root / "analyzer.db"
     if not db_path.exists():
         return active
-    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
     try:
         tables = _tables(connection)
         for table, column, states in ACTIVE_DATABASE_STATES:
@@ -113,7 +113,7 @@ def snapshot(root: Path) -> dict:
     db_path = root / "analyzer.db"
     if not db_path.exists():
         return result
-    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
     try:
         result["database"]["present"] = True
         result["database"]["integrity"] = connection.execute("PRAGMA integrity_check").fetchone()[0]

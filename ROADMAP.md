@@ -606,6 +606,35 @@ A roadmap item should only be marked complete when:
   gate is **PASS** and the final independent package gate is
   **CLEAR — DOCUMENTED DEVIATION**. Range acceptance still requires the new guarded
   retry and preserved-data/browser checks on the Range host.
+  The first `phase3-r2` Range retry exposed a separate recovery gap before that retry
+  could load its replacement image: the retained `phase2-r4` container had already been
+  restored to data that its own startup fingerprint gate cannot reopen, so it entered a
+  restart loop and the ordinary helper could not execute its in-container active-work or
+  build-identity checks. No `phase3-r2` image or new schema-audit record was present on
+  the Range. The `phase3-r3` recovery-package correction is implemented and undergoing
+  final package qualification. It stops the failed loop without deleting it, verifies
+  package and image checksums, proves exclusive access to the data folder, checkpoints
+  SQLite, runs the active-work and schema gates offline, binds the audit to a complete
+  inventory, independently extracts and verifies a cold backup, and retains the
+  incompatible source container. Any failure after candidate write
+  access must preserve candidate data, restore and verify the cold backup, and leave the
+  old incompatible image stopped. Success compares retained files, Artifact Registry
+  identities and record and account counts, verifies exact image, mount, port, build, health,
+  and restart, then retains a complete recovery receipt. The ordinary upgrade rollback
+  now requires old-application health before describing a restore as successful.
+  A disposable Docker-in-Docker exercise reproduced the exact old-container restart loop,
+  performed the recovery into the exact `phase3-r3` image, retained the existing account
+  and schema records, passed health and build-identity checks, and restarted cleanly. A
+  separate forced failure after the candidate-write boundary preserved the failed
+  candidate, restored the cold backup, independently verified the restored inventory,
+  and left the incompatible old image stopped. This exercise also exposed and corrected
+  a stopped-WAL read-only compatibility issue: offline SQLite checks now use immutable
+  read-only access so they do not attempt to create shared-memory files on a read-only
+  mount. The combined recovery, package, and schema suite passes with **63 tests**; every
+  shell helper passes Linux syntax validation; and the complete Linux/Docker suite passes
+  with **1,638 passed and 16 skipped**. Range acceptance remains pending until the sealed
+  `phase3-r3` package is transferred and this recovery path succeeds against the preserved
+  Range data.
 
 ## Field feedback correction cycle — 2026-10-08
 

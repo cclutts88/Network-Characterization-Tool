@@ -6,7 +6,7 @@ HOST_PORT="${NCT_HTTPS_PORT:-8445}"
 
 WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
-IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase3-r2"
+IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase3-r3"
 CONTAINER="nct"
 CONTAINER_PORT=8445
 DATA_DIR="$PERSIST_ROOT/data"
@@ -69,7 +69,7 @@ if [ -z "$account_count" ]; then
         account_count=$(docker run --rm -v "$DATA_DIR:/data:ro,z" "$IMAGE" python -c '
 import pathlib, sqlite3
 p = pathlib.Path("/data/analyzer.db")
-print(sqlite3.connect(f"file:{p}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
+print(sqlite3.connect(f"file:{p}?mode=ro&immutable=1", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
 ') || die "Existing NCT accounts could not be inspected under $DATA_DIR."
     fi
 fi

@@ -123,8 +123,47 @@ def test_quick_start_verifies_the_outer_package_before_extraction():
     assert content.index(verify) < content.index(extract)
     assert '(cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1' in content
     assert 'echo "Package SHA-256: $actual_package_sha256"' in content
+    assert 'export NCT_PACKAGE_SHA256="$actual_package_sha256"' in content
     assert "A missing" in content
     assert "does not stop installation" in content
+
+
+def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():
+    script = (SCRIPTS / "nct-recover-unhealthy-upgrade.sh").read_text(
+        encoding="utf-8"
+    )
+    guide = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_guide = " ".join(guide.split())
+
+    assert "NCT_PACKAGE_SHA256" in script
+    assert "sha256sum -c PACKAGE-MANIFEST.sha256" in script
+    assert 'ARCHIVE_CHECKSUM="$ARCHIVE.sha256"' in script
+    assert "?mode=ro&immutable=1" in script
+    assert "no_other_writer" in script
+    assert "wal_checkpoint(TRUNCATE)" in script
+    assert script.index("wal_checkpoint(TRUNCATE)") < script.rindex("active_check")
+    assert "nct-schema-preflight.py" in script
+    assert "report.get(\"database_sha256\")" in script
+    assert "recovery-backup-verify" in script
+    assert "cmp -s \"$before\" \"$verify_inventory\"" in script
+    assert "restore_on_failure" in script
+    assert "failed-recovery-data" in script
+    assert "The incompatible old image remains stopped" in script
+    assert "artifact_registry" in script
+    assert "Stored record count decreased" in script
+    assert "candidate_account_count" in script
+    assert "docker restart \"$CONTAINER\"" in script
+    assert "recovery-upgrade-$timestamp.receipt" in script
+    assert "nct-recover-unhealthy-upgrade.sh" in guide
+    assert "never starts the old image against replacement-written data" in normalized_guide
+
+
+def test_range_data_checker_can_use_a_truly_read_only_stopped_database():
+    content = (SCRIPTS / "nct-range-data-check.py").read_text(encoding="utf-8")
+
+    assert content.count("?mode=ro&immutable=1") == 2
 
 
 def test_quick_start_requires_release_specific_scope_handoff_acceptance():
@@ -133,8 +172,8 @@ def test_quick_start_requires_release_specific_scope_handoff_acceptance():
     )
     normalized = " ".join(content.split())
 
-    assert "NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r2.zip" in content
-    assert "0.16.0-range-test-20261013-phase3-r2" in content
+    assert "NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip" in content
+    assert "0.16.0-range-test-20261013-phase3-r3" in content
     assert "$NCT_WORKDIR/RELEASE-RECEIPT.txt" in content
     assert "Saved scope handoff needs correction" in content
     assert "Repair saved scope handoff" in content
@@ -218,6 +257,9 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert "Registered artifact identity changed during upgrade" in content
     assert '"artifact_registry": []' in content
     assert 'PRAGMA integrity_check' in content
+    assert "start_original_if_needed" in content
+    assert 'https://$RANGE_IP:$original_host_port/health' in content
+    assert 'docker update --restart=no "$CONTAINER"' in content
     assert 'PRAGMA foreign_key_check' in content
     assert 'SCHEMA_PREFLIGHT="$WORKDIR/scripts/nct-schema-preflight.py"' in content
     assert '"$original_image_id" python -c' in content

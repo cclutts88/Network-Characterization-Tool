@@ -86,3 +86,9 @@ image with the data mounted read-only. The audit records database integrity,
 fingerprints, migration history, originating build identity, known phase2
 maintenance tables, and the database SHA-256. Unknown, incomplete, or altered
 schema stops the upgrade and restores the earlier container.
+
+If the retained phase2 container itself cannot restart, use
+`nct-recover-unhealthy-upgrade.sh` only through step 6A of the main guide. It
+performs the same read-only schema gate without requiring the old application
+to run, independently verifies a cold backup, retains both failure sources, and
+does not restart an incompatible old image after replacement-written data.

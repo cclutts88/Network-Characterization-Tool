@@ -5,7 +5,7 @@ WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
 DATA_DIR="$PERSIST_ROOT/data"
 CONTAINER="${NCT_CONTAINER:-nct}"
-IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase3-r2"
+IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase3-r3"
 RANGE_IP="${1:-}"
 MODE="${2:-auto}"
 ARCHIVE="$WORKDIR/offline-images/nct-range-images.tar"
@@ -32,7 +32,7 @@ api_at_least() {
 [ "$(id -u)" -eq 0 ] || die "Run this script as root."
 [ -n "$RANGE_IP" ] || die "Usage: sh $WORKDIR/scripts/nct-upgrade.sh RANGE_IP [auto|compose|docker|legacy]"
 case "$MODE" in auto|compose|docker|legacy) ;; *) die "Mode must be auto, compose, docker, or legacy." ;; esac
-for command_name in docker sha256sum tar cmp; do
+for command_name in docker sha256sum tar cmp curl grep; do
     command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required."
 done
 docker info >/dev/null 2>&1 || die "Docker is not reachable."
@@ -65,7 +65,7 @@ for path in glob.glob("/data/**/manifest.json", recursive=True):
         pass
 db_path = pathlib.Path("/data/analyzer.db")
 if db_path.exists():
-    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    db = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = \"table\"")}
     checks = (
         ("scan_runs", "status", ("queued", "dispatching", "running", "awaiting_fallback_approval")),
@@ -119,7 +119,7 @@ check_active container
 account_count=$(docker exec "$CONTAINER" python -c '
 import pathlib, sqlite3
 p = pathlib.Path("/data/analyzer.db")
-print(0 if not p.exists() else sqlite3.connect(f"file:{p}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
+print(0 if not p.exists() else sqlite3.connect(f"file:{p}?mode=ro&immutable=1", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
 ') || die "Existing NCT accounts could not be inspected in the running container."
 case "$account_count" in ''|*[!0-9]*) die "The running container returned an invalid NCT account count." ;; esac
 original_build_id=$(docker exec "$CONTAINER" python -c 'from app.build_info import BUILD_ID; print(BUILD_ID)') ||
@@ -190,7 +190,7 @@ result = {
 }
 db_path = root / "analyzer.db"
 if db_path.exists():
-    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    db = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
     result["database"]["present"] = True
     result["database"]["integrity"] = db.execute("PRAGMA integrity_check").fetchone()[0]
     result["database"]["foreign_key_errors"] = [list(row) for row in db.execute("PRAGMA foreign_key_check")]
@@ -240,6 +240,25 @@ verify_rollback_identity() {
     rollback_mount_source=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$rollback")
     [ "$rollback_mount_type" = "$mount_type" ] && [ "$rollback_mount_source" = "$mount_source" ]
 }
+start_original_if_needed() {
+    [ "$was_running" = "true" ] || return 0
+    docker start "$CONTAINER" >/dev/null 2>&1 || return 1
+    attempt=0
+    until health=$(curl --connect-timeout 2 --max-time 5 -ksS "https://$RANGE_IP:$original_host_port/health" 2>/dev/null); do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -ge 15 ]; then
+            docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || true
+            docker stop "$CONTAINER" >/dev/null 2>&1 || true
+            return 1
+        fi
+        sleep 1
+    done
+    if ! printf '%s' "$health" | grep -q '"status":"ok"'; then
+        docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || true
+        docker stop "$CONTAINER" >/dev/null 2>&1 || true
+        return 1
+    fi
+}
 
 was_running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER")
 rollback=""
@@ -273,9 +292,7 @@ restore_original() {
             [ "$restore_ok" != "yes" ] || cmp -s "$before" "$restored_inventory" || restore_ok=no
             if [ "$restore_ok" = "yes" ] && verify_rollback_identity; then
                 docker rename "$rollback" "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
-                if [ "$restore_ok" = "yes" ] && [ "$was_running" = "true" ]; then
-                    docker start "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
-                fi
+                [ "$restore_ok" != "yes" ] || start_original_if_needed || restore_ok=no
                 [ "$restore_ok" != "yes" ] || restored=yes
             fi
             if [ "$restored" != "yes" ]; then
@@ -284,10 +301,10 @@ restore_original() {
             fi
         elif [ -n "$rollback" ] && verify_rollback_identity; then
             docker rename "$rollback" "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
-            [ "$was_running" != "true" ] || docker start "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
+            start_original_if_needed || restore_ok=no
             [ "$restore_ok" != "yes" ] || restored=yes
         elif [ "$original_stopped" = "yes" ]; then
-            [ "$was_running" != "true" ] || docker start "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
+            start_original_if_needed || restore_ok=no
             [ "$restore_ok" != "yes" ] || restored=yes
         fi
         if [ "$restored" = "yes" ]; then
