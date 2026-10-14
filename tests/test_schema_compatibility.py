@@ -254,7 +254,7 @@ def _create_verified_version_four_fixture(db_path: Path) -> None:
 
 
 def _schema_preflight(db_path: Path) -> dict[str, object]:
-    running_build_id, running_build_commit = SUPPORTED_V4_RANGE_BUILDS[2]
+    running_build_id, running_build_commit = SUPPORTED_V4_RANGE_BUILDS[1]
     return schema_upgrade_preflight(
         db_path,
         expected_build_id=running_build_id,
@@ -425,7 +425,7 @@ def test_version_four_read_only_preflight_accepts_exact_late_schema_and_preserve
     assert result["integrity"] == "ok"
     assert result["foreign_key_errors"] == []
     assert result["originating_build_id"] == SUPPORTED_V4_RANGE_BUILDS[0][0]
-    assert result["retained_running_build_id"] == SUPPORTED_V4_RANGE_BUILDS[2][0]
+    assert result["retained_running_build_id"] == SUPPORTED_V4_RANGE_BUILDS[1][0]
     assert result["known_late_schema_objects"] == [
         "artifact_backfill",
         "artifact_compaction_journal",

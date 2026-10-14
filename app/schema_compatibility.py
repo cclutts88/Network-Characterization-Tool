@@ -35,10 +35,6 @@ MIGRATION_PLAN = (
 # phase2 schema accepted by the phase3 replacement package.
 SUPPORTED_V4_RANGE_BUILDS = (
     (
-        "0.16.0-range-test-20261013-phase2-r2",
-        "aab6e6f603df18ba568808cdf26f18ad4384c9a2",
-    ),
-    (
         "0.16.0-range-test-20261013-phase2-r3",
         "a4256d6f7fdd1bc02e465fbe57f9d738515a2960",
     ),

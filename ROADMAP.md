@@ -563,7 +563,7 @@ A roadmap item should only be marked complete when:
   through the retained original image, and then uses the replacement image to record an
   immutable read-only audit of database integrity, foreign keys, schema fingerprints,
   the exact v1-through-v4 migration-plan digest and ledger, the separately retained
-  running-build and schema-origin identities against the explicit supported phase2-r2
+  running-build and schema-origin identities against the explicit supported phase2-r3
   through phase2-r5 lineage, and exact known late-schema objects. A later supported v4
   image may therefore open an unchanged schema created by an earlier supported v4 image,
   while the v4 state and ledger must still agree on the actual schema origin. Before the candidate can start, the
@@ -572,8 +572,17 @@ A roadmap item should only be marked complete when:
   changes to the state origin, v4 ledger origin, migration-plan digest, unknown schema,
   incomplete ledger, or report/database binding all stop the upgrade. The final
   Linux/Docker suite passes with **1,636 passed and 16 skipped**; **61 focused tests**
-  and Linux shell syntax validation also pass after this reviewer-led correction. The
-  exact replacement image still requires rebuild and package qualification. The failed `phase3-r1` package is
+  and Linux shell syntax validation also pass after this reviewer-led correction. One
+  initial full-suite run had a single background-job timing miss at its three-second
+  deadline; that test passed immediately in isolation and the complete suite then passed
+  cleanly on repeat. An exact-image exercise created v4 with `phase2-r3`, opened it
+  unchanged with `phase2-r4`, added retained rows in all three supported late-schema
+  groups, checkpointed through the retained r4 image, and passed the replacement's
+  immutable read-only audit with the r3 schema origin and r4 running identity recorded
+  separately. A direct r2-created database is not this same exact v4 schema and fails
+  closed; it must first pass through a supported later phase2 upgrade rather than using
+  this replacement directly. The exact replacement image still requires rebuild and
+  package qualification. The failed `phase3-r1` package is
   withdrawn. The schema correction quality gate is **CLEAR — DOCUMENTED DEVIATION** at
   commit `88a6322`; the strengthened package audit safeguard and exact replacement
   package still require independent review. Range acceptance still requires the new
