@@ -665,6 +665,35 @@ A roadmap item should only be marked complete when:
   withdrawn. This package is a verified transfer candidate; Range acceptance and mission
   readiness remain pending the preserved-data recovery and hands-on Range checks.
 
+- [x] **Phase 3 R3 clean-state Range acceptance and stopped-container recovery correction — 2026-10-13.**
+  The first Range recovery attempt exposed a deployment-helper defect before any package
+  load or candidate data write: `docker port` does not report a saved binding for a
+  stopped container. The recovery helper now reads the retained `8445/tcp` binding from
+  the container's saved configuration and rejects missing, multiple, nonnumeric, zero,
+  and out-of-range values before it disables the failed loop, loads an image, or touches
+  retained data. Focused regression coverage and a disposable stopped-container exercise
+  verify that behavior.
+  The exact read-only Range preflight also established that the retained version 4 database
+  originated on `phase2-r2`, outside the supported preserved-data recovery boundary that
+  begins with the reviewed late-phase2 maintenance layouts. The gate correctly failed
+  closed and no candidate migration began. Because the retained evidence and accounts
+  were explicitly declared nonessential, the operator authorized a clean NCT-only reset
+  instead of weakening the migration guard. The reset removed only NCT containers, NCT
+  data and deployment records, failed-upgrade copies, migration receipts, and obsolete NCT
+  images. It preserved the VM operating system, Docker, network configuration, unrelated
+  files, and retained TLS material.
+  A fresh `phase3-r3` installation then passed live Range checks at
+  `10.101.35.15:8445`: the container remained running, `/health` returned `status: ok`,
+  build ID `0.16.0-range-test-20261013-phase3-r3` and build commit
+  `f6ba1ad4a754b904511e3d726110d6fc35b9f237` matched the sealed candidate, one enabled
+  administrator account remained, the bootstrap secret was absent, the sign-in page
+  loaded, and only the `phase3-r3` NCT image remained. This is **clean-state Range
+  acceptance** for the Phase 3 R3 package. Preserved-data migration from `phase2-r2`,
+  mission readiness, and availability on `main` remain unclaimed. The recovery-helper
+  correction is foundation source for the next transfer package; it does not alter the
+  application bytes already running on the Range. The independent recovery closeout gate
+  is **CLEAR — DOCUMENTED DEVIATION**.
+
 ## Field feedback correction cycle — 2026-10-08
 
 - [x] Captured the complete Teams operator-feedback window from 2026-09-28 12:23
@@ -1020,6 +1049,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-13 | Phase 3 Range recovery and clean-state acceptance | Recover preserved data through the guarded Phase 3 R3 path after identifying the stopped source container's HTTPS binding | Read the binding from the stopped container's saved configuration and fail closed for missing, multiple, or invalid values. Preserve the exact schema-origin guard: the retained `phase2-r2` database remains ineligible for the supported late-phase2 recovery path. After the operator declared the retained NCT evidence and accounts nonessential, perform an explicitly authorized NCT-only reset and validate a fresh Phase 3 R3 install | `docker port` cannot report the binding of a stopped container, and the retained database came from a different schema origin than the reviewed preserved-data migration boundary | Clean-state Phase 3 R3 Range acceptance passed. Preserved-data migration from `phase2-r2` remains unclaimed. The running Range image is unchanged; the recovery-helper correction must be included in a future transfer package |
 | 2026-10-13 | Phase 3 Range schema compatibility | Require unconditional equality between the recorded schema fingerprint and the live database before every version 4 to version 5 upgrade | For version 4 to version 5 only, permit a mismatch solely when every present late phase2 maintenance group is complete and exactly matches the known SearchSploit cache, Artifact Registry backfill, or exact-content compaction definitions, and removing an allowed subset reproduces the recorded version 4 fingerprint. All altered, incomplete, unrelated, later-version, and otherwise unexplained drift still fails closed | The `phase2-r4` build legitimately created these maintenance tables after sealing its version 4 fingerprint. The first `phase3-r1` Range attempt therefore rejected supported phase2 state even though the migration guard correctly protected the saved database | `phase3-r1` is withdrawn. Version 5 now initializes all supported maintenance schemas before sealing its fingerprint. No Range fingerprint is rewritten and no retained maintenance state is deleted. The replacement requires a read-only stopped-database audit, a new exact package, guarded retry, preserved-data checks, and independent review before Range acceptance |
 | 2026-10-13 | Phase 3.6 adaptive collection | Let Mission Environment guide collection and show relevant pivots | Enforce the first adaptive gate only where the operator selected exact Saved Network records and reviewed their current Network Scope associations and Mission Environment declaration versions. Any reviewed Nmap-prohibited scope blocks preview, portable package generation, active-run admission, enabled schedule creation, schedule enabling, manual occurrence creation and final waiting-occurrence dispatch. Manual targets and unassociated Saved Networks remain Unknown even when their CIDRs overlap a scope. Arkime/Kibana guidance appears only when the tool is declared available and that exact scope declares available or partial coverage | Addresses, CIDRs, names, previous evidence and tool installation cannot safely establish mission authorization. Exact Saved Network leaves plus optimistic versions provide a reviewable boundary that can be rechecked in the same transaction before accepted work is retained or contact can begin | This supersedes only the non-enforcement portion of the declaration-first deviation below. Authorized remains descriptive and does not grant permission; existing operator authorization and No-Strike controls remain authoritative. Multi-scope selections are reviewed separately and one prohibited scope blocks the complete request. Actual Arkime/Kibana queries, evidence ingestion and broader analysis adaptation remain open, so Phase 3 is still incomplete |
 | 2026-10-13 | Phase 3 Mission Environment authorization | Use Mission Environment declarations to guide collection and analysis | The first slice stores and displays administrator-reviewed availability, coverage, authorization and blind-spot declarations. It does not grant permission, block scans, or change analysis. Existing authorization procedures and No-Strike controls remain authoritative | A durable, reviewable declaration layer must exist before it can safely affect network contact. Inferring permission from installed tools, addresses, names, targets or old evidence could authorize activity that an operator did not approve | Unknown is the default; Nmap-prohibited is derived into the blind-spot view; later reviewed gates must add scope-aware warnings/enforcement, adaptive pivots and Arkime/Kibana use. This is an accepted declaration-first deviation and Phase 3 remains incomplete until those gates pass |

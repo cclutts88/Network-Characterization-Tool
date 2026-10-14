@@ -169,6 +169,64 @@ def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():
     assert "never starts the old image against replacement-written data" in normalized_guide
 
 
+@pytest.mark.parametrize(
+    ("saved_ports", "expected_status", "expected_output"),
+    (
+        ("8445", 0, "8445"),
+        ("", 1, ""),
+        ("8445\n9445", 1, ""),
+        ("not-a-port", 1, ""),
+        ("0", 1, ""),
+        ("65536", 1, ""),
+    ),
+)
+def test_recovery_reads_one_valid_https_port_from_stopped_container_configuration(
+    tmp_path, saved_ports, expected_status, expected_output
+):
+    script = (SCRIPTS / "nct-recover-unhealthy-upgrade.sh").read_text(
+        encoding="utf-8"
+    )
+    body = script.split("# SAVED_HTTPS_PORT_FUNCTION_START\n", 1)[1].split(
+        "# SAVED_HTTPS_PORT_FUNCTION_END", 1
+    )[0]
+    harness = f"""
+set -eu
+SAVED_PORTS={saved_ports!r}
+docker() {{
+    [ "$1" = inspect ] || return 1
+    printf '%s\n' "$SAVED_PORTS"
+}}
+{body}
+saved_https_host_port nct
+"""
+    result = subprocess.run(
+        ["sh", "-c", harness],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_status
+    assert result.stdout.strip() == expected_output
+
+
+def test_recovery_uses_saved_port_bindings_before_any_package_load_or_data_action():
+    script = (SCRIPTS / "nct-recover-unhealthy-upgrade.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert '.HostConfig.PortBindings "8445/tcp"' in script
+    assert 'original_host_port=$(saved_https_host_port "$CONTAINER")' in script
+    assert script.index('original_host_port=$(saved_https_host_port "$CONTAINER")') < script.index(
+        'say "Disabling the failed restart loop'
+    )
+    assert script.index('original_host_port=$(saved_https_host_port "$CONTAINER")') < script.index(
+        'docker load -i "$ARCHIVE"'
+    )
+    assert 'candidate_host_port=$(saved_https_host_port "$CONTAINER")' in script
+
+
 def test_range_data_checker_reads_live_wal_and_uses_immutable_only_when_requested(
     tmp_path, capsys
 ):

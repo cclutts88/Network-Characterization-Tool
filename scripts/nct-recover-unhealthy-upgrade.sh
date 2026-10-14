@@ -27,6 +27,15 @@ valid_sha256() {
     case "$value" in *[!0-9a-f]*) return 1 ;; esac
 }
 file_sha256() { sha256sum "$1" | awk 'NR == 1 { print $1; exit }'; }
+# SAVED_HTTPS_PORT_FUNCTION_START
+saved_https_host_port() {
+    container=$1
+    port=$(docker inspect --format '{{range index .HostConfig.PortBindings "8445/tcp"}}{{.HostPort}}{{println}}{{end}}' "$container") || return 1
+    case "$port" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$port" -ge 1 ] 2>/dev/null && [ "$port" -le 65535 ] || return 1
+    printf '%s\n' "$port"
+}
+# SAVED_HTTPS_PORT_FUNCTION_END
 wait_for_health() {
     attempt=0
     until health=$(curl --connect-timeout 2 --max-time 5 -ksS "https://$RANGE_IP:$original_host_port/health" 2>/dev/null); do
@@ -105,8 +114,8 @@ mount_source=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/
 original_container_id=$(docker inspect --format '{{.Id}}' "$CONTAINER")
 original_image_id=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 original_restart_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$CONTAINER")
-original_host_port=$(docker port "$CONTAINER" 8445/tcp 2>/dev/null | awk -F: 'NR == 1 { print $NF }')
-case "$original_host_port" in ''|*[!0-9]*) die "The current HTTPS host port could not be identified." ;; esac
+original_host_port=$(saved_https_host_port "$CONTAINER") ||
+    die "The current HTTPS host port could not be identified from the saved container configuration."
 
 original_build_id=$(docker run --rm "$original_image_id" python -c 'from app.build_info import BUILD_ID; print(BUILD_ID)') || die "The retained source image build ID could not be read."
 original_build_commit=$(docker run --rm "$original_image_id" python -c 'from app.build_info import BUILD_COMMIT; print(BUILD_COMMIT)') || die "The retained source image commit could not be read."
@@ -240,7 +249,8 @@ candidate_image_id=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 [ "$candidate_image_id" = "$expected_image_id" ] || die "The replacement container image identity is wrong."
 candidate_mount=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$CONTAINER")
 [ "$candidate_mount" = "$DATA_DIR" ] || die "The replacement container data mount is wrong."
-candidate_host_port=$(docker port "$CONTAINER" 8445/tcp 2>/dev/null | awk -F: 'NR == 1 { print $NF }')
+candidate_host_port=$(saved_https_host_port "$CONTAINER") ||
+    die "The replacement HTTPS host port could not be identified from its saved container configuration."
 [ "$candidate_host_port" = "$original_host_port" ] || die "The replacement did not preserve the HTTPS port."
 health=$(wait_for_health) || die "The replacement did not become healthy."
 printf '%s' "$health" | grep -q '"status":"ok"' || die "The replacement health status is not ok."
