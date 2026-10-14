@@ -122,6 +122,12 @@ p = pathlib.Path("/data/analyzer.db")
 print(0 if not p.exists() else sqlite3.connect(f"file:{p}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
 ') || die "Existing NCT accounts could not be inspected in the running container."
 case "$account_count" in ''|*[!0-9]*) die "The running container returned an invalid NCT account count." ;; esac
+original_build_id=$(docker exec "$CONTAINER" python -c 'from app.build_info import BUILD_ID; print(BUILD_ID)') ||
+    die "The running NCT build identity could not be read."
+original_build_commit=$(docker exec "$CONTAINER" python -c 'from app.build_info import BUILD_COMMIT; print(BUILD_COMMIT)') ||
+    die "The running NCT build commit could not be read."
+[ -n "$original_build_id" ] && [ -n "$original_build_commit" ] ||
+    die "The running NCT build identity is incomplete."
 
 say "Loading the verified release image..."
 docker load -i "$ARCHIVE" >/dev/null
@@ -134,6 +140,24 @@ before="$BACKUP_DIR/pre-upgrade-$timestamp.json"
 after="$BACKUP_DIR/post-upgrade-$timestamp.json"
 backup="$BACKUP_DIR/nct-data-$timestamp.tar.gz"
 schema_preflight="$BACKUP_DIR/schema-preflight-$timestamp.json"
+
+preflight_binding_code='
+import hashlib, json, pathlib, sys
+root = pathlib.Path("/verification")
+report_path = root / sys.argv[1]
+inventory_path = root / sys.argv[2]
+report = json.loads(report_path.read_text(encoding="utf-8"))
+inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+if report.get("status") != "pass":
+    raise SystemExit("Schema preflight report did not record a passing result")
+database = inventory.get("restore_files", {}).get("analyzer.db")
+if not database or not database.get("sha256"):
+    raise SystemExit("Pre-upgrade inventory does not contain analyzer.db identity")
+if report.get("database_sha256") != database["sha256"]:
+    raise SystemExit("Schema preflight report does not match the inventoried analyzer.db")
+digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+print(digest)
+'
 
 snapshot_code='
 import hashlib, json, pathlib, sqlite3, sys
@@ -300,10 +324,22 @@ docker run --rm \
     -e PYTHONPATH=/app \
     -v "$DATA_DIR:/data:ro,Z" \
     -v "$SCHEMA_PREFLIGHT:/opt/nct-schema-preflight.py:ro,Z" \
-    "$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db > "$schema_preflight" ||
+    "$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db \
+        --expected-build-id "$original_build_id" \
+        --expected-build-commit "$original_build_commit" > "$schema_preflight" ||
     die "The saved schema is not an exact supported upgrade source. The original NCT container will be restored."
 chmod 600 "$schema_preflight"
 snapshot "$before"
+schema_preflight_sha256=$(docker run --rm \
+    -v "$BACKUP_DIR:/verification:ro,Z" \
+    "$IMAGE" python -c "$preflight_binding_code" \
+    "$(basename "$schema_preflight")" "$(basename "$before")") ||
+    die "The schema audit does not match the exact database backup inventory. The original NCT container will be restored."
+[ "${#schema_preflight_sha256}" -eq 64 ] ||
+    die "The schema audit checksum is invalid. The original NCT container will be restored."
+case "$schema_preflight_sha256" in
+    *[!0-9a-f]*) die "The schema audit checksum is invalid. The original NCT container will be restored." ;;
+esac
 tar -C "$PERSIST_ROOT" -czf "$backup" data
 chmod 600 "$backup"
 sha256sum "$backup" > "$backup.sha256"
@@ -356,6 +392,7 @@ receipt="$STATE_DIR/upgrade-$timestamp.receipt"
     printf 'backup=%s\n' "$backup"
     printf 'backup_checksum=%s\n' "$backup.sha256"
     printf 'schema_preflight=%s\n' "$schema_preflight"
+    printf 'schema_preflight_sha256=%s\n' "$schema_preflight_sha256"
     printf 'rollback_container=%s\n' "$rollback"
     printf 'rollback_container_id=%s\n' "$original_container_id"
     printf 'rollback_image_id=%s\n' "$original_image_id"

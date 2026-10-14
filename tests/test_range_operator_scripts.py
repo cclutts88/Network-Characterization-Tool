@@ -4,6 +4,7 @@ from pathlib import Path
 import runpy
 import sqlite3
 import subprocess
+import sys
 
 import pytest
 
@@ -223,6 +224,10 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert 'PRAGMA wal_checkpoint(TRUNCATE)' in content
     assert '"$DATA_DIR:/data:ro,Z"' in content
     assert '"$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db' in content
+    assert '--expected-build-id "$original_build_id"' in content
+    assert '--expected-build-commit "$original_build_commit"' in content
+    assert 'schema_preflight_sha256=%s' in content
+    assert 'preflight_binding_code' in content
     assert 'schema_preflight=%s' in content
     assert 'NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
     assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
@@ -230,6 +235,12 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert content.index('docker stop "$CONTAINER"') < content.index('snapshot "$before"')
     assert content.index('PRAGMA wal_checkpoint(TRUNCATE)') < content.index(
         'python /opt/nct-schema-preflight.py'
+    )
+    assert content.index('snapshot "$before"') < content.index(
+        'schema_preflight_sha256=$(docker run'
+    )
+    assert content.index('schema_preflight_sha256=$(docker run') < content.index(
+        'docker rename "$CONTAINER" "$rollback"'
     )
     assert 'snapshot "$after" container' in content
     assert '"analyzer.db-wal"' in content
@@ -360,6 +371,32 @@ def test_upgrade_snapshot_verifies_files_database_and_registered_artifacts(
     assert snapshot["artifact_registry"] == [
         {"sha256": digest, "size": artifact.stat().st_size}
     ]
+
+
+def test_upgrade_preflight_report_must_match_inventoried_database(tmp_path: Path):
+    report = tmp_path / "schema.json"
+    before = tmp_path / "before.json"
+    report.write_text(
+        json.dumps({"status": "pass", "database_sha256": "a" * 64}),
+        encoding="utf-8",
+    )
+    before.write_text(
+        json.dumps({"restore_files": {"analyzer.db": {"sha256": "b" * 64}}}),
+        encoding="utf-8",
+    )
+    code = _embedded_python("preflight_binding_code").replace(
+        "/verification", tmp_path.as_posix()
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code, report.name, before.name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "does not match" in result.stderr
 
 
 def test_quick_start_uses_executable_restore_path_and_correct_migration_step():

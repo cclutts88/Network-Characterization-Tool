@@ -23,8 +23,14 @@ def _sha256(path: Path) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=Path("/data/analyzer.db"))
+    parser.add_argument("--expected-build-id", required=True)
+    parser.add_argument("--expected-build-commit", required=True)
     args = parser.parse_args()
-    result = schema_upgrade_preflight(args.db)
+    result = schema_upgrade_preflight(
+        args.db,
+        expected_build_id=args.expected_build_id,
+        expected_build_commit=args.expected_build_commit,
+    )
     result["database_sha256"] = _sha256(args.db)
     print(json.dumps(result, sort_keys=True))
     return 0

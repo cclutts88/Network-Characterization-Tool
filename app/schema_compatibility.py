@@ -105,8 +105,10 @@ def _digest(value: object) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
-def migration_plan_digest() -> str:
-    return _digest({"migration_ids": list(MIGRATION_PLAN)})
+def migration_plan_digest(
+    migration_ids: tuple[str, ...] = MIGRATION_PLAN,
+) -> str:
+    return _digest({"migration_ids": list(migration_ids)})
 
 
 def image_schema_contract() -> dict[str, object]:
@@ -186,7 +188,12 @@ def _matches_exact_legacy_v4_late_schema(
     return False
 
 
-def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
+def schema_upgrade_preflight(
+    db_path: Path,
+    *,
+    expected_build_id: str,
+    expected_build_commit: str,
+) -> dict[str, object]:
     """Read-only proof that a saved v4 database is safe for this image to upgrade."""
     if not db_path.is_file():
         raise SchemaCompatibilityError("The saved NCT database was not found.")
@@ -205,12 +212,21 @@ def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
             )
         state = connection.execute(
             """SELECT schema_contract_version, schema_version, data_layout_contract,
-                      schema_fingerprint, originating_build_id, originating_build_commit
+                      migration_plan_digest, schema_fingerprint,
+                      originating_build_id, originating_build_commit
                  FROM nct_schema_state WHERE singleton = 1"""
         ).fetchone()
         if state is None:
             raise SchemaCompatibilityError("The saved schema state is missing.")
-        contract_version, schema_version, layout, recorded, build_id, build_commit = state
+        (
+            contract_version,
+            schema_version,
+            layout,
+            plan_digest,
+            recorded,
+            build_id,
+            build_commit,
+        ) = state
         if int(contract_version) != 4 or int(schema_version) != 4:
             raise SchemaCompatibilityError(
                 "This replacement package requires the verified phase2 version 4 schema."
@@ -218,6 +234,20 @@ def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
         if layout != DATA_LAYOUT_CONTRACT or not recorded:
             raise SchemaCompatibilityError(
                 "The saved evidence layout or schema fingerprint is not compatible."
+            )
+        expected_v4_plan_digest = migration_plan_digest(MIGRATION_PLAN[:4])
+        if plan_digest != expected_v4_plan_digest:
+            raise SchemaCompatibilityError(
+                "The saved version 4 migration plan does not match the supported lineage."
+            )
+        if (
+            not expected_build_id
+            or not expected_build_commit
+            or build_id != expected_build_id
+            or build_commit != expected_build_commit
+        ):
+            raise SchemaCompatibilityError(
+                "The saved schema origin does not match the retained running build."
             )
         live = schema_fingerprint(connection)
         compatibility = "recorded-fingerprint-match"
@@ -230,7 +260,8 @@ def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
 
         ledger = connection.execute(
             """SELECT migration_id, target_schema_version, status,
-                      after_schema_fingerprint
+                      after_schema_fingerprint, originating_build_id,
+                      originating_build_commit
                  FROM nct_schema_migrations ORDER BY target_schema_version, migration_id"""
         ).fetchall()
         expected_ids = MIGRATION_PLAN[:4]
@@ -247,6 +278,10 @@ def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
                 or row[2] != "completed"
                 or not row[3]
                 or (target == 4 and row[3] != recorded)
+                or (
+                    target == 4
+                    and (row[4] != build_id or row[5] != build_commit)
+                )
             ):
                 raise SchemaCompatibilityError(
                     "The saved version 4 migration ledger is incomplete or inconsistent."
@@ -262,6 +297,7 @@ def schema_upgrade_preflight(db_path: Path) -> dict[str, object]:
             "schema_contract_version": int(contract_version),
             "schema_version": int(schema_version),
             "data_layout_contract": layout,
+            "migration_plan_digest": plan_digest,
             "recorded_schema_fingerprint": recorded,
             "live_schema_fingerprint": live,
             "originating_build_id": build_id,

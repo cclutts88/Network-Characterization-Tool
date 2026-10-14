@@ -6,12 +6,14 @@ import sqlite3
 
 import pytest
 
+from app.build_info import BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 from app.schema_compatibility import (
     DATA_LAYOUT_CONTRACT,
     DEVICE_CONTACT_MIGRATION_ID,
     LEGACY_MIGRATION_ID,
     MIGRATION_ID,
+    MIGRATION_PLAN,
     SCHEDULED_WORK_MIGRATION_ID,
     SchemaCompatibilityError,
     WORK_COORDINATION_MIGRATION_ID,
@@ -233,10 +235,18 @@ def _create_verified_version_four_fixture(db_path: Path) -> None:
         db.execute(
             """UPDATE nct_schema_state
                   SET schema_contract_version = 4, schema_version = 4,
-                      migration_plan_digest = 'nct-v4-fixture',
+                      migration_plan_digest = ?,
                       schema_fingerprint = ?""",
-            (fingerprint,),
+            (migration_plan_digest(MIGRATION_PLAN[:4]), fingerprint),
         )
+
+
+def _schema_preflight(db_path: Path) -> dict[str, object]:
+    return schema_upgrade_preflight(
+        db_path,
+        expected_build_id=BUILD_ID,
+        expected_build_commit=BUILD_COMMIT,
+    )
 
 
 def _add_phase2_late_schema_group(db_path: Path, group: str) -> None:
@@ -394,7 +404,7 @@ def test_version_four_read_only_preflight_accepts_exact_late_schema_and_preserve
         assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
     before = db_path.read_bytes()
 
-    result = schema_upgrade_preflight(db_path)
+    result = _schema_preflight(db_path)
 
     assert result["status"] == "pass"
     assert result["compatibility"] == "exact-known-phase2-late-schema"
@@ -417,7 +427,7 @@ def test_version_four_read_only_preflight_rejects_unknown_drift(tmp_path: Path) 
         db.execute("CREATE TABLE unexpected_schema(id INTEGER PRIMARY KEY)")
 
     with pytest.raises(SchemaCompatibilityError, match="unrecognized"):
-        schema_upgrade_preflight(db_path)
+        _schema_preflight(db_path)
 
 
 def test_version_four_read_only_preflight_rejects_incomplete_ledger(tmp_path: Path) -> None:
@@ -430,7 +440,51 @@ def test_version_four_read_only_preflight_rejects_incomplete_ledger(tmp_path: Pa
         )
 
     with pytest.raises(SchemaCompatibilityError, match="ledger"):
-        schema_upgrade_preflight(db_path)
+        _schema_preflight(db_path)
+
+
+def test_version_four_read_only_preflight_rejects_changed_state_origin(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE nct_schema_state SET originating_build_id = 'different-build'"
+        )
+
+    with pytest.raises(SchemaCompatibilityError, match="origin"):
+        _schema_preflight(db_path)
+
+
+def test_version_four_read_only_preflight_rejects_changed_v4_ledger_origin(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE nct_schema_migrations SET originating_build_commit = 'different' "
+            "WHERE migration_id = ?",
+            (DEVICE_CONTACT_MIGRATION_ID,),
+        )
+
+    with pytest.raises(SchemaCompatibilityError, match="ledger"):
+        _schema_preflight(db_path)
+
+
+def test_version_four_read_only_preflight_rejects_changed_plan_digest(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE nct_schema_state SET migration_plan_digest = 'different-plan'"
+        )
+
+    with pytest.raises(SchemaCompatibilityError, match="migration plan"):
+        _schema_preflight(db_path)
 
 
 def test_verified_version_four_upgrades_to_mission_environment_schema(tmp_path: Path) -> None:
