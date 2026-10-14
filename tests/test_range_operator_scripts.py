@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import runpy
 import sqlite3
@@ -155,15 +156,105 @@ def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():
     assert "Stored record count decreased" in script
     assert "candidate_account_count" in script
     assert "docker restart \"$CONTAINER\"" in script
+    final_restart = script.split('docker restart "$CONTAINER"', 1)[1]
+    assert '"status":"ok"' in final_restart
+    assert "$EXPECTED_BUILD_ID" in final_restart
+    assert "$EXPECTED_BUILD_COMMIT" in final_restart
+    assert "restarted replacement build ID is wrong" in final_restart
+    assert "restarted replacement build commit is wrong" in final_restart
+    assert "isolate_failed_candidate" in script
+    assert "No backup was extracted over the existing data" in script
     assert "recovery-upgrade-$timestamp.receipt" in script
     assert "nct-recover-unhealthy-upgrade.sh" in guide
     assert "never starts the old image against replacement-written data" in normalized_guide
 
 
-def test_range_data_checker_can_use_a_truly_read_only_stopped_database():
-    content = (SCRIPTS / "nct-range-data-check.py").read_text(encoding="utf-8")
+def test_range_data_checker_reads_live_wal_and_uses_immutable_only_when_requested(
+    tmp_path, capsys
+):
+    helpers = runpy.run_path(str(SCRIPTS / "nct-range-data-check.py"))
+    db_path = tmp_path / "analyzer.db"
+    writer = sqlite3.connect(db_path)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("CREATE TABLE scan_runs (status TEXT)")
+    writer.commit()
+    writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    writer.execute("INSERT INTO scan_runs(status) VALUES ('queued')")
+    writer.commit()
+    try:
+        live = helpers["active_work"](tmp_path)
+        stopped_only = helpers["active_work"](tmp_path, immutable=True)
+        live_snapshot = helpers["snapshot"](tmp_path)
+        immutable_snapshot = helpers["snapshot"](tmp_path, immutable=True)
+        with pytest.raises(SystemExit) as active_exit:
+            _run_embedded_python("active_check_code", tmp_path)
+        capsys.readouterr()
+        _run_embedded_python("snapshot_code", tmp_path)
+        embedded_live_snapshot = json.loads(capsys.readouterr().out)
+    finally:
+        writer.close()
 
-    assert content.count("?mode=ro&immutable=1") == 2
+    assert live == [{"source": "database", "table": "scan_runs", "count": 1}]
+    assert stopped_only == []
+    assert live_snapshot["database"]["tables"]["scan_runs"] == 1
+    assert immutable_snapshot["database"]["tables"]["scan_runs"] == 0
+    assert active_exit.value.code == 42
+    assert embedded_live_snapshot["database"]["tables"]["scan_runs"] == 1
+
+
+@pytest.mark.parametrize("failure_step", ("stop", "rename", "move"))
+def test_recovery_never_extracts_over_data_when_candidate_isolation_fails(
+    tmp_path, failure_step
+):
+    script = (SCRIPTS / "nct-recover-unhealthy-upgrade.sh").read_text(
+        encoding="utf-8"
+    )
+    body = script.split("# RECOVERY_ISOLATION_FUNCTION_START\n", 1)[1].split(
+        "# RECOVERY_ISOLATION_FUNCTION_END", 1
+    )[0]
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    failed_data = tmp_path / "failed-data"
+    harness = f"""
+set -eu
+DATA_DIR={data_dir.as_posix()!r}
+failed_data={failed_data.as_posix()!r}
+CONTAINER=nct
+failed_container=nct-failed
+FAIL_STEP={failure_step!r}
+docker() {{
+    command_name=$1
+    shift
+    case "$command_name:$*" in
+        "inspect:nct") return 0 ;;
+        "inspect:--format {{{{.State.Running}}}} nct") printf 'false\\n'; return 0 ;;
+        "update:--restart=no nct") return 0 ;;
+        "stop:nct") [ "$FAIL_STEP" != stop ] ;;
+        "rename:nct nct-failed") [ "$FAIL_STEP" != rename ] ;;
+        *) return 1 ;;
+    esac
+}}
+mv() {{
+    [ "$FAIL_STEP" != move ] || return 1
+    command mv "$@"
+}}
+{body}
+if isolate_failed_candidate; then
+    exit 90
+fi
+[ -d "$DATA_DIR" ] || [ -d "$failed_data" ]
+printf 'NO_BACKUP_EXTRACTION\\n'
+"""
+    result = subprocess.run(
+        ["sh", "-c", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "NO_BACKUP_EXTRACTION\n"
 
 
 def test_quick_start_requires_release_specific_scope_handoff_acceptance():

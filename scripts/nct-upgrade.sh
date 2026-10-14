@@ -65,7 +65,9 @@ for path in glob.glob("/data/**/manifest.json", recursive=True):
         pass
 db_path = pathlib.Path("/data/analyzer.db")
 if db_path.exists():
-    db = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    immutable = len(sys.argv) > 1 and sys.argv[1] == "immutable"
+    suffix = "&immutable=1" if immutable else ""
+    db = sqlite3.connect(f"file:{db_path}?mode=ro{suffix}", uri=True)
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = \"table\"")}
     checks = (
         ("scan_runs", "status", ("queued", "dispatching", "running", "awaiting_fallback_approval")),
@@ -106,7 +108,7 @@ check_active() {
     if [ "$source" = "container" ]; then
         docker exec "$CONTAINER" python -c "$active_check_code"
     else
-        docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c "$active_check_code"
+        docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c "$active_check_code" immutable
     fi
     active_rc=$?
     set -e
@@ -119,7 +121,7 @@ check_active container
 account_count=$(docker exec "$CONTAINER" python -c '
 import pathlib, sqlite3
 p = pathlib.Path("/data/analyzer.db")
-print(0 if not p.exists() else sqlite3.connect(f"file:{p}?mode=ro&immutable=1", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
+print(0 if not p.exists() else sqlite3.connect(f"file:{p}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM analyst_users").fetchone()[0])
 ') || die "Existing NCT accounts could not be inspected in the running container."
 case "$account_count" in ''|*[!0-9]*) die "The running container returned an invalid NCT account count." ;; esac
 original_build_id=$(docker exec "$CONTAINER" python -c 'from app.build_info import BUILD_ID; print(BUILD_ID)') ||
@@ -190,7 +192,9 @@ result = {
 }
 db_path = root / "analyzer.db"
 if db_path.exists():
-    db = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    immutable = len(sys.argv) > 1 and sys.argv[1] == "immutable"
+    suffix = "&immutable=1" if immutable else ""
+    db = sqlite3.connect(f"file:{db_path}?mode=ro{suffix}", uri=True)
     result["database"]["present"] = True
     result["database"]["integrity"] = db.execute("PRAGMA integrity_check").fetchone()[0]
     result["database"]["foreign_key_errors"] = [list(row) for row in db.execute("PRAGMA foreign_key_check")]
@@ -228,7 +232,7 @@ snapshot() {
     if [ "$source" = "container" ]; then
         docker exec "$CONTAINER" python -c "$snapshot_code" > "$output"
     else
-        docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c "$snapshot_code" > "$output"
+        docker run --rm -v "$DATA_DIR:/data:ro,Z" "$IMAGE" python -c "$snapshot_code" immutable > "$output"
     fi
     chmod 600 "$output"
 }
@@ -277,11 +281,14 @@ restore_original() {
             failed_container="nct-failed-upgrade-$timestamp"
             failed_data="$PERSIST_ROOT/failed-upgrade-data-$timestamp"
             if docker inspect "$CONTAINER" >/dev/null 2>&1; then
-                docker stop "$CONTAINER" >/dev/null 2>&1 || true
-                docker rename "$CONTAINER" "$failed_container" >/dev/null 2>&1 || restore_ok=no
+                docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
+                [ "$restore_ok" != "yes" ] || docker stop "$CONTAINER" >/dev/null 2>&1 || restore_ok=no
+                [ "$restore_ok" != "yes" ] || [ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "false" ] || restore_ok=no
+                [ "$restore_ok" != "yes" ] || docker rename "$CONTAINER" "$failed_container" >/dev/null 2>&1 || restore_ok=no
             fi
             if [ "$restore_ok" = "yes" ] && [ -d "$DATA_DIR" ] && [ ! -e "$failed_data" ]; then
                 mv "$DATA_DIR" "$failed_data" || restore_ok=no
+                [ "$restore_ok" != "yes" ] || [ ! -e "$DATA_DIR" ] || restore_ok=no
             else
                 restore_ok=no
             fi

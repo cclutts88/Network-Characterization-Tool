@@ -42,7 +42,12 @@ snapshot() {
     docker run --rm \
         -v "$root:/data:ro,Z" \
         -v "$DATA_CHECK:/opt/nct-range-data-check.py:ro,Z" \
-        "$IMAGE" python /opt/nct-range-data-check.py snapshot --root /data > "$output"
+        "$IMAGE" python /opt/nct-range-data-check.py snapshot --root /data --immutable > "$output"
+    chmod 600 "$output"
+}
+snapshot_running_candidate() {
+    output=$1
+    docker exec -i "$CONTAINER" python - snapshot --root /data < "$DATA_CHECK" > "$output"
     chmod 600 "$output"
 }
 active_check() {
@@ -50,7 +55,7 @@ active_check() {
     docker run --rm \
         -v "$DATA_DIR:/data:ro,Z" \
         -v "$DATA_CHECK:/opt/nct-range-data-check.py:ro,Z" \
-        "$IMAGE" python /opt/nct-range-data-check.py active --root /data
+        "$IMAGE" python /opt/nct-range-data-check.py active --root /data --immutable
     active_rc=$?
     set -e
     [ "$active_rc" -ne 42 ] || die "Saved data contains active or unresolved work. Preserve the stopped installation for administrator review."
@@ -63,6 +68,19 @@ no_other_writer() {
         [ "$source_path" != "$DATA_DIR" ] || die "Another running container mounts $DATA_DIR: $container_id"
     done
 }
+# RECOVERY_ISOLATION_FUNCTION_START
+isolate_failed_candidate() {
+    if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+        docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || return 1
+        docker stop "$CONTAINER" >/dev/null 2>&1 || return 1
+        [ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "false" ] || return 1
+        docker rename "$CONTAINER" "$failed_container" >/dev/null 2>&1 || return 1
+    fi
+    [ -d "$DATA_DIR" ] && [ ! -e "$failed_data" ] || return 1
+    mv "$DATA_DIR" "$failed_data" || return 1
+    [ ! -e "$DATA_DIR" ] || return 1
+}
+# RECOVERY_ISOLATION_FUNCTION_END
 
 [ "$(id -u)" -eq 0 ] || die "Run this script as root."
 [ -n "$RANGE_IP" ] || die "Usage: sh $WORKDIR/scripts/nct-recover-unhealthy-upgrade.sh RANGE_IP [legacy|docker|compose]"
@@ -191,15 +209,9 @@ restore_on_failure() {
     [ "$recovery_complete" = "yes" ] && exit "$status"
     if [ "$candidate_may_have_written" = "yes" ]; then
         say "Candidate validation failed; preserving it and restoring the verified cold backup."
-        if docker inspect "$CONTAINER" >/dev/null 2>&1; then
-            docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || true
-            docker stop "$CONTAINER" >/dev/null 2>&1 || true
-            docker rename "$CONTAINER" "$failed_container" >/dev/null 2>&1 || true
-        fi
-        if [ -d "$DATA_DIR" ] && [ ! -e "$failed_data" ]; then
-            mv "$DATA_DIR" "$failed_data" || true
-        fi
-        if sha256sum -c "$backup_checksum" >/dev/null 2>&1 && tar -C "$PERSIST_ROOT" -xzf "$backup"; then
+        if ! isolate_failed_candidate; then
+            printf '%s\n' "[NCT recovery upgrade] HALT: the failed candidate could not be fully stopped, renamed, and separated from $DATA_DIR. No backup was extracted over the existing data. Preserve $backup and $rollback." >&2
+        elif sha256sum -c "$backup_checksum" >/dev/null 2>&1 && tar -C "$PERSIST_ROOT" -xzf "$backup"; then
             if snapshot "$DATA_DIR" "$restored" && cmp -s "$before" "$restored"; then
                 printf '%s\n' "[NCT recovery upgrade] The exact pre-upgrade data was restored and verified. The incompatible old image remains stopped as $rollback." >&2
             else
@@ -235,7 +247,7 @@ printf '%s' "$health" | grep -q '"status":"ok"' || die "The replacement health s
 printf '%s' "$health" | grep -q "\"build_id\":\"$EXPECTED_BUILD_ID\"" || die "The replacement build ID is wrong."
 printf '%s' "$health" | grep -q "\"build_commit\":\"$EXPECTED_BUILD_COMMIT\"" || die "The replacement build commit is wrong."
 
-snapshot "$DATA_DIR" "$after"
+snapshot_running_candidate "$after"
 docker run --rm -v "$BACKUP_DIR:/verification:ro,Z" "$IMAGE" python -c '
 import json, pathlib, sys
 root = pathlib.Path("/verification")
@@ -260,7 +272,9 @@ print(sqlite3.connect("/data/analyzer.db").execute("SELECT COUNT(*) FROM analyst
 say "Restarting the exact replacement once for final verification..."
 docker restart "$CONTAINER" >/dev/null
 health=$(wait_for_health) || die "The replacement did not become healthy after restart."
+printf '%s' "$health" | grep -q '"status":"ok"' || die "The restarted replacement health status is not ok."
 printf '%s' "$health" | grep -q "\"build_id\":\"$EXPECTED_BUILD_ID\"" || die "The restarted replacement build ID is wrong."
+printf '%s' "$health" | grep -q "\"build_commit\":\"$EXPECTED_BUILD_COMMIT\"" || die "The restarted replacement build commit is wrong."
 after_sha256=$(file_sha256 "$after")
 backup_sha256=$(file_sha256 "$backup")
 

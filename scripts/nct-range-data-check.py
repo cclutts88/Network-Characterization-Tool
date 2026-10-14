@@ -39,7 +39,12 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     }
 
 
-def active_work(root: Path) -> list[dict]:
+def _read_only_connection(db_path: Path, *, immutable: bool) -> sqlite3.Connection:
+    suffix = "&immutable=1" if immutable else ""
+    return sqlite3.connect(f"file:{db_path}?mode=ro{suffix}", uri=True)
+
+
+def active_work(root: Path, *, immutable: bool = False) -> list[dict]:
     active: list[dict] = []
     for raw_path in glob.glob(str(root / "**" / "manifest.json"), recursive=True):
         path = Path(raw_path)
@@ -53,7 +58,7 @@ def active_work(root: Path) -> list[dict]:
     db_path = root / "analyzer.db"
     if not db_path.exists():
         return active
-    connection = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    connection = _read_only_connection(db_path, immutable=immutable)
     try:
         tables = _tables(connection)
         for table, column, states in ACTIVE_DATABASE_STATES:
@@ -90,7 +95,7 @@ def _hash_file(path: Path) -> dict:
     return {"size": size, "sha256": digest.hexdigest()}
 
 
-def snapshot(root: Path) -> dict:
+def snapshot(root: Path, *, immutable: bool = False) -> dict:
     root = root.resolve()
     files: dict[str, dict] = {}
     restore_files: dict[str, dict] = {}
@@ -113,7 +118,7 @@ def snapshot(root: Path) -> dict:
     db_path = root / "analyzer.db"
     if not db_path.exists():
         return result
-    connection = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    connection = _read_only_connection(db_path, immutable=immutable)
     try:
         result["database"]["present"] = True
         result["database"]["integrity"] = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -150,12 +155,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("active", "snapshot"))
     parser.add_argument("--root", type=Path, default=Path("/data"))
+    parser.add_argument(
+        "--immutable",
+        action="store_true",
+        help="Use only after the database is stopped and its WAL was checkpointed.",
+    )
     args = parser.parse_args()
     if args.mode == "active":
-        active = active_work(args.root)
+        active = active_work(args.root, immutable=args.immutable)
         print(json.dumps(active, sort_keys=True))
         return 42 if active else 0
-    print(json.dumps(snapshot(args.root), sort_keys=True))
+    print(json.dumps(snapshot(args.root, immutable=args.immutable), sort_keys=True))
     return 0
 
 

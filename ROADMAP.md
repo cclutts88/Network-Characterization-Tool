@@ -630,9 +630,20 @@ A roadmap item should only be marked complete when:
   and left the incompatible old image stopped. This exercise also exposed and corrected
   a stopped-WAL read-only compatibility issue: offline SQLite checks now use immutable
   read-only access so they do not attempt to create shared-memory files on a read-only
-  mount. The combined recovery, package, and schema suite passes with **63 tests**; every
-  shell helper passes Linux syntax validation; and the complete Linux/Docker suite passes
-  with **1,638 passed and 16 skipped**. Range acceptance remains pending until the sealed
+  mount. The first recovery quality gate was **HALTED FOR REVIEW** because immutable
+  reads were also being used against live WAL data, candidate-isolation failures could
+  still reach backup extraction, and final restart validation did not recheck the exact
+  healthy build commit. Those paths are corrected: live checks use ordinary read-only
+  SQLite access inside the running container; immutable access is limited to stopped,
+  checkpointed databases; failed candidates must be confirmed stopped, renamed, and
+  moved aside before restoration; and the final restart rechecks status, build ID, and
+  build commit. Tests inject stop, rename, and move failures and prove that none can
+  extract a backup over the existing tree. A repeat end-to-end recovery passed, and a
+  forced candidate-health failure preserved both containers, restored the exact cold
+  inventory, account, and healthy database, and left the incompatible source stopped.
+  The combined recovery, package, and schema suite passes with **66 tests**; every shell
+  helper passes Linux syntax validation; and the complete Linux/Docker suite passes with
+  **1,641 passed and 16 skipped**. Range acceptance remains pending until the sealed
   `phase3-r3` package is transferred and this recovery path succeeds against the preserved
   Range data.
 
