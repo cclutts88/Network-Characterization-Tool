@@ -582,11 +582,18 @@ A roadmap item should only be marked complete when:
   separately. A direct r2-created database is not this same exact v4 schema and fails
   closed. It requires a separate reviewed compatibility or migration path; merely
   starting it with a later phase2 image does not reseal or make it eligible for this
-  replacement. The exact replacement image still requires rebuild and
-  package qualification. The failed `phase3-r1` package is
+  replacement. The exact replacement `phase3-r2` image was rebuilt from application
+  commit `fd4577e`, completed the verified r3-origin/r4-running v4-to-v5 exercise,
+  preserved all three late-schema record groups, restarted cleanly, and rendered System
+  Health with live process and container measurements and no browser-console errors.
+  Package qualification remains in progress. The failed `phase3-r1` package is
   withdrawn. The schema correction quality gate is **CLEAR — DOCUMENTED DEVIATION** at
-  commit `88a6322`; the strengthened package audit safeguard and exact replacement
-  package still require independent review. Range acceptance still requires the new
+  commit `17a182f`; the reviewer confirmed that phase2-r2 requires a separate reviewed
+  compatibility or migration path and that an ordinary later phase2 start does not make
+  it eligible. The Range launch, upgrade, rollback, migration, direct-deploy, test, and
+  operator-guide identifiers now consistently select `phase3-r2`; their focused suite
+  passes with **24 tests** and every packaged shell helper passes Linux syntax validation.
+  The exact replacement package still requires independent review. Range acceptance still requires the new
   guarded retry and preserved-data/browser checks.
 
 ## Field feedback correction cycle — 2026-10-08
