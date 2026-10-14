@@ -651,6 +651,19 @@ A roadmap item should only be marked complete when:
   **1,641 passed and 16 skipped**. Range acceptance remains pending until the sealed
   `phase3-r3` package is transferred and this recovery path succeeds against the preserved
   Range data.
+  The final independent recovery gate is **CLEAR** and the novice operator instruction
+  gate is **PASS**. The exact `phase3-r3` transfer candidate was sealed from package
+  checkpoint `1c5ba5e`. Its 95,790,043-byte ZIP has SHA-256
+  `9e587dc15173e07688aeea547c928a84499f0295924ae7adddce370784d86bee`;
+  its image archive has SHA-256
+  `39070f1d4659a12b147bab9853544d591db3d28d42d1e1d535d7f087c2a3c7f5`.
+  A fresh extraction passed all **23** manifest-bound file checks, every delivered shell
+  helper passed Linux syntax validation, both Python recovery checkers compiled, and the
+  guide and receipt identify the exact package revision. The archive loaded into an empty
+  Docker engine; the NCT image reported the exact build and source commit, exposed the
+  required network tools, started healthy, and restarted healthy. `phase3-r2` remains
+  withdrawn. This package is a verified transfer candidate; Range acceptance and mission
+  readiness remain pending the preserved-data recovery and hands-on Range checks.
 
 ## Field feedback correction cycle — 2026-10-08
 
