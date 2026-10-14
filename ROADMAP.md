@@ -593,8 +593,19 @@ A roadmap item should only be marked complete when:
   it eligible. The Range launch, upgrade, rollback, migration, direct-deploy, test, and
   operator-guide identifiers now consistently select `phase3-r2`; their focused suite
   passes with **24 tests** and every packaged shell helper passes Linux syntax validation.
-  The exact replacement package still requires independent review. Range acceptance still requires the new
-  guarded retry and preserved-data/browser checks.
+  The exact `phase3-r2` replacement package was then sealed at package checkpoint
+  `978dd52`. Its 97,424,734-byte ZIP has SHA-256
+  `903b01076b94c804948bad219748865b7c48237669886cd5cd8651da466558e4`;
+  its image archive has SHA-256
+  `0af3a23e4072b064b2e99ab3dfd6e4cfe71035b89eb67d40322f3f63f6aa22a3`.
+  A fresh extraction passed every one of its 22 manifest-bound file checks, the
+  separately bound schema helper was present, all packaged shell helpers passed syntax
+  validation, and both images loaded into an empty Docker engine. The archive-loaded NCT
+  image reported the exact expected build and application commit, exposed the required
+  network tools and capability, and started cleanly after a restart. The novice operator
+  gate is **PASS** and the final independent package gate is
+  **CLEAR — DOCUMENTED DEVIATION**. Range acceptance still requires the new guarded
+  retry and preserved-data/browser checks on the Range host.
 
 ## Field feedback correction cycle — 2026-10-08
 
