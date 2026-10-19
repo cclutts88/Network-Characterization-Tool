@@ -170,4 +170,24 @@ await eval(`(async () => {
   assert.match($('notice').textContent,/still has unsaved changes/);
 })()`);
 
+await eval(`(() => {
+  const wrappers=[];
+  const document={createElement:()=>({className:'',dataset:{},attributes:{},setAttribute(name,value){this.attributes[name]=value},append(node){this.child=node;node.parentElement=this}})};
+  const makeTable=label=>({previousElementSibling:{textContent:label},parentElement:{classList:{contains:()=>false}},replaceWith(wrapper){wrappers.push(wrapper)}});
+  const tables=[makeTable('Open services'),makeTable('MAC evidence')];
+  const root={querySelectorAll:selector=>selector==='table'?tables:[]};
+  ${handler("wrapDetailsTables")}
+
+  wrapDetailsTables(root);
+  assert.equal(wrappers.length,2);
+  for(const wrapper of wrappers){
+    assert.equal(wrapper.className,'table-wrap');
+    assert.equal(wrapper.dataset.nctTableMode,'contained');
+    assert.equal(wrapper.attributes.role,'region');
+    assert.equal(wrapper.tabIndex,0);
+    assert.match(wrapper.attributes['aria-label'],/table$/);
+    assert.ok(wrapper.child,'the original table remains inside the new scrolling region');
+  }
+})()`);
+
 console.log("Network Map expanded spacing runtime regression passed");

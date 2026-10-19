@@ -22,12 +22,12 @@ def storage_page() -> HTMLResponse:
 <p id="runtimeHealthStatus" role="status" aria-live="polite">Waiting for this panel to become visible.</p>
 <p id="runtimeTrendStatus">CPU and memory trends are warming up.</p>
 <h3>CPU</h3>
-<div class="table-wrap"><table class="runtime-table" aria-label="CPU use"><thead><tr><th>Measurement</th><th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th></tr></thead><tbody>
+<div class="table-wrap" data-nct-table-mode="static"><table class="runtime-table" aria-label="CPU use"><thead><tr><th>Measurement</th><th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th></tr></thead><tbody>
 <tr><td>NCT process</td><td id="runtimeProcessCpuCurrent">—</td><td id="runtimeProcessCpuAverage">—</td><td id="runtimeProcessCpuMaximum">—</td><td id="runtimeProcessCpuNearMax">—</td></tr>
 <tr><td>Container<small class="runtime-source-detail" id="runtimeContainerCpuBasis">Basis unavailable</small></td><td id="runtimeContainerCpuCurrent">—</td><td id="runtimeContainerCpuAverage">—</td><td id="runtimeContainerCpuMaximum">—</td><td id="runtimeContainerCpuNearMax">—</td></tr>
 </tbody></table></div>
 <h3>Memory</h3>
-<div class="table-wrap"><table class="runtime-table" aria-label="Memory use"><thead><tr><th>Measurement</th><th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th></tr></thead><tbody>
+<div class="table-wrap" data-nct-table-mode="static"><table class="runtime-table" aria-label="Memory use"><thead><tr><th>Measurement</th><th>Current</th><th>Average</th><th>Maximum</th><th>Time near max</th></tr></thead><tbody>
 <tr><td>NCT process</td><td id="runtimeProcessMemoryCurrent">—</td><td id="runtimeProcessMemoryAverage">—</td><td id="runtimeProcessMemoryMaximum">—</td><td id="runtimeProcessMemoryNearMax">—</td></tr>
 <tr><td>Container</td><td id="runtimeContainerMemoryCurrent">—</td><td id="runtimeContainerMemoryAverage">—</td><td id="runtimeContainerMemoryMaximum">—</td><td id="runtimeContainerMemoryNearMax">—</td></tr>
 </tbody></table></div>
@@ -49,9 +49,9 @@ def storage_page() -> HTMLResponse:
 <p id="kubernetesStatus" role="status" aria-live="polite">Not configured — no cluster request was attempted; standalone/local health remains active.</p>
 <p><strong>Last successful sample:</strong> <span id="kubernetesLastSuccess">None recorded in this application session</span></p>
 <div id="kubernetesDeploymentGuide" data-guide-context tabindex="0"><h3 id="kubernetesDeploymentHeading">Deployment and pods</h3>
-<div class="table-wrap"><table class="runtime-table kubernetes-table" aria-labelledby="kubernetesDeploymentHeading"><thead><tr><th>Expected NCT instances</th><th>Instances found</th><th>Ready to serve NCT</th><th>Starting or not ready</th><th>Ending</th><th>Last checked</th><th>Source</th></tr></thead><tbody><tr><td id="kubernetesExpected">—</td><td id="kubernetesFound">—</td><td id="kubernetesReady">—</td><td id="kubernetesStarting">—</td><td id="kubernetesEnding">—</td><td id="kubernetesChecked">Not configured</td><td id="kubernetesSource">No cluster request</td></tr></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table class="runtime-table kubernetes-table" aria-labelledby="kubernetesDeploymentHeading"><thead><tr><th>Expected NCT instances</th><th>Instances found</th><th>Ready to serve NCT</th><th>Starting or not ready</th><th>Ending</th><th>Last checked</th><th>Source</th></tr></thead><tbody><tr><td id="kubernetesExpected">—</td><td id="kubernetesFound">—</td><td id="kubernetesReady">—</td><td id="kubernetesStarting">—</td><td id="kubernetesEnding">—</td><td id="kubernetesChecked">Not configured</td><td id="kubernetesSource">No cluster request</td></tr></tbody></table></div>
 </div><div id="kubernetesMetricsGuide" data-guide-context tabindex="0"><h3 id="kubernetesMetricsHeading">Optional pod resource measurements</h3>
-<div class="table-wrap"><table class="runtime-table" aria-labelledby="kubernetesMetricsHeading"><thead><tr><th>Measurement</th><th>Current aggregate</th><th>Coverage</th></tr></thead><tbody>
+<div class="table-wrap" data-nct-table-mode="static"><table class="runtime-table" aria-labelledby="kubernetesMetricsHeading"><thead><tr><th>Measurement</th><th>Current aggregate</th><th>Coverage</th></tr></thead><tbody>
 <tr id="kubernetesCpuRow" hidden><td>CPU used by NCT pods</td><td id="kubernetesCpu">—</td><td id="kubernetesCpuCoverage">—</td></tr>
 <tr id="kubernetesMemoryRow" hidden><td>Memory used by NCT pods</td><td id="kubernetesMemory">—</td><td id="kubernetesMemoryCoverage">—</td></tr>
 <tr id="kubernetesMetricsUnavailable"><td colspan="3" id="kubernetesMetricsMessage">Not configured — no cluster request was attempted.</td></tr>
@@ -87,46 +87,46 @@ def storage_page() -> HTMLResponse:
 <section class="panel" id="ingestionStatusPanel" data-guide-context tabindex="0"><h2>Evidence intake status</h2>
 <p>Follow each supported Nmap file, completed scan, device upload, or device collection from receipt to its saved outputs. Processing is local and never starts a scan or contacts a device. A ready result describes saved evidence; it does not confirm what is true on the live network.</p>
 <p id="ingestionStatus" role="status" aria-live="polite">Loading evidence intake status.</p>
-<div class="table-wrap"><table><thead><tr><th>Received evidence</th><th>Overall status</th><th>Processing stages</th><th>Next step</th></tr></thead><tbody id="ingestionRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Received evidence</th><th>Overall status</th><th>Processing stages</th><th>Next step</th></tr></thead><tbody id="ingestionRows"></tbody></table></div>
 <div class="pager"><span id="ingestionPage">No evidence loaded</span><div><button id="ingestionPrevious">Previous evidence</button><button id="ingestionNext">Next evidence</button></div></div>
 </section>
 <section class="panel" id="savedAnalysisWorkPanel" data-guide-context tabindex="0"><h2>Saved analysis work</h2>
 <p>These are calculations made from retained evidence. They never start a scan or contact the network. Waiting work stays saved. If protected local analysis loses its worker, the earlier attempt remains Interrupted and NCT creates one new protected recovery attempt from the retained evidence. Network scans and device contact do not transfer this way.</p>
 <p id="jobStatus" role="status" aria-live="polite">Loading saved analysis work.</p>
-<div class="table-wrap"><table><thead><tr><th>Requested</th><th>Scan</th><th>Source scan status</th><th>Current status</th><th>Attempts</th><th>Result</th></tr></thead><tbody id="jobRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Requested</th><th>Scan</th><th>Source scan status</th><th>Current status</th><th>Attempts</th><th>Result</th></tr></thead><tbody id="jobRows"></tbody></table></div>
 <div class="pager"><span id="jobPage">No work loaded</span><div><button id="jobPrevious">Previous work</button><button id="jobNext">Next work</button></div></div>
 </section>
 <section class="panel"><h2>Reusable analysis status</h2>
 <p><strong>Current</strong> means the saved calculation rules match this build. It does not mean the source evidence is recent, intact, or still true on the network. Stale results remain retained and traceable. The saved rule version identifies the exact analysis instructions that created each result.</p>
 <p id="analysisStatus" role="status" aria-live="polite">Loading saved calculation status.</p>
-<div class="table-wrap"><table><thead><tr><th>Result type</th><th>Status</th><th>Saved rule version</th><th>Created</th><th>Explanation</th><th>Inputs</th></tr></thead><tbody id="analysisRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Result type</th><th>Status</th><th>Saved rule version</th><th>Created</th><th>Explanation</th><th>Inputs</th></tr></thead><tbody id="analysisRows"></tbody></table></div>
 <div class="pager"><span id="analysisPage">No saved results</span><div><button id="analysisPrevious">Previous</button><button id="analysisNext">Next</button></div></div>
 </section>
 <section class="panel"><h2>Saved calculation versions</h2>
 <p>Review which exact calculation rules remain saved. Groups stay separate when their settings differ. The settings fingerprint is an internal identifier: matching fingerprints mean the stored settings match exactly. These counts are saved calculation results, not scans, evidence encounters, or jobs that need to run.</p>
 <p id="versionStatus" role="status" aria-live="polite">Loading saved calculation versions.</p>
-<div class="table-wrap"><table><thead><tr><th>Result type</th><th>Status</th><th>Saved rule version</th><th>Output format</th><th>Settings fingerprint</th><th>Saved results</th><th>Calculation dates</th><th>Details</th></tr></thead><tbody id="versionRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Result type</th><th>Status</th><th>Saved rule version</th><th>Output format</th><th>Settings fingerprint</th><th>Saved results</th><th>Calculation dates</th><th>Details</th></tr></thead><tbody id="versionRows"></tbody></table></div>
 <div class="pager"><span id="versionPage">No version groups loaded</span><div><button id="versionPrevious">Previous versions</button><button id="versionNext">Next versions</button></div></div>
 <div class="hidden" id="versionResultsPanel"><h3 id="versionResultsTitle">Saved results in this version group</h3>
 <p>This list contains calculation results with the exact family, rule version, output format, and settings shown above. It does not indicate whether evidence is recent or whether work needs to be rerun.</p>
 <p id="versionResultsStatus" role="status" aria-live="polite"></p>
-<div class="table-wrap"><table><thead><tr><th>Created</th><th>Exact result</th><th>Inputs</th></tr></thead><tbody id="versionResultRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Created</th><th>Exact result</th><th>Inputs</th></tr></thead><tbody id="versionResultRows"></tbody></table></div>
 <div class="pager"><span id="versionResultsPage">No results loaded</span><div><button id="versionResultsPrevious">Previous results</button><button id="versionResultsNext">Next results</button></div></div></div>
 </section>
 <section class="panel hidden" id="dependencyPanel"><div class="panel-title"><h2 id="dependencyTitle">Inputs and source records</h2><button class="compact" id="dependencyClose">Close</button></div>
 <p>A declared input is something this calculation used. A source record is one retained encounter that supplied exact registered bytes for that input. Source records are provenance, not additional calculation steps.</p>
 <p>This view checks the saved relationships. It does not inspect source files, determine freshness, mark work stale, or rerun analysis.</p>
 <p id="dependencyStatus" role="status" aria-live="polite">Choose a saved result to inspect its inputs.</p>
-<div class="table-wrap"><table><thead><tr><th>Input role</th><th>Recorded type</th><th>Meaning</th><th>Exact identifier</th><th>Source records</th><th>Saved calculations</th></tr></thead><tbody id="dependencyRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Input role</th><th>Recorded type</th><th>Meaning</th><th>Exact identifier</th><th>Source records</th><th>Saved calculations</th></tr></thead><tbody id="dependencyRows"></tbody></table></div>
 <div class="pager"><span id="dependencyPage">No inputs loaded</span><div><button id="dependencyPrevious">Previous inputs</button><button id="dependencyNext">Next inputs</button></div></div>
 <div class="hidden" id="sourcePanel"><h3 id="sourceTitle">Source records</h3><p id="sourceStatus" role="status" aria-live="polite"></p>
-<div class="table-wrap"><table><thead><tr><th>Recorded</th><th>Source</th><th>Filename</th><th>Actor</th><th>Size</th><th>Exact record</th></tr></thead><tbody id="sourceRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Recorded</th><th>Source</th><th>Filename</th><th>Actor</th><th>Size</th><th>Exact record</th></tr></thead><tbody id="sourceRows"></tbody></table></div>
 <div class="pager"><span id="sourcePage">No source records loaded</span><div><button id="sourcePrevious">Previous records</button><button id="sourceNext">Next records</button></div></div></div>
 <div class="hidden" id="impactPanel"><h3 id="impactTitle">Saved calculations using this input</h3>
 <p>These are saved results that list this exact input directly. This does not show whether the source is recent or true on the network. It does not change status, mark results stale, or rerun analysis.</p>
 <p>This shows direct recorded links only; calculations that used related inputs indirectly are not included.</p>
 <p id="impactStatus" role="status" aria-live="polite"></p>
-<div class="table-wrap"><table><thead><tr><th>Result type</th><th>Recorded relationship</th><th>Status</th><th>Created</th><th>Result details</th></tr></thead><tbody id="impactRows"></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Result type</th><th>Recorded relationship</th><th>Status</th><th>Created</th><th>Result details</th></tr></thead><tbody id="impactRows"></tbody></table></div>
 <div class="pager"><span id="impactPage">No saved calculations loaded</span><div><button id="impactPrevious">Previous calculations</button><button id="impactNext">Next calculations</button></div></div></div>
 </section>
 <section class="panel"><h2>Storage breakdown</h2><p>Used space by folder or database file. Shared files are counted once, under the first folder inspected.</p><dl id="categories"><dt>Awaiting inspection</dt><dd>-</dd></dl></section>
@@ -134,7 +134,7 @@ def storage_page() -> HTMLResponse:
 <p id="detail">Dry run only. No evidence is deleted. Backfill registers historical files and may temporarily increase storage while keeping every original file.</p>
 <dl><dt>Files inspected</dt><dd id="files">—</dd><dt>Verified evidence references</dt><dd id="references">—</dd><dt>Active collections skipped</dt><dd id="active">—</dd></dl>
 <h3>Exact duplicate review</h3><p>Only byte-for-byte identical copies with verified references can share the retained canonical file. Scan history, evidence links, filenames, attribution, and recorded timestamps stay intact. The shared paths use the canonical file's filesystem timestamps and security settings.</p>
-<div class="table-wrap"><table><thead><tr><th>Duplicate copy</th><th>Verified retained copy</th><th>Estimated space</th></tr></thead><tbody id="compactionRows"><tr><td colspan="3">Run a dry run to review eligible files.</td></tr></tbody></table></div>
+<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Duplicate copy</th><th>Verified retained copy</th><th>Estimated space</th></tr></thead><tbody id="compactionRows"><tr><td colspan="3">Run a dry run to review eligible files.</td></tr></tbody></table></div>
 <div id="compactionSkipped"></div><div class="actions"><button id="compactAction" disabled>Remove verified duplicate copies</button></div>
 <div class="hidden" id="compactConfirm"><p><strong id="compactSummary"></strong> NCT will first repeat every check. If any referenced file changed, the operation stops. The completed result reports estimated file-length savings and measured free-space change. Automatic pruning remains disabled.</p><label for="compactPhrase">Type <code>REMOVE VERIFIED DUPLICATE COPIES</code> to confirm this exact reviewed plan.</label><div class="actions"><input id="compactPhrase" autocomplete="off"><button class="primary" id="compactConfirmButton">Confirm exact-content compaction</button><button id="compactCancel">Cancel</button></div></div>
 <ul id="issues"></ul><p id="backfillResult"></p><p id="compactionResult"></p></section>

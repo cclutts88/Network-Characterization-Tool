@@ -89,11 +89,27 @@ A roadmap item should only be marked complete when:
   Reach and Network Changes browser-handler regressions passed. The rebuilt browser
   preview had no console warnings or errors. Independent gate:
   **CLEAR — DOCUMENTED DEVIATION**; novice-operator gate: **CLEAR**.
-- [ ] Replace page-specific sticky-header and legacy color overrides with explicit
-  shared table/scroll modes and semantic theme surfaces. Then repair host/port/CVE
-  grouping, spacing, Reach evidence ordering, saved-analysis guidance, device-scope
-  continuity, and hostname-collection instructions against one cross-page browser
-  matrix with the Operator Guide open and closed.
+- [x] Shared presentation correction complete. Explicit shared page, contained and static table
+  modes now replace the broad page-specific sticky-header rules, Map detail tables gain
+  the same contained contract at render time, and Live Discoveries uses the active
+  theme. The responsive contained-table boundary was widened after browser review
+  found that a tablet-width page could overflow when the Operator Guide was closed.
+  Focused Docker interface regression: **67 passed**; complete Docker suite: **1,664
+  passed, 17 skipped**; six executable browser-handler regressions passed. The isolated
+  browser matrix covered table-bearing workspaces, Graphite and Halloween palettes,
+  tablet and full widths, and the Operator Guide open and closed; no page-level
+  horizontal overflow or browser console warnings/errors remained. Populated dynamic
+  table handlers are covered by the executable regressions while the isolated browser
+  preview intentionally used empty temporary evidence storage. The first independent
+  closeout halted because an assignment-history table with an extra CSS class had
+  escaped the original audit pattern. The table now declares the shared static mode,
+  and the regression tokenizes every wrapper's complete class list so additional
+  classes cannot conceal an unclassified table. Exact-diff rerun: **67 focused passed**
+  and **1,664 passed, 17 skipped** in the complete suite. Independent quality gate:
+  **CLEAR**; novice-operator gate: **CLEAR**.
+- [ ] After the shared presentation gate, repair host/port/CVE grouping and spacing,
+  Reach evidence ordering, saved-analysis guidance, device-scope continuity, and
+  hostname-collection instructions against the same cross-page browser matrix.
 - **Planned approach:** add VLAN presentation primarily as a Map overlay after the
   current ingestion pipeline work.
 - **Revised approach:** make VLAN observations a scoped, provenance-backed evidence

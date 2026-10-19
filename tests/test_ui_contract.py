@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from app.analysis_ui import analysis_page
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
@@ -37,6 +40,11 @@ def test_active_scan_has_a_bounded_provisional_discovery_workspace():
     assert "Nmap has fully closed" in SHELL_SCRIPT
     assert 'class="live-discoveries-scroll"' in html
     assert "position:sticky;top:0" in html
+    assert ".live-discoveries-scroll{min-height:0;flex:1 1 auto;overflow-y:auto;overflow-x:hidden" in html
+    assert "background:var(--nct-surface-muted,var(--panel2,#0a1720))" in html
+    assert "background:var(--nct-panel,var(--panel,#102632))" in html
+    assert "box-shadow:0 2px 0 var(--nct-line,var(--line,#365268))" in html
+    assert ".live-final-link{display:inline-flex;margin-top:8px;color:var(--nct-accent,var(--accent,#8be1d0))}" in html
     assert "/live-discoveries" in html
     assert "function renderLiveDiscoveries" in html
     assert "function renderLiveDiscoveryFinal" in html
@@ -295,8 +303,9 @@ def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     html = hunting_page().body.decode()
     assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
-    assert ".table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
-    assert ".table-wrap thead th{position:sticky;top:0;z-index:70;background:var(--panel)" in html
+    assert html.count('data-nct-table-mode="contained"') == 2
+    assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
+    assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important" in SHELL_SCRIPT
 
 
 def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
@@ -771,19 +780,34 @@ def test_scan_workflow_pages_share_human_readable_scan_references():
         assert "NCTScanReference" in html
 
 
-def test_table_headers_stay_visible_without_overlapping_sticky_page_content():
-    page_tables = [operator_page(), analysis_page(), device_analysis_page(), hunting_page()]
-    for page in page_tables:
+def test_table_headers_use_one_shared_explicit_scroll_contract():
+    assert ".table-wrap[data-nct-table-mode=page]{overflow:visible!important}" in SHELL_SCRIPT
+    assert "top:calc(var(--nct-header-height) + 6px)!important" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-table-mode=static]{overflow-x:auto!important;overflow-y:visible!important}" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-table-mode=static]>table>thead>tr>th{position:static!important" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-guide-mode=contained]" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-narrow-mode=contained]" in SHELL_SCRIPT
+
+    for source in (Path(__file__).parents[1] / "app").glob("*.py"):
+        text = source.read_text(encoding="utf-8")
+        wrappers = []
+        for tag in re.findall(r"<div\b[^>]*>", text):
+            class_match = re.search(r'''\bclass=(?:"([^"]*)"|'([^']*)')''', tag)
+            classes = (class_match.group(1) or class_match.group(2)).split() if class_match else []
+            if "table-wrap" in classes:
+                wrappers.append(tag)
+        assert all("data-nct-table-mode=" in wrapper for wrapper in wrappers), source.name
+
+    for page in (operator_page(), analysis_page(), device_analysis_page(), hunting_page()):
         html = page.body.decode()
-        assert "thead th{position:sticky" in html
-        assert "table-wrap" in html
-    for page in (operator_page(), analysis_page(), device_analysis_page()):
-        html = page.body.decode()
-        assert "--table-sticky-offset" in html
-        assert "syncTableStickyOffset" in html
-        assert "ResizeObserver(syncTableStickyOffset)" in html
-    assert "top:var(--hunt-result-offset" in hunting_page().body.decode()
-    assert "#details thead th{position:sticky;top:0" in network_map_page().body.decode()
+        assert "--table-sticky-offset" not in html
+        assert "syncTableStickyOffset" not in html
+        assert '.table-wrap{overflow:visible}' not in html
+    map_html = network_map_page().body.decode()
+    assert "function wrapDetailsTables(root)" in map_html
+    assert "wrapper.dataset.nctTableMode='contained'" in map_html
+    assert "#details thead th{position:sticky" not in map_html
 
 
 def test_activity_origin_banner_only_appears_on_outbound_pages():
@@ -1078,14 +1102,14 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'prepareDatasetPreview' in html
     assert '<details class="panel" data-workspace-card="capability-datasets"><summary>Capability datasets</summary>' in html
     assert "Hosts and services stay in one bulk table" in html
-    assert ".table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
-    assert "overflow-x:auto;overflow-y:visible" not in html
+    assert html.count('data-nct-table-mode="contained"') == 2
+    assert 'data-nct-table-mode="page"' not in html
     assert ".table-wrap{overflow:visible}" not in html
     assert "max-width:1600px" not in html
     assert "body.nct-guide-open #systemsPanel .table-wrap thead th" not in html
     assert 'aria-label="Hunt capability evidence table"' in html
     assert 'aria-label="Hunt host and device inventory table"' in html
-    assert "#systemsPanel .table-wrap:focus{outline:2px solid var(--accent)" in html
+    assert ".table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent))" in SHELL_SCRIPT
     assert "scroll inside the table to see every column while keeping its headings in view" in html
     assert "function setSystemView(view)" in html
     assert "function renderHostInventoryRows()" in html
@@ -2275,14 +2299,15 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert '.lfa-host-list-body:focus{outline:2px solid var(--accent)' in html
     assert 'role="region" tabindex="0" aria-label="${esc(label)}"' in html
     assert "Affected addresses for ${item.port||'unknown'}/${item.protocol||'unknown'}" in html
-    assert "body.nct-guide-open .network-overview-body>.table-wrap{max-width:100%;max-height:70vh;overflow:auto" in html
-    assert "@media(min-width:851px){body.nct-guide-open .network-overview-body>.table-wrap" in html
+    assert 'data-nct-table-mode="page" data-nct-guide-mode="contained" data-nct-narrow-mode="contained"' in html
+    assert "@media(min-width:851px){body.nct-shell.nct-guide-open .table-wrap[data-nct-guide-mode=contained]" in SHELL_SCRIPT
     assert "max-width:1600px" not in html
-    assert "body.nct-guide-open .network-overview-body>.table-wrap thead th{top:0}" in html
+    assert ".table-wrap[data-nct-guide-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important" in SHELL_SCRIPT
+    assert "@media(max-width:1400px){body.nct-shell .table-wrap[data-nct-narrow-mode=contained]" in SHELL_SCRIPT
     assert 'aria-label="Current network evidence table"' in html
-    assert ".network-overview-body>.table-wrap:focus{outline:2px solid var(--accent)" in html
+    assert ".table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent))" in SHELL_SCRIPT
     assert "scroll inside the table to see every column while keeping its headings in view" in html
-    assert ".outlier-group thead th{position:static;top:auto}" in html
+    assert '<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Uncommon port</th>' in html
     assert html.index("<thead><tr><th>Uncommon port</th>") < html.index("<tbody>${group.unusual.map")
     assert 'id="networkChangesPanel"' in html
     assert 'id="loadNetworkChanges"' in html

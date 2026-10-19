@@ -149,6 +149,17 @@ SHELL_SCRIPT = r"""
       body.nct-shell>header .nct-brand span b{color:inherit!important;font-size:inherit!important;font-weight:inherit!important}
       body.nct-shell>main{box-sizing:border-box;max-width:none!important;width:auto!important;margin:28px 32px!important}
       body.nct-shell>main,body.nct-shell>main>*{min-width:0;max-width:100%}
+      body.nct-shell .table-wrap[data-nct-table-mode]{min-width:0;max-width:100%;overscroll-behavior:contain;scrollbar-gutter:stable;border-color:var(--nct-line,var(--line));background:var(--nct-panel,var(--panel));}
+      body.nct-shell .table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent));outline-offset:2px}
+      body.nct-shell .table-wrap[data-nct-table-mode] thead th{background:var(--nct-panel,var(--panel))!important;color:var(--nct-muted,var(--muted));box-shadow:0 2px 0 var(--nct-line,var(--line))!important}
+      body.nct-shell .table-wrap[data-nct-table-mode=page]{overflow:visible!important}
+      body.nct-shell .table-wrap[data-nct-table-mode=page]>table>thead>tr>th{position:sticky!important;top:calc(var(--nct-header-height) + 6px)!important;z-index:70}
+      body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}
+      body.nct-shell .table-wrap[data-nct-table-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important;z-index:70}
+      body.nct-shell .table-wrap[data-nct-table-mode=static]{overflow-x:auto!important;overflow-y:visible!important}
+      body.nct-shell .table-wrap[data-nct-table-mode=static]>table>thead>tr>th{position:static!important;top:auto!important;z-index:auto}
+      @media(min-width:851px){body.nct-shell.nct-guide-open .table-wrap[data-nct-guide-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}body.nct-shell.nct-guide-open .table-wrap[data-nct-guide-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important;z-index:70}}
+      @media(max-width:1400px){body.nct-shell .table-wrap[data-nct-narrow-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}body.nct-shell .table-wrap[data-nct-narrow-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important;z-index:70}}
       body.nct-shell main :is(.panel,.card,details,.history-groups,.history-list,.history-group,.history-body,.run-list,.run-card,.run-body,.comparison-body-panel,.comparison-body,.result-content){min-width:0;max-width:100%}
       body.nct-shell main details>summary{box-sizing:border-box;min-width:0;max-width:100%;overflow-wrap:anywhere}
       body.nct-shell main details>summary>*{min-width:0;max-width:100%}

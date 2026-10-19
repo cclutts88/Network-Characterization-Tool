@@ -158,7 +158,7 @@ sudo tcpdump -i any -nn -s 0 -w nct-hostname-collection-accountability.pcap 'hos
       </div>
       <div class="actions"><button id="refresh" type="button" class="secondary">Refresh retained evidence</button><span id="visibleCount" class="meta"></span></div>
       <div id="status" class="status" role="status">Loading retained hostname evidence…</div>
-      <div class="table-wrap"><table><thead><tr><th>IP address</th><th>Nmap</th><th>DHCP / lease</th><th>DNS</th><th>LLDP / CDP</th><th>Configuration</th><th>Operator input</th><th>Selected name</th></tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="table-wrap" data-nct-table-mode="contained" role="region" tabindex="0" aria-label="Hostname evidence table"><table><thead><tr><th>IP address</th><th>Nmap</th><th>DHCP / lease</th><th>DNS</th><th>LLDP / CDP</th><th>Configuration</th><th>Operator input</th><th>Selected name</th></tr></thead><tbody id="rows"></tbody></table></div>
     </section>
   </main>
 <script>
