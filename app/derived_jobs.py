@@ -57,6 +57,15 @@ from app.device_observations import (
     DEVICE_INTERFACE_SCHEMA_VERSION,
     DEVICE_INTERFACE_TARGET_FAMILY,
 )
+from app.device_vlan_observations import (
+    DEVICE_VLAN_EXTRACTOR,
+    DEVICE_VLAN_JOB_TYPE,
+    DEVICE_VLAN_POLICY_VERSION,
+    DEVICE_VLAN_SCHEMA_VERSION,
+    DEVICE_VLAN_TARGET_FAMILY,
+    admit_device_vlan_observation_intent,
+    init_device_vlan_observation_storage,
+)
 from app.searchsploit import searchsploit_provider_snapshot
 from app.searchsploit_results import (
     SEARCHSPLOIT_CANDIDATE_JOB_TYPE,
@@ -1092,6 +1101,91 @@ def _device_observation_snapshot(
     return frozen, contract
 
 
+def _device_vlan_snapshot(contract: dict) -> dict:
+    required = {
+        "run_id", "source_observation_id", "source_status", "source_sha256",
+        "source_size_bytes", "target_job_type", "target_family",
+        "target_analysis_version", "target_payload_schema_version",
+        "target_parameters", "target_result_id", "source_kind", "source_ref",
+        "job_definition",
+    }
+    if not isinstance(contract, dict) or not required.issubset(contract):
+        raise DerivedJobConflict("The retained device VLAN contract is incomplete")
+    frozen = {
+        "job_type": contract["target_job_type"],
+        "source_run_id": contract["run_id"],
+        "source_observation_id": contract["source_observation_id"],
+        "source_status": contract["source_status"],
+        "source_sha256": contract["source_sha256"],
+        "source_size_bytes": int(contract["source_size_bytes"]),
+        "target_family": contract["target_family"],
+        "target_analysis_version": contract["target_analysis_version"],
+        "target_payload_schema_version": int(contract["target_payload_schema_version"]),
+        "target_parameters_json": _canonical_json(contract["target_parameters"]),
+        "target_computation_key": None,
+        "target_result_id": contract["target_result_id"],
+        "source_kind": contract["source_kind"],
+        "source_ref": contract["source_ref"],
+        "definition_json": _canonical_json(contract["job_definition"]),
+    }
+    if (
+        frozen["job_type"] != DEVICE_VLAN_JOB_TYPE
+        or frozen["target_family"] != DEVICE_VLAN_TARGET_FAMILY
+        or frozen["target_analysis_version"] != DEVICE_VLAN_EXTRACTOR
+        or frozen["target_payload_schema_version"] != DEVICE_VLAN_SCHEMA_VERSION
+        or frozen["target_parameters_json"] != "{}"
+    ):
+        raise DerivedJobConflict("The retained device VLAN target contract is unsupported")
+    frozen["job_key"] = _job_key(frozen)
+    return frozen
+
+
+def _dispatch_next_device_vlan_intake_on_connection(db: sqlite3.Connection) -> bool:
+    row = db.execute(
+        """SELECT intent_id, assignment_id, policy_version, actor, request_token,
+                  contract_json
+             FROM device_vlan_admission_intents
+            WHERE state = 'pending'
+            ORDER BY created_at, intent_id LIMIT 1"""
+    ).fetchone()
+    if row is None:
+        return False
+    intent_id, assignment_id = row[0], row[1]
+    db.execute(
+        """UPDATE device_vlan_admission_intents
+              SET activity_state = 'waiting', updated_at = ?, last_error = NULL
+            WHERE intent_id = ? AND state = 'pending'""",
+        (utc_now(), intent_id),
+    )
+    db.execute("SAVEPOINT device_vlan_admission")
+    try:
+        contract = json.loads(row[5] or "{}")
+        if (
+            int(row[2]) != DEVICE_VLAN_POLICY_VERSION
+            or contract.get("assignment_id") != assignment_id
+        ):
+            raise DerivedJobConflict("The device VLAN intake contract is unsupported")
+        frozen = _device_vlan_snapshot(contract)
+        job = _enqueue_scope_snapshot(
+            db, frozen, request_token=row[4], requested_by=row[3], allow_retry=False,
+        )
+        admit_device_vlan_observation_intent(
+            db, assignment_id=assignment_id, job_id=job["job_id"], admitted_at=utc_now(),
+        )
+        db.execute("RELEASE device_vlan_admission")
+    except (KeyError, ValueError, json.JSONDecodeError) as exc:
+        db.execute("ROLLBACK TO device_vlan_admission")
+        db.execute("RELEASE device_vlan_admission")
+        db.execute(
+            """UPDATE device_vlan_admission_intents
+                  SET state = 'blocked', activity_state = 'blocked', updated_at = ?,
+                      last_error = ?
+                WHERE intent_id = ? AND state = 'pending'""",
+            (utc_now(), (str(exc).strip() or exc.__class__.__name__)[:2000], intent_id),
+        )
+    return True
+
+
 def dispatch_next_pipeline_intake(db_path: Path) -> bool:
     """Admit one explicitly marked pending source without scanning historical rows."""
     from app.automated_nmap_foundation import (
@@ -1102,6 +1196,7 @@ def dispatch_next_pipeline_intake(db_path: Path) -> bool:
 
     init_automated_nmap_foundation_storage(db_path)
     init_derived_job_storage(db_path)
+    init_device_vlan_observation_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute(
@@ -1112,7 +1207,7 @@ def dispatch_next_pipeline_intake(db_path: Path) -> bool:
                ORDER BY created_at, intent_id LIMIT 1"""
         ).fetchone()
         if row is None:
-            return False
+            return _dispatch_next_device_vlan_intake_on_connection(db)
         intent_id, intent_kind, source_id = row[0], row[1], row[2]
         db.execute(
             """UPDATE pipeline_admission_intents
@@ -1866,6 +1961,139 @@ def execute_claimed_device_observation_job(
     )
 
 
+def execute_claimed_device_vlan_job(
+    db_path: Path, claim: dict, data_dir: Path,
+) -> dict:
+    from app.device_observations import (
+        _completed_summary_result,
+        assignment_contract_on_connection,
+        capture_device_interface_source,
+    )
+    from app.device_vlan_observations import (
+        extract_device_vlan_observations,
+        publish_device_vlan_assessment,
+    )
+
+    selected = ", ".join(f"job.{name}" for name in (
+        "job_id", "job_key", "job_type", "source_run_id", "source_observation_id",
+        "source_status", "source_sha256", "source_size_bytes", "target_family",
+        "target_analysis_version", "target_payload_schema_version",
+        "target_parameters_json", "target_computation_key", "target_result_id",
+        "source_kind", "source_ref", "definition_json",
+    ))
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            f"""SELECT {selected}, intent.contract_json AS vlan_contract_json
+                  FROM pipeline_jobs job
+                  JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                  JOIN device_vlan_admission_intents intent
+                    ON intent.admitted_job_id = job.job_id AND intent.state = 'admitted'
+                 WHERE job.job_id = ? AND attempt.attempt_id = ?
+                   AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+    if row is None:
+        raise DerivedJobConflict("The device VLAN worker no longer owns this attempt")
+    with connect_database(db_path, read_only=True) as db:
+        _assert_claim_on_connection(
+            db, claim, "The device VLAN worker lost its claim or protected ownership"
+        )
+    try:
+        contract = json.loads(row["vlan_contract_json"] or "{}")
+    except json.JSONDecodeError as exc:
+        raise DerivedJobConflict("The retained device VLAN contract is invalid") from exc
+    frozen = _device_vlan_snapshot(contract)
+    retained = {
+        "job_type": row["job_type"],
+        "source_run_id": row["source_run_id"],
+        "source_observation_id": row["source_observation_id"],
+        "source_status": row["source_status"],
+        "source_sha256": row["source_sha256"],
+        "source_size_bytes": int(row["source_size_bytes"]),
+        "target_family": row["target_family"],
+        "target_analysis_version": row["target_analysis_version"],
+        "target_payload_schema_version": int(row["target_payload_schema_version"]),
+        "target_parameters_json": row["target_parameters_json"],
+        "target_computation_key": row["target_computation_key"],
+        "target_result_id": row["target_result_id"],
+        "source_kind": row["source_kind"],
+        "source_ref": row["source_ref"],
+        "definition_json": row["definition_json"],
+        "job_key": row["job_key"],
+    }
+    if retained != frozen:
+        raise DerivedJobConflict("The device VLAN job contract is inconsistent")
+    assignment_id = contract["assignment_id"]
+    summary_result_id = contract["summary_result_id"]
+    snapshot = capture_device_interface_source(
+        db_path, row["source_run_id"], data_dir,
+    )
+    if (
+        snapshot["observation_id"] != row["source_observation_id"]
+        or snapshot["sha256"] != row["source_sha256"]
+        or snapshot["size_bytes"] != int(row["source_size_bytes"])
+    ):
+        raise DerivedJobConflict("The selected device VLAN configuration changed")
+    extracted = extract_device_vlan_observations(
+        snapshot["content"], device_context=row["source_run_id"],
+    )
+    repeated = capture_device_interface_source(
+        db_path, row["source_run_id"], data_dir,
+    )
+    if repeated != snapshot:
+        raise DerivedJobConflict("Device VLAN configuration changed during extraction")
+
+    def guard(db: sqlite3.Connection) -> None:
+        _assert_claim_on_connection(
+            db, claim, "The device VLAN worker lost its claim or protected ownership"
+        )
+        db.row_factory = sqlite3.Row
+        owned = db.execute(
+            """SELECT job.definition_json, job.target_result_id, intent.contract_json
+                 FROM pipeline_jobs job
+                 JOIN pipeline_job_attempts attempt ON attempt.job_id = job.job_id
+                 JOIN device_vlan_admission_intents intent
+                   ON intent.admitted_job_id = job.job_id AND intent.state = 'admitted'
+                WHERE job.job_id = ? AND attempt.attempt_id = ?
+                  AND attempt.state = 'running' AND attempt.claim_token = ?""",
+            (claim["job_id"], claim["attempt_id"], claim["claim_token"]),
+        ).fetchone()
+        if (
+            owned is None
+            or owned[0] != row["definition_json"]
+            or owned[1] != summary_result_id
+            or owned[2] != row["vlan_contract_json"]
+        ):
+            raise DerivedJobConflict("The device VLAN worker lost its frozen contract")
+        if assignment_contract_on_connection(db, assignment_id) != contract["assignment_contract"]:
+            raise DerivedJobConflict("The device VLAN scope or evidence authority changed")
+        if _completed_summary_result(db, row["source_run_id"]) != summary_result_id:
+            raise DerivedJobConflict("The verified reusable summary is no longer authoritative")
+
+    def finalize(db: sqlite3.Connection, created: bool, assessment_id: str) -> None:
+        finished_at = _complete_claim_on_connection(
+            db, claim, "The device VLAN worker lost its claim or protected ownership"
+        )
+        changed = db.execute(
+            """UPDATE pipeline_job_attempts
+                  SET state = 'completed', finished_at = ?, outcome = ?, result_id = NULL,
+                      output_kind = 'device_vlan_assessment', output_id = ?, error = NULL
+                WHERE attempt_id = ? AND job_id = ? AND state = 'running'
+                  AND claim_token = ?""",
+            (finished_at, "created" if created else "reused", assessment_id,
+             claim["attempt_id"], claim["job_id"], claim["claim_token"]),
+        ).rowcount
+        if changed != 1:
+            raise DerivedJobConflict("The device VLAN worker lost its claim")
+
+    return publish_device_vlan_assessment(
+        db_path, assignment_id=assignment_id, summary_result_id=summary_result_id,
+        snapshot=snapshot, extracted=extracted, frozen_contract=contract,
+        transaction_guard=guard, transaction_finalize=finalize,
+    )
+
+
 def execute_claimed_searchsploit_candidate_job(
     db_path: Path, claim: dict,
 ) -> dict:
@@ -2080,6 +2308,8 @@ def run_next_derived_job(db_path: Path, data_dir: Path) -> bool:
             execute_claimed_device_summary_job(db_path, claim, data_dir)
         elif job_type == DEVICE_INTERFACE_JOB_TYPE:
             execute_claimed_device_observation_job(db_path, claim, data_dir)
+        elif job_type == DEVICE_VLAN_JOB_TYPE:
+            execute_claimed_device_vlan_job(db_path, claim, data_dir)
         elif job_type == SEARCHSPLOIT_CANDIDATE_JOB_TYPE:
             execute_claimed_searchsploit_candidate_job(db_path, claim)
         else:

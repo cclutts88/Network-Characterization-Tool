@@ -173,7 +173,11 @@ from app.device_observations import (
     get_device_observation_status,
     init_device_observation_storage,
 )
-from app.device_vlan_observations import init_device_vlan_observation_storage
+from app.device_vlan_observations import (
+    get_device_vlan_observation_status,
+    get_device_vlan_receipts,
+    init_device_vlan_observation_storage,
+)
 from app.derived_results import init_derived_result_storage
 from app.derived_jobs import (
     DerivedJobConflict,
@@ -2507,6 +2511,26 @@ def device_scope_observation_receipts(
 ) -> dict:
     try:
         return get_device_interface_receipts(DB_PATH, run_id, limit=limit, offset=offset)
+    except (KeyError, ValueError) as exc:
+        raise _device_observation_error(exc) from exc
+
+
+@app.get("/api/device-configs/{run_id}/scope-vlans")
+def device_scope_vlan_status(run_id: str) -> dict:
+    try:
+        return get_device_vlan_observation_status(DB_PATH, run_id)
+    except (KeyError, ValueError) as exc:
+        raise _device_observation_error(exc) from exc
+
+
+@app.get("/api/device-configs/{run_id}/scope-vlans/receipts")
+def device_scope_vlan_receipts(
+    run_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_device_vlan_receipts(DB_PATH, run_id, limit=limit, offset=offset)
     except (KeyError, ValueError) as exc:
         raise _device_observation_error(exc) from exc
 

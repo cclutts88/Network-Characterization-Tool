@@ -203,6 +203,38 @@ A roadmap item should only be marked complete when:
   This gate is now clear. Downstream VLAN extraction, worker execution, receipt
   publication, and cross-view projections are the next implementation work; none is
   implied complete by this schema and admission checkpoint.
+- [x] Scoped VLAN extraction and publication completed after commit `d0d4954`.
+  This bounded slice consumes only the exact retained device configuration already
+  named by the reviewed VLAN admission contract. It adds no command, subprocess, or
+  network contact. Supported syntax will produce immutable source-line receipts under
+  the exact device assignment and Network Scope; unsupported syntax, missing command
+  coverage, decoding loss, and safety limits remain explicit and cannot be interpreted
+  as proof that a VLAN is absent. Admission and lease acquisition are earlier durable,
+  fenced steps. Final assignment, authority, source and lease checks then commit the
+  assessment, receipts, lease release, and terminal output together or publish nothing.
+  Cross-view presentation, comparison, historical adoption, and collection-profile
+  expansion remain separate reviewed gates. Independent architecture start gate:
+  **CLEAR**.
+  - The retained-source worker now recognizes bounded Cisco configuration and `show vlan`
+    evidence, Juniper set syntax, and Linux `bridge vlan show` output, including common
+    wrapped Cisco port rows and indented Linux VLAN ranges. It publishes immutable,
+    source-line receipts only after rechecking the exact assignment, authority, source,
+    scope, and worker lease.
+  - Coverage distinguishes supported, partial, unsupported, and unknown. Empty or
+    incomplete evidence never means no VLAN exists, and every status carries explicit
+    retained-evidence, no-live-state, no-absence, and no-device-identity limits.
+  - The first independent completion review halted for a blocking-safe source-open race,
+    incomplete wrapped-row handling, a multibyte related-line bound, and overstated
+    atomicity wording. The worker now opens the exact file relative to a verified parent
+    directory with no-follow and nonblocking safeguards, rechecks file and directory
+    identity, and has named-pipe and parent-replacement regressions. The parser and this
+    roadmap wording were corrected. Final independent quality gate: **CLEAR**. Novice
+    wording gate: **CLEAR**.
+  - Verification: **45 focused tests passed**, **211 device/pipeline/schema tests passed**,
+    and the complete required Linux suite passed with **1710 passed, 17 skipped**. The
+    only warning is the existing Starlette test-client deprecation. This capability is
+    committed for the foundation branch only; it is not on `main` and does not yet make
+    VLAN evidence visible throughout the operator views.
 
 ## Independent quality gate — 2026-09-27
 

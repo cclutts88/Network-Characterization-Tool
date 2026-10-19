@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import uuid
 
 from app.database import connect_database, initialize_once_per_database
@@ -384,21 +386,96 @@ def correct_device_scope(
 
 
 def _safe_bytes(path: Path, *, root: Path, label: str, maximum: int) -> bytes:
-    root = root.resolve()
-    candidate = path.resolve(strict=False)
-    if root.is_symlink() or path.is_symlink() or candidate.parent != root:
+    declared_root = Path(root)
+    declared_path = Path(path)
+    if (
+        declared_path.name in {"", ".", ".."}
+        or Path(os.path.abspath(declared_path.parent))
+        != Path(os.path.abspath(declared_root))
+    ):
         raise ValueError(f"{label} has an unsafe path")
-    if not path.is_file():
-        raise ValueError(f"{label} is unavailable")
-    before = path.stat()
-    if before.st_size > maximum:
-        raise ValueError(f"{label} exceeds the supported extraction limit")
-    content = path.read_bytes()
-    after = path.stat()
-    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-        after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    root_descriptor = None
+    descriptor = None
+    try:
+        root_descriptor = os.open(declared_root, directory_flags)
+        before_root = os.fstat(root_descriptor)
+        before_path = os.stat(
+            declared_path.name, dir_fd=root_descriptor, follow_symlinks=False,
+        )
+    except OSError as exc:
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+        raise ValueError(f"{label} is unavailable") from exc
+    try:
+        if stat.S_ISLNK(before_path.st_mode):
+            raise ValueError(f"{label} has an unsafe path")
+        if not stat.S_ISDIR(before_root.st_mode) or not stat.S_ISREG(before_path.st_mode):
+            raise ValueError(f"{label} is unavailable")
+        if before_path.st_size > maximum:
+            raise ValueError(f"{label} exceeds the supported extraction limit")
+        descriptor = os.open(
+            declared_path.name, file_flags, dir_fd=root_descriptor,
+        )
+        before_open = os.fstat(descriptor)
+        if not stat.S_ISREG(before_open.st_mode):
+            raise ValueError(f"{label} is unavailable")
+        if (before_path.st_dev, before_path.st_ino) != (before_open.st_dev, before_open.st_ino):
+            raise ValueError(f"{label} changed during verification")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, maximum + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > maximum:
+                raise ValueError(f"{label} exceeds the supported extraction limit")
+        after_open = os.fstat(descriptor)
+        content = b"".join(chunks)
+        after_path = os.stat(
+            declared_path.name, dir_fd=root_descriptor, follow_symlinks=False,
+        )
+        after_root_descriptor = os.fstat(root_descriptor)
+        after_root_path = declared_root.lstat()
+    except OSError as exc:
+        raise ValueError(f"{label} is unavailable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+    before_identity = (
+        before_open.st_dev, before_open.st_ino, before_open.st_size,
+        before_open.st_mtime_ns, before_open.st_ctime_ns,
+    )
+    if before_identity != (
+        after_open.st_dev, after_open.st_ino, after_open.st_size,
+        after_open.st_mtime_ns, after_open.st_ctime_ns,
+    ) or before_identity != (
+        after_path.st_dev, after_path.st_ino, after_path.st_size,
+        after_path.st_mtime_ns, after_path.st_ctime_ns,
     ):
         raise ValueError(f"{label} changed during verification")
+    root_identity = (before_root.st_dev, before_root.st_ino)
+    if root_identity != (after_root_descriptor.st_dev, after_root_descriptor.st_ino) or (
+        root_identity != (after_root_path.st_dev, after_root_path.st_ino)
+    ):
+        raise ValueError(f"{label} directory changed during verification")
     return content
 
 

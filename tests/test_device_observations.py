@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -12,7 +13,11 @@ from app import device_vlan_observations as vlan_observations
 from app import main as main_module
 from app.database import connect_database
 from app.device_limits import MAX_SUMMARY_ITEMS
-from app.device_vlan_observations import admit_device_vlan_observation_intent
+from app.device_vlan_observations import (
+    admit_device_vlan_observation_intent,
+    extract_device_vlan_observations,
+    publish_device_vlan_assessment,
+)
 from app.device_observations import (
     DeviceObservationConflict,
     assign_device_scope,
@@ -22,6 +27,7 @@ from app.device_observations import (
     get_device_interface_receipts,
     get_device_observation_status,
     publish_device_interface_assessment,
+    _safe_bytes,
 )
 from app.main import app
 from app.network_scopes import create_network_scope
@@ -41,6 +47,53 @@ def _upload(client: TestClient, configuration: str, address: str = "192.0.2.90")
         },
         files={"result_file": ("router.txt", configuration, "text/plain")},
     )
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX named pipes")
+def test_safe_bytes_rejects_named_pipe_replacement_without_blocking(tmp_path, monkeypatch):
+    root = tmp_path / "run"
+    root.mkdir()
+    source = root / "config.txt"
+    source.write_bytes(b"retained configuration")
+    real_open = os.open
+    replaced = False
+
+    def replace_with_fifo(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if kwargs.get("dir_fd") is not None and str(path) == source.name and not replaced:
+            replaced = True
+            source.unlink()
+            os.mkfifo(source)
+            assert flags & os.O_NONBLOCK
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", replace_with_fifo)
+    with pytest.raises(ValueError, match="unavailable"):
+        _safe_bytes(source, root=root, label="Configuration", maximum=1024)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX directory replacement")
+def test_safe_bytes_rejects_parent_directory_replacement(tmp_path, monkeypatch):
+    root = tmp_path / "run"
+    moved_root = tmp_path / "run-original"
+    root.mkdir()
+    source = root / "config.txt"
+    source.write_bytes(b"retained configuration")
+    real_read = os.read
+    replaced = False
+
+    def replace_parent(descriptor, size):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            root.rename(moved_root)
+            root.mkdir()
+            (root / source.name).write_bytes(b"replacement configuration")
+        return real_read(descriptor, size)
+
+    monkeypatch.setattr(os, "read", replace_parent)
+    with pytest.raises(ValueError, match="directory changed"):
+        _safe_bytes(source, root=root, label="Configuration", maximum=1024)
 
 
 def _complete_summary(tmp_path, monkeypatch, configuration: str, address="192.0.2.90"):
@@ -83,6 +136,27 @@ def _assign_and_process(db_path, tmp_path, run_id, scope):
     assert jobs.dispatch_next_pipeline_intake(db_path) is True
     assert jobs.run_next_derived_job(db_path, tmp_path) is True
     return assignment
+
+
+def _dispatch_and_run_vlan(db_path, tmp_path, assignment_id):
+    for _ in range(10):
+        with connect_database(db_path, read_only=True) as db:
+            row = db.execute(
+                """SELECT state, admitted_job_id FROM device_vlan_admission_intents
+                   WHERE assignment_id = ?""",
+                (assignment_id,),
+            ).fetchone()
+            attempt = None if not row[1] else db.execute(
+                """SELECT state FROM pipeline_job_attempts WHERE job_id = ?
+                   ORDER BY attempt_number DESC LIMIT 1""",
+                (row[1],),
+            ).fetchone()
+        if row[0] == "admitted" and attempt is not None and attempt[0] == "completed":
+            return row[1]
+        if row[0] == "pending":
+            assert jobs.dispatch_next_pipeline_intake(db_path) is True
+        assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    raise AssertionError("Target device VLAN job did not complete while draining the queue")
 
 
 def _insert_vlan_job(
@@ -183,6 +257,282 @@ def test_vlan_admission_binds_only_exact_real_pipeline_job(tmp_path, monkeypatch
                 "WHERE assignment_id = ?",
                 (assignment_id,),
             )
+
+
+def test_vlan_job_publishes_exact_scoped_receipts_and_terminal_output(tmp_path, monkeypatch):
+    configuration = """interface Gi0/1
+ ip address 192.0.2.10 255.255.255.0
+ switchport mode access
+ switchport access vlan 20
+vlan 20
+ name USERS
+"""
+    db_path, run_id = _complete_summary(tmp_path, monkeypatch, configuration)
+    scope = _scope(db_path, "VLAN worker scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+
+    job_id = _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+
+    with connect_database(db_path, read_only=True) as db:
+        assessment = db.execute(
+            """SELECT assessment_id, assignment_id, run_id, scope_id,
+                      extractor_version, collection_contract, coverage_json
+               FROM device_vlan_assessments"""
+        ).fetchone()
+        receipts = db.execute(
+            """SELECT vlan_id, vlan_name, interface_name, membership_relation,
+                      evidence_state, source_line_number, source_line, source_syntax
+               FROM device_vlan_receipts
+               ORDER BY source_line_number, membership_relation"""
+        ).fetchall()
+        attempt = db.execute(
+            """SELECT state, output_kind, output_id FROM pipeline_job_attempts
+               WHERE job_id = ? ORDER BY attempt_number DESC LIMIT 1""",
+            (job_id,),
+        ).fetchone()
+    assert assessment[1:4] == (
+        assignment["assignment_id"], run_id, scope["scope_id"],
+    )
+    assert assessment[4] == "device-vlan-observations:1"
+    assert json.loads(assessment[6])["absence_supported"] is False
+    assert receipts == [
+        (20, None, "Gi0/1", "access", "configured", 4,
+         " switchport access vlan 20", "cisco_switchport_config"),
+        (20, "USERS", None, "declaration", "configured", 5,
+         "vlan 20", "cisco_vlan_config"),
+    ]
+    assert attempt == ("completed", "device_vlan_assessment", assessment[0])
+
+    monkeypatch.setattr(main_module, "DB_PATH", db_path)
+    with TestClient(app) as client:
+        before = db_path.read_bytes()
+        status = client.get(f"/api/device-configs/{run_id}/scope-vlans")
+        page = client.get(
+            f"/api/device-configs/{run_id}/scope-vlans/receipts?limit=1&offset=0"
+        )
+        rejected = client.get(
+            f"/api/device-configs/{run_id}/scope-vlans/receipts?limit=101"
+        )
+        after = db_path.read_bytes()
+    assert status.status_code == 200
+    assert status.json()["state"] == "completed"
+    assert status.json()["meaning"].startswith(
+        "This status describes processing of retained device evidence"
+    )
+    assert status.json()["claims"]["live_status"] is False
+    assert status.json()["evidence_state_labels"] == {
+        "configured": "Configured in retained source",
+        "observed": "Reported in retained command output",
+    }
+    assert page.status_code == 200
+    assert page.json()["pagination"] == {
+        "limit": 1, "offset": 0, "total": 2, "has_more": True,
+    }
+    assert page.json()["claims"]["cross_device_vlan_identity"] is False
+    assert page.json()["receipts"][0]["evidence_state_label"] == (
+        "Configured in retained source"
+    )
+    assert rejected.status_code == 422
+    assert after == before
+
+
+def test_vlan_publication_replay_is_exact_and_conflicts_fail_closed(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 20\n",
+    )
+    scope = _scope(db_path, "VLAN replay scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    with connect_database(db_path, read_only=True) as db:
+        contract = json.loads(db.execute(
+            """SELECT contract_json FROM device_vlan_admission_intents
+               WHERE assignment_id = ?""",
+            (assignment["assignment_id"],),
+        ).fetchone()[0])
+    snapshot = capture_device_interface_source(db_path, run_id, tmp_path)
+    extracted = extract_device_vlan_observations(
+        snapshot["content"], device_context=run_id,
+    )
+    replay = publish_device_vlan_assessment(
+        db_path, assignment_id=assignment["assignment_id"],
+        summary_result_id=contract["summary_result_id"], snapshot=snapshot,
+        extracted=extracted, frozen_contract=contract,
+    )
+    assert replay["created"] is False
+    changed = json.loads(json.dumps(extracted))
+    changed["receipts"][0]["facts"]["invented"] = True
+    with pytest.raises(DeviceObservationConflict, match="receipt replay changed"):
+        publish_device_vlan_assessment(
+            db_path, assignment_id=assignment["assignment_id"],
+            summary_result_id=contract["summary_result_id"], snapshot=snapshot,
+            extracted=changed, frozen_contract=contract,
+        )
+
+
+def test_vlan_finalize_failure_rolls_back_and_retry_completes(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 30\n",
+    )
+    scope = _scope(db_path, "VLAN rollback scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        job_id = db.execute(
+            """SELECT admitted_job_id FROM device_vlan_admission_intents
+               WHERE assignment_id = ?""",
+            (assignment["assignment_id"],),
+        ).fetchone()[0]
+
+    original_publish = vlan_observations.publish_device_vlan_assessment
+
+    def fail_during_finalize(*args, **kwargs):
+        kwargs["transaction_finalize"] = (
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("injected VLAN finalize failure"))
+        )
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(vlan_observations, "publish_device_vlan_assessment", fail_during_finalize)
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_assessments").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_receipts").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT state FROM pipeline_job_attempts WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()[0] == "failed"
+
+    monkeypatch.setattr(vlan_observations, "publish_device_vlan_assessment", original_publish)
+    jobs.retry_derived_job(
+        db_path, job_id, request_token="retry-vlan-after-rollback", requested_by="analyst",
+    )
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_assessments").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_receipts").fetchone()[0] == 1
+        assert db.execute(
+            """SELECT state FROM pipeline_job_attempts WHERE job_id = ?
+               ORDER BY attempt_number DESC LIMIT 1""",
+            (job_id,),
+        ).fetchone()[0] == "completed"
+
+
+def test_admitted_vlan_job_cannot_publish_after_scope_archive(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 40\n",
+    )
+    scope = _scope(db_path, "VLAN archived scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    with connect_database(db_path) as db:
+        db.execute("UPDATE network_scopes SET active = 0 WHERE scope_id = ?", (scope["scope_id"],))
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_assessments").fetchone()[0] == 0
+        attempt = db.execute(
+            """SELECT attempt.state, attempt.error FROM pipeline_job_attempts attempt
+               JOIN device_vlan_admission_intents intent
+                 ON intent.admitted_job_id = attempt.job_id
+               WHERE intent.assignment_id = ?""",
+            (assignment["assignment_id"],),
+        ).fetchone()
+    assert attempt[0] == "failed"
+    assert "scope" in attempt[1].lower()
+
+
+def test_vlan_worker_with_expired_lease_cannot_publish(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 45\n",
+    )
+    scope = _scope(db_path, "VLAN lease scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    claim = jobs.claim_next_derived_job(db_path)
+    assert claim is not None
+    with connect_database(db_path) as db:
+        db.execute(
+            """UPDATE work_leases SET expires_at = '2000-01-01T00:00:00.000Z'
+               WHERE lease_key = ?""",
+            (claim["lease_key"],),
+        )
+    with pytest.raises(jobs.DerivedJobConflict, match="lost its claim|ownership"):
+        jobs.execute_claimed_device_vlan_job(db_path, claim, tmp_path)
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_assessments").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_receipts").fetchone()[0] == 0
+        assert db.execute(
+            """SELECT state FROM pipeline_job_attempts WHERE job_id = (
+                   SELECT admitted_job_id FROM device_vlan_admission_intents
+                    WHERE assignment_id = ?
+               )""",
+            (assignment["assignment_id"],),
+        ).fetchone()[0] == "running"
+
+
+def test_equal_vlan_ids_in_two_scoped_device_observations_remain_separate(
+    tmp_path, monkeypatch,
+):
+    configuration = "interface Gi0/1\n switchport access vlan 50\n"
+    db_path, first_run = _complete_summary(
+        tmp_path, monkeypatch, configuration, "192.0.2.50",
+    )
+    with TestClient(app) as client:
+        response = _upload(client, configuration, "192.0.2.51")
+    second_run = response.json()["run_id"]
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    first_scope = _scope(db_path, "First VLAN enclave")
+    second_scope = _scope(db_path, "Second VLAN enclave")
+    first = _assign_and_process(db_path, tmp_path, first_run, first_scope)
+    second = _assign_and_process(db_path, tmp_path, second_run, second_scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, first["assignment_id"])
+    _dispatch_and_run_vlan(db_path, tmp_path, second["assignment_id"])
+
+    with connect_database(db_path, read_only=True) as db:
+        rows = db.execute(
+            """SELECT assessment.scope_id, assessment.run_id, receipt.vlan_id
+                 FROM device_vlan_assessments assessment
+                 JOIN device_vlan_receipts receipt
+                   ON receipt.assessment_id = assessment.assessment_id
+                ORDER BY assessment.run_id"""
+        ).fetchall()
+    assert len(rows) == 2
+    assert {row[0] for row in rows} == {first_scope["scope_id"], second_scope["scope_id"]}
+    assert {row[1] for row in rows} == {first_run, second_run}
+    assert [row[2] for row in rows] == [50, 50]
+
+
+def test_vlan_worker_rejects_symlinked_run_local_source(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 60\n",
+    )
+    scope = _scope(db_path, "VLAN symlink scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    source = tmp_path / "device-configs" / run_id / "uploaded-router.txt"
+    replacement = tmp_path / "outside-vlan-source.txt"
+    replacement.write_text("interface Gi0/1\n switchport access vlan 60\n", encoding="utf-8")
+    source.unlink()
+    try:
+        source.symlink_to(replacement)
+    except OSError:
+        pytest.skip("symbolic links are unavailable")
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_receipts").fetchone()[0] == 0
+        attempt = db.execute(
+            """SELECT attempt.state, attempt.error FROM pipeline_job_attempts attempt
+               JOIN device_vlan_admission_intents intent
+                 ON intent.admitted_job_id = attempt.job_id
+               WHERE intent.assignment_id = ?""",
+            (assignment["assignment_id"],),
+        ).fetchone()
+    assert attempt[0] == "failed"
+    assert "unsafe path" in attempt[1].lower()
 
 
 def test_vlan_admission_rejects_superseded_scope_assignment(tmp_path, monkeypatch):
