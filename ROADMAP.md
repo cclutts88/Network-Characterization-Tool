@@ -154,6 +154,55 @@ A roadmap item should only be marked complete when:
 - Independent start gate: **CLEAR — DOCUMENTED DEVIATION**. Material evidence,
   provenance, migration, collection-profile, and comparison changes remain subject to
   separate reviewer gates before downstream work continues.
+- [~] Scoped VLAN evidence milestone started after commit `de80d16`. First establish
+  one provenance-backed observation contract from exact retained device configuration
+  lines, with explicit Network Scope, device/bridge context, VLAN ID, optional name,
+  interface membership and source receipt. Then project only supported fields into
+  Device Analysis, Current Network, Hunt, Reach, Map, Changes Over Time, retained
+  history/source views, exports, and the Operator Guide. Existing evidence that lacks
+  required collection coverage remains visibly Not collected, Unsupported, or Unknown;
+  no view may infer live state, physical-device identity, cross-device Layer-2 segment
+  identity, or equivalence from a matching VLAN number or name.
+- [x] Schema version 6 safety gate completed. Independent review halted the first
+  draft because it could accept mixed version-5/version-6 lineage and could not safely
+  distinguish expected VLAN tables from unrelated changes after interruption. The
+  revised guard now authenticates an exact completed version-5 contract, plan digest,
+  five-row ledger and fingerprint; accepts only the exact reviewed version-6 VLAN schema
+  after a failed or hard-interrupted attempt; rejects premature completed rows and all
+  unrelated schema drift; and proves that a version-5 image rejects completed version-6
+  data before workers start. A second independent review halted downstream projection
+  work until four additional boundaries were explicit. Version 6 now includes a
+  separate durable VLAN-admission request for every newly confirmed device-scope
+  assignment, so interface normalization and VLAN extraction cannot overwrite each
+  other's job identity. Immutable assessments retain older extractor versions while
+  selecting only the current supported extractor and collection contract. Linux PVID
+  and generic declared-membership evidence retain their source meaning instead of being
+  relabeled as access, native, tagged, or untagged. Interrupted ledger rows now require
+  the exact valid started or failed shape, including their fingerprint, completion, and
+  error fields. A fully initialized version-5 device and intake schema is covered by an
+  exact version-6 upgrade test. VLAN admission now accepts only a real pipeline job that
+  exactly matches the frozen assignment, scope, source, hash, run, extractor, family,
+  payload, parameters, and job definition; superseded assignments are rejected and a
+  retained non-null job binding is immutable. The immutable request also freezes the
+  exact completed reusable-analysis result, full reviewed assignment/authority contract,
+  collection contract, and source coverage. Admission re-derives those records under one
+  immediate write lock, rejecting newer summaries, archived scopes, changed authority,
+  or scope-correction races. The first complete-suite run exposed ten stale upgrade
+  fixture/shared-connection checks; all ten causes were corrected. Final focused Docker
+  regression passed **138 tests**. The complete Docker suite passed **1,690 tests with
+  17 expected skips** and the existing dependency warning. Independent quality gate:
+  **CLEAR — DOCUMENTED DEVIATION** after verifying the exact retained contract,
+  concurrency fence, fail-closed admission, migration boundary, and source vocabulary.
+- **Documented migration-boundary deviation:** version 6 supports a fresh installation
+  and an exact version-5-to-version-6 upgrade. Saved versions 1 through 4 must first be
+  upgraded and sealed by the reviewed version-5 package. This staged boundary replaces
+  the first draft's direct older-version-to-version-6 shortcut, which would have created
+  a false version-5 ledger entry before the version-5 schema had actually been applied.
+  The existing read-only version-4 audit remains available to qualify the staged first
+  upgrade; version 6 will fail closed rather than synthesize skipped migration history.
+  This gate is now clear. Downstream VLAN extraction, worker execution, receipt
+  publication, and cross-view projections are the next implementation work; none is
+  implied complete by this schema and admission checkpoint.
 
 ## Independent quality gate — 2026-09-27
 

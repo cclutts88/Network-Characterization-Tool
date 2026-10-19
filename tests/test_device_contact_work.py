@@ -24,6 +24,7 @@ from app.device_contact_work import (
 from app.schema_compatibility import (
     DEVICE_CONTACT_MIGRATION_ID,
     LEGACY_MIGRATION_ID,
+    MISSION_ENVIRONMENT_MIGRATION_ID,
     MIGRATION_ID,
     SCHEDULED_WORK_MIGRATION_ID,
     WORK_COORDINATION_MIGRATION_ID,
@@ -191,8 +192,8 @@ def _create_verified_v3_fixture(db_path: Path) -> None:
     init_scheduled_work_storage(db_path)
     with sqlite3.connect(db_path) as connection:
         connection.execute(
-            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?)",
-            (DEVICE_CONTACT_MIGRATION_ID, MIGRATION_ID),
+            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?, ?)",
+            (DEVICE_CONTACT_MIGRATION_ID, MISSION_ENVIRONMENT_MIGRATION_ID, MIGRATION_ID),
         )
         fingerprint = schema_fingerprint(connection)
         connection.execute(
@@ -214,92 +215,14 @@ def _create_verified_v3_fixture(db_path: Path) -> None:
         )
 
 
-def test_v3_to_v5_interrupted_ddl_resumes_with_exact_lineage(tmp_path: Path) -> None:
-    from app.mission_environment import init_mission_environment_storage
-
+def test_v3_requires_staged_upgrade_through_version_five(tmp_path: Path) -> None:
     db_path = tmp_path / "analyzer.db"
     _create_verified_v3_fixture(db_path)
-    first = begin_schema_migration(db_path)
-    assert first is not None and first.attempt == 1
-
-    with sqlite3.connect(db_path) as connection:
-        connection.execute(
-            """CREATE TABLE IF NOT EXISTS device_contact_runs (
-                   run_id TEXT PRIMARY KEY CHECK(length(run_id) = 32),
-                   operation_kind TEXT NOT NULL,
-                   subject_key TEXT NOT NULL,
-                   request_json TEXT NOT NULL,
-                   request_digest TEXT NOT NULL CHECK(length(request_digest) = 64),
-                   state TEXT NOT NULL CHECK(state IN (
-                       'waiting', 'preparing', 'contact_starting', 'contact_active',
-                       'complete', 'cancelled', 'failed', 'needs_attention'
-                   )),
-                   contact_phase TEXT NOT NULL CHECK(contact_phase IN (
-                       'not_started', 'preparing', 'contact_starting',
-                       'contact_active', 'contact_stopped', 'uncertain', 'complete'
-                   )),
-                   cancellation_requested INTEGER NOT NULL DEFAULT 0
-                       CHECK(cancellation_requested IN (0, 1)),
-                   retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count IN (0, 1)),
-                   active_attempt_number INTEGER,
-                   created_at TEXT NOT NULL,
-                   created_by TEXT NOT NULL,
-                   updated_at TEXT NOT NULL,
-                   completed_at TEXT,
-                   status_reason TEXT
-               )"""
-        )
-    fail_schema_migration(db_path, first, RuntimeError("injected v4 initializer failure"))
-
-    retry = begin_schema_migration(db_path)
-    assert retry is not None and retry.attempt == 2
-    init_device_contact_work_storage(db_path)
-    init_mission_environment_storage(db_path)
-    complete_schema_migration(db_path, retry)
-
-    with sqlite3.connect(db_path) as connection:
-        columns = {
-            row[1] for row in connection.execute(
-                "PRAGMA table_info(device_contact_runs)"
-            )
-        }
-    assert {"terminal_manifest_json", "presentation_synced"} <= columns
-
-    run_id = _run(db_path, "10")
-    claim = claim_device_contact_run(db_path, run_id, owner_id="worker.recovered")
-    assert mark_device_contact_starting(db_path, claim) is True
-    mark_device_contact_active(db_path, claim)
-    terminal_manifest = {"run_id": run_id, "status": "completed"}
-    publish_device_contact_terminal(
-        db_path,
-        claim,
-        outcome="complete",
-        reason="Recovered schema terminal publication",
-        terminal_manifest=terminal_manifest,
-    )
-    pending = list_unsynced_device_contact_presentations(db_path)
-    assert pending == [{
-        "run_id": run_id,
-        "attempt_number": 1,
-        "manifest": terminal_manifest,
-    }]
-    mark_device_contact_presentation_synced(db_path, run_id)
-    assert list_unsynced_device_contact_presentations(db_path) == []
-
-    state = schema_state(db_path)
-    assert state["schema_version"] == 5
-    assert state["schema_fingerprint_matches"] is True
-    assert [item["migration_id"] for item in state["migration_ledger"]] == [
-        LEGACY_MIGRATION_ID,
-        WORK_COORDINATION_MIGRATION_ID,
-        SCHEDULED_WORK_MIGRATION_ID,
-        DEVICE_CONTACT_MIGRATION_ID,
-        MIGRATION_ID,
-    ]
-    assert state["migration_ledger"][-1]["attempts"] == 2
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
+        begin_schema_migration(db_path)
 
 
-def test_version_three_image_rejects_completed_version_four(
+def test_version_three_image_rejects_completed_version_six(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app import schema_compatibility
@@ -309,6 +232,8 @@ def test_version_three_image_rejects_completed_version_four(
     attempt = begin_schema_migration(db_path)
     init_device_contact_work_storage(db_path)
     init_mission_environment_storage(db_path)
+    from app.device_vlan_observations import init_device_vlan_observation_storage
+    init_device_vlan_observation_storage(db_path)
     complete_schema_migration(db_path, attempt)
 
     monkeypatch.setattr(schema_compatibility, "SCHEMA_CONTRACT_VERSION", 3)

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import json
+import sqlite3
+
 from fastapi.testclient import TestClient
 import pytest
 
 from app import derived_jobs as jobs
 from app import device_configs
+from app import device_vlan_observations as vlan_observations
 from app import main as main_module
 from app.database import connect_database
 from app.device_limits import MAX_SUMMARY_ITEMS
+from app.device_vlan_observations import admit_device_vlan_observation_intent
 from app.device_observations import (
     DeviceObservationConflict,
     assign_device_scope,
@@ -68,9 +73,272 @@ def _assign_and_process(db_path, tmp_path, run_id, scope):
         source_id=assignment["assignment_id"],
     )
     assert intent["state"] == "pending"
+    with connect_database(db_path, read_only=True) as db:
+        vlan_intent = db.execute(
+            """SELECT state, assignment_id, admitted_job_id
+               FROM device_vlan_admission_intents WHERE assignment_id = ?""",
+            (assignment["assignment_id"],),
+        ).fetchone()
+    assert vlan_intent == ("pending", assignment["assignment_id"], None)
     assert jobs.dispatch_next_pipeline_intake(db_path) is True
     assert jobs.run_next_derived_job(db_path, tmp_path) is True
     return assignment
+
+
+def _insert_vlan_job(
+    db_path, assignment_id: str, job_id: str, *, field_changes: dict | None = None,
+    definition_changes: dict | None = None,
+):
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        contract = json.loads(db.execute(
+            "SELECT contract_json FROM device_vlan_admission_intents WHERE assignment_id = ?",
+            (assignment_id,),
+        ).fetchone()[0])
+        definition = {**contract["job_definition"], **(definition_changes or {})}
+        fields = {
+            "job_type": contract["target_job_type"],
+            "source_run_id": contract["run_id"],
+            "source_observation_id": contract["source_observation_id"],
+            "source_status": contract["source_status"],
+            "source_sha256": contract["source_sha256"],
+            "source_size_bytes": int(contract["source_size_bytes"]),
+            "target_family": contract["target_family"],
+            "target_analysis_version": contract["target_analysis_version"],
+            "target_payload_schema_version": int(contract["target_payload_schema_version"]),
+            "target_parameters_json": json.dumps(
+                contract["target_parameters"], sort_keys=True, separators=(",", ":"),
+            ),
+            "target_result_id": contract["target_result_id"],
+            "source_kind": contract["source_kind"],
+            "source_ref": contract["source_ref"],
+        }
+        fields.update(field_changes or {})
+        db.execute(
+            """INSERT INTO pipeline_jobs(
+                   job_id, job_key, job_type, source_run_id, source_observation_id,
+                   source_status, source_sha256, source_size_bytes, target_family,
+                   target_analysis_version, target_payload_schema_version,
+                   target_parameters_json, target_computation_key, target_result_id,
+                   source_kind, source_ref, definition_json, requested_by, requested_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)""",
+            (
+                job_id, f"key-{job_id}", fields["job_type"], fields["source_run_id"],
+                fields["source_observation_id"], fields["source_status"],
+                fields["source_sha256"], fields["source_size_bytes"],
+                fields["target_family"], fields["target_analysis_version"],
+                fields["target_payload_schema_version"], fields["target_parameters_json"],
+                fields["target_result_id"], fields["source_kind"], fields["source_ref"],
+                json.dumps(definition, sort_keys=True, separators=(",", ":")),
+                "observation-analyst", "2030-01-01T00:00:00+00:00",
+            ),
+        )
+
+
+def test_vlan_admission_binds_only_exact_real_pipeline_job(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 20\n",
+    )
+    scope = _scope(db_path, "VLAN admission scope")
+    assignment = assign_device_scope(
+        db_path, run_id=run_id, scope_id=scope["scope_id"],
+        actor="observation-analyst", reason="Confirmed whole collection context",
+        whole_collection_confirmed=True,
+    )
+    assignment_id = assignment["assignment_id"]
+    mismatches = (
+        ("interface-job", {"job_type": "device_interface_observations"}, None),
+        ("nmap-job", {"job_type": "nmap_scope_assessment"}, None),
+        ("wrong-assignment", {"source_ref": "device_assignment_stale"}, None),
+        ("wrong-source", {"source_sha256": "f" * 64}, None),
+        ("wrong-scope", None, {"scope_id": "scope-other"}),
+        ("wrong-version", {"target_analysis_version": "device-vlan-observations:0"}, None),
+    )
+    for job_id, field_changes, definition_changes in mismatches:
+        _insert_vlan_job(
+            db_path, assignment_id, job_id,
+            field_changes=field_changes, definition_changes=definition_changes,
+        )
+        with connect_database(db_path) as db, pytest.raises(
+            ValueError, match="frozen device VLAN contract",
+        ):
+            admit_device_vlan_observation_intent(
+                db, assignment_id=assignment_id, job_id=job_id, admitted_at="later",
+            )
+
+    _insert_vlan_job(db_path, assignment_id, "exact-vlan-job")
+    with connect_database(db_path) as db:
+        admitted = admit_device_vlan_observation_intent(
+            db, assignment_id=assignment_id, job_id="exact-vlan-job", admitted_at="later",
+        )
+        replayed = admit_device_vlan_observation_intent(
+            db, assignment_id=assignment_id, job_id="exact-vlan-job", admitted_at="latest",
+        )
+        assert admitted == replayed
+        assert admitted["admitted_job_id"] == "exact-vlan-job"
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            db.execute(
+                "UPDATE device_vlan_admission_intents SET admitted_job_id = 'interface-job' "
+                "WHERE assignment_id = ?",
+                (assignment_id,),
+            )
+
+
+def test_vlan_admission_rejects_superseded_scope_assignment(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 20\n",
+    )
+    first_scope = _scope(db_path, "First VLAN scope")
+    second_scope = _scope(db_path, "Second VLAN scope")
+    first = assign_device_scope(
+        db_path, run_id=run_id, scope_id=first_scope["scope_id"],
+        actor="observation-analyst", reason="Initial reviewed context",
+        whole_collection_confirmed=True,
+    )
+    _insert_vlan_job(db_path, first["assignment_id"], "stale-vlan-job")
+    correct_device_scope(
+        db_path, expected_assignment_id=first["assignment_id"],
+        destination_scope_id=second_scope["scope_id"], actor="observation-analyst",
+        reason="Corrected whole-collection context", whole_collection_confirmed=True,
+    )
+
+    with connect_database(db_path) as db, pytest.raises(
+        ValueError, match="no longer current",
+    ):
+        admit_device_vlan_observation_intent(
+            db, assignment_id=first["assignment_id"], job_id="stale-vlan-job",
+            admitted_at="later",
+        )
+
+
+def test_vlan_admission_rejects_changed_summary_scope_and_authority(
+    tmp_path, monkeypatch,
+):
+    def prepared(label: str):
+        root = tmp_path / label
+        root.mkdir()
+        db_path, run_id = _complete_summary(
+            root, monkeypatch,
+            "interface Gi0/1\n switchport access vlan 20\n",
+            address=f"192.0.2.{90 + len(label)}",
+        )
+        scope = _scope(db_path, f"{label} scope")
+        assignment = assign_device_scope(
+            db_path, run_id=run_id, scope_id=scope["scope_id"],
+            actor="observation-analyst", reason="Confirmed whole collection context",
+            whole_collection_confirmed=True,
+        )
+        _insert_vlan_job(db_path, assignment["assignment_id"], f"{label}-job")
+        return db_path, run_id, scope, assignment
+
+    summary_db, summary_run, _summary_scope, summary_assignment = prepared("summary")
+    with connect_database(summary_db) as db:
+        summary_job_id = db.execute(
+            "SELECT job_id FROM pipeline_jobs WHERE job_type = ? AND source_run_id = ?",
+            ("device_summary", summary_run),
+        ).fetchone()[0]
+        existing_result = db.execute(
+            "SELECT target_result_id FROM pipeline_jobs WHERE job_id = ?",
+            (summary_job_id,),
+        ).fetchone()[0]
+        db.execute(
+            """INSERT INTO derived_results(
+                   result_id, computation_key, family, analysis_version,
+                   payload_schema_version, parameters_json, inputs_json,
+                   result_json, result_sha256, generated_at
+               ) SELECT 'new-summary-result', 'new-summary-key', family,
+                        analysis_version, payload_schema_version, parameters_json,
+                        inputs_json, result_json, result_sha256,
+                        '2030-01-02T00:00:00+00:00'
+                   FROM derived_results WHERE result_id = ?""",
+            (existing_result,),
+        )
+        db.execute(
+            """INSERT INTO pipeline_job_attempts(
+                   attempt_id, job_id, attempt_number, state, requested_by,
+                   requested_at, output_kind, output_id
+               ) VALUES (
+                   'newer-summary-attempt', ?, 99, 'completed', 'analyst',
+                   '2030-01-02T00:00:00+00:00', 'derived_result', 'new-summary-result'
+               )""",
+            (summary_job_id,),
+        )
+        with pytest.raises(ValueError, match="summary changed"):
+            admit_device_vlan_observation_intent(
+                db, assignment_id=summary_assignment["assignment_id"],
+                job_id="summary-job", admitted_at="later",
+            )
+
+    scope_db, _scope_run, scope, scope_assignment = prepared("archive")
+    with connect_database(scope_db) as db:
+        db.execute("UPDATE network_scopes SET active = 0 WHERE scope_id = ?", (scope["scope_id"],))
+    with connect_database(scope_db) as db, pytest.raises(
+        ValueError, match="no longer current",
+    ):
+        admit_device_vlan_observation_intent(
+            db, assignment_id=scope_assignment["assignment_id"],
+            job_id="archive-job", admitted_at="later",
+        )
+
+    authority_db, authority_run, _authority_scope, authority_assignment = prepared("authority")
+    with connect_database(authority_db) as db:
+        db.execute(
+            """UPDATE device_collection_authority
+                  SET state = 'deleted', revision = revision + 1, deleted_at = 'later'
+                WHERE run_id = ?""",
+            (authority_run,),
+        )
+    with connect_database(authority_db) as db, pytest.raises(
+        ValueError, match="no longer current",
+    ):
+        admit_device_vlan_observation_intent(
+            db, assignment_id=authority_assignment["assignment_id"],
+            job_id="authority-job", admitted_at="later",
+        )
+
+
+def test_vlan_admission_write_lock_blocks_scope_change_race(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 20\n",
+    )
+    scope = _scope(db_path, "Race protected scope")
+    assignment = assign_device_scope(
+        db_path, run_id=run_id, scope_id=scope["scope_id"],
+        actor="observation-analyst", reason="Confirmed whole collection context",
+        whole_collection_confirmed=True,
+    )
+    _insert_vlan_job(db_path, assignment["assignment_id"], "race-protected-job")
+    race_blocked = []
+
+    def try_scope_archive(_db):
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            with connect_database(db_path, busy_timeout_ms=1) as competing:
+                competing.execute(
+                    "UPDATE network_scopes SET active = 0 WHERE scope_id = ?",
+                    (scope["scope_id"],),
+                )
+        race_blocked.append(True)
+
+    monkeypatch.setattr(
+        vlan_observations, "_before_device_vlan_admission_bind", try_scope_archive,
+    )
+    with connect_database(db_path) as db:
+        admitted = admit_device_vlan_observation_intent(
+            db, assignment_id=assignment["assignment_id"],
+            job_id="race-protected-job", admitted_at="later",
+        )
+
+    assert race_blocked == [True]
+    assert admitted["admitted_job_id"] == "race-protected-job"
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT active FROM network_scopes WHERE scope_id = ?", (scope["scope_id"],),
+        ).fetchone()[0] == 1
 
 
 def test_extractor_preserves_multiple_families_secondary_and_routing_context():

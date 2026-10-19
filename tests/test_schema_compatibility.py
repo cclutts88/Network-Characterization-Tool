@@ -11,6 +11,7 @@ from app.schema_compatibility import (
     DATA_LAYOUT_CONTRACT,
     DEVICE_CONTACT_MIGRATION_ID,
     LEGACY_MIGRATION_ID,
+    MISSION_ENVIRONMENT_MIGRATION_ID,
     MIGRATION_ID,
     MIGRATION_PLAN,
     SCHEDULED_WORK_MIGRATION_ID,
@@ -18,7 +19,7 @@ from app.schema_compatibility import (
     SchemaCompatibilityError,
     WORK_COORDINATION_MIGRATION_ID,
     begin_schema_migration,
-    complete_schema_migration,
+    complete_schema_migration as _complete_schema_migration,
     fail_schema_migration,
     image_schema_contract,
     migration_plan_digest,
@@ -27,11 +28,20 @@ from app.schema_compatibility import (
     schema_upgrade_preflight,
 )
 from app.work_coordination import init_work_coordination_storage
+from app.device_vlan_observations import create_device_vlan_schema
+from app.device_observations import init_device_observation_storage
+from app.pipeline_intake import init_pipeline_intake_storage
 from app.searchsploit import init_searchsploit_storage
 from app.storage_health import (
     _init_compaction_journal,
     init_storage_health_storage,
 )
+
+
+def complete_schema_migration(db_path: Path, attempt) -> None:
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
+    _complete_schema_migration(db_path, attempt)
 
 
 def _create_verified_version_two_fixture(db_path: Path) -> None:
@@ -41,8 +51,13 @@ def _create_verified_version_two_fixture(db_path: Path) -> None:
     init_work_coordination_storage(db_path)
     with sqlite3.connect(db_path) as db:
         db.execute(
-            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?, ?)",
-            (SCHEDULED_WORK_MIGRATION_ID, DEVICE_CONTACT_MIGRATION_ID, MIGRATION_ID),
+            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?, ?, ?)",
+            (
+                SCHEDULED_WORK_MIGRATION_ID,
+                DEVICE_CONTACT_MIGRATION_ID,
+                MISSION_ENVIRONMENT_MIGRATION_ID,
+                MIGRATION_ID,
+            ),
         )
         fingerprint = schema_fingerprint(db)
         db.execute(
@@ -90,7 +105,7 @@ def test_schema_contract_migration_records_completed_fingerprint(tmp_path: Path)
     complete_schema_migration(db_path, attempt)
 
     state = schema_state(db_path)
-    assert state["schema_version"] == 5
+    assert state["schema_version"] == 6
     assert state["data_layout_contract"] == DATA_LAYOUT_CONTRACT
     assert state["migration_plan_digest"] == migration_plan_digest()
     assert state["schema_fingerprint_matches"] is True
@@ -123,66 +138,27 @@ def test_interrupted_schema_migration_retries_idempotently(tmp_path: Path) -> No
     assert current["status"] == "completed"
 
 
-def test_interrupted_version_two_upgrade_resumes_exact_lineage(
-    tmp_path: Path,
-) -> None:
-    from app.scheduled_work import init_scheduled_work_storage
-    from app.device_contact_work import init_device_contact_work_storage
-
-    db_path = tmp_path / "analyzer.db"
-    _create_verified_version_two_fixture(db_path)
-
-    first = begin_schema_migration(db_path)
-    assert first is not None
-    assert first.attempt == 1
-    _create_first_scheduled_work_table(db_path)
-    fail_schema_migration(db_path, first, RuntimeError("injected v3 initializer failure"))
-
-    retry = begin_schema_migration(db_path)
-    assert retry is not None
-    assert retry.attempt == 2
-    init_scheduled_work_storage(db_path)
-    init_device_contact_work_storage(db_path)
-    complete_schema_migration(db_path, retry)
-
-    state = schema_state(db_path)
-    assert state["schema_version"] == 5
-    assert state["schema_fingerprint_matches"] is True
-    assert [item["migration_id"] for item in state["migration_ledger"]] == [
-        LEGACY_MIGRATION_ID,
-        WORK_COORDINATION_MIGRATION_ID,
-        SCHEDULED_WORK_MIGRATION_ID,
-        DEVICE_CONTACT_MIGRATION_ID,
-        MIGRATION_ID,
-    ]
-    assert [item["status"] for item in state["migration_ledger"]] == [
-        "completed", "completed", "completed", "completed", "completed",
-    ]
-    assert state["migration_ledger"][-1]["attempts"] == 2
-    assert begin_schema_migration(db_path) is None
-
-
-def test_interrupted_version_three_checkpoint_rejects_later_schema_drift(
+def test_version_two_requires_staged_upgrade_through_version_five(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "analyzer.db"
     _create_verified_version_two_fixture(db_path)
-    first = begin_schema_migration(db_path)
-    assert first is not None
-    _create_first_scheduled_work_table(db_path)
-    fail_schema_migration(db_path, first, RuntimeError("injected v3 initializer failure"))
 
-    with sqlite3.connect(db_path) as db:
-        db.execute("CREATE TABLE unexpected_after_failure(id INTEGER PRIMARY KEY)")
-
-    with pytest.raises(SchemaCompatibilityError, match="fingerprint"):
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
         begin_schema_migration(db_path)
 
 
-def test_verified_version_one_database_upgrades_with_complete_lineage(tmp_path: Path) -> None:
-    from app.device_contact_work import init_device_contact_work_storage
-    from app.scheduled_work import init_scheduled_work_storage
+def test_version_two_stage_boundary_precedes_later_schema_work(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_two_fixture(db_path)
 
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
+        begin_schema_migration(db_path)
+
+
+def test_verified_version_one_requires_staged_upgrade(tmp_path: Path) -> None:
     db_path = tmp_path / "analyzer.db"
     begin_schema_migration(db_path)
     with sqlite3.connect(db_path) as db:
@@ -193,7 +169,8 @@ def test_verified_version_one_database_upgrades_with_complete_lineage(tmp_path: 
                     'nct-work-coordination-v2',
                     'nct-scheduled-occurrences-v3',
                     'nct-device-contact-fencing-v4',
-                    'nct-mission-environment-v5'
+                    'nct-mission-environment-v5',
+                    'nct-scoped-vlan-evidence-v6'
                  )"""
         )
         db.execute(
@@ -202,21 +179,8 @@ def test_verified_version_one_database_upgrades_with_complete_lineage(tmp_path: 
                       migration_plan_digest = 'legacy-plan', schema_fingerprint = ?""",
             (fingerprint,),
         )
-    upgrade = begin_schema_migration(db_path)
-    assert upgrade is not None
-    init_work_coordination_storage(db_path)
-    init_scheduled_work_storage(db_path)
-    init_device_contact_work_storage(db_path)
-    complete_schema_migration(db_path, upgrade)
-    state = schema_state(db_path)
-    assert state["schema_version"] == 5
-    assert [item["migration_id"] for item in state["migration_ledger"]] == [
-        "nct-foundation-data-contract-v1",
-        "nct-work-coordination-v2",
-        "nct-scheduled-occurrences-v3",
-        "nct-device-contact-fencing-v4",
-        "nct-mission-environment-v5",
-    ]
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
+        begin_schema_migration(db_path)
 
 
 def _create_verified_version_four_fixture(db_path: Path) -> None:
@@ -225,7 +189,10 @@ def _create_verified_version_four_fixture(db_path: Path) -> None:
     complete_schema_migration(db_path, attempt)
     with sqlite3.connect(db_path) as db:
         schema_build_id, schema_build_commit = SUPPORTED_V4_RANGE_BUILDS[0]
-        db.execute("DELETE FROM nct_schema_migrations WHERE migration_id = ?", (MIGRATION_ID,))
+        db.execute(
+            "DELETE FROM nct_schema_migrations WHERE migration_id IN (?, ?)",
+            (MISSION_ENVIRONMENT_MIGRATION_ID, MIGRATION_ID),
+        )
         fingerprint = schema_fingerprint(db)
         db.execute(
             """UPDATE nct_schema_migrations
@@ -251,6 +218,48 @@ def _create_verified_version_four_fixture(db_path: Path) -> None:
                 schema_build_commit,
             ),
         )
+
+
+def _create_verified_version_five_fixture(db_path: Path) -> None:
+    """Create the sealed schema and completed lineage emitted by the v5 image."""
+    attempt = begin_schema_migration(db_path)
+    assert attempt is not None
+    complete_schema_migration(db_path, attempt)
+    _seal_current_schema_as_version_five(db_path)
+
+
+def _seal_current_schema_as_version_five(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as db:
+        db.execute("DROP TABLE device_vlan_receipts")
+        db.execute("DROP TABLE device_vlan_assessments")
+        db.execute("DROP TABLE device_vlan_admission_intents")
+        db.execute(
+            "DELETE FROM nct_schema_migrations WHERE migration_id = ?",
+            (MIGRATION_ID,),
+        )
+        fingerprint = schema_fingerprint(db)
+        db.execute(
+            """UPDATE nct_schema_migrations
+                  SET after_schema_fingerprint = ?
+                WHERE migration_id = ?""",
+            (fingerprint, MISSION_ENVIRONMENT_MIGRATION_ID),
+        )
+        db.execute(
+            """UPDATE nct_schema_state
+                  SET schema_contract_version = 5, schema_version = 5,
+                      migration_plan_digest = ?, schema_fingerprint = ?""",
+            (migration_plan_digest(MIGRATION_PLAN[:5]), fingerprint),
+        )
+
+
+def _create_initialized_version_five_fixture(db_path: Path) -> None:
+    """Create the actual pre-v6 device and intake schema, then seal it as v5."""
+    attempt = begin_schema_migration(db_path)
+    assert attempt is not None
+    init_device_observation_storage(db_path)
+    init_pipeline_intake_storage(db_path)
+    complete_schema_migration(db_path, attempt)
+    _seal_current_schema_as_version_five(db_path)
 
 
 def _schema_preflight(db_path: Path) -> dict[str, object]:
@@ -319,28 +328,13 @@ def test_verified_version_four_accepts_only_exact_phase2_late_schema_groups(
     _create_verified_version_four_fixture(db_path)
     for group in groups:
         _add_phase2_late_schema_group(db_path, group)
-    with sqlite3.connect(db_path) as db:
-        live_before = schema_fingerprint(db)
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
 
-    upgrade = begin_schema_migration(db_path)
-    assert upgrade is not None
-    with sqlite3.connect(db_path) as db:
-        before = db.execute(
-            "SELECT before_schema_fingerprint FROM nct_schema_migrations "
-            "WHERE migration_id = ?",
-            (MIGRATION_ID,),
-        ).fetchone()[0]
-    assert before == live_before
-
-    init_mission_environment_storage(db_path)
-    init_searchsploit_storage(db_path)
-    init_storage_health_storage(db_path)
-    complete_schema_migration(db_path, upgrade)
-
-    state = schema_state(db_path)
-    assert state["schema_version"] == 5
-    assert state["schema_fingerprint_matches"] is True
-    assert begin_schema_migration(db_path) is None
+    result = _schema_preflight(db_path)
+    assert result["status"] == "pass"
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
+        begin_schema_migration(db_path)
     with sqlite3.connect(db_path) as db:
         if "searchsploit" in groups:
             assert db.execute(
@@ -368,8 +362,10 @@ def test_version_four_rejects_altered_or_incomplete_phase2_late_schema(
     _create_verified_version_four_fixture(db_path)
     with sqlite3.connect(db_path) as db:
         db.execute(mutation)
-    with pytest.raises(SchemaCompatibilityError, match="fingerprint"):
-        begin_schema_migration(db_path)
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    with pytest.raises(SchemaCompatibilityError, match="unrecognized"):
+        _schema_preflight(db_path)
 
 
 def test_version_four_rejects_known_late_schema_plus_unexpected_drift(
@@ -380,8 +376,10 @@ def test_version_four_rejects_known_late_schema_plus_unexpected_drift(
     _add_phase2_late_schema_group(db_path, "searchsploit")
     with sqlite3.connect(db_path) as db:
         db.execute("CREATE TABLE unexpected_schema(id INTEGER PRIMARY KEY)")
-    with pytest.raises(SchemaCompatibilityError, match="fingerprint"):
-        begin_schema_migration(db_path)
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    with pytest.raises(SchemaCompatibilityError, match="unrecognized"):
+        _schema_preflight(db_path)
 
 
 def test_version_five_startup_owns_maintenance_schema_before_fingerprinting(
@@ -536,39 +534,222 @@ def test_version_four_read_only_preflight_rejects_unknown_running_build(
         )
 
 
-def test_verified_version_four_upgrades_to_mission_environment_schema(tmp_path: Path) -> None:
-    from app.mission_environment import init_mission_environment_storage
-
+def test_verified_version_five_upgrades_to_scoped_vlan_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "analyzer.db"
-    _create_verified_version_four_fixture(db_path)
+    _create_verified_version_five_fixture(db_path)
+
     upgrade = begin_schema_migration(db_path)
+
     assert upgrade is not None
-    assert upgrade.target_schema_version == 5
-    init_mission_environment_storage(db_path)
+    assert upgrade.migration_id == MIGRATION_ID
+    assert upgrade.target_schema_version == 6
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
     complete_schema_migration(db_path, upgrade)
     state = schema_state(db_path)
-    assert state["schema_version"] == 5
+    assert state["schema_version"] == 6
     assert state["schema_fingerprint_matches"] is True
-    assert state["migration_ledger"][-1]["migration_id"] == MIGRATION_ID
+    assert [item["migration_id"] for item in state["migration_ledger"]] == list(
+        MIGRATION_PLAN
+    )
     assert begin_schema_migration(db_path) is None
 
 
-def test_interrupted_mission_environment_upgrade_resumes(tmp_path: Path) -> None:
-    from app.mission_environment import init_mission_environment_storage
-
+def test_initialized_version_five_device_schema_upgrades_to_v6(tmp_path: Path) -> None:
     db_path = tmp_path / "analyzer.db"
-    _create_verified_version_four_fixture(db_path)
+    _create_initialized_version_five_fixture(db_path)
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'pipeline_admission_intents'"
+        ).fetchone() is not None
+        assert db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'device_scope_assignments'"
+        ).fetchone() is not None
+
+    upgrade = begin_schema_migration(db_path)
+    assert upgrade is not None
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
+    _complete_schema_migration(db_path, upgrade)
+
+    state = schema_state(db_path)
+    assert state["schema_version"] == 6
+    assert state["schema_fingerprint_matches"] is True
+
+
+def test_interrupted_version_five_to_six_upgrade_resumes(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
     first = begin_schema_migration(db_path)
-    init_mission_environment_storage(db_path)
-    fail_schema_migration(db_path, first, RuntimeError("injected v5 failure"))
+    assert first is not None
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
+    fail_schema_migration(db_path, first, RuntimeError("injected v6 failure"))
+
     retry = begin_schema_migration(db_path)
+
     assert retry is not None
     assert retry.attempt == 2
-    init_mission_environment_storage(db_path)
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
     complete_schema_migration(db_path, retry)
     state = schema_state(db_path)
-    assert state["schema_version"] == 5
+    assert state["schema_version"] == 6
     assert state["migration_ledger"][-1]["attempts"] == 2
+    assert state["schema_fingerprint_matches"] is True
+
+
+def test_version_five_failure_before_v6_ddl_resumes(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    first = begin_schema_migration(db_path)
+    assert first is not None
+    fail_schema_migration(db_path, first, RuntimeError("before v6 DDL"))
+
+    retry = begin_schema_migration(db_path)
+
+    assert retry is not None
+    assert retry.attempt == 2
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
+    complete_schema_migration(db_path, retry)
+    assert schema_state(db_path)["schema_version"] == 6
+
+
+def test_version_five_hard_interruption_after_exact_v6_ddl_resumes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    first = begin_schema_migration(db_path)
+    assert first is not None
+    with connect_database(db_path) as db:
+        create_device_vlan_schema(db)
+
+    retry = begin_schema_migration(db_path)
+
+    assert retry is not None
+    assert retry.attempt == 2
+    complete_schema_migration(db_path, retry)
+    assert schema_state(db_path)["schema_fingerprint_matches"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE nct_schema_migrations SET status = 'failed', "
+        "after_schema_fingerprint = NULL, error_summary = 'failed' "
+        f"WHERE migration_id = '{MIGRATION_ID}'",
+        "UPDATE nct_schema_migrations SET status = 'started', "
+        "after_schema_fingerprint = before_schema_fingerprint "
+        f"WHERE migration_id = '{MIGRATION_ID}'",
+    ],
+)
+def test_version_five_rejects_malformed_interruption_state(
+    tmp_path: Path, mutation: str,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    attempt = begin_schema_migration(db_path)
+    assert attempt is not None
+    with sqlite3.connect(db_path) as db:
+        db.execute(mutation)
+
+    with pytest.raises(SchemaCompatibilityError, match="ledger"):
+        begin_schema_migration(db_path)
+
+
+def test_version_five_failure_with_unexpected_ddl_is_rejected(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    first = begin_schema_migration(db_path)
+    assert first is not None
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE unexpected_during_v6(id INTEGER PRIMARY KEY)")
+    fail_schema_migration(db_path, first, RuntimeError("unexpected v6 DDL"))
+
+    with pytest.raises(SchemaCompatibilityError, match="exact resumable"):
+        begin_schema_migration(db_path)
+
+
+def test_version_five_to_six_rejects_unrecorded_schema_drift(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE unexpected_before_v6(id INTEGER PRIMARY KEY)")
+
+    with pytest.raises(SchemaCompatibilityError, match="fingerprint"):
+        begin_schema_migration(db_path)
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    [
+        ("UPDATE nct_schema_state SET schema_contract_version = 4", "contract"),
+        ("UPDATE nct_schema_state SET migration_plan_digest = 'changed'", "plan"),
+        (
+            "DELETE FROM nct_schema_migrations WHERE migration_id = "
+            "'nct-mission-environment-v5'",
+            "ledger",
+        ),
+    ],
+)
+def test_version_five_requires_exact_contract_and_lineage(
+    tmp_path: Path, mutation: str, message: str,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(mutation)
+
+    with pytest.raises(SchemaCompatibilityError, match=message):
+        begin_schema_migration(db_path)
+
+
+@pytest.mark.parametrize(
+    "status, target, before_value",
+    [
+        ("completed", 6, "recorded"),
+        ("started", 7, "recorded"),
+        ("failed", 6, "different"),
+    ],
+)
+def test_version_five_rejects_invalid_premature_v6_ledger(
+    tmp_path: Path, status: str, target: int, before_value: str,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        recorded = db.execute(
+            "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton = 1"
+        ).fetchone()[0]
+        before = recorded if before_value == "recorded" else before_value
+        db.execute(
+            """INSERT INTO nct_schema_migrations(
+                   migration_id, target_schema_version, originating_build_id,
+                   originating_build_commit, status, attempts, first_started_at,
+                   last_started_at, completed_at, before_schema_fingerprint,
+                   after_schema_fingerprint, error_summary
+               ) VALUES (?, ?, 'test', 'test', ?, 1, 't', 't', NULL, ?, NULL, NULL)""",
+            (MIGRATION_ID, target, status, before),
+        )
+
+    with pytest.raises(SchemaCompatibilityError, match="ledger"):
+        begin_schema_migration(db_path)
+
+
+def test_verified_version_four_requires_staged_upgrade(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
+        begin_schema_migration(db_path)
+
+
+def test_version_four_staged_boundary_does_not_start_v6(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_verified_version_four_fixture(db_path)
+    with pytest.raises(SchemaCompatibilityError, match="version 5 first"):
+        begin_schema_migration(db_path)
 
 
 @pytest.mark.parametrize("mutation", [
@@ -632,12 +813,33 @@ def test_incomplete_or_mismatched_completed_ledger_fails_closed(
 
 def test_image_contract_is_self_verifying_and_build_bound() -> None:
     contract = image_schema_contract()
-    assert contract["schema_contract_version"] == 5
-    assert contract["writable_schema_version"] == 5
-    assert contract["readable_schema_versions"] == [1, 2, 3, 4, 5]
+    assert contract["schema_contract_version"] == 6
+    assert contract["writable_schema_version"] == 6
+    assert contract["readable_schema_versions"] == [1, 2, 3, 4, 5, 6]
     assert len(contract["contract_digest"]) == 64
     assert contract["build_id"]
     assert contract["build_commit"]
+
+
+def test_version_five_image_rejects_completed_version_six(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import schema_compatibility
+
+    db_path = tmp_path / "analyzer.db"
+    attempt = begin_schema_migration(db_path)
+    complete_schema_migration(db_path, attempt)
+
+    monkeypatch.setattr(schema_compatibility, "SCHEMA_CONTRACT_VERSION", 5)
+    monkeypatch.setattr(schema_compatibility, "WRITABLE_SCHEMA_VERSION", 5)
+    monkeypatch.setattr(schema_compatibility, "READABLE_SCHEMA_VERSIONS", (1, 2, 3, 4, 5))
+    monkeypatch.setattr(schema_compatibility, "MIGRATION_PLAN", MIGRATION_PLAN[:5])
+    monkeypatch.setattr(
+        schema_compatibility, "MIGRATION_ID", MISSION_ENVIRONMENT_MIGRATION_ID
+    )
+
+    with pytest.raises(SchemaCompatibilityError, match="newer"):
+        schema_compatibility.begin_schema_migration(db_path)
 
 
 def test_lifespan_schema_rejection_never_marks_ready_or_starts_workers(

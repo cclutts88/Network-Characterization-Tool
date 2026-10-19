@@ -287,8 +287,13 @@ def assign_device_scope(
         raise ValueError("Whole-collection Network Scope confirmation is required")
     init_device_observation_storage(db_path)
     from app.pipeline_intake import init_pipeline_intake_storage, record_device_observation_intent
+    from app.device_vlan_observations import (
+        init_device_vlan_observation_storage,
+        record_device_vlan_observation_intent,
+    )
 
     init_pipeline_intake_storage(db_path)
+    init_device_vlan_observation_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         _intent_kind, authority = _authority_contract(db, run_id)
@@ -312,6 +317,7 @@ def assign_device_scope(
              actor, reason, utc_now()),
         )
         record_device_observation_intent(db, assignment_id)
+        record_device_vlan_observation_intent(db, assignment_id)
         return assignment_contract_on_connection(db, assignment_id)["assignment"]
 
 
@@ -327,8 +333,13 @@ def correct_device_scope(
         raise ValueError("Whole-collection Network Scope confirmation is required")
     init_device_observation_storage(db_path)
     from app.pipeline_intake import init_pipeline_intake_storage, record_device_observation_intent
+    from app.device_vlan_observations import (
+        init_device_vlan_observation_storage,
+        record_device_vlan_observation_intent,
+    )
 
     init_pipeline_intake_storage(db_path)
+    init_device_vlan_observation_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         db.row_factory = sqlite3.Row
@@ -368,6 +379,7 @@ def correct_device_scope(
                 "Device scope assignment changed in another session"
             ) from exc
         record_device_observation_intent(db, assignment_id)
+        record_device_vlan_observation_intent(db, assignment_id)
         return assignment_contract_on_connection(db, assignment_id)["assignment"]
 
 

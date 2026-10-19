@@ -173,6 +173,7 @@ from app.device_observations import (
     get_device_observation_status,
     init_device_observation_storage,
 )
+from app.device_vlan_observations import init_device_vlan_observation_storage
 from app.derived_results import init_derived_result_storage
 from app.derived_jobs import (
     DerivedJobConflict,
@@ -1537,6 +1538,7 @@ async def lifespan(_: FastAPI):
         init_device_observation_storage(DB_PATH)
         init_derived_result_storage(DB_PATH)
         init_pipeline_intake_storage(DB_PATH)
+        init_device_vlan_observation_storage(DB_PATH)
         init_work_coordination_storage(DB_PATH)
         init_device_contact_work_storage(DB_PATH)
         init_derived_job_storage(DB_PATH)

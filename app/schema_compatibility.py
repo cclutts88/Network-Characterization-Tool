@@ -8,26 +8,30 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import tempfile
 import uuid
 
 from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 
 
-SCHEMA_CONTRACT_VERSION = 5
-WRITABLE_SCHEMA_VERSION = 5
-READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
+SCHEMA_CONTRACT_VERSION = 6
+WRITABLE_SCHEMA_VERSION = 6
+READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6)
 DATA_LAYOUT_CONTRACT = "nct-data-layout-v1"
 LEGACY_MIGRATION_ID = "nct-foundation-data-contract-v1"
 WORK_COORDINATION_MIGRATION_ID = "nct-work-coordination-v2"
 SCHEDULED_WORK_MIGRATION_ID = "nct-scheduled-occurrences-v3"
 DEVICE_CONTACT_MIGRATION_ID = "nct-device-contact-fencing-v4"
-MIGRATION_ID = "nct-mission-environment-v5"
+MISSION_ENVIRONMENT_MIGRATION_ID = "nct-mission-environment-v5"
+VLAN_EVIDENCE_MIGRATION_ID = "nct-scoped-vlan-evidence-v6"
+MIGRATION_ID = VLAN_EVIDENCE_MIGRATION_ID
 MIGRATION_PLAN = (
     LEGACY_MIGRATION_ID,
     WORK_COORDINATION_MIGRATION_ID,
     SCHEDULED_WORK_MIGRATION_ID,
     DEVICE_CONTACT_MIGRATION_ID,
+    MISSION_ENVIRONMENT_MIGRATION_ID,
     MIGRATION_ID,
 )
 
@@ -171,6 +175,42 @@ def _normalized_sql(value: str) -> str:
     normalized = " ".join(str(value).split())
     normalized = re.sub(r"\s*([(),])\s*", r"\1", normalized)
     return normalized.casefold()
+
+
+def _matches_exact_v6_vlan_schema(
+    connection: sqlite3.Connection, *, base_fingerprint: str | None,
+) -> bool:
+    """Recognize only the reviewed v6 VLAN objects above an exact sealed base."""
+    from app.device_vlan_observations import (
+        DEVICE_VLAN_SCHEMA_OBJECTS,
+        create_device_vlan_schema,
+    )
+
+    if base_fingerprint is not None and schema_fingerprint(
+        connection, excluded_names=DEVICE_VLAN_SCHEMA_OBJECTS
+    ) != base_fingerprint:
+        return False
+    actual = {
+        row[1]: row for row in _schema_rows(connection)
+        if row[1] in DEVICE_VLAN_SCHEMA_OBJECTS
+    }
+    if set(actual) != set(DEVICE_VLAN_SCHEMA_OBJECTS):
+        return False
+    with tempfile.TemporaryDirectory(prefix="nct-v6-schema-") as directory:
+        expected_path = Path(directory) / "expected.db"
+        with connect_database(expected_path) as expected_db:
+            create_device_vlan_schema(expected_db)
+            expected = {
+                row[1]: row for row in _schema_rows(expected_db)
+                if row[1] in DEVICE_VLAN_SCHEMA_OBJECTS
+            }
+    if set(expected) != set(DEVICE_VLAN_SCHEMA_OBJECTS):
+        raise RuntimeError("The image-owned v6 VLAN schema definition is incomplete")
+    return all(
+        actual[name][:3] == expected[name][:3]
+        and _normalized_sql(actual[name][3]) == _normalized_sql(expected[name][3])
+        for name in DEVICE_VLAN_SCHEMA_OBJECTS
+    )
 
 
 def _matches_exact_legacy_v4_late_schema(
@@ -449,35 +489,27 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         "The saved migration ledger is incomplete or inconsistent."
                     )
                 return None
-            elif int(schema_version) in {1, 2, 3, 4}:
+            elif int(schema_version) == 5:
+                if int(contract_version) != 5:
+                    raise SchemaCompatibilityError(
+                        "The saved version 5 schema contract is inconsistent."
+                    )
+                if plan_digest != migration_plan_digest(MIGRATION_PLAN[:5]):
+                    raise SchemaCompatibilityError(
+                        "The saved version 5 migration plan does not match this image."
+                    )
                 live_fingerprint = schema_fingerprint(connection)
                 recorded = connection.execute(
                     "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton = 1"
                 ).fetchone()[0]
                 pending_current = connection.execute(
-                    """SELECT status, before_schema_fingerprint,
-                              after_schema_fingerprint
+                    """SELECT target_schema_version, status, attempts,
+                              before_schema_fingerprint, after_schema_fingerprint,
+                              completed_at, error_summary
                          FROM nct_schema_migrations WHERE migration_id = ?""",
                     (MIGRATION_ID,),
                 ).fetchone()
-                recognized_legacy_v4_additions = (
-                    int(schema_version) == 4
-                    and bool(recorded)
-                    and recorded != live_fingerprint
-                    and _matches_exact_legacy_v4_late_schema(connection, recorded)
-                )
-                if not recorded or recorded != live_fingerprint:
-                    resumable_failure = (
-                        pending_current is not None
-                        and pending_current[0] == "failed"
-                        and pending_current[1] == recorded
-                        and pending_current[2] == live_fingerprint
-                    )
-                    if not resumable_failure and not recognized_legacy_v4_additions:
-                        raise SchemaCompatibilityError(
-                            "The saved schema fingerprint does not match the live database."
-                        )
-                prior_ids = MIGRATION_PLAN[:int(schema_version)]
+                prior_ids = MIGRATION_PLAN[:5]
                 prior_rows = connection.execute(
                     """SELECT migration_id, target_schema_version, status,
                               after_schema_fingerprint
@@ -496,22 +528,58 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         or row[1] != target
                         or row[2] != "completed"
                         or not row[3]
-                        or (target == int(schema_version) and row[3] != recorded)
+                        or (target == 5 and row[3] != recorded)
                     ):
                         raise SchemaCompatibilityError(
                             "The saved migration ledger is incomplete or inconsistent."
                         )
-                for target, migration_id in enumerate(
-                    MIGRATION_PLAN[int(schema_version):-1],
-                    start=int(schema_version) + 1,
-                ):
-                    row = prior_by_id.get(migration_id)
-                    if row is not None and row != (
-                        migration_id, target, "completed", recorded
+                if len(prior_by_id) != 5 + (1 if pending_current is not None else 0):
+                    raise SchemaCompatibilityError(
+                        "The saved migration ledger is incomplete or inconsistent."
+                    )
+                if pending_current is None:
+                    if not recorded or live_fingerprint != recorded:
+                        raise SchemaCompatibilityError(
+                            "The saved schema fingerprint does not match the live database."
+                        )
+                else:
+                    (
+                        target, status, attempts, before_fingerprint,
+                        after_fingerprint, completed_at, error_summary,
+                    ) = pending_current
+                    status_shape_valid = (
+                        status == "started"
+                        and after_fingerprint is None
+                        and completed_at is None
+                        and error_summary is None
+                    ) or (
+                        status == "failed"
+                        and after_fingerprint == live_fingerprint
+                        and completed_at is None
+                        and bool(str(error_summary or "").strip())
+                    )
+                    if (
+                        int(target) != 6
+                        or status not in {"started", "failed"}
+                        or not status_shape_valid
+                        or int(attempts) < 1
+                        or before_fingerprint != recorded
                     ):
                         raise SchemaCompatibilityError(
                             "The saved migration ledger is incomplete or inconsistent."
                         )
+                    exact_before = live_fingerprint == recorded
+                    exact_after = _matches_exact_v6_vlan_schema(
+                        connection, base_fingerprint=recorded,
+                    )
+                    if not exact_before and not exact_after:
+                        raise SchemaCompatibilityError(
+                            "The saved schema fingerprint does not match an exact resumable migration."
+                        )
+            elif int(schema_version) in {1, 2, 3, 4}:
+                raise SchemaCompatibilityError(
+                    "This image requires older saved schemas to be upgraded to version 5 first."
+                )
             current_version = int(schema_version)
         else:
             current_version = 0
@@ -609,6 +677,29 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                     now, now, now, before, before,
                 ),
             )
+        if current_version in {0, 1, 2, 3, 4}:
+            connection.execute(
+                """INSERT INTO nct_schema_migrations(
+                       migration_id, target_schema_version, originating_build_id,
+                       originating_build_commit, status, attempts, first_started_at,
+                       last_started_at, completed_at, before_schema_fingerprint,
+                       after_schema_fingerprint, error_summary
+                   ) VALUES (?, 5, ?, ?, 'completed', 1, ?, ?, ?, ?, ?, NULL)
+                   ON CONFLICT(migration_id) DO UPDATE SET
+                       target_schema_version = 5,
+                       originating_build_id = excluded.originating_build_id,
+                       originating_build_commit = excluded.originating_build_commit,
+                       status = 'completed', attempts = MAX(attempts, 1),
+                       last_started_at = excluded.last_started_at,
+                       completed_at = excluded.completed_at,
+                       before_schema_fingerprint = excluded.before_schema_fingerprint,
+                       after_schema_fingerprint = excluded.after_schema_fingerprint,
+                       error_summary = NULL""",
+                (
+                    MISSION_ENVIRONMENT_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
+                    now, now, now, before, before,
+                ),
+            )
         previous = connection.execute(
             "SELECT attempts, first_started_at FROM nct_schema_migrations WHERE migration_id = ?",
             (MIGRATION_ID,),
@@ -654,10 +745,13 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                    originating_build_commit = excluded.originating_build_commit,
                    updated_at = excluded.updated_at""",
             (
-                SCHEMA_CONTRACT_VERSION,
+                5 if current_version == 5 else SCHEMA_CONTRACT_VERSION,
                 current_version,
                 DATA_LAYOUT_CONTRACT,
-                migration_plan_digest(),
+                (
+                    migration_plan_digest(MIGRATION_PLAN[:5])
+                    if current_version == 5 else migration_plan_digest()
+                ),
                 BUILD_ID,
                 BUILD_COMMIT,
                 now,
@@ -673,6 +767,23 @@ def complete_schema_migration(db_path: Path, attempt: MigrationAttempt | None) -
     now = _utc_now()
     with connect_database(db_path) as connection:
         after = schema_fingerprint(connection)
+        active = connection.execute(
+            """SELECT before_schema_fingerprint FROM nct_schema_migrations
+               WHERE migration_id = ? AND status = 'started' AND attempts = ?""",
+            (attempt.migration_id, attempt.attempt),
+        ).fetchone()
+        state = connection.execute(
+            "SELECT schema_version FROM nct_schema_state WHERE singleton = 1"
+        ).fetchone()
+        if active is None or state is None:
+            raise SchemaCompatibilityError("The active schema migration ledger changed.")
+        base_fingerprint = active[0] if int(state[0]) == 5 else None
+        if not _matches_exact_v6_vlan_schema(
+            connection, base_fingerprint=base_fingerprint,
+        ):
+            raise SchemaCompatibilityError(
+                "The exact version 6 VLAN schema was not applied cleanly."
+            )
         updated = connection.execute(
             """UPDATE nct_schema_migrations
                   SET status = 'completed', completed_at = ?,
@@ -753,6 +864,7 @@ def schema_state(db_path: Path) -> dict[str, object]:
                     WHEN 'nct-scheduled-occurrences-v3' THEN 3
                     WHEN 'nct-device-contact-fencing-v4' THEN 4
                     WHEN 'nct-mission-environment-v5' THEN 5
+                    WHEN 'nct-scoped-vlan-evidence-v6' THEN 6
                     ELSE 99 END,
                     first_started_at, migration_id"""
         ).fetchall()

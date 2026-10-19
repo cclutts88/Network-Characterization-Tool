@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from app.artifacts import init_artifact_storage, register_artifact_bytes
+from app.device_vlan_observations import init_device_vlan_observation_storage
 from app.schema_compatibility import begin_schema_migration, complete_schema_migration, image_schema_contract
 
 
@@ -41,6 +42,7 @@ def make_data(root: Path) -> None:
     with sqlite3.connect(db_path) as db:
         db.execute("CREATE TABLE imports(id TEXT PRIMARY KEY)")
         db.execute("INSERT INTO imports VALUES ('saved-evidence')")
+    init_device_vlan_observation_storage(db_path)
     complete_schema_migration(db_path, attempt)
     (root / "selected-evidence.xml").write_text("<nmaprun />", encoding="utf-8")
 
@@ -153,6 +155,7 @@ def test_cold_inspection_verifies_populated_artifact_registry(tmp_path: Path) ->
     db_path = root / "analyzer.db"
     attempt = begin_schema_migration(db_path)
     init_artifact_storage(db_path)
+    init_device_vlan_observation_storage(db_path)
     complete_schema_migration(db_path, attempt)
     artifact = register_artifact_bytes(
         db_path=db_path,
