@@ -2571,3 +2571,45 @@ def test_map_editing_exposes_safe_save_choices_and_direct_text_editing():
     assert "Enter saves; Escape cancels" in html
     assert "event.key==='Escape'" in html
     assert "Device icons are currently inferred from retained evidence" in SHELL_SCRIPT
+
+
+def test_scoped_vlan_context_is_shared_without_changing_other_results():
+    for path in (
+        "'/device-analysis'", "'/device-config'", "'/analysis'", "'/hunting'",
+        "'/reachability'", "'/network-map'",
+    ):
+        assert path in SHELL_SCRIPT
+    assert "panel.id='nct-scoped-vlan-context'" in SHELL_SCRIPT
+    assert "Retained scoped VLAN evidence" in SHELL_SCRIPT
+    assert "NCT does not attach it to an Nmap host by matching an IP address" in SHELL_SCRIPT
+    assert "VLAN evidence does not change a Reach result" in SHELL_SCRIPT
+    assert "NCT does not create Map segments or links" in SHELL_SCRIPT
+    assert "It does not create a capability, CVE candidate, host identity" in SHELL_SCRIPT
+    assert "does not claim a VLAN was added, removed, or changed" in SHELL_SCRIPT
+    assert "tableWrap.dataset.nctTableMode='contained'" in SHELL_SCRIPT
+    assert "for(const label of ['Network Scope','Reporting device','Coverage','Retained VLAN evidence','Source'])" in SHELL_SCRIPT
+    assert "textContent=pageNotes()" in SHELL_SCRIPT
+    assert "sourceLine.source_line" in SHELL_SCRIPT
+    assert "safeSourceUrl" in SHELL_SCRIPT
+    assert "Refresh retained evidence" in SHELL_SCRIPT
+    assert "/api/evidence/vlans/export.json" in SHELL_SCRIPT
+    assert "/api/evidence/vlans/export.csv" in SHELL_SCRIPT
+    assert "Missing evidence stays Unknown; explicitly unsupported evidence stays Unsupported" in SHELL_SCRIPT
+    assert "Neither state proves a VLAN is absent" in SHELL_SCRIPT
+    assert "No supported retained VLAN receipts" in SHELL_SCRIPT
+    assert "['unknown','Unknown']" in SHELL_SCRIPT
+    assert "Unknown / not assessed" not in SHELL_SCRIPT
+    assert "Define Saved Networks and connect them to the reviewed Network Scope" in SHELL_SCRIPT
+    assert "Define authorized network scopes first" not in SHELL_SCRIPT
+
+
+def test_operator_readme_explains_scope_continuity_and_scoped_vlan_limits():
+    html = how_nct_works_page(
+        app_version="test", build_id="test", build_commit="test",
+    ).body.decode()
+
+    assert "A scope carried by a profile remains a suggestion" in html
+    assert "It separately records supported VLAN statements" in html
+    assert "Scoped VLAN evidence appears in Network Devices, Current Network" in html
+    assert "do not turn them into host identity, routing, Reach, CVE, or Map-link claims" in html
+    assert "<summary>Scoped VLAN evidence</summary>" in html

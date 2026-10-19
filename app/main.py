@@ -178,6 +178,15 @@ from app.device_vlan_observations import (
     get_device_vlan_receipts,
     init_device_vlan_observation_storage,
 )
+from app.device_vlan_projection import (
+    DeviceVlanProjectionChanged,
+    DeviceVlanProjectionTooLarge,
+    MAX_VLAN_EXPORT_BYTES,
+    VLAN_EXPORT_COLUMNS,
+    build_device_vlan_export_projection,
+    build_device_vlan_projection,
+    device_vlan_export_rows,
+)
 from app.derived_results import init_derived_result_storage
 from app.derived_jobs import (
     DerivedJobConflict,
@@ -383,6 +392,7 @@ from app.shell_preferences import (
     save_shell_preference,
 )
 import copy
+import csv
 import hashlib
 import io
 import ipaddress
@@ -2533,6 +2543,125 @@ def device_scope_vlan_receipts(
         return get_device_vlan_receipts(DB_PATH, run_id, limit=limit, offset=offset)
     except (KeyError, ValueError) as exc:
         raise _device_observation_error(exc) from exc
+
+
+@app.get("/api/evidence/vlans")
+def scoped_vlan_evidence(
+    run_id: str | None = Query(default=None, max_length=200),
+    scope_id: str | None = Query(default=None, max_length=200),
+    state: str | None = Query(default=None, max_length=20),
+    search: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    revision: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    try:
+        return build_device_vlan_projection(
+            DB_PATH, run_id=run_id, scope_id=scope_id, state=state, search=search,
+            limit=limit, offset=offset, expected_revision=revision,
+        )
+    except DeviceVlanProjectionChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _scoped_vlan_export(
+    *, revision: str, run_id: str | None, scope_id: str | None,
+    state: str | None, search: str | None,
+) -> dict:
+    try:
+        return build_device_vlan_export_projection(
+            DB_PATH, revision=revision, run_id=run_id, scope_id=scope_id,
+            state=state, search=search,
+        )
+    except DeviceVlanProjectionChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DeviceVlanProjectionTooLarge as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _bounded_vlan_json(value: dict) -> bytes:
+    parts: list[bytes] = []
+    size = 0
+    for text in json.JSONEncoder(
+        ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    ).iterencode(value):
+        chunk = text.encode("utf-8")
+        size += len(chunk)
+        if size > MAX_VLAN_EXPORT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Scoped VLAN export is too large; narrow it by Network Scope or search",
+            )
+        parts.append(chunk)
+    return b"".join(parts)
+
+
+class _BoundedVlanCsvBuffer:
+    def __init__(self) -> None:
+        self.parts = [b"\xef\xbb\xbf"]
+        self.size = 3
+
+    def write(self, value: str) -> int:
+        chunk = value.encode("utf-8")
+        self.size += len(chunk)
+        if self.size > MAX_VLAN_EXPORT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Scoped VLAN export is too large; narrow it by Network Scope or search",
+            )
+        self.parts.append(chunk)
+        return len(value)
+
+    def body(self) -> bytes:
+        return b"".join(self.parts)
+
+
+@app.get("/api/evidence/vlans/export.json")
+def export_scoped_vlan_evidence_json(
+    revision: str = Query(min_length=64, max_length=64),
+    run_id: str | None = Query(default=None, max_length=200),
+    scope_id: str | None = Query(default=None, max_length=200),
+    state: str | None = Query(default=None, max_length=20),
+    search: str | None = Query(default=None, max_length=100),
+) -> Response:
+    projection = _scoped_vlan_export(
+        revision=revision, run_id=run_id, scope_id=scope_id,
+        state=state, search=search,
+    )
+    body = _bounded_vlan_json(projection)
+    return Response(
+        body,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="nct-scoped-vlan-evidence.json"'},
+    )
+
+
+@app.get("/api/evidence/vlans/export.csv")
+def export_scoped_vlan_evidence_csv(
+    revision: str = Query(min_length=64, max_length=64),
+    run_id: str | None = Query(default=None, max_length=200),
+    scope_id: str | None = Query(default=None, max_length=200),
+    state: str | None = Query(default=None, max_length=20),
+    search: str | None = Query(default=None, max_length=100),
+) -> Response:
+    projection = _scoped_vlan_export(
+        revision=revision, run_id=run_id, scope_id=scope_id,
+        state=state, search=search,
+    )
+    stream = _BoundedVlanCsvBuffer()
+    writer = csv.DictWriter(stream, fieldnames=VLAN_EXPORT_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(device_vlan_export_rows(projection))
+    body = stream.body()
+    return Response(
+        body,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="nct-scoped-vlan-evidence.csv"'},
+    )
 
 
 @app.get("/health")

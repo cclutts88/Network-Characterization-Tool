@@ -9,6 +9,7 @@ import pytest
 
 from app import derived_jobs as jobs
 from app import device_configs
+from app import device_vlan_projection as vlan_projection_module
 from app import device_vlan_observations as vlan_observations
 from app import main as main_module
 from app.database import connect_database
@@ -17,6 +18,10 @@ from app.device_vlan_observations import (
     admit_device_vlan_observation_intent,
     extract_device_vlan_observations,
     publish_device_vlan_assessment,
+)
+from app.device_vlan_projection import (
+    DeviceVlanProjectionChanged,
+    build_device_vlan_projection,
 )
 from app.device_observations import (
     DeviceObservationConflict,
@@ -30,7 +35,7 @@ from app.device_observations import (
     _safe_bytes,
 )
 from app.main import app
-from app.network_scopes import create_network_scope
+from app.network_scopes import archive_network_scope, create_network_scope
 from app.pipeline_intake import DEVICE_OBSERVATION_INTENT, get_admission_intent
 
 
@@ -504,6 +509,378 @@ def test_equal_vlan_ids_in_two_scoped_device_observations_remain_separate(
     assert {row[1] for row in rows} == {first_run, second_run}
     assert [row[2] for row in rows] == [50, 50]
 
+    projection = build_device_vlan_projection(db_path, limit=10)
+    assert projection["pagination"]["total"] == 2
+    assert [item["scope"]["scope_id"] for item in projection["assignments"]] == [
+        first_scope["scope_id"], second_scope["scope_id"],
+    ]
+    keys = [item["key"] for item in projection["facets"]["vlans"]]
+    assert len(keys) == 2
+    assert len(set(keys)) == 2
+    assert all(item["vlan_id"] == 50 for item in projection["facets"]["vlans"])
+
+
+def test_vlan_projection_keeps_unprocessed_assignment_unknown_then_advances_revision(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "vlan 70\n name Blue enclave\ninterface Gi0/1\n switchport access vlan 70\n",
+    )
+    scope = _scope(db_path, "Projection scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+
+    before_bytes = db_path.read_bytes()
+    pending = build_device_vlan_projection(db_path, run_id=run_id)
+    after_bytes = db_path.read_bytes()
+    assert after_bytes == before_bytes
+    assert pending["assignments"][0]["state"] == "unknown"
+    assert pending["assignments"][0]["vlans"] == []
+    assert pending["claims"]["live_status"] is False
+
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    completed = build_device_vlan_projection(db_path, run_id=run_id)
+    assert completed["source_revision"] != pending["source_revision"]
+    assert completed["assignments"][0]["state"] == "supported"
+    assert completed["assignments"][0]["device"]["label"] == "Observation Router"
+    assert completed["assignments"][0]["device"]["address"] == "192.0.2.90"
+    vlan = completed["assignments"][0]["vlans"][0]
+    assert len(completed["assignments"][0]["vlans"]) == 1
+    assert vlan["vlan_id"] == 70
+    assert vlan["vlan_name"] == "Blue enclave"
+    assert vlan["receipt_count"] == 2
+    assert vlan["interfaces"] == ["Gi0/1"]
+    assert vlan["evidence_state_labels"] == ["Configured in retained source"]
+    assert "source_lines" not in vlan
+    assert vlan["receipts_url"].endswith("/scope-vlans/receipts")
+    receipt_page = vlan_observations.get_device_vlan_receipts(
+        db_path, run_id, limit=100, offset=0,
+    )
+    assert [item["source_line"] for item in receipt_page["receipts"]] == [
+        "vlan 70", " switchport access vlan 70",
+    ]
+    with pytest.raises(DeviceVlanProjectionChanged):
+        build_device_vlan_projection(
+            db_path, run_id=run_id, expected_revision=pending["source_revision"],
+        )
+
+
+def test_vlan_projection_api_is_bounded_revisioned_and_read_only(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "vlan 80\n name Blue\nvlan 81\n name Red\n"
+        "interface Gi0/1\n switchport access vlan 80\n",
+    )
+    scope = _scope(db_path, "Projection API scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    monkeypatch.setattr(main_module, "DB_PATH", db_path)
+
+    with TestClient(app) as client:
+        before = db_path.read_bytes()
+        response = client.get(f"/api/evidence/vlans?run_id={run_id}&limit=1")
+        revision = response.json()["source_revision"]
+        filtered = client.get(
+            f"/api/evidence/vlans?run_id={run_id}&state=supported&search=80"
+        )
+        filtered_revision = filtered.json()["source_revision"]
+        filtered_csv_export = client.get(
+            f"/api/evidence/vlans/export.csv?run_id={run_id}&state=supported&search=80"
+            f"&revision={filtered_revision}"
+        )
+        json_export = client.get(
+            f"/api/evidence/vlans/export.json?run_id={run_id}&revision={revision}"
+        )
+        csv_export = client.get(
+            f"/api/evidence/vlans/export.csv?run_id={run_id}&revision={revision}"
+        )
+        rejected = client.get("/api/evidence/vlans?limit=101")
+        invalid_state = client.get("/api/evidence/vlans?state=missing")
+        stale = client.get("/api/evidence/vlans?revision=" + ("0" * 64))
+        stale_export = client.get(
+            "/api/evidence/vlans/export.json?revision=" + ("0" * 64)
+        )
+        monkeypatch.setattr(vlan_projection_module, "MAX_VLAN_EXPORT_BYTES", 1)
+        oversized_export = client.get(
+            f"/api/evidence/vlans/export.json?run_id={run_id}&revision={revision}"
+        )
+        after = db_path.read_bytes()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pagination"] == {
+        "limit": 1, "offset": 0, "total": 1, "has_more": False,
+    }
+    assert body["assignments"][0]["scope"]["scope_id"] == scope["scope_id"]
+    assert filtered.status_code == 200
+    assert filtered.json()["pagination"]["total"] == 1
+    assert [item["vlan_id"] for item in filtered.json()["assignments"][0]["vlans"]] == [80]
+    filtered_csv_text = filtered_csv_export.content.decode("utf-8-sig")
+    assert filtered_csv_export.status_code == 200
+    assert ",80," in filtered_csv_text
+    assert ",81," not in filtered_csv_text
+    assert json_export.status_code == 200
+    assert json_export.json()["source_revision"] == revision
+    assert json_export.headers["content-disposition"].endswith(
+        '"nct-scoped-vlan-evidence.json"'
+    )
+    csv_text = csv_export.content.decode("utf-8-sig")
+    assert csv_export.status_code == 200
+    assert "projection_revision,scope_id,scope_label" in csv_text
+    assert revision in csv_text
+    assert "Projection API scope" in csv_text
+    assert ",80," in csv_text
+    assert rejected.status_code == 422
+    assert invalid_state.status_code == 422
+    assert stale.status_code == 409
+    assert stale_export.status_code == 409
+    assert oversized_export.status_code == 413
+    assert after == before
+
+
+def test_vlan_projection_missing_database_is_read_only(tmp_path):
+    db_path = tmp_path / "missing-projection.db"
+    result = build_device_vlan_projection(db_path)
+    assert result["assignments"] == []
+    assert result["pagination"]["total"] == 0
+    assert result["claims"]["absence_or_disappearance"] is False
+    assert not db_path.exists()
+
+
+def test_vlan_projection_keeps_archived_scope_assignment_visible_as_unknown(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "vlan 90\n name Former enclave\ninterface Gi0/1\n"
+        " switchport access vlan 90\n",
+    )
+    scope = _scope(db_path, "Archive projection scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    before = build_device_vlan_projection(db_path, run_id=run_id)
+    assert before["assignments"][0]["state"] == "supported"
+
+    archive_network_scope(
+        db_path, scope["scope_id"], expected_version=1,
+        archived_by="scope-admin", reason="Exercise projection unknown state",
+    )
+    after = build_device_vlan_projection(db_path, run_id=run_id)
+    assert after["source_revision"] != before["source_revision"]
+    assert after["pagination"]["total"] == 1
+    assert after["assignments"][0]["state"] == "unknown"
+    assert after["assignments"][0]["reason"] == "Assigned Network Scope is archived"
+    assert after["assignments"][0]["vlans"] == []
+
+
+def test_vlan_projection_keeps_mixed_state_filter_and_export_exact(
+    tmp_path, monkeypatch,
+):
+    db_path, supported_run = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 20\n", "192.0.2.20",
+    )
+    _same_db, partial_run = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/2\n switchport access vlan 30\n"
+        "switchport trunk allowed vlan all\n",
+        "192.0.2.30",
+    )
+    scope = _scope(db_path, "Mixed state projection scope")
+    assignments = [
+        _assign_and_process(db_path, tmp_path, supported_run, scope),
+        _assign_and_process(db_path, tmp_path, partial_run, scope),
+    ]
+    for assignment in assignments:
+        _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    monkeypatch.setattr(main_module, "DB_PATH", db_path)
+
+    supported = build_device_vlan_projection(db_path, state="supported", limit=10)
+    partial = build_device_vlan_projection(db_path, state="partial", limit=10)
+    assert supported["filters"]["state"] == "supported"
+    assert [item["run_id"] for item in supported["assignments"]] == [supported_run]
+    assert partial["filters"]["state"] == "partial"
+    assert [item["run_id"] for item in partial["assignments"]] == [partial_run]
+
+    with TestClient(app) as client:
+        api_supported = client.get("/api/evidence/vlans?state=supported&limit=10")
+        assert api_supported.status_code == 200, api_supported.text
+        exported = client.get(
+            "/api/evidence/vlans/export.csv?state=supported"
+            f"&revision={api_supported.json()['source_revision']}"
+        )
+    assert exported.status_code == 200, exported.text
+    text = exported.content.decode("utf-8-sig")
+    assert supported_run in text
+    assert partial_run not in text
+
+    monkeypatch.setattr(vlan_projection_module, "MAX_VLAN_PROJECTION_ASSIGNMENTS", 1)
+    with pytest.raises(ValueError, match="assignment limit"):
+        build_device_vlan_projection(db_path, limit=10)
+
+
+def test_vlan_projection_summarizes_maximum_receipts_without_expanding_lines():
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        """CREATE TABLE device_vlan_receipts (
+               receipt_id TEXT, assessment_id TEXT, source_filename TEXT,
+               device_context TEXT, bridge_context TEXT, vlan_id INTEGER,
+               vlan_name TEXT, interface_name TEXT, membership_relation TEXT,
+               evidence_state TEXT, source_line_number INTEGER, source_line TEXT
+           )"""
+    )
+    db.executemany(
+        """INSERT INTO device_vlan_receipts VALUES (
+               ?, 'assessment-max', 'router.txt', 'router-max', NULL, 50,
+               'Maximum receipts', ?, 'access', 'configured', ?, ?
+           )""",
+        (
+            (f"receipt-{index:05d}", f"Gi{index}", index + 1, f"line {index}")
+            for index in range(vlan_observations.MAX_VLAN_RECEIPTS)
+        ),
+    )
+    entry = {
+        "run_id": "run-max",
+        "assessment": {
+            "assessment_id": "assessment-max",
+            "source_url": "/api/device-configs/run-max/files/router.txt",
+        },
+    }
+    summaries, truncated = vlan_projection_module._summarize_receipts(db, entry, None)
+    assert truncated is False
+    assert len(summaries) == 1
+    assert summaries[0]["receipt_count"] == vlan_observations.MAX_VLAN_RECEIPTS
+    assert summaries[0]["interface_count"] == vlan_observations.MAX_VLAN_RECEIPTS
+    assert "source_lines" not in summaries[0]
+
+
+def test_vlan_export_preflight_counts_multibyte_bytes_before_expansion(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "vlan 88\n name Blå🚀 enclave\n", "192.0.2.88",
+    )
+    scope = _scope(db_path, "Multibyte export scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    projection = build_device_vlan_projection(db_path, run_id=run_id)
+    assessment_id = projection["assignments"][0]["assessment"]["assessment_id"]
+    fields = (
+        "receipt_id", "source_filename", "device_context", "bridge_context",
+        "vlan_name", "interface_name", "membership_relation", "evidence_state",
+        "source_line",
+    )
+    character_terms = " + ".join(
+        f"length(COALESCE({field}, ''))" for field in fields
+    )
+    byte_terms = " + ".join(
+        f"length(CAST(COALESCE({field}, '') AS BLOB))" for field in fields
+    )
+    with connect_database(db_path, read_only=True) as db:
+        count, character_size, byte_size = db.execute(
+            f"""SELECT COUNT(*), COALESCE(SUM({character_terms}), 0),
+                       COALESCE(SUM({byte_terms}), 0)
+                  FROM device_vlan_receipts WHERE assessment_id = ?""",
+            (assessment_id,),
+        ).fetchone()
+    assert byte_size > character_size
+    monkeypatch.setattr(
+        vlan_projection_module, "MAX_VLAN_EXPORT_BYTES",
+        int(count) * 2_048 + int(character_size),
+    )
+
+    def receipt_expansion_must_not_run(*_args, **_kwargs):
+        pytest.fail("multibyte export was expanded before byte preflight rejection")
+
+    monkeypatch.setattr(
+        vlan_projection_module, "_group_receipts", receipt_expansion_must_not_run,
+    )
+    with pytest.raises(vlan_projection_module.DeviceVlanProjectionTooLarge):
+        vlan_projection_module.build_device_vlan_export_projection(
+            db_path, revision=projection["source_revision"], run_id=run_id,
+        )
+
+
+def test_vlan_projection_revision_changes_after_later_receipt_insert(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 66\n", "192.0.2.66",
+    )
+    scope = _scope(db_path, "Receipt revision scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    before = build_device_vlan_projection(db_path, run_id=run_id)
+    with connect_database(db_path) as db:
+        db.execute(
+            """INSERT INTO device_vlan_receipts(
+                   receipt_id, assessment_id, source_observation_id, source_role,
+                   source_filename, device_context, bridge_context, vlan_id,
+                   vlan_name, interface_name, membership_relation, evidence_state,
+                   source_line_number, source_line, related_line_number,
+                   related_source_line, source_command, source_section,
+                   source_syntax, facts_json
+               )
+               SELECT 'later-receipt', assessment_id, source_observation_id, source_role,
+                      source_filename, device_context, bridge_context, vlan_id,
+                      vlan_name, 'Gi-later', 'declared_member', evidence_state,
+                      source_line_number + 100000, 'later retained receipt',
+                      related_line_number, related_source_line, source_command,
+                      source_section, source_syntax, facts_json
+                 FROM device_vlan_receipts WHERE assessment_id = ? LIMIT 1""",
+            (before["assignments"][0]["assessment"]["assessment_id"],),
+        )
+    after = build_device_vlan_projection(db_path, run_id=run_id)
+    assert after["source_revision"] != before["source_revision"]
+    with pytest.raises(DeviceVlanProjectionChanged):
+        build_device_vlan_projection(
+            db_path, run_id=run_id,
+            expected_revision=before["source_revision"],
+        )
+
+
+def test_vlan_projection_uses_one_snapshot_and_rejects_changed_next_page(
+    tmp_path, monkeypatch,
+):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Gi0/1\n switchport access vlan 77\n", "192.0.2.77",
+    )
+    scope = _scope(db_path, "Snapshot projection scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
+    original = vlan_projection_module.current_device_vlan_assessment_on_connection
+    changed = False
+
+    def archive_after_snapshot_read(db, **kwargs):
+        nonlocal changed
+        result = original(db, **kwargs)
+        if not changed:
+            changed = True
+            archive_network_scope(
+                db_path, scope["scope_id"], expected_version=1,
+                archived_by="scope-admin", reason="Concurrent snapshot regression",
+            )
+        return result
+
+    monkeypatch.setattr(
+        vlan_projection_module,
+        "current_device_vlan_assessment_on_connection",
+        archive_after_snapshot_read,
+    )
+    first = build_device_vlan_projection(db_path, run_id=run_id, limit=1)
+    assert changed is True
+    assert first["assignments"][0]["scope"]["active"] is True
+    assert first["assignments"][0]["state"] == "supported"
+    with pytest.raises(DeviceVlanProjectionChanged):
+        build_device_vlan_projection(
+            db_path, run_id=run_id, limit=1,
+            expected_revision=first["source_revision"],
+        )
+
 
 def test_vlan_worker_rejects_symlinked_run_local_source(tmp_path, monkeypatch):
     db_path, run_id = _complete_summary(
@@ -878,6 +1255,11 @@ def test_correction_is_append_only_and_stale_assignment_cannot_publish(tmp_path,
     assert "no longer current" in old["last_error"]
     assert jobs.run_next_derived_job(db_path, tmp_path) is True
     assert get_device_observation_status(db_path, run_id)["assignment"]["scope_id"] == second["scope_id"]
+    projection = build_device_vlan_projection(db_path, run_id=run_id)
+    assert projection["pagination"]["total"] == 1
+    assert projection["assignments"][0]["assignment_id"] == corrected["assignment_id"]
+    assert projection["assignments"][0]["scope"]["scope_id"] == second["scope_id"]
+    assert projection["assignments"][0]["state"] == "unknown"
 
 
 def test_assignment_requires_completed_new_pipeline_summary(tmp_path, monkeypatch):

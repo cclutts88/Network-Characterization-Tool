@@ -235,6 +235,76 @@ A roadmap item should only be marked complete when:
     only warning is the existing Starlette test-client deprecation. This capability is
     committed for the foundation branch only; it is not on `main` and does not yet make
     VLAN evidence visible throughout the operator views.
+- [~] Scoped VLAN cross-view presentation started after commit `d07ed1a`. This slice
+  will build one bounded read-only projection from the current exact scoped VLAN
+  assessment, then carry its retained-source state, Network Scope, device/bridge and
+  receipt links through Device Analysis, Current Network, Hunt, Reach, Map, Changes Over
+  Time, retained history/source views, exports, and the Operator Guide. Missing or older
+  unsupported evidence remains visibly unknown; a matching number or name cannot merge
+  VLANs across devices or scopes. No collection command, live-state claim, automatic
+  historical adoption, or Layer-2 identity inference is authorized by this slice.
+  Independent architecture start gate: **CLEAR — DOCUMENTED DEVIATION**. Projection
+  begins from every current device-scope assignment, including those without a current
+  assessment, so missing, obsolete, unsupported, or unprocessed VLAN evidence remains
+  visible as Unknown. Context may attach only to its exact configuration-source record;
+  matching IP addresses cannot bind it to an Nmap host. Existing heuristic switching
+  fields stay separate. Current-only evidence may appear as context in Changes Over Time,
+  but VLAN added/removed/changed claims require a later reviewed comparable-coverage and
+  device-continuity contract. This slice must use deterministic bounded paging and a
+  source revision, invalidate affected view caches, and preserve all evidence limits.
+  - [x] **2026-10-19 — scoped VLAN context is available across the analyst workflow.**
+    One read-only, revisioned projection now enumerates every current device-scope
+    assignment, including Unknown records with no usable current assessment. It accepts
+    only the current assignment, active scope, exact current collection authority,
+    extractor and collection contract, and retains the scope, collection, reporting
+    device, bridge, interface, VLAN, source hash, receipt and source-line provenance.
+    Equal VLAN IDs remain separate across scopes, collections, devices and bridges;
+    declarations and memberships for the same VLAN inside one exact device/bridge context
+    are summarized together without discarding their individual receipts. Device Analysis
+    links to the existing bounded receipt pages for full source-line detail. Device
+    Collections, Current Network, Hunt, Reach, Map
+    and Changes Over Time show bounded context with scope/state/search filters, deterministic
+    paging, a visible source revision, manual refresh, retained-source links, and standalone
+    revision-bound JSON and CSV exports. The Operator Guide and How NCT Works explain the
+    retained-evidence meaning and the no-live, no-absence, no-cross-device and no-identity
+    limits. A reusable device profile continues to remember a preferred scope only as the
+    next collection's visible suggestion; completed evidence keeps the analyst-confirmed
+    scope for that exact collection.
+    **Documented presentation deviation:** rather than injecting VLAN records into each
+    page's older cached model and native export, every affected page reads the same direct
+    projection panel. This bypasses stale page caches and keeps the new standalone exports
+    tied to one VLAN revision. Existing Analyze, Hunt, Reach and Map exports remain unchanged
+    because those models do not yet contain VLAN conclusions; no mixed-revision combined
+    export is produced. Changes Over Time labels this as current context only, and no VLAN
+    change detection, Reach outcome, routing conclusion, CVE/capability, physical identity,
+    topology segment or Map link is created. Browser validation used isolated retained
+    Cisco evidence at 1265 px with the Operator Guide open: headings stayed above and aligned
+    with cells, the 940 px table used an internal 525 px viewport, VLAN 110 and 120 retained
+    their names and source links, every requested page showed the correct limitation, and an
+    archived scope remained visible as Unknown instead of implying disappearance.
+    **Independent-review correction:** the first completion candidate was halted because its
+    state filter could be overwritten by an assessment state, it expanded receipts before
+    paging, exports checked size after expansion, and separate queries were not held in one
+    SQLite snapshot. The corrected projection keeps the requested filter separate, begins one
+    read transaction before candidate selection, builds its revision from bounded assignment
+    and assessment metadata, filters and pages assignments before loading detail, caps each
+    visible assignment at 200 VLAN summaries, and sends full source lines through the existing
+    100-row receipt endpoint. Export preflight rejects more than 20,000 receipt rows or a
+    conservative 10 MiB byte estimate before expansion, including multibyte UTF-8 evidence;
+    JSON and CSV encoding also enforce the
+    10 MiB limit incrementally. Regression coverage now includes mixed evidence states,
+    revision-bound filtered export, the 20,000-receipt ceiling, aggregate assignment limits,
+    multibyte oversized-export rejection before expansion, later receipt insertion changing
+    the source revision, and a concurrent scope archive proving one coherent first page followed
+    by a stale-revision `409` on the next request. Final Linux/Docker validation: focused
+    VLAN/UI suite `123 passed`; broader device/evidence/route/UI suite `213 passed`; full suite
+    `1721 passed, 17 skipped`. The only warning is the existing Starlette test-client
+    deprecation warning; no new warning or failure was introduced. Novice operator re-review:
+    **CLEAR** after Unknown/Unsupported, retained-not-live, Saved Network scope-context and
+    bounded-detail wording corrections. Independent architecture completion gate:
+    **CLEAR — DOCUMENTED DEVIATION**. The intentional deviation remains the shared direct
+    projection panel and standalone revision-bound exports instead of modifying each older
+    page model and its native export.
 
 ## Independent quality gate — 2026-09-27
 
