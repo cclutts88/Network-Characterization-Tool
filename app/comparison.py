@@ -566,6 +566,85 @@ def _trace_evidence(host: dict) -> dict | None:
     }
 
 
+def _trace_path_identity(trace: dict | None) -> tuple[tuple[int, str], ...] | None:
+    """Return only the ordered hop identity used to compare saved paths.
+
+    Probe transport, target port, and resolved names describe how a trace was
+    collected or displayed. They do not establish a different network path.
+    A trace with an unresolved hop is incomplete and cannot support a change claim.
+    """
+    if not trace:
+        return None
+    hops = trace.get("hops") or []
+    if not hops:
+        return None
+    identity = []
+    expected_ttl = 1
+    for hop in hops:
+        try:
+            ttl = int(str(hop.get("ttl") or "").strip())
+        except ValueError:
+            return None
+        if ttl != expected_ttl:
+            return None
+        raw_address = str(hop.get("ip") or "").strip()
+        try:
+            address = str(ipaddress.ip_address(raw_address))
+        except ValueError:
+            return None
+        identity.append((ttl, address))
+        expected_ttl += 1
+    return tuple(identity)
+
+
+def _trace_assessment(
+    before_trace: dict | None, after_trace: dict | None,
+    *,
+    before_collected: bool = False,
+    after_collected: bool = False,
+) -> dict:
+    if not before_collected and not after_collected and not before_trace and not after_trace:
+        return {
+            "classification": "not_collected",
+            "reason": "Neither saved source declared or retained traceroute collection.",
+            "before": None,
+            "after": None,
+        }
+    before_identity = _trace_path_identity(before_trace)
+    after_identity = _trace_path_identity(after_trace)
+    if before_identity is None or after_identity is None:
+        missing = []
+        if before_identity is None:
+            missing.append("earlier")
+        if after_identity is None:
+            missing.append("later")
+        return {
+            "classification": "not_assessed",
+            "reason": (
+                f"The {', '.join(missing)} saved source did not retain a complete "
+                "ordered traceroute path, so NCT cannot determine whether the route changed."
+            ),
+            "before": before_trace,
+            "after": after_trace,
+        }
+    if before_identity == after_identity:
+        return {
+            "classification": "unchanged",
+            "reason": (
+                "The ordered TTL and hop-address path is unchanged. Probe transport, "
+                "target port, and resolved-name differences do not create a route change."
+            ),
+            "before": before_trace,
+            "after": after_trace,
+        }
+    return {
+        "classification": "changed",
+        "reason": "The ordered TTL and hop-address path differs between the saved sources.",
+        "before": before_trace,
+        "after": after_trace,
+    }
+
+
 def compare_analyses(
     before_analysis: dict,
     after_analysis: dict,
@@ -598,6 +677,9 @@ def compare_analyses(
     if max_port_details is not None and port_detail_count > max_port_details:
         raise ComparisonLimitExceeded("The comparison contains too many port details")
     changed = []
+    path_not_assessed = []
+    before_trace_collected = bool((before_analysis.get("coverage") or {}).get("traceroute"))
+    after_trace_collected = bool((after_analysis.get("coverage") or {}).get("traceroute"))
     unchanged_port_count = 0
     for key in sorted(set(before) & set(after), key=ip_sort_key):
         old_host, new_host = before[key], after[key]
@@ -703,14 +785,33 @@ def compare_analyses(
             if old_host.get(field) != new_host.get(field)
         }
         old_trace, new_trace = _trace_evidence(old_host), _trace_evidence(new_host)
+        route_assessment = _trace_assessment(
+            old_trace, new_trace,
+            before_collected=before_trace_collected,
+            after_collected=after_trace_collected,
+        )
         route_change = (
             {"before": old_trace, "after": new_trace}
-            if old_trace != new_trace else None
+            if route_assessment["classification"] == "changed" else None
         )
-        if added_ports or removed_ports or not_assessed_ports or service_changes or identity_changes or route_change:
+        route_not_assessed = route_assessment["classification"] == "not_assessed"
+        host_changed = bool(
+            added_ports or removed_ports or not_assessed_ports or service_changes
+            or identity_changes or route_change
+        )
+        if route_not_assessed or host_changed:
             host_detail_count += 1
             if max_host_details is not None and host_detail_count > max_host_details:
                 raise ComparisonLimitExceeded("The comparison contains too many host details")
+        if route_not_assessed:
+            path_not_assessed.append({
+                "key": key,
+                "ip": new_host.get("ip") or old_host.get("ip"),
+                "hostname": new_host.get("hostname") or old_host.get("hostname"),
+                "route_assessment": route_assessment,
+                "evidence": {"before": before_evidence, "after": after_evidence},
+            })
+        if host_changed:
             changed.append({
                 "key": key,
                 "ip": new_host.get("ip") or old_host.get("ip"),
@@ -723,6 +824,7 @@ def compare_analyses(
                 "port_state_changes": port_state_changes,
                 "identity_changes": identity_changes,
                 "route_change": route_change,
+                "route_assessment": route_assessment,
                 "evidence": {"before": before_evidence, "after": after_evidence},
             })
 
@@ -752,12 +854,14 @@ def compare_analyses(
             "port_state_changes": sum(len(host["port_state_changes"]) for host in changed),
             "identity_changes": sum(len(host["identity_changes"]) for host in changed),
             "route_changes": sum(1 for host in changed if host["route_change"]),
+            "routes_not_assessed": len(path_not_assessed),
             "before_hosts": len(before),
             "after_hosts": len(after),
         },
         "hosts_added": [public_host(after[key], key) for key in added_keys],
         "hosts_removed": [public_host(before[key], key) for key in removed_keys],
         "hosts_changed": changed,
+        "path_assessments_not_assessed": path_not_assessed,
         "protocol_deltas": _protocol_deltas(before_analysis, after_analysis),
         "evidence": {"before": before_evidence, "after": after_evidence},
     }

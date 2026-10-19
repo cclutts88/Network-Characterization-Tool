@@ -269,6 +269,119 @@ def test_comparison_surfaces_ports_identity_mac_and_route_evidence():
     assert changed["route_change"] is not None
 
 
+def test_traceroute_metadata_does_not_create_a_path_change():
+    before = {"hosts": [{
+        "ip": "192.0.2.10",
+        "trace": {
+            "port": "80", "protocol": "tcp",
+            "hops": [{"ttl": 1, "ip": "192.0.2.1", "hostname": "gateway.local"}],
+        },
+    }]}
+    after = {"hosts": [{
+        "ip": "192.0.2.10",
+        "trace": {
+            "port": "443", "protocol": "udp",
+            "hops": [{"ttl": "1", "ip": "192.0.2.1", "hostname": "GATEWAY"}],
+        },
+    }]}
+
+    result = compare_analyses(before, after)
+
+    assert result["summary"]["route_changes"] == 0
+    assert result["summary"]["routes_not_assessed"] == 0
+    assert result["hosts_changed"] == []
+    assert result["path_assessments_not_assessed"] == []
+
+
+@pytest.mark.parametrize("before_trace,after_trace", [
+    (None, {"hops": [{"ttl": 1, "ip": "192.0.2.1"}]}),
+    ({"hops": [{"ttl": 1, "ip": "192.0.2.1"}]}, None),
+    (
+        {"hops": [{"ttl": 1, "ip": "192.0.2.1"}]},
+        {"hops": [{"ttl": 1, "ip": ""}, {"ttl": 2, "ip": "192.0.2.2"}]},
+    ),
+])
+def test_missing_or_incomplete_traceroute_is_not_assessed(
+    before_trace, after_trace,
+):
+    before = {"hosts": [{"ip": "192.0.2.10", "trace": before_trace}]}
+    after = {"hosts": [{"ip": "192.0.2.10", "trace": after_trace}]}
+
+    result = compare_analyses(before, after)
+
+    assert result["summary"]["route_changes"] == 0
+    assert result["summary"]["routes_not_assessed"] == 1
+    assert result["hosts_changed"] == []
+    assessment = result["path_assessments_not_assessed"][0]["route_assessment"]
+    assert assessment["classification"] == "not_assessed"
+    assert "cannot determine whether the route changed" in assessment["reason"]
+
+
+def test_hosts_without_requested_or_retained_traceroute_do_not_create_path_rows():
+    before = {"coverage": {"traceroute": False}, "hosts": [{"ip": "192.0.2.10"}]}
+    after = {"coverage": {"traceroute": False}, "hosts": [{"ip": "192.0.2.10"}]}
+
+    result = compare_analyses(before, after)
+
+    assert result["summary"]["routes_not_assessed"] == 0
+    assert result["path_assessments_not_assessed"] == []
+
+
+def test_requested_traceroute_without_retained_paths_is_not_assessed():
+    before = {"coverage": {"traceroute": True}, "hosts": [{"ip": "192.0.2.10"}]}
+    after = {"coverage": {"traceroute": True}, "hosts": [{"ip": "192.0.2.10"}]}
+
+    result = compare_analyses(before, after)
+
+    assert result["summary"]["routes_not_assessed"] == 1
+    assert result["path_assessments_not_assessed"][0]["ip"] == "192.0.2.10"
+
+
+@pytest.mark.parametrize("invalid_hops", [
+    [{"ttl": 1, "ip": "192.0.2.1"}, {"ttl": 3, "ip": "192.0.2.3"}],
+    [{"ttl": 1, "ip": "192.0.2.1"}, {"ttl": 1, "ip": "192.0.2.2"}],
+    [{"ttl": 0, "ip": "192.0.2.1"}],
+    [{"ttl": 2, "ip": "192.0.2.2"}, {"ttl": 1, "ip": "192.0.2.1"}],
+    [{"ttl": 1, "ip": "not-an-address"}],
+])
+def test_invalid_or_noncontiguous_traceroute_is_not_assessed(invalid_hops):
+    before = {"hosts": [{"ip": "192.0.2.10", "trace": {"hops": invalid_hops}}]}
+    after = {"hosts": [{
+        "ip": "192.0.2.10",
+        "trace": {"hops": [{"ttl": 1, "ip": "192.0.2.1"}]},
+    }]}
+
+    result = compare_analyses(before, after)
+
+    assert result["summary"]["route_changes"] == 0
+    assert result["summary"]["routes_not_assessed"] == 1
+
+
+def test_equivalent_ipv6_hop_spellings_are_the_same_path():
+    before = {"hosts": [{
+        "ip": "2001:db8::10",
+        "trace": {"hops": [{"ttl": 1, "ip": "2001:0db8:0:0:0:0:0:1"}]},
+    }]}
+    after = {"hosts": [{
+        "ip": "2001:db8::10",
+        "trace": {"hops": [{"ttl": "1", "ip": "2001:db8::1"}]},
+    }]}
+
+    result = compare_analyses(before, after)
+
+    assert result["summary"]["route_changes"] == 0
+    assert result["summary"]["routes_not_assessed"] == 0
+
+
+def test_path_not_assessed_rows_obey_host_detail_limit():
+    hosts = [{"ip": f"10.0.{index // 256}.{index % 256}"} for index in range(2001)]
+    before = {"coverage": {"traceroute": True}, "hosts": hosts}
+    after = {"coverage": {"traceroute": True}, "hosts": hosts}
+
+    with pytest.raises(ComparisonLimitExceeded):
+        compare_analyses(before, after, max_host_details=2000)
+
+
 def test_comparison_distinguishes_port_state_changes_and_links_evidence():
     before_evidence = {"label": "Earlier", "sources": [{"label": "Earlier XML", "url": "/before.xml"}]}
     after_evidence = {"label": "Later", "sources": [{"label": "Later XML", "url": "/after.xml"}]}

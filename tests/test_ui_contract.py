@@ -1287,7 +1287,9 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "function invalidateScenarioResult" in html
     assert "scenarioRequestRevision" in html
     assert "revision!==scenarioRequestRevision||encounter!==JSON.stringify" in html
-    assert "Scenario inputs changed. Validate the combined scenario again" in html
+    assert "Scenario inputs changed. The previous result is no longer current" in html
+    assert "Reassess proposed scenario" in html
+    assert "body.nct-guide-open .scenario-traffic-grid" in html
     assert "invalidateScenarioResult();$('simulationRule').value=data.rule_text" in html
     assert "nct-reach-latest-assessment-v1" in html
     assert "function restoreLatestAssessment" in html
@@ -1295,6 +1297,9 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "destination:$('scenarioDestination').value.trim()" in html
     assert "port:Number($('scenarioPort').value)" in html
     assert "function useAssessmentInScenario" in html
+    assert html.count("function useAssessmentInScenario") == 1
+    assert html.count("function applyIncomingContext") == 1
+    assert html.count("function copyLatestAssessment") == 1
     assert "routeSimulationNetwork').value=routeNetwork" in html
     assert 'id="simulationDevice"' in html
     assert 'id="simulationInterface"' in html
@@ -2283,6 +2288,8 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'id="loadNetworkChanges"' in html
     assert "/api/analysis/network-changes" in html
     assert "renderNetworkChanges" in html
+    assert "Some traceroute paths were not assessed" in html
+    assert "paths not assessed" in html
     assert "Processed evidence by Network Scope" in html
     assert 'id="processedEvidenceScope"' in html
     assert 'id="loadProcessedEvidence"' in html

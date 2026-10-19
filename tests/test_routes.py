@@ -756,6 +756,57 @@ def test_selected_comparison_rejects_unbounded_interactive_detail(monkeypatch):
     assert "too large" in response.json()["detail"]
 
 
+def test_selected_comparison_rejects_unbounded_path_assessment_detail(monkeypatch):
+    first_id, second_id = "e1" * 16, "f1" * 16
+
+    def retained(run_id: str, when: str) -> dict:
+        manifest = {
+            "run_id": run_id, "status": "completed", "created_at": when,
+            "completed_at": when, "targets": ["10.0.0.0/8"],
+            "coverage": {"targets": ["10.0.0.0/8"], "protocols": ["TCP"]},
+        }
+        return {
+            "manifests": [manifest],
+            "group": {
+                "group_id": f"run:{run_id}", "run_ids": [run_id],
+                "created_at": when, "completed_at": when, "display_name": run_id,
+                "saved_networks": [],
+                "scope": {"fingerprint": "same", "targets": ["10.0.0.0/8"]},
+            },
+            "analysis": {"hosts": []},
+            "provenance": {"composition_version": "test", "children": []},
+        }
+
+    saved = {
+        first_id: retained(first_id, "2030-01-01T00:00:00+00:00"),
+        second_id: retained(second_id, "2030-01-02T00:00:00+00:00"),
+    }
+    monkeypatch.setattr(
+        "app.main.load_prepared_scan_group",
+        lambda db_path, data_dir, run_id: saved[run_id],
+    )
+    monkeypatch.setattr(
+        "app.main.compare_analyses",
+        lambda *args, **kwargs: {
+            "summary": {}, "protocol_deltas": [], "hosts_removed": [],
+            "hosts_changed": [], "hosts_added": [],
+            "path_assessments_not_assessed": [
+                {"key": f"10.0.{index // 256}.{index % 256}"}
+                for index in range(2001)
+            ],
+            "evidence": {},
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/scan-comparisons/compare?first={first_id}&second={second_id}"
+        )
+
+    assert response.status_code == 422
+    assert "too large" in response.json()["detail"]
+
+
 def device_password_plan() -> dict:
     return {
         "operator": "analyst01",

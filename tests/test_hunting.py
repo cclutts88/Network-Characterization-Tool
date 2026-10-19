@@ -57,6 +57,37 @@ def test_category_rules_support_nonstandard_ports_and_multiple_categories():
     assert {item["capability_state"] for item in mixed} == {"inferred", "observed"}
 
 
+def test_ssh_on_8022_is_nonstandard_but_unidentified_8022_is_not_guessed():
+    ssh = categorize_port(port(8022, "ssh", "OpenSSH"))
+    unknown = categorize_port(port(8022, "unknown", ""))
+
+    remote = next(
+        item for item in ssh
+        if item["category"] == "Remote Access & Administration"
+    )
+    assert remote["capability_state"] == "observed"
+    assert remote["nonstandard_port"] is True
+    assert unknown == [{
+        "category": "Unknown / Other Exposed Service",
+        "capability_state": "exposed",
+        "evidence_states": ["exposed"],
+        "standard_port": False,
+        "nonstandard_port": False,
+        "match_basis": ["open service exposure"],
+    }]
+
+
+def test_host_service_summary_preserves_nonstandard_signal_across_capabilities():
+    result = build_hunting_analysis({
+        "hosts": [host("10.0.0.10", [port(443, "ldap", "Directory gateway")])]
+    })
+
+    services = result["hosts"][0]["services"]
+    assert len(services) == 1
+    assert services[0]["port"] == 443
+    assert services[0]["nonstandard_port"] is True
+
+
 def test_explicit_sftp_is_observed_file_transfer_evidence():
     findings = categorize_port(port(22, "sftp", "OpenSSH"))
     file_transfer = next(

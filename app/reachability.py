@@ -3630,6 +3630,29 @@ def simulate_proposed_change_scenario(
     return {
         "status": "reachability_change_scenario_complete",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "scenario_input": {
+            "source": source_text,
+            "destination": destination_text,
+            "protocol": protocol,
+            "port": port,
+            "flow_state": flow_state,
+            "source_external": source_external,
+            "route": deepcopy(route),
+            "policy": deepcopy(policy),
+        },
+        "evidence_sources": [
+            {
+                "run_id": item.get("run_id"),
+                "device_name": (item.get("device") or {}).get("name"),
+                "device_address": (item.get("device") or {}).get("address"),
+                "collected_at": (
+                    (item.get("collection") or {}).get("completed_at")
+                    or (item.get("collection") or {}).get("created_at")
+                ),
+            }
+            for item in device_analyses
+            if item.get("run_id")
+        ],
         "route_proposal": route_result["proposal"],
         "policy_proposal": policy_proposal,
         "baseline": route_result["baseline"],

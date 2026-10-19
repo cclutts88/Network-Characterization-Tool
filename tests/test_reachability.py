@@ -533,6 +533,14 @@ def test_combined_change_applies_route_before_policy_and_confirms_intent():
     assert result["comparison"]["after"] == "Expected Blocked"
     assert result["comparison"]["policy_on_projected_path"] is True
     assert result["comparison"]["intent_achieved"] is True
+    assert result["scenario_input"]["route"]["route_network"] == "10.90.0.0/24"
+    assert result["scenario_input"]["policy"]["action"] == "deny"
+    assert result["evidence_sources"] == [{
+        "run_id": "a" * 32,
+        "device_name": "Edge Firewall",
+        "device_address": "10.80.0.1",
+        "collected_at": None,
+    }]
     assert [item["status"] for item in result["validation"]] == [
         "pass", "pass", "pass", "pass", "pass",
     ]

@@ -72,6 +72,53 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Field-correction and first-class VLAN program — 2026-10-19
+
+- [~] A staged correction program is proceeding from the post-2026-10-14 operator
+  reports.
+- [x] First evidence gate completed: traceroute compares only canonical ordered hop
+  identity, keeps absent or incomplete requested paths Not assessed, omits path rows
+  when neither source collected traceroute, and applies the reviewed interactive host
+  limit to those rows. Detailed and network-wide views carry the same unassessed-path
+  count, affected addresses, evidence links, and warning language. Recognized services
+  on nonstandard ports retain that status across duplicate capability rows without
+  guessing unknown ports. Proposed route/policy results now become unusable after any
+  input change until reassessed, retain the exact tested inputs and source receipts,
+  and remain readable with the Operator Guide open. Focused Docker regression:
+  **237 passed**; final full Docker suite: **1,664 passed, 17 skipped**; executable
+  Reach and Network Changes browser-handler regressions passed. The rebuilt browser
+  preview had no console warnings or errors. Independent gate:
+  **CLEAR — DOCUMENTED DEVIATION**; novice-operator gate: **CLEAR**.
+- [ ] Replace page-specific sticky-header and legacy color overrides with explicit
+  shared table/scroll modes and semantic theme surfaces. Then repair host/port/CVE
+  grouping, spacing, Reach evidence ordering, saved-analysis guidance, device-scope
+  continuity, and hostname-collection instructions against one cross-page browser
+  matrix with the Operator Guide open and closed.
+- **Planned approach:** add VLAN presentation primarily as a Map overlay after the
+  current ingestion pipeline work.
+- **Revised approach:** make VLAN observations a scoped, provenance-backed evidence
+  capability across Device Analysis, Current Network, Hunt, Reach, Map, Changes Over
+  Time, retained source/history views, exports, and the Operator Guide. Audit and,
+  where required, version the bounded read-only vendor collection command sets before
+  expanding projections. Existing retained collections may be reprocessed locally
+  only when their exact saved content and command coverage support the new contract;
+  otherwise they remain visibly Not collected, Unsupported, or Unknown.
+- **Reason and expected impact:** operator review showed that VLAN context is needed
+  while interpreting inventory, investigations, path assessment, and change, not only
+  while drawing topology. Cisco, Juniper, Linux/UniFi switching evidence already
+  provides a partial source foundation, but no shared scoped VLAN observation model
+  currently supplies every view. VLAN identity therefore remains local to the exact
+  Network Scope, device/bridge observation, collection, and VLAN ID until a later
+  reviewed physical-device and Layer-2 segment reconciliation capability exists.
+- **Evidence limits:** configuration proves what a retained source reported; it does
+  not prove that a VLAN, trunk, route, service, or device is live now. Matching VLAN
+  numbers, names, subnets, or MAC addresses do not merge observations across devices.
+  No new vendor command may be admitted without read-only behavior, bounded output,
+  visible failure coverage, parser fixtures, and independent review.
+- Independent start gate: **CLEAR — DOCUMENTED DEVIATION**. Material evidence,
+  provenance, migration, collection-profile, and comparison changes remain subject to
+  separate reviewer gates before downstream work continues.
+
 ## Independent quality gate — 2026-09-27
 
 - Reviewer operating rules are preserved in [docs/NCT_PROJECT_OPERATING_RULES.md](docs/NCT_PROJECT_OPERATING_RULES.md).

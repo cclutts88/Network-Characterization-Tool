@@ -3502,10 +3502,17 @@ MAX_COMPARISON_PORT_DETAILS = 10_000
 
 def _enforce_comparison_bounds(result: dict) -> None:
     """Keep one interactive response within reviewed memory and display bounds."""
-    host_rows = sum(
-        len(result.get(key) or [])
-        for key in ("hosts_added", "hosts_removed", "hosts_changed")
-    )
+    host_identities: set[str] = set()
+    for collection in (
+        "hosts_added", "hosts_removed", "hosts_changed",
+        "path_assessments_not_assessed",
+    ):
+        for index, host in enumerate(result.get(collection) or []):
+            identity = host.get("key") or host.get("ip")
+            host_identities.add(
+                f"host:{identity}" if identity else f"{collection}:{index}"
+            )
+    host_rows = len(host_identities)
     port_rows = sum(len(host.get("ports") or []) for host in (result.get("hosts_added") or []))
     port_rows += sum(len(host.get("ports") or []) for host in (result.get("hosts_removed") or []))
     port_rows += sum(
@@ -4074,7 +4081,7 @@ def analyze_current_network_changes(
     summary_keys = (
         "hosts_added", "hosts_removed", "hosts_changed", "ports_added",
         "ports_removed", "ports_not_assessed", "ports_unchanged", "port_state_changes",
-        "identity_changes", "route_changes",
+        "identity_changes", "route_changes", "routes_not_assessed",
     )
     aggregate = {key: 0 for key in summary_keys}
     scopes = []

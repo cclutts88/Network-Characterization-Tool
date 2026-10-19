@@ -107,6 +107,7 @@ await eval(`(() => {
   assert.equal($('exportScenario').disabled,true);
   assert.equal($('showScenarioOnMap').disabled,true);
   assert.match($('scenarioStatus').textContent,/inputs changed/i);
+  assert.equal($('simulateScenario').textContent,'Reassess proposed scenario');
 })()`);
 
 await eval(`(async () => {

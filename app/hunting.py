@@ -445,6 +445,30 @@ def categorize_port(port: dict) -> list[dict]:
     }]
 
 
+def _service_observations(findings: list[dict]) -> list[dict]:
+    """Collapse capability rows without losing a nonstandard-port observation."""
+    services: dict[tuple, dict] = {}
+    for finding in findings:
+        item = {
+            "port": finding.get("port"),
+            "protocol": finding.get("protocol"),
+            "service": finding.get("service"),
+            "product": finding.get("product"),
+            "version": finding.get("version"),
+            "nonstandard_port": bool(finding.get("nonstandard_port")),
+        }
+        key = tuple(item[field] for field in (
+            "port", "protocol", "service", "product", "version"
+        ))
+        if key in services:
+            services[key]["nonstandard_port"] = bool(
+                services[key]["nonstandard_port"] or item["nonstandard_port"]
+            )
+        else:
+            services[key] = item
+    return list(services.values())
+
+
 def build_hunting_analysis(
     analysis: dict,
     *,
@@ -540,14 +564,7 @@ def build_hunting_analysis(
             "protocols": sorted({
                 item["protocol"] for item in host_findings if item.get("protocol")
             }),
-            "services": [{
-                "port": item.get("port"),
-                "protocol": item.get("protocol"),
-                "service": item.get("service"),
-                "product": item.get("product"),
-                "version": item.get("version"),
-                "nonstandard_port": bool(item.get("nonstandard_port")),
-            } for item in host_findings],
+            "services": _service_observations(host_findings),
             "nonstandard_port": any(
                 item.get("nonstandard_port") for item in host_findings
             ),
