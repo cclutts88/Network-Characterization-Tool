@@ -332,6 +332,8 @@ def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
 def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "const actionGuideHints=" in SHELL_SCRIPT
     assert "function actionGuideFor(control)" in SHELL_SCRIPT
+    assert "guideKey=control?.dataset?.guideKey" in SHELL_SCRIPT
+    assert "page[guideKey]||page[control?.id]" in SHELL_SCRIPT
     assert "[data-latest-observations]" in SHELL_SCRIPT
     assert "last confirmed positive observation, with direct evidence links" in SHELL_SCRIPT
     assert "This is not a live check or an exact Last Seen time" in SHELL_SCRIPT
@@ -1191,9 +1193,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "Hosts and services stay in one bulk table" in html
     assert "CVE candidates" in html
     assert "candidateInlineMarkup" in html
-    assert "ensureCandidateColumns" in html
+    assert "Network Evidence row does not match its eight visible headings" in html
     assert 'data-hostkey="${esc(item.host_key||\'\')}" data-ip=' in html
-    assert "slot.dataset.hostkey?matches.filter" in html
+    assert "Saved CVE grouping is unavailable because this retained row has no canonical host identity" in html
+    assert "const related=matches.filter(match=>String(match.host_key||'')===slot.dataset.hostkey)" in html
     assert "inline-cve-detail" in html
     assert "cve-port-group" in html
     assert "cve-reference-group" in html
@@ -1214,7 +1217,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "syncDatasetFilterButtons" in html
     assert "Select the active Dataset badge again to clear it" in SHELL_SCRIPT
     assert ".finding-match-slot,.finding-host-match-slot,.host-cve-slot{min-width:0;max-width:100%}" in html
-    assert "#capabilityView table{min-width:980px;table-layout:fixed}" in html
+    assert "#capabilityView table{min-width:1440px;table-layout:fixed}" in html
+    assert "#capabilityView th:nth-child(7),#capabilityView td:nth-child(7){width:360px}" in html
+    assert "function findingRowMarkup(item)" in html
+    assert "function findingGroupKey(item,index)" in html
     assert "configureCveFilters" in html
     assert "applySearchSploitFilters" in html
     assert "renderHostCveDropdowns" in html
@@ -1380,6 +1386,11 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "Retained route, policy, and NAT objects" in html
     assert "function evidenceCard(item)" in html
     assert "Read this assessment in order" in html
+    assert html.index("Traffic and likely path:") < html.index("Evidence used:</") < html.index("Limits and uncertainty:</") < html.index("Supported outcome:</")
+    assert "Unknown</b> means NCT assessed the saved evidence" in html
+    assert "Not assessed</b> means required coverage was never available" in html
+    assert html.index('<div id="evidence"></div>') < html.index('class="panel result-conclusion"')
+    assert "function reportEvidence(items){return assessmentEvidence(items).map(evidenceCard)" in html
     assert "network context, translation, selected routes, switching, ordered policy" in html
     assert "function assessmentEvidence(items)" in html
     assert "rank={source_network:0,destination_network:0,nat:1,route:2,switching:3,policy:4,service:5,coverage:5}" in html

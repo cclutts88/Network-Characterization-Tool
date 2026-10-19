@@ -4286,6 +4286,7 @@ async def upload_result(
         or not re.fullmatch(r"[A-Za-z0-9._:-]+", clean_preferred_scope_id)
     ):
         raise HTTPException(status_code=422, detail="Choose a valid Network Scope")
+    preferred_scope_label = None
     if clean_preferred_scope_id:
         scope = get_network_scope(DB_PATH, clean_preferred_scope_id)
         if scope is None or not scope["active"]:
@@ -4293,6 +4294,7 @@ async def upload_result(
                 status_code=422,
                 detail="The suggested Network Scope does not exist or is archived",
             )
+        preferred_scope_label = scope["label"]
     if (
         vendor not in VENDORS
         or device_type not in DEVICE_TYPES
@@ -4368,6 +4370,8 @@ async def upload_result(
             "device_address": values["device_address"],
             "device_name": clean_device_name or None,
             "preferred_scope_id": clean_preferred_scope_id or None,
+            "preferred_scope_label": preferred_scope_label,
+            "preferred_scope_available": bool(clean_preferred_scope_id),
             "operation": "manual_upload",
             "status": "uploaded",
             "capture_required": False,

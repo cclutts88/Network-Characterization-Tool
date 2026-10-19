@@ -176,6 +176,42 @@ await eval(`(() => {
   assert.equal(enrichmentCalls,1,'active candidate filters must be reapplied with the Dataset selection');
 })()`);
 
+await eval(`(() => {
+  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const rowData=()=>'';
+  const originEvidence=()=>'';
+  const macEvidence=()=>'';
+  const datasetFilterButton=value=>'<button>'+esc(value)+'</button>';
+  const stateChips=()=>'<span>observed</span>';
+  const summaryStateChips=()=>'<span>observed</span>';
+  const findingTransportMarkup=item=>'<code>'+esc(item.port||'-')+'/'+esc(item.protocol||'-')+'</code>';
+  const findingMatchKey=item=>[item.host_key,item.protocol,item.port,item.service,item.product,item.version].join('|');
+  const renderMatchBasis=item=>esc((item.match_basis||[]).join('; '));
+  ${syncHandler("findingGroupKey")}
+  ${syncHandler("findingGroups")}
+  ${syncHandler("findingRowMarkup")}
+  ${syncHandler("renderFindingSummaries")}
+  const findings=[
+    {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Web',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:80,service:'http',product:'nginx',version:'1.24',match_basis:['port']},
+    {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Web',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:80,service:'http',product:'Apache',version:'2.4',match_basis:['product']},
+    {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Remote',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:22,service:'ssh',product:'OpenSSH',version:'9',match_basis:['service']},
+    {ip:'10.0.0.99',hostname:'legacy',category:'Legacy A',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:1,service:'tcpmux'},
+    {ip:'10.0.0.99',hostname:'legacy',category:'Legacy B',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:2,service:'compressnet'}
+  ];
+  const summary=renderFindingSummaries(findings);
+  assert.equal((summary.match(/<tr class="finding-summary-row"/g)||[]).length,3,'unkeyed retained rows must remain separate rather than merging by IP or hostname');
+  for(const row of summary.split('<tr class="finding-summary-row"').slice(1))assert.equal((row.match(/<td>/g)||[]).length,8,'every combined row must match the eight visible headings');
+  assert.match(summary,/nginx/);
+  assert.match(summary,/Apache/,'different product facts on the same port must both remain visible');
+  assert.ok((summary.match(/80\\/tcp/g)||[]).length>=3,'the transport list shows the port once and each same-port service fingerprint repeats it');
+  assert.match(summary,/Each service fingerprint repeats its port/);
+  assert.match(summary,/data-hostkey="scope-a\|10\.0\.0\.10"/);
+  const detailed=findingRowMarkup(findings[0]);
+  assert.equal((detailed.match(/<td>/g)||[]).length,8,'every filtered row must match the eight visible headings');
+  assert.match(detailed,/finding-match-slot/);
+  assert.ok(detailed.indexOf('finding-match-slot')>detailed.indexOf('nginx'),'the CVE cell must follow the service and product cell');
+})()`);
+
 console.log("Hunt saved candidate runtime regressions passed");
 
 await eval(`(async () => {

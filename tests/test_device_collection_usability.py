@@ -42,7 +42,7 @@ object network WEB_SERVER
 
 def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatch):
     from app import device_configs
-    from app.network_scopes import create_network_scope
+    from app.network_scopes import create_network_scope, update_network_scope
 
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -75,6 +75,14 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
             },
             files={"result_file": ("router-copy.txt", SAMPLE_CONFIG, "text/plain")},
         )
+        update_network_scope(
+            device_configs.DB_PATH,
+            scope["scope_id"],
+            expected_version=scope["version"],
+            updated_by="admin",
+            reason="Verify collection-time labels remain historical",
+            label="Renamed device lab",
+        )
         history = client.get("/api/device-configs?limit=25")
 
     assert response.status_code == 200
@@ -83,8 +91,11 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
     assert duplicate.status_code == 200
     assert history.status_code == 200
     assert response.json()["preferred_scope_id"] == scope["scope_id"]
+    assert response.json()["preferred_scope_label"] == "Device lab"
     assert duplicate.json()["preferred_scope_id"] == scope["scope_id"]
+    assert duplicate.json()["preferred_scope_label"] == "Device lab"
     assert {item["preferred_scope_id"] for item in history.json()} == {scope["scope_id"]}
+    assert {item["preferred_scope_label"] for item in history.json()} == {"Device lab"}
     assert duplicate.json()["artifact_duplicate"] is True
     assert response.json()["artifact_sha256"] == duplicate.json()["artifact_sha256"]
     first_path = (

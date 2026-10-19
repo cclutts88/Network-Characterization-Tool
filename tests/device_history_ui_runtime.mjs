@@ -57,6 +57,16 @@ assert.ok(source.includes("Retained by scoped receipts"));
 assert.ok(source.includes("blank.selected=!preferredScope"));
 assert.ok(source.includes("The former suggestion"));
 assert.ok(source.includes("is archived or unavailable, so NCT selected nothing"));
+assert.ok(source.includes("Collection-plan scope suggestion"));
+assert.ok(source.includes("label not retained"));
+assert.ok(!source.includes("run.preferred_scope_label||run.device_scope_assignment?.scope_label"));
+
+await eval(`(() => {
+  ${handler("collectionPlanScopeSuggestion")}
+  assert.equal(collectionPlanScopeSuggestion({preferred_scope_id:'scope:lab',preferred_scope_label:'Original lab'}),'Original lab · scope:lab');
+  assert.equal(collectionPlanScopeSuggestion({profile_preferred_scope_id:'scope:legacy'}),'scope:legacy · label not retained');
+  assert.equal(collectionPlanScopeSuggestion({device_scope_assignment:{scope_id:'scope:confirmed',scope_label:'Confirmed'}}),'None','a confirmed assignment must never be relabeled as the original suggestion');
+})()`);
 
 await eval(`(() => {
   const copySettingsSource=source.match(/function copyCollectionSettings\\(run\\) \\{[\\s\\S]*?\\r?\\n\\}\\r?\\nfunction searchTerm/)[0].replace(/\\r?\\nfunction searchTerm$/, '');

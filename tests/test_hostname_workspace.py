@@ -149,6 +149,21 @@ def test_hostname_page_moves_import_and_explains_zero_touch_refresh():
     assert "operator_input:'Operator'" in html
     assert "Collect from DHCP and DNS servers" in html
     assert "Windows Server 2012 and newer" in html
+    assert '<summary data-guide-key="windowsModern">Windows Server 2012 and newer</summary>' in html
+    assert 'data-copy-target="windowsModern" data-guide-key="windowsModern"' in html
+    assert "every IPv4 DHCP scope and every forward DNS zone" in html
+    assert "An unexpected zero is a warning" in html
+    assert 'Import-Module DhcpServer -ErrorAction Stop' in html
+    assert 'Import-Module DnsServer -ErrorAction Stop' in html
+    assert 'Get-DhcpServerv4Scope -ComputerName $Server -ErrorAction Stop' in html
+    assert 'Get-DnsServerZone -ComputerName $Server -ErrorAction Stop' in html
+    assert 'if ($Completed.Count -eq 0) { throw "No hostname collector completed.' in html
+    assert 'Write-Warning "Partial collection:' in html
+    assert "Verify permissions and expected source coverage" in html
+    assert "Inspect it before transfer and upload" in html
+    assert 'if ($LASTEXITCODE -ne 0) { $Failures += "DHCP scope' in html
+    assert 'if ($LASTEXITCODE -ne 0) { $Failures += "DNS zone' in html
+    assert 'throw "Legacy hostname collection failed.' in html
     assert "Legacy Windows Server fallback" in html
     assert "Linux DHCP and DNS servers" in html
     assert "netsh dhcp server" in html

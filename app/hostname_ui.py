@@ -30,21 +30,25 @@ def hostname_page() -> HTMLResponse:
     <section id="serverEvidence" class="panel">
       <h2>Collect from DHCP and DNS servers</h2>
       <p class="hint">Run the matching read-only collection on an authorized server, then upload its output here. NCT retains the result and does not contact the server when this page is refreshed.</p>
+      <ol class="collection-steps"><li>Sign in to an authorized DHCP or DNS server with read access to the records you intend to collect.</li><li>Open the matching collector below, review its server target, then run it from the stated shell.</li><li>Confirm which collectors completed and inspect the reported row count. An unexpected zero is a warning to check access and source coverage, not proof that no hostname evidence exists.</li><li>Inspect the output file, transfer it through the approved path, then upload it here and review the retained DHCP and DNS counts.</li></ol>
       <div class="collector-grid">
         <details class="collector">
-          <summary>Windows Server 2012 and newer</summary>
+          <summary data-guide-key="windowsModern">Windows Server 2012 and newer</summary>
           <div class="collector-body">
-            <p>Uses the installed DHCP and DNS PowerShell modules. Change <code>$Server</code> only when collecting from a different authorized Windows server.</p>
-            <div class="script-head"><strong>PowerShell</strong><button type="button" class="secondary" data-copy-target="windowsModern">Copy</button></div>
+            <p>Run in PowerShell on an authorized server or management host with the DHCP and DNS modules and read permission on <code>$Server</code>. The collector enumerates every IPv4 DHCP scope and every forward DNS zone it can read. Change <code>$Server</code> only for a different authorized Windows server.</p>
+            <div class="script-head"><strong>PowerShell</strong><button type="button" class="secondary" data-copy-target="windowsModern" data-guide-key="windowsModern">Copy</button></div>
             <pre id="windowsModern">$Server = $env:COMPUTERNAME
 $Out = Join-Path (Get-Location) "nct-hostname-evidence-windows.csv"
 $Observed = (Get-Date).ToUniversalTime().ToString("o")
 $Rows = @()
+$Completed = @()
+$Failures = @()
 
-Import-Module DhcpServer -ErrorAction SilentlyContinue
-if (Get-Command Get-DhcpServerv4Scope -ErrorAction SilentlyContinue) {
-  Get-DhcpServerv4Scope -ComputerName $Server | ForEach-Object {
-    Get-DhcpServerv4Lease -ComputerName $Server -ScopeId $_.ScopeId | Where-Object { $_.HostName } | ForEach-Object {
+try {
+  Import-Module DhcpServer -ErrorAction Stop
+  if (-not (Get-Command Get-DhcpServerv4Scope -ErrorAction SilentlyContinue)) { throw "Get-DhcpServerv4Scope is unavailable" }
+  Get-DhcpServerv4Scope -ComputerName $Server -ErrorAction Stop | ForEach-Object {
+    Get-DhcpServerv4Lease -ComputerName $Server -ScopeId $_.ScopeId -ErrorAction Stop | Where-Object { $_.HostName } | ForEach-Object {
       $Rows += New-Object PSObject -Property ([ordered]@{
         source="dhcp"; ip=$_.IPAddress.IPAddressToString; hostname=$_.HostName.TrimEnd(".")
         lease_expires_at=if ($_.LeaseExpiryTime) {$_.LeaseExpiryTime.ToUniversalTime().ToString("o")} else {""}
@@ -52,13 +56,17 @@ if (Get-Command Get-DhcpServerv4Scope -ErrorAction SilentlyContinue) {
       })
     }
   }
+  $Completed += "DHCP"
+} catch {
+  $Failures += "DHCP: $($_.Exception.Message)"
 }
 
-Import-Module DnsServer -ErrorAction SilentlyContinue
-if (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue) {
-  Get-DnsServerZone -ComputerName $Server | Where-Object { -not $_.IsReverseLookupZone -and $_.ZoneType -ne "Cache" } | ForEach-Object {
+try {
+  Import-Module DnsServer -ErrorAction Stop
+  if (-not (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue)) { throw "Get-DnsServerZone is unavailable" }
+  Get-DnsServerZone -ComputerName $Server -ErrorAction Stop | Where-Object { -not $_.IsReverseLookupZone -and $_.ZoneType -ne "Cache" } | ForEach-Object {
     $Zone = $_.ZoneName
-    Get-DnsServerResourceRecord -ComputerName $Server -ZoneName $Zone -RRType A | ForEach-Object {
+    Get-DnsServerResourceRecord -ComputerName $Server -ZoneName $Zone -RRType A -ErrorAction Stop | ForEach-Object {
       $Name = if ($_.HostName -eq "@") {$Zone} else {"$($_.HostName).$Zone"}
       $Rows += New-Object PSObject -Property ([ordered]@{
         source="dns"; ip=$_.RecordData.IPv4Address.IPAddressToString; hostname=$Name.TrimEnd(".")
@@ -66,10 +74,17 @@ if (Get-Command Get-DnsServerZone -ErrorAction SilentlyContinue) {
       })
     }
   }
+  $Completed += "DNS"
+} catch {
+  $Failures += "DNS: $($_.Exception.Message)"
 }
 
+if ($Completed.Count -eq 0) { throw "No hostname collector completed. $($Failures -join '; ')" }
 $Rows | Export-Csv -Path $Out -NoTypeInformation -Encoding UTF8
-Write-Host "Created $Out with $($Rows.Count) rows"</pre>
+Write-Host "Collectors completed: $($Completed -join ', ')"
+if ($Failures.Count) { Write-Warning "Partial collection: $($Failures -join '; ')" }
+if ($Rows.Count -eq 0) { Write-Warning "The completed collectors returned zero named records. Verify permissions and expected source coverage before treating this as evidence." }
+Write-Host "Created $Out with $($Rows.Count) rows. Inspect it before transfer and upload."</pre>
           </div>
         </details>
         <details class="collector">
@@ -81,17 +96,21 @@ Write-Host "Created $Out with $($Rows.Count) rows"</pre>
 $Scopes = @("10.0.0.0")       # Replace with DHCP scope IDs
 $Zones = @("example.local")   # Replace with forward lookup zones
 $Out = Join-Path (Get-Location) "nct-hostname-evidence-windows-legacy.txt"
+$Failures = @()
 
 "# NCT legacy Windows DHCP and DNS evidence" | Out-File $Out -Encoding utf8
 foreach ($Scope in $Scopes) {
   "===== DHCP scope $Scope =====" | Out-File $Out -Append -Encoding utf8
   netsh dhcp server "\\$Server" scope $Scope show clients 1 | Out-File $Out -Append -Encoding utf8
+  if ($LASTEXITCODE -ne 0) { $Failures += "DHCP scope $Scope returned exit code $LASTEXITCODE" }
 }
 foreach ($Zone in $Zones) {
   "===== DNS zone $Zone =====" | Out-File $Out -Append -Encoding utf8
   dnscmd $Server /enumrecords $Zone @ /type A /additional | Out-File $Out -Append -Encoding utf8
+  if ($LASTEXITCODE -ne 0) { $Failures += "DNS zone $Zone returned exit code $LASTEXITCODE" }
 }
-Write-Host "Created $Out"</pre>
+if ($Failures.Count) { throw "Legacy hostname collection failed. $($Failures -join '; ')" }
+Write-Host "Created $Out. Inspect the recorded scopes and zones before transfer and upload."</pre>
           </div>
         </details>
         <details class="collector">

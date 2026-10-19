@@ -107,9 +107,29 @@ A roadmap item should only be marked complete when:
   classes cannot conceal an unclassified table. Exact-diff rerun: **67 focused passed**
   and **1,664 passed, 17 skipped** in the complete suite. Independent quality gate:
   **CLEAR**; novice-operator gate: **CLEAR**.
-- [ ] After the shared presentation gate, repair host/port/CVE grouping and spacing,
-  Reach evidence ordering, saved-analysis guidance, device-scope continuity, and
-  hostname-collection instructions against the same cross-page browser matrix.
+- [x] Post-presentation operator correction gate complete after commit `dd632df`.
+  Hunt now keeps eight cells under eight headings, groups host-level CVE summaries only
+  by canonical `host_key`, preserves separate unkeyed rows and distinct same-port
+  fingerprints, and repeats each transport beside its service/product/version so
+  wrapping cannot imply a false pairing. Reach now reads in operator order from traffic
+  and path through evidence and limits to the supported outcome, and plainly separates
+  Unknown from Not assessed. Device History separately shows the immutable
+  collection-plan scope suggestion and the analyst-confirmed Network Scope; copying a
+  prior collection may prefill a new suggestion but does not silently confirm it.
+  Hostname collection now gives an ordered authorized workflow, enumerates all readable
+  Windows IPv4 DHCP scopes and forward DNS zones, reports partial and zero-row results,
+  and refuses false success when modern or legacy collectors fail. The dedicated Guide
+  topic is reachable from both the Windows collector heading and Copy control. Existing
+  saved-analysis guidance was revalidated: preparing a saved scan reads its retained
+  XML locally, Scan History remains metadata-first, and no refresh or selection starts
+  network contact or silently queues preparation. Focused Docker regression: **272
+  passed, 2 skipped**; Hunt and Device History executable browser-handler regressions
+  passed. The first complete-suite run had one background job miss its three-second
+  test deadline under load; that exact test passed immediately in isolation and the
+  clean complete rerun passed **1,664 tests with 17 skipped**. The rebuilt isolated
+  browser preview confirmed the dedicated hostname guidance from both controls with no
+  console warnings or errors. Independent quality gate: **CLEAR**; novice-operator
+  gate: **CLEAR**. No evidence model or network-contact boundary was changed.
 - **Planned approach:** add VLAN presentation primarily as a Map overlay after the
   current ingestion pipeline work.
 - **Revised approach:** make VLAN observations a scoped, provenance-backed evidence
