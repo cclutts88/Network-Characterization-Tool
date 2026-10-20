@@ -121,6 +121,11 @@ Use the [Range compatibility matrix](docs/RANGE_COMPATIBILITY_MATRIX.md) to run
 the repeatable non-destructive deployment scenarios and optionally include a
 real `--check-only` preflight for one immutable local image.
 
+For the Proxmox passive-evidence lab, use the
+[Range observability topology](docs/RANGE_OBSERVABILITY_TOPOLOGY.md) to see how
+Arkime, Security Onion sensors, UniFi syslog and NCT fit together, what each path
+provides, and the ordered checks for troubleshooting it.
+
 To generate private-lab TLS material without starting any containers:
 
 ```bash
