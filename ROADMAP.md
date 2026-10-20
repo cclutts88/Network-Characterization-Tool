@@ -5132,6 +5132,12 @@ Arkime support must be **tiered**.
   retained packet evidence was captured and searched successfully, and the lab was
   returned to its prior operating state after the test. Detailed operational evidence
   is retained in `docs/RANGE_OBSERVABILITY_VALIDATION_RECORD.md`.
+- [~] **2026-10-20 — Security Onion lab replacement started on verified separate
+  local storage.** Hardware-health evidence stopped the planned reuse of the existing
+  shared pool. Its volumes remain untouched while replacement manager/search and sensor
+  guests are provisioned on separately verified storage. This is a test-range recovery
+  decision, not a Security Onion or NCT readiness claim; exact evidence and limits are
+  retained in `docs/RANGE_OBSERVABILITY_VALIDATION_RECORD.md`.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish implemented NCT passive ingestion, Range readiness, mission
   readiness, or availability on main.

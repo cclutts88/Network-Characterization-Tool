@@ -196,3 +196,74 @@ The clean rebuild is not started and does not close Security Onion acceptance. I
 complete only after manager health, both sensor joins, capture-interface isolation,
 known-event search, restart behavior, retention measurement and source attribution
 all pass.
+
+## 2026-10-20 — replacement-storage deviation cleared
+
+The preflight review stopped the planned activation of the shared `chrisJr` pool.
+One physical member reported 113 reallocated sectors, a raw pending-sector value of
+65,535 and nine offline-uncorrectable sectors. The kernel had not logged a current
+I/O error and the drive still reported an overall SMART pass, but those attributes do
+not satisfy the clean-disk condition for a shared-pool activation attempt. No pool
+activation, repair, metadata change, force option or old-volume cleanup was attempted.
+All `chrisJr` volumes, including VM 116 and the old Security Onion disks and snapshots,
+remain unchanged.
+
+The separate `Das_Boot` destination was verified as a locally attached 12 TB Seagate
+IronWolf disk with XFS mounted read/write, approximately 11 TB available, no
+reallocated, pending, offline-uncorrectable or reported-uncorrectable sectors, and no
+disk or XFS error in the current kernel log. It is already configured by Proxmox to
+store VM images. The drive is one shared rotating disk, so it is a test-range recovery
+destination with a performance and resilience limit. It is not evidence of production
+storage readiness, and retention acceptance must be measured after the sensors run.
+
+Before replacement provisioning, the complete VM 110, 112 and 117 configuration and
+snapshot records plus the exact old `chrisJr` volume identities were copied outside the
+affected pool to a root-only directory under `Das_Boot` and protected by a SHA-256
+manifest. The values of previously recorded temporary credentials remain excluded from
+this document and source control.
+
+The cleared replacement procedure preserves the stopped old VMs under display names
+beginning `RETAINED-STORAGE-BLOCKED-` and leaves every old disk, snapshot and network
+reference attached to those records. Fresh manager/search and sensor guests use unused
+VM identifiers, new disks created only on `Das_Boot`, and the intended original role
+names. This avoids disk-removal commands whose storage-deletion behavior could affect
+the unhealthy pool. The existing and replacement guests must never run together or
+claim the same management address. The independent quality gate returned
+**CLEAR — DOCUMENTED DEVIATION** for this bounded procedure.
+
+This deviation authorizes replacement provisioning only. Security Onion acceptance
+still requires manager health, both sensor joins, unnumbered capture interfaces,
+known-event search, restart behavior, retention measurement and source attribution.
+
+## 2026-10-20 — replacement guests provisioned
+
+The stopped old guests remain protected and retain all original storage and snapshot
+references:
+
+- VM 110 — `RETAINED-STORAGE-BLOCKED-SO-ManagerSearch`
+- VM 112 — `RETAINED-STORAGE-BLOCKED-SO-Sensor-Home`
+- VM 117 — `RETAINED-STORAGE-BLOCKED-SO-Sensor-Range`
+
+Their automatic-start setting is disabled and their Proxmox protection flag is set.
+No old disk was detached, deleted, moved or activated.
+
+Fresh replacement guests were created with new MAC addresses and new disks stored only
+on `Das_Boot`:
+
+| VM | Role name | Resources | Interfaces | Fresh disk |
+|---|---|---|---|---|
+| 210 | `SO-ManagerSearch` | 8 vCPU, 24 GiB RAM | management on `vmbr5` | 400 GiB |
+| 212 | `SO-Sensor-Home` | 8 vCPU, 16 GiB RAM | management on `vmbr5`; capture on `vmbr2` | 900 GiB |
+| 217 | `SO-Sensor-Range-BlueNet` | 8 vCPU, 16 GiB RAM | management on `vmbr5`; capture on `vmbr3` and `vmbr4` | 900 GiB |
+
+The three QCOW2 files passed `qemu-img check`, and Proxmox reported each disk at the
+requested virtual size on `Das_Boot`. The Security Onion
+`2.4.211-20260407` ISO matched the publisher's SHA-256 value
+`185d8cf49cd3bfdd8876b8dde48343da90804b0c0ec3eadf0ad90d29c55e72b7`.
+An isolated temporary interface found no neighbor using the three planned management
+addresses before it was removed and its namespace cleanup was verified.
+
+Only replacement manager VM 210 was started. Its official ISO installer accepted the
+new local administrator account and entered the automated operating-system installation.
+Replacement sensors 212 and 217 remain stopped. Installation start is not manager
+health or Security Onion acceptance.
