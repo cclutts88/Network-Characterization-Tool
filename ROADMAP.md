@@ -359,7 +359,7 @@ A roadmap item should only be marked complete when:
   workflow acceptance remain pending. It is not Range-accepted, mission-ready, or
   available on `main`.
 
-- [~] **2026-10-20 — correct the retained version-5 Range upgrade gate.** The
+- [x] **2026-10-20 — correct the retained version-5 Range upgrade gate.** The
   `phase4-r2` package was transferred, its outer and internal manifests passed, and
   its replacement image loaded. The stopped-database read-only preflight then rejected
   the healthy retained `phase3-r3` database because the packaged gate admitted only
@@ -412,6 +412,36 @@ A roadmap item should only be marked complete when:
     candidate. Installation, HTTPS, sign-in, retained-data, account, offline-reference,
     device-field and operator-workflow checks on the work Range remain pending; it is
     not yet Range-accepted, mission-ready or available on `main`.
+  - [x] **Live retained-data upgrade completed on the work Range.** The uploaded
+    `phase4-r5` ZIP matched the sealed outer SHA-256 exactly, and its complete
+    23-file manifest and nested image checksum passed in a fresh staging directory.
+    The adjacent sidecar checksum was not transferred; for this installation only,
+    the operator compared the uploaded ZIP directly with the exact sealed digest
+    recorded above before extraction. This preserved the checksum guarantee but is
+    a documented operator-path deviation; future transfers still require the adjacent
+    sidecar and must not edit package checksums or scripts. The guarded legacy upgrade
+    accepted the exact `phase3-r3` version-5 source, preserved both analyst accounts,
+    created `/var/lib/nct/deployment/backups/nct-data-20261020T023003Z.tar.gz`, and
+    retained stopped rollback container
+    `nct-upgrade-rollback-20261020T023003Z`. Receipt
+    `/var/lib/nct/deployment/upgrade-20261020T023003Z.receipt` records completion at
+    `2026-10-20T02:32:35Z`. The live container now reports build
+    `0.16.0-range-test-20261019-phase4-r5` and commit
+    `b908834cb60327a640e9987fddff036c4df9fb75` from the unchanged bind-mounted
+    `/var/lib/nct/data`. The database is schema version 6 with all six migrations
+    complete, integrity `ok`, and no foreign-key errors. Pre/post inventory showed no
+    changes to existing evidence-table counts; the only table-count changes were the
+    three new empty scoped-VLAN tables and the migration ledger advancing from five to
+    six rows. The backup-created restore-file inventory changed as expected, while the
+    retained non-database files and Artifact Registry inventory remained unchanged.
+    HTTPS health passed at `10.101.35.15:8445`; root, Scans, Analyze, Hunt, System
+    Health and Map all enforced sign-in, and their redirects returned the NCT sign-in
+    page successfully. This closes the retained-data upgrade gate, with the backup and
+    rollback materials preserved. Rollback was not exercised in this run; it requires
+    restoring the matching pre-upgrade data before starting the retained old container.
+    Authenticated analyst workflow, offline-reference and device-field acceptance remain
+    separate hands-on checks, so this is not yet Range-accepted, mission-ready or
+    available on `main`.
 
 ## Independent quality gate — 2026-09-27
 
