@@ -50,6 +50,7 @@ checksum_file="$package_zip.sha256"
 }
 actual_package_sha256=$(sha256sum "$package_zip" | awk '{print $1}')
 export NCT_PACKAGE_SHA256="$actual_package_sha256"
+echo "Package SHA-256: $actual_package_sha256"
 (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
 if [ -e /root/NCT-Air-Gapped-Range-Deployment ]; then
     staging_dir="/root/nct-package-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -232,10 +233,12 @@ the packaged image and stops the current NCT writer. The retained original image
 first completes SQLite's normal stopped-database checkpoint so the audit cannot
 miss recently committed records. The replacement image then audits the saved
 database through a read-only mount without changing it. The audit verifies database
-integrity, the complete saved migration history, and either the exact recorded
-version 4 structure or only the complete known phase2 maintenance tables. Any
-unknown, incomplete, or altered structure stops the upgrade and restores the
-original container. After the audit passes, the helper backs up the permanent
+integrity, the complete saved migration history, and the exact recorded structure
+and build identity. Only exact reviewed version-4 sources and the version-5 Range
+source `0.16.0-range-test-20261013-phase3-r3` at commit
+`f6ba1ad4a754b904511e3d726110d6fc35b9f237` are accepted. Every other version-5
+source, and any unknown, incomplete, or altered structure, stops the upgrade and
+restores the original container. After the audit passes, the helper backs up the permanent
 data, retains the old container, preserves the installation's current web port,
 starts NCT 0.16.0, and confirms that stored file and record counts did not go
 down.
@@ -244,7 +247,15 @@ What success looks like: the script prints a successful upgrade receipt, a
 read-only schema-audit receipt, a backup location, and a rollback-container
 name. Write down all four and keep them until testing is complete.
 
-### 6A. Recover when the retained phase2 container cannot restart
+If the helper reports an unsupported saved database and confirms that the original
+container was restored, leave that restored NCT and `/var/lib/nct/data` unchanged.
+Do not edit the database, manifests, or checksums, and do not replace only one script.
+Obtain the corrected full ZIP and matching adjacent checksum, repeat step 1 into a
+new staging folder, confirm the new release identity and checksums, and then repeat
+step 6. If the original container was not confirmed restored, stop and involve the
+administrator instead of retrying.
+
+### 6A. Recover when the retained earlier container cannot restart
 
 Use this path only when the existing `nct` container is stopped or repeatedly
 restarting with a saved-schema fingerprint error and the ordinary upgrade did

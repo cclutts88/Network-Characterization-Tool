@@ -126,7 +126,10 @@ def test_quick_start_verifies_the_outer_package_before_extraction():
     assert 'echo "Package SHA-256: $actual_package_sha256"' in content
     assert 'export NCT_PACKAGE_SHA256="$actual_package_sha256"' in content
     assert "A missing" in content
-    assert "does not stop installation" in content
+    assert "stops installation before extraction" in content
+    assert "0.16.0-range-test-20261013-phase3-r3" in content
+    assert "f6ba1ad4a754b904511e3d726110d6fc35b9f237" in content
+    assert "Every other version-5" in content
 
 
 def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():

@@ -16,6 +16,7 @@ from app.schema_compatibility import (
     MIGRATION_PLAN,
     SCHEDULED_WORK_MIGRATION_ID,
     SUPPORTED_V4_RANGE_BUILDS,
+    SUPPORTED_V5_RANGE_BUILDS,
     SchemaCompatibilityError,
     WORK_COORDINATION_MIGRATION_ID,
     begin_schema_migration,
@@ -230,6 +231,7 @@ def _create_verified_version_five_fixture(db_path: Path) -> None:
 
 def _seal_current_schema_as_version_five(db_path: Path) -> None:
     with sqlite3.connect(db_path) as db:
+        schema_build_id, schema_build_commit = SUPPORTED_V5_RANGE_BUILDS[0]
         db.execute("DROP TABLE device_vlan_receipts")
         db.execute("DROP TABLE device_vlan_assessments")
         db.execute("DROP TABLE device_vlan_admission_intents")
@@ -240,15 +242,27 @@ def _seal_current_schema_as_version_five(db_path: Path) -> None:
         fingerprint = schema_fingerprint(db)
         db.execute(
             """UPDATE nct_schema_migrations
-                  SET after_schema_fingerprint = ?
+                  SET after_schema_fingerprint = ?,
+                      originating_build_id = ?, originating_build_commit = ?
                 WHERE migration_id = ?""",
-            (fingerprint, MISSION_ENVIRONMENT_MIGRATION_ID),
+            (
+                fingerprint,
+                schema_build_id,
+                schema_build_commit,
+                MISSION_ENVIRONMENT_MIGRATION_ID,
+            ),
         )
         db.execute(
             """UPDATE nct_schema_state
                   SET schema_contract_version = 5, schema_version = 5,
-                      migration_plan_digest = ?, schema_fingerprint = ?""",
-            (migration_plan_digest(MIGRATION_PLAN[:5]), fingerprint),
+                      migration_plan_digest = ?, schema_fingerprint = ?,
+                      originating_build_id = ?, originating_build_commit = ?""",
+            (
+                migration_plan_digest(MIGRATION_PLAN[:5]),
+                fingerprint,
+                schema_build_id,
+                schema_build_commit,
+            ),
         )
 
 
@@ -269,6 +283,20 @@ def _schema_preflight(db_path: Path) -> dict[str, object]:
         expected_build_id=running_build_id,
         expected_build_commit=running_build_commit,
     )
+
+
+def _version_five_schema_preflight(db_path: Path) -> dict[str, object]:
+    running_build_id, running_build_commit = SUPPORTED_V5_RANGE_BUILDS[0]
+    return schema_upgrade_preflight(
+        db_path,
+        expected_build_id=running_build_id,
+        expected_build_commit=running_build_commit,
+    )
+
+
+def _checkpoint_database(db_path: Path) -> None:
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
 
 
 def _add_phase2_late_schema_group(db_path: Path, group: str) -> None:
@@ -376,6 +404,7 @@ def test_version_four_rejects_known_late_schema_plus_unexpected_drift(
     _add_phase2_late_schema_group(db_path, "searchsploit")
     with sqlite3.connect(db_path) as db:
         db.execute("CREATE TABLE unexpected_schema(id INTEGER PRIMARY KEY)")
+    _checkpoint_database(db_path)
     with connect_database(db_path) as db:
         assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
     with pytest.raises(SchemaCompatibilityError, match="unrecognized"):
@@ -525,6 +554,104 @@ def test_version_four_read_only_preflight_rejects_unknown_running_build(
 ) -> None:
     db_path = tmp_path / "analyzer.db"
     _create_verified_version_four_fixture(db_path)
+
+    with pytest.raises(SchemaCompatibilityError, match="retained running build"):
+        schema_upgrade_preflight(
+            db_path,
+            expected_build_id="unknown-build",
+            expected_build_commit="unknown-commit",
+        )
+
+
+def test_version_five_read_only_preflight_accepts_exact_phase3_range_source(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_initialized_version_five_fixture(db_path)
+    with connect_database(db_path) as db:
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    before = db_path.read_bytes()
+
+    result = _version_five_schema_preflight(db_path)
+
+    assert result["status"] == "pass"
+    assert result["compatibility"] == "recorded-fingerprint-match-v5"
+    assert result["schema_contract_version"] == 5
+    assert result["schema_version"] == 5
+    assert result["migration_plan_digest"] == migration_plan_digest(MIGRATION_PLAN[:5])
+    assert result["originating_build_id"] == SUPPORTED_V5_RANGE_BUILDS[0][0]
+    assert result["retained_running_build_id"] == SUPPORTED_V5_RANGE_BUILDS[0][0]
+    assert result["migration_ids"] == list(MIGRATION_PLAN[:5])
+    assert result["integrity"] == "ok"
+    assert result["foreign_key_errors"] == []
+    assert db_path.read_bytes() == before
+
+
+def test_version_five_read_only_preflight_rejects_schema_drift(tmp_path: Path) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_initialized_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE unexpected_schema(id INTEGER PRIMARY KEY)")
+    _checkpoint_database(db_path)
+
+    with pytest.raises(SchemaCompatibilityError, match="version 5.*unrecognized"):
+        _version_five_schema_preflight(db_path)
+
+
+def test_version_five_read_only_preflight_rejects_incomplete_ledger(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_initialized_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "DELETE FROM nct_schema_migrations WHERE migration_id = ?",
+            (MISSION_ENVIRONMENT_MIGRATION_ID,),
+        )
+    _checkpoint_database(db_path)
+
+    with pytest.raises(SchemaCompatibilityError, match="version 5 migration ledger"):
+        _version_five_schema_preflight(db_path)
+
+
+def test_version_five_read_only_preflight_rejects_changed_origin(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_initialized_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE nct_schema_state SET originating_build_commit = 'different'"
+        )
+    _checkpoint_database(db_path)
+
+    with pytest.raises(SchemaCompatibilityError, match="schema origin"):
+        _version_five_schema_preflight(db_path)
+
+
+def test_version_five_read_only_preflight_rejects_changed_final_ledger_origin(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_initialized_version_five_fixture(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "UPDATE nct_schema_migrations SET originating_build_id = 'different' "
+            "WHERE migration_id = ?",
+            (MISSION_ENVIRONMENT_MIGRATION_ID,),
+        )
+    _checkpoint_database(db_path)
+
+    with pytest.raises(SchemaCompatibilityError, match="version 5 migration ledger"):
+        _version_five_schema_preflight(db_path)
+
+
+def test_version_five_read_only_preflight_rejects_unknown_running_build(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "analyzer.db"
+    _create_initialized_version_five_fixture(db_path)
+    _checkpoint_database(db_path)
 
     with pytest.raises(SchemaCompatibilityError, match="retained running build"):
         schema_upgrade_preflight(

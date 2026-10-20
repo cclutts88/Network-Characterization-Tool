@@ -359,6 +359,34 @@ A roadmap item should only be marked complete when:
   workflow acceptance remain pending. It is not Range-accepted, mission-ready, or
   available on `main`.
 
+- [~] **2026-10-20 — correct the retained version-5 Range upgrade gate.** The
+  `phase4-r2` package was transferred, its outer and internal manifests passed, and
+  its replacement image loaded. The stopped-database read-only preflight then rejected
+  the healthy retained `phase3-r3` database because the packaged gate admitted only
+  the earlier version-4 lineage. The upgrade stopped before backup or migration and
+  restored the original `phase3-r3` container; the retained database reports schema
+  version 5 with all five expected completed migrations. This is a release-path
+  compatibility defect, not evidence corruption. Correct the gate to admit only the
+  exact reviewed version-4 sources or the exact `phase3-r3` version-5 source, preserving
+  integrity, foreign-key, plan-digest, fingerprint, build-origin and complete-ledger
+  checks. Add direct rejection tests for altered version-5 state, rebuild under a new
+  immutable package identity, and repeat independent and Range validation. `phase4-r2`
+  remains rejected for retained-data upgrade and is not Range-accepted.
+  - [x] The source gate now accepts only the exact reviewed version-4 lineages or
+    `0.16.0-range-test-20261013-phase3-r3` at commit
+    `f6ba1ad4a754b904511e3d726110d6fc35b9f237` as a version-5 source. Version 5 must
+    match its exact plan digest, live and recorded fingerprint, five completed ledger
+    rows, final migration origin, retained running build, integrity check and foreign-key
+    check; every other version-5 source fails closed. Version-4 late-maintenance handling
+    remains unchanged. The primary operator guide now explains the exact accepted source
+    and requires a corrected full ZIP and adjacent checksum in a new staging directory
+    after a safely restored preflight stop; it forbids database, manifest, checksum and
+    single-script edits. Focused Linux/Docker validation passed **95 tests** and the
+    complete suite passed **1,739 tests with 17 skipped**. Novice review: **CLEAR**.
+    Independent quality gate: **CLEAR — DOCUMENTED DEVIATION**. The source correction
+    is complete on the foundation branch; corrected immutable package sealing and live
+    Range retained-data acceptance remain in progress.
+
 ## Independent quality gate — 2026-09-27
 
 - Reviewer operating rules are preserved in [docs/NCT_PROJECT_OPERATING_RULES.md](docs/NCT_PROJECT_OPERATING_RULES.md).

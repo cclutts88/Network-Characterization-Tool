@@ -82,10 +82,11 @@ rollback section in the main quickstart rather than improvising recovery steps.
 Before an upgrade changes saved data, `nct-upgrade.sh` stops NCT, uses the
 retained original image to complete SQLite's normal stopped-database WAL
 checkpoint, and then runs `nct-schema-preflight.py` through the replacement
-image with the data mounted read-only. The audit records database integrity, fingerprints, migration
-history, originating build identity, known phase2 maintenance tables, and the
-database SHA-256. Unknown, incomplete, or altered schema stops the upgrade and
-restores the earlier container.
+image with the data mounted read-only. The audit records database integrity,
+fingerprints, migration history, originating build identity, known version-4
+maintenance tables, and the database SHA-256. Only exact reviewed version-4 and
+version-5 Range sources are accepted. Unknown, incomplete, or altered schema stops
+the upgrade and restores the earlier container.
 
 ## Candidate Kubernetes storage check
 

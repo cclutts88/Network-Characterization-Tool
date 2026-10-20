@@ -83,11 +83,12 @@ Before an upgrade changes saved data, `nct-upgrade.sh` stops NCT, uses the
 retained original image to complete SQLite's normal stopped-database WAL
 checkpoint, and then runs `nct-schema-preflight.py` through the replacement
 image with the data mounted read-only. The audit records database integrity,
-fingerprints, migration history, originating build identity, known phase2
-maintenance tables, and the database SHA-256. Unknown, incomplete, or altered
-schema stops the upgrade and restores the earlier container.
+fingerprints, migration history, originating build identity, known version-4
+maintenance tables, and the database SHA-256. Only exact reviewed version-4 and
+version-5 Range sources are accepted. Unknown, incomplete, or altered schema stops
+the upgrade and restores the earlier container.
 
-If the retained phase2 container itself cannot restart, use
+If the retained earlier container itself cannot restart, use
 `nct-recover-unhealthy-upgrade.sh` only through step 6A of the main guide. It
 performs the same read-only schema gate without requiring the old application
 to run, independently verifies a cold backup, retains both failure sources, and

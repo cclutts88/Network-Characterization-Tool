@@ -52,6 +52,15 @@ SUPPORTED_V4_RANGE_BUILDS = (
     ),
 )
 
+# Exact version-5 Range image that may have created and opened the phase3
+# schema accepted by the phase4 replacement package.
+SUPPORTED_V5_RANGE_BUILDS = (
+    (
+        "0.16.0-range-test-20261013-phase3-r3",
+        "f6ba1ad4a754b904511e3d726110d6fc35b9f237",
+    ),
+)
+
 _LEGACY_V4_LATE_SCHEMA_GROUPS = (
     frozenset({"searchsploit_query_cache", "searchsploit_query_cache_updated"}),
     frozenset({"artifact_backfill"}),
@@ -251,7 +260,7 @@ def schema_upgrade_preflight(
     expected_build_id: str,
     expected_build_commit: str,
 ) -> dict[str, object]:
-    """Read-only proof that a saved v4 database is safe for this image to upgrade."""
+    """Read-only proof that a supported saved database is safe to upgrade."""
     if not db_path.is_file():
         raise SchemaCompatibilityError("The saved NCT database was not found.")
     wal_path = db_path.with_name(f"{db_path.name}-wal")
@@ -284,35 +293,44 @@ def schema_upgrade_preflight(
             build_id,
             build_commit,
         ) = state
-        if int(contract_version) != 4 or int(schema_version) != 4:
+        contract_version = int(contract_version)
+        schema_version = int(schema_version)
+        if contract_version != schema_version or schema_version not in (4, 5):
             raise SchemaCompatibilityError(
-                "This replacement package requires the verified phase2 version 4 schema."
+                "This replacement package requires an exact supported version 4 or 5 schema."
             )
         if layout != DATA_LAYOUT_CONTRACT or not recorded:
             raise SchemaCompatibilityError(
                 "The saved evidence layout or schema fingerprint is not compatible."
             )
-        expected_v4_plan_digest = migration_plan_digest(MIGRATION_PLAN[:4])
-        if plan_digest != expected_v4_plan_digest:
+        expected_plan_digest = migration_plan_digest(MIGRATION_PLAN[:schema_version])
+        if plan_digest != expected_plan_digest:
             raise SchemaCompatibilityError(
-                "The saved version 4 migration plan does not match the supported lineage."
+                f"The saved version {schema_version} migration plan does not match the supported lineage."
             )
+        supported_builds = (
+            SUPPORTED_V4_RANGE_BUILDS
+            if schema_version == 4
+            else SUPPORTED_V5_RANGE_BUILDS
+        )
         running_origin = (expected_build_id, expected_build_commit)
         schema_origin = (build_id, build_commit)
-        if running_origin not in SUPPORTED_V4_RANGE_BUILDS:
+        if running_origin not in supported_builds:
             raise SchemaCompatibilityError(
-                "The retained running build is not a supported version 4 Range source."
+                f"The retained running build is not a supported version {schema_version} Range source."
             )
-        if schema_origin not in SUPPORTED_V4_RANGE_BUILDS:
+        if schema_origin not in supported_builds:
             raise SchemaCompatibilityError(
-                "The saved schema origin is not a supported version 4 Range source."
+                f"The saved schema origin is not a supported version {schema_version} Range source."
             )
         live = schema_fingerprint(connection)
-        compatibility = "recorded-fingerprint-match"
+        compatibility = f"recorded-fingerprint-match-v{schema_version}"
         if live != recorded:
-            if not _matches_exact_legacy_v4_late_schema(connection, recorded):
+            if schema_version != 4 or not _matches_exact_legacy_v4_late_schema(
+                connection, recorded
+            ):
                 raise SchemaCompatibilityError(
-                    "The saved schema differs from version 4 in an unrecognized way."
+                    f"The saved schema differs from version {schema_version} in an unrecognized way."
                 )
             compatibility = "exact-known-phase2-late-schema"
 
@@ -322,10 +340,10 @@ def schema_upgrade_preflight(
                       originating_build_commit
                  FROM nct_schema_migrations ORDER BY target_schema_version, migration_id"""
         ).fetchall()
-        expected_ids = MIGRATION_PLAN[:4]
+        expected_ids = MIGRATION_PLAN[:schema_version]
         if len(ledger) != len(expected_ids):
             raise SchemaCompatibilityError(
-                "The saved version 4 migration ledger is incomplete or contains extra entries."
+                f"The saved version {schema_version} migration ledger is incomplete or contains extra entries."
             )
         by_id = {row[0]: row for row in ledger}
         for target, migration_id in enumerate(expected_ids, start=1):
@@ -335,14 +353,14 @@ def schema_upgrade_preflight(
                 or int(row[1]) != target
                 or row[2] != "completed"
                 or not row[3]
-                or (target == 4 and row[3] != recorded)
+                or (target == schema_version and row[3] != recorded)
                 or (
-                    target == 4
+                    target == schema_version
                     and (row[4] != build_id or row[5] != build_commit)
                 )
             ):
                 raise SchemaCompatibilityError(
-                    "The saved version 4 migration ledger is incomplete or inconsistent."
+                    f"The saved version {schema_version} migration ledger is incomplete or inconsistent."
                 )
 
         known_late_names = set(_LEGACY_V4_LATE_SCHEMA_ROWS)
@@ -352,8 +370,8 @@ def schema_upgrade_preflight(
         return {
             "status": "pass",
             "compatibility": compatibility,
-            "schema_contract_version": int(contract_version),
-            "schema_version": int(schema_version),
+            "schema_contract_version": contract_version,
+            "schema_version": schema_version,
             "data_layout_contract": layout,
             "migration_plan_digest": plan_digest,
             "recorded_schema_fingerprint": recorded,
