@@ -291,3 +291,28 @@ record remain available for diagnosis. Manager acceptance remains open until Fle
 setup finishes successfully, all expected services pass status checks, a full highstate
 finishes without failures, the web login is verified, and restart stability is shown.
 Neither sensor has been started.
+
+## 2026-10-20 — host firmware stability gate
+
+The manager's Elasticsearch container later exited with code 134 after the bundled
+OpenJDK 25 process received `SIGSEGV` in `libjvm.so`. No out-of-memory kill was
+recorded: Docker reported `OOMKilled=false`, the guest kernel recorded no
+out-of-memory event, and about 16 GiB remained available. The JVM error report was
+copied out of the stopped container before any recovery attempt.
+
+The Proxmox host reports an Intel Core i9-14900KF, MSI PRO B760-P WIFI DDR4
+motherboard, BIOS `1.A0` dated 2024-03-28 and CPU microcode `0x123`. Intel's published
+13th/14th-generation desktop instability guidance recommends Intel Default Settings
+and the latest BIOS containing microcode `0x12F` or later. MSI publishes newer BIOS
+releases for this exact board. Outdated host firmware is a material stability concern,
+but neither crash has been proven to originate from it; guest software, memory and
+other hardware causes remain unresolved.
+
+No firmware was changed remotely. Any firmware maintenance requires a separate
+host-wide plan that inventories and protects every running guest, preserves the
+unhealthy shared storage without activating it, provides recovery access and verifies
+the resulting BIOS settings and microcode. Security Onion manager acceptance and
+sensor setup are halted until that maintenance is complete and the manager passes
+repeated service, load and restart checks. Both sensors remain stopped, and the failed
+manager state and crash records are preserved for diagnosis. A successful firmware
+update alone will not establish stability.

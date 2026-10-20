@@ -5140,7 +5140,9 @@ Arkime support must be **tiered**.
   retained in `docs/RANGE_OBSERVABILITY_VALIDATION_RECORD.md`. During manager setup,
   the ISO's default kernel crashed while configuring Fleet. The manager was moved to an
   alternate kernel already present on the same verified ISO; recovery and
-  acceptance testing remain in progress, and both replacement sensors remain stopped.
+  acceptance testing then exposed a separate search-process crash. Host BIOS and
+  microcode are now a stability gate before manager acceptance can resume; both
+  replacement sensors remain stopped.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish implemented NCT passive ingestion, Range readiness, mission
   readiness, or availability on main.
