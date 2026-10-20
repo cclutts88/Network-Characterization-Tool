@@ -333,7 +333,7 @@ A roadmap item should only be marked complete when:
 
 ## Range transfer candidate — 2026-10-19
 
-- [ ] Prepare one complete air-gapped Docker package from the latest reviewed
+- [x] Prepare one complete air-gapped Docker package from the latest reviewed
   foundation branch for the next Range test. The package must use a new immutable
   image and build identity, carry its own file and image checksums, keep the existing
   host-folder data and rollback safeguards, and clearly identify itself as a transfer
@@ -344,6 +344,20 @@ A roadmap item should only be marked complete when:
   and its outer checksum path did not fail closed when the companion checksum was
   absent. `phase4-r2` replaces that draft with the self-contained Range script guide
   and requires the matching adjacent ZIP checksum before extraction.
+  Completed as `NCT-Air-Gapped-Range-Deployment-0.16.0-20261019-phase4-r2.zip`
+  with adjacent checksum. The extracted 23-file manifest and nested offline-image
+  checksum passed on Linux; the outer ZIP checksum is
+  `6be272983dfe7385333b5e9ea2078706ccced87305cb9e23ac94a5a77641cd26`.
+  The exact archive loaded into an empty Docker engine and preserved the NCT and
+  Caddy identities, application version, build, commit, required tools, raw-network
+  capability, healthy startup, and healthy restart. Disposable health, five main
+  pages, System Health rendering, and browser-console checks passed. A missing
+  checksum was separately proven to stop before extraction, while the supplied
+  checksum passed. The independent reviewer and novice operator both returned
+  `CLEAR`. This is a locally verified transfer candidate; Range installation,
+  HTTPS, sign-in, retained-data, offline-reference, device-field, and analyst
+  workflow acceptance remain pending. It is not Range-accepted, mission-ready, or
+  available on `main`.
 
 ## Independent quality gate — 2026-09-27
 
