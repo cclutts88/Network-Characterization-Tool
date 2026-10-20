@@ -25,6 +25,9 @@ You need:
 
 - the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip` uploaded to
   the Range server;
+- the matching adjacent file
+  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip.sha256` uploaded to
+  the same folder;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
 - an approved analyst network address for the firewall rule, if a new rule is
@@ -41,14 +44,13 @@ Open the Range server's terminal and run these commands one line at a time:
 cd /root
 package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip
 checksum_file="$package_zip.sha256"
+[ -f "$checksum_file" ] || {
+    echo "HALT: the matching package checksum file is missing: $checksum_file" >&2
+    exit 1
+}
 actual_package_sha256=$(sha256sum "$package_zip" | awk '{print $1}')
 export NCT_PACKAGE_SHA256="$actual_package_sha256"
-if [ -f "$checksum_file" ]; then
-    (cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
-else
-    echo "Package SHA-256: $actual_package_sha256"
-    echo "Compare this value with the SHA-256 shown with the release before continuing"
-fi
+(cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
 if [ -e /root/NCT-Air-Gapped-Range-Deployment ]; then
     staging_dir="/root/nct-package-$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -m 0700 "$staging_dir"
@@ -62,14 +64,12 @@ cd "$NCT_WORKDIR"
 sha256sum -c PACKAGE-MANIFEST.sha256 || exit 1
 ```
 
-What success looks like: when the small companion checksum file was uploaded,
-the checksum comparison prints `OK`; otherwise the command displays the ZIP's
-SHA-256 so you can compare it with the value shown with the release. A missing
-companion checksum file does not stop installation, but a supplied checksum
-that fails does. Do not extract or run a file with a failed or mismatched
-checksum. After extraction, the final command verifies every delivered file and
-must print `OK` for each one before returning to the prompt. Run the following
-command to confirm the package contents are visible:
+What success looks like: the companion checksum comparison prints `OK`. A missing
+or mismatched companion checksum file stops installation before extraction. Do not
+extract or run a package whose checksum cannot be verified. After extraction, the
+final command verifies every delivered file and must print `OK` for each one before
+returning to the prompt. Run the following command to confirm the package contents
+are visible:
 
 If an internal package or image checksum reports a missing or mismatched file,
 stop, preserve the package and the displayed output, and obtain a corrected

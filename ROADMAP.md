@@ -339,6 +339,11 @@ A roadmap item should only be marked complete when:
   host-folder data and rollback safeguards, and clearly identify itself as a transfer
   candidate pending Range installation and acceptance. This work started after the
   Kubernetes discovery kit and full 1,733-test Docker regression suite passed.
+  The first `phase4-r1` draft was withdrawn at the independent quality gate: its
+  packaged script reference pointed to development-only files that were not delivered,
+  and its outer checksum path did not fail closed when the companion checksum was
+  absent. `phase4-r2` replaces that draft with the self-contained Range script guide
+  and requires the matching adjacent ZIP checksum before extraction.
 
 ## Independent quality gate — 2026-09-27
 
