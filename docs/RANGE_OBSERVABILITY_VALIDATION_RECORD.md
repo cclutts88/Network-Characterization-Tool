@@ -151,3 +151,48 @@ manager, range sensor and home sensor remain stopped. Before any repair, record 
 complete volume-group, thin-pool, device-mapper and Proxmox storage state and account
 for running VMs that may already have active volumes from the same pool. This record
 does not authorize or prescribe a repair.
+
+## 2026-10-20 — authorized clean-rebuild boundary
+
+The existing Security Onion installation was not complete and has no Security Onion
+evidence that needs preservation. The operator authorized removal and recreation of
+only these unfinished VMs, reusing their names:
+
+- VM 110 — `SO-ManagerSearch`
+- VM 112 — `SO-Sensor-Home`
+- VM 117 — `SO-Sensor-Range-BlueNet`
+
+This authorization does not include deleting or reformatting the shared `chrisJr`
+pool, deleting any other VM, or performing broad orphan-volume cleanup. The inactive
+pool also contains records associated with other VMs. If normal removal cannot reach
+the old Security Onion disks, their exact old volume identities must be recorded and
+left untouched until a separately reviewed storage action is available.
+
+Recreation is gated on demonstrated healthy local capacity for 2,200 GiB of requested
+virtual disks plus operational headroom. Inaccessible old disks do not count as
+reclaimed space. VM identities, stopped state, snapshots, attached disks, network
+adapters, HA membership and replication membership must be recorded before removal.
+
+The intended rebuilt layout is:
+
+| VM | Role | Management | Passive capture | Provisional allocation |
+|---|---|---|---|---|
+| 110 | Manager/Search | `172.22.70.10/24` on `vmbr5` | None | 8 vCPU, 24 GiB RAM, 400 GiB disk |
+| 117 | Range sensor | `172.22.70.20/24` on `vmbr5` | `vmbr3`, `vmbr4` | 8 vCPU, 16 GiB RAM, 900 GiB disk |
+| 112 | Home sensor | `172.22.70.21/24` on `vmbr5` | `vmbr2` | 8 vCPU, 16 GiB RAM, 900 GiB disk |
+
+The management gateway is `172.22.70.1`, DNS is `10.0.0.53`, and the intended console
+address is `https://172.22.70.10`. Address-conflict checks remain required before use.
+The operator supplied one temporary administrator credential for all three nodes. Its
+value is intentionally absent from source control and documentation and must be
+rotated after acceptance.
+
+The supported Security Onion roles are ManagerSearch and Sensor. Arkime remains on
+separate VM 118 rather than being added to the Security Onion sensor guests. This is a
+documented clarification of the earlier conversational phrase "Arkime on the
+sensors" and avoids duplicate packet-platform resource use inside each sensor.
+
+The clean rebuild is not started and does not close Security Onion acceptance. It is
+complete only after manager health, both sensor joins, capture-interface isolation,
+known-event search, restart behavior, retention measurement and source attribution
+all pass.

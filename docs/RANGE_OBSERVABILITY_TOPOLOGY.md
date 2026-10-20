@@ -49,6 +49,44 @@ The diagram follows evidence toward the tools, with one normal-traffic line from
 test endpoints into the VyOS trunk. Solid evidence lines have been exercised for the
 stated Arkime tests. Dotted lines remain planned until their acceptance checks pass.
 
+## Security Onion role and interface plan
+
+The range uses one supported Security Onion `ManagerSearch` node and two supported
+Security Onion `Sensor` nodes. The manager/search node provides the analyst interface
+and indexed event storage. It does not sniff mirrored traffic. Each sensor has one
+numbered management interface and separate unnumbered capture interfaces.
+
+| Node | Management | Capture | Purpose |
+|---|---|---|---|
+| Manager/Search | `172.22.70.10/24` on `vmbr5` | None | Security Onion Console, coordination and indexed search data |
+| Range sensor | `172.22.70.20/24` on `vmbr5` | `vmbr3` and `vmbr4` only | Range packet analysis for the approved mirror points |
+| Home sensor | `172.22.70.21/24` on `vmbr5` | `vmbr2` only | Home-mirror packet analysis |
+
+All three nodes use gateway `172.22.70.1` and DNS `10.0.0.53` on the management
+network. Capture interfaces must remain without an IP address, DNS setting or default
+route. Before installation, each planned management address must be checked for a
+conflict. The manager's intended web address is `https://172.22.70.10`.
+
+The provisional lab allocations are 8 vCPU, 24 GiB RAM and 400 GiB disk for the
+manager/search node, and 8 vCPU, 16 GiB RAM and 900 GiB disk for each sensor. These
+meet or exceed the published Security Onion 2.4 minimums for their roles, but acceptance still
+requires measured CPU, memory, ingest rate and retention under the lab's actual
+traffic. Thin-provisioned disk size is not proof that physical capacity exists.
+
+### Arkime separation decision
+
+Arkime remains a separate passive-evidence system on VM 118. Additional Arkime
+services will not be installed inside the Security Onion sensors. Security Onion
+already performs its supported sensor duties with Zeek, Suricata and local packet
+retention; installing another packet platform on the same sensor would compete for
+CPU, memory and disk while making evidence ownership harder to explain.
+
+When both products need the same traffic, the range may deliberately fan out the
+approved mirror to the Security Onion sensor and VM 118. Each observation retains its
+own sensor, source, time and coverage labels. NCT may correlate those observations but
+must not add their counts together as though they were independent connections. This
+separation replaces the earlier shorthand description of "Arkime on the sensors."
+
 ## What each system is for
 
 ### Arkime
