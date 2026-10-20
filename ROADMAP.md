@@ -386,6 +386,32 @@ A roadmap item should only be marked complete when:
     Independent quality gate: **CLEAR — DOCUMENTED DEVIATION**. The source correction
     is complete on the foundation branch; corrected immutable package sealing and live
     Range retained-data acceptance remain in progress.
+  - [x] The corrected immutable transfer package is sealed as
+    `NCT-Air-Gapped-Range-Deployment-0.16.0-20261019-phase4-r5.zip` at **97,499,852
+    bytes** with outer SHA-256
+    `fcfdbd179fb81c11b6b7aeea482927c1ea3a3ff6f3880e674c17947b0357502f` and a
+    required adjacent checksum. `phase4-r3` was withdrawn before transfer because its
+    packaged script reference was the repository developer guide and named files that
+    were not delivered. `phase4-r4` was withdrawn locally because its receipt called an
+    archive configuration digest an archive-loaded image ID. `phase4-r5` contains the
+    exact package-specific script guide, distinguishes Docker image IDs from archive
+    configuration digests, and retains no missing Kubernetes or development-only
+    references. A fresh extraction has one safe root, **24** unique entries, **23**
+    manifest-bound files, LF-only checksum records, and a **98,220,544-byte** image
+    archive with SHA-256
+    `d8b8e7d2bee57ecc8b8827b31e82d6df2717a1f6d8fd8868c58699ffde6e069a`.
+    All checksums, **15** shell helpers and both Python helpers passed from the fresh
+    extraction. The exact archive reloaded as build
+    `0.16.0-range-test-20261019-phase4-r5` from commit
+    `b908834cb60327a640e9987fddff036c4df9fb75`. Its read-only preflight accepted a
+    fresh database created by the exact `phase3-r3` image; an isolated copy then
+    upgraded to schema version 6 with all six migrations complete, SQLite integrity
+    `ok`, no foreign-key errors, healthy startup, and successful Analyze, Hunt, Reach,
+    Map and System Health responses. Novice package gate: **CLEAR**. Independent exact
+    package gate: **CLEAR — DOCUMENTED DEVIATION**. This is a locally verified transfer
+    candidate. Installation, HTTPS, sign-in, retained-data, account, offline-reference,
+    device-field and operator-workflow checks on the work Range remain pending; it is
+    not yet Range-accepted, mission-ready or available on `main`.
 
 ## Independent quality gate — 2026-09-27
 
