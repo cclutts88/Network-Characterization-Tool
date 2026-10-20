@@ -5124,6 +5124,87 @@ unavailable or prohibited.
 
 Arkime support must be **tiered**.
 
+- [~] **2026-10-19 — existing Proxmox passive-evidence lab completion started.**
+  Prepare the already-created lab on Proxmox node `Rachael` as an isolated test
+  environment for the next Arkime integration iteration. Preserve the existing
+  roles: pfSense on the external and server/workstation lab bridges; VyOS on the
+  internal pfSense transit plus the VM-only VLAN-aware trunk; VLAN 10 and VLAN 20
+  test endpoints; the Security Onion manager and range sensor; and the separate
+  Arkime backend. First inventory exact VM interfaces, bridge/VLAN attachment,
+  routes, installed versions, storage and power state, then complete only the
+  missing configuration. Do not connect this lab to the deployed Work Range NCT
+  instance or treat VM names as proof of isolation or sensor coverage. Acceptance
+  requires bounded known traffic with timestamps, verified capture coverage and
+  gaps, preserved VLAN tags where expected, restart checks, resource/retention
+  measurements, and an exact retained Arkime export whose filter, time window,
+  timezone, sensor identity, Network Scope and coverage limits are recorded. This
+  is lab preparation and export validation only; it does not claim implemented NCT
+  Arkime ingestion, Range readiness, mission readiness or availability on `main`.
+  - [x] **Topology and separation inventory recorded (2026-10-20).** Proxmox
+    `Rachael` is running pfSense VM 254, VyOS VM 105, VLAN 10 and VLAN 20 test
+    endpoints VMs 106 and 108, and Arkime VM 118. pfSense has the lab server,
+    workstation, blue and VyOS-transit interfaces; VyOS routes the VLAN-aware
+    VM-only trunk. Arkime management is on Blue Net at `172.22.70.30/24`; its
+    separate capture interface has no IP and is attached to the pfSense LAN
+    bridge. Security Onion manager VM 110 and range-sensor VM 117 remain stopped.
+    Nothing in this exercise connects Arkime to the deployed Work Range NCT.
+  - [x] **Rollback points recorded before capture repair (2026-10-20).** VM 118
+    has snapshot `pre-arkime-capture-fix-20261019`, and the guest configuration
+    backup is `/opt/arkime/etc/config.ini.pre-capture-fix-20261019`. The Proxmox
+    thin pool warned that total provisioned capacity exceeds physical capacity;
+    this remains a lab-capacity risk even though the snapshot succeeded.
+  - [x] **Bounded pfSense-LAN mirror, retention and restart validation completed
+    (2026-10-20).** A temporary, reboot-volatile two-direction `tc` mirror sends the pfSense LAN
+    bridge-facing port `fwpr254p1` to Arkime capture tap `tap118i1`; deleting the
+    `clsact` qdisc from `fwpr254p1` is the recorded rollback command. A five-echo ICMP test
+    and an HTTPS HEAD request from the Proxmox host to pfSense LAN
+    `192.168.1.1` both succeeded with zero ping loss, and Arkime's capture
+    interface counters increased, proving the mirror path. The later duplicate
+    `dropUser=nobody`/`dropGroup=daemon` settings were corrected to the dedicated
+    `arkime:arkime` identity after saving
+    `/opt/arkime/etc/config.ini.pre-identity-resolution-20261020`. The actual
+    capture process and packet files now use `arkime:arkime`. A stale
+    `/tmp/arkimemanagement.stoppedsessions` file still owned by the former
+    identity blocked stopped-session persistence; changing that one runtime file
+    to `arkime:arkime` removed the repeated save error without deleting evidence.
+    Arkime's configured 256 KiB direct-write buffer explained why the first tiny
+    probes produced indexed metadata before a nonzero packet file. A bounded
+    1,000-packet, 1,400-byte ICMP run then retained 57,344 compressed packet
+    bytes. After restarting capture, a second bounded 300-packet run retained a
+    new 16,384-byte packet file. OpenSearch, capture and viewer were all active,
+    the session index increased to three documents after restart, and no new
+    stopped-session ownership errors appeared.
+  - [x] **Exact retained structured-session validation export recorded
+    (2026-10-20).** VM 118
+    retains `/srv/arkime-data/exports/nct-validation-20261020/query.json`, the
+    exact 10,528-byte `export.json`, and `metadata.txt`. The metadata records UTC,
+    sensor `arkimemanagement`, explicit validation scope
+    `Proxmox-Arkime-Lab-Servers` (`192.168.1.0/24`), source `192.168.1.2`,
+    destination `192.168.1.1`, exact millisecond time window
+    `1792515600000..1792516530654`, four returned sessions, and export SHA-256
+    `880f339c17211ad2457ede9a1f52a2e121b704315f713af09710c48b350a917d`.
+    This proves the retained structured-session export path used for Tier D
+    validation; it does not satisfy the separate Tier A summary-export
+    requirement. The export and packet-byte proofs establish only the temporary pfSense-LAN
+    mirror path. They explicitly do not establish VLAN 10 or VLAN 20 coverage,
+    persistent mirror configuration, overlap reconciliation, Security Onion
+    coverage, or implemented NCT Arkime ingestion.
+  - [~] **Broader passive-sensor coverage validation remains in progress
+    (2026-10-20).** Before making the mirror persistent, inventory and test the
+    exact VyOS trunk/transit observation points, prove whether VLAN tags survive,
+    and prevent double-counting when the same exchange is visible at more than
+    one observation point. Keep management and Work Range networks outside the
+    mirror. Security Onion manager VM 110 and range-sensor VM 117 remain stopped
+    until their existing roles, storage and safe capture attachment are verified.
+  - [!] **OpenSearch stability limitation (2026-10-20).** Before this controlled
+    restart, OpenSearch had exited after about four hours with `SIGSEGV`, which
+    then caused Arkime capture to lose its database. Disk space, the dedicated
+    packet volume, memory and swap were not exhausted at the observed failure;
+    the guest kernel also marked TSC unstable after clock skew. That timing signal
+    is a possible contributor, not a proven cause. A short successful restart is
+    insufficient: extended soak, resource, restart and reconciliation checks
+    remain mandatory.
+
 ## 6.1 Tier A — Summary export
 
 Lowest-cost/manual option.
