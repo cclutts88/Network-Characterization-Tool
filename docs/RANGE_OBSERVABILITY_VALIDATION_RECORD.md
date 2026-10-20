@@ -322,3 +322,5 @@ packages against an unavailable search service. That run was stopped with termin
 status 143 to prevent further failed package writes. The manager then completed an
 orderly operating-system shutdown. Proxmox confirms that the manager and both sensors
 are stopped and that automatic start remains disabled for all three replacement guests.
+The bounded physical-maintenance and post-update validation sequence is retained in
+`docs/RANGE_HOST_FIRMWARE_MAINTENANCE.md`.
