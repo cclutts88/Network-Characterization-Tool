@@ -131,3 +131,23 @@ restart and reconciliation checks remain required before any readiness claim.
 - Duplicate visibility across observation points.
 - Retention measurements under sustained traffic.
 - Implemented and verified NCT passive-evidence ingestion.
+
+## 2026-10-20 — Security Onion startup blocker
+
+The first attempt to start manager/search VM 110 stopped before guest boot. Proxmox
+reported:
+
+`Activation of logical volume chrisJr/chrisJr is prohibited while logical volume chrisJr/chrisJr_tmeta is active.`
+
+The Proxmox storage status API reported the `chrisJr` LVM-thin storage as enabled but
+inactive, with zero available, total and used values. The LVM-thin inventory reported
+thin pool `chrisJr/chrisJr` with inactive state. Those zero capacity figures do not
+establish that the pool is empty or exhausted, and the observation does not by itself
+prove corruption. The manager and both sensors use disks on that storage, so sensor
+startup was not attempted.
+
+No storage repair, disk move, VM configuration change or retry was performed. The
+manager, range sensor and home sensor remain stopped. Before any repair, record the
+complete volume-group, thin-pool, device-mapper and Proxmox storage state and account
+for running VMs that may already have active volumes from the same pool. This record
+does not authorize or prescribe a repair.
