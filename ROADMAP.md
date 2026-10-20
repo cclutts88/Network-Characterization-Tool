@@ -306,6 +306,31 @@ A roadmap item should only be marked complete when:
     projection panel and standalone revision-bound exports instead of modifying each older
     page model and its native export.
 
+## Kubernetes Range trial preparation — 2026-10-19
+
+- [x] Prepare a non-destructive, single-replica Kubernetes trial path for the Range.
+  The first step must inventory the selected cluster context, namespace, storage classes,
+  ingress support, Metrics API, and any existing NCT resources without creating, changing,
+  deleting, or reading Secrets. The operator guide must make the choice between a fresh
+  side-by-side Kubernetes trial, an existing supported Kubernetes upgrade, recovery, and
+  an unsupported/blocked path before any mutation. A standalone Docker installation is
+  not to be treated as an in-place Kubernetes upgrade; the safe trial uses a new namespace
+  and new persistent claim while preserving the current installation until acceptance.
+  Exact image registry/digest, namespace, storage class, requested capacity, HTTPS gateway,
+  and target-cluster qualification evidence remain required before application.
+  Completed with a fail-closed read-only inventory script, a novice-oriented start page,
+  and the `NCT-Kubernetes-Range-Discovery-20261019-r1.zip` administrator handoff package.
+  The inventory pins the selected context, bounds each request, does not read Secrets,
+  and detects existing workloads, nondefault configuration records, claims, and retained
+  volumes even when the namespace is absent. The fresh, existing-upgrade, recovery, and
+  blocked paths are explained without treating the current Docker installation as a
+  Kubernetes upgrade. Focused Docker validation passed 39 tests. The independent reviewer
+  and novice operator both returned `CLEAR`. This completes discovery preparation only;
+  no Range cluster resource was changed, and exact-cluster storage, registry, HTTPS,
+  backup/restore, replacement, node-loss, upgrade, and rollback evidence remain required
+  before Range-ready status. The complete Docker regression suite also passed
+  1,733 tests with 17 skipped checks after this package work.
+
 ## Independent quality gate — 2026-09-27
 
 - Reviewer operating rules are preserved in [docs/NCT_PROJECT_OPERATING_RULES.md](docs/NCT_PROJECT_OPERATING_RULES.md).

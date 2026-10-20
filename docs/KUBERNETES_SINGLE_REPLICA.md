@@ -1,5 +1,11 @@
 # Kubernetes single-replica analysis profile
 
+> **Operator starting point:** first use
+> [`KUBERNETES_RANGE_START_HERE.md`](KUBERNETES_RANGE_START_HERE.md) to decide whether
+> this is a fresh side-by-side trial, an existing Kubernetes upgrade, a recovery, or a
+> blocked/unknown installation. Do not use the fresh-install steps below against an
+> existing NCT Deployment or retained claim.
+
 ## What this profile is
 
 A replica is one running copy of NCT. This profile permits exactly one NCT copy and
