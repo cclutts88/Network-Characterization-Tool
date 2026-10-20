@@ -316,3 +316,9 @@ sensor setup are halted until that maintenance is complete and the manager passe
 repeated service, load and restart checks. Both sensors remain stopped, and the failed
 manager state and crash records are preserved for diagnosis. A successful firmware
 update alone will not establish stability.
+
+After the Elasticsearch crash, the still-running Fleet process was installing optional
+packages against an unavailable search service. That run was stopped with termination
+status 143 to prevent further failed package writes. The manager then completed an
+orderly operating-system shutdown. Proxmox confirms that the manager and both sensors
+are stopped and that automatic start remains disabled for all three replacement guests.
