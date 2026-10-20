@@ -331,6 +331,15 @@ A roadmap item should only be marked complete when:
   before Range-ready status. The complete Docker regression suite also passed
   1,733 tests with 17 skipped checks after this package work.
 
+## Range transfer candidate — 2026-10-19
+
+- [ ] Prepare one complete air-gapped Docker package from the latest reviewed
+  foundation branch for the next Range test. The package must use a new immutable
+  image and build identity, carry its own file and image checksums, keep the existing
+  host-folder data and rollback safeguards, and clearly identify itself as a transfer
+  candidate pending Range installation and acceptance. This work started after the
+  Kubernetes discovery kit and full 1,733-test Docker regression suite passed.
+
 ## Independent quality gate — 2026-09-27
 
 - Reviewer operating rules are preserved in [docs/NCT_PROJECT_OPERATING_RULES.md](docs/NCT_PROJECT_OPERATING_RULES.md).
