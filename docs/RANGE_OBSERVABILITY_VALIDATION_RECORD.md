@@ -267,3 +267,27 @@ Only replacement manager VM 210 was started. Its official ISO installer accepted
 new local administrator account and entered the automated operating-system installation.
 Replacement sensors 212 and 217 remain stopped. Installation start is not manager
 health or Security Onion acceptance.
+
+## 2026-10-20 — manager kernel recovery in progress
+
+During the first manager/search configuration run, the Security Onion ISO's default
+Oracle UEK kernel `5.15.0-318.199.3.2.1.el9uek.x86_64` crashed in the
+memory-control-group path while the official Elastic Fleet setup was creating
+integration policies. Kdump retained the crash evidence under `/var/crash`. The guest
+then restarted automatically; this was the source of the operator-visible return to a
+login prompt.
+
+The guest has fixed memory with Proxmox ballooning disabled, so the failure was not
+treated as a memory-resize event. The default boot entry was changed to the alternate
+Red Hat compatible kernel `5.14.0-611.45.1.el9_7.x86_64` already shipped on the same
+verified Security Onion ISO. No outside package or custom kernel was added. After
+reboot, the manager completed its automatic highstate. Elasticsearch HTTPS returned
+401 to an unauthenticated request, showing that its authentication endpoint responded;
+Kibana status returned 200. The official Fleet setup progressed beyond the operation
+that triggered the crash and remains in progress.
+
+This is a reversible test-range compatibility deviation. The UEK kernel and crash
+record remain available for diagnosis. Manager acceptance remains open until Fleet
+setup finishes successfully, all expected services pass status checks, a full highstate
+finishes without failures, the web login is verified, and restart stability is shown.
+Neither sensor has been started.

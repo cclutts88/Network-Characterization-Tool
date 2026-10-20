@@ -5137,7 +5137,10 @@ Arkime support must be **tiered**.
   shared pool. Its volumes remain untouched while replacement manager/search and sensor
   guests are provisioned on separately verified storage. This is a test-range recovery
   decision, not a Security Onion or NCT readiness claim; exact evidence and limits are
-  retained in `docs/RANGE_OBSERVABILITY_VALIDATION_RECORD.md`.
+  retained in `docs/RANGE_OBSERVABILITY_VALIDATION_RECORD.md`. During manager setup,
+  the ISO's default kernel crashed while configuring Fleet. The manager was moved to an
+  alternate kernel already present on the same verified ISO; recovery and
+  acceptance testing remain in progress, and both replacement sensors remain stopped.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish implemented NCT passive ingestion, Range readiness, mission
   readiness, or availability on main.
