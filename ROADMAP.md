@@ -5176,9 +5176,10 @@ Arkime support must be **tiered**.
   separate development workstation with copied exports or isolated fixtures, but the
   host and Security Onion acceptance gates remain open.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
-  does not yet establish implemented NCT passive ingestion, Range readiness, mission
-  readiness, or availability on main.
-- [~] **2026-10-20 — exact Range Arkime connector acceptance started.** Read-only
+  does not yet establish Tier A passive-network analysis, full Arkime and Security
+  Onion integration, Range readiness, mission readiness, or availability on main.
+- [~] **2026-10-20 to 2026-10-21 — exact Range Arkime connector acceptance is
+  operational with one visual closeout still open.** Read-only
   inventory confirmed that the existing Arkime guest retains separate system and
   capture disks and that Arkime Capture, Viewer and OpenSearch start together on its
   planned isolated management address. The range router was restored for this trial.
@@ -5199,6 +5200,26 @@ Arkime support must be **tiered**.
   trial must prove Arkime authentication, bounded Sessions API retrieval, exact-source
   retention, restart behavior and visible NCT receipts before this item can close. The
   existing guests and retained evidence must not be deleted or modified as a shortcut.
+  The isolated Compose deployment now runs the exact foundation build and uses a
+  dedicated API-only Arkime account over verified HTTPS. A ten-minute pull completed
+  with zero records, then a bounded 24-hour pull completed with **69 retained session
+  records**. Both attempts retained their exact response, scope and receipt metadata.
+  After an intentional NCT container restart, both completed attempts and both retained
+  imports remained available through NCT, including the 69-record result. Arkime
+  Capture, Viewer and OpenSearch reported no service restarts; the NCT container used
+  about 60 MiB during the final check; no swap or storage pressure appeared; and only
+  the three guests authorized for this exception were running. The temporary setup key
+  and disposable validation scripts were removed after verification. The connector is
+  therefore working in the isolated Range through Docker Compose. The final browser
+  closeout remains open only because the operator workstation has not yet trusted the
+  private NCT web certificate authority. This NCT web CA is separate from the Arkime
+  Viewer CA mounted into NCT for API access, and the browser warning must not be
+  bypassed. Closeout requires trusting the approved NCT CA and opening both the live
+  Arkime page and one retained receipt without a certificate warning. The live health
+  and authenticated receipt APIs pass, and the same build's Arkime page already passed
+  the local browser runtime check.
+  Kubernetes installation, Tier A data, Security Onion integration, host-firmware
+  acceptance, mission readiness and promotion to `main` remain separate gates.
 - [x] **2026-10-20 — bounded manual Tier D Arkime intake completed on the foundation
   branch.** NCT now accepts a bounded Sessions JSON export, requires explicit Network
   Scope, sensor, query-window, bounding and separate export/capture completeness

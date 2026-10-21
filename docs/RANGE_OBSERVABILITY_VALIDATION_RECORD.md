@@ -372,3 +372,43 @@ any required service repeatedly restarts. Do not expand capture, replay traffic 
 start Security Onion as part of this acceptance. A successful trial establishes only
 bounded connector behavior and does not establish Range, Kubernetes, Security Onion,
 host-firmware or mission readiness.
+
+## 2026-10-21 — live Arkime connector trial result
+
+The bounded Docker Compose trial reached an operational result on the side-by-side NCT
+guest without changing the preserved NCT guest or starting the Security Onion guests.
+The deployed NCT container reported foundation commit
+`73389306895f6b947993ac5108dd6671dd55d523`, the exact build under test. Arkime
+Viewer was placed behind HTTPS with a private Range certificate, and a dedicated
+API-only `arkimeUser` account was created for the connector. Its password and CA were
+mounted read-only from root-owned files; neither secret was placed in a pull definition
+or evidence record.
+
+Direct Digest authentication from the NCT guest succeeded. A ten-minute NCT pull then
+completed with zero returned sessions, which verified the empty-result path. A second
+bounded pull covering 24 hours completed with 69 returned sessions. NCT retained the
+exact source response and exposed the normalized import receipt with complete calculated
+export status and unknown capture coverage. The result remained below the 1,000-record
+and 10 MiB acceptance ceilings.
+
+The NCT container was intentionally restarted. After restart, authenticated NCT reads
+returned both completed pull attempts and both retained imports, including the 69-session
+result. The NCT health endpoint returned the expected build identity. Arkime Capture,
+Viewer and OpenSearch remained active with zero recorded service restarts. Final checks
+showed no swap use or storage pressure and low NCT container use. Only the existing
+Arkime guest, the range router and the side-by-side NCT guest were running; the preserved
+NCT guest and all Security Onion guests remained stopped.
+
+The temporary administrative SSH key and disposable validation scripts were removed
+after acceptance. The continuing integration uses the dedicated read-only Arkime
+credential and mounted trust material. Live browser rendering on the operator workstation
+still requires that workstation to trust the private NCT web certificate authority.
+This NCT web CA is separate from the Arkime Viewer CA mounted into NCT for API access.
+Do not bypass the browser warning. The closeout check is complete only after the
+approved NCT CA is trusted on the workstation and both the live Arkime page and one
+retained receipt open without a certificate warning. The live health and authenticated
+receipt APIs pass, while the same build's Arkime page has already passed its local
+browser runtime check. This remaining visual check does not change the connector's
+operational result, but it keeps the exact Range acceptance item open.
+This trial did not enable an automatic schedule, so scheduled-pull recovery and
+long-duration stability remain later acceptance checks.

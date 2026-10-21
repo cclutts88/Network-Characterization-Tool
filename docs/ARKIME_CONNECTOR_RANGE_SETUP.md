@@ -242,6 +242,18 @@ The first Range acceptance pull is limited to 1,000 records and 10 MiB. Partial 
 unknown results are retained for review and pause that definition. Opening or
 refreshing the page reads NCT's saved records and does not contact Arkime.
 
+A **Complete** result with 0 sessions means NCT contacted Arkime successfully and
+Arkime found no sessions matching that query window. It does not prove that no traffic
+occurred or that sensor coverage was complete. A nonzero result means Arkime returned
+that many matching session records; it does not prove that a port or service is
+currently open. Capture coverage remains **Unknown** unless it is validated separately.
+
+The CA that protects the NCT HTTPS page on an operator workstation is separate from the
+Arkime Viewer CA mounted into NCT for API access. Do not bypass a browser certificate
+warning. The visual closeout is complete only after the approved NCT web CA is trusted
+on the workstation and both the Arkime page and a retained receipt open without a
+certificate warning.
+
 ## Troubleshooting order
 
 1. Confirm Arkime Viewer and OpenSearch are healthy.
