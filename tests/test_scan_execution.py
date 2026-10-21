@@ -347,6 +347,82 @@ def test_combined_top_ports_success_retains_context_and_publishes_both_protocols
     assert {"tcp-scan.xml", "udp-scan.xml", "scan.xml"}.issubset(registered)
 
 
+def test_combined_top_ports_fping_fallback_previews_and_runs_both_protocols(tmp_path):
+    db_path = tmp_path / "nct.db"
+    data_dir = tmp_path / "data"
+    request = ScanRunRequest(
+        operator="Tester",
+        name="Combined FPING fallback",
+        reason="Verify split fallback approval and execution",
+        originating_host="test-host",
+        interface="eth0",
+        profile="Custom",
+        scan_options=ScanOptions(
+            protocol="tcp_udp",
+            tcp_scope="top_1000",
+            udp_scope="top_100",
+            discovery_mode="fping",
+            traceroute=True,
+        ),
+        targets=["192.0.2.10/32"],
+        capture=True,
+        timeout_seconds=30,
+    )
+    manifest = prepare_scan_run(request, db_path, interfaces={"eth0"})
+    control = RunControl()
+    approval_states: list[dict] = []
+    launched: list[str] = []
+
+    def fake_popen(argv, *, cwd: Path, **_kwargs):
+        command = " ".join(str(item) for item in argv)
+        launched.append(command)
+        if command.startswith("tcpdump"):
+            return FakeProcess(None)
+        if command.startswith("fping"):
+            return FakeProcess(1)
+        if "tcp-scan.xml" in command:
+            (cwd / "tcp-scan.xml").write_bytes(TCP_XML)
+            return FakeProcess(0)
+        if "udp-scan.xml" in command:
+            (cwd / "udp-scan.xml").write_bytes(UDP_XML)
+            return FakeProcess(0)
+        raise AssertionError(command)
+
+    def approve_full_target_fallback(_seconds):
+        current = get_scan_run_plan(manifest["run_id"], db_path)
+        if current and current["status"] == "awaiting_fallback_approval":
+            approval_states.append(current)
+            control.fallback_decision = "approve"
+            control.fallback_decided_by = "Tester"
+            control.fallback_authorization_note = "Approved test-only full-target fallback"
+            control.fallback_decision_event.set()
+
+    execute_scan_run(
+        manifest["run_id"], control, db_path=db_path, data_dir=data_dir,
+        popen_factory=fake_popen, sleep_fn=approve_full_target_fallback,
+    )
+
+    completed = get_scan_run_plan(manifest["run_id"], db_path)
+    assert approval_states
+    preview = approval_states[0]
+    assert preview["fallback_trigger"] == "no_responsive_hosts"
+    assert [item["name"] for item in preview["fallback_execution_phases"]] == [
+        "tcp", "udp"
+    ]
+    tcp_preview, udp_preview = preview["fallback_execution_phases"]
+    assert tcp_preview["command_argv"][
+        tcp_preview["command_argv"].index("--top-ports") + 1
+    ] == "1000"
+    assert udp_preview["command_argv"][
+        udp_preview["command_argv"].index("--top-ports") + 1
+    ] == "100"
+    assert completed["status"] == "completed"
+    assert completed["fallback_decision"] == "approve"
+    assert completed["coverage"]["actual_protocols"] == ["TCP", "UDP"]
+    assert any("tcp-scan.xml" in command for command in launched)
+    assert any("udp-scan.xml" in command for command in launched)
+
+
 @pytest.mark.parametrize(
     ("failure_mode", "expected_reason"),
     [("exit", "exit status 4"), ("startup", "a startup error")],

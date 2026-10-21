@@ -1159,6 +1159,7 @@ def apply_fping_fallback(manifest: dict) -> None:
         target_file="targets.txt",
         pre_discovered=False,
     )
+    manifest["fallback_execution_phases"] = phases
     if requires_split_protocol_phases(manifest["profile_settings"]):
         manifest["command_argv"] = list(phases[0]["command_argv"])
         manifest["command_note"] = (
@@ -4365,14 +4366,21 @@ def execute_scan_run(
                     manifest["fallback_trigger"] = fallback_trigger
                     terminate_process(control.capture_process)
                     control.capture_process = None
-                    fallback_argv = build_nmap_argv(
-                        manifest["profile"], manifest["interface"],
+                    fallback_phases = build_execution_phases(
+                        manifest["interface"], manifest["profile_settings"],
                         include_no_strike=bool(manifest.get("no_strike")),
-                        scan_options=manifest["profile_settings"],
                         target_file="targets.txt",
+                        pre_discovered=False,
                     )
+                    manifest["fallback_execution_phases"] = fallback_phases
+                    fallback_argv = list(fallback_phases[0]["command_argv"])
                     manifest["fallback_command_argv"] = fallback_argv
                     manifest["exact_fallback_command"] = shlex.join(fallback_argv)
+                    manifest["fallback_command_note"] = (
+                        "Review every protocol command below before approval."
+                        if len(fallback_phases) > 1
+                        else "Review the full-target command below before approval."
+                    )
                     if manifest.get("fallback_policy") == "stop_without_nmap":
                         manifest.update({
                             "status": "completed_without_nmap",

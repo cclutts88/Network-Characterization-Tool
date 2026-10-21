@@ -5203,6 +5203,21 @@ Arkime support must be **tiered**.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish Tier A passive-network analysis, full Arkime and Security
   Onion integration, Range readiness, mission readiness, or availability on main.
+- [x] **2026-10-21 — FPING fallback compatibility repaired after live home-VLAN
+  scans failed before their TCP and UDP phases.** Four operator-started scans retained
+  a clear failure reason instead of evidence: FPING reported no responsive hosts, then
+  the fallback preview tried to flatten independently selected TCP and UDP top-port
+  scopes into one command. NCT now preserves the two exact protocol phases, shows both
+  full-target commands before approval, and retains the explicit authorization gate.
+  The scan builder, fallback approval panel, Operator Guide, and built-in How NCT Works
+  guide explain that FPING is ICMP-only, that zero replies do not prove an empty network,
+  and that Nmap discovery is usually clearer for authorized routed-VLAN work. The panel
+  labels and displays every separate protocol command before approval. A regression
+  test executes the complete zero-host, approval, TCP top-1000, UDP top-100 path with isolated fake
+  processes. Docker validation passed with 1,801 tests and 18 skips; the focused scan,
+  profile, and UI contract set passed again after the guide update with 96 tests. The
+  four earlier failed runs remain accurate failed history and must be replaced by new
+  scans; no historical record or source evidence was rewritten.
 - [x] **2026-10-21 — dedicated NCT scanner access to the approved home test VLANs
   completed.** The isolated lab now permits only the dedicated NCT scanner to
   initiate active checks toward the five operator-approved VLANs while retaining the

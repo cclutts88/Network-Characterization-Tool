@@ -2547,6 +2547,13 @@ def test_tcp_udp_top_scopes_are_allowed_and_split_by_the_backend():
     assert "normalizeCombinedScopes" not in html
     assert "TCP + UDP needs independent" not in html
     assert "$('protocol').addEventListener('change',()=>{showOptions();setDirty()})" in html
+    assert "run.fallback_execution_phases" in html
+    assert "FPING uses ICMP only" in html
+    assert "Exact full-target commands awaiting authorization" in html
+    assert "run.fallback_command_note" in html
+    assert "zero replies do not prove that the subnet is empty" in html
+    guide = how_nct_works_page().body.decode()
+    assert "shows every separate TCP and UDP command for review" in guide
     assert html.index('id="runNow"') < html.index('id="profileManagementPanel"')
     for control_id in (
         "profileName",
