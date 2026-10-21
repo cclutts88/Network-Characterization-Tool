@@ -4,6 +4,22 @@ Use this checklist before resuming the Security Onion build. It applies to the
 physical Proxmox host only. It does not authorize changes to the NCT application,
 production evidence or the inaccessible `chrisJr` storage pool.
 
+## Current status — deferred without flashing
+
+On 2026-10-20, physical firmware access and the prepared update media were verified,
+but the operator deferred the update after the motherboard interface presented an
+unreliable mixed-language display. M-FLASH was not started and no firmware setting was
+changed. After the host returned, it still reported BIOS `1.A0`, dated 2024-03-28, and
+CPU microcode `0x123`.
+
+All guests remain stopped with automatic start disabled. The `chrisJr` storage entry
+remains disabled and excluded from LVM autoactivation; the verified `pve` boot volume
+group remains the only permitted automatic-activation volume group. This is a safe
+deferral, not completion of the maintenance gate. Security Onion acceptance, sensor
+setup and heavy host workloads remain halted. Bounded NCT development may continue on
+the separate development workstation using copies of retained exports or isolated
+fixtures, subject to an independent design gate.
+
 ## Why the gate exists
 
 The host currently reports:

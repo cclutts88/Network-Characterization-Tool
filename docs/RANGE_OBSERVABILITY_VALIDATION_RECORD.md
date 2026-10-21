@@ -324,3 +324,27 @@ orderly operating-system shutdown. Proxmox confirms that the manager and both se
 are stopped and that automatic start remains disabled for all three replacement guests.
 The bounded physical-maintenance and post-update validation sequence is retained in
 `docs/RANGE_HOST_FIRMWARE_MAINTENANCE.md`.
+
+## 2026-10-20 — firmware maintenance safely deferred
+
+Physical BIOS access was demonstrated and the exact MSI update media was prepared and
+verified before entry into the firmware interface. The operator deferred the update
+when the interface presented an unreliable mixed-language display. M-FLASH was not
+started, no BIOS setting was changed and no firmware was written.
+
+After the host returned, it reported the same BIOS `1.A0`, dated 2024-03-28, and the
+same CPU microcode `0x123`. Proxmox showed no running guest. Every VM retained
+`onboot=0`; `chrisJr` remained disabled; `pve`, `local` and `local-lvm` remained active;
+and the host-local LVM autoactivation rule still permitted only the `pve` volume group.
+The previously verified host backup and original autostart record remain retained on
+healthy storage and in the off-host recovery copy.
+
+The independent quality gate returned **CLEAR — DOCUMENTED DEVIATION** for limited
+continuation. The host stability gate remains unresolved. Security Onion guests,
+heavy range workloads and the inaccessible `chrisJr` pool remain stopped or excluded,
+and guest autostarts must not be restored implicitly. NCT may continue bounded passive-
+evidence development and isolated tests on the separate development workstation using
+copies of retained exports or fixtures. Original export bytes and their hashes, source,
+sensor, time window and coverage context must be preserved. Structured Arkime session
+exports remain Tier D evidence and do not establish Tier A summaries, live coverage,
+independent observation counts or Phase 6 acceptance.

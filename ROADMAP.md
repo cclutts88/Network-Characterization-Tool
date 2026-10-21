@@ -5141,8 +5141,11 @@ Arkime support must be **tiered**.
   the ISO's default kernel crashed while configuring Fleet. The manager was moved to an
   alternate kernel already present on the same verified ISO; recovery and
   acceptance testing then exposed a separate search-process crash. Host BIOS and
-  microcode are now a stability gate before manager acceptance can resume; both
-  replacement sensors remain stopped.
+  microcode remain a stability gate before manager acceptance can resume. The prepared
+  firmware update was safely deferred without flashing; all replacement Security Onion
+  guests remain stopped. Bounded passive-evidence development may continue on the
+  separate development workstation with copied exports or isolated fixtures, but the
+  host and Security Onion acceptance gates remain open.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish implemented NCT passive ingestion, Range readiness, mission
   readiness, or availability on main.
