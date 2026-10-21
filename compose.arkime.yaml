@@ -1,0 +1,11 @@
+services:
+  nct:
+    environment:
+      NCT_ARKIME_API_ENABLED: "${NCT_ARKIME_API_ENABLED:-0}"
+      NCT_ARKIME_API_URL: "${NCT_ARKIME_API_URL:-}"
+      NCT_ARKIME_API_USERNAME: "${NCT_ARKIME_API_USERNAME:-}"
+      NCT_ARKIME_API_PASSWORD_FILE: /run/nct-arkime/password
+      NCT_ARKIME_API_CA_FILE: /run/nct-arkime/ca.pem
+      NCT_ARKIME_API_TIMEOUT_SECONDS: "${NCT_ARKIME_API_TIMEOUT_SECONDS:-30}"
+    volumes:
+      - ${NCT_ARKIME_SECRETS_DIR}:/run/nct-arkime:ro,Z

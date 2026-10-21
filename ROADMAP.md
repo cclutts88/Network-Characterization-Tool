@@ -5240,6 +5240,18 @@ Arkime support must be **tiered**.
   The independent re-review exercised the real slow-header and slow-body paths, worker
   shutdown during transport startup, retry scheduling, paging, row ceilings and frozen
   processing versions; its 56-test closeout returned **CLEAR — DOCUMENTED DEVIATION**.
+- [x] **2026-10-20 — novice-oriented Arkime connector deployment runbook completed.**
+  The Range procedure now explains Arkime HTTPS, the dedicated API-only `arkimeUser`
+  account, verified CA transfer, root-only password handling, the optional Compose
+  override, one-row authentication verification, the first bounded pull and ordered
+  troubleshooting. The account is not represented as endpoint-scoped because Arkime's
+  minimum standard Viewer role can read more than one API; NCT still calls only the
+  Sessions endpoint. The optional Compose overlay rendered with every required setting
+  and the protected secret mount; its documentation link and path checks passed. The
+  independent gate returned **CLEAR — DOCUMENTED DEVIATION**, and the novice operator
+  returned **PASS** after verifying the final copyable time-window and deployment
+  recovery steps. The runbook does not clear live Range acceptance, Kubernetes or
+  host-firmware gates.
 
 ## 6.1 Tier A — Summary export
 

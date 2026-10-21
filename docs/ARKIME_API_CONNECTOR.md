@@ -5,6 +5,11 @@ analyst exporting each file by hand. It is a read-only evidence connector. It do
 not request packet captures, change Arkime, prove that a service is open now, or add
 overlapping session counts together.
 
+Range administrators should follow the complete novice-oriented setup and verification
+procedure in [`ARKIME_CONNECTOR_RANGE_SETUP.md`](ARKIME_CONNECTOR_RANGE_SETUP.md).
+That guide covers Arkime HTTPS, the dedicated API account, secret files, Docker
+Compose, the first bounded pull and troubleshooting.
+
 ## Deployment configuration
 
 The deployment administrator supplies these settings outside the NCT user interface:
@@ -14,8 +19,8 @@ The deployment administrator supplies these settings outside the NCT user interf
 | `NCT_ARKIME_API_ENABLED=1` | Enables the connector. |
 | `NCT_ARKIME_API_URL=https://arkime.example:8005` | Arkime Viewer base URL. HTTPS is required. Credentials, query text and fragments are rejected in this URL. |
 | `NCT_ARKIME_API_USERNAME=nct-reader` | Dedicated read-only Arkime account. |
-| `NCT_ARKIME_API_PASSWORD_FILE=/run/secrets/nct-arkime-password` | Mounted file containing only that account's password. The password is never saved in a pull definition or evidence record. |
-| `NCT_ARKIME_API_CA_FILE=/run/secrets/arkime-ca.pem` | Optional CA file when the deployment uses its own certificate authority. |
+| `NCT_ARKIME_API_PASSWORD_FILE=/run/nct-arkime/password` | Range Compose path for the mounted file containing only that account's password. The password is never saved in a pull definition or evidence record. |
+| `NCT_ARKIME_API_CA_FILE=/run/nct-arkime/ca.pem` | Range Compose path for the mounted CA file when the deployment uses its own certificate authority. |
 | `NCT_ARKIME_API_TIMEOUT_SECONDS=30` | Whole-request deadline from 3 to 120 seconds. |
 
 NCT uses verified HTTPS, refuses redirects, ignores ambient HTTP proxy settings, asks

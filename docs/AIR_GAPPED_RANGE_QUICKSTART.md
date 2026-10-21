@@ -349,6 +349,14 @@ Both the ZIP name and build ID end in `phase3-r3`. Open
 `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it lists this same package
 revision, image name, build ID, and source commit before continuing.
 
+This `phase3-r3` package predates the automatic Arkime connector. Do not add the
+connector by copying files into this package. A later connector-capable release must
+list `compose.arkime.yaml` in its verified package manifest and include
+[`ARKIME_CONNECTOR_RANGE_SETUP.md`](ARKIME_CONNECTOR_RANGE_SETUP.md). That procedure
+creates a separate read-only Arkime account, installs the trusted CA and password as
+root-only files, and adds the verified Compose override. Do not place the Arkime
+password in a guide, Compose file or shell command line.
+
 Then verify the saved information in the browser:
 
 1. Open **Nmap Scans** and confirm the existing scan history is present.
