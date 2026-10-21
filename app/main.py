@@ -2227,11 +2227,17 @@ def arkime_coverage_window_history(
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     revision: str | None = None,
+    recommend_stream_identity: str | None = Query(default=None, max_length=64),
+    overlap_minutes: int = Query(default=5, ge=0, le=1439),
+    cutoff: str | None = Query(default=None, max_length=64),
+    collection_delay_seconds: int = Query(default=60, ge=0, le=3600),
 ) -> dict:
     try:
         return list_arkime_coverage_windows(
             DB_PATH, scope_id=scope_id, limit=limit, offset=offset,
-            revision=revision,
+            revision=revision, recommend_stream_identity=recommend_stream_identity,
+            overlap_minutes=overlap_minutes, cutoff=cutoff,
+            collection_delay_seconds=collection_delay_seconds,
         )
     except ArkimeCoverageError as exc:
         raise _arkime_error(exc) from exc

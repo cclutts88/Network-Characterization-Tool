@@ -72,6 +72,23 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Arkime next-forward recommendation without historical repair or deduplication — 2026-10-21
+
+- **Planned approach:** Phase 6.8 would generate the smallest useful next collection
+  window with overlap and deduplicate the repeated portion.
+- **Revised approach:** this slice recommends only the next forward UTC window for one
+  exact API stream. It starts at the latest complete retained end minus a bounded
+  safety overlap and ends at an explicit UTC cutoff or one frozen server time minus a
+  disclosed collection delay. It retains every contributing source reference and does
+  not combine or remove traffic observations.
+- **Reason and expected impact:** a time overlap is not a traffic-observation identity.
+  Removing records without a separately proven identity contract could silently lose
+  evidence. The recommendation also cannot determine the smallest historical repair
+  because earlier gaps may require separate operator decisions and API bounding rules.
+- **Follow-up:** automatic collection, historical-gap repair and traffic-observation
+  deduplication remain open. A recommended interval may still exceed the connector's
+  returned-row limit and therefore cannot guarantee a complete API result.
+
 ## Arkime retained-window continuity without traffic deduplication — 2026-10-21
 
 - **Planned approach:** Phase 6.7 would track retained Arkime coverage windows and
@@ -5523,11 +5540,39 @@ Track:
 
 ## 6.8 Recommended collection window
 
-- [ ] Generate the smallest useful next window with a configurable overlap buffer to
-  avoid retained-window gaps. Traffic-observation deduplication is explicitly deferred
-  to this phase and requires its own reviewed identity contract; Phase 6.7 merges
-  overlapping time intervals only for continuity calculation and never removes or
-  combines retained observations.
+- [x] **2026-10-21 — next forward Arkime collection-window recommendation completed.**
+  For one exact comparable API stream, derive a read-only UTC window from the complete
+  retained stream rather than the visible page. The start is the latest eligible
+  retained end minus a bounded nonnegative overlap; the end is an operator-selected
+  cutoff or one frozen server time minus a disclosed collection delay. Later partial or
+  unknown receipts stay visible but do not advance the anchor. The recommendation must
+  expose every contributing anchor receipt, warn that a time window cannot guarantee a
+  complete API result, and remain separate from collection authorization or execution.
+  It does not repair earlier gaps or claim to be a smallest sufficient capture window.
+  Automatic collection, historical-gap repair and traffic-observation deduplication
+  remain open and require separate reviewed contracts; no retained traffic counts are
+  removed, combined or deduplicated in this slice.
+  - The Settings-free Arkime workspace now lists exact retained API streams and lets an
+    analyst calculate the next forward window with a bounded overlap, optional explicit
+    zoned cutoff, or one frozen server time minus a visible collection delay. The result
+    exposes every source receipt that supports the terminal complete segment, calls out
+    later incomplete or noncomparable receipts, and warns that the 1,000-session
+    connector limit can still make a time-bounded pull incomplete.
+  - The calculation stays owned by the exact Network Scope, stream, coverage revision,
+    overlap, cutoff and delay that requested it. Changing any planning input clears the
+    old answer; delayed successes and errors cannot replace newer work; and a
+    recommendation response cannot change the coverage table's revision.
+  - The initial independent review halted the scope and delayed-response ownership
+    defects, and the novice pass halted an overlapping stream/overlap layout. Both were
+    corrected with runtime regressions and a constrained responsive grid. Docker-focused
+    verification passed **91 tests**, the browser runtime regression passed, the complete
+    Docker suite passed **1,870 tests with 18 environment-dependent skips**, and the live
+    browser verified a scope-filtered calculation, immediate input invalidation, zero
+    control overlap with the Operator Guide open or closed, and no browser warnings or
+    errors. The novice operator returned **CLEAR** and the independent quality gate
+    returned **CLEAR — DOCUMENTED DEVIATION** because collection execution,
+    historical-gap repair and traffic-observation deduplication remain separate reviewed
+    work.
 
 ## 6.9 Passive-only characterization
 

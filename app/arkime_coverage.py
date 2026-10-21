@@ -7,7 +7,7 @@ of a sensor outage or an absence of traffic.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -19,6 +19,10 @@ from app.arkime_evidence import ARKIME_SOURCE_KIND
 
 MAX_PAGE = 100
 MAX_WINDOWS = 20_000
+MAX_RECOMMENDATION_STREAMS = 1_000
+MAX_OVERLAP_MINUTES = 1_439
+MAX_COLLECTION_DELAY_SECONDS = 3_600
+ARKIME_PULL_ROW_LIMIT = 1_000
 
 
 class ArkimeCoverageError(ValueError):
@@ -320,9 +324,196 @@ def _revision(items: list[dict]) -> str:
     ).hexdigest()
 
 
+def _stream_summaries(items: list[dict]) -> list[dict]:
+    streams: dict[str, list[dict]] = {}
+    for item in items:
+        if item["provenance_state"] == "exact_api_run":
+            streams.setdefault(item["stream_identity"], []).append(item)
+    if len(streams) > MAX_RECOMMENDATION_STREAMS:
+        raise ArkimeCoverageError(
+            f"The coverage inventory contains more than {MAX_RECOMMENDATION_STREAMS} "
+            "exact API streams; choose one Network Scope"
+        )
+    result = []
+    for identity, stream in streams.items():
+        ordered = sorted(stream, key=lambda item: (
+            _time(item["query_end"]), _time(item["query_start"]),
+            item["imported_at"], item["import_id"],
+        ))
+        latest = ordered[-1]
+        eligible = [item for item in ordered if item["eligible_for_continuity"]]
+        result.append({
+            "stream_identity": identity,
+            "scope": latest["scope"],
+            "operator_sensor": latest["operator_sensor"],
+            "connector_id": latest["connector_id"],
+            "connector_contract": latest["connector_contract"],
+            "query_expression": latest["query_expression"],
+            "bounding_mode": latest["bounding_mode"],
+            "parser_version": latest["parser_version"],
+            "retained_window_count": len(ordered),
+            "eligible_window_count": len(eligible),
+            "latest_eligible_end": (
+                max(eligible, key=lambda item: _time(item["query_end"]))["query_end"]
+                if eligible else None
+            ),
+        })
+    result.sort(key=lambda item: (
+        item["scope"]["label"].casefold(), item["operator_sensor"].casefold(),
+        item["connector_id"] or "", item["stream_identity"],
+    ))
+    return result
+
+
+def _recommend_next_forward_window(
+    items: list[dict], *, stream_identity: str, overlap_minutes: int,
+    cutoff: str | None, collection_delay_seconds: int,
+    frozen_now: datetime | None = None,
+) -> dict:
+    if not isinstance(stream_identity, str) or not stream_identity.strip():
+        raise ArkimeCoverageError("stream_identity cannot be blank")
+    if (
+        isinstance(overlap_minutes, bool) or not isinstance(overlap_minutes, int)
+        or not 0 <= overlap_minutes <= MAX_OVERLAP_MINUTES
+    ):
+        raise ArkimeCoverageError(
+            f"overlap_minutes must be between 0 and {MAX_OVERLAP_MINUTES}"
+        )
+    if (
+        isinstance(collection_delay_seconds, bool)
+        or not isinstance(collection_delay_seconds, int)
+        or not 0 <= collection_delay_seconds <= MAX_COLLECTION_DELAY_SECONDS
+    ):
+        raise ArkimeCoverageError(
+            "collection_delay_seconds must be between 0 and "
+            f"{MAX_COLLECTION_DELAY_SECONDS}"
+        )
+    now = frozen_now or datetime.now(timezone.utc).replace(microsecond=0)
+    if now.tzinfo is None:
+        raise ArkimeCoverageError("The frozen server time must include a timezone")
+    now = now.astimezone(timezone.utc).replace(microsecond=0)
+    exact = [
+        item for item in items
+        if item["provenance_state"] == "exact_api_run"
+        and item["stream_identity"] == stream_identity
+    ]
+    if not exact:
+        return {
+            "status": "unavailable", "reason": "stream_not_found",
+            "detail": "The selected exact API stream is no longer retained.",
+            "read_only": True,
+        }
+    eligible = [item for item in exact if item["eligible_for_continuity"]]
+    if not eligible:
+        return {
+            "status": "unavailable", "reason": "no_eligible_anchor",
+            "detail": (
+                "No retained window for this exact API stream has Complete calculated "
+                "export, operator assessment, and capture declarations."
+            ),
+            "stream_identity": stream_identity, "read_only": True,
+        }
+    eligible.sort(key=lambda item: (
+        _time(item["query_start"]), _time(item["query_end"]),
+        item["imported_at"], item["import_id"],
+    ))
+    terminal_segment: list[dict] = []
+    terminal_end: datetime | None = None
+    for item in eligible:
+        start = _time(item["query_start"])
+        end = _time(item["query_end"])
+        if terminal_end is None or start > terminal_end:
+            terminal_segment = [item]
+            terminal_end = end
+        else:
+            terminal_segment.append(item)
+            if end > terminal_end:
+                terminal_end = end
+    assert terminal_end is not None
+    if cutoff is None:
+        selected_cutoff = now - timedelta(seconds=collection_delay_seconds)
+        cutoff_basis = "frozen_server_time_minus_collection_delay"
+    else:
+        selected_cutoff = _time(cutoff).astimezone(timezone.utc).replace(microsecond=0)
+        cutoff_basis = "operator_selected_utc_cutoff"
+    later_noncomparable = [
+        item for item in exact
+        if not item["eligible_for_continuity"] and _time(item["query_end"]) > terminal_end
+    ]
+    common = {
+        "stream_identity": stream_identity,
+        "generated_at": now.isoformat(),
+        "cutoff": selected_cutoff.isoformat(),
+        "cutoff_basis": cutoff_basis,
+        "collection_delay_seconds": collection_delay_seconds if cutoff is None else 0,
+        "overlap_minutes": overlap_minutes,
+        "anchor_end": terminal_end.isoformat(),
+        "anchor_sources": [
+            {
+                "import_id": item["import_id"],
+                "observation_id": item["observation_id"],
+                "pull_run_id": item["pull_run_id"],
+                "query_start": item["query_start"],
+                "query_end": item["query_end"],
+                "raw_url": item["raw_url"],
+            }
+            for item in terminal_segment
+        ],
+        "later_noncomparable_sources": [
+            {
+                "import_id": item["import_id"],
+                "query_start": item["query_start"],
+                "query_end": item["query_end"],
+                "provenance_state": item["provenance_state"],
+                "raw_url": item["raw_url"],
+            }
+            for item in later_noncomparable
+        ],
+        "row_limit_warning": (
+            f"Arkime may report more than the {ARKIME_PULL_ROW_LIMIT:,}-session connector "
+            "limit. A recommended time window cannot guarantee a complete API result."
+        ),
+        "repairs_historical_gaps": False,
+        "deduplicates_observations": False,
+        "contacts_arkime": False,
+        "read_only": True,
+    }
+    if selected_cutoff > now:
+        return {
+            **common, "status": "unavailable", "window": None,
+            "reason": "cutoff_after_frozen_server_time",
+            "detail": (
+                "The selected cutoff is later than the frozen server time. Choose a "
+                "current or historical UTC cutoff."
+            ),
+        }
+    if selected_cutoff <= terminal_end:
+        return {
+            **common, "status": "nothing_due", "window": None,
+            "reason": "cutoff_not_after_anchor",
+            "detail": (
+                "The selected cutoff is not later than the latest eligible retained "
+                "window, so there is no forward interval to recommend."
+            ),
+        }
+    start = terminal_end - timedelta(minutes=overlap_minutes)
+    return {
+        **common, "status": "recommended",
+        "window": {"start": start.isoformat(), "end": selected_cutoff.isoformat()},
+        "detail": (
+            "This is the next forward collection window from the latest comparable "
+            "retained interval. It does not repair earlier gaps or authorize a pull."
+        ),
+        "recollects_later_noncomparable_time": bool(later_noncomparable),
+    }
+
+
 def list_arkime_coverage_windows(
     db_path: Path, *, scope_id: str | None = None, limit: int = 25,
     offset: int = 0, revision: str | None = None,
+    recommend_stream_identity: str | None = None, overlap_minutes: int = 5,
+    cutoff: str | None = None, collection_delay_seconds: int = 60,
+    frozen_now: datetime | None = None,
 ) -> dict:
     """Return a revision-bound page from one read-only database snapshot."""
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
@@ -414,6 +605,15 @@ def list_arkime_coverage_windows(
     states: dict[str, int] = {}
     for item in items:
         states[item["continuity"]] = states.get(item["continuity"], 0) + 1
+    exact_api_streams = _stream_summaries(items)
+    recommendation = None
+    if recommend_stream_identity is not None:
+        recommendation = _recommend_next_forward_window(
+            items, stream_identity=recommend_stream_identity,
+            overlap_minutes=overlap_minutes, cutoff=cutoff,
+            collection_delay_seconds=collection_delay_seconds,
+            frozen_now=frozen_now,
+        )
     return {
         "items": page,
         "source_revision": source_revision,
@@ -422,6 +622,8 @@ def list_arkime_coverage_windows(
             "has_more": offset + len(page) < total,
         },
         "continuity_counts": states,
+        "exact_api_streams": exact_api_streams,
+        "recommendation": recommendation,
         "read_only": True,
         "meaning": (
             "A retained-window gap means only that NCT has no comparable retained "

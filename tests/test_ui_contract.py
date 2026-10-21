@@ -1071,6 +1071,16 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert "Why this label and when the evidence was collected" in html
     assert "Open exact Nmap source" in html
     assert "A retained-window gap is an NCT evidence gap" in html
+    assert 'id="coverageRecommendationStream"' in html
+    assert 'id="coverageRecommendationOverlap"' in html
+    assert 'id="coverageRecommendationCutoff"' in html
+    assert 'id="coverageRecommendationDelay"' in html
+    assert 'id="coverageRecommend"' in html
+    assert "Calculate next forward window" in html
+    assert "recommend_stream_identity" in html
+    assert "A recommendation never starts collection" in html
+    assert "no traffic deduplication" in html
+    assert "Use Next forward collection window" in SHELL_SCRIPT
     assert "calculated export, operator assessment, and capture declarations are all Complete" in html
     assert "Recorded export declaration':'Calculated export" in html
     assert "operator assessment ${item.operator_export_assessment}" in html

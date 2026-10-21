@@ -44,6 +44,21 @@ await eval([
 
 await eval([
   "(async () => {",
+  "const esc=value=>String(value??''),controls={coverageRecommendationResult:{innerHTML:'',textContent:''}},$=id=>controls[id];",
+  syncHandler("recommendationSourceLinks"),
+  syncHandler("renderCoverageRecommendation"),
+  "renderCoverageRecommendation({status:'recommended',window:{start:'2030-01-01T05:55:00+00:00',end:'2030-01-01T09:00:00+00:00'},detail:'Forward only.',overlap_minutes:5,cutoff_basis:'operator_selected_utc_cutoff',generated_at:'2030-01-01T09:05:00+00:00',anchor_sources:[{import_id:'source-1',raw_url:'/api/source-1'}],later_noncomparable_sources:[{import_id:'partial-1'}],row_limit_warning:'Time cannot guarantee a complete result.'});",
+  "const html=controls.coverageRecommendationResult.innerHTML;",
+  "assert.ok(html.includes('Recommended next forward window'));",
+  "assert.ok(html.includes('Later incomplete or noncomparable receipts exist'));",
+  "assert.ok(html.includes('no Arkime contact'));",
+  "assert.ok(html.includes('no traffic deduplication'));",
+  "assert.ok(html.includes('download=\"arkime-source-source-1.json\"'));",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
   "let trafficFilters=[{field:'ip.src',operator:'==',value:'192.0.2.1'}],trafficMatchMode='all',trafficImportId='import-1',trafficRequest=0;",
   "const input={attributes:{},setAttribute(name,value){this.attributes[name]=value}};",
   "const controls={trafficAnalysisProgress:{hidden:true},trafficAnalysisStatus:{textContent:'',className:''},trafficExpressionInput:input};",
@@ -120,13 +135,50 @@ await eval([
 
 await eval([
   "(async () => {",
+  "let coverageRevision='coverage-r1',coverageRecommendationRequest=0;",
+  "const controls={coverageRecommendationStream:{value:'stream-a'},coverageRecommendationOverlap:{value:'5'},coverageRecommendationCutoff:{value:''},coverageRecommendationDelay:{value:'60'},coverageFilterScope:{value:'scope-a'},coverageRecommendationProgress:{hidden:true},coverageRecommend:{disabled:false},coverageRecommendationResult:{textContent:'',innerHTML:''}};",
+  "const $=id=>controls[id],busy=(id,on)=>{controls[id].hidden=!on},esc=value=>String(value??'');",
+  "const renders=[],pending=[];",
+  "const renderCoverageRecommendation=item=>{renders.push(item?.marker??item?.status??null);controls.coverageRecommendationResult.innerHTML=item?.marker??item?.detail??'Choose an exact retained API stream.'};",
+  "const api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));",
+  syncHandler("coverageRecommendationSelection"),
+  syncHandler("invalidateCoverageRecommendation"),
+  handler("loadCoverageRecommendation"),
+  "const older=loadCoverageRecommendation();",
+  "assert.ok(pending[0].url.includes('scope_id=scope-a'),'a recommendation must keep the coverage table scope');",
+  "assert.ok(pending[0].url.includes('revision=coverage-r1'));",
+  "controls.coverageRecommendationStream.value='stream-b';invalidateCoverageRecommendation();",
+  "const newer=loadCoverageRecommendation();",
+  "pending[1].resolve({source_revision:'coverage-r2',recommendation:{marker:'stream-b'}});await newer;",
+  "pending[0].resolve({source_revision:'coverage-r3',recommendation:{marker:'stream-a'}});await older;",
+  "assert.deepEqual(renders,[null,'stream-b'],'a delayed response for the prior stream must not replace the newer recommendation');",
+  "assert.equal(coverageRevision,'coverage-r1','recommendation responses must not change the coverage table revision');",
+  "controls.coverageRecommendationStream.value='stream-c';invalidateCoverageRecommendation();const staleError=loadCoverageRecommendation();",
+  "controls.coverageRecommendationStream.value='stream-d';invalidateCoverageRecommendation();const latest=loadCoverageRecommendation();",
+  "pending[3].resolve({source_revision:'ignored',recommendation:{marker:'stream-d'}});await latest;",
+  "pending[2].reject(new Error('stale failure'));await staleError;",
+  "assert.equal(controls.coverageRecommendationResult.innerHTML,'stream-d','a stale error must not overwrite the latest recommendation');",
+  "controls.coverageRecommendationOverlap.value='7';invalidateCoverageRecommendation();",
+  "assert.equal(controls.coverageRecommendationResult.innerHTML,'Choose an exact retained API stream.','changing a planning input must clear the prior result');",
+  "assert.equal(controls.coverageRecommendationProgress.hidden,true);",
+  "})()",
+].join("\n"));
+
+assert.ok(source.includes("$('coverageRecommendationStream').onchange=invalidateCoverageRecommendation"), "changing the exact stream must invalidate its recommendation");
+assert.ok(source.includes("$('coverageRecommendationOverlap').oninput=invalidateCoverageRecommendation"), "changing overlap must invalidate its recommendation");
+assert.ok(source.includes("$('coverageRecommendationCutoff').oninput=invalidateCoverageRecommendation"), "changing cutoff must invalidate its recommendation");
+assert.ok(source.includes("$('coverageRecommendationDelay').oninput=invalidateCoverageRecommendation"), "changing delay must invalidate its recommendation");
+assert.ok(source.includes("$('coverageFilterScope').onchange=()=>{invalidateCoverageRecommendation();loadCoverage(0,false)}"), "changing scope must invalidate the recommendation before reloading coverage");
+
+await eval([
+  "(async () => {",
   "let coverageOffset=0,coverageTotal=0,coverageRevision='';",
   "function node(tag='div'){return {tag,children:[],textContent:'',disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=[...items]}}}",
   "const controls={coverageRows:node('tbody'),coveragePrevious:{disabled:false},coverageNext:{disabled:false},coveragePage:{textContent:''}};",
-  "const $=id=>controls[id],esc=value=>String(value??''),badge=value=>`<span>${value}</span>`,coverageContinuity=()=>'<strong>Not comparable</strong>',loadTrafficAnalysis=()=>{};",
+  "const $=id=>controls[id],esc=value=>String(value??''),badge=value=>`<span>${value}</span>`,coverageContinuity=()=>'<strong>Not comparable</strong>',renderRecommendationStreams=()=>{},loadTrafficAnalysis=()=>{};",
   "const document={createElement(tag){const item=node(tag);if(tag==='tr'){item.cells=Array.from({length:7},()=>node('td'));Object.defineProperty(item,'innerHTML',{set(value){item.rendered=value},get(){return item.rendered||''}})}return item}};",
   syncHandler("renderCoverage"),
-  "renderCoverage({source_revision:'r1',pagination:{total:1,offset:0,has_more:false},items:[{import_id:'summary-1',source_kind:'summary_csv',source_method:'manual_summary',connector_id:null,connector_contract:null,parser_version:'summary:1',scope:{label:'Range',version:1},operator_sensor:'declared sensor',query_start:'2030-01-01T00:00:00Z',query_end:'2030-01-01T01:00:00Z',bounding_mode:'both',query_expression:'',stream_basis:'operator declaration',export_completeness:'complete',operator_export_assessment:'complete',capture_coverage:'unknown',returned_count:2,raw_url:'/api/summary/raw'}]});",
+  "renderCoverage({source_revision:'r1',pagination:{total:1,offset:0,has_more:false},exact_api_streams:[],items:[{import_id:'summary-1',source_kind:'summary_csv',source_method:'manual_summary',connector_id:null,connector_contract:null,parser_version:'summary:1',scope:{label:'Range',version:1},operator_sensor:'declared sensor',query_start:'2030-01-01T00:00:00Z',query_end:'2030-01-01T01:00:00Z',bounding_mode:'both',query_expression:'',stream_basis:'operator declaration',export_completeness:'complete',operator_export_assessment:'complete',capture_coverage:'unknown',returned_count:2,raw_url:'/api/summary/raw'}]});",
   "const html=controls.coverageRows.children[0].innerHTML;",
   "assert.ok(html.includes('Recorded export declaration complete'),'summary completeness must be labeled as a recorded declaration');",
   "assert.ok(!html.includes('Calculated export complete'),'summary completeness must not be presented as independently calculated');",

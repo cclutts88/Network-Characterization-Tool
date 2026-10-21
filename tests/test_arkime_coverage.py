@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 import pytest
@@ -376,3 +376,191 @@ def test_coverage_route_returns_revision_bound_page(tmp_path, monkeypatch):
         response = client.get("/api/arkime/coverage-windows?limit=1")
     assert response.status_code == 200
     assert response.json()["pagination"]["total"] == 1
+
+
+def test_coverage_route_returns_read_only_forward_recommendation(tmp_path, monkeypatch):
+    import app.main as main
+    from fastapi.testclient import TestClient
+
+    db = tmp_path / "route-recommend.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    item = _import_session(
+        db, scope, "2020-01-01T00:00:00+00:00", "2020-01-01T01:00:00+00:00",
+        api_run_id="run-0-0",
+    )
+    _link_api(db, scope, [item])
+    listing = list_arkime_coverage_windows(db)
+    stream = listing["exact_api_streams"][0]["stream_identity"]
+    monkeypatch.setattr(main, "DB_PATH", db)
+    with TestClient(main.app) as client:
+        response = client.get("/api/arkime/coverage-windows", params={
+            "recommend_stream_identity": stream,
+            "overlap_minutes": 5,
+            "cutoff": "2020-01-01T02:00:00Z",
+            "revision": listing["source_revision"],
+        })
+    assert response.status_code == 200
+    recommendation = response.json()["recommendation"]
+    assert recommendation["status"] == "recommended"
+    assert recommendation["window"]["start"] == "2020-01-01T00:55:00+00:00"
+    assert recommendation["contacts_arkime"] is False
+
+
+def test_next_forward_window_uses_terminal_complete_segment_and_keeps_all_anchors(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    windows = [
+        ("2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00", "old"),
+        ("2030-01-01T03:00:00+00:00", "2030-01-01T04:00:00+00:00", "segment"),
+        ("2030-01-01T03:30:00+00:00", "2030-01-01T05:00:00+00:00", "nested"),
+        ("2030-01-01T05:00:00+00:00", "2030-01-01T06:00:00+00:00", "touching"),
+    ]
+    imports = [
+        _import_session(db, scope, start, end, suffix, api_run_id=f"run-{index}-0")
+        for index, (start, end, suffix) in enumerate(windows)
+    ]
+    imports.append(_import_session(
+        db, scope, "2030-01-01T05:00:00+00:00", "2030-01-01T06:00:00+00:00",
+        "duplicate", api_run_id="run-4-0",
+        content=_sessions(
+            "2030-01-01T05:00:00+00:00", "2030-01-01T06:00:00+00:00", "touching",
+        ),
+    ))
+    later_partial = _import_session(
+        db, scope, "2030-01-01T06:00:00+00:00", "2030-01-01T08:00:00+00:00",
+        "partial", capture="partial", api_run_id="run-5-0",
+    )
+    _link_api(db, scope, [*imports, later_partial])
+    listing = list_arkime_coverage_windows(db, limit=1)
+    stream = listing["exact_api_streams"][0]
+
+    result = list_arkime_coverage_windows(
+        db, limit=1, offset=1, revision=listing["source_revision"],
+        recommend_stream_identity=stream["stream_identity"], overlap_minutes=5,
+        cutoff="2030-01-01T09:00:00+00:00",
+        frozen_now=datetime(2030, 1, 1, 9, 5, tzinfo=timezone.utc),
+    )["recommendation"]
+
+    assert result["status"] == "recommended"
+    assert result["window"] == {
+        "start": "2030-01-01T05:55:00+00:00",
+        "end": "2030-01-01T09:00:00+00:00",
+    }
+    assert {item["import_id"] for item in result["anchor_sources"]} == {
+        item["import_id"] for item in imports[1:]
+    }
+    assert [item["import_id"] for item in result["later_noncomparable_sources"]] == [
+        later_partial["import_id"]
+    ]
+    assert result["recollects_later_noncomparable_time"] is True
+    assert result["repairs_historical_gaps"] is False
+    assert result["deduplicates_observations"] is False
+    assert result["contacts_arkime"] is False
+    assert "1,000-session" in result["row_limit_warning"]
+
+    changed = _import_session(
+        db, scope, "2030-01-01T09:00:00+00:00", "2030-01-01T10:00:00+00:00",
+        "changed", capture="partial", api_run_id="changed-run",
+    )
+    _link_api(db, scope, [changed], run_ids=["changed-run"])
+    with pytest.raises(ArkimeCoverageConflict, match="changed while paging"):
+        list_arkime_coverage_windows(
+            db, revision=listing["source_revision"],
+            recommend_stream_identity=stream["stream_identity"],
+            cutoff="2030-01-01T11:00:00+00:00",
+        )
+
+
+def test_next_forward_window_requires_an_eligible_complete_api_anchor(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    unknown = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        "unknown", capture="unknown", api_run_id="run-0-0",
+    )
+    _link_api(db, scope, [unknown])
+    listing = list_arkime_coverage_windows(db)
+    stream = listing["exact_api_streams"][0]
+    assert stream["eligible_window_count"] == 0
+
+    result = list_arkime_coverage_windows(
+        db, recommend_stream_identity=stream["stream_identity"],
+        frozen_now=datetime(2030, 1, 1, 2, tzinfo=timezone.utc),
+    )["recommendation"]
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "no_eligible_anchor"
+    assert "Complete" in result["detail"]
+
+
+@pytest.mark.parametrize("overlap", [-1, 1440])
+def test_next_forward_window_rejects_out_of_bounds_overlap(tmp_path, overlap):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    item = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        api_run_id="run-0-0",
+    )
+    _link_api(db, scope, [item])
+    stream = list_arkime_coverage_windows(db)["exact_api_streams"][0]
+    with pytest.raises(ArkimeCoverageError, match="overlap_minutes"):
+        list_arkime_coverage_windows(
+            db, recommend_stream_identity=stream["stream_identity"],
+            overlap_minutes=overlap,
+        )
+
+
+def test_next_forward_window_freezes_delayed_cutoff_and_reports_nothing_due(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    item = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T02:00:00+00:00",
+        api_run_id="run-0-0",
+    )
+    _link_api(db, scope, [item])
+    stream = list_arkime_coverage_windows(db)["exact_api_streams"][0]
+    result = list_arkime_coverage_windows(
+        db, recommend_stream_identity=stream["stream_identity"],
+        collection_delay_seconds=300,
+        frozen_now=datetime(2030, 1, 1, 2, 5, tzinfo=timezone.utc),
+    )["recommendation"]
+    assert result["status"] == "nothing_due"
+    assert result["cutoff"] == "2030-01-01T02:00:00+00:00"
+    assert result["window"] is None
+
+    future_anchor = list_arkime_coverage_windows(
+        db, recommend_stream_identity=stream["stream_identity"],
+        collection_delay_seconds=0,
+        frozen_now=datetime(2030, 1, 1, 1, 59, tzinfo=timezone.utc),
+    )["recommendation"]
+    assert future_anchor["status"] == "nothing_due"
+    assert future_anchor["reason"] == "cutoff_not_after_anchor"
+
+    future_cutoff = list_arkime_coverage_windows(
+        db, recommend_stream_identity=stream["stream_identity"],
+        cutoff="2030-01-01T03:00:01+00:00",
+        frozen_now=datetime(2030, 1, 1, 3, tzinfo=timezone.utc),
+    )["recommendation"]
+    assert future_cutoff["status"] == "unavailable"
+    assert future_cutoff["reason"] == "cutoff_after_frozen_server_time"
+
+
+def test_next_forward_window_keeps_exact_streams_separate(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    first = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        "first", api_run_id="stream-a", sensor="sensor-a",
+    )
+    second = _import_session(
+        db, scope, "2030-01-01T10:00:00+00:00", "2030-01-01T11:00:00+00:00",
+        "second", api_run_id="stream-b", sensor="sensor-b",
+    )
+    _link_api(db, scope, [first], sensor="sensor-a", run_ids=["stream-a"])
+    _link_api(db, scope, [second], sensor="sensor-b", run_ids=["stream-b"])
+    listing = list_arkime_coverage_windows(db)
+    by_sensor = {item["operator_sensor"]: item for item in listing["exact_api_streams"]}
+    result = list_arkime_coverage_windows(
+        db, recommend_stream_identity=by_sensor["sensor-a"]["stream_identity"],
+        cutoff="2030-01-01T12:00:00+00:00",
+    )["recommendation"]
+    assert [item["import_id"] for item in result["anchor_sources"]] == [first["import_id"]]
