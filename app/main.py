@@ -34,6 +34,7 @@ from app.arkime_coverage import (
 from app.arkime_analytics import (
     ArkimeAnalyticsError,
     analyze_arkime_import,
+    build_hunt_arkime_context,
     parse_arkime_filter_expression,
 )
 from app.arkime_ui import arkime_page
@@ -4332,6 +4333,18 @@ def analyze_hunting_network() -> dict:
         device_analyses=_latest_device_reachability_evidence(),
     )
     return result
+
+
+@app.get("/api/hunting/passive-context")
+def analyze_hunting_passive_context(
+    import_id: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> dict:
+    """Return one separately selected retained Arkime source for Hunt review."""
+    try:
+        return build_hunt_arkime_context(DB_PATH, import_id, limit=limit)
+    except (KeyError, ArkimeAnalyticsError) as exc:
+        raise _arkime_error(exc) from exc
 
 
 @app.get("/api/analysis/network")

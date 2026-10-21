@@ -7,7 +7,12 @@ import pytest
 
 from app.artifacts import register_artifact_bytes
 from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
-from app.arkime_analytics import analyze_arkime_import, parse_arkime_filter_expression
+from app.arkime_analytics import (
+    ArkimeAnalyticsError,
+    analyze_arkime_import,
+    build_hunt_arkime_context,
+    parse_arkime_filter_expression,
+)
 from app.arkime_evidence import import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
@@ -638,6 +643,106 @@ def test_traffic_analysis_route_uses_one_exact_import(tmp_path, monkeypatch):
     assert typed.json()["filter_expression"] == (
         "(ip.src == 10.0.0.5) && (protocols == google)"
     )
+
+
+def test_hunt_context_keeps_exact_source_and_separate_claim_boundary(tmp_path):
+    db = tmp_path / "hunt-context.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    imported = _import_sessions(db, scope)
+
+    result = build_hunt_arkime_context(db, imported["import_id"], limit=1)
+
+    assert result["contract"] == "arkime-hunt-context:1"
+    assert result["import_id"] == imported["import_id"]
+    assert result["scope"] == {
+        "scope_id": scope["scope_id"], "label": "Range", "version": 1,
+    }
+    assert result["correlated_path_count"] == 2
+    assert len(result["correlated_paths"]) == 1
+    assert result["correlated_paths_truncated"] is True
+    assert result["raw_url"].endswith(f'/{imported["import_id"]}/raw')
+    assert result["claims"] == {
+        "creates_current_hosts": False,
+        "changes_candidate_matching": False,
+        "changes_hunt_filters": False,
+        "included_in_hunt_exports": False,
+        "proves_live_service": False,
+        "proves_connection_success": False,
+        "changes_reach_or_map": False,
+    }
+
+
+def test_hunt_context_rejects_summary_source(tmp_path):
+    db = tmp_path / "hunt-summary.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    content = (",".join(SUMMARY_HEADERS) + "\n"
+               "10.0.0.5,8.8.8.8,443,tcp,tls,10,5,8,100\n").encode()
+    imported = import_arkime_summary_csv(
+        db, content=content, original_filename="summary.csv", media_type="text/csv",
+        scope_id=scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", query_expression="",
+        summary_basis="all_matching_groups", top_n_limit=None,
+        operator_export_assessment="complete", capture_coverage="unknown", actor="analyst",
+    )
+
+    with pytest.raises(ArkimeAnalyticsError, match="Sessions JSON/API source"):
+        build_hunt_arkime_context(db, imported["import_id"])
+
+
+def test_hunt_passive_context_route_is_independent_and_rejects_bad_sources(
+    tmp_path, monkeypatch,
+):
+    import app.main as main
+
+    db = tmp_path / "hunt-route.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    sessions = _import_sessions(db, scope)
+    content = (",".join(SUMMARY_HEADERS) + "\n"
+               "10.0.0.5,8.8.8.8,443,tcp,tls,10,5,8,100\n").encode()
+    summary = import_arkime_summary_csv(
+        db, content=content, original_filename="summary.csv", media_type="text/csv",
+        scope_id=scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", query_expression="",
+        summary_basis="all_matching_groups", top_n_limit=None,
+        operator_export_assessment="complete", capture_coverage="unknown", actor="analyst",
+    )
+    monkeypatch.setattr(main, "DB_PATH", db)
+    network_calls = []
+    monkeypatch.setattr(
+        main, "_latest_network_evidence",
+        lambda: network_calls.append(True) or {
+            "hosts": [], "findings": [], "source": {"scope_summaries": []},
+        },
+    )
+    monkeypatch.setattr(main, "list_saved_networks", lambda _path: [])
+    monkeypatch.setattr(main, "_latest_device_reachability_evidence", lambda: [])
+    monkeypatch.setattr(main, "load_retained_searchsploit_candidates", lambda *_args: [])
+    monkeypatch.setattr(
+        main, "classify_searchsploit_exposure",
+        lambda *_args, **_kwargs: {"status": "complete", "matches": []},
+    )
+
+    with TestClient(main.app) as client:
+        before = client.get("/api/hunting/network").json()
+        valid = client.get(
+            "/api/hunting/passive-context",
+            params={"import_id": sessions["import_id"], "limit": 1},
+        )
+        missing = client.get(
+            "/api/hunting/passive-context", params={"import_id": "deleted-source"},
+        )
+        rejected = client.get(
+            "/api/hunting/passive-context", params={"import_id": summary["import_id"]},
+        )
+        after = client.get("/api/hunting/network").json()
+
+    assert valid.status_code == 200
+    assert valid.json()["import_id"] == sessions["import_id"]
+    assert missing.status_code == 404
+    assert rejected.status_code == 422
+    assert "Sessions JSON/API source" in rejected.json()["detail"]
+    assert before == after
+    assert len(network_calls) == 2
 
 
 def test_traffic_analysis_route_reports_active_context_candidate_bound(

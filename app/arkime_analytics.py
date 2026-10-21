@@ -1012,3 +1012,53 @@ def analyze_arkime_import(
         ),
         **analysis,
     }
+
+
+def build_hunt_arkime_context(
+    db_path: Path, import_id: str, *, limit: int = 25,
+) -> dict:
+    """Return one exact retained Sessions source for the separate Hunt context panel."""
+    analysis = analyze_arkime_import(db_path, import_id, limit=limit)
+    if analysis["source_kind"] != "sessions_json":
+        raise ArkimeAnalyticsError(
+            "Hunt passive context accepts one retained Sessions JSON/API source. "
+            "Communication-summary groups can overlap and remain available only in "
+            "the Arkime workspace."
+        )
+    return {
+        "contract": "arkime-hunt-context:1",
+        "import_id": analysis["import_id"],
+        "source_kind": analysis["source_kind"],
+        "source_revision": analysis["source_revision"],
+        "scope": analysis["scope"],
+        "operator_sensor": analysis["operator_sensor"],
+        "query_start": analysis["query_start"],
+        "query_end": analysis["query_end"],
+        "export_completeness": analysis["export_completeness"],
+        "capture_coverage": analysis["capture_coverage"],
+        "raw_url": analysis["raw_url"],
+        "detail_url": analysis["detail_url"],
+        "read_only": True,
+        "retained_row_count": analysis["retained_row_count"],
+        "correlated_paths": analysis["correlated_paths"],
+        "correlated_path_count": analysis["correlated_path_count"],
+        "correlated_paths_truncated": analysis["correlated_paths_truncated"],
+        "correlation_note": analysis["correlation_note"],
+        "active_context_contract": analysis["active_context_contract"],
+        "active_context_note": analysis["active_context_note"],
+        "claims": {
+            "creates_current_hosts": False,
+            "changes_candidate_matching": False,
+            "changes_hunt_filters": False,
+            "included_in_hunt_exports": False,
+            "proves_live_service": False,
+            "proves_connection_success": False,
+            "changes_reach_or_map": False,
+        },
+        "boundary_note": (
+            "This is separately selected retained passive context. It does not change "
+            "the network-wide Hunt inventory, CVE candidates, filters, exports, Reach "
+            "or Map. Nmap labels use exact same-scope retained sources and may differ "
+            "from the scans displayed elsewhere in Hunt."
+        ),
+    }

@@ -24,6 +24,8 @@ def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert "other.tab.setAttribute('aria-expanded','false')" in SESSION_SCRIPT
     assert "?'shared':'personal'}-notes-open`,'0'" in SESSION_SCRIPT
     assert ".nct-note-panel.personal{left:var(--nct-sidebar-width,278px)" in SESSION_SCRIPT
+    assert "transform:translateX(calc(-100% - var(--nct-sidebar-width,278px)))" in SESSION_SCRIPT
+    assert "@media(max-width:1100px){.nct-note-tab.personal{left:0" in SESSION_SCRIPT
     assert ".nct-note-tab.personal{left:var(--nct-sidebar-width,278px)" in SESSION_SCRIPT
     assert ".nct-note-tab-content" in SESSION_SCRIPT
     assert "transform:translate(-50%,-50%) rotate(90deg)" in SESSION_SCRIPT
@@ -304,7 +306,7 @@ def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     html = hunting_page().body.decode()
     assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
-    assert html.count('data-nct-table-mode="contained"') == 2
+    assert html.count('data-nct-table-mode="contained"') == 3
     assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
     assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important" in SHELL_SCRIPT
 
@@ -1183,7 +1185,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'prepareDatasetPreview' in html
     assert '<details class="panel" data-workspace-card="capability-datasets"><summary>Capability datasets</summary>' in html
     assert "Hosts and services stay in one bulk table" in html
-    assert html.count('data-nct-table-mode="contained"') == 2
+    assert html.count('data-nct-table-mode="contained"') == 3
     assert 'data-nct-table-mode="page"' not in html
     assert ".table-wrap{overflow:visible}" not in html
     assert "max-width:1600px" not in html
@@ -1362,6 +1364,33 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "Open Reach with this destination and service; Source remains for you to choose." in html
     assert "renderSearchSploitReachBase" in html
     assert "target='_blank'" in html
+
+
+def test_hunt_can_open_one_exact_arkime_source_without_merging_it_into_inventory():
+    hunt = hunting_page().body.decode()
+    arkime = arkime_page().body.decode()
+    guide = how_nct_works_page().body.decode()
+
+    assert 'id="passiveContextPanel"' in hunt
+    assert 'data-guide-context="hunt-passive-context"' in hunt
+    assert "/api/hunting/passive-context?import_id=" in hunt
+    assert "Selected Arkime communication context" in hunt
+    assert "Retained Nmap context" in hunt
+    assert "Exact evidence" in hunt
+    assert "Network Evidence remains independent" in hunt
+    assert "did not substitute another import" in hunt
+    assert "params.delete('run')" in hunt
+    assert "params.delete('arkime')" in hunt
+    assert "Promise.allSettled([loadNetwork(),arkime?loadPassiveContext(arkime)" in hunt
+    assert "$('refreshNetwork').onclick=refreshWorkspace" in hunt
+    assert "Investigate this retained source in Hunt" in arkime
+    assert "/hunting?arkime=${encodeURIComponent(data.import_id)}#huntOverview" in arkime
+    assert "requestedAnalysis" in arkime
+    assert "Review one Arkime source in Hunt" in SHELL_SCRIPT
+    assert "Choosing a focused scan in Hunt removes the passive selection" in SHELL_SCRIPT
+    assert "huntOverview:['passiveContextPanel','huntEvidenceOverview'" in SHELL_SCRIPT
+    assert "separate communication-context panel" in guide
+    assert "A missing, deleted, or unsupported source reports its own error" in guide
 
 
 def test_reachability_view_has_grouped_source_exposure_reports():

@@ -24,12 +24,15 @@ await eval(`(async () => {
   const setStatus=()=>{};
   const startHuntLoadStatus=()=>{};
   const stopHuntLoadStatus=()=>{};
-  const history={replaceState(){}};
-  const location={hash:'#huntOverview'};
+  const replaced=[];
+  const history={replaceState(_state,_title,url){replaced.push(url)}};
+  const location={search:'?arkime=selected-source',hash:'#huntOverview'};
   const rendered=[],candidates=[];
   const renderHunt=data=>rendered.push(data.view);
   const renderSearchSploit=data=>candidates.push(data.view);
   ${handler("beginHuntSelection", "function")}
+  ${handler("huntQuery", "function")}
+  ${handler("replaceHuntQuery", "function")}
   ${handler("loadNetwork")}
   const older=loadNetwork(),newer=loadNetwork();
   assert.deepEqual(requests.map(item=>item.endpoint),['/api/hunting/network','/api/hunting/network']);
@@ -41,6 +44,7 @@ await eval(`(async () => {
   await older;
   assert.deepEqual(rendered,['newer'],'an obsolete network response must not replace current Hunt evidence');
   assert.deepEqual(candidates,['saved-newer'],'candidate results must come from the accepted saved response');
+  assert.equal(replaced.at(-1),'/hunting?arkime=selected-source#huntOverview','network refresh must preserve the exact passive source selection');
 })()`);
 
 await eval(`(async () => {
@@ -54,6 +58,7 @@ await eval(`(async () => {
   const encodeURIComponent=value=>String(value);
   const location={hash:'#huntOverview'};
   const history={replaceState(){}};
+  const clearPassiveContext=()=>{};
   const rendered=[],candidates=[];
   const renderHunt=data=>rendered.push(data.view);
   const renderSearchSploit=data=>candidates.push(data.view);
@@ -88,6 +93,8 @@ await eval(`(async () => {
   let call=0;
   const timedJson=async endpoint=>{call+=1;if(call===1)return{response:{ok:true},data:{view:'focused'}};throw new Error('network refresh failed')};
   ${handler("beginHuntSelection", "function")}
+  ${handler("huntQuery", "function")}
+  ${handler("replaceHuntQuery", "function")}
   ${handler("loadNetwork")}
   ${handler("start")}
   await start();
@@ -99,6 +106,53 @@ await eval(`(async () => {
   assert.match(statuses.at(-1),/focused scan Network Evidence/);
   assert.ok(statuses.at(-1).includes(focusedTime),'failed refresh must name when the retained focused view loaded');
   assert.match(controls.get('huntSubtitle').textContent,/focused scan Network Evidence/);
+})()`);
+
+await eval(`(async () => {
+  let passiveContext=null,passiveRevision=0,passiveRequestController=null;
+  const requests=[];
+  const state={hidden:true};
+  const sourceLink={href:'/arkime?analyze=source-A#arkimeTrafficAnalysis',hidden:false,removeAttribute(name){if(name==='href')delete this.href},classList:{add(name){if(name==='hidden')sourceLink.hidden=true},remove(name){if(name==='hidden')sourceLink.hidden=false}}};
+  const controls=new Map([
+    ['passiveContextPanel',{classList:{add(){state.hidden=true},remove(){state.hidden=false}}}],
+    ['passiveContextTitle',{textContent:''}],['passiveContextSubtitle',{textContent:''}],
+    ['passiveContextStatus',{textContent:'',className:''}],['passiveContextResult',{innerHTML:''}],
+    ['openPassiveSource',sourceLink]
+  ]);
+  const $=id=>controls.get(id);
+  const encodeURIComponent=value=>String(value);
+  const timedJson=(endpoint,options={})=>new Promise(resolve=>requests.push({endpoint,signal:options.signal,resolve}));
+  const rendered=[];
+  const renderPassiveContext=data=>{passiveContext=data;rendered.push(data.import_id);sourceLink.href='/arkime?analyze='+data.import_id+'#arkimeTrafficAnalysis';sourceLink.hidden=false};
+  ${handler("clearPassiveSourceLink", "function")}
+  ${handler("clearPassiveContext", "function")}
+  ${handler("loadPassiveContext")}
+  const older=loadPassiveContext('source-A'),newer=loadPassiveContext('source-B');
+  assert.equal(requests[0].signal.aborted,true,'a newer passive selection must cancel the older request');
+  requests[1].resolve({response:{ok:true},data:{import_id:'source-B'}});
+  await newer;
+  requests[0].resolve({response:{ok:true},data:{import_id:'source-A'}});
+  await older;
+  assert.deepEqual(rendered,['source-B'],'a delayed passive source must not replace the current selection');
+  assert.equal(passiveContext.import_id,'source-B');
+  assert.match(sourceLink.href,/source-B/,'the exact-source link must belong to the accepted source');
+  clearPassiveContext(false);
+  assert.equal(sourceLink.href,undefined,'removal must clear the exact-source link');
+  assert.equal(sourceLink.hidden,true,'removal must hide the exact-source link');
+  const restored=loadPassiveContext('source-B');
+  requests[2].resolve({response:{ok:true},data:{import_id:'source-B'}});
+  await restored;
+  const failed=loadPassiveContext('deleted-source');
+  assert.equal(sourceLink.href,undefined,'a pending replacement must clear the earlier source link immediately');
+  assert.equal(sourceLink.hidden,true,'a pending replacement must hide the earlier source link');
+  requests[3].resolve({response:{ok:false},data:{detail:'Arkime import not found'}});
+  await failed;
+  assert.equal(passiveContext,null,'a failed selection must clear the previously rendered passive data');
+  assert.equal(sourceLink.href,undefined,'a failed replacement must not restore the earlier source link');
+  assert.equal(sourceLink.hidden,true,'a failed replacement must leave the exact-source link hidden');
+  assert.equal(state.hidden,false,'the failed selection must remain visible as its own error');
+  assert.match(controls.get('passiveContextStatus').textContent,/Network Evidence remains independent/);
+  assert.match(controls.get('passiveContextResult').innerHTML,/did not substitute another import/);
 })()`);
 
 await eval(`(() => {

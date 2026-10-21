@@ -72,6 +72,28 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Separate exact-source Arkime context in Hunt — 2026-10-21
+
+- **Planned approach:** extend the network-wide Hunt request with an optional Arkime
+  import so one selected passive source could appear beside the existing Hunt evidence.
+- **Revised approach:** Hunt now loads the selected retained Sessions JSON/API source
+  through a separate `/api/hunting/passive-context` request and renders it in a clearly
+  labeled passive-context panel. The ordinary network-wide Hunt request, cache,
+  inventory, CVE candidates, filters and exports remain unchanged. The selected import
+  identifier survives normal network-view refreshes, while focused-scan selection and
+  the explicit Remove action clear it. Independent request ownership prevents a delayed
+  earlier selection from replacing a later source.
+- **Reason and expected impact:** coupling passive-source failure, timing and caching to
+  the existing Hunt request could hide otherwise usable evidence or accidentally make
+  the selected Arkime source part of current inventory. The separate request preserves
+  the user's exact-source investigation workflow while keeping both failure and evidence
+  meaning isolated.
+- **Remaining boundary:** this is Hunt access to one exact retained passive source, not
+  a unified Timeline selection or a current-network assertion. Aggregate summary CSV
+  imports are rejected because their groups can overlap. Passive context does not add
+  hosts, services, CVEs, Last Seen, Reach or Map claims, does not alter filters or
+  exports, and does not combine Arkime and Nmap collection windows.
+
 ## NCT-defined Arkime communication-summary contract — 2026-10-21
 
 - **Planned approach:** begin passive Tier A intake with the lowest-cost summary
@@ -5607,6 +5629,38 @@ Evidence source(s)
   excluded because overlapping groups cannot be safely treated as individual sessions.
   Nmap services with no passive row, broader Last Seen reasoning, historical state-change
   presentation, and reuse in Reach, Hunt Timeline and Map remain downstream work.
+
+- [x] **2026-10-21 — exact-source Arkime-to-Hunt integration completed.** An operator
+  can open one analyzed Sessions JSON/API source in Hunt and keep that exact import,
+  Network Scope, sensor, UTC query window, source declarations, bounded path rows,
+  truncation state, packet/byte receipts and exact raw/details links visible beside the
+  ordinary network-wide evidence. When supported same-scope Nmap evidence exists, each
+  destination service shows its separate collection window, selection reason and source
+  link without merging the two sources or claiming that they describe the same event.
+  Normal refresh preserves the exact passive source; focused-scan selection and Remove
+  clear it. A newer selection owns the panel so a delayed earlier request cannot replace
+  it. Invalid, deleted and aggregate-summary selections fail inside the passive panel
+  while the normal Hunt view remains usable. The Operator Guide and How NCT Works page
+  explain the handoff and its evidence boundary.
+
+  **Validation:** focused Arkime, UI and authentication checks passed with **97 tests**
+  and one existing warning; the Hunt executable browser regression passed; the complete
+  container suite passed with **1,857 tests, 18 skipped** and one existing warning. The
+  isolated browser preview verified exact-source handoff, refresh, removal, deleted and
+  aggregate-source errors, focused-scan precedence, readable labels, contained scrolling
+  and tailored Operator Guide guidance. Review found and resolved one stale Open in
+  Arkime link during source replacement, then novice review found and resolved narrow-
+  screen Personal Notes drawer and launcher overlap plus ambiguous focused-scan wording.
+  The final independent gate returned **CLEAR — DOCUMENTED DEVIATION** and the final
+  novice-operator gate returned **CLEAR** at 980 by 900 with the Guide open.
+
+  **Documented deviation / remaining limit:** the selected passive source uses a separate
+  `/api/hunting/passive-context` request instead of extending the cached network-wide
+  Hunt request. This keeps passive failures and source selection out of current inventory,
+  CVE candidates, filters and exports. The feature is exact-source context in Hunt, not
+  Timeline, Last Seen, Reach, Map or unified multi-source correlation; aggregate summary
+  imports remain excluded because overlapping groups cannot be safely treated as exact
+  sessions.
 
 Support:
 
