@@ -100,9 +100,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "does not prove one device, DHCP movement" in html
     assert "physical-device reconciliation, DHCP-cause proof" in html
     assert "never treats processing time as observation time" in html
-    assert "Bounded manual Arkime Sessions JSON imports" in html
+    assert "Bounded manual or automatic Arkime Sessions JSON intake" in html
     assert "A complete Arkime query result does not prove complete packet capture" in html
-    assert "direct Arkime API collection" in html
+    assert "The page itself never contacts Arkime" in html
+    assert "Failed, cancelled, interrupted, capped, and incomplete pulls remain visible" in html
     assert "Build details · version" in html
     assert "registered Nmap and device artifacts" in html
     assert "operator hostname upload" in html

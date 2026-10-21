@@ -87,7 +87,8 @@ def test_primary_pages_and_profiles_are_available():
     assert "Build scan" in scan_page.text
     assert analysis_page.status_code == 200
     assert arkime_page.status_code == 200
-    assert "Manual Sessions JSON only" in arkime_page.text
+    assert "Automatic read-only pulls" in arkime_page.text
+    assert "Import Sessions JSON" in arkime_page.text
     assert "Observed activity upload" not in arkime_page.text
     assert scan_references.status_code == 200
     assert "window.NCTScanReference" in scan_references.text

@@ -17,6 +17,22 @@ from app.arkime_evidence import (
     read_verified_arkime_source,
 )
 from app.arkime_ui import arkime_page
+from app.arkime_connector import (
+    ArkimeConnectorConflict,
+    ArkimeConnectorError,
+    cancel_pull_run,
+    connector_status,
+    create_pull_profile,
+    enqueue_pull_now,
+    init_arkime_connector_storage,
+    list_pull_profiles,
+    list_pull_runs,
+    recover_interrupted_pulls,
+    retry_pull_run,
+    set_pull_profile_enabled,
+    start_arkime_pull_worker,
+    stop_arkime_pull_worker,
+)
 from app.nmap_evidence import nmap_xml_coverage
 from app.pipeline_intake import (
     NMAP_INGESTION_POLICY_VERSION,
@@ -664,6 +680,25 @@ class MissionScopeUpdateRequest(BaseModel):
     ]] = Field(default_factory=list, max_length=7)
     notes: str = Field(default="", max_length=1000)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class ArkimePullProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    scope_id: str = Field(min_length=1, max_length=200)
+    operator_sensor: str = Field(min_length=1, max_length=200)
+    query_expression: str = Field(default="", max_length=2000)
+    bounding_mode: Literal["first", "last", "both", "either"] = "both"
+    cadence_minutes: int = Field(default=60, ge=5, le=1440)
+    lookback_minutes: int = Field(default=60, ge=5, le=10080)
+    overlap_minutes: int = Field(default=5, ge=0, le=1439)
+    collection_delay_seconds: int = Field(default=60, ge=0, le=3600)
+    enabled: bool = False
+
+
+class ArkimePullEnabledRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
 
 
 class NmapScopeAssignmentRequest(BaseModel):
@@ -1588,6 +1623,7 @@ async def lifespan(_: FastAPI):
         init_automated_nmap_scope_correction_storage(DB_PATH)
         init_mission_environment_storage(DB_PATH)
         init_arkime_evidence_storage(DB_PATH)
+        init_arkime_connector_storage(DB_PATH)
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
@@ -1601,6 +1637,8 @@ async def lifespan(_: FastAPI):
             resume_derived_job_worker()
             recover_interrupted_derived_jobs(DB_PATH)
             start_derived_job_worker(DB_PATH, DATA_DIR)
+            recover_interrupted_pulls(DB_PATH)
+            start_arkime_pull_worker(DB_PATH)
             if collection_enabled:
                 recover_scheduler_state()
                 scheduler_stop = threading.Event()
@@ -1644,6 +1682,10 @@ async def lifespan(_: FastAPI):
                 except BaseException:
                     shutdown_clean = False
             if background_workers_started:
+                try:
+                    shutdown_clean = stop_arkime_pull_worker() and shutdown_clean
+                except BaseException:
+                    shutdown_clean = False
                 try:
                     shutdown_clean = stop_derived_job_worker(DB_PATH) and shutdown_clean
                 except BaseException:
@@ -2213,6 +2255,94 @@ def arkime_import_raw(import_id: str) -> Response:
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _arkime_connector_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    if isinstance(exc, ArkimeConnectorConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/api/arkime/connector")
+def arkime_connector_configuration() -> dict:
+    return connector_status()
+
+
+@app.get("/api/arkime/pull-profiles")
+def arkime_pull_profile_list(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return list_pull_profiles(DB_PATH, limit=limit, offset=offset)
+    except ArkimeConnectorError as exc:
+        raise _arkime_connector_error(exc) from exc
+
+
+@app.post("/api/arkime/pull-profiles", status_code=201)
+def arkime_pull_profile_create(
+    request: Request, payload: ArkimePullProfileRequest,
+) -> dict:
+    require_storage_admin(request)
+    actor = signed_in_username(request) or "local-administrator"
+    try:
+        return create_pull_profile(DB_PATH, payload.model_dump(), actor=actor)
+    except (KeyError, ArkimeConnectorError) as exc:
+        raise _arkime_connector_error(exc) from exc
+
+
+@app.post("/api/arkime/pull-profiles/{profile_id}/enabled")
+def arkime_pull_profile_enabled(
+    request: Request, profile_id: str, payload: ArkimePullEnabledRequest,
+) -> dict:
+    require_storage_admin(request)
+    actor = signed_in_username(request) or "local-administrator"
+    try:
+        return set_pull_profile_enabled(
+            DB_PATH, profile_id, enabled=payload.enabled, actor=actor,
+        )
+    except (KeyError, ArkimeConnectorError) as exc:
+        raise _arkime_connector_error(exc) from exc
+
+
+@app.get("/api/arkime/pull-runs")
+def arkime_pull_run_list(
+    profile_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    try:
+        return list_pull_runs(DB_PATH, profile_id=profile_id, limit=limit)
+    except ArkimeConnectorError as exc:
+        raise _arkime_connector_error(exc) from exc
+
+
+@app.post("/api/arkime/pull-profiles/{profile_id}/pull-now", status_code=202)
+def arkime_pull_profile_now(request: Request, profile_id: str) -> dict:
+    actor = require_passive_importer(request)
+    try:
+        return enqueue_pull_now(DB_PATH, profile_id, actor=actor)
+    except (KeyError, ArkimeConnectorError) as exc:
+        raise _arkime_connector_error(exc) from exc
+
+
+@app.post("/api/arkime/pull-runs/{run_id}/retry", status_code=202)
+def arkime_pull_run_retry(request: Request, run_id: str) -> dict:
+    actor = require_passive_importer(request)
+    try:
+        return retry_pull_run(DB_PATH, run_id, actor=actor)
+    except (KeyError, ArkimeConnectorError) as exc:
+        raise _arkime_connector_error(exc) from exc
+
+
+@app.post("/api/arkime/pull-runs/{run_id}/cancel", status_code=202)
+def arkime_pull_run_cancel(request: Request, run_id: str) -> dict:
+    require_passive_importer(request)
+    try:
+        return cancel_pull_run(DB_PATH, run_id)
+    except (KeyError, ArkimeConnectorError) as exc:
+        raise _arkime_connector_error(exc) from exc
 
 
 def require_nmap_assignment_mutator(request: Request) -> str:

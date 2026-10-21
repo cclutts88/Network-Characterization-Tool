@@ -458,7 +458,8 @@ def test_manual_arkime_routes_upload_list_detail_and_download(tmp_path, monkeypa
         raw = client.get(item["raw_url"])
 
     assert page.status_code == 200
-    assert "Manual Sessions JSON only" in page.text
+    assert "Automatic read-only pulls" in page.text
+    assert "Import Sessions JSON" in page.text
     assert "Query-result completeness and capture coverage are separate" in page.text
     assert history.status_code == detail.status_code == raw.status_code == 200
     assert history.json()["items"][0]["scope"]["label"] == "Route scope"

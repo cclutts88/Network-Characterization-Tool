@@ -72,6 +72,34 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Bounded Arkime Sessions API connector — 2026-10-20
+
+- **Planned approach:** progress from manual Arkime evidence intake to direct API
+  collection, then continue toward passive connection summaries and correlation.
+- **Revised approach:** the first direct connector is an intentionally bounded Tier E
+  Sessions API window collector. It uses one deployment-configured read-only Digest
+  account over verified HTTPS, freezes scope and query authority before contact,
+  requests no more than 1,000 ordered sessions and 10 MiB, retains the exact returned
+  entity, and reuses the reviewed manual whole-file validator and atomic receipt path.
+  It does not page silently. Missing or larger result counts are retained as Unknown
+  or Partial and stop that definition for explicit review. One restart-aware worker
+  runs one window at a time; interruptions never resume automatically and a retry
+  preserves the original window and its scheduling purpose. The connector freezes its
+  parser and request contract with each attempt, enforces a whole-request deadline and
+  validates the actual returned row ceiling independently from the byte ceiling. Profile
+  definitions are immutable and paged in this slice;
+  changing one means creating a replacement and pausing the earlier definition.
+- **Reason and expected impact:** unbounded paging, automatic catch-up after downtime,
+  mutable queued queries, or treating a capped response as complete could lose or
+  misstate evidence. The bounded slice makes network contact and completeness visible,
+  preserves exact provenance and keeps repeated or overlapping responses as separate
+  observations while still removing routine manual export work.
+- **Remaining boundary:** Tier A summaries, PCAP retrieval, current-state or Last Seen
+  claims, Timeline/Hunt/Reach/Map correlation, and compatibility with the live Range
+  Arkime endpoint remain separate gates. The foundation implementation and isolated
+  browser validation do not make this Range-ready, mission-ready, or available on
+  `main`.
+
 ## Field-correction and first-class VLAN program — 2026-10-19
 
 - [~] A staged correction program is proceeding from the post-2026-10-14 operator
@@ -5165,6 +5193,32 @@ Arkime support must be **tiered**.
   on the development workstation, so compatibility remains unverified until that exact
   file is checked without contacting the range. It is development-ready on the
   foundation branch, not Range-ready, mission-ready or available on `main`.
+- [x] **2026-10-20 — bounded read-only Arkime API connector implementation and
+  validation completed.** Administrators can save
+  immutable Network Scope-specific pull definitions, pause or enable their schedules,
+  and analysts can run one bounded window, cancel work or explicitly retry the same
+  saved window. Deployment settings supply the HTTPS endpoint, Digest user, password
+  file and optional CA; credentials never enter saved definitions, receipts or errors.
+  One restart-aware worker freezes the exact scope, query and connector identity before
+  contact, prevents rapid catch-up, retains accepted responses through the Artifact
+  Registry and stops on partial, unknown, failed, cancelled or interrupted results.
+  Page reads never contact Arkime. The complete Docker suite passed **1,796 tests with
+  18 skipped**; the expanded focused regression passed **171 tests**, the Arkime browser
+  runtime check passed, the rebuilt isolated container reported ready, and the novice
+  operator returned **PASS** at normal and narrow widths with no console errors. Live
+  Range compatibility, Tier A records, PCAP workflows and downstream correlation remain
+  open, so this is foundation-only and is not Range-ready, mission-ready or on `main`.
+  The first independent closeout returned **HALTED FOR REVIEW** after reproducing five
+  boundary failures: manual retries could move the scheduled cursor, definitions after
+  the first 100 were hidden, a slow response could exceed the advertised deadline, a
+  1,001-row response could bypass the connector ceiling, and queued work did not freeze
+  its parser contract. Corrections now preserve retry purpose, reject obsolete scheduled
+  retries, page every definition, isolate each HTTPS transfer in a killable helper to
+  enforce a hard DNS/authentication/header/body deadline and shutdown bound,
+  validate the real row count, and reject incompatible queued work before contact.
+  The independent re-review exercised the real slow-header and slow-body paths, worker
+  shutdown during transport startup, retry scheduling, paging, row ceilings and frozen
+  processing versions; its 56-test closeout returned **CLEAR — DOCUMENTED DEVIATION**.
 
 ## 6.1 Tier A — Summary export
 

@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from app.analysis_ui import analysis_page
+from app.arkime_ui import arkime_page
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
@@ -997,12 +998,12 @@ def test_configuration_activity_is_hunt_while_collection_comparison_stays_compar
     assert "body[data-nct-task=\"activityEvidenceSection\"] #baselineEvidenceControl" in device_analysis_page().body.decode()
 
 
-def test_manual_arkime_upload_is_actionable_while_hunt_timeline_remains_planned():
+def test_arkime_passive_evidence_intake_is_actionable_while_hunt_timeline_remains_planned():
     collect_group = SHELL_SCRIPT.split("{label:'Collect'", 1)[1].split("{label:'Identify'", 1)[0]
     hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
 
     assert "{title:'Arkime',icon:'arkime',children:" in collect_group
-    assert "href:'/arkime#arkimeUpload',title:'Observed activity upload'" in collect_group
+    assert "href:'/arkime#arkimeConnector',title:'Passive evidence intake'" in collect_group
     assert "{title:'Arkime',icon:'arkime',planned:true" not in collect_group
     assert "{title:'Timeline',planned:true" in hunt_group
     assert "if(task.planned)" in SHELL_SCRIPT
@@ -1010,8 +1011,26 @@ def test_manual_arkime_upload_is_actionable_while_hunt_timeline_remains_planned(
     assert "huntTimelinePlanned.hidden=task?.parent!=='Hunt'" in SHELL_SCRIPT
     assert "Timeline will show when retained observations first appeared or changed" in SHELL_SCRIPT
     assert "Network Evidence remains the view of what the selected evidence currently reports" in SHELL_SCRIPT
-    assert "Arkime manual-import boundary" in SHELL_SCRIPT
+    assert "Arkime passive-evidence boundary" in SHELL_SCRIPT
+    assert "Automatic read-only Arkime pulls" in SHELL_SCRIPT
     assert "Query-result completeness and sensor capture coverage remain separate" in SHELL_SCRIPT
+
+
+def test_arkime_connector_explains_contact_boundary_and_recovery_controls():
+    html = arkime_page().body.decode()
+
+    assert 'id="arkimeConnector"' in html
+    assert "Automatic read-only pulls" in html
+    assert "Page reads never contact Arkime" in html
+    assert "Pull now" in html
+    assert "Retry same window" in html
+    assert "never launches a rapid catch-up burst" in html
+    assert 'aria-label="Automatic Arkime pull definitions"' in html
+    assert 'aria-label="Recent automatic Arkime pulls"' in html
+    assert "data-nct-table-mode=\"contained\"" in html
+    assert 'id="pullProfilePrevious"' in html
+    assert 'id="pullProfileNext"' in html
+    assert "/api/arkime/pull-profiles?limit=${pullProfileLimit}&offset=${pullProfileOffset}" in html
 
 
 def test_device_collections_uses_combined_router_firewall_icon():

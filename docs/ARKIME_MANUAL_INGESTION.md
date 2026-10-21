@@ -1,6 +1,6 @@
 # Manual Arkime Sessions JSON intake
 
-This is the first bounded Arkime evidence path in NCT. It accepts a saved result from
+This is the manual bounded Arkime evidence path in NCT. It accepts a saved result from
 Arkime's Sessions API when the JSON root contains a `data` array. It does not contact
 Arkime, copy packet captures, accept an OpenSearch `hits.hits` export, or claim that a
 passively observed destination port is open now.
@@ -65,7 +65,9 @@ these routes when sign-in mode is enabled.
 
 The retained sessions are passive source receipts for analyst inspection. They do not
 currently create canonical hosts or services, update Current Network or Last Seen,
-feed Hunt, Reach, or Map conclusions, or establish physical-device identity. Direct
-Arkime API intake, Tier A connection records, PCAP-backed workflows, timeline
+feed Hunt, Reach, or Map conclusions, or establish physical-device identity. Automatic
+bounded Sessions API intake is documented in
+[`ARKIME_API_CONNECTOR.md`](ARKIME_API_CONNECTOR.md). Tier A connection records,
+PCAP-backed workflows, timeline
 correlation, and validation against the actual retained Range export remain later
 Phase 6 work.

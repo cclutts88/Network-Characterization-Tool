@@ -6,6 +6,7 @@ observations, or feed canonical current-state selectors.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
@@ -532,8 +533,11 @@ def import_arkime_sessions_json(
     scope_id: str, operator_sensor: str, query_start: str, query_end: str,
     bounding_mode: str, operator_export_assessment: str,
     capture_coverage: str, query_expression: str, actor: str,
+    connection: sqlite3.Connection | None = None,
+    source_metadata: dict | None = None,
 ) -> dict:
-    init_arkime_evidence_storage(db_path)
+    if connection is None:
+        init_arkime_evidence_storage(db_path)
     scope_id = _text(scope_id, "scope_id", 200)
     sensor = _text(operator_sensor, "operator_sensor", 200)
     operator_assessment = _declaration(
@@ -556,9 +560,22 @@ def import_arkime_sessions_json(
     import_id = f"arkime_{uuid.uuid4().hex}"
     imported_at = utc_now()
     root = artifact_root_for(db_path)
-    with connect_database(db_path) as db:
-        db.execute("BEGIN IMMEDIATE")
+    database_context = nullcontext(connection) if connection is not None else connect_database(db_path)
+    with database_context as db:
+        if connection is None:
+            db.execute("BEGIN IMMEDIATE")
         scope = _scope_snapshot(db, scope_id)
+        artifact_metadata = {
+            "import_tier": "tier_d_sessions_json",
+            "scope_id": scope_id,
+            "operator_sensor": sensor,
+            "query_start": parsed["query_start"],
+            "query_end": parsed["query_end"],
+            "bounding_mode": parsed["bounding_mode"],
+            "returned_count": len(parsed["sessions"]),
+        }
+        if source_metadata:
+            artifact_metadata.update(source_metadata)
         artifact = register_artifact_bytes(
             db_path=db_path,
             content=content,
@@ -569,15 +586,7 @@ def import_arkime_sessions_json(
             actor=actor,
             observed_at=imported_at,
             observation_key=f"{ARKIME_SOURCE_KIND}:{import_id}",
-            metadata={
-                "import_tier": "tier_d_sessions_json",
-                "scope_id": scope_id,
-                "operator_sensor": sensor,
-                "query_start": parsed["query_start"],
-                "query_end": parsed["query_end"],
-                "bounding_mode": parsed["bounding_mode"],
-                "returned_count": len(parsed["sessions"]),
-            },
+            metadata=artifact_metadata,
             connection=db,
         )
         db.execute(
