@@ -492,9 +492,10 @@ def build_device_vlan_projection(
                         entry.get("reason"),
                         *entry["device"].values(),
                     ]
-                    if not any(
+                    entry_matches = not clean_search.isdigit() and any(
                         clean_search in str(value or "").casefold() for value in entry_values
-                    ):
+                    )
+                    if not entry_matches:
                         assessment = entry.get("assessment")
                         if not assessment:
                             continue

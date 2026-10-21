@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../app/arkime_ui.py", import.meta.url), "utf8");
+assert.ok(source.includes("top:100%"), "the value-action menu must touch its trigger so the pointer does not cross a dead gap");
+assert.ok(source.includes("visibility 0s linear .22s"), "the value-action menu must remain available briefly while the pointer enters it");
+assert.ok(source.includes("background:var(--nct-surface-muted,var(--panel))"), "the expression builder must inherit the active NCT theme");
 
 function handler(name) {
   const match = source.match(new RegExp(`^async function ${name}\\(.*$`, "m"));
@@ -39,6 +42,21 @@ await eval([
 
 await eval([
   "(async () => {",
+  "let trafficFilters=[{field:'ip.src',operator:'==',value:'192.0.2.1'}],trafficMatchMode='any',trafficImportId='',trafficRequest=0;",
+  "const location={hash:'#arkimeCoverageWindows'},controls={trafficAnalysisProgress:{hidden:true},trafficAnalysisStatus:{textContent:'',className:''},arkimeTrafficAnalysis:{scrolled:false,scrollIntoView(){this.scrolled=true}}};",
+  "const $=id=>controls[id],busy=(id,on)=>{controls[id].hidden=!on},rendered=[];",
+  "const api=async url=>({url}),renderTrafficAnalysis=data=>rendered.push(data.url);",
+  handler("loadTrafficAnalysis"),
+  "await loadTrafficAnalysis('import-1',true);",
+  "assert.equal(location.hash,'arkimeTrafficAnalysis','Analyze traffic must open the visible Traffic Patterns panel');",
+  "assert.equal(trafficFilters.length,0);assert.equal(trafficMatchMode,'all');",
+  "assert.equal(controls.arkimeTrafficAnalysis.scrolled,true);",
+  "assert.ok(rendered[0].includes('filters=%5B%5D'));",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
   "function node(tag='div'){return {tag,className:'',dataset:{},children:[],textContent:'',disabled:false,hidden:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=[...items]}}}",
   "const document={createElement(tag){const item=node(tag);if(tag==='table'){Object.defineProperty(item,'innerHTML',{set(){item.tBodies=[node('tbody')]}})}return item}};",
   "const esc=value=>String(value??''),requested=[];",
@@ -53,6 +71,45 @@ await eval([
   "assert.ok(requested[0].includes('offset=100'),'the first continuation must reach session 101');",
   "assert.ok(requested[1].includes('offset=200'),'the second continuation must reach session 205');",
   "assert.equal(host.children[1].children[0].textContent,'Sessions 201–201 of 205');",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "let coverageOffset=0,coverageTotal=0,coverageRevision='',coverageRequest=0;const limit=25;",
+  "const controls={coverageFilterScope:{value:'scope-a'},coverageProgress:{hidden:true},coverageStatus:{textContent:'',className:''},coveragePrevious:{disabled:false},coverageNext:{disabled:false},coverageRows:{innerHTML:''}};",
+  "const $=id=>controls[id];",
+  "const busy=(id,on)=>{controls[id].hidden=!on};",
+  "const renders=[],pending=[];",
+  "const renderCoverage=data=>renders.push(data.marker);",
+  "const api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));",
+  handler("loadCoverage"),
+  "const older=loadCoverage(0,false);",
+  "controls.coverageFilterScope.value='scope-b';",
+  "const newer=loadCoverage(0,false);",
+  "pending[1].resolve({marker:'scope-b'});await newer;",
+  "pending[0].resolve({marker:'scope-a'});await older;",
+  "assert.deepEqual(renders,['scope-b'],'a delayed older coverage response must not replace the selected scope');",
+  "assert.equal(controls.coverageStatus.textContent,'Read-only retained evidence. Gaps never prove an Arkime sensor outage or an absence of traffic.');",
+  "assert.equal(controls.coverageProgress.hidden,true);",
+  "assert.ok(pending[0].url.includes('scope_id=scope-a'));assert.ok(pending[1].url.includes('scope_id=scope-b'));",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "const esc=value=>String(value??'');",
+  syncHandler("trafficPredicate"),
+  syncHandler("trafficValueActions"),
+  syncHandler("trafficMetricTable"),
+  "const exact='18000000000000000000';",
+  "const html=trafficMetricTable('Top source addresses',[{label:'10.0.0.5',filter_clauses:[{field:'ip.src',operator:'==',value:'10.0.0.5'}],retained_session_rows:2,known_packet_total:exact,packet_rows_missing:0,known_byte_total:'0',byte_rows_missing:1,receipt_ordinals:[0,1],receipt_references_truncated:false}],'empty');",
+  "assert.ok(html.includes(exact),'traffic analytics must render exact decimal totals without Number conversion');",
+  "assert.ok(html.includes('1 row Unknown'),'missing values must remain visibly Unknown');",
+  "assert.ok(html.includes('class=\"metric-value\"'),'value actions must live in the compact hover or focus control');",
+  "assert.ok(html.includes('Click to filter for this value'),'the main value must explain its one-click include behavior');",
+  "const grouped=trafficPredicate({filter_clauses:[{field:'ipProtocol',operator:'==',value:'tcp'},{field:'port.dst',operator:'==',value:53}]},true);",
+  "assert.equal(grouped.negated,true);assert.equal(grouped.match_mode,'all');assert.equal(grouped.clauses.length,2);",
   "})()",
 ].join("\n"));
 

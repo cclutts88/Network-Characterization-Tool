@@ -26,6 +26,15 @@ from app.arkime_summary import (
     list_arkime_summary_imports,
     read_verified_arkime_summary_source,
 )
+from app.arkime_coverage import (
+    ArkimeCoverageConflict,
+    ArkimeCoverageError,
+    list_arkime_coverage_windows,
+)
+from app.arkime_analytics import (
+    ArkimeAnalyticsError,
+    analyze_arkime_import,
+)
 from app.arkime_ui import arkime_page
 from app.arkime_connector import (
     ArkimeConnectorConflict,
@@ -2182,7 +2191,9 @@ def require_passive_importer(request: Request) -> str:
 def _arkime_error(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail=str(exc.args[0]))
-    if isinstance(exc, (ArkimeEvidenceConflict, ArkimeSummaryConflict)):
+    if isinstance(exc, (
+        ArkimeEvidenceConflict, ArkimeSummaryConflict, ArkimeCoverageConflict,
+    )):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
 
@@ -2206,6 +2217,41 @@ def arkime_summary_template() -> Response:
             "Content-Disposition": 'attachment; filename="nct-arkime-summary-v1.csv"'
         },
     )
+
+
+@app.get("/api/arkime/coverage-windows")
+def arkime_coverage_window_history(
+    scope_id: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    revision: str | None = None,
+) -> dict:
+    try:
+        return list_arkime_coverage_windows(
+            DB_PATH, scope_id=scope_id, limit=limit, offset=offset,
+            revision=revision,
+        )
+    except ArkimeCoverageError as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/traffic-analysis")
+def arkime_retained_traffic_analysis(
+    import_id: str,
+    limit: int = Query(default=25, ge=1, le=100),
+    filters: str | None = Query(default=None, max_length=8192),
+    match_mode: Literal["all", "any"] = "all",
+) -> dict:
+    try:
+        decoded_filters = json.loads(filters) if filters else []
+        return analyze_arkime_import(
+            DB_PATH, import_id, limit=limit, filters=decoded_filters,
+            match_mode=match_mode,
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="filters must be valid JSON") from exc
+    except (KeyError, ArkimeAnalyticsError) as exc:
+        raise _arkime_error(exc) from exc
 
 
 @app.post("/api/arkime/imports", status_code=201)

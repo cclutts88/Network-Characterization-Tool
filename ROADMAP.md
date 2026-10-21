@@ -5438,6 +5438,20 @@ Manual/offline export remains supported even when API integration exists.
 
 ## 6.7 Coverage tracking
 
+- [~] **2026-10-21 — unified retained Arkime window tracking started.** This slice
+  combines the saved query windows from communication summaries, manual Sessions JSON
+  and successfully retained API pulls into one read-only, paged view. It preserves the
+  Network Scope version, observation-point declaration, method and parser contract,
+  query/bounding context, connector identity where available, separate export/capture
+  declarations and exact source/import link. Interval comparison is allowed only for an
+  exact API stream with complete declarations and unambiguous provenance, and uses the
+  maximum preceding eligible end across the complete filtered stream. Every other row
+  remains visibly Not comparable. A reported gap means only that NCT lacks a comparable
+  retained window; it does not prove a sensor outage, absent collection or missing
+  traffic. Failed attempts without retained imports remain outside evidence coverage.
+  Boundary, nested-interval, paging, concurrent-revision, malformed-provenance,
+  read-only, browser, novice and independent-review checks must pass before completion.
+
 Track:
 
 - Coverage start/end
@@ -5463,6 +5477,67 @@ Label clearly:
 Do not claim a listener is open unless evidence supports that conclusion.
 
 ## 6.10 Communication aggregation
+
+- [~] **2026-10-21 — operator-facing Arkime traffic analysis started.** Build
+  bounded, read-only views for exact retained evidence that explain top source and
+  destination talkers, frequently contacted external addresses, destination-port
+  activity, protocols/applications and VLAN activity. Preserve the exact import,
+  Network Scope and export/capture declarations behind every result. Never combine
+  overlapping retained windows into one unexplained total, call a reported destination
+  port open, infer maliciousness, or present incomplete capture as whole-network truth.
+  External-address classification requires explicit reviewed scope CIDRs; otherwise it
+  remains Unknown. Architecture review, exact-count handling, browser checks, novice
+  workflow review and independent quality-gate approval are required before completion.
+- [~] **2026-10-21 — retained-data Arkime expression pivots started.** Every value
+  in the traffic ranking's first column will support Arkime-style include and exclude
+  actions. Analysts can combine IP, destination port, IP protocol, detected protocol,
+  and VLAN clauses with match-all or match-any behavior. NCT must show the exact
+  expression, recalculate every related table from the same retained import, preserve
+  Unknown values, and make clear that this local drill-down does not send a new query
+  to Arkime.
+  - [x] **2026-10-21 — compact filter controls corrected and theme-aligned.** Clicking
+    a reported value applies the include action; hovering or focusing it reveals the
+    include/exclude choices without permanently crowding the table. The action menu now
+    directly touches its trigger and remains open briefly while the pointer enters its
+    border. Keyboard focus keeps the same controls available. The expression builder,
+    clause chips and hover menu now inherit the active NCT theme. Runtime checks,
+    focused Docker tests and a rebuilt-browser workflow verified the menu, exclusion
+    action, exact displayed expression and filtered result count.
+    Independent review returned **CLEAR — DOCUMENTED DEVIATION** because this gate
+    covers the compact menu and theme correction rather than all Phase 6 analytics.
+    The novice-operator review returned **CLEAR** with no browser errors or layout
+    overflow. The complete Docker regression suite passed with 1,837 tests and 18
+    environment-dependent skips.
+  - [x] **2026-10-21 — full Arkime analytics gate corrections completed.** The
+    independent reviewer halted the broader milestone after reproducing four semantic
+    edge cases: transport-specific port rows could be filtered as port-only; a literal
+    application value named `unknown` could collide with a missing value; malformed
+    filter field types could escape validation; and a pull-run link alone could promote
+    a manual observation to comparable API provenance. The implementation now uses one
+    grouped predicate for transport plus destination port, distinct reported/missing
+    application identities, bounded typed filter validation, and exact retained
+    observation metadata checks for API continuity. The rebuilt browser verified the
+    theme-aligned controls, persistent keyboard-accessible action menu, grouped UDP/53
+    include and exclude expressions, and exact two-of-four result counts. The complete
+    Docker suite initially exposed an unrelated nondeterministic numeric VLAN search:
+    a generated assignment identifier containing the requested digits could return every
+    VLAN in that assignment. Numeric searches now select the exact VLAN identifier only,
+    and the regression test deliberately places the same digits in the scope label. The
+    affected VLAN file passed 37 tests; the focused Arkime tests passed 15 tests; the UI
+    runtime check passed; and the complete Docker suite passed 1,840 tests with 18
+    environment-dependent skips. Independent re-review then halted on two additional
+    malformed-filter boundaries: a non-text grouped match mode and a superscript numeric
+    character could escape the normal input-error path. Group modes now require text,
+    numeric port/VLAN values require ASCII decimal syntax, and both API regressions return
+    a bounded 422 response. The updated focused test passed 9 checks, the UI runtime check
+    passed, the complete Docker suite again passed 1,840 tests with 18 environment-dependent
+    skips, and the novice-operator review returned **CLEAR** with no browser warnings,
+    page overflow or confusing grouped-filter behavior. The built-in How NCT Works guide
+    now distinguishes ranked Sessions JSON analysis from communication-summary groups that
+    remain separate and are never aggregated into top-talker rankings. Independent final
+    review returned **CLEAR — DOCUMENTED DEVIATION**: this correction gate is complete,
+    while the parent Phase 6 traffic-analysis and expression-pivot items remain in progress
+    until broader roadmap integration is finished.
 
 Collapse repetitive sessions into durable summaries:
 

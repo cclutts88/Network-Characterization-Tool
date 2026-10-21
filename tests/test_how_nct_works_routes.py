@@ -104,6 +104,12 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "A complete Arkime query result does not prove complete packet capture" in html
     assert "The page itself never contacts Arkime" in html
     assert "Failed, cancelled, interrupted, capped, and incomplete pulls remain visible" in html
+    assert "Arkime traffic-pattern review" in html
+    assert "a destination-port choice keeps its transport and port together" in html
+    assert "every source-reported group separate" in html
+    assert "never aggregates those groups into top-talker rankings" in html
+    assert "It does not contact Arkime, run a live query" in html
+    assert "literal reported value named “unknown” remains a separate reported value" in html
     assert "Build details · version" in html
     assert "registered Nmap and device artifacts" in html
     assert "operator hostname upload" in html

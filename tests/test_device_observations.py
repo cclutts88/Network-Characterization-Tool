@@ -571,7 +571,7 @@ def test_vlan_projection_api_is_bounded_revisioned_and_read_only(tmp_path, monke
         "vlan 80\n name Blue\nvlan 81\n name Red\n"
         "interface Gi0/1\n switchport access vlan 80\n",
     )
-    scope = _scope(db_path, "Projection API scope")
+    scope = _scope(db_path, "Projection API scope 80")
     assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
     _dispatch_and_run_vlan(db_path, tmp_path, assignment["assignment_id"])
     monkeypatch.setattr(main_module, "DB_PATH", db_path)
