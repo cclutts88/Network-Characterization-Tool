@@ -286,6 +286,9 @@ def register_artifact_bytes(
     observed_at: str | None = None,
     artifact_root: Path | None = None,
     pipeline_policy_version: int | None = None,
+    observation_key: str | None = None,
+    transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict:
     artifact_root = artifact_root or artifact_root_for(db_path)
     digest = hashlib.sha256(content).hexdigest()
@@ -312,7 +315,10 @@ def register_artifact_bytes(
         actor=actor,
         metadata=metadata,
         observed_at=observed_at,
+        observation_key=observation_key,
         pipeline_policy_version=pipeline_policy_version,
+        transaction_guard=transaction_guard,
+        connection=connection,
     )
     record["physical_created"] = not record["duplicate"]
     return record

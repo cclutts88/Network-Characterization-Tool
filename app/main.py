@@ -1,7 +1,22 @@
 from __future__ import annotations
 
 from app.database import configure_database, connect_database
-from app.artifacts import get_artifact, init_artifact_storage, register_artifact_bytes
+from app.artifacts import (
+    get_artifact,
+    init_artifact_storage,
+    register_artifact_bytes,
+)
+from app.arkime_evidence import (
+    ArkimeEvidenceConflict,
+    ArkimeEvidenceError,
+    MAX_ARKIME_JSON_BYTES,
+    get_arkime_import,
+    import_arkime_sessions_json,
+    init_arkime_evidence_storage,
+    list_arkime_imports,
+    read_verified_arkime_source,
+)
+from app.arkime_ui import arkime_page
 from app.nmap_evidence import nmap_xml_coverage
 from app.pipeline_intake import (
     NMAP_INGESTION_POLICY_VERSION,
@@ -411,7 +426,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from defusedxml import ElementTree as ET
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -1572,6 +1587,7 @@ async def lifespan(_: FastAPI):
         init_automated_nmap_foundation_storage(DB_PATH)
         init_automated_nmap_scope_correction_storage(DB_PATH)
         init_mission_environment_storage(DB_PATH)
+        init_arkime_evidence_storage(DB_PATH)
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
@@ -2096,6 +2112,106 @@ def mission_environment_history(
 ) -> dict:
     return list_mission_history(
         DB_PATH, kind=kind, key=key, limit=limit, offset=offset,
+    )
+
+
+def require_passive_importer(request: Request) -> str:
+    if auth_enabled():
+        analyst = request.state.analyst
+        if analyst is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if analyst.get("role") not in {"analyst", "admin"}:
+            raise HTTPException(status_code=403, detail="Analyst or administrator role required")
+        return analyst["username"]
+    return signed_in_username(request) or "local-operator"
+
+
+def _arkime_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, KeyError):
+        return HTTPException(status_code=404, detail=str(exc.args[0]))
+    if isinstance(exc, ArkimeEvidenceConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/arkime", response_class=HTMLResponse)
+def arkime_workspace() -> HTMLResponse:
+    return arkime_page()
+
+
+@app.post("/api/arkime/imports", status_code=201)
+async def arkime_import(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    scope_id: Annotated[str, Form()],
+    operator_sensor: Annotated[str, Form()],
+    query_start: Annotated[str, Form()],
+    query_end: Annotated[str, Form()],
+    bounding_mode: Annotated[str, Form()],
+    operator_export_assessment: Annotated[str, Form()],
+    capture_coverage: Annotated[str, Form()],
+    query_expression: Annotated[str, Form()] = "",
+) -> dict:
+    actor = require_passive_importer(request)
+    content = await file.read(MAX_ARKIME_JSON_BYTES + 1)
+    if len(content) > MAX_ARKIME_JSON_BYTES:
+        raise HTTPException(status_code=413, detail="The Arkime JSON file exceeds the 10 MiB intake limit")
+    try:
+        return import_arkime_sessions_json(
+            DB_PATH, content=content,
+            original_filename=file.filename or "arkime-sessions.json",
+            media_type=file.content_type or "application/json",
+            scope_id=scope_id, operator_sensor=operator_sensor,
+            query_start=query_start, query_end=query_end,
+            bounding_mode=bounding_mode,
+            operator_export_assessment=operator_export_assessment,
+            capture_coverage=capture_coverage,
+            query_expression=query_expression, actor=actor,
+        )
+    except EvidenceMaintenanceBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KeyError, ArkimeEvidenceError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/imports")
+def arkime_import_history(
+    scope_id: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    revision: str | None = None,
+) -> dict:
+    try:
+        return list_arkime_imports(
+            DB_PATH, scope_id=scope_id, limit=limit, offset=offset, revision=revision,
+        )
+    except ArkimeEvidenceError as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/imports/{import_id}")
+def arkime_import_detail(
+    import_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_arkime_import(DB_PATH, import_id, limit=limit, offset=offset)
+    except (KeyError, ArkimeEvidenceError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/imports/{import_id}/raw")
+def arkime_import_raw(import_id: str) -> Response:
+    try:
+        source, content = read_verified_arkime_source(DB_PATH, import_id)
+    except (KeyError, ArkimeEvidenceError) as exc:
+        raise _arkime_error(exc) from exc
+    filename = safe_name(source["original_filename"] or "arkime-sessions.json", "arkime-sessions.json")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

@@ -997,18 +997,21 @@ def test_configuration_activity_is_hunt_while_collection_comparison_stays_compar
     assert "body[data-nct-task=\"activityEvidenceSection\"] #baselineEvidenceControl" in device_analysis_page().body.decode()
 
 
-def test_planned_arkime_upload_and_hunt_timeline_are_visible_but_not_actionable():
+def test_manual_arkime_upload_is_actionable_while_hunt_timeline_remains_planned():
     collect_group = SHELL_SCRIPT.split("{label:'Collect'", 1)[1].split("{label:'Identify'", 1)[0]
     hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
 
-    assert "{title:'Arkime',icon:'arkime',planned:true" in collect_group
-    assert "{title:'Observed Activity Upload',planned:true" in collect_group
+    assert "{title:'Arkime',icon:'arkime',children:" in collect_group
+    assert "href:'/arkime#arkimeUpload',title:'Observed activity upload'" in collect_group
+    assert "{title:'Arkime',icon:'arkime',planned:true" not in collect_group
     assert "{title:'Timeline',planned:true" in hunt_group
     assert "if(task.planned)" in SHELL_SCRIPT
     assert "row.setAttribute('aria-disabled','true')" in SHELL_SCRIPT
     assert "huntTimelinePlanned.hidden=task?.parent!=='Hunt'" in SHELL_SCRIPT
     assert "Timeline will show when retained observations first appeared or changed" in SHELL_SCRIPT
     assert "Network Evidence remains the view of what the selected evidence currently reports" in SHELL_SCRIPT
+    assert "Arkime manual-import boundary" in SHELL_SCRIPT
+    assert "Query-result completeness and sensor capture coverage remain separate" in SHELL_SCRIPT
 
 
 def test_device_collections_uses_combined_router_firewall_icon():
@@ -2361,6 +2364,9 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "A later closed result or narrower scan does not erase" in SHELL_SCRIPT
     assert "body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "@media(min-width:1101px){body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
+    assert "@media(min-width:851px) and (max-width:1100px)" in SHELL_SCRIPT
+    assert "body.nct-shell.nct-guide-open #nct-sidebar{display:none}" in SHELL_SCRIPT
+    assert "margin-right:calc(var(--nct-guide-reserve,350px) + 28px)" in SHELL_SCRIPT
     assert "html[data-nct-density=compact] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "html[data-nct-density=spacious] body.nct-shell.nct-guide-open>main" in SHELL_SCRIPT
     assert "--nct-guide-reserve" in SHELL_SCRIPT
