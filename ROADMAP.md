@@ -5203,6 +5203,23 @@ Arkime support must be **tiered**.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish Tier A passive-network analysis, full Arkime and Security
   Onion integration, Range readiness, mission readiness, or availability on main.
+- [x] **2026-10-21 — dedicated NCT scanner access to the approved home test VLANs
+  completed.** The isolated lab now permits only the dedicated NCT scanner to
+  initiate active checks toward the five operator-approved VLANs while retaining the
+  existing isolation policy for other range systems. The routed firewall preserves
+  NCT's exact source identity for those destinations and keeps its automatic outbound
+  translation rules for other traffic. A live discovery run from the deployed NCT
+  container completed across all five VLANs and reported responsive hosts in every
+  one. The deployment now has five named Saved Networks associated with one reviewed
+  Home Network scope, whose Mission Environment record marks Nmap coverage available
+  and the operator-approved Nmap boundary authorized; passive and configuration
+  coverage remain explicitly unknown. Operator guidance now requires selection of a
+  named Saved Network, confirmation of the Home Network scope and review of the scan
+  profile, timing and No-Strike exclusions before starting; the authorization label
+  does not approve arbitrary targets or probes. Exact operational evidence and
+  limitations are retained in `docs/RANGE_OBSERVABILITY_VALIDATION_RECORD.md`. This is
+  an isolated lab capability and does not establish Range readiness, mission readiness,
+  Kubernetes readiness or availability on `main`.
 - [~] **2026-10-20 to 2026-10-21 — exact Range Arkime connector acceptance is
   operational with one visual closeout still open.** Read-only
   inventory confirmed that the existing Arkime guest retains separate system and

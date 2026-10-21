@@ -454,3 +454,51 @@ as the primary address. The generated certificate approves both values, while a 
 answer preserves the existing IP-only behavior. Focused automated checks verify both
 approved names and verify the generated certificate against its generated public
 authority.
+
+## 2026-10-21 — dedicated NCT scanner reachability across the approved home VLANs
+
+The operator authorized the dedicated NCT guest to scan all five home VLANs. The
+network change was deliberately limited to that single scanner. UniFi retains its
+existing inter-VLAN isolation rules and now has one higher-priority allow policy whose
+source is only the NCT guest and whose destinations are only the five approved VLANs.
+Automatic return-traffic handling is enabled for that policy.
+
+The routed firewall originally translated NCT traffic to the firewall's address before
+it reached UniFi. That prevented the exact-source policy from identifying NCT. The
+firewall was therefore moved from Automatic to Hybrid outbound translation and given
+five destination-specific no-translation rules for the NCT guest. Hybrid mode retains
+the existing automatic translation rules after the manual exceptions, so the change
+does not broaden another range guest and does not replace normal outbound translation.
+The final firewall page showed Hybrid mode, all five exact-source exceptions and no
+pending apply action. A unique DNS query from NCT was then recorded by the home resolver
+under the NCT host name rather than the routed firewall, confirming source preservation.
+
+A live Nmap discovery run executed from the deployed NCT container against the five
+approved `/24` Saved Network boundaries. It completed successfully over 1,280 addresses
+in 115.25 seconds and reported 35 responsive hosts: 17, 13, 2, 2 and 1 across the five
+VLANs respectively. Every VLAN produced at least one response. This verifies routed
+active-scan reachability from the same container used by NCT; it does not prove that
+every host permits every probe or that every service accepts NCT traffic. Representative
+management services on two isolated hosts remained unavailable, consistent with
+possible endpoint or service-specific restrictions, while discovery on both VLANs
+still succeeded.
+
+The deployed NCT database now contains five named Saved Networks, all associated with
+one `Home Network` Network Scope. Its Mission Environment declaration records Nmap
+coverage as available and Nmap authorization as operator-approved. Arkime, Kibana,
+device-configuration and broader passive coverage were not inferred from active-scan
+reachability and remain unknown with a visible telemetry-gap limitation. Existing
+No-Strike controls and the operator's authorization process still apply to each scan.
+
+For an approved scan, open **Nmap Scans** and select the intended Saved Network:
+**Default VLAN**, **IoT VLAN**, **Kids VLAN**, **Range VLAN** or **Travel VLAN**. Confirm
+that its Network Scope is **Home Network**, then review the approved scan profile,
+timing and No-Strike exclusions before starting. Scan another VLAN as a separate target
+unless the administrator explicitly approved a combined run. **Nmap coverage available**
+means the active Nmap path is usable for these saved boundaries. **Nmap authorization
+authorized** records the approved boundary; neither label authorizes arbitrary CIDRs or
+every possible probe.
+
+This is a live isolated-lab configuration result. It is not a claim that the foundation
+branch is on `main`, that every home endpoint is reachable on every port, or that
+Kubernetes, Security Onion, passive coverage or mission readiness is complete.
