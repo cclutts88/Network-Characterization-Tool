@@ -5,10 +5,14 @@ import json
 from fastapi.testclient import TestClient
 import pytest
 
+from app.artifacts import register_artifact_bytes
+from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
 from app.arkime_analytics import analyze_arkime_import, parse_arkime_filter_expression
 from app.arkime_evidence import import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
-from app.network_scopes import create_network_scope
+from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
+from app.foundation_evidence import get_foundation_scope_evidence
+from app.network_scopes import archive_network_scope, create_network_scope
 
 
 START = "2030-01-01T00:00:00+00:00"
@@ -52,6 +56,52 @@ def _import_sessions(db, scope):
     )
 
 
+def _nmap_xml(
+    requested_ports, services, *, address="192.0.2.10", start=1893450000,
+    host_start=None, host_end=None, finish=None, omitted_state="closed",
+):
+    finish = finish if finish is not None else start + 10
+    host_start = host_start if host_start is not None else start + 1
+    host_end = host_end if host_end is not None else finish - 1
+    explicit = {port for protocol, port, _ in services if protocol == "tcp"}
+    omitted = len(set(requested_ports) - explicit)
+    ports = "".join(
+        f'<port protocol="{protocol}" portid="{port}"><state state="{state}"/>'
+        f'<service name="service-{port}"/></port>'
+        for protocol, port, state in services
+    )
+    extras = (
+        f'<extraports state="{omitted_state}" count="{omitted}"/>' if omitted else ""
+    )
+    return (
+        f'<nmaprun scanner="nmap" args="nmap -n {address}" start="{start}">'
+        f'<scaninfo type="syn" protocol="tcp" numservices="{len(requested_ports)}" '
+        f'services="{",".join(str(port) for port in requested_ports)}"/>'
+        f'<host starttime="{host_start}" endtime="{host_end}"><status state="up"/>'
+        f'<address addr="{address}" addrtype="ipv4"/><ports>{extras}{ports}</ports>'
+        f'</host><runstats><finished time="{finish}" exit="success"/></runstats>'
+        '</nmaprun>'
+    ).encode()
+
+
+def _process_nmap(db, scope, content, source_ref):
+    observation = register_artifact_bytes(
+        db_path=db, content=content, source_kind="nmap_import",
+        source_ref=source_ref, original_filename=f"{source_ref}.xml",
+        actor="analyst", observed_at="2030-01-01T03:00:00+00:00",
+    )
+    assignment = assign_artifact_scope(
+        db, artifact_observation_id=observation["observation_id"],
+        scope_id=scope["scope_id"], actor="analyst",
+        reason="Confirmed exact whole-file context", whole_artifact_confirmed=True,
+    )
+    ingest_assigned_nmap_observation(
+        db, expected_assignment_id=assignment["assignment_id"],
+        linked_by="analyst", parser_version="nmap-endpoints:2",
+    )
+    return observation, assignment
+
+
 def test_session_analysis_counts_rows_preserves_unknown_and_large_exact_totals(tmp_path):
     db = tmp_path / "nct.db"
     scope = create_network_scope(db, label="Range", created_by="admin")
@@ -92,6 +142,274 @@ def test_session_analysis_counts_rows_preserves_unknown_and_large_exact_totals(t
         {"field": "port.dst", "operator": "==", "value": 53},
     ]
     assert result["read_only"] is True
+
+
+def test_session_paths_add_exact_scope_nmap_context_and_keep_windows_separate(tmp_path):
+    db = tmp_path / "nct.db"
+    range_scope = create_network_scope(db, label="Range", created_by="admin")
+    observation, _ = _process_nmap(
+        db, range_scope,
+        _nmap_xml([443], [("tcp", 443, "open")], start=1893440000),
+        "upload:range-open-443",
+    )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="sessions.json", media_type="application/json",
+        scope_id=range_scope["scope_id"], operator_sensor="sensor",
+        query_start=START, query_end=END, bounding_mode="both",
+        operator_export_assessment="complete", capture_coverage="complete",
+        query_expression="", actor="analyst",
+    )
+
+    result = analyze_arkime_import(db, imported["import_id"])
+    context = result["correlated_paths"][0]["active_context"]
+
+    assert result["active_context_contract"] == "arkime-active-context:1"
+    assert context["status"] == "reported_open_and_observed"
+    assert context["reported_state"] == "open"
+    assert context["reported_basis"] == "explicit"
+    assert context["scope_id"] == range_scope["scope_id"]
+    assert context["scope_version"] == imported["scope"]["version"]
+    assert context["destination_endpoint"]["address"] == "192.0.2.10"
+    assert context["active_sources"][0]["observation_id"] == observation["observation_id"]
+    assert context["active_sources"][0]["source_url"]
+    assert context["selection_revision"]
+    assert context["evidence_windows"]["relationship"] == "active_before_passive"
+    assert "different times" in context["evidence_windows"]["note"]
+    assert context["claims"] == {
+        "live_or_current_network_truth": False,
+        "physical_device_identity": False,
+        "connection_succeeded": False,
+        "listener_open": False,
+        "same_event": False,
+    }
+    archive_network_scope(
+        db, range_scope["scope_id"], expected_version=range_scope["version"],
+        archived_by="admin", reason="Retain historical scope evidence",
+    )
+    archived = analyze_arkime_import(db, imported["import_id"])
+    assert archived["correlated_paths"][0]["active_context"]["status"] == (
+        "reported_open_and_observed"
+    )
+
+
+def test_path_context_does_not_cross_scopes_and_preserves_scope_correction(tmp_path):
+    db = tmp_path / "nct.db"
+    first = create_network_scope(db, label="First", created_by="admin")
+    second = create_network_scope(db, label="Second", created_by="admin")
+    _, assignment = _process_nmap(
+        db, second, _nmap_xml([443], [("tcp", 443, "open")]),
+        "upload:second-only",
+    )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="first-scope.json", media_type="application/json",
+        scope_id=first["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    before = analyze_arkime_import(db, imported["import_id"])
+    assert before["correlated_paths"][0]["active_context"]["status"] == "passive_only_in_scope"
+
+    corrected = correct_artifact_scope(
+        db, expected_assignment_id=assignment["assignment_id"],
+        destination_scope_id=first["scope_id"], actor="analyst",
+        reason="Corrected exact context", whole_artifact_confirmed=True,
+    )
+    ingest_assigned_nmap_observation(
+        db, expected_assignment_id=corrected["assignment_id"],
+        linked_by="analyst", parser_version="nmap-endpoints:2",
+    )
+    moved = analyze_arkime_import(db, imported["import_id"])
+    context = moved["correlated_paths"][0]["active_context"]
+    assert context["status"] == "reported_open_and_observed"
+    assert context["scope_id"] == first["scope_id"]
+
+
+def test_path_context_resolves_exact_service_beyond_page_and_aggregate_omission(tmp_path):
+    db = tmp_path / "nct.db"
+    range_scope = create_network_scope(db, label="Range", created_by="admin")
+    ports = list(range(1, 101)) + [65000]
+    _process_nmap(
+        db, range_scope,
+        _nmap_xml(ports, [("tcp", port, "open") for port in ports]),
+        "upload:more-than-one-service-page",
+    )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=65000),
+        ]}).encode(), original_filename="exact-port.json", media_type="application/json",
+        scope_id=range_scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    exact = analyze_arkime_import(db, imported["import_id"])
+    assert exact["correlated_paths"][0]["active_context"]["status"] == "reported_open_and_observed"
+
+    later_scope = create_network_scope(db, label="Aggregate", created_by="admin")
+    _process_nmap(
+        db, later_scope, _nmap_xml([4444], [], omitted_state="closed"),
+        "upload:aggregate-closed",
+    )
+    aggregate_import = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(2, source="10.0.0.7", destination="192.0.2.10", port=4444),
+        ]}).encode(), original_filename="aggregate.json", media_type="application/json",
+        scope_id=later_scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    aggregate = analyze_arkime_import(db, aggregate_import["import_id"])
+    aggregate_context = aggregate["correlated_paths"][0]["active_context"]
+    assert aggregate_context["status"] == "observed_scan_mismatch"
+    assert aggregate_context["reported_state"] == "closed"
+    assert aggregate_context["reported_basis"] == "aggregate"
+
+
+@pytest.mark.parametrize(
+    ("reported_state", "reason_text"),
+    [("closed", "reported closed"), ("filtered", "reported filtered"),
+     ("open|filtered", "ambiguous state (open|filtered)")],
+)
+def test_scan_mismatch_keeps_closed_filtered_and_ambiguous_states_distinct(
+    tmp_path, reported_state, reason_text,
+):
+    db = tmp_path / "nct.db"
+    range_scope = create_network_scope(db, label="Range", created_by="admin")
+    _process_nmap(
+        db, range_scope, _nmap_xml([443], [("tcp", 443, reported_state)]),
+        f"upload:{reported_state}",
+    )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="mismatch.json", media_type="application/json",
+        scope_id=range_scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    context = analyze_arkime_import(db, imported["import_id"])["correlated_paths"][0][
+        "active_context"
+    ]
+    assert context["status"] == "observed_scan_mismatch"
+    assert context["reported_state"] == reported_state
+    assert reason_text in context["reason"]
+    assert "do not prove that a connection succeeded" in context["reason"]
+
+
+def test_path_context_preserves_unresolved_sources_and_missing_fields(tmp_path):
+    db = tmp_path / "nct.db"
+    range_scope = create_network_scope(db, label="Range", created_by="admin")
+    for index, (state, start, host_start, host_end) in enumerate([
+        ("open", 1893450000, 1893450001, 1893450015),
+        ("closed", 1893450005, 1893450010, 1893450020),
+    ]):
+        _process_nmap(
+            db, range_scope,
+            _nmap_xml(
+                [443], [("tcp", 443, state)], start=start,
+                host_start=host_start, host_end=host_end, finish=host_end + 1,
+            ), f"upload:overlap-{index}",
+        )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+            _session(2, source="10.0.0.5", destination="192.0.2.10", port=None),
+            _session(3, source="10.0.0.5", destination="192.0.2.10", port=444,
+                     transport=None),
+        ]}).encode(), original_filename="unresolved.json", media_type="application/json",
+        scope_id=range_scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    result = analyze_arkime_import(db, imported["import_id"])
+    by_port = {item["destination_port"]: item["active_context"]
+               for item in result["correlated_paths"]}
+    assert by_port[443]["status"] == "active_state_unresolved"
+    assert {item["source_ref"] for item in by_port[443]["active_sources"]} == {
+        "upload:overlap-0", "upload:overlap-1",
+    }
+    assert by_port[None]["status"] == "insufficient_path_fields"
+    assert by_port[None]["selection_revision"] is None
+    assert by_port[444]["status"] == "insufficient_path_fields"
+
+
+def test_path_context_keeps_unknown_nmap_time_unresolved(tmp_path):
+    db = tmp_path / "nct.db"
+    range_scope = create_network_scope(db, label="Range", created_by="admin")
+    timed = _nmap_xml([443], [("tcp", 443, "open")], start=1893450000)
+    unknown = _nmap_xml([443], [("tcp", 443, "closed")], start=1893450100)
+    unknown = unknown.replace(
+        b' starttime="1893450101" endtime="1893450109"', b"",
+    )
+    _process_nmap(db, range_scope, timed, "upload:timed")
+    _process_nmap(db, range_scope, unknown, "upload:unknown-time")
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="unknown-time.json", media_type="application/json",
+        scope_id=range_scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    context = analyze_arkime_import(db, imported["import_id"])["correlated_paths"][0][
+        "active_context"
+    ]
+    assert context["status"] == "active_state_unresolved"
+    assert len(context["active_sources"]) == 2
+    assert context["evidence_windows"]["relationship"] == "unknown"
+
+
+def test_arkime_and_nmap_context_share_one_read_snapshot(tmp_path, monkeypatch):
+    from app import arkime_analytics as analytics
+
+    db = tmp_path / "nct.db"
+    first = create_network_scope(db, label="First", created_by="admin")
+    second = create_network_scope(db, label="Second", created_by="admin")
+    _, assignment = _process_nmap(
+        db, first, _nmap_xml([443], [("tcp", 443, "open")]),
+        "upload:snapshot",
+    )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="snapshot.json", media_type="application/json",
+        scope_id=first["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    original = analytics.get_foundation_exact_service_states_snapshot
+    changed = False
+
+    def correct_during_selection(connection, scope_id, entity_id, services):
+        nonlocal changed
+        if not changed:
+            changed = True
+            corrected = correct_artifact_scope(
+                db, expected_assignment_id=assignment["assignment_id"],
+                destination_scope_id=second["scope_id"], actor="analyst",
+                reason="Concurrent reviewed correction", whole_artifact_confirmed=True,
+            )
+            ingest_assigned_nmap_observation(
+                db, expected_assignment_id=corrected["assignment_id"],
+                linked_by="analyst", parser_version="nmap-endpoints:2",
+            )
+        return original(connection, scope_id, entity_id, services)
+
+    monkeypatch.setattr(
+        analytics, "get_foundation_exact_service_states_snapshot",
+        correct_during_selection,
+    )
+    frozen = analyze_arkime_import(db, imported["import_id"])
+    assert frozen["correlated_paths"][0]["active_context"]["status"] == (
+        "reported_open_and_observed"
+    )
+    refreshed = analyze_arkime_import(db, imported["import_id"])
+    assert refreshed["correlated_paths"][0]["active_context"]["status"] == (
+        "not_actively_assessed"
+    )
 
 
 def test_typed_expression_parses_exact_fields_groups_quotes_and_unknown():
@@ -274,6 +592,8 @@ def test_summary_analysis_keeps_potentially_overlapping_groups_separate(tmp_path
     assert "does not add groups" in result["metric_definition"]
     assert result["correlated_paths"] == []
     assert "can overlap" in result["correlation_note"]
+    assert result["active_context_contract"] is None
+    assert "not calculated" in result["active_context_note"]
 
     filtered = analyze_arkime_import(
         db, imported["import_id"],
@@ -318,6 +638,90 @@ def test_traffic_analysis_route_uses_one_exact_import(tmp_path, monkeypatch):
     assert typed.json()["filter_expression"] == (
         "(ip.src == 10.0.0.5) && (protocols == google)"
     )
+
+
+def test_traffic_analysis_route_reports_active_context_candidate_bound(
+    tmp_path, monkeypatch,
+):
+    import app.main as main
+    from app import foundation_evidence as evidence
+
+    db = tmp_path / "candidate-bound.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    for index in range(2):
+        _process_nmap(
+            db, scope,
+            _nmap_xml(
+                [443], [("tcp", 443, "open")],
+                start=1893440000 + index * 100,
+            ),
+            f"upload:candidate-bound-{index}",
+        )
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="candidate-bound.json",
+        media_type="application/json", scope_id=scope["scope_id"],
+        operator_sensor="sensor", query_start=START, query_end=END,
+        bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    monkeypatch.setattr(main, "DB_PATH", db)
+    monkeypatch.setattr(evidence, "MAX_CURRENT_SERVICE_CANDIDATES", 1)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/arkime/traffic-analysis",
+            params={"import_id": imported["import_id"]},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("Active Nmap context is unavailable:")
+    assert "source-record bound" in response.json()["detail"]
+    assert "no partial result was produced" in response.json()["detail"]
+
+
+def test_traffic_analysis_route_reports_active_context_unresolved_evidence_bound(
+    tmp_path, monkeypatch,
+):
+    import app.main as main
+    from app import foundation_evidence as evidence
+
+    db = tmp_path / "unresolved-bound.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    for index, state in enumerate(("open", "closed")):
+        content = _nmap_xml(
+            [443], [("tcp", 443, state)], start=1893440000 + index * 100,
+        ).replace(
+            (
+                f' starttime="{1893440001 + index * 100}" '
+                f'endtime="{1893440009 + index * 100}"'
+            ).encode(),
+            b"",
+        )
+        _process_nmap(db, scope, content, f"upload:unresolved-bound-{index}")
+    imported = import_arkime_sessions_json(
+        db, content=json.dumps({"data": [
+            _session(1, source="10.0.0.5", destination="192.0.2.10", port=443),
+        ]}).encode(), original_filename="unresolved-bound.json",
+        media_type="application/json", scope_id=scope["scope_id"],
+        operator_sensor="sensor", query_start=START, query_end=END,
+        bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+    monkeypatch.setattr(main, "DB_PATH", db)
+    monkeypatch.setattr(evidence, "MAX_CURRENT_SERVICE_EVIDENCE", 1)
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/arkime/traffic-analysis",
+            params={"import_id": imported["import_id"]},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("Active Nmap context is unavailable:")
+    assert "more than 1 unresolved latest source records" in response.json()["detail"]
+    assert "no partial result was produced" in response.json()["detail"]
 
 
 def test_traffic_analysis_route_rejects_invalid_filter_json(tmp_path, monkeypatch):

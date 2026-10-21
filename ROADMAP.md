@@ -5573,6 +5573,41 @@ Evidence source(s)
 
 ## 6.11 Active/passive correlation
 
+- [x] **2026-10-21 — exact-scope Arkime/Nmap path context completed.** For each
+  bounded communication path from one selected Sessions JSON/API source, join only the
+  same frozen Network Scope and exact destination address, transport and destination
+  port to NCT's existing latest defensible source-reported Nmap selector. Show source
+  and destination endpoint links where processed entities already exist, then label the
+  destination service as reported open and observed, Observed / Scan Mismatch, not
+  actively assessed, unresolved, or passive-only in this scope. Do not create hosts or
+  services from passive rows, infer physical identity, reverse client/server direction,
+  merge imports, promote aggregate summary groups, claim live truth or use an address
+  from another Network Scope. Preserve both Arkime receipt references and the exact
+  retained Nmap source behind every comparison. The Arkime Traffic Patterns workspace
+  now shows this context beside each correlated path, keeps Arkime and Nmap collection
+  windows separate in UTC, exposes the exact retained source links and processed endpoint
+  links, and preserves click and typed-expression filtering across source, destination,
+  transport and destination port. Safety-bound failures return a clear request error and
+  no partial comparison. The Operator Guide and How NCT Works page explain how to read
+  the labels and why they are retained-report comparisons rather than current network
+  truth.
+
+  **Validation:** the complete container test suite passed with 1,853 tests, 18 skipped
+  and one existing warning; the final focused Arkime, foundation-evidence, guide and UI
+  checks passed with 169 tests and one existing warning; the browser runtime regression
+  check passed; and the rebuilt container was exercised in the browser with the Operator
+  Guide open, contained table scrolling, filters, exact evidence explanations and fully
+  readable UTC start/end times. The independent gate returned **CLEAR — DOCUMENTED
+  DEVIATION** and the novice-operator gate returned **CLEAR**.
+
+  **Documented deviation / remaining limit:** this milestone correlates saved Arkime
+  rows with the latest defensible saved Nmap report for the same scope and exact service.
+  It does not establish live service state, connection success, physical-device identity
+  or that the two sources describe the same event. Aggregate Arkime summary groups remain
+  excluded because overlapping groups cannot be safely treated as individual sessions.
+  Nmap services with no passive row, broader Last Seen reasoning, historical state-change
+  presentation, and reuse in Reach, Hunt Timeline and Map remain downstream work.
+
 Support:
 
 - Open + observed

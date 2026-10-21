@@ -1175,7 +1175,8 @@ def get_foundation_current_service_states(
         relevant = latest_timed + unknown
         if len(relevant) > MAX_CURRENT_SERVICE_EVIDENCE:
             raise ValueError(
-                "Current service-state selection has more than 250 unresolved latest "
+                "Current service-state selection has more than "
+                f"{MAX_CURRENT_SERVICE_EVIDENCE} unresolved latest "
                 "source records; no partial result was produced"
             )
         if unknown:
@@ -1293,6 +1294,191 @@ def get_foundation_current_service_states(
             "has_more": offset + len(page_keys) < len(keys),
             "selection_revision": selection_revision,
         },
+        "read_only": True,
+        "claims": {
+            "latest_defensible_source_reported_state": selection_status == "ordered",
+            "live_or_current_network_truth": False,
+            "physical_device_identity": False,
+            "exact_last_seen_timestamp": False,
+            "absence_or_disappearance": False,
+        },
+    }
+
+
+def get_foundation_exact_service_states_snapshot(
+    db: sqlite3.Connection,
+    scope_id: str,
+    entity_id: str,
+    services: list[tuple[str, int]],
+) -> dict:
+    """Select exact service states inside an existing read snapshot.
+
+    This deliberately shares the current-service selector's candidate, ordering,
+    coverage, omission and uncertainty rules.  It exists for bounded cross-evidence
+    views that must ask about a port even when that port has never produced an explicit
+    service receipt, so paging the previously recorded service-key inventory is not a
+    correct substitute.
+    """
+    if not isinstance(services, list) or not 1 <= len(services) <= MAX_CURRENT_SERVICE_PAGE:
+        raise ValueError(
+            f"exact services must contain 1 to {MAX_CURRENT_SERVICE_PAGE} entries"
+        )
+    page_keys: list[tuple[str, int]] = []
+    for item in services:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("each exact service must contain protocol and port")
+        protocol, port = item
+        protocol = str(protocol or "").strip().lower()
+        if protocol not in {"tcp", "udp", "sctp"}:
+            raise ValueError("protocol must be TCP, UDP, or SCTP")
+        if type(port) is not int or not 0 <= port <= 65535:
+            raise ValueError("port must be between 0 and 65535")
+        key = (protocol, port)
+        if key not in page_keys:
+            page_keys.append(key)
+    page_keys.sort()
+
+    scope_row = db.execute(
+        """SELECT scope_id, label, description, version, active
+           FROM network_scopes WHERE scope_id = ?""",
+        (scope_id,),
+    ).fetchone()
+    endpoint = db.execute(
+        """SELECT entity_id, address FROM endpoint_entities
+           WHERE entity_id = ? AND scope_id = ?""",
+        (entity_id, scope_id),
+    ).fetchone()
+    if scope_row is None or endpoint is None:
+        raise KeyError("Processed endpoint not found in this Network Scope")
+    rows = db.execute(
+        _LATEST_OBSERVATION_CANDIDATES_SQL,
+        (scope_id, entity_id, NMAP_ENDPOINT_PARSER,
+         MAX_CURRENT_SERVICE_CANDIDATES + 1),
+    ).fetchall()
+    if len(rows) > MAX_CURRENT_SERVICE_CANDIDATES:
+        raise ValueError(
+            "Current service-state selection exceeds the reviewed per-address "
+            "source-record bound; no partial result was produced"
+        )
+    selection_revision = _assignment_set_revision(rows)
+
+    candidates = []
+    incomplete_count = 0
+    for row in rows:
+        record, interval, completed = _supported_observation_candidate(row)
+        if not completed:
+            incomplete_count += 1
+            continue
+        record["endpoint_facts"] = _json(row["endpoint_facts_json"])
+        candidates.append({"record": record, "interval": interval})
+    timed = [item for item in candidates if item["interval"] is not None]
+    unknown = [item for item in candidates if item["interval"] is None]
+    latest_timed = _latest_timed_candidates(timed)
+    relevant = latest_timed + unknown
+    if len(relevant) > MAX_CURRENT_SERVICE_EVIDENCE:
+        raise ValueError(
+            "Current service-state selection has more than "
+            f"{MAX_CURRENT_SERVICE_EVIDENCE} unresolved latest "
+            "source records; no partial result was produced"
+        )
+    if unknown:
+        selection_status = "unresolved"
+        selection_reason = (
+            "At least one successful current record has no valid host collection "
+            "window, so NCT cannot prove which source record is latest"
+        )
+    elif len(latest_timed) > 1:
+        selection_status = "unresolved"
+        selection_reason = (
+            "The latest successful source windows overlap, touch, or tie; NCT "
+            "keeps their service reports unresolved"
+        )
+    elif len(latest_timed) == 1:
+        selection_status = "ordered"
+        selection_reason = (
+            "One successful source record has a strictly later non-overlapping "
+            "host collection window"
+        )
+    else:
+        selection_status = "unavailable"
+        selection_reason = "No successful supported source record is available"
+
+    explicit = {}
+    if relevant:
+        assessment_ids = sorted({
+            item["record"]["assessment"]["assessment_id"] for item in relevant
+        })
+        assessment_marks = ",".join("?" for _ in assessment_ids)
+        key_clause = " OR ".join(
+            "(entity.protocol = ? AND entity.port = ?)" for _ in page_keys
+        )
+        parameters: list[object] = [*assessment_ids, entity_id]
+        for protocol, port in page_keys:
+            parameters.extend([protocol, port])
+        service_rows = db.execute(
+            f"""SELECT receipt.assessment_id, entity.protocol, entity.port,
+                        entity.entity_id AS service_id, receipt.facts_json
+                 FROM service_receipts receipt
+                 JOIN service_entities entity ON entity.entity_id = receipt.service_id
+                 WHERE receipt.assessment_id IN ({assessment_marks})
+                   AND entity.host_id = ? AND ({key_clause})
+                 ORDER BY receipt.assessment_id, entity.protocol, entity.port""",
+            parameters,
+        ).fetchall()
+        explicit = {
+            (row["assessment_id"], row["protocol"], int(row["port"])): {
+                "service_id": row["service_id"],
+                "facts": _json(row["facts_json"]),
+            }
+            for row in service_rows
+        }
+
+    selected_services = []
+    for protocol, port in page_keys:
+        evidence = [
+            _current_service_record(
+                item["record"],
+                explicit.get((item["record"]["assessment"]["assessment_id"],
+                              protocol, port)),
+                protocol, port,
+            )
+            for item in relevant
+        ]
+        if selection_status == "ordered" and len(evidence) == 1:
+            selected = evidence[0]
+            status = selected["status"]
+            state = selected["reported_state"]
+            basis = selected["basis"]
+            reason = selected["reason"]
+        elif selection_status == "unresolved":
+            status, state, basis = "unresolved", None, None
+            reason = selection_reason
+        else:
+            status, state, basis = "unavailable", None, None
+            reason = selection_reason
+        selected_services.append({
+            "protocol": protocol,
+            "port": port,
+            "status": status,
+            "reported_state": state,
+            "basis": basis,
+            "reason": reason,
+            "evidence": evidence,
+        })
+    return {
+        "contract": CURRENT_SERVICE_STATE_CONTRACT,
+        "scope": _scope(scope_row),
+        "endpoint": {"entity_id": endpoint["entity_id"], "address": endpoint["address"]},
+        "selection": {
+            "status": selection_status,
+            "reason": selection_reason,
+            "successful_candidate_count": len(candidates),
+            "relevant_source_count": len(relevant),
+            "unknown_time_count": len(unknown),
+            "incomplete_record_count": incomplete_count,
+        },
+        "services": selected_services,
+        "selection_revision": selection_revision,
         "read_only": True,
         "claims": {
             "latest_defensible_source_reported_state": selection_status == "ordered",

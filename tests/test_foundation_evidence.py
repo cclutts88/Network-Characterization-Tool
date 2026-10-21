@@ -4,12 +4,14 @@ import pytest
 
 from app.artifacts import register_artifact_bytes
 from app.assigned_nmap_ingestion import ingest_assigned_nmap_observation
+from app.database import connect_database
 from app.entities import record_assessment
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
 from app.foundation_evidence import (
     FoundationEvidenceConflict,
     compare_foundation_receipt_services,
     get_foundation_current_service_states,
+    get_foundation_exact_service_states_snapshot,
     get_foundation_endpoint_evidence,
     get_foundation_latest_observations,
     get_foundation_last_open_service_observations,
@@ -1462,6 +1464,36 @@ def test_current_service_state_enforces_candidate_bound_before_json_decode(
     )
     with pytest.raises(ValueError, match="source-record bound"):
         _current_for(db, lab)
+
+
+def test_exact_service_snapshot_matches_current_selector_for_same_services(tmp_path):
+    db = tmp_path / "nct.db"
+    lab = scope(db, "Lab")
+    process(db, assign(db, observation(
+        db, "upload:selector-parity",
+        content=lifecycle_xml(
+            [22, 443], [("tcp", 22, "open"), ("tcp", 443, "closed")],
+        ),
+    ), lab))
+    current = _current_for(db, lab, limit=50)
+    requested = [
+        (item["protocol"], item["port"]) for item in current["services"]
+    ]
+
+    with connect_database(db, read_only=True) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("BEGIN")
+        exact = get_foundation_exact_service_states_snapshot(
+            connection, lab["scope_id"], current["endpoint"]["entity_id"], requested,
+        )
+
+    assert exact["contract"] == current["contract"]
+    assert exact["scope"] == current["scope"]
+    assert exact["endpoint"] == current["endpoint"]
+    assert exact["selection"] == current["selection"]
+    assert exact["services"] == current["services"]
+    assert exact["claims"] == current["claims"]
+    assert exact["selection_revision"] == current["pagination"]["selection_revision"]
 
 
 def test_latest_observation_uses_source_windows_not_import_or_processing_order(tmp_path):

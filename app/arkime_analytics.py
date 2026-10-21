@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
 
 from app.database import connect_database
+from app.foundation_evidence import get_foundation_exact_service_states_snapshot
 
 
 MAX_RESULTS = 100
@@ -475,6 +477,240 @@ def _correlated_paths(rows: list[sqlite3.Row], limit: int) -> list[dict]:
     return paths[:limit]
 
 
+def _parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _window_context(record: sqlite3.Row, evidence: dict | None) -> dict:
+    passive = {"start": record["query_start"], "end": record["query_end"]}
+    active = evidence.get("collection_window") if evidence else None
+    active_start = _parse_utc((active or {}).get("start", {}).get("utc"))
+    active_end = _parse_utc((active or {}).get("end", {}).get("utc"))
+    passive_start = _parse_utc(record["query_start"])
+    passive_end = _parse_utc(record["query_end"])
+    if None in {active_start, active_end, passive_start, passive_end}:
+        relationship = "unknown"
+        note = (
+            "The retained Arkime and Nmap windows are shown separately; their time "
+            "relationship cannot be established."
+        )
+    elif active_end < passive_start:
+        relationship = "active_before_passive"
+        note = (
+            "The Nmap collection ended before this retained Arkime window began. "
+            "These are reports from different times."
+        )
+    elif passive_end < active_start:
+        relationship = "passive_before_active"
+        note = (
+            "This retained Arkime window ended before the Nmap collection began. "
+            "These are reports from different times."
+        )
+    else:
+        relationship = "overlapping"
+        note = (
+            "The retained Arkime and Nmap collection windows overlap. This still does "
+            "not prove both tools observed the same packet or service event."
+        )
+    return {
+        "passive": passive,
+        "active": active,
+        "relationship": relationship,
+        "note": note,
+    }
+
+
+def _endpoint_link(scope_id: str, row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    entity_id = str(row["entity_id"])
+    return {
+        "entity_id": entity_id,
+        "address": str(row["address"]),
+        "detail_url": (
+            f"/api/foundation-evidence/scopes/{scope_id}/endpoints/{entity_id}"
+        ),
+        "workspace_url": "/analysis#networkChangesPanel",
+    }
+
+
+def _active_label(service: dict, selection: dict) -> tuple[str, str, str]:
+    if selection["status"] == "unresolved" or service["status"] == "unresolved":
+        return (
+            "active_state_unresolved",
+            "Active state unresolved",
+            selection["reason"],
+        )
+    if service["status"] != "reported":
+        return (
+            "not_actively_assessed",
+            "Not actively assessed",
+            service["reason"],
+        )
+    state = str(service.get("reported_state") or "").strip().lower()
+    if state == "open":
+        return (
+            "reported_open_and_observed",
+            "Reported open + observed",
+            "Nmap reported this exact destination protocol and port open, and this "
+            "retained Arkime source reports traffic to it.",
+        )
+    if state == "closed":
+        detail = "reported closed"
+    elif state == "filtered":
+        detail = "reported filtered"
+    else:
+        detail = f"reported an ambiguous state ({state or 'Unknown'})"
+    return (
+        "observed_scan_mismatch",
+        "Observed / Scan Mismatch",
+        f"Nmap {detail}, while this retained Arkime source reports traffic to the "
+        "same destination protocol and port. The reports may cover different times, "
+        "and observed packets do not prove that a connection succeeded or a listener "
+        "was open.",
+    )
+
+
+def _attach_active_context(
+    db: sqlite3.Connection,
+    record: sqlite3.Row,
+    paths: list[dict],
+) -> None:
+    """Attach exact-scope Nmap context using the caller's Arkime read snapshot."""
+    addresses = sorted({
+        value
+        for path in paths
+        for value in (path.get("source_ip"), path.get("destination_ip"))
+        if isinstance(value, str) and value
+    })
+    if not addresses:
+        return
+    marks = ",".join("?" for _ in addresses)
+    endpoint_table = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='endpoint_entities'"
+    ).fetchone()
+    endpoint_rows = [] if endpoint_table is None else db.execute(
+        f"""SELECT entity_id, address FROM endpoint_entities
+             WHERE scope_id = ? AND address IN ({marks})
+             ORDER BY address, entity_id""",
+        [record["scope_id"], *addresses],
+    ).fetchall()
+    endpoints = {str(row["address"]): row for row in endpoint_rows}
+    grouped: dict[str, set[tuple[str, int]]] = {}
+    for path in paths:
+        destination = path.get("destination_ip")
+        endpoint = endpoints.get(destination)
+        protocol = str(path.get("transport") or "").lower()
+        port = path.get("destination_port")
+        if endpoint is not None and protocol in {"tcp", "udp", "sctp"} \
+                and type(port) is int and 0 <= port <= 65535:
+            grouped.setdefault(str(endpoint["entity_id"]), set()).add((protocol, port))
+    selections = {}
+    for entity_id, services in grouped.items():
+        try:
+            selections[entity_id] = get_foundation_exact_service_states_snapshot(
+                db, str(record["scope_id"]), entity_id, sorted(services),
+            )
+        except ValueError as exc:
+            raise ArkimeAnalyticsError(
+                f"Active Nmap context is unavailable: {exc}"
+            ) from exc
+    for path in paths:
+        source_endpoint = endpoints.get(path.get("source_ip"))
+        destination_endpoint = endpoints.get(path.get("destination_ip"))
+        base = {
+            "contract": "arkime-active-context:1",
+            "scope_id": record["scope_id"],
+            "scope_version": int(record["scope_version"]),
+            "source_endpoint": _endpoint_link(record["scope_id"], source_endpoint),
+            "destination_endpoint": _endpoint_link(
+                record["scope_id"], destination_endpoint,
+            ),
+            "read_only": True,
+            "claims": {
+                "live_or_current_network_truth": False,
+                "physical_device_identity": False,
+                "connection_succeeded": False,
+                "listener_open": False,
+                "same_event": False,
+            },
+        }
+        if destination_endpoint is None:
+            path["active_context"] = {
+                **base,
+                "status": "passive_only_in_scope",
+                "label": "Passive only in this scope",
+                "reason": (
+                    "No supported processed Nmap endpoint exists for this destination "
+                    "address in the same Network Scope. This does not mean it was never scanned."
+                ),
+                "reported_state": None,
+                "selection_revision": None,
+                "active_source": None,
+                "active_sources": [],
+                "evidence_windows": _window_context(record, None),
+            }
+            continue
+        protocol = str(path.get("transport") or "").lower()
+        port = path.get("destination_port")
+        if (
+            protocol not in {"tcp", "udp", "sctp"}
+            or type(port) is not int
+            or not 0 <= port <= 65535
+        ):
+            path["active_context"] = {
+                **base,
+                "status": "insufficient_path_fields",
+                "label": "Not actively assessed",
+                "reason": (
+                    "This retained path has no supported exact transport and destination "
+                    "port, so NCT cannot compare it with Nmap service coverage."
+                ),
+                "reported_state": None,
+                "selection_revision": None,
+                "active_source": None,
+                "active_sources": [],
+                "evidence_windows": _window_context(record, None),
+            }
+            continue
+        selection = selections[str(destination_endpoint["entity_id"])]
+        service = next(
+            item for item in selection["services"]
+            if item["protocol"] == protocol and item["port"] == port
+        )
+        status, label, reason = _active_label(service, selection["selection"])
+        active_evidence = (
+            service["evidence"][0]
+            if selection["selection"]["status"] == "ordered"
+            and len(service["evidence"]) == 1
+            else None
+        )
+        active_sources = [
+            item["source"] for item in service["evidence"]
+            if isinstance(item.get("source"), dict)
+        ]
+        path["active_context"] = {
+            **base,
+            "status": status,
+            "label": label,
+            "reason": reason,
+            "reported_state": service.get("reported_state"),
+            "reported_basis": service.get("basis"),
+            "selection_revision": selection["selection_revision"],
+            "active_source": active_evidence.get("source") if active_evidence else None,
+            "active_sources": active_sources,
+            "evidence_windows": _window_context(record, active_evidence),
+        }
+
+
 def _session_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) -> dict:
     sources, source_labels = _group(
         rows, lambda row: (
@@ -710,6 +946,14 @@ def analyze_arkime_import(
                 unfiltered_row_count = len(rows)
                 rows = _apply_filters(rows, "sessions_json", normalized_filters, match_mode)
                 analysis = _session_analysis(session, rows, limit)
+                _attach_active_context(db, session, analysis["correlated_paths"])
+                analysis["active_context_contract"] = "arkime-active-context:1"
+                analysis["active_context_note"] = (
+                    "Active context uses the same database read snapshot, exact Network "
+                    "Scope, destination address, transport and destination port. It "
+                    "compares retained reports; it does not claim live truth or that a "
+                    "connection succeeded."
+                )
                 source_kind = "sessions_json"
                 source_url = f"/api/arkime/imports/{import_id}/raw"
                 detail_url = f"/api/arkime/imports/{import_id}"
@@ -723,6 +967,11 @@ def analyze_arkime_import(
                 unfiltered_row_count = len(rows)
                 rows = _apply_filters(rows, "summary_csv", normalized_filters, match_mode)
                 analysis = _summary_analysis(summary, rows, limit)
+                analysis["active_context_contract"] = None
+                analysis["active_context_note"] = (
+                    "Active Nmap context is not calculated for communication-summary "
+                    "groups because their reported rows may overlap."
+                )
                 source_kind = "summary_csv"
                 source_url = f"/api/arkime/summary-imports/{import_id}/raw"
                 detail_url = f"/api/arkime/summary-imports/{import_id}"

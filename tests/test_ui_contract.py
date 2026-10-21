@@ -1062,6 +1062,12 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert "Analyze one retained Arkime source" in SHELL_SCRIPT
     assert "Type an exact Arkime-style retained-data expression" in SHELL_SCRIPT
     assert "correlated communication-path table" in SHELL_SCRIPT
+    assert "same Network Scope and exact destination service" in SHELL_SCRIPT
+    assert "Observed / Scan Mismatch compare retained reports" in SHELL_SCRIPT
+    assert "Passive only means no supported processed Nmap endpoint" in SHELL_SCRIPT
+    assert "Retained Nmap context" in html
+    assert "Why this label and when the evidence was collected" in html
+    assert "Open exact Nmap source" in html
     assert "A retained-window gap is an NCT evidence gap" in html
     assert "NCT Arkime Summary CSV v1" in html
     assert "it is not a native Arkime export format" in html
