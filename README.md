@@ -129,13 +129,16 @@ provides, and the ordered checks for troubleshooting it.
 To generate private-lab TLS material without starting any containers:
 
 ```bash
-sh scripts/setup-lab-https.sh SERVER_IP nct-deployment/tls-material
+sh scripts/setup-lab-https.sh SERVER_IP nct-deployment/tls-material OPTIONAL_DNS_NAME
 ```
 
-Transfer the generated public `nct-lab-root.crt` to each operator workstation
-through the approved process and install it in **Trusted Root Certification
-Authorities**. Never transfer the CA or server private key. The guided installer
-automates this generation option and prints the verified final address. See
+Transfer only the generated public CA certificate, `nct-lab-root.crt`, to each
+operator workstation through the approved process and install it in **Trusted Root
+Certification Authorities**. Never transfer the CA private key or server private key. When analysts use a
+local DNS name, supply it as the optional third value so the certificate approves
+both the stable IP address and that name. The guided installer asks for this name
+when it generates HTTPS material, verifies the server, and prints the friendly
+operator address. See
 [Private-lab HTTPS setup](docs/HTTPS_LAB_SETUP.md) for the complete trust steps.
 
 The automated **Run now** path requires the container capabilities and bundled Nmap/FPING/tcpdump tools. It starts tcpdump on the selected analyzer interface and retains the PCAP with the scan evidence. **Generate package** creates a portable certified package without starting a scan on the analyzer.

@@ -72,6 +72,31 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Default-VLAN operator access for the isolated trial — 2026-10-21
+
+- **Planned approach:** operators would reach the side-by-side NCT trial through its
+  assigned HTTPS address after installing the private NCT web certificate authority.
+- **Revised approach:** the existing home resolver now provides the stable local name
+  `nct.home.arpa`, and the existing NCT leaf certificate was reissued by the same
+  private NCT authority with both the stable name and the retained IP address in its
+  approved names. The original leaf certificate and extension file remain as local
+  rollback copies on the NCT guest.
+- **Reason and expected impact:** a stable name removes the need for operators to
+  memorize a Range address and avoids a certificate-name mismatch when the name is
+  used. The Default VLAN already had a working route to the isolated trial, so this
+  change did not add or broaden a firewall rule. Existing access to other Range
+  management endpoints is a separate network-hardening decision and was not changed
+  implicitly.
+- **Remaining boundary:** the name, route, certificate chain and NCT health response
+  are verified. Each operator workstation must still trust the approved public NCT web
+  authority before normal browser use; bypassing a browser warning is not an accepted
+  setup step. This is a trial-environment access improvement, not Range, mission,
+  stable-`main` or multi-replica acceptance.
+- **Installer completion:** the guided HTTPS setup now accepts an optional operator DNS
+  name and generates one certificate that approves both the stable server IP and that
+  name. The original IP-only workflow remains supported, and certificate generation
+  remains separate from container deployment.
+
 ## Bounded Arkime Sessions API connector — 2026-10-20
 
 - **Planned approach:** progress from manual Arkime evidence intake to direct API

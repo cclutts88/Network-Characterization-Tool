@@ -7,9 +7,18 @@ set -eu
 
 server_name="${1:-}"
 output_root="${2:-.}"
+alternate_dns_name="${3:-}"
 if [ -z "$server_name" ]; then
-    printf '%s\n' "Usage: $0 SERVER_IP_OR_NAME [OUTPUT_ROOT]" >&2
+    printf '%s\n' "Usage: $0 SERVER_IP_OR_NAME [OUTPUT_ROOT] [ALTERNATE_DNS_NAME]" >&2
     exit 2
+fi
+if [ -n "$alternate_dns_name" ]; then
+    case "$alternate_dns_name" in
+        .*|*.|*..*|*[!A-Za-z0-9.-]*)
+            printf '%s\n' "Alternate DNS name must be a hostname without a URL scheme, port, path, or empty label." >&2
+            exit 2
+            ;;
+    esac
 fi
 
 command -v openssl >/dev/null 2>&1 || {
@@ -42,6 +51,9 @@ case "$server_name" in
     *[!0-9.]*) san="DNS:$server_name" ;;
     *) san="IP:$server_name" ;;
 esac
+if [ -n "$alternate_dns_name" ] && [ "$alternate_dns_name" != "$server_name" ]; then
+    san="$san,DNS:$alternate_dns_name"
+fi
 printf 'subjectAltName=%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' \
     "$san" > "$tls_dir/server.ext"
 
@@ -58,6 +70,7 @@ chmod 600 "$tls_dir/nct-lab-ca.key" "$tls_dir/nct-server.key"
 chmod 644 "$cert_dir/nct-lab-root.crt" "$tls_dir/nct-server.crt"
 
 printf '%s\n' "NCT lab TLS material generated for $server_name."
+[ -z "$alternate_dns_name" ] || printf '%s\n' "Alternate approved DNS name: $alternate_dns_name"
 printf '%s\n' "Certificate: $tls_dir/nct-server.crt"
 printf '%s\n' "Private key: $tls_dir/nct-server.key"
 printf '%s\n' "Operator trust certificate: $cert_dir/nct-lab-root.crt"

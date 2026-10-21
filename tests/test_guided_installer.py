@@ -85,6 +85,40 @@ def test_guided_range_plan_covers_legacy_tls_firewall_and_admin_prompts(tmp_path
     assert "Authentication:   local" in completed.stdout
 
 
+def test_guided_range_plan_keeps_optional_dns_name_for_generated_tls(tmp_path):
+    completed = run_plan(
+        tmp_path,
+        "profile=range\naccess=lan\nbind_address=192.0.2.10\n"
+        "tls_enabled=yes\ntls_mode=generate\nserver_dns_name=nct.home.arpa\n"
+        "https_port=8445\nconfigure_firewall=no\n"
+        "image=nct:0.16.0-range\noffline=no\n"
+        "promotion_receipt=/transfer/test.receipt\nauth_mode=local\nadmin_user=nct\n",
+        reuse_preset=True,
+        answers=0,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Access:           lan on 192.0.2.10:8445" in completed.stdout
+    assert "Friendly name:    nct.home.arpa" in completed.stdout
+
+
+def test_guided_range_plan_preserves_dns_name_when_reusing_generated_tls(tmp_path):
+    completed = run_plan(
+        tmp_path,
+        "profile=range\naccess=lan\nbind_address=192.0.2.10\n"
+        "tls_enabled=yes\ntls_mode=existing\n"
+        "tls_cert=/state/tls/nct-server.crt\ntls_key=/state/tls/nct-server.key\n"
+        "tls_ca=/state/certs/nct-lab-root.crt\nserver_dns_name=nct.home.arpa\n"
+        "https_port=8445\nconfigure_firewall=no\n"
+        "image=nct:0.16.0-range\noffline=no\n"
+        "promotion_receipt=/transfer/test.receipt\nauth_mode=local\nadmin_user=nct\n",
+        reuse_preset=True,
+        answers=0,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "HTTPS:            yes (existing)" in completed.stdout
+    assert "Friendly name:    nct.home.arpa" in completed.stdout
+
+
 def test_explicit_preset_reuse_skips_setup_questions_but_keeps_review(tmp_path):
     completed = run_plan(
         tmp_path,
@@ -132,6 +166,8 @@ def test_installer_preflights_before_deploying_and_saves_only_after_success():
         "Matching Test acceptance receipt",
         "Verify and stage the offline archive now",
         "Initial Administrator username",
+        "Operator address: https://$server_dns_name:$selected_port",
+        "Do not bypass the warning",
         "--allow-legacy-range-runtime",
         "--configure-firewall",
         "--generate-admin-password",
@@ -177,3 +213,54 @@ def test_tls_helper_generates_only_certificates_and_refuses_overwrite(tmp_path):
     )
     assert second.returncode == 1
     assert "Refusing to overwrite" in second.stderr
+
+
+def test_tls_helper_can_approve_both_ip_and_dns_name(tmp_path):
+    completed = subprocess.run(
+        [
+            "sh",
+            str(TLS_SETUP),
+            "192.0.2.10",
+            str(tmp_path),
+            "nct.home.arpa",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    cert = tmp_path / "tls" / "nct-server.crt"
+    ca = tmp_path / "certs" / "nct-lab-root.crt"
+    san = subprocess.run(
+        ["openssl", "x509", "-in", str(cert), "-noout", "-ext", "subjectAltName"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "IP Address:192.0.2.10" in san.stdout
+    assert "DNS:nct.home.arpa" in san.stdout
+    verified = subprocess.run(
+        ["openssl", "verify", "-CAfile", str(ca), str(cert)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert verified.returncode == 0, verified.stderr
+
+
+def test_tls_helper_rejects_a_url_instead_of_a_dns_name(tmp_path):
+    completed = subprocess.run(
+        [
+            "sh",
+            str(TLS_SETUP),
+            "192.0.2.10",
+            str(tmp_path),
+            "https://nct.home.arpa:8445",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 2
+    assert "without a URL scheme, port, path" in completed.stderr
+    assert not (tmp_path / "tls" / "nct-server.crt").exists()

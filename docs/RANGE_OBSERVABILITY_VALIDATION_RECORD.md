@@ -412,3 +412,45 @@ browser runtime check. This remaining visual check does not change the connector
 operational result, but it keeps the exact Range acceptance item open.
 This trial did not enable an automatic schedule, so scheduled-pull recovery and
 long-duration stability remain later acceptance checks.
+
+## 2026-10-21 — Default VLAN NCT name and reachability
+
+The operator requested direct NCT access from the home Default VLAN without having to
+remember a numeric address. From the Default-VLAN workstation, the existing route to
+the side-by-side NCT guest was already functional. The workstation reached NCT HTTPS
+and received HTTP 200 from `/health`, reporting build
+`0.16.0-range-lab-20261020-arkime-a1` at exact foundation commit
+`73389306895f6b947993ac5108dd6671dd55d523`.
+
+The existing local resolver now has an A record for `nct.home.arpa` pointing to the NCT
+guest. Resolution through the workstation's normal DNS configuration and an explicit
+query to the local resolver both returned the expected address. The live NCT leaf
+certificate was reissued by the existing private NCT web authority using the existing
+leaf key. Its approved names are now `DNS:nct.home.arpa` and the retained NCT IP
+address. The candidate certificate passed verification against the existing authority
+before it replaced the active leaf certificate. The previous leaf certificate and
+extension file remain on the NCT guest as rollback copies.
+
+The first reissue command referred to a serial-file path that did not exist. That
+candidate was never validated or accepted. The original certificate was immediately
+restored and NCT health returned HTTP 200. The corrected certificate was then written
+to a separate file, verified, inspected for both approved names, moved into place and
+activated by restarting only the NCT container. After activation,
+`https://nct.home.arpa:8445/health` again returned HTTP 200 with the expected build
+identity. The retained data volume and Arkime source evidence were not modified by
+this access change.
+
+This work did not change the existing firewall policy. The same workstation could
+already reach other Range management endpoints, so constraining that broader access
+requires a separate reviewed network-hardening change rather than an implicit side
+effect of enabling NCT. Normal browser rendering remains pending until the operator
+workstation trusts the public NCT web authority. The name and leaf certificate remove
+the name-mismatch problem; they do not make an untrusted private authority trusted, and
+the browser warning must not be bypassed.
+
+The guided private-lab HTTPS generator and installer were also extended for future
+rebuilds. An operator may now enter one optional DNS name while keeping the server IP
+as the primary address. The generated certificate approves both values, while a blank
+answer preserves the existing IP-only behavior. Focused automated checks verify both
+approved names and verify the generated certificate against its generated public
+authority.

@@ -157,6 +157,7 @@ tls_mode="none"
 tls_cert=""
 tls_key=""
 tls_ca=""
+server_dns_name=""
 tls_root="$state_dir/tls-material"
 if [ "$tls_enabled" = "yes" ]; then
     existing_generated="no"
@@ -179,6 +180,16 @@ if [ "$tls_enabled" = "yes" ]; then
             ;;
         *) die "Choose generate or existing TLS material." ;;
     esac
+    if [ "$access" = "lan" ]; then
+        server_dns_name=$(prompt_value "Optional DNS name already pointing to this server (name only; generated certificates will approve it and existing certificates must already approve it; blank for IP only)" "$(default_value server_dns_name '')")
+        if [ -n "$server_dns_name" ]; then
+            case "$server_dns_name" in
+                .*|*.|*..*|*[!A-Za-z0-9.-]*)
+                    die "DNS name must be a hostname without https://, a port, a path, or an empty label."
+                    ;;
+            esac
+        fi
+    fi
 fi
 
 if [ "$tls_enabled" = "yes" ]; then
@@ -268,6 +279,7 @@ printf '\n%s\n' "Installation review"
 printf '  Profile:          %s\n' "$profile"
 printf '  Access:           %s on %s:%s\n' "$access" "$bind_address" "$selected_port"
 printf '  HTTPS:            %s%s\n' "$tls_enabled" "${tls_mode:+ ($tls_mode)}"
+[ -z "$server_dns_name" ] || printf '  Friendly name:    %s\n' "$server_dns_name"
 printf '  Firewall:         %s%s\n' "$configure_firewall" "${source_cidr:+ from $source_cidr}"
 printf '  Docker API:       %s\n' "$server_api"
 printf '  Legacy workaround:%s\n' " $allow_legacy"
@@ -309,7 +321,7 @@ fi
 if [ "$tls_mode" = "generate" ]; then
     say "Step 2 of 4: generating the approved private-lab TLS material."
     [ ! -e "$tls_key" ] || die "Generated TLS keys already exist. Choose existing TLS material instead."
-    sh "$tls_script" "$bind_address" "$tls_root"
+    sh "$tls_script" "$bind_address" "$tls_root" "$server_dns_name"
 else
     say "Step 2 of 4: using the reviewed TLS setting without generating new material."
 fi
@@ -334,6 +346,10 @@ deploy_now=$(confirm_yes_no "Preflight passed. Install NCT now" yes)
 [ "$deploy_now" = "yes" ] || die "Installation stopped after the successful preflight; no container or firewall change was made."
 say "Step 4 of 4: installing the verified NCT image and checking application health."
 sh "$@" --yes
+if [ -n "$server_dns_name" ]; then
+    say "Operator address: https://$server_dns_name:$selected_port"
+    say "If the browser warns, stop and verify DNS, the certificate name, and public CA trust. Do not bypass the warning."
+fi
 
 mkdir -p "$state_dir"
 mkdir -p "$(dirname -- "$preset_file")"
@@ -346,7 +362,7 @@ saved_https_port=$(default_value https_port 8444)
 if [ "$tls_enabled" = "yes" ]; then saved_https_port=$selected_port; else saved_app_port=$selected_port; fi
 {
     printf 'profile=%s\naccess=%s\nbind_address=%s\napp_port=%s\nhttps_port=%s\n' "$profile" "$access" "$bind_address" "$saved_app_port" "$saved_https_port"
-    printf 'tls_enabled=%s\ntls_mode=%s\ntls_cert=%s\ntls_key=%s\ntls_ca=%s\n' "$tls_enabled" "$preset_tls_mode" "$tls_cert" "$tls_key" "$tls_ca"
+    printf 'tls_enabled=%s\ntls_mode=%s\ntls_cert=%s\ntls_key=%s\ntls_ca=%s\nserver_dns_name=%s\n' "$tls_enabled" "$preset_tls_mode" "$tls_cert" "$tls_key" "$tls_ca" "$server_dns_name"
     printf 'configure_firewall=%s\nsource_cidr=%s\nallow_legacy_range_runtime=%s\n' "$configure_firewall" "$source_cidr" "$allow_legacy"
     printf 'image=%s\noffline=%s\nuse_image_archive=%s\nimage_archive=%s\nimage_sha256=%s\n' "$image" "$offline" "${use_archive:-no}" "$image_archive" "$image_sha256"
     printf 'promotion_receipt=%s\nauth_mode=%s\nadmin_user=%s\n' "$promotion_receipt" "$auth_mode" "$admin_user"
