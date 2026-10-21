@@ -348,3 +348,27 @@ copies of retained exports or fixtures. Original export bytes and their hashes, 
 sensor, time window and coverage context must be preserved. Structured Arkime session
 exports remain Tier D evidence and do not establish Tier A summaries, live coverage,
 independent observation counts or Phase 6 acceptance.
+
+## 2026-10-20 — bounded live Arkime connector acceptance exception
+
+The operator authorized a short Range trial of NCT's read-only Arkime API connector.
+This exception does not clear the unresolved host-firmware stability gate and does not
+resume Security Onion installation. The manager/search guest and both Security Onion
+sensors remain stopped, with autostart disabled. No firmware, capture topology,
+existing NCT guest, retained packet data or saved evidence may be modified for this
+trial.
+
+The trial permits only the existing Arkime guest, the existing range router and one
+new side-by-side NCT Ubuntu guest on `Das_Boot`. The NCT guest is limited to 8 virtual
+CPUs, 16 GiB RAM and a 100 GiB virtual disk. The existing Arkime guest's allocation is
+unchanged. NCT will run through Docker Compose for this connector test. Kubernetes is
+not installed or enabled during the trial; its runtime and workload behavior require a
+separate qualification gate after the connector succeeds.
+
+The first automatic request is limited to 1,000 records and 10 MiB. Stop and shut down
+the trial guests immediately if Arkime or OpenSearch crashes, the host or a guest logs
+a kernel or clock error, memory or swap pressure appears, storage pressure appears, or
+any required service repeatedly restarts. Do not expand capture, replay traffic or
+start Security Onion as part of this acceptance. A successful trial establishes only
+bounded connector behavior and does not establish Range, Kubernetes, Security Onion,
+host-firmware or mission readiness.

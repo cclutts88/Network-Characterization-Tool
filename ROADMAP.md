@@ -5178,6 +5178,27 @@ Arkime support must be **tiered**.
 - [~] **Arkime and Security Onion integration testing remains in progress.** This work
   does not yet establish implemented NCT passive ingestion, Range readiness, mission
   readiness, or availability on main.
+- [~] **2026-10-20 — exact Range Arkime connector acceptance started.** Read-only
+  inventory confirmed that the existing Arkime guest retains separate system and
+  capture disks and that Arkime Capture, Viewer and OpenSearch start together on its
+  planned isolated management address. The range router was restored for this trial.
+  The older NCT/Python guest remains preserved and unchanged because no reachable
+  operating system was confirmed. The acceptance plan therefore uses a new
+  side-by-side Ubuntu guest on verified separate storage. Docker Compose will run the
+  current single-container NCT package for the first live Arkime connector test.
+  Kubernetes is not installed or enabled during this connector trial; the guest is
+  sized and networked so a single-node Kubernetes runtime can be installed and
+  qualified later at its separate roadmap gate. Docker Compose is not being
+  represented as a Kubernetes deployment. This is an authorized, bounded exception
+  to the unresolved host-firmware stability gate: only the existing Arkime guest,
+  range router and the new NCT guest may run; Security Onion guests remain stopped;
+  guest autostart remains disabled; and no firmware, capture topology or retained
+  evidence is changed. The first connector test is capped at 1,000 records and 10 MiB.
+  Stop the trial immediately for an OpenSearch or Arkime crash, a kernel or clock
+  error, memory or swap pressure, storage pressure, or repeated service restarts. The
+  trial must prove Arkime authentication, bounded Sessions API retrieval, exact-source
+  retention, restart behavior and visible NCT receipts before this item can close. The
+  existing guests and retained evidence must not be deleted or modified as a shortcut.
 - [x] **2026-10-20 — bounded manual Tier D Arkime intake completed on the foundation
   branch.** NCT now accepts a bounded Sessions JSON export, requires explicit Network
   Scope, sensor, query-window, bounding and separate export/capture completeness
