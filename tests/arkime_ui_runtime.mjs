@@ -56,5 +56,47 @@ await eval([
   "})()",
 ].join("\n"));
 
+await eval([
+  "(async () => {",
+  "let summaryOffset=0,summaryTotal=0,summaryRevision='',summaryHistoryRequest=0;const limit=25;",
+  "const controls={summaryFilterScope:{value:'scope-a'},summaryHistoryProgress:{hidden:true},summaryHistoryStatus:{textContent:'',className:''},summaryPrevious:{disabled:false},summaryNext:{disabled:false},summaryRows:{innerHTML:''}};",
+  "const $=id=>controls[id];",
+  "const busy=(id,on)=>{controls[id].hidden=!on};",
+  "const renders=[],pending=[];",
+  "const renderSummaries=data=>renders.push(data.marker);",
+  "const api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));",
+  handler("loadSummaries"),
+  "const older=loadSummaries(0,false);",
+  "controls.summaryFilterScope.value='scope-b';",
+  "const newer=loadSummaries(0,false);",
+  "pending[1].resolve({marker:'scope-b'});await newer;",
+  "pending[0].resolve({marker:'scope-a'});await older;",
+  "assert.deepEqual(renders,['scope-b'],'a delayed older summary response must not replace the selected scope');",
+  "assert.equal(controls.summaryHistoryStatus.textContent,'Showing saved receipts only. Counts remain separate by source file and grouping row.');",
+  "assert.equal(controls.summaryHistoryProgress.hidden,true);",
+  "assert.ok(pending[0].url.includes('scope_id=scope-a'));assert.ok(pending[1].url.includes('scope_id=scope-b'));",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "function node(tag='div'){return {tag,className:'',dataset:{},children:[],textContent:'',disabled:false,hidden:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=[...items]}}}",
+  "const document={createElement(tag){const item=node(tag);if(tag==='table'){Object.defineProperty(item,'innerHTML',{set(){item.tBodies=[node('tbody')]}})}return item}};",
+  "const esc=value=>String(value??''),requested=[];",
+  "const exact='9007199254740993',receipt={source_line:102,source_ordinal:100,source_ip:null,destination_ip:'198.51.100.1',destination_port:443,transport:'tcp',detected_protocol:'tls',vlan:10,session_count:exact,packet_count:exact,byte_count:exact};",
+  "const pages=new Map([[100,{receipts:[receipt],pagination:{offset:100,total:205,has_more:true}}],[200,{receipts:[{...receipt,source_line:206,source_ordinal:204}],pagination:{offset:200,total:205,has_more:false}}]]);",
+  "const api=async url=>{requested.push(url);const value=Number(new URL(url,'http://nct').searchParams.get('offset'));return pages.get(value)};",
+  syncHandler("summaryReceiptTable"),
+  handler("loadSummaryReceiptPage"),
+  "const host=node();const first={receipts:[{...receipt,source_line:2,source_ordinal:0}],pagination:{offset:0,total:205,has_more:true}};",
+  "summaryReceiptTable(first,host,'summary-1');",
+  "assert.ok(host.children[0].children[0].tBodies[0].children[0].innerHTML.includes(exact),'the browser must render the exact decimal count without Number rounding');",
+  "let next=host.children[1].children[1].children[1];await next.onclick();",
+  "next=host.children[1].children[1].children[1];await next.onclick();",
+  "assert.ok(requested[0].includes('offset=100'));assert.ok(requested[1].includes('offset=200'));",
+  "assert.equal(host.children[1].children[0].textContent,'Grouped rows 201–201 of 205');",
+  "})()",
+].join("\n"));
+
 assert.equal((source.match(/Observed activity upload/g) || []).length, 0, "the shell owns the page heading");
 console.log("Arkime UI paging and request-ownership regressions passed");

@@ -708,6 +708,10 @@ def test_enterprise_shell_replaces_legacy_navigation_on_every_primary_page():
     assert "href:'#nct-personal-notes'" not in SHELL_SCRIPT
     assert "html[data-nct-scanlines=on] body.nct-shell::after{position:fixed;inset:0 0 0 var(--nct-sidebar-width)" in SHELL_SCRIPT
     assert "window.NCTOpenTask=openTask" in SHELL_SCRIPT
+    assert "const syncTaskScroll=" in SHELL_SCRIPT
+    assert "target.scrollIntoView({block:'start'})" in SHELL_SCRIPT
+    assert "const resetTaskScroll=" not in SHELL_SCRIPT
+    assert "'/arkime':{candidates:'#arkimeSummaryUpload,#arkimeSummaryHistory,#arkimeConnector,#arkimeUpload,#arkimeHistory',support:{arkimeConnector:['arkimeUpload','arkimeHistory']}}" in SHELL_SCRIPT
     assert 'padding-bottom:30px' in SESSION_SCRIPT
     assert 'bottom:9px' in SESSION_SCRIPT
 
@@ -1003,7 +1007,9 @@ def test_arkime_passive_evidence_intake_is_actionable_while_hunt_timeline_remain
     hunt_group = SHELL_SCRIPT.split("{title:'Hunt'", 1)[1].split("{title:'Reach'", 1)[0]
 
     assert "{title:'Arkime',icon:'arkime',children:" in collect_group
-    assert "href:'/arkime#arkimeConnector',title:'Passive evidence intake'" in collect_group
+    assert "href:'/arkime#arkimeConnector',title:'Sessions and API pulls'" in collect_group
+    assert "href:'/arkime#arkimeSummaryUpload',title:'Communication summaries'" in collect_group
+    assert "href:'/arkime#arkimeSummaryHistory',title:'Retained summaries'" in collect_group
     assert "{title:'Arkime',icon:'arkime',planned:true" not in collect_group
     assert "{title:'Timeline',planned:true" in hunt_group
     assert "if(task.planned)" in SHELL_SCRIPT
@@ -1031,6 +1037,31 @@ def test_arkime_connector_explains_contact_boundary_and_recovery_controls():
     assert 'id="pullProfilePrevious"' in html
     assert 'id="pullProfileNext"' in html
     assert "/api/arkime/pull-profiles?limit=${pullProfileLimit}&offset=${pullProfileOffset}" in html
+
+
+def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits():
+    html = arkime_page().body.decode()
+
+    assert 'id="arkimeSummaryUpload"' in html
+    assert "NCT Arkime Summary CSV v1" in html
+    assert "it is not a native Arkime export format" in html
+    assert "Validate and retain summary" in html
+    assert "source_ip,destination_ip,destination_port,transport,detected_protocol,vlan,session_count,packet_count,byte_count" in html
+    assert "Traffic addressed to a destination port does not prove" in html
+    assert "An empty file does not prove there was no traffic" in html
+    assert "A numeric zero is a measured zero; a blank count remains Unknown" in html
+    assert "Download a ready-to-edit CSV template" in html
+    assert "NCT cannot independently verify it from the CSV" in html
+    assert 'id="arkimeSummaryHistory"' in html
+    assert "NCT does not add counts across repeated or overlapping summaries" in html
+    assert "Recorded from operator declaration" in html
+    assert "NCT cannot verify completeness or row membership from this CSV" in html
+    assert "Observed destination" in html
+    assert "Reported destination port" in html
+    assert "/api/arkime/summary-imports" in html
+    assert "arkime-summary-upload" in SHELL_SCRIPT
+    assert "arkime-summary-history" in SHELL_SCRIPT
+    assert "These rows do not create current hosts or services" in SHELL_SCRIPT
 
 
 def test_device_collections_uses_combined_router_firewall_icon():

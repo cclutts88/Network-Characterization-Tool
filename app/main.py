@@ -16,6 +16,16 @@ from app.arkime_evidence import (
     list_arkime_imports,
     read_verified_arkime_source,
 )
+from app.arkime_summary import (
+    ArkimeSummaryConflict,
+    ArkimeSummaryError,
+    MAX_ARKIME_SUMMARY_BYTES,
+    get_arkime_summary_import,
+    import_arkime_summary_csv,
+    init_arkime_summary_storage,
+    list_arkime_summary_imports,
+    read_verified_arkime_summary_source,
+)
 from app.arkime_ui import arkime_page
 from app.arkime_connector import (
     ArkimeConnectorConflict,
@@ -1623,6 +1633,7 @@ async def lifespan(_: FastAPI):
         init_automated_nmap_scope_correction_storage(DB_PATH)
         init_mission_environment_storage(DB_PATH)
         init_arkime_evidence_storage(DB_PATH)
+        init_arkime_summary_storage(DB_PATH)
         init_arkime_connector_storage(DB_PATH)
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
@@ -2171,7 +2182,7 @@ def require_passive_importer(request: Request) -> str:
 def _arkime_error(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail=str(exc.args[0]))
-    if isinstance(exc, ArkimeEvidenceConflict):
+    if isinstance(exc, (ArkimeEvidenceConflict, ArkimeSummaryConflict)):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
 
@@ -2179,6 +2190,22 @@ def _arkime_error(exc: Exception) -> HTTPException:
 @app.get("/arkime", response_class=HTMLResponse)
 def arkime_workspace() -> HTMLResponse:
     return arkime_page()
+
+
+@app.get("/api/arkime/summary-template.csv")
+def arkime_summary_template() -> Response:
+    content = (
+        "source_ip,destination_ip,destination_port,transport,detected_protocol,"
+        "vlan,session_count,packet_count,byte_count\n"
+        "192.0.2.10,198.51.100.20,443,tcp,tls,10,4,14,4096\n"
+    )
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="nct-arkime-summary-v1.csv"'
+        },
+    )
 
 
 @app.post("/api/arkime/imports", status_code=201)
@@ -2253,6 +2280,93 @@ def arkime_import_raw(import_id: str) -> Response:
     return Response(
         content=content,
         media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/arkime/summary-imports", status_code=201)
+async def arkime_summary_import(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    scope_id: Annotated[str, Form()],
+    operator_sensor: Annotated[str, Form()],
+    query_start: Annotated[str, Form()],
+    query_end: Annotated[str, Form()],
+    bounding_mode: Annotated[str, Form()],
+    summary_basis: Annotated[str, Form()],
+    operator_export_assessment: Annotated[str, Form()],
+    capture_coverage: Annotated[str, Form()],
+    top_n_limit: Annotated[int | None, Form()] = None,
+    query_expression: Annotated[str, Form()] = "",
+) -> dict:
+    actor = require_passive_importer(request)
+    content = await file.read(MAX_ARKIME_SUMMARY_BYTES + 1)
+    if len(content) > MAX_ARKIME_SUMMARY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="The Arkime summary CSV exceeds the 10 MiB intake limit",
+        )
+    try:
+        return import_arkime_summary_csv(
+            DB_PATH, content=content,
+            original_filename=file.filename or "arkime-summary.csv",
+            media_type=file.content_type or "text/csv",
+            scope_id=scope_id, operator_sensor=operator_sensor,
+            query_start=query_start, query_end=query_end,
+            bounding_mode=bounding_mode, query_expression=query_expression,
+            summary_basis=summary_basis, top_n_limit=top_n_limit,
+            operator_export_assessment=operator_export_assessment,
+            capture_coverage=capture_coverage, actor=actor,
+        )
+    except EvidenceMaintenanceBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KeyError, ArkimeSummaryError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/summary-imports")
+def arkime_summary_import_history(
+    scope_id: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    revision: str | None = None,
+) -> dict:
+    try:
+        return list_arkime_summary_imports(
+            DB_PATH, scope_id=scope_id, limit=limit, offset=offset,
+            revision=revision,
+        )
+    except ArkimeSummaryError as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/summary-imports/{import_id}")
+def arkime_summary_import_detail(
+    import_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_arkime_summary_import(
+            DB_PATH, import_id, limit=limit, offset=offset,
+        )
+    except (KeyError, ArkimeSummaryError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/summary-imports/{import_id}/raw")
+def arkime_summary_import_raw(import_id: str) -> Response:
+    try:
+        source, content = read_verified_arkime_summary_source(DB_PATH, import_id)
+    except (KeyError, ArkimeSummaryError) as exc:
+        raise _arkime_error(exc) from exc
+    filename = safe_name(
+        source["original_filename"] or "arkime-summary.csv",
+        "arkime-summary.csv",
+    )
+    return Response(
+        content=content,
+        media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

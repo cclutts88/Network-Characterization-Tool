@@ -72,6 +72,29 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## NCT-defined Arkime communication-summary contract — 2026-10-21
+
+- **Planned approach:** begin passive Tier A intake with the lowest-cost summary
+  export available from Arkime, retaining grouped communication counts before adding
+  higher-volume session correlation.
+- **Revised approach:** the first Tier A slice accepts one explicitly NCT-defined
+  `NCT Arkime Summary CSV v1` contract because a stable native Arkime summary-export
+  shape has not yet been verified in the isolated Range. The exact ordered fields,
+  grouping rule, 10 MiB and 10,000-row limits, Network Scope, observation point,
+  query window, bounding mode, query expression and operator declarations are frozen
+  before immutable receipts are published. Count values remain exact decimal text at
+  the API and browser boundary.
+- **Reason and expected impact:** silently interpreting an unverified native export or
+  deriving completeness from a small aggregate file could misstate traffic coverage.
+  The bounded contract provides a reviewable offline path now while preserving a
+  separate compatibility gate for future native exports.
+- **Remaining boundary:** recorded completeness comes only from the operator's grouping,
+  export and capture declarations; NCT cannot prove completeness or group membership
+  from this CSV. Repeated or overlapping files remain separate observations and their
+  counts are never added. These receipts do not create current hosts or services,
+  establish Last Seen, prove an open listener, contact Arkime, or complete downstream
+  Timeline, Hunt, Reach, Map or active/passive correlation.
+
 ## Default-VLAN operator access for the isolated trial — 2026-10-21
 
 - **Planned approach:** operators would reach the side-by-side NCT trial through its
@@ -1473,6 +1496,7 @@ A roadmap item should only be marked complete when:
 
 | Date | Phase | Planned | Revised / Implemented | Reason | Impact / Follow-up |
 |---|---|---|---|---|---|
+| 2026-10-21 | Phase 6.1 Tier A summary export | Ingest the lowest-cost native Arkime summary export before higher-volume session correlation | Accept one bounded, explicitly NCT-defined Summary CSV v1 with a fixed ordered header, explicit Network Scope, observation point, query window, bounding and query context, declared grouping/export/capture coverage, exact source bytes and separate immutable grouped receipts. Preserve counts as exact decimal text at the API/browser boundary and never add counts across files | No stable native Tier A Arkime export contract has yet been verified in the isolated Range. Guessing a native format or calculating completeness from aggregate rows would turn operator-provided context into an unsupported evidence claim | Native-format compatibility remains a separate gate. Recorded completeness is declaration-based and cannot be independently verified from the CSV. These rows do not create current hosts or services, prove an open listener, establish Last Seen, contact Arkime or feed downstream correlation yet, so Phase 6 remains partial |
 | 2026-10-20 | Phase 6 initial passive intake | Begin Arkime support with the lowest-cost Tier A summary export | Begin with a bounded manual Tier D Sessions JSON intake using an exact retained source, explicit Network Scope, sensor, query window and completeness declaration. Retain exact bytes in the Artifact Registry and publish immutable normalized session receipts only after whole-file validation. Do not ingest PCAP, contact Arkime, infer coverage, merge observations across imports or treat passive traffic as proof of an open listener | The isolated range validation produced a structured Arkime export, while no verified Tier A export is yet available. The retained Range file is not available on the development workstation, so the first adapter is checked against the documented Sessions API shape and representative fixtures without resuming the unstable range host | Tier A remains required and Phase 6 remains incomplete. This first slice is capped for interactive use, reports partial and unknown coverage explicitly, preserves overlapping observations separately and requires the retained Range export to pass a separate compatibility check before Range readiness or any high-volume, live API, correlation or timeline work |
 | 2026-10-13 | Phase 3 Range recovery and clean-state acceptance | Recover preserved data through the guarded Phase 3 R3 path after identifying the stopped source container's HTTPS binding | Read the binding from the stopped container's saved configuration and fail closed for missing, multiple, or invalid values. Preserve the exact schema-origin guard: the retained `phase2-r2` database remains ineligible for the supported late-phase2 recovery path. After the operator declared the retained NCT evidence and accounts nonessential, perform an explicitly authorized NCT-only reset and validate a fresh Phase 3 R3 install | `docker port` cannot report the binding of a stopped container, and the retained database came from a different schema origin than the reviewed preserved-data migration boundary | Clean-state Phase 3 R3 Range acceptance passed. Preserved-data migration from `phase2-r2` remains unclaimed. The running Range image is unchanged; the recovery-helper correction must be included in a future transfer package |
 | 2026-10-13 | Phase 3 Range schema compatibility | Require unconditional equality between the recorded schema fingerprint and the live database before every version 4 to version 5 upgrade | For version 4 to version 5 only, permit a mismatch solely when every present late phase2 maintenance group is complete and exactly matches the known SearchSploit cache, Artifact Registry backfill, or exact-content compaction definitions, and removing an allowed subset reproduces the recorded version 4 fingerprint. All altered, incomplete, unrelated, later-version, and otherwise unexplained drift still fails closed | The `phase2-r4` build legitimately created these maintenance tables after sealing its version 4 fingerprint. The first `phase3-r1` Range attempt therefore rejected supported phase2 state even though the migration guard correctly protected the saved database | `phase3-r1` is withdrawn. Version 5 now initializes all supported maintenance schemas before sealing its fingerprint. No Range fingerprint is rewritten and no retained maintenance state is deleted. The replacement requires a read-only stopped-database audit, a new exact package, guarded retry, preserved-data checks, and independent review before Range acceptance |
@@ -5334,6 +5358,30 @@ Arkime support must be **tiered**.
 ## 6.1 Tier A — Summary export
 
 Lowest-cost/manual option.
+
+- [x] **2026-10-21 — bounded Tier A communication-summary intake completed.** NCT now
+  accepts one bounded NCT Arkime Summary CSV v1 file with explicit Network Scope,
+  observation point, query window, bounding rule, query expression, grouping basis and
+  separate operator export/capture declarations. It validates the whole file before
+  publishing immutable grouped receipts, retains exact source bytes through the Artifact
+  Registry, keeps duplicate-content uploads as separate observations, exposes verified
+  raw download and bounded retained-history/detail pages, and preserves 64-bit counts as
+  exact decimal text through the API and browser. A ready-to-edit template, dedicated
+  Communication summaries and Retained summaries tasks, Operator Guide explanations and
+  the built-in How NCT Works guide make the workflow and its limits visible. The complete
+  Docker suite passed **1,825 tests with 18 skipped**; the final focused suite passed
+  **190 tests with one environment skip**; direct browser runtime checks passed; and the
+  isolated preview verified upload/history navigation, aligned contained tables, exact
+  `9007199254740993` rendering, zero versus Unknown and error-free normal/narrow Guide
+  layouts. The novice operator returned **CLEAR**, and the independent quality gate
+  returned **CLEAR — DOCUMENTED DEVIATION** after first halting for browser number
+  rounding and overstated completeness. Counts are never added across files; recorded
+  completeness remains an operator declaration that NCT cannot independently verify
+  from the aggregate CSV. These receipts do not contact Arkime, create current hosts or
+  services, establish Last Seen, prove an open listener or feed downstream correlation.
+  Native Arkime aggregate compatibility and Range acceptance remain separate gates, so
+  Phase 6 is still partial and this is not Range-ready, mission-ready or available on
+  `main`.
 
 Support exports such as:
 

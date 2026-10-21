@@ -1,5 +1,9 @@
 # Manual Arkime Sessions JSON intake
 
+For aggregate Tier A traffic counts, use the separate
+[`ARKIME_SUMMARY_CSV.md`](ARKIME_SUMMARY_CSV.md) workflow. The summary adapter retains
+grouped counts without presenting them as individual sessions or open services.
+
 This is the manual bounded Arkime evidence path in NCT. It accepts a saved result from
 Arkime's Sessions API when the JSON root contains a `data` array. It does not contact
 Arkime, copy packet captures, accept an OpenSearch `hits.hits` export, or claim that a
