@@ -259,13 +259,15 @@ def _apply_api_provenance(
     complete = (
         run["state"] == "complete"
         and item["export_completeness"] == "complete"
+        and item["operator_export_assessment"] == "complete"
         and item["capture_coverage"] == "complete"
     )
     item["eligible_for_continuity"] = complete
     item["continuity_detail"] = (
         "Comparable complete API window."
         if complete else
-        "API source retained, but incomplete or unknown export/capture declarations "
+        "API source retained, but incomplete or unknown calculated export, operator "
+        "export-assessment, or capture declarations "
         "prevent continuity comparison."
     )
 

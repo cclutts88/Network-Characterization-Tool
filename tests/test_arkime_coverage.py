@@ -36,31 +36,38 @@ def _sessions(start: str, end: str, suffix: str = "1") -> bytes:
 
 def _import_session(
     db, scope, start, end, suffix="1", *, capture="complete", api_run_id=None,
+    sensor="range-sensor", query="vlan == 10", connector_id="range-arkime",
+    connector_contract="arkime-sessions-api:1", content=None,
+    operator_assessment="complete",
 ):
     source_metadata = None if api_run_id is None else {
         "import_tier": "tier_e_sessions_api",
         "pull_run_id": api_run_id,
-        "connector_id": "range-arkime",
-        "connector_contract": "arkime-sessions-api:1",
+        "connector_id": connector_id,
+        "connector_contract": connector_contract,
         "parser_version": ARKIME_PARSER_VERSION,
         "request_parameters": {},
         "exact_bytes": "decoded HTTP entity; transfer framing removed; content encoding identity",
     }
     return import_arkime_sessions_json(
-        db, content=_sessions(start, end, suffix),
+        db, content=content if content is not None else _sessions(start, end, suffix),
         original_filename=(f"arkime-api-{api_run_id}.json" if api_run_id else f"{suffix}.json"),
         media_type="application/json", scope_id=scope["scope_id"],
-        operator_sensor="range-sensor", query_start=start, query_end=end,
-        bounding_mode="both", operator_export_assessment="complete",
-        capture_coverage=capture, query_expression="vlan == 10", actor="analyst",
+        operator_sensor=sensor, query_start=start, query_end=end,
+        bounding_mode="both", operator_export_assessment=operator_assessment,
+        capture_coverage=capture, query_expression=query, actor="analyst",
         source_metadata=source_metadata,
     )
 
 
-def _link_api(db, scope, imports, *, duplicate_first=False):
+def _link_api(
+    db, scope, imports, *, duplicate_first=False, sensor="range-sensor",
+    query="vlan == 10", connector_id="range-arkime",
+    connector_contract="arkime-sessions-api:1", run_ids=None,
+):
     profile = create_pull_profile(db, {
         "name": "Coverage pull", "scope_id": scope["scope_id"],
-        "operator_sensor": "range-sensor", "query_expression": "vlan == 10",
+        "operator_sensor": sensor, "query_expression": query,
         "bounding_mode": "both", "cadence_minutes": 60,
         "lookback_minutes": 60, "overlap_minutes": 0,
         "collection_delay_seconds": 60, "enabled": False,
@@ -69,6 +76,12 @@ def _link_api(db, scope, imports, *, duplicate_first=False):
         for index, item in enumerate(imports):
             repetitions = 2 if duplicate_first and index == 0 else 1
             for repetition in range(repetitions):
+                run_id = (
+                    run_ids[index] if run_ids is not None
+                    else f"run-{index}-0"
+                )
+                if repetition:
+                    run_id = f"{run_id}-duplicate-{repetition}"
                 connection.execute(
                     """INSERT INTO arkime_pull_runs (
                            run_id,profile_id,profile_version,request_kind,state,scope_id,
@@ -78,11 +91,11 @@ def _link_api(db, scope, imports, *, duplicate_first=False):
                            request_parameters_json,actor,queued_at,completed_at,import_id
                        ) VALUES (?,?,1,'manual','complete',?,?,?,?,?,?,?,?,?,?,?,0,'{}',?,?,?,?)""",
                     (
-                        f"run-{index}-{repetition}", profile["profile_id"],
+                        run_id, profile["profile_id"],
                         scope["scope_id"], scope["label"], scope["version"],
-                        "range-sensor", "vlan == 10", "both",
-                        item["query_start"], item["query_end"], "range-arkime",
-                        "arkime-sessions-api:1", ARKIME_PARSER_VERSION,
+                        sensor, query, "both",
+                        item["query_start"], item["query_end"], connector_id,
+                        connector_contract, ARKIME_PARSER_VERSION,
                         "analyst", item["imported_at"], item["imported_at"],
                         item["import_id"],
                     ),
@@ -139,6 +152,147 @@ def test_exact_api_stream_uses_maximum_preceding_end_for_gap(tmp_path):
     assert "does not prove" in by_id[imports[2]["import_id"]]["continuity_detail"]
 
 
+def test_touching_windows_are_continuous_and_partial_window_cannot_bridge_gap(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    first = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        "first", api_run_id="run-0-0",
+    )
+    touching = _import_session(
+        db, scope, "2030-01-01T01:00:00+00:00", "2030-01-01T02:00:00+00:00",
+        "touching", api_run_id="run-1-0",
+    )
+    partial = _import_session(
+        db, scope, "2030-01-01T02:00:00+00:00", "2030-01-01T04:00:00+00:00",
+        "partial", capture="partial", api_run_id="run-2-0",
+    )
+    after_gap = _import_session(
+        db, scope, "2030-01-01T03:00:00+00:00", "2030-01-01T05:00:00+00:00",
+        "after", api_run_id="run-3-0",
+    )
+    _link_api(db, scope, [first, touching, partial, after_gap])
+
+    by_id = {
+        item["import_id"]: item for item in list_arkime_coverage_windows(db)["items"]
+    }
+    assert by_id[touching["import_id"]]["continuity"] == "continuous_or_overlapping"
+    assert by_id[partial["import_id"]]["continuity"] == "not_comparable"
+    assert by_id[after_gap["import_id"]]["continuity"] == "retained_window_gap"
+    assert by_id[after_gap["import_id"]]["gap_seconds"] == 3600
+
+
+def test_duplicate_exact_bytes_remain_separate_source_receipts(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    content = _sessions(
+        "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00", "same",
+    )
+    first = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        "first", content=content,
+    )
+    second = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        "second", content=content,
+    )
+
+    result = list_arkime_coverage_windows(db)
+    assert result["pagination"]["total"] == 2
+    assert {item["import_id"] for item in result["items"]} == {
+        first["import_id"], second["import_id"],
+    }
+    assert first["sha256"] == second["sha256"]
+    assert first["observation_id"] != second["observation_id"]
+    assert second["artifact_duplicate"] is True
+
+
+def test_exact_api_streams_stay_separate_by_scope_sensor_query_and_contract(tmp_path):
+    db = tmp_path / "nct.db"
+    scope_a = create_network_scope(db, label="Range A", created_by="admin")
+    scope_b = create_network_scope(db, label="Range B", created_by="admin")
+    streams = [
+        (scope_a, "sensor-a", "vlan == 10", "arkime-sessions-api:1", "a"),
+        (scope_b, "sensor-a", "vlan == 10", "arkime-sessions-api:1", "b"),
+        (scope_a, "sensor-b", "vlan == 10", "arkime-sessions-api:1", "c"),
+        (scope_a, "sensor-a", "vlan == 20", "arkime-sessions-api:1", "d"),
+        (scope_a, "sensor-a", "vlan == 10", "arkime-sessions-api:2", "e"),
+    ]
+    imports = []
+    for index, (scope, sensor, query, contract, suffix) in enumerate(streams):
+        run_id = f"run-{index}-0"
+        item = _import_session(
+            db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+            suffix, api_run_id=run_id, sensor=sensor, query=query,
+            connector_contract=contract,
+        )
+        _link_api(
+            db, scope, [item], sensor=sensor, query=query,
+            connector_contract=contract, run_ids=[run_id],
+        )
+        imports.append(item)
+
+    items = list_arkime_coverage_windows(db)["items"]
+    selected = [item for item in items if item["import_id"] in {x["import_id"] for x in imports}]
+    assert len({item["stream_identity"] for item in selected}) == len(streams)
+    assert all(item["continuity"] == "first_retained_comparable_window" for item in selected)
+
+
+def test_zero_session_api_window_remains_a_window_not_a_no_traffic_claim(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    empty = json.dumps({"recordsFiltered": 0, "recordsTotal": 0, "data": []}).encode()
+    item = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+        "empty", api_run_id="run-0-0", content=empty,
+    )
+    _link_api(db, scope, [item])
+
+    retained = list_arkime_coverage_windows(db)["items"][0]
+    assert retained["returned_count"] == 0
+    assert retained["continuity"] == "first_retained_comparable_window"
+    assert "absence of traffic" not in retained["continuity_detail"].lower()
+
+
+def test_page_boundary_keeps_full_stream_continuity(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    imports = [
+        _import_session(
+            db, scope, f"2030-01-01T0{hour}:00:00+00:00",
+            f"2030-01-01T0{hour + 1}:00:00+00:00", str(hour),
+            api_run_id=f"run-{hour}-0",
+        )
+        for hour in range(3)
+    ]
+    _link_api(db, scope, imports)
+    first_page = list_arkime_coverage_windows(db, limit=1)
+    second_page = list_arkime_coverage_windows(
+        db, limit=1, offset=1, revision=first_page["source_revision"],
+    )
+
+    assert first_page["items"][0]["continuity"] == "continuous_or_overlapping"
+    assert second_page["items"][0]["continuity"] == "continuous_or_overlapping"
+
+
+def test_malformed_retained_timestamp_fails_explicitly(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    item = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00", "2030-01-01T01:00:00+00:00",
+    )
+    with connect_database(db) as connection:
+        # Simulate a legacy/corrupted retained row that predates immutable guards.
+        connection.execute("DROP TRIGGER arkime_imports_no_update")
+        connection.execute(
+            "UPDATE arkime_imports SET query_start='not-a-time' WHERE import_id=?",
+            (item["import_id"],),
+        )
+
+    with pytest.raises(ArkimeCoverageError, match="invalid time metadata"):
+        list_arkime_coverage_windows(db)
+
+
 def test_partial_and_ambiguous_api_provenance_stay_visible_not_comparable(tmp_path):
     db = tmp_path / "nct.db"
     scope = create_network_scope(db, label="Range", created_by="admin")
@@ -150,7 +304,11 @@ def test_partial_and_ambiguous_api_provenance_stay_visible_not_comparable(tmp_pa
         db, scope, "2030-01-01T01:00:00+00:00", "2030-01-01T02:00:00+00:00", "2",
         api_run_id="run-1-0",
     )
-    _link_api(db, scope, [partial, ambiguous], duplicate_first=False)
+    operator_unknown = _import_session(
+        db, scope, "2030-01-01T02:00:00+00:00", "2030-01-01T03:00:00+00:00", "3",
+        api_run_id="run-2-0", operator_assessment="unknown",
+    )
+    _link_api(db, scope, [partial, ambiguous, operator_unknown], duplicate_first=False)
     # Add a second retained-run claim for the second import to simulate malformed history.
     with connect_database(db) as connection:
         base = connection.execute(
@@ -172,6 +330,8 @@ def test_partial_and_ambiguous_api_provenance_stay_visible_not_comparable(tmp_pa
     assert by_id[partial["import_id"]]["continuity"] == "not_comparable"
     assert by_id[ambiguous["import_id"]]["provenance_state"] == "ambiguous_api_runs"
     assert by_id[ambiguous["import_id"]]["continuity"] == "not_comparable"
+    assert by_id[operator_unknown["import_id"]]["provenance_state"] == "exact_api_run"
+    assert by_id[operator_unknown["import_id"]]["continuity"] == "not_comparable"
 
 
 def test_pull_run_link_cannot_promote_manual_observation_to_api_provenance(tmp_path):

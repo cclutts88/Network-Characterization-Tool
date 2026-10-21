@@ -72,6 +72,26 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Arkime retained-window continuity without traffic deduplication — 2026-10-21
+
+- **Planned approach:** Phase 6.7 would track retained Arkime coverage windows and
+  gaps, followed by Phase 6.8 choosing the next useful window and deduplicating
+  overlap.
+- **Revised approach:** Phase 6.7 compares only complete, unambiguous publications
+  from one exact API stream and merges touching or overlapping query intervals only
+  for continuity calculation. Every retained source receipt remains separate, and no
+  session, packet or byte counts are combined or deduplicated. Manual Sessions JSON,
+  communication summaries, incomplete declarations and malformed or ambiguous API
+  provenance remain visible but cannot bridge a gap.
+- **Reason and expected impact:** matching query intervals does not establish that two
+  exports contain the same traffic observations. Treating interval overlap as traffic
+  identity could silently remove evidence or undercount communication. The narrower
+  rule gives operators a defensible view of NCT's retained query-window history while
+  preserving every source encounter.
+- **Follow-up:** traffic-observation deduplication remains deferred to Phase 6.8 and
+  requires a separately reviewed identity contract. Phase 6.7 does not claim sensor
+  uptime, continuous packet capture, absent traffic or deduplicated passive evidence.
+
 ## Separate exact-source Arkime context in Hunt — 2026-10-21
 
 - **Planned approach:** extend the network-wide Hunt request with an optional Arkime
@@ -5460,7 +5480,7 @@ Manual/offline export remains supported even when API integration exists.
 
 ## 6.7 Coverage tracking
 
-- [~] **2026-10-21 — unified retained Arkime window tracking started.** This slice
+- [x] **2026-10-21 — unified retained Arkime window tracking completed.** This slice
   combines the saved query windows from communication summaries, manual Sessions JSON
   and successfully retained API pulls into one read-only, paged view. It preserves the
   Network Scope version, observation-point declaration, method and parser contract,
@@ -5471,8 +5491,27 @@ Manual/offline export remains supported even when API integration exists.
   remains visibly Not comparable. A reported gap means only that NCT lacks a comparable
   retained window; it does not prove a sensor outage, absent collection or missing
   traffic. Failed attempts without retained imports remain outside evidence coverage.
-  Boundary, nested-interval, paging, concurrent-revision, malformed-provenance,
-  read-only, browser, novice and independent-review checks must pass before completion.
+  The completion gate included boundary, nested-interval, paging,
+  concurrent-revision, malformed-provenance, read-only, browser, novice and
+  independent-review checks.
+  The final contract also requires the calculated export result, operator export
+  assessment and capture declaration to be Complete before an exact API window can
+  participate in continuity. Focused regressions cover nested and touching intervals,
+  a noncomparable partial interval inside a real gap, repeated exact bytes retaining
+  separate observations, distinct scopes/sensors/queries/contracts, false API linkage,
+  a zero-session result, page-boundary continuity, concurrent revision changes,
+  missing storage and malformed retained time metadata. The focused Arkime coverage
+  and interface suite passed **84 tests**; the executable UI regression passed; and
+  the complete Docker suite passed **1,863 tests with 18 environment-dependent
+  skips**. The novice gate initially halted because an exact-source link replaced the
+  workspace with a browser error; the updated coverage, traffic-analysis and
+  Sessions-history source controls now use explicit page-preserving downloads, the
+  JSON download was verified in the browser, and the novice retest returned
+  **CLEAR**. Independent review initially halted the summary row's calculated-export
+  wording; the label was corrected to Recorded export declaration, a rendered-row
+  regression was added, and re-review returned **CLEAR — DOCUMENTED DEVIATION**
+  because interval continuity is complete here while traffic-observation
+  deduplication remains a separate Phase 6.8 contract.
 
 Track:
 
@@ -5484,8 +5523,11 @@ Track:
 
 ## 6.8 Recommended collection window
 
-Generate the smallest useful next window with a configurable overlap buffer to
-avoid gaps. NCT deduplicates overlap.
+- [ ] Generate the smallest useful next window with a configurable overlap buffer to
+  avoid retained-window gaps. Traffic-observation deduplication is explicitly deferred
+  to this phase and requires its own reviewed identity contract; Phase 6.7 merges
+  overlapping time intervals only for continuity calculation and never removes or
+  combines retained observations.
 
 ## 6.9 Passive-only characterization
 

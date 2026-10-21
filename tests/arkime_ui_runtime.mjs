@@ -120,6 +120,21 @@ await eval([
 
 await eval([
   "(async () => {",
+  "let coverageOffset=0,coverageTotal=0,coverageRevision='';",
+  "function node(tag='div'){return {tag,children:[],textContent:'',disabled:false,append(...items){this.children.push(...items)},replaceChildren(...items){this.children=[...items]}}}",
+  "const controls={coverageRows:node('tbody'),coveragePrevious:{disabled:false},coverageNext:{disabled:false},coveragePage:{textContent:''}};",
+  "const $=id=>controls[id],esc=value=>String(value??''),badge=value=>`<span>${value}</span>`,coverageContinuity=()=>'<strong>Not comparable</strong>',loadTrafficAnalysis=()=>{};",
+  "const document={createElement(tag){const item=node(tag);if(tag==='tr'){item.cells=Array.from({length:7},()=>node('td'));Object.defineProperty(item,'innerHTML',{set(value){item.rendered=value},get(){return item.rendered||''}})}return item}};",
+  syncHandler("renderCoverage"),
+  "renderCoverage({source_revision:'r1',pagination:{total:1,offset:0,has_more:false},items:[{import_id:'summary-1',source_kind:'summary_csv',source_method:'manual_summary',connector_id:null,connector_contract:null,parser_version:'summary:1',scope:{label:'Range',version:1},operator_sensor:'declared sensor',query_start:'2030-01-01T00:00:00Z',query_end:'2030-01-01T01:00:00Z',bounding_mode:'both',query_expression:'',stream_basis:'operator declaration',export_completeness:'complete',operator_export_assessment:'complete',capture_coverage:'unknown',returned_count:2,raw_url:'/api/summary/raw'}]});",
+  "const html=controls.coverageRows.children[0].innerHTML;",
+  "assert.ok(html.includes('Recorded export declaration complete'),'summary completeness must be labeled as a recorded declaration');",
+  "assert.ok(!html.includes('Calculated export complete'),'summary completeness must not be presented as independently calculated');",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
   "const esc=value=>String(value??'');",
   syncHandler("trafficPredicate"),
   syncHandler("trafficValueActions"),

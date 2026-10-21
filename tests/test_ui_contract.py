@@ -1071,6 +1071,11 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert "Why this label and when the evidence was collected" in html
     assert "Open exact Nmap source" in html
     assert "A retained-window gap is an NCT evidence gap" in html
+    assert "calculated export, operator assessment, and capture declarations are all Complete" in html
+    assert "Recorded export declaration':'Calculated export" in html
+    assert "operator assessment ${item.operator_export_assessment}" in html
+    assert 'download="arkime-source-${esc(item.import_id)}.' in html
+    assert 'download="arkime-source-${esc(data.import_id)}.' in html
     assert "NCT Arkime Summary CSV v1" in html
     assert "it is not a native Arkime export format" in html
     assert "Validate and retain summary" in html
