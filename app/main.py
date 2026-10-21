@@ -34,6 +34,7 @@ from app.arkime_coverage import (
 from app.arkime_analytics import (
     ArkimeAnalyticsError,
     analyze_arkime_import,
+    parse_arkime_filter_expression,
 )
 from app.arkime_ui import arkime_page
 from app.arkime_connector import (
@@ -2240,10 +2241,15 @@ def arkime_retained_traffic_analysis(
     import_id: str,
     limit: int = Query(default=25, ge=1, le=100),
     filters: str | None = Query(default=None, max_length=8192),
+    expression: str | None = Query(default=None, max_length=8192),
     match_mode: Literal["all", "any"] = "all",
 ) -> dict:
     try:
+        if expression is not None and filters is not None:
+            raise ArkimeAnalyticsError("Send either a typed expression or filter clauses, not both")
         decoded_filters = json.loads(filters) if filters else []
+        if expression is not None:
+            decoded_filters, match_mode = parse_arkime_filter_expression(expression)
         return analyze_arkime_import(
             DB_PATH, import_id, limit=limit, filters=decoded_filters,
             match_mode=match_mode,

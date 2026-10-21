@@ -5,6 +5,8 @@ const source = fs.readFileSync(new URL("../app/arkime_ui.py", import.meta.url), 
 assert.ok(source.includes("top:100%"), "the value-action menu must touch its trigger so the pointer does not cross a dead gap");
 assert.ok(source.includes("visibility 0s linear .22s"), "the value-action menu must remain available briefly while the pointer enters it");
 assert.ok(source.includes("background:var(--nct-surface-muted,var(--panel))"), "the expression builder must inherit the active NCT theme");
+assert.ok(source.includes("Plain-language field guide: source address = ip.src"), "the typed expression control must explain Arkime fields in plain language");
+assert.ok(source.includes("ip.src == 10.50.15.10 &amp;&amp; port.dst == 443"), "the typed expression example must remain fully visible outside the input placeholder");
 
 function handler(name) {
   const match = source.match(new RegExp(`^async function ${name}\\(.*$`, "m"));
@@ -42,6 +44,23 @@ await eval([
 
 await eval([
   "(async () => {",
+  "let trafficFilters=[{field:'ip.src',operator:'==',value:'192.0.2.1'}],trafficMatchMode='all',trafficImportId='import-1',trafficRequest=0;",
+  "const input={attributes:{},setAttribute(name,value){this.attributes[name]=value}};",
+  "const controls={trafficAnalysisProgress:{hidden:true},trafficAnalysisStatus:{textContent:'',className:''},trafficExpressionInput:input};",
+  "const $=id=>controls[id],busy=(id,on)=>{controls[id].hidden=!on};",
+  "const api=async()=>{throw new Error('unsupported field')},renderTrafficAnalysis=()=>assert.fail('invalid typed input must not replace prior results');",
+  "const location={hash:''};",
+  handler("loadTrafficAnalysis"),
+  "await loadTrafficAnalysis('import-1',false,'bad.field == value');",
+  "assert.equal(input.attributes['aria-invalid'],'true');",
+  "assert.ok(controls.trafficAnalysisStatus.textContent.includes('Typed expression was not applied: unsupported field'));",
+  "assert.ok(controls.trafficAnalysisStatus.textContent.includes('last applied clauses and results remain unchanged'));",
+  "assert.equal(controls.trafficAnalysisStatus.className,'status bad');",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
   "let trafficFilters=[{field:'ip.src',operator:'==',value:'192.0.2.1'}],trafficMatchMode='any',trafficImportId='',trafficRequest=0;",
   "const location={hash:'#arkimeCoverageWindows'},controls={trafficAnalysisProgress:{hidden:true},trafficAnalysisStatus:{textContent:'',className:''},arkimeTrafficAnalysis:{scrolled:false,scrollIntoView(){this.scrolled=true}}};",
   "const $=id=>controls[id],busy=(id,on)=>{controls[id].hidden=!on},rendered=[];",
@@ -52,6 +71,9 @@ await eval([
   "assert.equal(trafficFilters.length,0);assert.equal(trafficMatchMode,'all');",
   "assert.equal(controls.arkimeTrafficAnalysis.scrolled,true);",
   "assert.ok(rendered[0].includes('filters=%5B%5D'));",
+  "await loadTrafficAnalysis('import-1',false,'ip.src == 10.0.0.5 && port.dst == 53');",
+  "assert.ok(rendered[1].includes('expression=ip.src+%3D%3D+10.0.0.5+%26%26+port.dst+%3D%3D+53'),'typed expressions must be sent as bounded expression input');",
+  "assert.ok(!rendered[1].includes('filters='),'typed requests must not also send the structured filter shape');",
   "})()",
 ].join("\n"));
 
@@ -102,6 +124,8 @@ await eval([
   syncHandler("trafficPredicate"),
   syncHandler("trafficValueActions"),
   syncHandler("trafficMetricTable"),
+  syncHandler("trafficFilterValue"),
+  syncHandler("trafficPathTable"),
   "const exact='18000000000000000000';",
   "const html=trafficMetricTable('Top source addresses',[{label:'10.0.0.5',filter_clauses:[{field:'ip.src',operator:'==',value:'10.0.0.5'}],retained_session_rows:2,known_packet_total:exact,packet_rows_missing:0,known_byte_total:'0',byte_rows_missing:1,receipt_ordinals:[0,1],receipt_references_truncated:false}],'empty');",
   "assert.ok(html.includes(exact),'traffic analytics must render exact decimal totals without Number conversion');",
@@ -110,6 +134,8 @@ await eval([
   "assert.ok(html.includes('Click to filter for this value'),'the main value must explain its one-click include behavior');",
   "const grouped=trafficPredicate({filter_clauses:[{field:'ipProtocol',operator:'==',value:'tcp'},{field:'port.dst',operator:'==',value:53}]},true);",
   "assert.equal(grouped.negated,true);assert.equal(grouped.match_mode,'all');assert.equal(grouped.clauses.length,2);",
+  "const pathHtml=trafficPathTable({correlated_paths:[{source_ip:'10.0.0.5',destination_ip:'8.8.8.8',destination_port:53,transport:'udp',retained_session_rows:2,known_packet_total:'12',packet_rows_missing:1,known_byte_total:'400',byte_rows_missing:0,receipt_ordinals:[0,1],receipt_references_truncated:false,filter_clauses:[{field:'ip.src',operator:'==',value:'10.0.0.5'},{field:'ip.dst',operator:'==',value:'8.8.8.8'},{field:'ipProtocol',operator:'==',value:'udp'},{field:'port.dst',operator:'==',value:53}]}],correlated_path_count:1,correlated_paths_truncated:false,correlation_note:'One-source correlation.'});",
+  "assert.ok(pathHtml.includes('Correlated communication paths'));assert.ok(pathHtml.includes('10.0.0.5'));assert.ok(pathHtml.includes('8.8.8.8'));assert.ok(pathHtml.includes('53 / udp'));assert.ok(pathHtml.includes('1 row Unknown'));assert.ok(pathHtml.includes('Filter exact path'));",
   "})()",
 ].join("\n"));
 

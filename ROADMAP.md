@@ -5495,6 +5495,25 @@ Do not claim a listener is open unless evidence supports that conclusion.
   expression, recalculate every related table from the same retained import, preserve
   Unknown values, and make clear that this local drill-down does not send a new query
   to Arkime.
+  - [x] **2026-10-21 — typed expression and correlated-path view completed.** Analysts
+    can now type a bounded Arkime-style retained-data expression for an exact source
+    address, destination address, destination port, IP protocol, detected application or
+    VLAN without first finding a ranked row. A visible full example and plain-language
+    field/operator guide keep the control usable on narrow screens. Valid input
+    recalculates the clause chips, every ranking and a contained correlated path table
+    grouped by source address, destination address, transport and destination port, with
+    retained-row, exact packet/byte totals and receipt references. Unsupported or
+    ambiguous syntax is rejected without replacing the last valid result, and the page
+    states that explicitly. Communication-summary rows remain separate because their
+    reported groups may overlap. The browser verified valid UDP/53 filtering, preserved
+    results after a rejected mixed expression, the full example, aligned contained
+    scrolling and the Operator Guide at normal and 980×900 layouts. The focused Arkime
+    and interface suite passed **81 tests**, the browser runtime regression passed, and
+    the complete Docker suite passed **1,841 tests with 18 environment-dependent
+    skips**. The novice operator returned **CLEAR** and the independent quality gate
+    returned **CLEAR — DOCUMENTED DEVIATION**. This remains a local calculation over
+    one explicitly selected retained source; it does not prove an open port, contact
+    Arkime, merge overlapping imports or complete active/passive correlation.
   - [x] **2026-10-21 — compact filter controls corrected and theme-aligned.** Clicking
     a reported value applies the include action; hovering or focusing it reveals the
     include/exclude choices without permanently crowding the table. The action menu now

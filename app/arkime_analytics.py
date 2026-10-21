@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from app.database import connect_database
@@ -13,6 +14,7 @@ from app.database import connect_database
 MAX_RESULTS = 100
 MAX_RECEIPT_REFS = 100
 MAX_FILTERS = 20
+MAX_EXPRESSION_LENGTH = 8192
 FILTER_FIELDS = {"ip.src", "ip.dst", "port.dst", "ipProtocol", "protocols", "vlan"}
 
 
@@ -188,6 +190,189 @@ def _normalize_filters(filters) -> list[dict]:
     return normalized
 
 
+def _scan_expression_level(expression: str) -> tuple[list[str], str | None]:
+    parts: list[str] = []
+    connectors: list[str] = []
+    start = 0
+    depth = 0
+    quoted = False
+    escaped = False
+    index = 0
+    while index < len(expression):
+        character = expression[index]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+            index += 1
+            continue
+        if character == '"':
+            quoted = True
+            index += 1
+            continue
+        if character == "(":
+            depth += 1
+            index += 1
+            continue
+        if character == ")":
+            depth -= 1
+            if depth < 0:
+                raise ArkimeAnalyticsError("Typed expression has an unmatched closing parenthesis")
+            index += 1
+            continue
+        connector = expression[index:index + 2]
+        if depth == 0 and connector in {"&&", "||"}:
+            part = expression[start:index].strip()
+            if not part:
+                raise ArkimeAnalyticsError("Typed expression has an empty clause")
+            parts.append(part)
+            connectors.append(connector)
+            index += 2
+            start = index
+            continue
+        index += 1
+    if quoted:
+        raise ArkimeAnalyticsError("Typed expression has an unterminated quoted value")
+    if depth:
+        raise ArkimeAnalyticsError("Typed expression has an unmatched opening parenthesis")
+    if not connectors:
+        return [expression.strip()], None
+    final = expression[start:].strip()
+    if not final:
+        raise ArkimeAnalyticsError("Typed expression has an empty clause")
+    parts.append(final)
+    if len(set(connectors)) != 1:
+        raise ArkimeAnalyticsError(
+            "Use one connector at each level: group mixed AND and OR clauses with parentheses"
+        )
+    return parts, connectors[0]
+
+
+def _is_wrapped_expression(expression: str) -> bool:
+    if len(expression) < 2 or expression[0] != "(" or expression[-1] != ")":
+        return False
+    depth = 0
+    quoted = False
+    escaped = False
+    for index, character in enumerate(expression):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+            continue
+        if character == '"':
+            quoted = True
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0 and index != len(expression) - 1:
+                return False
+            if depth < 0:
+                return False
+    return depth == 0 and not quoted
+
+
+def _strip_expression_wrapper(expression: str) -> str:
+    value = expression.strip()
+    while _is_wrapped_expression(value):
+        value = value[1:-1].strip()
+    return value
+
+
+def _parse_expression_value(value: str):
+    value = value.strip()
+    if not value:
+        raise ArkimeAnalyticsError("Typed expression requires a value after == or !=")
+    if value == "EXISTS!":
+        return None
+    if value.startswith('"'):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ArkimeAnalyticsError("Typed expression contains an invalid quoted value") from exc
+        if not isinstance(decoded, str):
+            raise ArkimeAnalyticsError("Quoted Arkime filter values must be text")
+        return decoded
+    if any(character.isspace() for character in value):
+        raise ArkimeAnalyticsError("Put double quotes around filter values that contain spaces")
+    if any(token in value for token in ("(", ")", "&&", "||", "==", "!=")):
+        raise ArkimeAnalyticsError("Typed expression contains unsupported syntax in a value")
+    return value
+
+
+def _parse_expression_clause(expression: str) -> dict:
+    value = _strip_expression_wrapper(expression)
+    match = re.fullmatch(r"([A-Za-z][A-Za-z0-9.]*)\s*(==|!=)\s*(.+)", value)
+    if not match:
+        raise ArkimeAnalyticsError(
+            "Use a supported field followed by == or != and one exact value"
+        )
+    field, operator, raw_value = match.groups()
+    parsed_value = _parse_expression_value(raw_value)
+    if parsed_value is None:
+        operator = "!=" if operator == "==" else "=="
+    return _normalize_clause({"field": field, "operator": operator, "value": parsed_value})
+
+
+def _parse_expression_predicate(expression: str) -> dict:
+    value = expression.strip()
+    negated = value.startswith("!")
+    if negated:
+        value = value[1:].strip()
+        if not _is_wrapped_expression(value):
+            raise ArkimeAnalyticsError("NOT must be followed by a parenthesized clause group")
+    if _is_wrapped_expression(value):
+        inner = value[1:-1].strip()
+        parts, connector = _scan_expression_level(inner)
+        if connector:
+            clauses = []
+            for part in parts:
+                nested = _strip_expression_wrapper(part)
+                _, nested_connector = _scan_expression_level(nested)
+                if nested_connector:
+                    raise ArkimeAnalyticsError(
+                        "Typed expression nesting is too deep; split it into simpler grouped clauses"
+                    )
+                clauses.append(_parse_expression_clause(part))
+            return {
+                "clauses": clauses,
+                "match_mode": "all" if connector == "&&" else "any",
+                "negated": negated,
+            }
+        value = inner
+    clause = _parse_expression_clause(value)
+    if negated:
+        clause["operator"] = "!=" if clause["operator"] == "==" else "=="
+    return clause
+
+
+def parse_arkime_filter_expression(expression: str | None) -> tuple[list[dict], str]:
+    if expression is None:
+        return [], "all"
+    if not isinstance(expression, str):
+        raise ArkimeAnalyticsError("Typed expression must be text")
+    if not expression.strip():
+        return [], "all"
+    if len(expression) > MAX_EXPRESSION_LENGTH:
+        raise ArkimeAnalyticsError(
+            f"Typed expression must contain no more than {MAX_EXPRESSION_LENGTH} characters"
+        )
+    value = expression.strip()
+    while _is_wrapped_expression(value):
+        value = value[1:-1].strip()
+    parts, connector = _scan_expression_level(value)
+    predicates = [_parse_expression_predicate(part) for part in parts]
+    match_mode = "any" if connector == "||" else "all"
+    return _normalize_filters(predicates), match_mode
+
+
 def _row_matches(row: sqlite3.Row, source_kind: str, clause: dict) -> bool:
     values = _filter_value(row, source_kind, clause["field"])
     wanted = clause["value"]
@@ -247,6 +432,47 @@ def _filter_expression(filters: list[dict], match_mode: str) -> str:
         expression = f"({grouped})"
         parts.append(f"!{expression}" if predicate["negated"] else expression)
     return (" && " if match_mode == "all" else " || ").join(parts)
+
+
+def _correlated_paths(rows: list[sqlite3.Row], limit: int) -> list[dict]:
+    groups: dict[tuple, list[sqlite3.Row]] = {}
+    for row in rows:
+        key = (
+            row["source_ip"], row["destination_ip"], row["transport"],
+            row["destination_port"],
+        )
+        groups.setdefault(key, []).append(row)
+    paths = []
+    for (source_ip, destination_ip, transport, destination_port), grouped_rows in groups.items():
+        packets, missing_packets = _known_sum(grouped_rows, "packet_count")
+        byte_count, missing_bytes = _known_sum(grouped_rows, "byte_count")
+        ordinals = sorted(int(row["source_ordinal"]) for row in grouped_rows)
+        paths.append({
+            "source_ip": source_ip,
+            "destination_ip": destination_ip,
+            "transport": transport,
+            "destination_port": destination_port,
+            "retained_session_rows": len(grouped_rows),
+            "known_packet_total": packets,
+            "packet_rows_missing": missing_packets,
+            "known_byte_total": byte_count,
+            "byte_rows_missing": missing_bytes,
+            "receipt_ordinals": ordinals[:MAX_RECEIPT_REFS],
+            "receipt_count": len(ordinals),
+            "receipt_references_truncated": len(ordinals) > MAX_RECEIPT_REFS,
+            "filter_clauses": [
+                {"field": "ip.src", "operator": "==", "value": source_ip},
+                {"field": "ip.dst", "operator": "==", "value": destination_ip},
+                {"field": "ipProtocol", "operator": "==", "value": transport},
+                {"field": "port.dst", "operator": "==", "value": destination_port},
+            ],
+        })
+    paths.sort(key=lambda item: (
+        -item["retained_session_rows"], item["source_ip"] or "",
+        item["destination_ip"] or "", item["transport"] or "",
+        -1 if item["destination_port"] is None else item["destination_port"],
+    ))
+    return paths[:limit]
 
 
 def _session_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) -> dict:
@@ -354,6 +580,19 @@ def _session_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) 
             vlans, vlan_labels, limit, filter_field="vlan",
             filter_values={key: None if key == "unknown" else int(key) for key in vlans},
         ),
+        "correlated_paths": _correlated_paths(rows, limit),
+        "correlated_path_count": len({
+            (row["source_ip"], row["destination_ip"], row["transport"], row["destination_port"])
+            for row in rows
+        }),
+        "correlated_paths_truncated": len({
+            (row["source_ip"], row["destination_ip"], row["transport"], row["destination_port"])
+            for row in rows
+        }) > limit,
+        "correlation_note": (
+            "Each path groups individual retained session rows by source address, "
+            "destination address, transport and destination port."
+        ),
         "reported_groups": [],
         "category_note": (
             "Application and VLAN categories can overlap because one retained session row "
@@ -410,6 +649,13 @@ def _summary_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) 
         "transport_activity": [],
         "application_activity": [],
         "vlan_activity": [],
+        "correlated_paths": [],
+        "correlated_path_count": 0,
+        "correlated_paths_truncated": False,
+        "correlation_note": (
+            "Communication-summary rows remain separate below because their reported "
+            "groups can overlap; NCT does not add them into correlated path totals."
+        ),
         "reported_groups": groups[:limit],
         "reported_group_count": len(groups),
         "reported_groups_truncated": len(groups) > limit,

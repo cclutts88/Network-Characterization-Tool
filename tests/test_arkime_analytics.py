@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 
 from fastapi.testclient import TestClient
+import pytest
 
-from app.arkime_analytics import analyze_arkime_import
+from app.arkime_analytics import analyze_arkime_import, parse_arkime_filter_expression
 from app.arkime_evidence import import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
 from app.network_scopes import create_network_scope
@@ -76,7 +77,48 @@ def test_session_analysis_counts_rows_preserves_unknown_and_large_exact_totals(t
     assert result["transport_activity"][0]["key"] == "tcp"
     assert next(item for item in result["application_activity"] if item["key"] == "dns")["retained_session_rows"] == 2
     assert next(item for item in result["vlan_activity"] if item["key"] == "10")["retained_session_rows"] == 2
+    assert result["correlated_path_count"] == 2
+    path = result["correlated_paths"][0]
+    assert (path["source_ip"], path["destination_ip"], path["destination_port"], path["transport"]) == (
+        "10.0.0.5", "8.8.8.8", 53, "tcp",
+    )
+    assert path["retained_session_rows"] == 2
+    assert path["known_packet_total"] == "18000000000000000000"
+    assert path["known_byte_total"] == "9000000000000000000"
+    assert path["filter_clauses"] == [
+        {"field": "ip.src", "operator": "==", "value": "10.0.0.5"},
+        {"field": "ip.dst", "operator": "==", "value": "8.8.8.8"},
+        {"field": "ipProtocol", "operator": "==", "value": "tcp"},
+        {"field": "port.dst", "operator": "==", "value": 53},
+    ]
     assert result["read_only"] is True
+
+
+def test_typed_expression_parses_exact_fields_groups_quotes_and_unknown():
+    filters, match_mode = parse_arkime_filter_expression(
+        'ip.src == 10.0.0.5 && (port.dst == 53 || protocols == "domain name")'
+    )
+    assert match_mode == "all"
+    assert filters == [
+        {"field": "ip.src", "operator": "==", "value": "10.0.0.5"},
+        {
+            "clauses": [
+                {"field": "port.dst", "operator": "==", "value": 53},
+                {"field": "protocols", "operator": "==", "value": "domain name"},
+            ],
+            "match_mode": "any", "negated": False,
+        },
+    ]
+    missing, missing_mode = parse_arkime_filter_expression("vlan != EXISTS!")
+    assert missing_mode == "all"
+    assert missing == [{"field": "vlan", "operator": "==", "value": None}]
+
+    with pytest.raises(ValueError, match="one connector"):
+        parse_arkime_filter_expression(
+            "ip.src == 10.0.0.5 && port.dst == 53 || protocols == dns"
+        )
+    with pytest.raises(ValueError, match="unsupported or malformed"):
+        parse_arkime_filter_expression("source.ip == 10.0.0.5")
 
 
 def test_session_analysis_applies_multiple_arkime_style_clauses_locally(tmp_path):
@@ -230,6 +272,8 @@ def test_summary_analysis_keeps_potentially_overlapping_groups_separate(tmp_path
     assert {item["packet_count"] for item in result["reported_groups"]} == {None, "0"}
     assert all(item["public_destination"] for item in result["reported_groups"])
     assert "does not add groups" in result["metric_definition"]
+    assert result["correlated_paths"] == []
+    assert "can overlap" in result["correlation_note"]
 
     filtered = analyze_arkime_import(
         db, imported["import_id"],
@@ -260,6 +304,20 @@ def test_traffic_analysis_route_uses_one_exact_import(tmp_path, monkeypatch):
     assert response.json()["import_id"] == imported["import_id"]
     assert len(response.json()["top_source_addresses"]) == 1
     assert response.json()["filtered_row_count"] == 2
+
+    with TestClient(main.app) as client:
+        typed = client.get(
+            "/api/arkime/traffic-analysis",
+            params={
+                "import_id": imported["import_id"],
+                "expression": "ip.src == 10.0.0.5 && protocols == google",
+            },
+        )
+    assert typed.status_code == 200
+    assert typed.json()["filtered_row_count"] == 1
+    assert typed.json()["filter_expression"] == (
+        "(ip.src == 10.0.0.5) && (protocols == google)"
+    )
 
 
 def test_traffic_analysis_route_rejects_invalid_filter_json(tmp_path, monkeypatch):
@@ -302,6 +360,20 @@ def test_traffic_analysis_route_rejects_invalid_filter_json(tmp_path, monkeypatc
     assert "match_mode" in malformed_group_mode.json()["detail"]
     assert unicode_numeric.status_code == 422
     assert "non-negative integer" in unicode_numeric.json()["detail"]
+
+    with TestClient(main.app) as client:
+        both_shapes = client.get(
+            "/api/arkime/traffic-analysis",
+            params={"import_id": "anything", "filters": "[]", "expression": "vlan == 10"},
+        )
+        unsupported_expression = client.get(
+            "/api/arkime/traffic-analysis",
+            params={"import_id": "anything", "expression": "source.ip == 10.0.0.5"},
+        )
+    assert both_shapes.status_code == 422
+    assert "either a typed expression" in both_shapes.json()["detail"]
+    assert unsupported_expression.status_code == 422
+    assert "unsupported or malformed" in unsupported_expression.json()["detail"]
 
 
 def test_summary_template_route_still_returns_the_csv(tmp_path, monkeypatch):

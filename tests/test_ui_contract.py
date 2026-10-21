@@ -1049,8 +1049,19 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert 'id="arkimeTrafficAnalysis"' in html
     assert "/api/arkime/coverage-windows" in html
     assert "/api/arkime/traffic-analysis" in html
+    assert 'id="trafficExpressionForm"' in html
+    assert 'id="trafficExpressionInput"' in html
+    assert "Apply typed expression" in html
+    assert "Plain-language field guide: source address = ip.src" in html
+    assert "destination port = port.dst" in html
+    assert "ip.src == 10.50.15.10 &amp;&amp; port.dst == 443" in html
+    assert "Last applied clauses" in html
+    assert "The last applied clauses and results remain unchanged below" in html
+    assert "Correlated communication paths" in html
+    assert 'aria-label="Correlated Arkime communication paths"' in html
     assert "Analyze one retained Arkime source" in SHELL_SCRIPT
-    assert "Shows top reported source and destination addresses" in SHELL_SCRIPT
+    assert "Type an exact Arkime-style retained-data expression" in SHELL_SCRIPT
+    assert "correlated communication-path table" in SHELL_SCRIPT
     assert "A retained-window gap is an NCT evidence gap" in html
     assert "NCT Arkime Summary CSV v1" in html
     assert "it is not a native Arkime export format" in html
