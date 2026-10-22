@@ -134,6 +134,7 @@ cat > /var/lib/nct/deployment/arkime-connector.env <<'EOF'
 NCT_ARKIME_API_ENABLED=1
 NCT_ARKIME_API_URL=https://ARKIME_ADDRESS:8005
 NCT_ARKIME_API_USERNAME=nct-reader
+NCT_ARKIME_DATASET_ID=range-arkime-2026
 NCT_ARKIME_API_TIMEOUT_SECONDS=30
 NCT_ARKIME_SECRETS_DIR=/var/lib/nct/arkime-secrets
 EOF
@@ -141,7 +142,11 @@ chmod 0600 /var/lib/nct/deployment/arkime-connector.env
 ```
 
 Replace `ARKIME_ADDRESS` with the exact name or IP in the Arkime certificate. Do not
-put credentials, query text or a trailing API path in the URL.
+put credentials, query text or a trailing API path in the URL. Choose one descriptive
+`NCT_ARKIME_DATASET_ID` for this Arkime installation and keep it unchanged while that
+session dataset persists. If Arkime storage is rebuilt, reset or replaced, assign a new
+identifier before collecting new pulls; reusing the old identifier could make unrelated
+session IDs appear to belong to one history.
 
 ## 6. Attach the connector to the NCT Compose deployment
 

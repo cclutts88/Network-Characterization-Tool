@@ -20,6 +20,18 @@ function syncHandler(name) {
   return match[0];
 }
 
+function multilineHandler(name, asyncFunction = true) {
+  const prefix = `${asyncFunction ? "async " : ""}function ${name}(`;
+  const start = source.indexOf(prefix);
+  assert.notEqual(start, -1, `Could not find ${name} in app/arkime_ui.py`);
+  const tail = source.slice(start + prefix.length);
+  const candidates = ["\nasync function ", "\nfunction "]
+    .map(marker => tail.indexOf(marker))
+    .filter(index => index >= 0);
+  const end = candidates.length ? start + prefix.length + Math.min(...candidates) : source.length;
+  return source.slice(start, end).trim();
+}
+
 await eval([
   "(async () => {",
   "let offset=0,total=0,revision='',historyRequest=0;const limit=25;",
@@ -39,6 +51,31 @@ await eval([
   "assert.equal(controls.historyStatus.textContent,'Showing saved receipts only. Opening this page does not re-read the JSON source.');",
   "assert.equal(controls.historyProgress.hidden,true);",
   "assert.ok(pending[0].url.includes('scope_id=scope-a'));assert.ok(pending[1].url.includes('scope_id=scope-b'));",
+  "})()",
+].join("\n"));
+
+{
+  const match = source.match(/\$\('historyRefresh'\)\.onclick=(\(\)=>loadLatestHistory\(\))/);
+  assert.ok(match, "Refresh must wrap loadLatestHistory instead of forwarding the click event");
+  let argumentCount = -1;
+  const loadLatestHistory = (...args) => { argumentCount = args.length; };
+  const click = eval(match[1]);
+  click({type: "click"});
+  assert.equal(argumentCount, 0, "the actual Refresh handler must not pass the browser event as a selection revision");
+}
+
+await eval([
+  "(async () => {",
+  "let communicationHistoryFilter='',communicationHistorySelectionRevision=0;",
+  "const options=[{value:'run-a',dataset:{streamIdentity:'stream-a'}},{value:'run-b',dataset:{streamIdentity:'stream-b'}}],select={value:'run-a',options,get selectedOptions(){return options.filter(item=>item.value===this.value)}};",
+  "const controls={historyStream:select,historyCalculationProgress:{hidden:true},historyCalculate:{disabled:false},historyCalculationStatus:{textContent:'',className:''},arkimeCommunicationHistory:{scrollIntoView(){}}};",
+  "const $=id=>controls[id],busy=(id,on)=>{controls[id].hidden=!on},renders=[],pending=[];",
+  "const renderHistory=data=>renders.push(data.marker),loadLatestHistory=async()=>{},location={hash:''},api=()=>new Promise((resolve,reject)=>pending.push({resolve,reject}));",
+  multilineHandler("calculateHistory"),
+  "const stale=calculateHistory();",
+  "select.value='run-b';communicationHistorySelectionRevision+=1;busy('historyCalculationProgress',false);",
+  "pending[0].resolve({marker:'stream-a'});await stale;",
+  "assert.deepEqual(renders,[],'a calculation for a prior selection must not replace the newly selected stream');",
   "})()",
 ].join("\n"));
 
@@ -254,4 +291,43 @@ await eval([
 ].join("\n"));
 
 assert.equal((source.match(/Observed activity upload/g) || []).length, 0, "the shell owns the page heading");
+
+await eval([
+  "(async () => {",
+  "let communicationHistoryResultId='',communicationHistoryRequest=0,communicationHistoryFilter='',communicationHistorySelectionRevision=1;",
+  "const options=[{value:'run-a',dataset:{streamIdentity:'stream-a'}},{value:'run-b',dataset:{streamIdentity:'stream-b'}}],select={value:'run-a',get selectedOptions(){return options.filter(item=>item.value===this.value)}};",
+  "const controls={historyStream:select,historyCalculationProgress:{hidden:true},historyCalculationStatus:{textContent:'',className:''},historyResult:{innerHTML:''},historyPathFilterForm:{hidden:true}};",
+  "const $=id=>controls[id],busy=(id,on)=>{controls[id].hidden=!on},renders=[],pending=[];",
+  "const renderHistory=data=>renders.push(data.marker),api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));",
+  multilineHandler("loadHistory"),
+  multilineHandler("loadLatestHistory"),
+  "const older=loadLatestHistory(1);",
+  "select.value='run-b';communicationHistorySelectionRevision=2;const newer=loadLatestHistory(2);",
+  "pending[1].resolve({items:[{result_id:'result-b'}]});await new Promise(resolve=>setTimeout(resolve,0));",
+  "assert.ok(pending[2].url.includes('/result-b?'),'the selected stream must load its own saved generation');",
+  "pending[2].resolve({marker:'stream-b',stream_identity:'stream-b'});await newer;",
+  "pending[0].resolve({items:[{result_id:'result-a'}]});await older;",
+  "assert.deepEqual(renders,['stream-b'],'a delayed prior stream list must not start or render an older detail request');",
+  "assert.equal(pending.length,3,'the stale prior stream must stop before requesting detail');",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "let historyStreamOffset=0;",
+  "const select={value:'',options:[],replaceChildren(...items){this.options=[...items];for(const item of this.options)item.parent=this},append(item){item.parent=this;this.options.push(item)},get lastElementChild(){return this.options.at(-1)}};",
+  "function Option(text,value){return {textContent:text,value,dataset:{},disabled:false,parent:null,remove(){const index=this.parent.options.indexOf(this);if(index>=0)this.parent.options.splice(index,1)}}}",
+  "const controls={historyStream:select,historyCalculate:{disabled:false},historyCalculationStatus:{textContent:'',className:''}},$=id=>controls[id];",
+  "const requested=[],pages=[{items:[{profile_name:'Newest',operator_sensor:'sensor-a',scope_label:'Range',scope_version:1,query_expression:'',pull_count:100,anchor_run_id:'run-100',stream_identity:'stream-100',history_ready:true}],pagination:{has_more:true}},{items:[{profile_name:'Oldest',operator_sensor:'sensor-b',scope_label:'Range',scope_version:1,query_expression:'',pull_count:1,anchor_run_id:'run-101',stream_identity:'stream-101',history_ready:true}],pagination:{has_more:false}}];",
+  "const api=async url=>{requested.push(url);return pages.shift()};",
+  multilineHandler("loadHistoryStreams"),
+  "await loadHistoryStreams(false);",
+  "assert.equal(select.options.at(-1).value,'__load_more__','the first page must offer usable continuation');",
+  "await loadHistoryStreams(true);",
+  "assert.ok(requested[1].includes('offset=1'),'continuation must request the next catalog offset');",
+  "assert.ok(select.options.some(item=>item.value==='run-101'),'the next stream page must become selectable');",
+  "assert.ok(!select.options.some(item=>item.value==='__load_more__'),'the continuation option must disappear at the end');",
+  "})()",
+].join("\n"));
+
 console.log("Arkime UI paging and request-ownership regressions passed");

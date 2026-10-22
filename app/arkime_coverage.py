@@ -88,6 +88,7 @@ def _manual_session(row: sqlite3.Row) -> dict:
         "summary_basis": None,
         "top_n_limit": None,
         "connector_id": None,
+        "dataset_identity": None,
         "connector_contract": None,
         "pull_run_id": None,
         "pull_state": None,
@@ -144,6 +145,7 @@ def _summary(row: sqlite3.Row) -> dict:
         "summary_basis": row["summary_basis"],
         "top_n_limit": row["top_n_limit"],
         "connector_id": None,
+        "dataset_identity": None,
         "connector_contract": None,
         "pull_run_id": None,
         "pull_state": None,
@@ -207,6 +209,8 @@ def _api_observation_matches(
         (metadata.get("bounding_mode"), item["bounding_mode"]),
         (metadata.get("returned_count"), item["returned_count"]),
     )
+    if run["dataset_identity"] not in {"unverified", "legacy-unverified"}:
+        comparisons += ((metadata.get("dataset_identity"), run["dataset_identity"]),)
     return all(left == right for left, right in comparisons)
 
 
@@ -228,6 +232,7 @@ def _apply_api_provenance(
     item["pull_run_id"] = run["run_id"]
     item["pull_state"] = run["state"]
     item["connector_id"] = run["connector_id"]
+    item["dataset_identity"] = run["dataset_identity"]
     item["connector_contract"] = run["connector_contract"]
     if not _api_provenance_matches(item, run):
         item["provenance_state"] = "api_provenance_mismatch"
@@ -252,6 +257,7 @@ def _apply_api_provenance(
         "query_expression": item["query_expression"],
         "parser_version": item["parser_version"],
         "connector_id": run["connector_id"],
+        "dataset_identity": run["dataset_identity"],
         "connector_contract": run["connector_contract"],
     }
     item["stream_identity"] = _identity(stream)

@@ -54,6 +54,17 @@ from app.arkime_connector import (
     start_arkime_pull_worker,
     stop_arkime_pull_worker,
 )
+from app.arkime_history import (
+    ArkimeHistoryConflict,
+    ArkimeHistoryError,
+    build_arkime_history,
+    get_arkime_history,
+    get_arkime_history_path_evidence,
+    get_arkime_history_record_exclusions,
+    init_arkime_history_storage,
+    list_arkime_histories,
+    list_arkime_history_streams,
+)
 from app.nmap_evidence import nmap_xml_coverage
 from app.pipeline_intake import (
     NMAP_INGESTION_POLICY_VERSION,
@@ -1646,6 +1657,7 @@ async def lifespan(_: FastAPI):
         init_arkime_evidence_storage(DB_PATH)
         init_arkime_summary_storage(DB_PATH)
         init_arkime_connector_storage(DB_PATH)
+        init_arkime_history_storage(DB_PATH)
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
         recover_missing_automated_nmap_intents(DB_PATH)
@@ -2195,6 +2207,7 @@ def _arkime_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc.args[0]))
     if isinstance(exc, (
         ArkimeEvidenceConflict, ArkimeSummaryConflict, ArkimeCoverageConflict,
+        ArkimeHistoryConflict,
     )):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
@@ -2266,6 +2279,88 @@ def arkime_retained_traffic_analysis(
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail="filters must be valid JSON") from exc
     except (KeyError, ArkimeAnalyticsError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+class ArkimeHistoryBuildPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    anchor_run_id: str = Field(min_length=1, max_length=200)
+
+
+@app.get("/api/arkime/history-streams")
+def arkime_history_stream_options(
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return list_arkime_history_streams(DB_PATH, limit=limit, offset=offset)
+    except ArkimeHistoryError as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.post("/api/arkime/history", status_code=201)
+def arkime_history_build(request: Request, payload: ArkimeHistoryBuildPayload) -> dict:
+    actor = require_passive_importer(request)
+    try:
+        return build_arkime_history(DB_PATH, payload.anchor_run_id, actor=actor)
+    except (KeyError, ArkimeHistoryError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/history")
+def arkime_history_list(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    stream_identity: str | None = Query(default=None, min_length=64, max_length=64),
+) -> dict:
+    try:
+        return list_arkime_histories(
+            DB_PATH, limit=limit, offset=offset, stream_identity=stream_identity,
+        )
+    except ArkimeHistoryError as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/history/{result_id}")
+def arkime_history_detail(
+    result_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    path_filter: str | None = Query(default=None, max_length=200),
+) -> dict:
+    try:
+        return get_arkime_history(
+            DB_PATH, result_id, limit=limit, offset=offset, path_filter=path_filter,
+        )
+    except (KeyError, ArkimeHistoryError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/history/{result_id}/paths/{path_key}/evidence")
+def arkime_history_path_evidence(
+    result_id: str, path_key: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_arkime_history_path_evidence(
+            DB_PATH, result_id, path_key, limit=limit, offset=offset,
+        )
+    except (KeyError, ArkimeHistoryError) as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/history/{result_id}/record-exclusions")
+def arkime_history_record_exclusions(
+    result_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        return get_arkime_history_record_exclusions(
+            DB_PATH, result_id, limit=limit, offset=offset,
+        )
+    except (KeyError, ArkimeHistoryError) as exc:
         raise _arkime_error(exc) from exc
 
 

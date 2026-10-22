@@ -713,7 +713,7 @@ def test_enterprise_shell_replaces_legacy_navigation_on_every_primary_page():
     assert "const syncTaskScroll=" in SHELL_SCRIPT
     assert "target.scrollIntoView({block:'start'})" in SHELL_SCRIPT
     assert "const resetTaskScroll=" not in SHELL_SCRIPT
-    assert "'/arkime':{candidates:'#arkimeCoverageWindows,#arkimeTrafficAnalysis,#arkimeSummaryUpload,#arkimeSummaryHistory,#arkimeConnector,#arkimeUpload,#arkimeHistory',support:{arkimeConnector:['arkimeUpload','arkimeHistory']}}" in SHELL_SCRIPT
+    assert "'/arkime':{candidates:'#arkimeCoverageWindows,#arkimeTrafficAnalysis,#arkimeCommunicationHistory,#arkimeSummaryUpload,#arkimeSummaryHistory,#arkimeConnector,#arkimeUpload,#arkimeHistory',support:{arkimeConnector:['arkimeUpload','arkimeHistory']}}" in SHELL_SCRIPT
     assert 'padding-bottom:30px' in SESSION_SCRIPT
     assert 'bottom:9px' in SESSION_SCRIPT
 
@@ -1080,6 +1080,20 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert "Not actively validated" in html
     assert "Open exact Nmap source" in html
     assert "A retained-window gap is an NCT evidence gap" in html
+    assert 'id="arkimeCommunicationHistory"' in html
+    assert 'id="historyPathFilter"' in html
+    assert "IP address, port, transport, or application" in html
+    assert "Retained-window gaps" in html
+    assert "minutes without a comparable retained window" in html
+    assert "Complete means the complete API result was retained" in html
+    assert "Review communication history" in html
+    assert "item.provenance_state==='exact_api_run'" in html
+    assert "Load latest saved generation" in html
+    assert "stream_identity" in html
+    assert "data-history-exclusions-page" in html
+    assert "Repeated retained record copies removed" in html
+    assert "Retained session records counted once" in html
+    assert ".history-identity strong,.history-identity small{display:block}" in html
     assert 'id="coverageRecommendationStream"' in html
     assert 'id="coverageRecommendationOverlap"' in html
     assert 'id="coverageRecommendationCutoff"' in html

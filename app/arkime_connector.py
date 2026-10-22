@@ -101,6 +101,7 @@ class ArkimeConnectorConfig:
     ca_file: Path | None = None
     timeout_seconds: int = 30
     connector_id: str | None = None
+    dataset_identity: str | None = None
 
     @classmethod
     def from_environment(cls) -> "ArkimeConnectorConfig":
@@ -131,11 +132,16 @@ class ArkimeConnectorConfig:
         if not 3 <= timeout <= 120:
             raise ArkimeConnectorUnavailable("Arkime API timeout must be between 3 and 120 seconds")
         ca_raw = os.getenv("NCT_ARKIME_API_CA_FILE", "").strip()
+        dataset_raw = os.getenv("NCT_ARKIME_DATASET_ID", "").strip()
+        dataset_identity = (
+            _text(dataset_raw, "Arkime dataset identity", 200) if dataset_raw else None
+        )
         identity = hashlib.sha256(f"{base_url}\0{username}".encode()).hexdigest()[:16]
         return cls(
             enabled=True, base_url=base_url, username=username,
             password_file=Path(password_path), ca_file=Path(ca_raw) if ca_raw else None,
             timeout_seconds=timeout, connector_id=identity,
+            dataset_identity=dataset_identity,
         )
 
     @property
@@ -189,6 +195,8 @@ def connector_status() -> dict:
         "parser_version": ARKIME_PARSER_VERSION,
         "max_sessions_per_pull": MAX_PULL_SESSIONS,
         "max_response_bytes": MAX_ARKIME_JSON_BYTES,
+        "dataset_identity": config.dataset_identity,
+        "history_identity_configured": bool(config.dataset_identity),
         "detail": "Ready for bounded read-only Sessions API pulls",
     }
 
@@ -327,6 +335,7 @@ def init_arkime_connector_storage(db_path: Path) -> None:
                 query_start TEXT NOT NULL,
                 query_end TEXT NOT NULL,
                 connector_id TEXT NOT NULL,
+                dataset_identity TEXT NOT NULL DEFAULT 'legacy-unverified',
                 connector_contract TEXT NOT NULL,
                 parser_version TEXT NOT NULL,
                 advances_schedule INTEGER NOT NULL CHECK(advances_schedule IN (0,1)),
@@ -370,6 +379,11 @@ def init_arkime_connector_storage(db_path: Path) -> None:
                 "ALTER TABLE arkime_pull_runs ADD COLUMN connector_contract TEXT "
                 "NOT NULL DEFAULT 'legacy-unfrozen'"
             )
+        if "dataset_identity" not in columns:
+            db.execute(
+                "ALTER TABLE arkime_pull_runs ADD COLUMN dataset_identity TEXT "
+                "NOT NULL DEFAULT 'legacy-unverified'"
+            )
         if "parser_version" not in columns:
             db.execute(
                 "ALTER TABLE arkime_pull_runs ADD COLUMN parser_version TEXT "
@@ -411,6 +425,7 @@ def init_arkime_connector_storage(db_path: Path) -> None:
                   OR OLD.bounding_mode != NEW.bounding_mode
                   OR OLD.query_start != NEW.query_start OR OLD.query_end != NEW.query_end
                   OR OLD.connector_id != NEW.connector_id
+                  OR OLD.dataset_identity != NEW.dataset_identity
                   OR OLD.connector_contract != NEW.connector_contract
                   OR OLD.parser_version != NEW.parser_version
                   OR OLD.advances_schedule != NEW.advances_schedule
@@ -634,12 +649,13 @@ def _enqueue(db: sqlite3.Connection, row: sqlite3.Row, *, kind: str, actor: str,
         """INSERT INTO arkime_pull_runs
            (run_id,profile_id,profile_version,request_kind,retry_of_run_id,state,scope_id,
             scope_label,scope_version,operator_sensor,query_expression,bounding_mode,
-             query_start,query_end,connector_id,connector_contract,parser_version,
+             query_start,query_end,connector_id,dataset_identity,connector_contract,parser_version,
              advances_schedule,request_parameters_json,actor,queued_at)
-           VALUES (?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (run_id,row["profile_id"],row["current_version"],kind,retry_of,row["scope_id"],
          row["scope_label"],row["scope_version"],row["operator_sensor"],row["query_expression"],
-         row["bounding_mode"],start,end,config.connector_id,ARKIME_CONNECTOR_CONTRACT,
+         row["bounding_mode"],start,end,config.connector_id,
+         config.dataset_identity or "unverified",ARKIME_CONNECTOR_CONTRACT,
          ARKIME_PARSER_VERSION,int(advances_schedule),
          json.dumps(parameters,sort_keys=True,separators=(",",":")),_text(actor,"actor",100),now),
     )
@@ -725,6 +741,7 @@ def _run_dict(row: sqlite3.Row) -> dict:
         "query_expression":row["query_expression"],"bounding_mode":row["bounding_mode"],
         "query_start":row["query_start"],"query_end":row["query_end"],
         "connector_id":row["connector_id"],
+        "dataset_identity":row["dataset_identity"],
         "connector_contract":row["connector_contract"],"parser_version":row["parser_version"],
         "advances_schedule":bool(row["advances_schedule"]),
         "request_parameters":json.loads(row["request_parameters_json"]),
@@ -844,7 +861,7 @@ def _publish(db_path: Path, run: dict, token: str, content: bytes) -> None:
                 scope_id=run["scope_id"],operator_sensor=run["operator_sensor"],query_start=run["query_start"],query_end=run["query_end"],
                 bounding_mode=run["bounding_mode"],operator_export_assessment=assessment,capture_coverage="unknown",
                 query_expression=run["query_expression"],actor=run["actor"],connection=db,
-                source_metadata={"import_tier":"tier_e_sessions_api","pull_run_id":run["run_id"],"connector_id":run["connector_id"],"connector_contract":run["connector_contract"],"parser_version":run["parser_version"],"request_parameters":json.loads(run["request_parameters_json"]),"exact_bytes":"decoded HTTP entity; transfer framing removed; content encoding identity"},
+                source_metadata={"import_tier":"tier_e_sessions_api","pull_run_id":run["run_id"],"connector_id":run["connector_id"],"dataset_identity":run["dataset_identity"],"connector_contract":run["connector_contract"],"parser_version":run["parser_version"],"request_parameters":json.loads(run["request_parameters_json"]),"exact_bytes":"decoded HTTP entity; transfer framing removed; content encoding identity"},
             )
             final="complete" if completeness=="complete" else "partial"
             db.execute("UPDATE arkime_pull_runs SET state=?,completed_at=?,claim_token=NULL,import_id=? WHERE run_id=?",(final,now_text,result["import_id"],run["run_id"]))
@@ -900,6 +917,8 @@ def execute_one_pull(db_path: Path, *, fetcher: Callable[[ArkimeConnectorConfig,
         config=ArkimeConnectorConfig.from_environment()
         if config.connector_id!=run["connector_id"]:
             raise ArkimeConnectorConflict("Connector deployment identity changed after this pull was queued")
+        if (config.dataset_identity or "unverified") != run["dataset_identity"]:
+            raise ArkimeConnectorConflict("Arkime dataset identity changed after this pull was queued")
         if run["connector_contract"] != ARKIME_CONNECTOR_CONTRACT:
             raise ArkimeConnectorConflict(
                 "The queued Arkime connector contract is not supported; no request was sent"

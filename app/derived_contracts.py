@@ -62,6 +62,16 @@ SEARCHSPLOIT_CANDIDATES_PARAMETERS = MappingProxyType({
     "max_candidates_per_query": 25,
 })
 
+ARKIME_STREAM_HISTORY_FAMILY = "arkime_stream_history"
+ARKIME_STREAM_HISTORY_VERSION = "arkime-stream-history:1"
+ARKIME_STREAM_HISTORY_SCHEMA_VERSION = 1
+ARKIME_STREAM_HISTORY_PARAMETERS = MappingProxyType({
+    "record_identity": "dataset_id+source_node+session_id",
+    "semantic_comparison": "arkime-retained-session:1",
+    "path_grouping": "source+destination+transport+destination_port",
+    "capture_declaration_controls_eligibility": False,
+})
+
 
 SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
     NMAP_BASE_ANALYSIS_FAMILY: DerivedResultContract(
@@ -105,6 +115,16 @@ SUPPORTED_DERIVED_RESULT_CONTRACTS = MappingProxyType({
         input_kinds=MappingProxyType({
             "nmap_xml": ("artifact_sha256",),
             "offline_dataset": ("searchsploit_dataset_sha256",),
+        }),
+    ),
+    ARKIME_STREAM_HISTORY_FAMILY: DerivedResultContract(
+        family=ARKIME_STREAM_HISTORY_FAMILY,
+        label="Arkime automatic-stream communication history",
+        analysis_version=ARKIME_STREAM_HISTORY_VERSION,
+        payload_schema_version=ARKIME_STREAM_HISTORY_SCHEMA_VERSION,
+        parameters=ARKIME_STREAM_HISTORY_PARAMETERS,
+        input_kinds=MappingProxyType({
+            "stream_manifest": ("canonical_json_sha256",),
         }),
     ),
 })

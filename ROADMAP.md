@@ -109,6 +109,35 @@ A roadmap item should only be marked complete when:
   requires a separately reviewed identity contract. Phase 6.7 does not claim sensor
   uptime, continuous packet capture, absent traffic or deduplicated passive evidence.
 
+## Arkime durable history as deduplicated retained records — 2026-10-21
+
+- **Planned approach:** Phase 6.10 would collapse repetitive sessions into durable
+  communication summaries across retained Arkime windows.
+- **Revised approach:** build immutable, versioned history generations only from a
+  frozen set of complete automatic API pulls in one exact stream. Repeated records are
+  recognized only by the exact declared Arkime dataset, Network Scope/version, profile
+  authority, source node and session ID. Matching repeated records must agree on every
+  normalized retained field before one counted record can represent their encounters.
+  Manual Sessions imports, communication-summary CSVs, incomplete retained API results,
+  noncomparable streams, records without both identity fields and conflicting copies stay
+  excluded with visible reasons and preserved evidence. Eligibility requires a complete
+  retained API result; its separate capture declaration remains Complete, Partial or
+  Unknown and does not decide eligibility. `rootId` is retained as context and is never
+  substituted for the exact record ID.
+- **Reason and expected impact:** Arkime addresses a saved record by node and session ID
+  and can separately link multiple segments. That supports overlap handling for repeated
+  retained records, but it does not prove a unique real-world connection or deduplicated
+  packets. A declared dataset identity also prevents a replacement Arkime backend at the
+  same URL and username from silently sharing the earlier record namespace.
+- **Follow-up:** reuse the immutable derived-result identity and publication model, add
+  normalized Arkime-specific generation, source, record-membership and path tables for
+  bounded reads, and define a real multi-source work contract before using the shared
+  background queue. Cross-stream aggregation, packet deduplication, linked-segment
+  collapse and claims of unique connections remain deferred.
+  This narrower retained-history rule does not relax Phase 6.7 continuity eligibility or
+  Phase 6.8 recommendation rules and cannot support sensor-uptime, absence, whole-network
+  visibility or complete-capture claims.
+
 ## Separate exact-source Arkime context in Hunt — 2026-10-21
 
 - **Planned approach:** extend the network-wide Hunt request with an optional Arkime
@@ -5608,6 +5637,37 @@ Do not claim a listener is open unless evidence supports that conclusion.
 
 ## 6.10 Communication aggregation
 
+- [x] **2026-10-21 — durable automatic-stream communication history completed.** NCT
+  now builds an immutable history generation from a frozen, verified set of complete retained
+  automatic Arkime API results for one exact dataset, profile authority, Network Scope/version, sensor,
+  query, bounding rule and parser/connector contract. Count a repeated node + session ID
+  once only when every normalized retained field agrees, preserve every source encounter
+  and receipt, and block publication on conflicting copies. The operator view will show
+  the stream identity and retained UTC range first, followed by included, excluded and
+  conflicting source/record counts, a paged communication-path table with retained-history
+  first/last times, Unknown counts and evidence links, then collapsed rankings. Operators
+  can page through older exact streams, communication paths, supporting receipts and
+  excluded retained records without loading an unbounded result. The selected stream and
+  displayed generation stay synchronized across delayed requests, refreshes and selection
+  changes; provenance-mismatched windows cannot offer the history action. Manual
+  imports and summary CSVs remain separate. Independent architecture review returned
+  **CLEAR — DOCUMENTED DEVIATION** and required this to be described as deduplicated
+  retained records rather than unique connections or deduplicated packets. The novice
+  pre-review returned **CLEAR** and selected **Communication History** directly after
+  **Traffic Patterns**, with a Review stream history action on eligible automatic rows.
+  Capture declarations remain independently visible as Complete, Partial or Unknown and
+  do not determine retained-result eligibility. Focused container checks passed **104 tests**
+  with one existing warning, the executable browser regression passed, and the complete
+  Docker suite passed **1,885 tests with 18 environment-dependent skips** and one existing
+  warning. Browser verification at desktop and 980 x 900 guide-open widths confirmed aligned,
+  contained tables, stream-specific reload behavior and no console warnings or errors. The
+  independent final gate returned **CLEAR — DOCUMENTED DEVIATION** after independently
+  verifying the integrity, paging and asynchronous-selection corrections; the novice final
+  review returned **CLEAR**. This history does not change Phase 6.7
+  continuity or Phase 6.8 recommendation eligibility and makes no complete-capture,
+  sensor-uptime, absence or whole-network claim. Capture completeness, unique-connection
+  claims, packet deduplication, cross-stream aggregation and Range acceptance remain outside
+  this milestone.
 - [x] **2026-10-21 — exact-source communication summary extension completed.** The
   existing correlated-path view now pages through every grouped path in one explicitly
   selected Sessions source and keeps the source address, destination address, transport,

@@ -8,6 +8,7 @@ from app.database import configure_database, connect_database, initialize_once_p
 
 
 CASES = [
+    ('arkime_history', 'init_arkime_history_storage', lambda m, p: m.list_arkime_history_streams(p)),
     ('achievements', 'init_achievement_storage', lambda m, p: m.list_achievements(p, owner='alice')),
     ('exposure_reports', 'init_exposure_report_storage', lambda m, p: m.get_exposure_report(p, 'missing')),
     ('host_identities', 'init_host_identity_storage', lambda m, p: m.list_host_identities(p)),
@@ -31,7 +32,7 @@ def test_initialized_views_read_during_writer_without_schema_work(tmp_path, monk
         writer.commit()
         writer.execute('BEGIN IMMEDIATE')
         writer.execute("INSERT INTO writer_probe VALUES ('pending')")
-        def reader(db_path):
+        def reader(db_path, **_kwargs):
             db = connect_database(db_path, read_only=True)
             db.execute('PRAGMA busy_timeout=100')
             forbidden = {sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_CREATE_INDEX,

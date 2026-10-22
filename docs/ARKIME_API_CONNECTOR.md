@@ -19,6 +19,7 @@ The deployment administrator supplies these settings outside the NCT user interf
 | `NCT_ARKIME_API_ENABLED=1` | Enables the connector. |
 | `NCT_ARKIME_API_URL=https://arkime.example:8005` | Arkime Viewer base URL. HTTPS is required. Credentials, query text and fragments are rejected in this URL. |
 | `NCT_ARKIME_API_USERNAME=nct-reader` | Dedicated read-only Arkime account. |
+| `NCT_ARKIME_DATASET_ID=range-arkime-2026` | Administrator-reviewed identity for this Arkime installation and retained-session namespace. Keep it stable while that dataset persists. Change it when the Arkime backend is rebuilt, reset, or replaced. Automatic pulls still work without it, but cross-window Communication History stays unavailable because record IDs cannot be safely compared across an unverified dataset lifetime. |
 | `NCT_ARKIME_API_PASSWORD_FILE=/run/nct-arkime/password` | Range Compose path for the mounted file containing only that account's password. The password is never saved in a pull definition or evidence record. |
 | `NCT_ARKIME_API_CA_FILE=/run/nct-arkime/ca.pem` | Range Compose path for the mounted CA file when the deployment uses its own certificate authority. |
 | `NCT_ARKIME_API_TIMEOUT_SECONDS=30` | Whole-request deadline from 3 to 120 seconds. |
@@ -102,9 +103,34 @@ Loading the page or choosing **Refresh pull status** reads NCT's saved records o
 never contacts Arkime. Failed, interrupted, cancelled, partial and unknown attempts
 remain visible with their retained window and require an explicit operator decision.
 
+## Communication History
+
+After at least one new pull completes with `NCT_ARKIME_DATASET_ID` configured, open
+**Collect / Arkime / Communication History** or choose **Review communication history**
+beside an eligible retained window. The calculation reads retained NCT evidence only;
+it does not contact Arkime. It combines only complete retained API results whose saved
+dataset, pull-definition version, Network Scope version, observation point, query,
+bounding rule, connector contract and parser contract match exactly.
+
+The result shows included and excluded windows, retained-window gaps, excluded records,
+exact repeated copies, unique retained session records, searchable communication paths,
+Unknown packet or byte values and paged source receipts. The same Arkime dataset,
+source node and session ID is counted once only when every retained field agrees. If
+two copies disagree, NCT refuses to publish a replacement and leaves the earlier good
+generation available. One calculation is limited to 1,000 retained pulls and 1,000,000
+session receipts so an ordinary web request cannot grow without a bound.
+
+Here, **Complete** means NCT retained the complete API result. Capture coverage remains
+a separate Complete, Partial or Unknown declaration. First and last times are bounded
+to the included retained records. They do not prove continuous capture, sensor uptime,
+absence of traffic, a successful connection, an open service, current state or
+whole-network visibility. Older pulls without a frozen dataset identity remain visible
+but cannot be silently relabeled and cannot enter cross-window history.
+
 ## Current boundary
 
-This is bounded Tier E session intake. The retained sessions are available for source
-inspection, but they do not yet create Tier A connection records or feed Current
-Network, exact Last Seen, Timeline, Hunt, Reach or Map conclusions. PCAP retrieval and
-live Range compatibility validation remain separate gates.
+This is bounded Tier E session intake with immutable, operator-requested communication
+history over eligible automatic pulls. The retained sessions do not create Tier A
+connection records or feed Current Network, exact Last Seen, Timeline, Reach or Map
+conclusions. The existing exact-source Hunt handoff stays source-bounded. PCAP retrieval
+and live Range compatibility validation remain separate gates.
