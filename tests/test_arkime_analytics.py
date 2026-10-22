@@ -141,13 +141,86 @@ def test_session_analysis_counts_rows_preserves_unknown_and_large_exact_totals(t
     assert path["retained_session_rows"] == 2
     assert path["known_packet_total"] == "18000000000000000000"
     assert path["known_byte_total"] == "9000000000000000000"
+    assert path["first_packet"] == "2030-01-01T00:01:00Z"
+    assert path["last_packet"] == "2030-01-01T00:02:30Z"
+    assert path["first_packet_receipt_ordinals"] == [0]
+    assert path["first_packet_receipt_count"] == 1
+    assert path["first_packet_receipt_references_truncated"] is False
+    assert path["last_packet_receipt_ordinals"] == [1]
+    assert path["last_packet_receipt_count"] == 1
+    assert path["last_packet_receipt_references_truncated"] is False
+    assert path["detected_applications"] == [
+        {
+            "label": "dns", "receipt_ordinals": [0, 1], "receipt_count": 2,
+            "receipt_references_truncated": False,
+        },
+        {
+            "label": "google", "receipt_ordinals": [0], "receipt_count": 1,
+            "receipt_references_truncated": False,
+        },
+    ]
     assert path["filter_clauses"] == [
         {"field": "ip.src", "operator": "==", "value": "10.0.0.5"},
         {"field": "ip.dst", "operator": "==", "value": "8.8.8.8"},
         {"field": "ipProtocol", "operator": "==", "value": "tcp"},
         {"field": "port.dst", "operator": "==", "value": 53},
     ]
+    assert result["communication_aggregation_contract"] == (
+        "arkime-exact-source-paths:1"
+    )
+    assert result["path_pagination"] == {
+        "offset": 0, "limit": 25, "total": 2, "has_more": False,
+    }
+    second_page = analyze_arkime_import(
+        db, imported["import_id"], path_limit=1, path_offset=1,
+    )
+    assert second_page["path_pagination"] == {
+        "offset": 1, "limit": 1, "total": 2, "has_more": False,
+    }
+    assert len(second_page["correlated_paths"]) == 1
+    assert second_page["correlated_paths"][0]["source_ip"] == "10.0.0.7"
+    for invalid_paging in (
+        {"path_limit": 0}, {"path_limit": 101}, {"path_limit": True},
+        {"path_offset": -1}, {"path_offset": True},
+    ):
+        with pytest.raises(ArkimeAnalyticsError):
+            analyze_arkime_import(
+                db, imported["import_id"], **invalid_paging,
+            )
     assert result["read_only"] is True
+
+
+def test_tied_path_times_disclose_truncated_supporting_receipts(tmp_path):
+    db = tmp_path / "nct.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    rows = []
+    for index in range(101):
+        row = _session(
+            index, source="10.0.0.5", destination="8.8.8.8", port=53,
+            applications=["dns"], transport="udp",
+        )
+        row["firstPacket"] = 1893456000000
+        row["lastPacket"] = 1893456030000
+        rows.append(row)
+    imported = import_arkime_sessions_json(
+        db,
+        content=json.dumps({
+            "recordsFiltered": len(rows), "recordsTotal": len(rows), "data": rows,
+        }).encode(),
+        original_filename="tied-times.json", media_type="application/json",
+        scope_id=scope["scope_id"], operator_sensor="sensor", query_start=START,
+        query_end=END, bounding_mode="both", operator_export_assessment="complete",
+        capture_coverage="complete", query_expression="", actor="analyst",
+    )
+
+    path = analyze_arkime_import(db, imported["import_id"])["correlated_paths"][0]
+
+    assert path["first_packet_receipt_ordinals"] == list(range(100))
+    assert path["first_packet_receipt_count"] == 101
+    assert path["first_packet_receipt_references_truncated"] is True
+    assert path["last_packet_receipt_ordinals"] == list(range(100))
+    assert path["last_packet_receipt_count"] == 101
+    assert path["last_packet_receipt_references_truncated"] is True
 
 
 def test_session_paths_add_exact_scope_nmap_context_and_keep_windows_separate(tmp_path):
@@ -640,6 +713,7 @@ def test_traffic_analysis_route_uses_one_exact_import(tmp_path, monkeypatch):
             "/api/arkime/traffic-analysis",
             params={
                 "import_id": imported["import_id"], "limit": 1,
+                "path_limit": 1, "path_offset": 1,
                 "filters": json.dumps([
                     {"field": "port.dst", "operator": "==", "value": 53},
                 ]),
@@ -649,6 +723,9 @@ def test_traffic_analysis_route_uses_one_exact_import(tmp_path, monkeypatch):
     assert response.json()["import_id"] == imported["import_id"]
     assert len(response.json()["top_source_addresses"]) == 1
     assert response.json()["filtered_row_count"] == 2
+    assert response.json()["path_pagination"] == {
+        "offset": 1, "limit": 1, "total": 1, "has_more": False,
+    }
 
     with TestClient(main.app) as client:
         typed = client.get(
@@ -670,7 +747,9 @@ def test_hunt_context_keeps_exact_source_and_separate_claim_boundary(tmp_path):
     scope = create_network_scope(db, label="Range", created_by="admin")
     imported = _import_sessions(db, scope)
 
-    result = build_hunt_arkime_context(db, imported["import_id"], limit=1)
+    result = build_hunt_arkime_context(
+        db, imported["import_id"], limit=1, offset=1,
+    )
 
     assert result["contract"] == "arkime-hunt-context:1"
     assert result["import_id"] == imported["import_id"]
@@ -680,6 +759,12 @@ def test_hunt_context_keeps_exact_source_and_separate_claim_boundary(tmp_path):
     assert result["correlated_path_count"] == 2
     assert len(result["correlated_paths"]) == 1
     assert result["correlated_paths_truncated"] is True
+    assert result["path_pagination"] == {
+        "offset": 1, "limit": 1, "total": 2, "has_more": False,
+    }
+    assert result["communication_aggregation_contract"] == (
+        "arkime-exact-source-paths:1"
+    )
     assert result["raw_url"].endswith(f'/{imported["import_id"]}/raw')
     assert result["claims"] == {
         "creates_current_hosts": False,
@@ -746,7 +831,7 @@ def test_hunt_passive_context_route_is_independent_and_rejects_bad_sources(
         before = client.get("/api/hunting/network").json()
         valid = client.get(
             "/api/hunting/passive-context",
-            params={"import_id": sessions["import_id"], "limit": 1},
+            params={"import_id": sessions["import_id"], "limit": 1, "offset": 1},
         )
         missing = client.get(
             "/api/hunting/passive-context", params={"import_id": "deleted-source"},
@@ -758,6 +843,7 @@ def test_hunt_passive_context_route_is_independent_and_rejects_bad_sources(
 
     assert valid.status_code == 200
     assert valid.json()["import_id"] == sessions["import_id"]
+    assert valid.json()["path_pagination"]["offset"] == 1
     assert missing.status_code == 404
     assert rejected.status_code == 422
     assert "Sessions JSON/API source" in rejected.json()["detail"]

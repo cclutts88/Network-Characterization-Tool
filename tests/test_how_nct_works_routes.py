@@ -108,6 +108,10 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "a destination-port choice keeps its transport and port together" in html
     assert "every source-reported group separate" in html
     assert "never aggregates those groups into top-talker rankings" in html
+    assert "the complete selected source" in html
+    assert "not network-wide First Seen or Last Seen" in html
+    assert "Rankings from this same source" in html
+    assert "does not merge or deduplicate overlapping imports" in html
     assert "It does not contact Arkime, run a live query" in html
     assert "literal reported value named “unknown” remains a separate reported value" in html
     assert "same frozen Network Scope and exact destination address" in html

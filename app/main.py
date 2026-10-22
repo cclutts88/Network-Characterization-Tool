@@ -2247,6 +2247,8 @@ def arkime_coverage_window_history(
 def arkime_retained_traffic_analysis(
     import_id: str,
     limit: int = Query(default=25, ge=1, le=100),
+    path_limit: int = Query(default=25, ge=1, le=100),
+    path_offset: int = Query(default=0, ge=0),
     filters: str | None = Query(default=None, max_length=8192),
     expression: str | None = Query(default=None, max_length=8192),
     match_mode: Literal["all", "any"] = "all",
@@ -2259,7 +2261,7 @@ def arkime_retained_traffic_analysis(
             decoded_filters, match_mode = parse_arkime_filter_expression(expression)
         return analyze_arkime_import(
             DB_PATH, import_id, limit=limit, filters=decoded_filters,
-            match_mode=match_mode,
+            match_mode=match_mode, path_limit=path_limit, path_offset=path_offset,
         )
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail="filters must be valid JSON") from exc
@@ -4345,10 +4347,13 @@ def analyze_hunting_network() -> dict:
 def analyze_hunting_passive_context(
     import_id: str = Query(min_length=1, max_length=200),
     limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ) -> dict:
     """Return one separately selected retained Arkime source for Hunt review."""
     try:
-        return build_hunt_arkime_context(DB_PATH, import_id, limit=limit)
+        return build_hunt_arkime_context(
+            DB_PATH, import_id, limit=limit, offset=offset,
+        )
     except (KeyError, ArkimeAnalyticsError) as exc:
         raise _arkime_error(exc) from exc
 

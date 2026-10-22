@@ -5608,6 +5608,28 @@ Do not claim a listener is open unless evidence supports that conclusion.
 
 ## 6.10 Communication aggregation
 
+- [x] **2026-10-21 — exact-source communication summary extension completed.** The
+  existing correlated-path view now pages through every grouped path in one explicitly
+  selected Sessions source and keeps the source address, destination address, transport,
+  destination port, earliest and latest reported packet times in this source, distinct
+  detected applications, exact packet and byte totals, Unknown counts, and supporting
+  receipts together. Time and application receipts are expandable, disclose when their
+  bounded reference lists are truncated, and keep the full supporting-receipt count.
+  The same source-bound result is available in Arkime and through its exact-source Hunt
+  handoff. Rankings remain secondary and collapsed. Browser checks confirmed aligned,
+  contained tables, paging controls and evidence explanations in both workspaces with no
+  console warnings or errors; backend and executable-runtime tests covered multi-page
+  traversal because the preview contained four paths. The focused container checks passed
+  **102 tests** with one existing
+  warning, both executable browser regressions passed, and the complete Docker suite
+  passed **1,871 tests with 18 environment-dependent skips** and one existing warning.
+  The independent final gate returned **CLEAR — DOCUMENTED DEVIATION** after finding and
+  verifying the correction for silently truncated tied time receipts; the novice final
+  review returned **CLEAR**. This remains the versioned `arkime-exact-source-paths:1`
+  read-only calculation over one retained import. It does not merge overlapping windows,
+  deduplicate sessions, persist a cross-window traffic identity, or promote potentially
+  overlapping communication-summary CSV groups. Durable cross-window summaries remain
+  downstream work.
 - [~] **2026-10-21 — operator-facing Arkime traffic analysis started.** Build
   bounded, read-only views for exact retained evidence that explain top source and
   destination talkers, frequently contacted external addresses, destination-port

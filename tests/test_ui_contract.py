@@ -1059,11 +1059,17 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert "ip.src == 10.50.15.10 &amp;&amp; port.dst == 443" in html
     assert "Last applied clauses" in html
     assert "The last applied clauses and results remain unchanged below" in html
-    assert "Correlated communication paths" in html
-    assert 'aria-label="Correlated Arkime communication paths"' in html
+    assert "Communication paths in this retained source" in html
+    assert 'aria-label="Communication paths in selected retained Arkime source"' in html
+    assert "First / last seen in this source (UTC)" in html
+    assert "Detected applications" in html
+    assert "first_packet_receipt_count" in html
+    assert "first 100" in html
+    assert "Rankings from this same source" in html
+    assert "path_offset" in html
     assert "Analyze one retained Arkime source" in SHELL_SCRIPT
     assert "Type an exact Arkime-style retained-data expression" in SHELL_SCRIPT
-    assert "correlated communication-path table" in SHELL_SCRIPT
+    assert "The paged communication-path table" in SHELL_SCRIPT
     assert "same Network Scope and exact destination service" in SHELL_SCRIPT
     assert "Observed / Scan Mismatch compare retained reports" in SHELL_SCRIPT
     assert "Every individual session path is labeled Passively observed" in SHELL_SCRIPT
@@ -1408,6 +1414,10 @@ def test_hunt_can_open_one_exact_arkime_source_without_merging_it_into_inventory
     assert "/hunting?arkime=${encodeURIComponent(data.import_id)}#huntOverview" in arkime
     assert "requestedAnalysis" in arkime
     assert "Review one Arkime source in Hunt" in SHELL_SCRIPT
+    assert "earliest and latest packet time in this source" in SHELL_SCRIPT
+    assert "The paged communication-path table" in SHELL_SCRIPT
+    assert "not network-wide First Seen or Last Seen" in SHELL_SCRIPT
+    assert "Separate or overlapping imports are not merged or deduplicated" in SHELL_SCRIPT
     assert "Choosing a focused scan in Hunt removes the passive selection" in SHELL_SCRIPT
     assert "huntOverview:['passiveContextPanel','huntEvidenceOverview'" in SHELL_SCRIPT
     assert "separate communication-context panel" in guide

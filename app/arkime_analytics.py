@@ -436,7 +436,9 @@ def _filter_expression(filters: list[dict], match_mode: str) -> str:
     return (" && " if match_mode == "all" else " || ").join(parts)
 
 
-def _correlated_paths(rows: list[sqlite3.Row], limit: int) -> list[dict]:
+def _correlated_paths(
+    rows: list[sqlite3.Row], limit: int, offset: int = 0,
+) -> tuple[list[dict], int]:
     groups: dict[tuple, list[sqlite3.Row]] = {}
     for row in rows:
         key = (
@@ -449,6 +451,33 @@ def _correlated_paths(rows: list[sqlite3.Row], limit: int) -> list[dict]:
         packets, missing_packets = _known_sum(grouped_rows, "packet_count")
         byte_count, missing_bytes = _known_sum(grouped_rows, "byte_count")
         ordinals = sorted(int(row["source_ordinal"]) for row in grouped_rows)
+        first_values = [
+            (_parse_utc(row["first_packet"]), int(row["source_ordinal"]))
+            for row in grouped_rows
+        ]
+        last_values = [
+            (_parse_utc(row["last_packet"]), int(row["source_ordinal"]))
+            for row in grouped_rows
+        ]
+        valid_first = [(value, ordinal) for value, ordinal in first_values if value]
+        valid_last = [(value, ordinal) for value, ordinal in last_values if value]
+        earliest = min((value for value, _ in valid_first), default=None)
+        latest = max((value for value, _ in valid_last), default=None)
+        earliest_ordinals = sorted(
+            ordinal for value, ordinal in valid_first if value == earliest
+        )
+        latest_ordinals = sorted(
+            ordinal for value, ordinal in valid_last if value == latest
+        )
+        applications: dict[str, set[int]] = {}
+        for row in grouped_rows:
+            ordinal = int(row["source_ordinal"])
+            try:
+                labels = _json_values(row["applications_json"])
+            except (TypeError, ValueError):
+                labels = []
+            for label in labels:
+                applications.setdefault(str(label), set()).add(ordinal)
         paths.append({
             "source_ip": source_ip,
             "destination_ip": destination_ip,
@@ -459,6 +488,35 @@ def _correlated_paths(rows: list[sqlite3.Row], limit: int) -> list[dict]:
             "packet_rows_missing": missing_packets,
             "known_byte_total": byte_count,
             "byte_rows_missing": missing_bytes,
+            "first_packet": (
+                earliest.isoformat().replace("+00:00", "Z") if earliest else None
+            ),
+            "last_packet": (
+                latest.isoformat().replace("+00:00", "Z") if latest else None
+            ),
+            "first_packet_receipt_ordinals": earliest_ordinals[:MAX_RECEIPT_REFS],
+            "first_packet_receipt_count": len(earliest_ordinals),
+            "first_packet_receipt_references_truncated": (
+                len(earliest_ordinals) > MAX_RECEIPT_REFS
+            ),
+            "last_packet_receipt_ordinals": latest_ordinals[:MAX_RECEIPT_REFS],
+            "last_packet_receipt_count": len(latest_ordinals),
+            "last_packet_receipt_references_truncated": (
+                len(latest_ordinals) > MAX_RECEIPT_REFS
+            ),
+            "detected_applications": [
+                {
+                    "label": label,
+                    "receipt_ordinals": sorted(application_ordinals)[:MAX_RECEIPT_REFS],
+                    "receipt_count": len(application_ordinals),
+                    "receipt_references_truncated": (
+                        len(application_ordinals) > MAX_RECEIPT_REFS
+                    ),
+                }
+                for label, application_ordinals in sorted(
+                    applications.items(), key=lambda item: (item[0].casefold(), item[0]),
+                )
+            ],
             "receipt_ordinals": ordinals[:MAX_RECEIPT_REFS],
             "receipt_count": len(ordinals),
             "receipt_references_truncated": len(ordinals) > MAX_RECEIPT_REFS,
@@ -474,7 +532,7 @@ def _correlated_paths(rows: list[sqlite3.Row], limit: int) -> list[dict]:
         item["destination_ip"] or "", item["transport"] or "",
         -1 if item["destination_port"] is None else item["destination_port"],
     ))
-    return paths[:limit]
+    return paths[offset:offset + limit], len(paths)
 
 
 def _parse_utc(value: object) -> datetime | None:
@@ -742,7 +800,10 @@ def _attach_active_context(
         }
 
 
-def _session_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) -> dict:
+def _session_analysis(
+    record: sqlite3.Row, rows: list[sqlite3.Row], limit: int,
+    path_limit: int, path_offset: int,
+) -> dict:
     sources, source_labels = _group(
         rows, lambda row: (
             row["source_ip"] or "unknown", row["source_ip"] or "Unknown source address",
@@ -801,6 +862,9 @@ def _session_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) 
     public = {
         key: group for key, group in destinations.items() if _public_destination(key)
     }
+    correlated_paths, correlated_path_count = _correlated_paths(
+        rows, path_limit, path_offset,
+    )
     return {
         "analysis_mode": "individual_session_rows",
         "metric_definition": (
@@ -847,18 +911,21 @@ def _session_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) 
             vlans, vlan_labels, limit, filter_field="vlan",
             filter_values={key: None if key == "unknown" else int(key) for key in vlans},
         ),
-        "correlated_paths": _correlated_paths(rows, limit),
-        "correlated_path_count": len({
-            (row["source_ip"], row["destination_ip"], row["transport"], row["destination_port"])
-            for row in rows
-        }),
-        "correlated_paths_truncated": len({
-            (row["source_ip"], row["destination_ip"], row["transport"], row["destination_port"])
-            for row in rows
-        }) > limit,
+        "communication_aggregation_contract": "arkime-exact-source-paths:1",
+        "correlated_paths": correlated_paths,
+        "correlated_path_count": correlated_path_count,
+        "correlated_paths_truncated": correlated_path_count > path_limit,
+        "path_pagination": {
+            "offset": path_offset,
+            "limit": path_limit,
+            "total": correlated_path_count,
+            "has_more": path_offset + len(correlated_paths) < correlated_path_count,
+        },
         "correlation_note": (
             "Each path groups individual retained session rows by source address, "
-            "destination address, transport and destination port."
+            "destination address, transport and destination port from this one selected "
+            "source. First and last times are the earliest and latest reported packet "
+            "times in this source; they are not network-wide First Seen or Last Seen."
         ),
         "reported_groups": [],
         "category_note": (
@@ -916,9 +983,13 @@ def _summary_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) 
         "transport_activity": [],
         "application_activity": [],
         "vlan_activity": [],
+        "communication_aggregation_contract": None,
         "correlated_paths": [],
         "correlated_path_count": 0,
         "correlated_paths_truncated": False,
+        "path_pagination": {
+            "offset": 0, "limit": limit, "total": 0, "has_more": False,
+        },
         "correlation_note": (
             "Communication-summary rows remain separate below because their reported "
             "groups can overlap; NCT does not add them into correlated path totals."
@@ -939,12 +1010,19 @@ def _summary_analysis(record: sqlite3.Row, rows: list[sqlite3.Row], limit: int) 
 
 def analyze_arkime_import(
     db_path: Path, import_id: str, *, limit: int = 25,
-    filters=None, match_mode: str = "all",
+    filters=None, match_mode: str = "all", path_limit: int | None = None,
+    path_offset: int = 0,
 ) -> dict:
     if not isinstance(import_id, str) or not import_id.strip():
         raise ArkimeAnalyticsError("import_id is required")
     if type(limit) is not int or not 1 <= limit <= MAX_RESULTS:
         raise ArkimeAnalyticsError(f"limit must be between 1 and {MAX_RESULTS}")
+    if path_limit is None:
+        path_limit = limit
+    if type(path_limit) is not int or not 1 <= path_limit <= MAX_RESULTS:
+        raise ArkimeAnalyticsError(f"path_limit must be between 1 and {MAX_RESULTS}")
+    if type(path_offset) is not int or path_offset < 0:
+        raise ArkimeAnalyticsError("path_offset must be zero or greater")
     normalized_filters = _normalize_filters(filters)
     if not isinstance(match_mode, str) or match_mode not in {"all", "any"}:
         raise ArkimeAnalyticsError("match_mode must be all or any")
@@ -976,7 +1054,9 @@ def analyze_arkime_import(
                 ).fetchall()
                 unfiltered_row_count = len(rows)
                 rows = _apply_filters(rows, "sessions_json", normalized_filters, match_mode)
-                analysis = _session_analysis(session, rows, limit)
+                analysis = _session_analysis(
+                    session, rows, limit, path_limit, path_offset,
+                )
                 _attach_active_context(db, session, analysis["correlated_paths"])
                 analysis["active_context_contract"] = "arkime-active-context:1"
                 analysis["active_context_note"] = (
@@ -1046,10 +1126,12 @@ def analyze_arkime_import(
 
 
 def build_hunt_arkime_context(
-    db_path: Path, import_id: str, *, limit: int = 25,
+    db_path: Path, import_id: str, *, limit: int = 25, offset: int = 0,
 ) -> dict:
     """Return one exact retained Sessions source for the separate Hunt context panel."""
-    analysis = analyze_arkime_import(db_path, import_id, limit=limit)
+    analysis = analyze_arkime_import(
+        db_path, import_id, limit=limit, path_limit=limit, path_offset=offset,
+    )
     if analysis["source_kind"] != "sessions_json":
         raise ArkimeAnalyticsError(
             "Hunt passive context accepts one retained Sessions JSON/API source. "
@@ -1074,6 +1156,10 @@ def build_hunt_arkime_context(
         "correlated_paths": analysis["correlated_paths"],
         "correlated_path_count": analysis["correlated_path_count"],
         "correlated_paths_truncated": analysis["correlated_paths_truncated"],
+        "path_pagination": analysis["path_pagination"],
+        "communication_aggregation_contract": analysis[
+            "communication_aggregation_contract"
+        ],
         "correlation_note": analysis["correlation_note"],
         "active_context_contract": analysis["active_context_contract"],
         "active_context_note": analysis["active_context_note"],
