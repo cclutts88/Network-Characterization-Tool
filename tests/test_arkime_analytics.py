@@ -15,6 +15,7 @@ from app.arkime_analytics import (
 )
 from app.arkime_evidence import import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
+from app.database import connect_database
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
 from app.foundation_evidence import get_foundation_scope_evidence
 from app.network_scopes import archive_network_scope, create_network_scope
@@ -172,6 +173,9 @@ def test_session_paths_add_exact_scope_nmap_context_and_keep_windows_separate(tm
 
     assert result["active_context_contract"] == "arkime-active-context:1"
     assert context["status"] == "reported_open_and_observed"
+    assert context["passive_observation"]["status"] == "passively_observed"
+    assert context["passive_observation"]["label"] == "Passively observed"
+    assert context["active_validation"] is None
     assert context["reported_state"] == "open"
     assert context["reported_basis"] == "explicit"
     assert context["scope_id"] == range_scope["scope_id"]
@@ -216,7 +220,17 @@ def test_path_context_does_not_cross_scopes_and_preserves_scope_correction(tmp_p
         capture_coverage="complete", query_expression="", actor="analyst",
     )
     before = analyze_arkime_import(db, imported["import_id"])
-    assert before["correlated_paths"][0]["active_context"]["status"] == "passive_only_in_scope"
+    passive_only = before["correlated_paths"][0]["active_context"]
+    assert passive_only["status"] == "passive_only_in_scope"
+    assert passive_only["passive_observation"]["label"] == "Passively observed"
+    assert passive_only["active_validation"]["status"] == "not_actively_validated"
+    assert passive_only["active_validation"]["label"] == "Not actively validated"
+    assert "same Network Scope" in passive_only["active_validation"]["reason"]
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM endpoint_entities WHERE scope_id=?",
+            (first["scope_id"],),
+        ).fetchone()[0] == 0
 
     corrected = correct_artifact_scope(
         db, expected_assignment_id=assignment["assignment_id"],
@@ -269,6 +283,8 @@ def test_path_context_resolves_exact_service_beyond_page_and_aggregate_omission(
     aggregate = analyze_arkime_import(db, aggregate_import["import_id"])
     aggregate_context = aggregate["correlated_paths"][0]["active_context"]
     assert aggregate_context["status"] == "observed_scan_mismatch"
+    assert aggregate_context["passive_observation"]["label"] == "Passively observed"
+    assert aggregate_context["active_validation"] is None
     assert aggregate_context["reported_state"] == "closed"
     assert aggregate_context["reported_basis"] == "aggregate"
 
@@ -333,10 +349,13 @@ def test_path_context_preserves_unresolved_sources_and_missing_fields(tmp_path):
     by_port = {item["destination_port"]: item["active_context"]
                for item in result["correlated_paths"]}
     assert by_port[443]["status"] == "active_state_unresolved"
+    assert by_port[443]["active_validation"]["label"] == "Not actively validated"
     assert {item["source_ref"] for item in by_port[443]["active_sources"]} == {
         "upload:overlap-0", "upload:overlap-1",
     }
     assert by_port[None]["status"] == "insufficient_path_fields"
+    assert by_port[None]["passive_observation"]["label"] == "Passively observed"
+    assert by_port[None]["active_validation"]["label"] == "Not actively validated"
     assert by_port[None]["selection_revision"] is None
     assert by_port[444]["status"] == "insufficient_path_fields"
 
@@ -363,6 +382,7 @@ def test_path_context_keeps_unknown_nmap_time_unresolved(tmp_path):
         "active_context"
     ]
     assert context["status"] == "active_state_unresolved"
+    assert context["active_validation"]["status"] == "not_actively_validated"
     assert len(context["active_sources"]) == 2
     assert context["evidence_windows"]["relationship"] == "unknown"
 

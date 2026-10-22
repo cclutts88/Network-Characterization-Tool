@@ -579,6 +579,32 @@ def _active_label(service: dict, selection: dict) -> tuple[str, str, str]:
     )
 
 
+def _path_characterization(status: str, reason: str) -> dict:
+    result = {
+        "passive_observation": {
+            "status": "passively_observed",
+            "label": "Passively observed",
+            "reason": (
+                "This exact retained Arkime source reported one or more individual "
+                "session rows for this communication path."
+            ),
+        },
+        "active_validation": None,
+    }
+    if status in {
+        "passive_only_in_scope",
+        "insufficient_path_fields",
+        "not_actively_assessed",
+        "active_state_unresolved",
+    }:
+        result["active_validation"] = {
+            "status": "not_actively_validated",
+            "label": "Not actively validated",
+            "reason": reason,
+        }
+    return result
+
+
 def _attach_active_context(
     db: sqlite3.Connection,
     record: sqlite3.Row,
@@ -644,14 +670,16 @@ def _attach_active_context(
             },
         }
         if destination_endpoint is None:
+            reason = (
+                "No supported processed Nmap endpoint exists for this destination "
+                "address in the same Network Scope. This does not mean it was never scanned."
+            )
             path["active_context"] = {
                 **base,
                 "status": "passive_only_in_scope",
                 "label": "Passive only in this scope",
-                "reason": (
-                    "No supported processed Nmap endpoint exists for this destination "
-                    "address in the same Network Scope. This does not mean it was never scanned."
-                ),
+                "reason": reason,
+                **_path_characterization("passive_only_in_scope", reason),
                 "reported_state": None,
                 "selection_revision": None,
                 "active_source": None,
@@ -666,14 +694,16 @@ def _attach_active_context(
             or type(port) is not int
             or not 0 <= port <= 65535
         ):
+            reason = (
+                "This retained path has no supported exact transport and destination "
+                "port, so NCT cannot compare it with Nmap service coverage."
+            )
             path["active_context"] = {
                 **base,
                 "status": "insufficient_path_fields",
                 "label": "Not actively assessed",
-                "reason": (
-                    "This retained path has no supported exact transport and destination "
-                    "port, so NCT cannot compare it with Nmap service coverage."
-                ),
+                "reason": reason,
+                **_path_characterization("insufficient_path_fields", reason),
                 "reported_state": None,
                 "selection_revision": None,
                 "active_source": None,
@@ -702,6 +732,7 @@ def _attach_active_context(
             "status": status,
             "label": label,
             "reason": reason,
+            **_path_characterization(status, reason),
             "reported_state": service.get("reported_state"),
             "reported_basis": service.get("basis"),
             "selection_revision": selection["selection_revision"],

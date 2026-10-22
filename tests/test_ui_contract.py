@@ -1066,9 +1066,12 @@ def test_arkime_summary_intake_keeps_grouped_counts_separate_and_explains_limits
     assert "correlated communication-path table" in SHELL_SCRIPT
     assert "same Network Scope and exact destination service" in SHELL_SCRIPT
     assert "Observed / Scan Mismatch compare retained reports" in SHELL_SCRIPT
-    assert "Passive only means no supported processed Nmap endpoint" in SHELL_SCRIPT
+    assert "Every individual session path is labeled Passively observed" in SHELL_SCRIPT
+    assert "Not actively validated means" in SHELL_SCRIPT
     assert "Retained Nmap context" in html
-    assert "Why this label and when the evidence was collected" in html
+    assert "Why these labels and when the evidence was collected" in html
+    assert "Passively observed" in html
+    assert "Not actively validated" in html
     assert "Open exact Nmap source" in html
     assert "A retained-window gap is an NCT evidence gap" in html
     assert 'id="coverageRecommendationStream"' in html
@@ -1391,6 +1394,9 @@ def test_hunt_can_open_one_exact_arkime_source_without_merging_it_into_inventory
     assert "/api/hunting/passive-context?import_id=" in hunt
     assert "Selected Arkime communication context" in hunt
     assert "Retained Nmap context" in hunt
+    assert "Passively observed" in hunt
+    assert "Not actively validated" in hunt
+    assert "Why these labels and which sources support them" in hunt
     assert "Exact evidence" in hunt
     assert "Network Evidence remains independent" in hunt
     assert "did not substitute another import" in hunt

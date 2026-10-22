@@ -108,6 +108,17 @@ await eval(`(async () => {
   assert.match(controls.get('huntSubtitle').textContent,/focused scan Network Evidence/);
 })()`);
 
+await eval(`(() => {
+  const esc=value=>String(value??'');
+  ${syncHandler("passiveNmapContext")}
+  const context={label:'Passive only in this scope',reported_state:null,passive_observation:{status:'passively_observed',label:'Passively observed',reason:'This exact retained Arkime source reported this path.'},active_validation:{status:'not_actively_validated',label:'Not actively validated',reason:'No supported same-scope endpoint exists.'},active_sources:[],active_source:null,evidence_windows:{passive:{start:'2030-01-01T00:00:00Z',end:'2030-01-01T01:00:00Z'},active:null,note:'The evidence windows remain separate.'},reason:'No supported same-scope endpoint exists.'};
+  const html=passiveNmapContext(context);
+  assert.ok(html.includes('Passively observed'),'Hunt must show the passive observation characterization');
+  assert.ok(html.includes('Not actively validated'),'Hunt must show the missing active validation characterization');
+  assert.ok(html.includes('Passive only in this scope'),'Hunt must preserve the specific active-context status');
+  assert.ok(html.includes('Arkime window (UTC)'),'Hunt must retain the exact passive window');
+})()`);
+
 await eval(`(async () => {
   let passiveContext=null,passiveRevision=0,passiveRequestController=null;
   const requests=[];

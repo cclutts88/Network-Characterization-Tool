@@ -5576,6 +5576,27 @@ Track:
 
 ## 6.9 Passive-only characterization
 
+- [x] **2026-10-21 — operator-visible passive-only characterization completed.**
+  Reuse the existing read-only, exact-source communication paths in Arkime and Hunt.
+  Every individual Sessions path will say **Passively observed** and retain its exact
+  receipts and window. When the same frozen Network Scope has no defensible exact
+  destination-service assessment, it will also say **Not actively validated** and keep
+  the specific missing-endpoint, missing-path-field, missing-coverage or unresolved-time
+  reason. Existing reported-open, mismatch and unresolved Nmap explanations remain
+  separate. Communication summaries remain excluded because their reported groups can
+  overlap. This slice does not create canonical passive hosts or services and does not
+  change inventory, CVEs, exports, Reach or Map.
+  - Exact-source backend and UI coverage passed **101 focused tests**, both Arkime and
+    Hunt JavaScript runtime suites, Python compilation and whitespace checks. A live
+    browser walkthrough confirmed the two labels, the retained reason, separate source
+    windows and receipts in both views; the aggregate rankings stayed neutral and the
+    browser console remained clear. The complete Docker regression suite passed
+    **1,870 tests with 18 environment-dependent skips** and one existing warning.
+  - The novice operator returned **CLEAR**. The independent quality gate returned
+    **CLEAR — DOCUMENTED DEVIATION** because this is intentionally operator-visible
+    retained-path characterization; canonical passive host/service creation and live
+    active validation remain outside this slice.
+
 A host/port relationship can exist based solely on passive evidence.
 
 Label clearly:

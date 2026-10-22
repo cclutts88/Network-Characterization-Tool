@@ -112,6 +112,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "literal reported value named “unknown” remains a separate reported value" in html
     assert "same frozen Network Scope and exact destination address" in html
     assert "Observed / Scan Mismatch" in html
+    assert "Passively observed" in html
+    assert "Not actively validated" in html
     assert "Passive only in this scope" in html
     assert "does not mean the address was never scanned" in html
     assert "Observed packets do not prove that a connection succeeded" in html
