@@ -19,6 +19,42 @@ The included scripts do the Docker work for you. They:
 
 Do not manually delete the current `nct` container or the `nct-data` volume.
 
+## Diagnose an unhealthy installation before recovery
+
+If NCT is stopped, unhealthy, or repeatedly restarting, do not begin by deleting
+or recreating it. From the extracted package directory, run:
+
+```sh
+cd "$NCT_WORKDIR"
+sh scripts/nct-diagnostic-report.sh
+```
+
+The command works with running, stopped, and restarting containers and does not
+stop, restart, reset, repair, migrate, or upload anything. It stores an owner-only
+text report, JSON companion, and checksum in a fresh private child directory under
+`/var/lib/nct/deployment/diagnostics`. The screen prints the exact paths, size,
+SHA-256, completeness, and safe next step. An existing parent directory keeps its
+current permissions.
+
+If the saved container has another name, identify that exact name first and run:
+
+```sh
+sh scripts/nct-diagnostic-report.sh --container EXACT_CONTAINER_NAME
+```
+
+If the default name is missing and several NCT-looking containers exist, the
+command lists candidates and stops instead of guessing. If Docker or the target
+container cannot be identified safely, the partial result and next step appear in
+the terminal and no report directory is created. After NCT's data location has
+been verified, a partial result includes the text report, JSON companion and
+checksum and records why the exact image, storage, or database could not be checked.
+Keep NCT data, locks, WAL files, evidence, and database rows unchanged while an
+administrator reviews it. The report excludes credentials, environment secret
+values, raw logs, raw device configurations, raw evidence, and raw database rows.
+Only bounded log signal counts are retained; review paths, IP addresses and
+timestamps before sharing. Docker queries and helper runs have fixed deadlines so
+an unavailable runtime cannot leave the diagnostic hanging indefinitely.
+
 ## Before you begin
 
 You need:

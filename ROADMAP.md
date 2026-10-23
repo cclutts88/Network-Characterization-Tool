@@ -134,6 +134,100 @@ A roadmap item should only be marked complete when:
   job and the unchanged sample XML hash. Browser opened verified saved analysis
   without preparation, with no browser error logs. Implementation stops here.
 
+## Teams requested-fix integration — resumed 2026-10-23
+
+- [x] **R22 diagnostic-first recovery report complete.** Add one administrator command
+  that can inspect a running, stopped or restarting NCT container without opening the
+  saved database for writes. Save a private report containing the exact image/build,
+  container state, saved port and mount configuration, host and data-storage capacity,
+  bounded recent logs, database integrity and read-only unfinished-work summaries. Do
+  not include passwords, environment secret values or raw retained evidence by default.
+  The command must explain where the report was saved and give next steps tied to the
+  observed state. Test stopped-container data, restart loops, missing or restricted
+  runtime access and both bind-folder and named-volume storage.
+  **Documented safety deviation:** the initial design proposed sanitized recent-log
+  excerpts. The report instead retains only bounded signal counts because arbitrary log
+  text can contain unlabeled credentials that no redaction pattern can safely guarantee
+  to remove. Before any report path is created, the wrapper identifies the exact
+  container and proves that the requested report root does not overlap retained data.
+  Preflight failures therefore print a partial result and next step to the terminal;
+  once separation is proved, every complete or partial saved result contains a private
+  text report, JSON companion and checksum in a new owner-only child directory. Docker
+  probes and image helpers have deadlines, and all database summaries share one explicit
+  read transaction so they describe a coherent saved snapshot.
+  **Completion evidence (2026-10-23):** the focused diagnostic, Guide and UI suite passes
+  **104 tests**; the clean full suite passes **1,950 tests with 18 skipped** and one
+  dependency warning. Real isolated Docker checks covered stopped named-volume storage,
+  an exact-image report, a refused retained-data overlap, forced helper timeouts, valid
+  text/JSON/checksum output, private file modes, unchanged database hashes and zero
+  remaining diagnostic helpers. A failed helper removal keeps the exact helper identity
+  and private probe path; a final cleanup retry may remove that helper, but the recorded
+  workspace remains until the administrator follows the report. The rebuilt browser
+  Guide was checked with a clean console. Independent gate: **CLEAR — DOCUMENTED
+  DEVIATION** for bounded log-signal summaries in place of unsafe arbitrary log excerpts
+  and for terminal-only results before storage separation is proved. Novice gate:
+  **CLEAR**. This is committed development work only; it does not reset unfinished work,
+  change the installed Range, or claim mission readiness.
+- [ ] **R23 evidence-preserving reset unfinished work.** Begin only after R22 can capture
+  the pre-reset state. Keep this separate from fresh installation; require a verified cold
+  backup, preserve completed evidence and refuse unfamiliar work or unresolved migration.
+  Add scan-work self-diagnosis that automatically detects impossible or stranded active,
+  queued, and scheduled states, preserves a diagnostic record, and blocks additional scan
+  dispatch while the condition is unresolved. On Active Scans, show the exact affected
+  work and reasons, then offer an administrator-confirmed reset of only the proven
+  unfinished records. Reconcile only strictly provable stale bookkeeping automatically;
+  uncertain network contact remains interrupted for human review. Keep the host-side
+  recovery path available when the application cannot start, because an in-tool control
+  cannot repair an unavailable UI. Recover all eligible affected scans together: retain
+  each frozen target, profile, scope, ownership, queue order, schedule occurrence, and
+  completed target-batch history; queue only work that remains. Recheck current No-Strike,
+  mission authorization, scope, and analyzer availability before contact. Preserve any
+  possibly active attempt as Interrupted and create a separately traceable retry only
+  after review rather than treating partial output as a clean completion. The preview must
+  identify every salvageable and excluded item with its reason so operators do not have
+  to rebuild a large queue manually.
+- [ ] **R24 explicit fresh installation.** Begin only after the diagnostic and reset
+  boundaries are complete. Preview the exact NCT data that will be isolated, verify a
+  separately stored backup and require explicit destructive confirmation. Preserve
+  unrelated installations and document TLS/network-setting treatment and restoration.
+- The remaining R01–R21 requests stay tracked in
+  `docs/NCT_SCHEDULE_INCIDENT_AND_FIX_HANDOFF_2026-10-23.md`. After R22–R24, implement
+  reliability and evidence-correctness items before navigation/presentation work, then
+  plan STIG, reviewed neighbor collection and image-integrity capabilities as separately
+  gated milestones. No handoff item is accepted as fixed without current-code reproduction
+  or evidence that an existing implementation already satisfies it.
+- [ ] **Later operator library navigation.** Add a hamburger **Evidence Library** that
+  puts retained Nmap scans and device-pull evidence in one searchable, filterable catalog
+  while preserving each record's provenance and read-only source access. Add a separate
+  administrator **NCT Configuration & Source** area (the clarified form of the requested
+  “Configurations & Code” entry) for read-only inspection of NCT's own approved
+  configuration examples and application source. Bind displayed files to the installed
+  build with a packaged hash manifest and use an explicit file allowlist; exclude secrets,
+  credentials, runtime environment values and arbitrary host filesystem browsing. Keep
+  its access separate from analyst Evidence Library access. Each listed file must show
+  its exact, copyable packaged/container path and build identity so an authorized analyst
+  can locate the same file directly without the page becoming a filesystem browser. This
+  is recorded for later and does not interrupt R22–R24 reliability work.
+- [ ] **Later single-scope operating mode.** Add an explicit administrator opt-in for
+  installations with exactly one Network Scope available for new evidence and no reused
+  or overlapping address space across sites, tenants, labs, missions, VPN contexts or
+  disconnected ranges. Record the administrator, acknowledgment, exact scope revision,
+  effective time and later changes. Eligible new scans, imports and device evidence may
+  then freeze that authorized default at intake and label the resulting assignment as
+  automatic; this is a durable operator decision, not scope inference. Hide redundant
+  selectors and filters but always show `Network Scope: NAME · assigned automatically`
+  with a Settings path on collection, evidence, analysis, comparison and export views.
+  Never rewrite historical, unscoped, differently scoped, mixed-context or unresolved
+  evidence. Creating or reactivating another scope, archiving the selected scope or
+  invalidating its authority must stop automatic assignment atomically without changing
+  earlier records; returning to one scope requires a new opt-in. Preserve No-Strike,
+  authorization, target, capture-coverage and physical-identity boundaries. Require
+  concurrency, restart, queued-work, second-scope, archived-scope, mixed-context and
+  historical-preservation tests. Independent architecture gate: **CLEAR — DOCUMENTED
+  DEVIATION** from per-intake selection to an audited administrator-authorized default;
+  novice design gate: **CLEAR** with a persistent scope indicator and explicit plain-
+  language acknowledgment. This remains later work and does not interrupt R22–R24.
+
 ## Arkime next-forward recommendation without historical repair or deduplication — 2026-10-21
 
 - **Planned approach:** Phase 6.8 would generate the smallest useful next collection

@@ -10,6 +10,41 @@ The authoritative instructions are in
 This file is a short reference for the scripts and must not replace the required
 preflight and acceptance steps.
 
+## Diagnose before changing anything
+
+When NCT is unhealthy, stopped, or repeatedly restarting, collect a read-only
+report before choosing a recovery action:
+
+```bash
+sh scripts/nct-diagnostic-report.sh
+```
+
+The default container is `nct`. To inspect another exact saved container or put
+the report in another private absolute directory:
+
+```bash
+sh scripts/nct-diagnostic-report.sh --container CONTAINER_NAME --output-dir /PRIVATE/REPORT/DIRECTORY
+```
+
+The command reads saved container settings, bounded log signal counts, storage
+capacity, and database/work counts through the container's exact local image. It
+works while the container is running, stopped, or restarting. It does not stop,
+restart, reset, repair, migrate, or upload anything. The report, JSON companion,
+and checksum are owner-only and are stored in a fresh private child directory
+under `/var/lib/nct/deployment/diagnostics` by default. An existing report-root
+directory keeps its current permissions.
+
+The summary uses **OK**, **Needs attention**, and **Not checked — reason**. Preserve
+the report and follow its state-specific next step. Do not delete a container,
+database, WAL file, lock, or evidence during diagnosis. The report excludes
+passwords, tokens, environment values, raw log text, raw device configurations,
+raw evidence, and raw database rows. It can still contain container names, host
+paths, IP addresses, timestamps, and log signal counts, so review it before
+sharing. Every Docker query has a deadline. If Docker or the target container
+cannot be identified safely, the command prints a partial result and next step
+to the terminal without creating a report directory whose separation from NCT
+data has not yet been proved.
+
 1. Confirm Docker is available:
 
    ```bash

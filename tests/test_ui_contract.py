@@ -144,6 +144,12 @@ def test_system_health_explains_bounded_calculation_status():
     assert "kubernetesMetricsGuide:['Optional pod resource measurements'" in SHELL_SCRIPT
     assert "kubernetesStatusMeaningSummary:['Kubernetes status terms'" in SHELL_SCRIPT
     assert "summary,[data-guide-context]" in SHELL_SCRIPT
+    assert "[data-guide-context=\"safe-diagnostics\"]" in SHELL_SCRIPT
+    assert "Diagnose without changing NCT" in SHELL_SCRIPT
+    assert "does not stop, restart, reset, repair, migrate, or upload NCT" in SHELL_SCRIPT
+    assert "bounded log signal counts" in SHELL_SCRIPT
+    assert "Raw log text is excluded" in SHELL_SCRIPT
+    assert "partial result appears only in the terminal" in SHELL_SCRIPT
     assert "Opening this disclosure only reveals help text" in SHELL_SCRIPT
     assert "never receives a Kubernetes API token" in guide
     assert "it never means zero Pods or a failed deployment" in guide

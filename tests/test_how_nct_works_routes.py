@@ -218,6 +218,12 @@ def test_readme_route_is_available_to_every_authenticated_role(tmp_path, monkeyp
             response = client.get("/help/how-nct-works")
             assert response.status_code == 200
             assert "How NCT works" in response.text
+            assert "Diagnose without changing NCT" in response.text
+            assert "sh scripts/nct-diagnostic-report.sh" in response.text
+            assert "bounded log signal counts" in response.text
+            assert "raw log text" in response.text
+            assert "partial result appears only in the terminal" in response.text
+            assert 'data-guide-context="safe-diagnostics"' in response.text
 
 
 def test_readme_route_redirects_an_unauthenticated_user(tmp_path, monkeypatch):
