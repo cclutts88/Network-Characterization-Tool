@@ -21,6 +21,18 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "associate a Saved Network with one active Network Scope" in html
     assert "Mixed, combined, manual, and unassociated scan targets" in html
     assert "New schedules pin the reviewed context" in html
+    assert "Scheduled scan startup recovery:" in html
+    assert "Genuinely older interrupted schedules are converted once and paused for review" in html
+    assert "Uncertain network contact never resumes automatically" in html
+    assert "Scheduled queue checks:" in html
+    assert "Each scheduler check starts at most one batch" in html
+    assert "Unexpected scheduler failures are recorded in the application log" in html
+    assert "Scheduled scan context:" in html
+    assert "Splitting a schedule into smaller target batches does not expand the addresses contacted" in html
+    assert "Older scans with missing selection or scope are not silently relabelled or reassigned" in html
+    assert "Automatic saved analysis:" in html
+    assert "Unmarked historical scans retain Prepare from saved scan" in html
+    assert "failed or interrupted calculations require an explicit retry" in html
     assert "Assign manual Nmap context" in html
     assert "Follow automatic scan processing" in html
     assert "New uploads then enter background processing automatically" in html

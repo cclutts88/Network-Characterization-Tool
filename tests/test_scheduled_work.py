@@ -63,6 +63,142 @@ def frozen() -> dict:
     }
 
 
+@pytest.mark.parametrize("state", ["waiting", "preparing", "active", "needs_attention", "complete", "cancelled"])
+def test_legacy_migration_preserves_existing_durable_occurrences(tmp_path, state):
+    from app.scheduled_work import migrate_legacy_schedules
+
+    db_path = tmp_path / "analyzer.db"
+    schedule = make_schedule(db_path)
+    prepared = prepare_occurrence(
+        db_path, schedule=schedule, due_at="2026-01-01T00:00:00+00:00",
+        trigger_kind="scheduled", trigger_key="cadence", actor="scheduler",
+        frozen_contract=frozen(), chunks=[["198.51.100.1"]], next_due_at=None,
+    )
+    # Native execution uses the same mutable batch fields as the old scheduler.
+    # Even stale fields after completion must not reinterpret durable history.
+    with connect_database(db_path) as connection:
+        connection.execute(
+            "UPDATE scan_schedule_occurrences SET state = ? WHERE occurrence_id = ?",
+            (state, prepared.occurrence_id),
+        )
+        schedule.update(active_batch_id=prepared.occurrence_id,
+                        batch_status="running", active_target_chunks=[["198.51.100.1"]])
+        connection.execute("UPDATE scan_schedules SET definition_json = ? WHERE schedule_id = ?",
+                           (json.dumps(schedule), schedule["schedule_id"]))
+
+    def snapshot():
+        with connect_database(db_path) as connection:
+            return {table: connection.execute(f"SELECT * FROM {table}").fetchall()
+                    for table in ("scan_schedules", "scan_schedule_definitions",
+                                  "scan_schedule_occurrences", "scan_schedule_chunks")}
+
+    before = snapshot()
+    for _ in range(2):
+        assert migrate_legacy_schedules(db_path) == []
+        # Exercise the same storage initialization called by application startup,
+        # without the previous process's readiness shortcut.
+        poc._POC_STORAGE_READY.clear()
+        poc.init_poc_storage(db_path)
+        assert snapshot() == before
+        with connect_database(db_path) as connection:
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_legacy_active_migration_is_idempotent_alongside_native_work(tmp_path):
+    from app.scheduled_work import migrate_legacy_schedules
+
+    db_path = tmp_path / "analyzer.db"
+    native = make_schedule(db_path)
+    prepared = prepare_occurrence(
+        db_path, schedule=native, due_at="2026-01-01T00:00:00+00:00",
+        trigger_kind="scheduled", trigger_key="cadence", actor="scheduler",
+        frozen_contract=frozen(), chunks=[["198.51.100.1"]], next_due_at=None,
+    )
+    before = get_occurrence(db_path, prepared.occurrence_id)
+    legacy = make_schedule(db_path)
+    legacy.pop("definition_version", None)
+    legacy.pop("definition_digest", None)
+    legacy.update(active_batch_id="old-batch", batch_status="running",
+                  active_target_chunks=[["198.51.100.2"], ["198.51.100.3"], ["198.51.100.4"]],
+                  completed_chunk_count=1, active_chunk_number=2)
+    with connect_database(db_path) as connection:
+        connection.execute("UPDATE scan_schedules SET definition_json = ? WHERE schedule_id = ?",
+                           (json.dumps(legacy), legacy["schedule_id"]))
+    assert migrate_legacy_schedules(db_path) == [legacy["schedule_id"]]
+    migrated = poc.get_scan_schedule(legacy["schedule_id"], db_path)
+    occurrence = get_occurrence(db_path, migrated["active_batch_id"])
+    assert migrated["enabled"] is False
+    assert occurrence["state"] == "needs_attention"
+    assert [c["state"] for c in occurrence["chunks"]] == ["complete", "needs_attention", "waiting"]
+    assert [c["contact_phase"] for c in occurrence["chunks"]] == ["complete", "uncertain", "not_started"]
+    assert migrate_legacy_schedules(db_path) == []
+    assert get_occurrence(db_path, migrated["active_batch_id"]) == occurrence
+    assert get_occurrence(db_path, prepared.occurrence_id) == before
+    with connect_database(db_path) as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("prepared", [True, False])
+@pytest.mark.parametrize("failure", [poc.MissionEnvironmentConflict, poc.SavedNetworkScopeConflict, RuntimeError])
+def test_scheduler_does_not_starve_valid_schedule_behind_blocked_one(tmp_path, monkeypatch, prepared, failure):
+    db_path = tmp_path / "analyzer.db"
+    schedules = [make_schedule(db_path) for _ in range(3)]
+    if prepared:
+        for schedule in schedules:
+            prepare_schedule_occurrence(
+                schedule["schedule_id"], advance_schedule=True, trigger_key="cadence",
+                actor="scheduler", now=datetime(2026, 1, 1, tzinfo=timezone.utc), db_path=db_path,
+            )
+        ordered = sorted(poc.list_scan_schedules(db_path), key=lambda s: (
+            s["latest_occurrence"]["created_at"], s["schedule_id"]))
+    else:
+        ordered = sorted(poc.list_scan_schedules(db_path), key=lambda s: s["next_run_at"])
+    blocked_id = ordered[0]["schedule_id"]
+    calls = []
+
+    def dispatch(schedule_id, *args, **kwargs):
+        calls.append(schedule_id)
+        if schedule_id == blocked_id:
+            raise failure("This schedule needs review")
+        return True if prepared else {"schedule_id": schedule_id}
+
+    monkeypatch.setattr(poc, "_start_prepared_schedule_occurrence" if prepared else "queue_scan_schedule_batch", dispatch)
+    result = poc.dispatch_due_schedules(datetime(2026, 1, 1, tzinfo=timezone.utc), db_path)
+    assert calls == [blocked_id, ordered[1]["schedule_id"]]
+    assert len(result) == 1 and result[0]["schedule_id"] == ordered[1]["schedule_id"]
+    if prepared:
+        unchanged = get_occurrence(db_path, ordered[0]["latest_occurrence"]["occurrence_id"])
+        assert unchanged["state"] == "waiting"
+        assert all(c["contact_phase"] == "not_started" for c in unchanged["chunks"])
+
+
+def test_scheduler_all_waiting_blocked_starts_nothing(tmp_path, monkeypatch):
+    db_path = tmp_path / "analyzer.db"
+    schedules = [make_schedule(db_path) for _ in range(2)]
+    for schedule in schedules:
+        prepare_schedule_occurrence(
+            schedule["schedule_id"], advance_schedule=True, trigger_key="cadence",
+            actor="scheduler", now=datetime(2026, 1, 1, tzinfo=timezone.utc), db_path=db_path,
+        )
+    calls = []
+
+    def blocked(schedule_id, *args, **kwargs):
+        calls.append(schedule_id)
+        raise poc.MissionEnvironmentConflict("Scope prohibited")
+
+    monkeypatch.setattr(poc, "_start_prepared_schedule_occurrence", blocked)
+    assert poc.dispatch_due_schedules(datetime(2026, 1, 1, tzinfo=timezone.utc), db_path) == []
+    assert set(calls) == {s["schedule_id"] for s in schedules}
+    assert all(not poc.get_scan_schedule(s["schedule_id"], db_path)["enabled"] for s in schedules)
+    # Even if the condition later changes, disabled blocked occurrences need an
+    # explicit operator action rather than automatic contact on the next tick.
+    monkeypatch.setattr(poc, "_start_prepared_schedule_occurrence",
+                        lambda *args, **kwargs: pytest.fail("Blocked work restarted"))
+    before = [poc.get_scan_schedule(s["schedule_id"], db_path) for s in schedules]
+    assert poc.dispatch_due_schedules(datetime(2026, 1, 1, tzinfo=timezone.utc), db_path) == []
+    assert [poc.get_scan_schedule(s["schedule_id"], db_path) for s in schedules] == before
+
+
 def bound_queued_run(db_path: Path) -> tuple[dict, dict, object]:
     schedule = make_schedule(db_path)
     occurrence = prepare_occurrence(

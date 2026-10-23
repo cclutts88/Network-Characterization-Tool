@@ -13,6 +13,7 @@ from app.artifacts import (
 )
 from app.database import connect_database, initialize_once_per_database
 from app.derived_jobs import (
+    JOB_TYPE as NMAP_BASE_JOB_TYPE,
     _automated_contract_from_evidence,
     _enqueue_automated_nmap_scope_job,
     _request_token,
@@ -181,9 +182,13 @@ def _candidate_on_connection(db, run_id: str) -> dict:
         jobs_table = db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pipeline_jobs'"
         ).fetchone()
+        # Local base analysis uses only XML and never assigns scope. Its new
+        # automatic preparation must not prevent this explicit context repair;
+        # scoped and unknown processing histories still block the correction.
         if jobs_table is not None and db.execute(
-            "SELECT 1 FROM pipeline_jobs WHERE source_observation_id = ?",
-            (observation[0],),
+            """SELECT 1 FROM pipeline_jobs WHERE source_observation_id = ?
+                 AND job_type != ?""",
+            (observation[0], NMAP_BASE_JOB_TYPE),
         ).fetchone() is not None:
             reasons.append("The aggregate scan.xml already has processing history")
     intent = admission_intent_on_connection(

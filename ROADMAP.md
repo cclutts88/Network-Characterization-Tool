@@ -72,6 +72,68 @@ A roadmap item should only be marked complete when:
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Scheduled scan incident repair — started 2026-10-23
+
+- [x] Reproduce and repair the Teams-reported startup failure converting older
+  schedules, including native durable occurrences, repeated restarts and mixed
+  legacy/native data. Preserve frozen plans, completed chunks and evidence; never
+  resume uncertain network contact automatically.
+  Seven new regressions reproduced the fault before the fix; 34 focused Docker
+  checks then passed, with independent reviewer CLEAR. The controller's stopped
+  phase4-r5 container log confirms the same migration stack; no live repair made.
+- [x] Repair independently reproduced queue starvation using isolated
+  regressions and additional controller evidence where needed. Seven isolated
+  regressions reproduced head-of-queue starvation and unhandled changed-scope
+  errors. Dispatch now considers later eligible schedules while retaining blockers
+  and enforcing one successful dispatch per check. Real changed-scope validation
+  and repeated checks preserve the review barrier; independent reviewer CLEAR,
+  51 focused Docker tests passed. This is not proof of the controller queue cause.
+- [x] Repair new scheduled scan Saved Network selection/name snapshots and scope retention,
+  automatic analysis without changing historical evidence or guessing scope.
+  Reproduced dropped selection on scheduled chunks; atomic run admission now
+  copies the reviewed schedule selection only after frozen definition validation.
+  Execution targets remain bounded to the chunk. Actual contact-boundary tests
+  retain scope/name and block a changed association; automatic local-processing
+  regression now covers scheduled completion. Independent reviewer CLEAR. A literal
+  Saved Network record rename and older missing-context records remain separate
+  handoff items; no historical evidence was relabelled.
+- [x] Browser verification found and repaired a separate missing automatic step: scoped
+  foundation processing could finish while reusable local Nmap analysis still
+  required Prepare from saved scan. Extend the existing background calculation
+  worker to admit one completed, explicitly marked scan with an existing finalized
+  intake receipt and one registered aggregate XML. This local-only calculation
+  does not require or assign scope. Existing jobs in any state prevent automatic
+  retries/recalculation. Startup and worker-exit checks recover missed admission;
+  unmarked historical scans retain explicit preparation.
+  **Documented deviation:** browser verification required this additional local
+  base-analysis step beyond scoped foundation admission. The explicit missing-scope
+  handoff correction now excludes only scope-independent base-analysis jobs from
+  its existing processing-history prohibition; scoped and unknown jobs still block
+  correction. This preserves the repair after automatic local preparation without
+  altering either result's provenance. Independent reviewer CLEAR — DOCUMENTED
+  DEVIATION; 53 focused checks passed. Combined full suite: 1,923 passed, 18 skipped,
+  one existing dependency warning. Rebuilt isolated preview verified automatic saved
+  analysis in History with original Saved Network/scope and no preparation click.
+- [-] Troubleshooting, unfinished-work reset and fresh-install implementation handed
+  to the Primary NCT Roadmap Builder at the user's explicit direction. No scripts
+  implemented and no controller reset/reinstall performed. Requirements, recommended
+  options and acceptance checks are in
+  `docs/NCT_SCHEDULE_INCIDENT_AND_FIX_HANDOFF_2026-10-23.md` (R22–R24).
+- Controller read-only inspection: 19 completed scans, one queued scheduled scan,
+  a native preparing occurrence and another waiting occurrence; foreign-key check
+  returns no violations. Startup's failed transaction did not leave broken database
+  relationships. Existing evidence and deployment remain untouched.
+- The user requested implementation stop after this incident repair and a complete
+  requested-fix report for the Primary NCT Roadmap Builder. All other requests are
+  recorded in that handoff, not silently accepted as completed. Development stays on the
+  foundation branch; no controller repair, deployment package change, main
+  promotion, Range acceptance or mission readiness is claimed.
+- Final completion gate: **CLEAR — DOCUMENTED DEVIATION**. Independent reviewer
+  checked the exact final diff, 24-item handoff and rebuilt preview; two restarts
+  retained one completed scan, one waiting native occurrence, one base-analysis
+  job and the unchanged sample XML hash. Browser opened verified saved analysis
+  without preparation, with no browser error logs. Implementation stops here.
+
 ## Arkime next-forward recommendation without historical repair or deduplication — 2026-10-21
 
 - **Planned approach:** Phase 6.8 would generate the smallest useful next collection

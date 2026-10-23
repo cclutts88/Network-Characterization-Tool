@@ -80,6 +80,8 @@ def manual_assignment(tmp_path: Path, *, marked: bool = True):
 
 def completed_automated_run(
     tmp_path: Path, *, finalize: bool = True, register_observation: bool = True,
+    scheduled: bool = False,
+    scoped: bool = True,
 ):
     db_path = tmp_path / "analyzer.db"
     network = create_saved_network(
@@ -121,6 +123,24 @@ def completed_automated_run(
         capture=True,
         timeout_seconds=30,
     )
+    if not scoped:
+        request = request.model_copy(update={"saved_network_ids": [],
+            "reviewed_scope_associations": [], "reviewed_mission_scopes": []})
+    if scheduled:
+        from datetime import datetime, timezone
+        from app import poc
+
+        schedule = poc.create_scan_schedule(poc.ScanScheduleCreate(
+            name="Scheduled scan label", created_by="analyst", profile_id="builtin-standard",
+            profile_version=2, targets=[network["cidr"]],
+            saved_network_ids=request.saved_network_ids,
+            reviewed_scope_associations=request.reviewed_scope_associations,
+            reviewed_mission_scopes=request.reviewed_mission_scopes,
+            interface="eth0", first_run_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        ), db_path)
+        request = poc._scheduled_request(schedule, [network["cidr"]], batch_id="test-batch",
+            chunk_number=1, chunk_count=1, batch_hosts_total=256,
+            batch_hosts_completed_before=0, db_path=db_path)
     run = prepare_scan_run(request, db_path, interfaces={"eth0"})
     run["status"] = "completed"
     run["completed_at"] = "2030-01-01T00:01:00+00:00"
@@ -143,6 +163,118 @@ def completed_automated_run(
     if finalize:
         update_scan_run_manifest(run, db_path)
     return db_path, run, scope, observation
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_automatic_base_analysis_prepares_once_without_manual_action(tmp_path, scheduled, scoped):
+    from concurrent.futures import ThreadPoolExecutor
+
+    db_path, run, _, _ = completed_automated_run(tmp_path, scheduled=scheduled, scoped=scoped)
+    # The aggregate exists in the normal run directory as well as the registry.
+    run_dir = tmp_path / "scan-runs" / run["run_id"]
+    run_dir.mkdir(parents=True)
+    (run_dir / "scan.xml").write_bytes(XML)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: jobs.dispatch_next_automatic_nmap_base_analysis(db_path), range(4)))
+    assert results.count(True) == 1
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    status = jobs.scan_run_job_statuses(db_path, [run["run_id"]], tmp_path)[run["run_id"]]
+    assert status["current_job"]["latest_attempt"]["state"] == "completed"
+    assert status["current_job"]["latest_attempt"]["result_id"]
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is False
+    with connect_database(db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM pipeline_jobs WHERE job_type = ?", (jobs.JOB_TYPE,)).fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM pipeline_job_attempts").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("state", ["queued", "running", "completed", "failed", "interrupted"])
+def test_automatic_base_analysis_does_not_retry_existing_attempt(tmp_path, state):
+    db_path, _, _, _ = completed_automated_run(tmp_path)
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is True
+    with connect_database(db_path) as db:
+        db.execute("UPDATE pipeline_job_attempts SET state = ?", (state,))
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is False
+    with connect_database(db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM pipeline_job_attempts").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("problem", ["unfinished", "missing_xml", "ambiguous_xml"])
+def test_automatic_base_analysis_waits_for_finalized_unique_evidence(tmp_path, problem):
+    db_path, run, _, _ = completed_automated_run(tmp_path,
+        finalize=problem != "unfinished", register_observation=problem != "missing_xml")
+    if problem == "ambiguous_xml":
+        register_artifact_bytes(db_path=db_path, content=XML, source_kind="nmap_scan",
+            source_ref=run["run_id"], original_filename="scan.xml", actor="analyst",
+            observation_key="second-aggregate")
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is False
+
+
+def test_automatic_base_analysis_rechecks_exit_race(tmp_path, monkeypatch):
+    import threading
+
+    db_path, run, _, _ = completed_automated_run(tmp_path, finalize=False, scoped=False)
+    restarted = []
+    monkeypatch.setattr(jobs, "dispatch_next_pipeline_intake", lambda *_: False)
+    monkeypatch.setattr(jobs, "dispatch_next_automatic_nmap_base_analysis", lambda *_: False)
+    def finalize_while_worker_exits(*_args):
+        update_scan_run_manifest(run, db_path)
+        return False
+    monkeypatch.setattr(jobs, "run_next_derived_job", finalize_while_worker_exits)
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args: restarted.append(args))
+    jobs._worker_loop(db_path, tmp_path, threading.Event())
+    assert restarted == [(db_path.resolve(), tmp_path)]
+
+
+@pytest.mark.parametrize("policy", [None, NMAP_INGESTION_POLICY_VERSION + 1])
+def test_automatic_base_analysis_does_not_adopt_unmarked_or_unknown_policy_history(tmp_path, policy):
+    from app.pipeline_intake import AUTOMATED_NMAP_SOURCE, mark_pipeline_source
+
+    db_path = tmp_path / "analyzer.db"
+    run = dict(run_id="e" * 32, status="completed", created_at="2026-01-01T00:00:00+00:00",
+               operator="analyst", reason="Retained history", originating_host="test",
+               interface="eth0", profile="Standard", targets=["192.0.2.0/24"])
+    insert_scan_run_manifest(run, db_path)
+    path = tmp_path / "scan.xml"
+    path.write_bytes(XML)
+    register_artifact_file(db_path=db_path, source_path=path, source_kind="nmap_scan",
+        source_ref=run["run_id"], original_filename="scan.xml", actor="analyst")
+    if policy is not None:
+        from app.pipeline_intake import init_pipeline_intake_storage
+        init_pipeline_intake_storage(db_path)
+        with connect_database(db_path) as db:
+            mark_pipeline_source(db, source_kind=AUTOMATED_NMAP_SOURCE, source_id=run["run_id"],
+                policy_version=policy, marked_by="analyst", marked_at=run["created_at"])
+    update_scan_run_manifest(run, db_path)
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is False
+
+
+def test_automatic_base_analysis_failure_does_not_hold_later_valid_scan(tmp_path):
+    from app.pipeline_intake import AUTOMATED_NMAP_SOURCE, mark_pipeline_source
+
+    db_path, first, _, _ = completed_automated_run(tmp_path, scoped=False)
+    first_dir = tmp_path / "scan-runs" / first["run_id"]
+    first_dir.mkdir(parents=True)
+    (first_dir / "scan.xml").write_bytes(b"corrupt local evidence")
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is True
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    second = dict(first, run_id="f" * 32)
+    insert_scan_run_manifest(second, db_path)
+    with connect_database(db_path) as db:
+        mark_pipeline_source(db, source_kind=AUTOMATED_NMAP_SOURCE, source_id=second["run_id"],
+            marked_by="analyst", marked_at=second["created_at"])
+    second_dir = tmp_path / "scan-runs" / second["run_id"]
+    second_dir.mkdir(parents=True)
+    path = second_dir / "scan.xml"
+    path.write_bytes(XML)
+    register_artifact_file(db_path=db_path, source_path=path, source_kind="nmap_scan",
+        source_ref=second["run_id"], original_filename="scan.xml", actor="analyst")
+    update_scan_run_manifest(second, db_path)
+    assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is True
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    status = jobs.scan_run_job_statuses(db_path, [first["run_id"], second["run_id"]], tmp_path)
+    assert status[first["run_id"]]["current_job"]["latest_attempt"]["state"] == "failed"
+    assert status[second["run_id"]]["current_job"]["latest_attempt"]["state"] == "completed"
 
 
 def test_finalized_scan_registration_retains_its_reviewed_scope(tmp_path):
@@ -204,13 +336,19 @@ def bad_scope_handoff(tmp_path: Path):
     return db_path, run, scope, observation
 
 
+@pytest.mark.parametrize("base_prepared", [False, True])
 def test_explicit_scope_handoff_correction_preserves_failed_intent_and_is_idempotent(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, base_prepared,
 ):
     import app.automated_nmap_scope_corrections as corrections
 
     monkeypatch.setattr(corrections, "start_derived_job_worker", lambda *_args: None)
     db_path, run, scope, observation = bad_scope_handoff(tmp_path)
+    if base_prepared:
+        assert jobs.dispatch_next_automatic_nmap_base_analysis(db_path) is True
+        assert jobs.run_next_derived_job(db_path, tmp_path) is True
+        status = jobs.scan_run_job_statuses(db_path, [run["run_id"]], tmp_path)[run["run_id"]]
+        assert status["current_job"]["latest_attempt"]["state"] == "completed"
     before = get_admission_intent(
         db_path,
         intent_kind=AUTOMATED_NMAP_INTENT,
@@ -261,7 +399,7 @@ def test_explicit_scope_handoff_correction_preserves_failed_intent_and_is_idempo
         assert db.execute(
             "SELECT COUNT(*) FROM pipeline_jobs WHERE source_run_id = ?",
             (run["run_id"],),
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == (2 if base_prepared else 1)
         assert db.execute(
             "SELECT COUNT(*) FROM pipeline_job_attempts WHERE state = 'queued'"
         ).fetchone()[0] == 1
@@ -944,8 +1082,9 @@ def test_parser_change_before_dispatch_blocks_frozen_contract(tmp_path, monkeypa
         assert db.execute("SELECT COUNT(*) FROM pipeline_jobs").fetchone()[0] == 0
 
 
-def test_completed_marked_scan_creates_intent_and_dispatches_once(tmp_path):
-    db_path, run, scope, observation = completed_automated_run(tmp_path)
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_completed_marked_scan_creates_intent_and_dispatches_once(tmp_path, scheduled):
+    db_path, run, scope, observation = completed_automated_run(tmp_path, scheduled=scheduled)
     intent = get_admission_intent(
         db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],
     )

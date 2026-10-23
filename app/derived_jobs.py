@@ -38,6 +38,7 @@ from app.nmap_base_analysis import (
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
 from app.pipeline_intake import (
     AUTOMATED_NMAP_INTENT,
+    AUTOMATED_NMAP_SOURCE,
     COLLECTED_DEVICE_INTENT,
     DEVICE_INGESTION_POLICY_VERSION,
     DEVICE_SUMMARY_JOB_TYPE,
@@ -577,61 +578,124 @@ def enqueue_nmap_base_job(
     if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
         raise ValueError("Invalid scan run identifier")
     token = _request_token(request_token)
-    now = utc_now()
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        frozen = _source_snapshot(db, run_id)
-        prior = db.execute(
-            "SELECT job_id, request_kind FROM pipeline_job_requests WHERE request_token = ?",
-            (token,),
-        ).fetchone()
-        if prior is not None:
-            job = db.execute(
-                f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (prior[0],)
-            ).fetchone()
-            if job is None or prior[1] != "initial" or job[2] != run_id or job[3] != frozen["source_observation_id"]:
-                raise DerivedJobConflict("That request token is already used for different work")
-            return _job_dict(db, job)
-        existing = db.execute(
-            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_key = ?",
-            (frozen["job_key"],),
-        ).fetchone()
-        if existing is None:
-            job_id = f"analysis_job_{uuid.uuid4().hex}"
-            db.execute(
-                """INSERT INTO pipeline_jobs (
-                       job_id, job_key, job_type, source_run_id, source_observation_id,
-                       source_status, source_sha256, source_size_bytes, target_family,
-                       target_analysis_version, target_payload_schema_version,
-                       target_parameters_json, target_computation_key, target_result_id,
-                       source_kind, source_ref, definition_json, requested_by, requested_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scan_run', ?, '{}', ?, ?)""",
-                (job_id, frozen["job_key"], frozen["job_type"], run_id,
-                 frozen["source_observation_id"], frozen["source_status"],
-                 frozen["source_sha256"], frozen["source_size_bytes"],
-                 frozen["target_family"], frozen["target_analysis_version"],
-                 frozen["target_payload_schema_version"], frozen["target_parameters_json"],
-                 frozen["target_computation_key"], frozen["target_result_id"],
-                 run_id, requested_by, now),
-            )
-            db.execute(
-                """INSERT INTO pipeline_job_attempts (
-                       attempt_id, job_id, attempt_number, state, requested_by, requested_at
-                   ) VALUES (?, ?, 1, 'queued', ?, ?)""",
-                (f"analysis_attempt_{uuid.uuid4().hex}", job_id, requested_by, now),
-            )
-            existing = db.execute(
-                f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
-        db.execute(
-            """INSERT INTO pipeline_job_requests (
-                   request_token, job_id, request_kind, requested_by, requested_at
-               ) VALUES (?, ?, 'initial', ?, ?)""",
-            (token, existing[0], requested_by, now),
+        result = _enqueue_nmap_base_job_on_connection(
+            db, run_id, token=token, requested_by=requested_by,
         )
-        result = _job_dict(db, existing)
     start_derived_job_worker(db_path)
     return result
+
+
+def _enqueue_nmap_base_job_on_connection(
+    db: sqlite3.Connection, run_id: str, *, token: str, requested_by: str,
+) -> dict:
+    now = utc_now()
+    frozen = _source_snapshot(db, run_id)
+    prior = db.execute(
+        "SELECT job_id, request_kind FROM pipeline_job_requests WHERE request_token = ?",
+        (token,),
+    ).fetchone()
+    if prior is not None:
+        job = db.execute(
+            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (prior[0],)
+        ).fetchone()
+        if job is None or prior[1] != "initial" or job[2] != run_id or job[3] != frozen["source_observation_id"]:
+            raise DerivedJobConflict("That request token is already used for different work")
+        return _job_dict(db, job)
+    existing = db.execute(
+        f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_key = ?",
+        (frozen["job_key"],),
+    ).fetchone()
+    if existing is None:
+        job_id = f"analysis_job_{uuid.uuid4().hex}"
+        db.execute(
+            """INSERT INTO pipeline_jobs (
+                   job_id, job_key, job_type, source_run_id, source_observation_id,
+                   source_status, source_sha256, source_size_bytes, target_family,
+                   target_analysis_version, target_payload_schema_version,
+                   target_parameters_json, target_computation_key, target_result_id,
+                   source_kind, source_ref, definition_json, requested_by, requested_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scan_run', ?, '{}', ?, ?)""",
+            (job_id, frozen["job_key"], frozen["job_type"], run_id,
+             frozen["source_observation_id"], frozen["source_status"],
+             frozen["source_sha256"], frozen["source_size_bytes"],
+             frozen["target_family"], frozen["target_analysis_version"],
+             frozen["target_payload_schema_version"], frozen["target_parameters_json"],
+             frozen["target_computation_key"], frozen["target_result_id"],
+             run_id, requested_by, now),
+        )
+        db.execute(
+            """INSERT INTO pipeline_job_attempts (
+                   attempt_id, job_id, attempt_number, state, requested_by, requested_at
+               ) VALUES (?, ?, 1, 'queued', ?, ?)""",
+            (f"analysis_attempt_{uuid.uuid4().hex}", job_id, requested_by, now),
+        )
+        existing = db.execute(
+            f"SELECT {_JOB_COLUMNS} FROM pipeline_jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+    db.execute(
+        """INSERT INTO pipeline_job_requests (
+               request_token, job_id, request_kind, requested_by, requested_at
+           ) VALUES (?, ?, 'initial', ?, ?)""",
+        (token, existing[0], requested_by, now),
+    )
+    return _job_dict(db, existing)
+
+
+def _automatic_nmap_base_candidate(db: sqlite3.Connection):
+    """One finalized marked encounter, regardless of its scope decision.
+
+    The existing immutable intake receipt proves successful finalization; a
+    registered file alone can precede that boundary. Existing jobs of any state
+    prevent automatic retries or version-driven recalculation.
+    """
+    if db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scan_runs'"
+    ).fetchone() is None:
+        return None
+    return db.execute(
+        """SELECT source.source_id, source.marked_by
+           FROM pipeline_intake_sources source
+           JOIN scan_runs run ON run.run_id = source.source_id
+           WHERE source.source_kind = ? AND source.policy_version = ?
+             AND run.status = 'completed'
+             AND EXISTS (
+                 SELECT 1 FROM pipeline_admission_intents intent
+                 WHERE intent.source_id = source.source_id AND intent.intent_kind = ?
+                   AND intent.policy_version = source.policy_version
+             )
+             AND 1 = (
+                 SELECT COUNT(*) FROM artifact_observations observation
+                 JOIN artifact_registry artifact ON artifact.sha256 = observation.sha256
+                 WHERE observation.source_kind = 'nmap_scan'
+                   AND observation.source_ref = source.source_id
+                   AND observation.original_filename = 'scan.xml'
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM pipeline_jobs job
+                 WHERE job.source_run_id = source.source_id AND job.job_type = ?
+             )
+           ORDER BY source.marked_at, source.source_id LIMIT 1""",
+        (AUTOMATED_NMAP_SOURCE, NMAP_INGESTION_POLICY_VERSION,
+         AUTOMATED_NMAP_INTENT, JOB_TYPE),
+    ).fetchone()
+
+
+def dispatch_next_automatic_nmap_base_analysis(db_path: Path) -> bool:
+    """Prepare one retained scan locally; never contact targets or infer scope."""
+    init_pipeline_intake_storage(db_path)
+    init_derived_job_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        candidate = _automatic_nmap_base_candidate(db)
+        if candidate is None:
+            return False
+        _enqueue_nmap_base_job_on_connection(
+            db, candidate[0], token=f"automatic-nmap-base:{candidate[0]}",
+            requested_by=candidate[1],
+        )
+    return True
 
 
 def _nmap_scope_snapshot(
@@ -2357,6 +2421,8 @@ def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
             if admission_enabled:
                 try:
                     admitted = dispatch_next_pipeline_intake(db_path)
+                    base_admitted = dispatch_next_automatic_nmap_base_analysis(db_path)
+                    admitted = admitted or base_admitted
                     intake_failures = 0
                 except sqlite3.OperationalError as exc:
                     intake_failures += 1
@@ -2405,7 +2471,8 @@ def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
                     pending_intake = db.execute(
                         "SELECT 1 FROM pipeline_admission_intents WHERE state = 'pending' LIMIT 1"
                     ).fetchone()
-                if queued or pending_intake:
+                    pending_base = _automatic_nmap_base_candidate(db)
+                if queued or pending_intake or pending_base:
                     start_derived_job_worker(path, data_dir)
 
 

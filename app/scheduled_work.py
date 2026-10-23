@@ -240,6 +240,16 @@ def migrate_legacy_schedules(db_path: Path) -> list[str]:
             "SELECT schedule_id, definition_json FROM scan_schedules"
         ).fetchall()
         for schedule_id, definition_json in rows:
+            # Durable history proves this schedule already crossed the migration
+            # boundary. Its mutable batch fields are also used by native work;
+            # reinterpreting them can collide with the one-open-occurrence index
+            # and then insert chunks for an occurrence that was never inserted.
+            # Recovery of durable contact belongs to recover_schedule_occurrences.
+            if connection.execute(
+                "SELECT 1 FROM scan_schedule_occurrences WHERE schedule_id = ? LIMIT 1",
+                (schedule_id,),
+            ).fetchone() is not None:
+                continue
             schedule = json.loads(definition_json)
             changed = False
             if not schedule.get("definition_version"):

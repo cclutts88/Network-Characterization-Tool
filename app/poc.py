@@ -4,6 +4,7 @@ import calendar
 import ipaddress
 import hmac
 import json
+import logging
 import os
 import re
 import shlex
@@ -2348,6 +2349,18 @@ def insert_reviewed_scan_run(
             if schedule_row is None:
                 raise MissionEnvironmentConflict("The saved schedule is no longer available")
             schedule = json.loads(schedule_row[0])
+            if scheduled_chunk_claim is not None:
+                occurrence_row = db.execute(
+                    """SELECT schedule_id, definition_version, definition_digest
+                         FROM scan_schedule_occurrences WHERE occurrence_id = ?""",
+                    (scheduled_chunk_claim[0],),
+                ).fetchone()
+                if occurrence_row is None or tuple(occurrence_row) != (
+                    plan.schedule_id, *definition_identity(schedule)[:2]
+                ):
+                    raise WorkLeaseConflict(
+                        "The schedule definition no longer matches its frozen occurrence"
+                    )
             resolve_reviewed_scope_context(
                 db,
                 saved_network_ids=list(schedule.get("saved_network_ids") or []),
@@ -2365,6 +2378,20 @@ def insert_reviewed_scan_run(
                 manual_targets=list(schedule.get("manual_targets") or []),
                 reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
             )
+            # Preserve the reviewed selection as provenance, not execution
+            # targets. Feeding IDs back into the generic builder would expand
+            # this chunk to the whole Saved Network. The final contact check
+            # must use the same reviewed associations rather than an empty
+            # selection that would silently replace inherited scope with None.
+            for field in (
+                "saved_network_ids", "saved_networks", "manual_targets",
+                "reviewed_scope_associations", "reviewed_mission_scopes",
+            ):
+                manifest[field] = list(schedule.get(field) or [])
+            manifest["target_selection"] = {
+                "saved_networks": manifest["saved_networks"],
+                "manual_targets": manifest["manual_targets"],
+            }
         else:
             context = resolve_reviewed_scope_context(
                 db,
@@ -5919,12 +5946,14 @@ def dispatch_due_schedules(
         schedule for schedule in schedules
         if (schedule.get("latest_occurrence") or {}).get("state") == "waiting"
         and schedule["schedule_id"] not in active_schedule_ids
+        and (schedule.get("enabled") or schedule.get("batch_status") not in {
+            "blocked_network_scope", "blocked_mission_environment",
+        })
     ]
     waiting.sort(
         key=lambda item: (item["latest_occurrence"]["created_at"], item["schedule_id"])
     )
-    if waiting:
-        selected = waiting[0]
+    for selected in waiting:
         try:
             with connect_database(db_path) as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -5950,21 +5979,24 @@ def dispatch_due_schedules(
                 db_path=db_path,
                 data_dir=DATA_DIR,
             )
-        except MissionEnvironmentConflict as exc:
+        except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
             blocked = get_scan_schedule(selected["schedule_id"], db_path) or selected
             blocked["enabled"] = False
-            blocked["batch_status"] = "blocked_mission_environment"
-            blocked["last_occurrence_status"] = "blocked_mission_environment"
+            blocked["batch_status"] = (
+                "blocked_network_scope" if isinstance(exc, SavedNetworkScopeConflict)
+                else "blocked_mission_environment"
+            )
+            blocked["last_occurrence_status"] = blocked["batch_status"]
             blocked["last_dispatch_note"] = str(exc)
             _store_scan_schedule(blocked, db_path)
-            return []
+            continue
         except RuntimeError:
             record_schedule_conflict(
                 selected,
                 f"occurrence:{selected['latest_occurrence']['occurrence_id']}",
                 db_path,
             )
-            return []
+            continue
         if started:
             return [{
                 "schedule_id": selected["schedule_id"],
@@ -5980,7 +6012,7 @@ def dispatch_due_schedules(
         and _as_utc(schedule["next_run_at"]) <= moment
     ]
     due.sort(key=lambda item: item["next_run_at"])
-    for schedule in due[:1]:
+    for schedule in due:
         try:
             batch = queue_scan_schedule_batch(
                 schedule["schedule_id"],
@@ -5990,21 +6022,25 @@ def dispatch_due_schedules(
                 now=moment,
                 db_path=db_path,
             )
-        except MissionEnvironmentConflict as exc:
+        except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
             schedule["enabled"] = False
-            schedule["batch_status"] = "blocked_mission_environment"
-            schedule["last_occurrence_status"] = "blocked_mission_environment"
+            schedule["batch_status"] = (
+                "blocked_network_scope" if isinstance(exc, SavedNetworkScopeConflict)
+                else "blocked_mission_environment"
+            )
+            schedule["last_occurrence_status"] = schedule["batch_status"]
             schedule["last_dispatch_note"] = str(exc)
             _store_scan_schedule(schedule, db_path)
-            break
+            continue
         except RuntimeError:
             record_schedule_conflict(
                 schedule,
                 f"scheduled:{schedule['next_run_at']}",
                 db_path,
             )
-            break
+            continue
         dispatched.append(batch)
+        break
     return dispatched
 
 
@@ -6015,7 +6051,7 @@ def schedule_worker(stop_event: threading.Event, interval_seconds: float = 15.0)
             dispatch_due_schedules()
         except Exception:
             # One malformed or unavailable schedule must not stop future checks.
-            pass
+            logging.getLogger(__name__).exception("Scan scheduler check failed")
         stop_event.wait(interval_seconds)
 
 

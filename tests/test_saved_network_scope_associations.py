@@ -281,6 +281,114 @@ def test_schedule_pins_context_and_archived_scope_blocks_dispatch(tmp_path):
         )
 
 
+def test_changed_scope_waiting_schedule_does_not_block_valid_waiting_schedule(tmp_path, monkeypatch):
+    from app import poc
+
+    db_path = ready_database(tmp_path)
+    network = saved_network(db_path, "Reviewed network", "198.51.100.0/29")
+    association = assign(db_path, network, scope(db_path, "Original context"))
+    blocked = create_scan_schedule(ScanScheduleCreate(
+        name="Blocked by changed context", created_by="analyst",
+        profile_id="builtin-standard", profile_version=2, interface="eth0",
+        targets=[network["cidr"]], saved_network_ids=[network["saved_network_id"]],
+        reviewed_scope_associations=[{"association_id": association["association_id"], "revision": association["revision"]}],
+        reviewed_mission_scopes=[{"scope_id": association["scope"]["scope_id"], "version": 0}],
+        first_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc), enabled=True,
+    ), db_path)
+    valid = create_scan_schedule(ScanScheduleCreate(
+        name="Valid schedule", created_by="analyst", profile_id="builtin-standard",
+        profile_version=2, interface="eth0", targets=["203.0.113.0/29"],
+        first_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc), enabled=True,
+    ), db_path)
+    for schedule in (blocked, valid):
+        poc.prepare_schedule_occurrence(schedule["schedule_id"], advance_schedule=True,
+            trigger_key="cadence", actor="scheduler", now=datetime(2026, 1, 1, tzinfo=timezone.utc), db_path=db_path)
+    assign(db_path, network, scope(db_path, "Replacement context"), association)
+    started = []
+    monkeypatch.setattr(poc, "_start_prepared_schedule_occurrence",
+                        lambda schedule_id, *args, **kwargs: started.append(schedule_id) or True)
+    result = poc.dispatch_due_schedules(datetime(2026, 1, 1, tzinfo=timezone.utc), db_path)
+    assert started == [valid["schedule_id"]]
+    assert result[0]["schedule_id"] == valid["schedule_id"]
+    saved = poc.get_scan_schedule(blocked["schedule_id"], db_path)
+    assert saved["enabled"] is False
+    assert saved["batch_status"] == "blocked_network_scope"
+    assert "changed after review" in saved["last_dispatch_note"]
+
+
+@pytest.mark.parametrize("scenario", ["unchanged", "scope_changed", "mission_changed", "mixed", "definition_changed"])
+def test_scheduled_chunk_retains_selection_and_scope_at_contact_boundary(tmp_path, scenario):
+    from app import poc
+    from app.scheduled_work import claim_next_chunk, get_occurrence
+
+    db_path = ready_database(tmp_path)
+    network = saved_network(db_path, "Original network label", "198.51.100.0/29")
+    association = assign(db_path, network, scope(db_path, "Scheduled context"))
+    schedule = create_scan_schedule(ScanScheduleCreate(
+        name="Different scheduled scan label", created_by="analyst",
+        profile_id="builtin-standard", profile_version=2, interface="eth0",
+        targets=[network["cidr"]], saved_network_ids=[network["saved_network_id"]],
+        manual_targets=["203.0.113.1"] if scenario == "mixed" else [],
+        reviewed_scope_associations=[{"association_id": association["association_id"], "revision": association["revision"]}],
+        reviewed_mission_scopes=[{"scope_id": association["scope"]["scope_id"], "version": 0}],
+        first_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc), enabled=True,
+        chunking_enabled=True, chunk_size=3,
+    ), db_path)
+    prepared = poc.prepare_schedule_occurrence(schedule["schedule_id"], advance_schedule=True,
+        trigger_key="cadence", actor="scheduler", now=datetime(2026, 1, 1, tzinfo=timezone.utc), db_path=db_path)
+    occurrence_id = prepared["occurrence_id"]
+    chunk, lease = claim_next_chunk(db_path, occurrence_id, owner_id="test-worker")
+    request = poc._scheduled_request(schedule, chunk["targets"], batch_id=occurrence_id,
+        chunk_number=1, chunk_count=3, batch_hosts_total=8, batch_hosts_completed_before=0, db_path=db_path)
+    if scenario == "definition_changed":
+        changed = dict(schedule, name="Changed after freezing")
+        with connect_database(db_path) as db:
+            db.execute("UPDATE scan_schedules SET definition_json = ? WHERE schedule_id = ?",
+                       (json.dumps(changed), schedule["schedule_id"]))
+        with pytest.raises(poc.WorkLeaseConflict, match="frozen occurrence"):
+            prepare_scan_run(request, db_path, interfaces={"eth0"},
+                scheduled_chunk_claim=(occurrence_id, 1, lease))
+        with connect_database(db_path) as db:
+            assert db.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0] == 0
+        return
+    queued = prepare_scan_run(request, db_path, interfaces={"eth0"},
+        scheduled_chunk_claim=(occurrence_id, 1, lease))
+    import ipaddress
+    assert {str(ip) for target in queued["targets"] for ip in ipaddress.ip_network(target)} == set(chunk["targets"])
+    assert queued["saved_network_ids"] == [network["saved_network_id"]]
+    assert queued["saved_networks"][0]["name"] == "Original network label"
+    assert queued["manual_targets"] == schedule["manual_targets"]
+    context = queued["network_scope_context"]
+    if scenario == "mixed":
+        assert context is None
+    else:
+        assert context["scope_id"] == association["scope"]["scope_id"]
+    claimed = poc.claim_next_queued_scan(db_path)
+    assert claimed["run_id"] == queued["run_id"]
+    if scenario == "scope_changed":
+        assign(db_path, network, scope(db_path, "Replacement context"), association)
+    elif scenario == "mission_changed":
+        from app.mission_environment import update_scope_context
+        update_scope_context(db_path, association["scope"]["scope_id"], expected_version=0,
+            nmap_coverage="available", arkime_coverage="unknown", kibana_coverage="unknown",
+            config_coverage="unknown", nmap_authorization="prohibited", device_evidence="unknown",
+            blind_spots=[], notes="Changed after admission", actor="admin", reason="Review change")
+    blocked = scenario in {"scope_changed", "mission_changed"}
+    assert poc.publish_scan_contact_starting(claimed, db_path=db_path) is (not blocked)
+    retained = poc.get_scan_run_plan(queued["run_id"], db_path)
+    assert retained["targets"] == queued["targets"]
+    assert retained["network_scope_context"] == context
+    assert get_run_scope_context(db_path, queued["run_id"]) == context
+    if blocked:
+        assert retained["status"] != "running"
+        assert get_occurrence(db_path, occurrence_id)["chunks"][0]["contact_phase"] != "contact_starting"
+    else:
+        assert retained["status"] == "running"
+        assert retained["network_scope_status"] == ("unscoped" if scenario == "mixed" else "inherited")
+    from app.saved_networks import get_saved_network
+    assert get_saved_network(network["saved_network_id"], db_path)["name"] == "Original network label"
+
+
 def test_same_bytes_keep_separate_observation_scope_contexts_and_replay_is_exact(tmp_path):
     db_path = ready_database(tmp_path)
     first_network = saved_network(db_path, "Dev", "10.50.15.0/24")
