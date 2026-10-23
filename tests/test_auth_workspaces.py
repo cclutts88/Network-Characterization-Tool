@@ -1,5 +1,9 @@
 import sqlite3
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("bypass_collection_safety_gate")
+
 from fastapi.testclient import TestClient
 
 from app.auth import create_user, init_auth_storage, verify_credentials
@@ -261,7 +265,8 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "nct-sidebar-edge" in account_script.text
         assert "Device collections" in account_script.text
         assert "New collection" in account_script.text
-        assert "No-Strike exclusions" in account_script.text
+        assert "Mission Environment" in account_script.text
+        assert "Scope & Safety Setup" not in account_script.text
         assert "Active scans" in account_script.text
         assert "Active scans & queue" not in account_script.text
         assert "support:{queuePanel:['currentRunPanel']}" in account_script.text

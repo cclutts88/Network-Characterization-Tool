@@ -67,6 +67,12 @@ from app.saved_networks import (
     update_saved_network_record,
 )
 from app.network_scopes import list_network_scopes
+from app.collection_safety_setup import (
+    bind_collection_scope_context_on_connection,
+    CollectionSafetySetupIncomplete,
+    require_collection_safety_ready,
+    require_collection_safety_ready_on_connection,
+)
 from app.mission_environment import (
     MissionEnvironmentConflict,
     ReviewedMissionScope,
@@ -755,6 +761,12 @@ def add_global_no_strike(
             revision=result["revision"],
             changed_by=request.changed_by,
         )
+        _persist_active_device_cancellations_in_transaction(
+            db,
+            requested,
+            revision=result["revision"],
+            changed_by=request.changed_by,
+        )
     # Signal workers only after the exclusion and every durable cancellation request
     # have committed together. A failed write rolls the whole safety change back.
     for run_id, _intersecting, _cause in cancellation_records:
@@ -763,6 +775,60 @@ def add_global_no_strike(
         if control is not None:
             control.cancel_event.set()
     return result
+
+
+def _persist_active_device_cancellations_in_transaction(
+    db, entries: list[str], *, revision: int, changed_by: str
+) -> list[str]:
+    """Fence active SSH work when a new exclusion covers its bound IPv4 target."""
+    if not db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='device_contact_runs'"
+    ).fetchone():
+        return []
+    exclusions = [ipaddress.ip_network(item, strict=False) for item in entries]
+    cancelled: list[str] = []
+    rows = db.execute(
+        """SELECT run_id, request_json, state FROM device_contact_runs
+             WHERE state IN ('waiting', 'preparing', 'contact_starting', 'contact_active')
+               AND cancellation_requested = 0"""
+    ).fetchall()
+    for run_id, request_json, state in rows:
+        try:
+            address = ipaddress.ip_address(
+                str(json.loads(request_json).get("device_address") or "")
+            )
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if address.version != 4 or not any(address in item for item in exclusions):
+            continue
+        requested_at = utc_now()
+        reason = (
+            f"Global No-Strike revision {revision} now excludes device target {address}"
+        )
+        db.execute(
+            """INSERT INTO device_contact_controls(
+                   control_id, run_id, control_kind, requested_at,
+                   requested_by, reason
+               ) VALUES (?, ?, 'cancel_requested', ?, ?, ?)""",
+            (uuid.uuid4().hex, run_id, requested_at, changed_by[:100], reason),
+        )
+        if state == "waiting":
+            db.execute(
+                """UPDATE device_contact_runs
+                      SET state='cancelled', cancellation_requested=1,
+                          completed_at=?, updated_at=?, status_reason=?
+                    WHERE run_id=? AND cancellation_requested=0""",
+                (requested_at, requested_at, reason, run_id),
+            )
+        else:
+            db.execute(
+                """UPDATE device_contact_runs
+                      SET cancellation_requested=1, updated_at=?, status_reason=?
+                    WHERE run_id=? AND cancellation_requested=0""",
+                (requested_at, reason, run_id),
+            )
+        cancelled.append(str(run_id))
+    return cancelled
 
 
 def _persist_active_run_cancellations_in_transaction(
@@ -962,6 +1028,33 @@ def scan_safety_summary(
         "global_no_strike_revision": global_state["revision"],
         "global_no_strike_as_of": global_state["updated_at"],
     }
+
+
+def _plan_manual_targets(plan: ScanRunPlan | ScanRunRequest) -> list[str]:
+    if plan.manual_targets or plan.saved_network_ids:
+        return list(plan.manual_targets)
+    return list(plan.targets)
+
+
+def require_scan_plan_collection_setup(
+    plan: ScanRunPlan | ScanRunRequest, db_path: Path = DB_PATH
+) -> dict:
+    """Require one exact reviewed setup for a scan that may contact targets."""
+    init_poc_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        context = resolve_reviewed_scope_context(
+            db,
+            saved_network_ids=list(plan.saved_network_ids),
+            manual_targets=_plan_manual_targets(plan),
+            reviewed_associations=[
+                item.model_dump() for item in plan.reviewed_scope_associations
+            ],
+        )
+        status, _context = bind_collection_scope_context_on_connection(
+            db, context=context, saved_network_ids=list(plan.saved_network_ids),
+        )
+        return status
 
 
 def remove_global_no_strike(
@@ -2073,6 +2166,12 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
             manual_targets=definition["manual_targets"],
             reviewed_associations=definition["reviewed_scope_associations"],
         )
+        _setup, context = bind_collection_scope_context_on_connection(
+            db,
+            context=context,
+            saved_network_ids=definition["saved_network_ids"],
+        )
+        definition["collection_safety_setup"] = _setup["review"]
         definition["network_scope_context"] = context
         definition["network_scope_status"] = (
             "pinned" if context is not None else "unscoped"
@@ -2153,8 +2252,8 @@ def set_scan_schedule_enabled(
                 raise RuntimeError(
                     "Review and close the interrupted occurrence before enabling future occurrences"
                 )
-            resolve_schedule_scope_context_in_transaction(db, schedule_id)
-            resolve_reviewed_scope_context(
+            context = resolve_schedule_scope_context_in_transaction(db, schedule_id)
+            reviewed_context = resolve_reviewed_scope_context(
                 db,
                 saved_network_ids=list(schedule.get("saved_network_ids") or []),
                 manual_targets=list(schedule.get("manual_targets") or []),
@@ -2162,6 +2261,13 @@ def set_scan_schedule_enabled(
                     schedule.get("reviewed_scope_associations") or []
                 ),
             )
+            _setup, bound_context = bind_collection_scope_context_on_connection(
+                db,
+                context=context or reviewed_context,
+                saved_network_ids=list(schedule.get("saved_network_ids") or []),
+            )
+            if context is None:
+                insert_schedule_scope_context(db, schedule_id, bound_context)
             mission_review = resolve_collection_mission_review(
                 db,
                 saved_network_ids=list(schedule.get("saved_network_ids") or []),
@@ -2405,6 +2511,12 @@ def insert_reviewed_scan_run(
                 manual_targets=manifest.get("manual_targets") or [],
                 reviewed_scopes=mission_reviewed,
             )
+        _setup, context = bind_collection_scope_context_on_connection(
+            db,
+            context=context,
+            saved_network_ids=list(manifest.get("saved_network_ids") or []),
+        )
+        manifest["collection_safety_setup"] = _setup["review"]
         manifest["network_scope_context"] = context
         manifest["network_scope_status"] = (
             "inherited" if context is not None else "unscoped"
@@ -2597,6 +2709,19 @@ def publish_scan_contact_starting(
             "inherited" if context is not None else "unscoped"
         )
         manifest["mission_environment_review"] = mission_review
+        try:
+            setup = require_collection_safety_ready_on_connection(
+                db,
+                expected_scope_id=context.get("scope_id") if context else None,
+            )
+        except CollectionSafetySetupIncomplete as exc:
+            blocked = _close_precontact_mission_block_on_connection(
+                db, manifest, f"Mission Environment: {exc}"
+            )
+            manifest.clear()
+            manifest.update(blocked)
+            return False
+        manifest["collection_safety_setup"] = setup["review"]
         manifest["started_at"] = utc_now()
         manifest["status"] = "running"
         if isinstance(scheduled_claim, dict):
@@ -3068,6 +3193,11 @@ def certify_scan_contact_phase(
     data_dir: Path = DATA_DIR,
 ) -> list[str]:
     """Re-certify the safety boundary immediately before active contact."""
+    context = manifest.get("network_scope_context") or {}
+    setup = require_collection_safety_ready(
+        db_path, expected_scope_id=context.get("scope_id")
+    )
+    manifest["collection_safety_setup"] = setup["review"]
     global_state = get_global_no_strike(db_path)
     coverage = manifest.setdefault("coverage", {})
     submission = manifest.get("no_strike_submission") or {}
@@ -4996,13 +5126,18 @@ def prepare_schedule_occurrence(
     )
     with connect_database(db_path) as mission_db:
         mission_db.execute("BEGIN")
-        resolve_reviewed_scope_context(
+        reviewed_context = resolve_reviewed_scope_context(
             mission_db,
             saved_network_ids=list(schedule.get("saved_network_ids") or []),
             manual_targets=list(schedule.get("manual_targets") or []),
             reviewed_associations=list(
                 schedule.get("reviewed_scope_associations") or []
             ),
+        )
+        _setup, scope_context = bind_collection_scope_context_on_connection(
+            mission_db,
+            context=scope_context or reviewed_context,
+            saved_network_ids=list(schedule.get("saved_network_ids") or []),
         )
         mission_review = resolve_collection_mission_review(
             mission_db,
@@ -5038,6 +5173,7 @@ def prepare_schedule_occurrence(
         "manual_targets": list(schedule.get("manual_targets") or []),
         "saved_networks": list(schedule.get("saved_networks") or []),
         "network_scope_context": scope_context,
+        "collection_safety_setup": _setup["review"],
         "mission_environment_review": mission_review,
         "profile": {
             "profile_id": schedule["profile_id"],
@@ -5069,6 +5205,10 @@ def prepare_schedule_occurrence(
     })
 
     def recheck_external_inputs(connection) -> None:
+        require_collection_safety_ready_on_connection(
+            connection,
+            expected_scope_id=(scope_context or {}).get("scope_id"),
+        )
         live_global = _global_no_strike_state_in_transaction(connection)
         if int(live_global["revision"]) != int(global_no_strike["revision"]):
             raise RuntimeError(
@@ -6538,6 +6678,8 @@ def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> di
             require_active_collection()
         request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_schedule(request, DB_PATH)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(status_code=409, detail=f"Mission Environment: {exc}") from exc
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MissionEnvironmentConflict as exc:
@@ -6558,6 +6700,8 @@ def change_scan_schedule_state(
             schedule_id, request.enabled, changed_by=request.changed_by,
             db_path=DB_PATH,
         )
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(status_code=409, detail=f"Mission Environment: {exc}") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except SavedNetworkScopeConflict as exc:
@@ -6597,6 +6741,8 @@ def run_saved_scan_schedule(
             request_id=request.request_id,
             requested_by=request.requested_by or "local-operator",
         )
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(status_code=409, detail=f"Mission Environment: {exc}") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan schedule not found") from exc
     except SavedNetworkScopeConflict as exc:
@@ -6675,7 +6821,12 @@ def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
         if request.scheduled:
             actor_fields.append("scheduled_by")
         request = bind_signed_in_actor(http_request, request, *actor_fields)
+        require_scan_plan_collection_setup(request, DB_PATH)
         return launch_scan_run(request)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Mission Environment: {exc}"
+        ) from exc
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:

@@ -23,7 +23,7 @@ from app.derived_contracts import (
 from app.mac_enrichment import oui_search_paths
 
 
-NETWORK_MODEL_CONTRACT_VERSION = 1
+NETWORK_MODEL_CONTRACT_VERSION = 2
 MAX_MAP_CONFIG_BYTES = 100 * 1024 * 1024
 
 
@@ -453,6 +453,19 @@ def capture_network_evidence_snapshot(
                     db, "saved_networks", where="active = 1", order_by="saved_network_id"
                 ),
             }
+            app_settings_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_settings'"
+            ).fetchone()
+            mutable["mission_special_roles"] = (
+                _table_rows(
+                    db, "app_settings",
+                    where="key LIKE 'mission_special_role:%'",
+                    order_by="key",
+                    limit=1001,
+                )
+                if app_settings_exists
+                else {"columns": [], "rows": []}
+            )
     except sqlite3.Error as exc:
         return _uncacheable_snapshot(
             groups, f"Mutable context cannot be fingerprinted: {exc}"

@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("bypass_collection_safety_gate")
+
 from app import poc
 from app.database import connect_database
 

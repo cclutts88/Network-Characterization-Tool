@@ -50,8 +50,8 @@ EXPECTED_HUNT_PAGING = {
     "exposure_filter_across_pages": True,
 }
 EXPECTED_MAP = {
-    False: {"devices": 1, "gateways": 1, "interfaces": 2, "subnets": 2, "hosts": 4188, "relationships": 47, "nmap_records_read": 4315, "configuration_records_read": 4, "mac_observations": 4315, "mac_identified_hosts": 4188, "mac_conflicts": 0, "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0},
-    True: {"devices": 1, "gateways": 0, "interfaces": 1000, "subnets": 0, "hosts": 4188, "relationships": 1041, "nmap_records_read": 4315, "configuration_records_read": 4, "mac_observations": 4315, "mac_identified_hosts": 4188, "mac_conflicts": 0, "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0},
+    False: {"devices": 1, "gateways": 1, "interfaces": 2, "subnets": 2, "hosts": 4188, "relationships": 47, "nmap_records_read": 4315, "configuration_records_read": 4, "mission_partner_identified_devices": 0, "mac_observations": 4315, "mac_identified_hosts": 4188, "mac_conflicts": 0, "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0},
+    True: {"devices": 1, "gateways": 0, "interfaces": 1000, "subnets": 0, "hosts": 4188, "relationships": 1041, "nmap_records_read": 4315, "configuration_records_read": 4, "mission_partner_identified_devices": 0, "mac_observations": 4315, "mac_identified_hosts": 4188, "mac_conflicts": 0, "arp_neighbors": 0, "topology_neighbors": 0, "switchport_links": 0},
 }
 
 

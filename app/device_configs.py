@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import pty
@@ -72,6 +73,11 @@ from app.device_collection_profiles import (
 )
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from app.network_scopes import get_network_scope
+from app.collection_safety_setup import (
+    CollectionSafetySetupIncomplete,
+    get_collection_safety_status,
+    require_collection_safety_ready,
+)
 from app.device_contact_work import (
     DeviceContactClaim,
     DeviceContactConflict,
@@ -157,6 +163,7 @@ def _write_json_atomic(path: Path, value: dict) -> None:
 class DeviceContactFence:
     db_path: Path
     claim: DeviceContactClaim
+    contact_certification: dict[str, object] | None = None
     _stop: threading.Event = field(default_factory=threading.Event)
     _lost: threading.Event = field(default_factory=threading.Event)
     _cancel_requested: threading.Event = field(default_factory=threading.Event)
@@ -179,6 +186,7 @@ class DeviceContactFence:
         next_renewal = time.monotonic() + DEVICE_CONTACT_RENEW_SECONDS
         while not self._stop.wait(0.5):
             try:
+                self._assert_certification_current()
                 if device_contact_cancellation_requested(self.db_path, self.claim):
                     self._cancel_requested.set()
                     self._terminate_processes()
@@ -229,8 +237,21 @@ class DeviceContactFence:
 
     def assert_contact_allowed(self) -> None:
         self.assert_current()
+        self._assert_certification_current()
         if self.cancellation_requested():
             raise DeviceContactConflict("Cancellation is pending for this device contact")
+
+    def _assert_certification_current(self) -> None:
+        if self.contact_certification is None:
+            return
+        try:
+            require_device_contact_certification_ready(
+                self.contact_certification, self.db_path
+            )
+        except CollectionSafetySetupIncomplete as exc:
+            raise DeviceContactConflict(
+                f"Mission Environment changed during device contact: {exc}"
+            ) from exc
 
     def register_process(self, process: object | None) -> None:
         if process is None:
@@ -278,6 +299,7 @@ def acquire_device_contact_fence(
     subject_key: str,
     request: dict[str, object],
     created_by: str,
+    contact_certification: dict[str, object] | None = None,
     db_path: Path | None = None,
 ) -> DeviceContactFence:
     db_path = DB_PATH if db_path is None else db_path
@@ -295,7 +317,7 @@ def acquire_device_contact_fence(
         owner_id=DEVICE_CONTACT_OWNER_ID,
         lease_seconds=DEVICE_CONTACT_LEASE_SECONDS,
     )
-    fence = DeviceContactFence(db_path, claim)
+    fence = DeviceContactFence(db_path, claim, contact_certification)
     fence.start()
     return fence
 
@@ -303,8 +325,16 @@ def acquire_device_contact_fence(
 def publish_device_contact_starting(
     run_dir: Path, manifest: dict, fence: DeviceContactFence
 ) -> None:
+    certification = manifest.get("device_contact_certification")
+    if isinstance(certification, dict):
+        fence.contact_certification = certification
+    try:
+        setup = require_device_contact_manifest_ready(manifest, fence.db_path)
+    except CollectionSafetySetupIncomplete as exc:
+        raise DeviceContactConflict(f"Mission Environment: {exc}") from exc
     if not mark_device_contact_starting(fence.db_path, fence.claim):
         raise DeviceContactConflict("The device contact was cancelled before it started")
+    manifest["collection_safety_setup"] = setup["review"]
     manifest["contact_phase"] = "contact_starting"
     manifest["contact_started_at"] = utc_now()
     manifest["work_claim"] = fence.claim_summary()
@@ -854,6 +884,124 @@ class DeviceConfigPlan(BaseModel):
         return cleaned
 
 
+def certify_device_collection_plan(
+    plan: DeviceConfigPlan, db_path: Path = DB_PATH
+) -> tuple[DeviceConfigPlan, dict]:
+    """Bind SSH to one reviewed, non-excluded IPv4 destination."""
+    current = get_collection_safety_status(db_path)
+    inherited_scope_id = (
+        (current.get("scope") or {}).get("scope_id") if current.get("ready") else None
+    )
+    setup = require_collection_safety_ready(
+        db_path, expected_scope_id=plan.preferred_scope_id or inherited_scope_id
+    )
+    requested = plan.device_address
+    try:
+        parsed = ipaddress.ip_address(requested)
+        addresses = [str(parsed)] if parsed.version == 4 else []
+    except ValueError:
+        try:
+            addresses = sorted({
+                item[4][0]
+                for item in socket.getaddrinfo(
+                    requested, plan.ssh_port, family=socket.AF_INET,
+                    type=socket.SOCK_STREAM,
+                )
+            }, key=lambda value: int(ipaddress.ip_address(value)))
+        except socket.gaierror as exc:
+            raise ValueError(
+                "The device hostname could not be resolved to an IPv4 address"
+            ) from exc
+    if not addresses:
+        raise ValueError("The device target has no usable IPv4 address")
+    exclusions = [
+        ipaddress.ip_network(value, strict=False)
+        for value in setup["no_strike"]["entries"]
+    ]
+    blocked = [
+        address for address in addresses
+        if any(ipaddress.ip_address(address) in network for network in exclusions)
+    ]
+    if blocked:
+        raise CollectionSafetySetupIncomplete(
+            "The device target resolves inside the Global No-Strike boundary: "
+            + ", ".join(blocked)
+        )
+    selected = addresses[0]
+    certified = plan.model_copy(update={
+        "device_address": selected,
+        "preferred_scope_id": setup["scope"]["scope_id"],
+    })
+    return certified, {
+        "requested_device_address": requested,
+        "resolved_ipv4_addresses": addresses,
+        "selected_device_address": selected,
+        "scope_id": setup["scope"]["scope_id"],
+        "scope_version": setup["scope"]["version"],
+        "setup_review_revision": setup["review"]["revision"],
+        "no_strike_revision": setup["no_strike"]["revision"],
+    }
+
+
+def require_device_contact_manifest_ready(
+    manifest: dict, db_path: Path
+) -> dict:
+    setup = require_collection_safety_ready(
+        db_path, expected_scope_id=manifest.get("preferred_scope_id")
+    )
+    try:
+        destination = ipaddress.ip_address(str(manifest.get("device_address") or ""))
+    except ValueError as exc:
+        raise CollectionSafetySetupIncomplete(
+            "The certified device destination is unavailable"
+        ) from exc
+    if destination.version != 4 or any(
+        destination in ipaddress.ip_network(value, strict=False)
+        for value in setup["no_strike"]["entries"]
+    ):
+        raise CollectionSafetySetupIncomplete(
+            "The certified device destination is now excluded by Global No-Strike"
+        )
+    return setup
+
+
+def require_device_contact_certification_ready(
+    certification: dict[str, object], db_path: Path
+) -> dict:
+    """Require the current setup to match the exact contact certification."""
+    scope_id = str(certification.get("scope_id") or "")
+    setup = require_collection_safety_ready(
+        db_path, expected_scope_id=scope_id or None
+    )
+    expected_values = {
+        "scope_version": int((setup.get("scope") or {}).get("version") or 0),
+        "setup_review_revision": int((setup.get("review") or {}).get("revision") or 0),
+        "no_strike_revision": int((setup.get("no_strike") or {}).get("revision") or 0),
+    }
+    for field, current in expected_values.items():
+        if int(certification.get(field) or 0) != current:
+            raise CollectionSafetySetupIncomplete(
+                "The reviewed scope or Global No-Strike boundary changed after "
+                "this device contact was certified"
+            )
+    try:
+        destination = ipaddress.ip_address(
+            str(certification.get("selected_device_address") or "")
+        )
+    except ValueError as exc:
+        raise CollectionSafetySetupIncomplete(
+            "The certified device destination is unavailable"
+        ) from exc
+    if destination.version != 4 or any(
+        destination in ipaddress.ip_network(value, strict=False)
+        for value in setup["no_strike"]["entries"]
+    ):
+        raise CollectionSafetySetupIncomplete(
+            "The certified device destination is now excluded by Global No-Strike"
+        )
+    return setup
+
+
 class DeviceCollectionProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -958,10 +1106,37 @@ def _profile_preview_fields(profile: dict | None, plan: DeviceConfigPlan) -> dic
     }
 
 
+def _ssh_endpoint_guard_args(plan: DeviceConfigPlan) -> list[str]:
+    """Freeze OpenSSH onto the reviewed numeric endpoint without ambient routing."""
+    return [
+        "-F", "/dev/null",
+        "-o", f"HostName={plan.device_address}",
+        "-o", "CanonicalizeHostname=no",
+        "-o", "ProxyCommand=none",
+        "-o", "ProxyJump=none",
+        "-o", "PermitLocalCommand=no",
+        "-o", "ClearAllForwardings=yes",
+    ]
+
+
 def _control_ssh_args_for_plan(plan: DeviceConfigPlan, control_path: Path) -> list[str]:
     return [
-        "ssh", "-S", str(control_path), "-p", str(plan.ssh_port),
+        "ssh", *_ssh_endpoint_guard_args(plan),
+        "-S", str(control_path), "-p", str(plan.ssh_port),
         f"{plan.username}@{plan.device_address}",
+    ]
+
+
+def _control_scp_args_for_plan(
+    plan: DeviceConfigPlan,
+    control_path: Path,
+    remote_output: str,
+    local_output: Path,
+) -> list[str]:
+    return [
+        "scp", "-q", *_ssh_endpoint_guard_args(plan),
+        "-P", str(plan.ssh_port), "-o", f"ControlPath={control_path}",
+        f"{plan.username}@{plan.device_address}:{remote_output}", str(local_output),
     ]
 
 
@@ -970,6 +1145,7 @@ def _interactive_master_args(plan: DeviceConfigPlan, control_path: Path) -> list
     target = f"{plan.username}@{plan.device_address}"
     return [
         "setsid", "--ctty", "ssh", "-M", "-N", "-T",
+        *_ssh_endpoint_guard_args(plan),
         "-o", "ControlMaster=yes", "-o", f"ControlPath={control_path}",
         "-o", "ControlPersist=no", "-o", "NumberOfPasswordPrompts=1",
         "-o", "PubkeyAuthentication=no", "-o", "GSSAPIAuthentication=no",
@@ -1056,7 +1232,7 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
     name = safe_name(plan.device_name or plan.device_address)
     target = f"{plan.username}@{plan.device_address}"
     interactive = plan.authentication_mode == "password_prompt"
-    ssh_args = ["ssh"]
+    ssh_args = ["ssh", *_ssh_endpoint_guard_args(plan)]
     if not interactive:
         ssh_args += ["-o", "BatchMode=yes"]
     ssh_args += [
@@ -1175,11 +1351,9 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
             ),
         )
         if remote_file_workflow:
-            scp_args = [
-                "scp", "-q", "-P", str(plan.ssh_port),
-                "-o", f"ControlPath={control_path}",
-                f"{target}:{remote_output}", str(local_output),
-            ]
+            scp_args = _control_scp_args_for_plan(
+                plan, control_path, remote_output, local_output
+            )
             add_step(
                 "Copy temporary output to NCT",
                 "NCT host",
@@ -1516,10 +1690,8 @@ def _control_check(session: InteractiveSshSession) -> bool:
     if not session.control_path.exists():
         return False
     checked = _run_fenced_process(
-        [
-            "ssh", "-S", str(session.control_path), "-p", str(session.plan.ssh_port),
-            "-O", "check", f"{session.plan.username}@{session.plan.device_address}",
-        ],
+        _control_ssh_args(session)[:-1]
+        + ["-O", "check", _control_ssh_args(session)[-1]],
         session.fence,
         timeout=5,
     )
@@ -2130,10 +2302,9 @@ def _run_interactive_collection(session: InteractiveSshSession) -> dict:
             if collected.returncode != 0:
                 raise RuntimeError("The remote collection command returned a non-zero result.")
             copied = _run_fenced_process(
-                [
-                    "scp", "-q", "-P", str(plan.ssh_port), "-o", f"ControlPath={session.control_path}",
-                    f"{target}:{remote_output}", str(local_output),
-                ],
+                _control_scp_args_for_plan(
+                    plan, session.control_path, remote_output, local_output
+                ),
                 session.fence,
                 timeout=60,
             )
@@ -3468,10 +3639,19 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
         plan, profile = resolve_device_collection_profile_plan(plan)
     except ValueError as exc:
         raise _device_profile_error(exc) from exc
+    try:
+        plan, contact_certification = certify_device_collection_plan(plan, DB_PATH)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Mission Environment: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if plan.authentication_mode != "password_prompt":
         raise HTTPException(status_code=422, detail="Choose password-prompt authentication for this workflow")
     preview_data = build_plan(plan)
     preview_data.update(_profile_preview_fields(profile, plan))
+    preview_data["device_contact_certification"] = contact_certification
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -3488,6 +3668,7 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
             "authentication_mode": "password_prompt",
         },
         created_by=plan.operator,
+        contact_certification=contact_certification,
         db_path=DB_PATH,
     )
     manifest = manifest_for(
@@ -3499,6 +3680,7 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
         credential_retention="none",
         contact_phase="not_started",
         work_claim=fence.claim_summary(),
+        device_contact_certification=contact_certification,
     )
     fence.assert_current()
     _write_json_atomic(run_dir / "manifest.json", manifest)
@@ -3523,6 +3705,7 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
         # SSH. Without this, OpenSSH immediately sends an empty password and
         # reports Permission denied before the operator dialog can appear.
         master_args = _interactive_master_args(plan, control_path)
+        fence.assert_contact_allowed()
         master_process = subprocess.Popen(
             master_args,
             stdin=slave_fd,
@@ -3646,6 +3829,18 @@ def submit_interactive_password(
         try:
             if session.closed:
                 raise HTTPException(status_code=409, detail="The SSH password prompt is already closed")
+            try:
+                require_device_contact_manifest_ready(session.manifest, DB_PATH)
+            except CollectionSafetySetupIncomplete as exc:
+                _finish_interactive_session(
+                    session,
+                    status="cancelled",
+                    stderr=f"Mission Environment changed before authentication: {exc}",
+                    failure_class="safety_boundary_changed",
+                )
+                raise HTTPException(
+                    status_code=409, detail=f"Mission Environment: {exc}"
+                ) from exc
             session.fence.assert_contact_allowed()
             if time.monotonic() - session.created_monotonic >= PASSWORD_SESSION_TTL_SECONDS:
                 _finish_interactive_session(
@@ -3964,6 +4159,14 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
         plan, profile = resolve_device_collection_profile_plan(plan)
     except ValueError as exc:
         raise _device_profile_error(exc) from exc
+    try:
+        plan, contact_certification = certify_device_collection_plan(plan, DB_PATH)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Mission Environment: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     key = key_preflight(plan.key_path)
@@ -3973,6 +4176,7 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
         return result
     preview_data = build_plan(plan)
     preview_data.update(_profile_preview_fields(profile, plan))
+    preview_data["device_contact_certification"] = contact_certification
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -3989,18 +4193,21 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
             "authentication_mode": "key",
         },
         created_by=plan.operator,
+        contact_certification=contact_certification,
         db_path=DB_PATH,
     )
     manifest = manifest_for(
         plan, preview_data, "preparing", operation="ssh_preflight",
         key_status=key["status"], contact_phase="not_started",
         work_claim=fence.claim_summary(),
+        device_contact_certification=contact_certification,
     )
     fence.assert_current()
     _write_json_atomic(run_dir / "manifest.json", manifest)
     work_dir = _device_contact_staging_dir(run_dir, fence)
     args = [
-        "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        "ssh", *_ssh_endpoint_guard_args(plan),
+        "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new", "-p", str(plan.ssh_port),
     ]
     if plan.key_path:
@@ -4073,10 +4280,19 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         plan, profile = resolve_device_collection_profile_plan(plan)
     except ValueError as exc:
         raise _device_profile_error(exc) from exc
+    try:
+        plan, contact_certification = certify_device_collection_plan(plan, DB_PATH)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Mission Environment: {exc}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if plan.authentication_mode != "key":
         raise HTTPException(status_code=409, detail="Use the interactive SSH endpoints for password-prompt authentication")
     preview_data = build_plan(plan)
     preview_data.update(_profile_preview_fields(profile, plan))
+    preview_data["device_contact_certification"] = contact_certification
     key = key_preflight(plan.key_path)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     run_dir = CONFIG_DIR / preview_data["run_id"]
@@ -4094,12 +4310,14 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
             "authentication_mode": "key",
         },
         created_by=plan.operator,
+        contact_certification=contact_certification,
         db_path=DB_PATH,
     )
     manifest = manifest_for(
         plan, preview_data, "preparing", operation="configuration_pull",
         key_status=key["status"], contact_phase="not_started",
         work_claim=fence.claim_summary(),
+        device_contact_certification=contact_certification,
     )
     fence.assert_current()
     _write_json_atomic(run_dir / "manifest.json", manifest)

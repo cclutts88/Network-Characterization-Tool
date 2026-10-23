@@ -407,6 +407,15 @@ def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
     assert "storedGuidePreference===null||storedGuidePreference==='1'" in SHELL_SCRIPT
     assert "hasOwnProperty.call(snapshot,'guide_enabled'))setGuideEnabled" in SHELL_SCRIPT
     assert '<summary>Using this guide</summary>' in SHELL_SCRIPT
+    assert '<strong>How to use this</strong>' in SHELL_SCRIPT
+    assert '<strong>How NCT uses this</strong>' in SHELL_SCRIPT
+    assert '<strong>Limits</strong>' in SHELL_SCRIPT
+    assert 'id="nct-guide-data-use"' in SHELL_SCRIPT
+    assert 'Why this matters' not in SHELL_SCRIPT
+    assert 'function guideDataUseFor(stage=0)' in SHELL_SCRIPT
+    assert 'where that information goes next' in SHELL_SCRIPT
+    assert 'Individual retained Arkime session receipts can contribute' in SHELL_SCRIPT
+    assert 'Aggregate summary groups remain separate' in SHELL_SCRIPT
     assert "Remove verified duplicate copies" in SHELL_SCRIPT
     assert "Recovery records protect interrupted replacements" in SHELL_SCRIPT
     assert 'id="nct-guide-name" tabindex="0"' in SHELL_SCRIPT
@@ -596,19 +605,16 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="deleteStatus"' in html
     assert "Enter the confirmation string shown above" in html
     assert "Built-in profile protected" in html
-    assert 'id="noStrikePanel"' in html
-    assert "Global No-Strikes are excluded addresses" in html
-    assert "profiles cannot turn off" in html
+    assert 'id="noStrikePanel"' not in html
+    assert "Add to global No-Strike list" not in html
+    assert 'href="/settings/mission-environment#scopeSafetyPanel">Mission Environment</a>' in html
+    assert "optional exclusions below apply only to this scan or schedule" in html
+    assert "safety summary below counts their effect" in html
     assert "changed_by:auditActor()" in html
-    assert 'id="globalNoStrikeStatus" class="status" role="status"' in html
-    assert "setGlobalSafetyStatus(error.message,'bad')" in html
-    assert "/api/safety/no-strike" in html
     assert "/api/safety/scan-summary" in html
     assert "Pre-launch scope &amp; safety check" in html
+    assert "sessionAnalyst.role==='admin'&&data.authentication_enabled" in html
     assert 'id="safetyEffective"' in html
-    assert "globalNoStrikeSummary').textContent=`${entries.length} excluded · r" in html
-    assert "Remove a global No-Strike exclusion" in html
-    assert "Downloaded packages are fixed snapshots" in html
     assert "Preview is advisory; NCT rechecks before active contact" in html
     assert "Pause and require operator approval before Nmap" in html
     assert "Estimated time left in this phase" in html
@@ -661,19 +667,23 @@ def test_scan_builder_is_one_page_with_requested_actions():
 
 
 def test_operator_guides_explain_no_strike_timing_and_static_packages():
+    from app.collection_safety_setup_ui import collection_safety_setup_page
     from app.how_nct_works_ui import how_nct_works_page
 
     readme = how_nct_works_page().body.decode()
+    setup = collection_safety_setup_page().body.decode()
     assert "How No-Strike safety is applied" in readme
-    assert "before every active scan phase" in SHELL_SCRIPT
+    assert "TCP, UDP, and an approved full-target fallback are separately rechecked" in readme
     assert "A downloaded package is a static snapshot" in readme
+    assert "Broad networks such as <code>10.0.0.0/8</code> are supported" in readme
     assert "requests cancellation promptly" in readme
     assert "original list of target batches" in readme
     assert "A software rollback can still read the current exclusions" in readme
     html = operator_page().body.decode()
-    assert "canRemove=sessionAnalyst?.role==='admin'" in html
-    assert "administrator removal required" in html
+    assert "Add to global No-Strike list" not in html
     assert "role:'admin',local:true" in html
+    assert "Broad CIDRs are supported, including <code>10.0.0.0/8</code>" in setup
+    assert "pre-launch count is advisory" in readme
 
 
 def test_scan_queue_polling_stops_when_the_session_is_rejected():
@@ -728,17 +738,21 @@ def test_scan_workflow_is_grouped_under_scan_details_navigation():
     collect_group = SHELL_SCRIPT.split("{label:'Collect'", 1)[1].split("{label:'Identify'", 1)[0]
 
     assert "{title:'Nmap scans',icon:'scan'" in collect_group
+    assert "href:'/settings/scope-safety',title:'Scope & Safety Setup'" not in collect_group
+    assert "href:'/settings/mission-environment',title:'Mission Environment'" in SHELL_SCRIPT
+    assert "sidebar.append(missionSection)" in SHELL_SCRIPT
+    assert SHELL_SCRIPT.index("sidebar.append(missionSection)") < SHELL_SCRIPT.index("for(const group of groups)")
     assert "{title:'Scan Details',description:" in collect_group
-    assert "Saved target boundaries, shared scan exclusions" in collect_group
+    assert "Saved target boundaries and reusable scan profiles" in collect_group
     grouped_tasks = [
         "Saved Networks",
-        "No-Strike exclusions",
         "Scan profiles",
     ]
     positions = [collect_group.index(f"title:'{title}'") for title in grouped_tasks]
     assert positions == sorted(positions)
     scan_details = collect_group.split("{title:'Scan Details'", 1)[1].split("{href:'/analysis#xmlImport'", 1)[0]
     assert all(f"title:'{title}'" in scan_details for title in grouped_tasks)
+    assert "No-Strike exclusions" not in scan_details
     for title in ["New scan", "Active scans", "Schedules", "Scan history"]:
         assert f"title:'{title}'" not in scan_details.split("]},", 1)[0]
         assert f"title:'{title}'" in collect_group
@@ -749,6 +763,55 @@ def test_scan_workflow_is_grouped_under_scan_details_navigation():
     assert "ancestor.open=true" in SHELL_SCRIPT
     assert "link?.setAttribute('aria-current','page')" in SHELL_SCRIPT
     assert "summary.title=item.planned?`${itemLabel} — planned`:(item.description||itemLabel)" in SHELL_SCRIPT
+
+
+def test_mission_environment_unifies_safety_tools_and_network_level_visibility():
+    from app.mission_environment_ui import mission_environment_page
+
+    html = mission_environment_page().body.decode()
+    assert html.index('id="scopeSafetyPanel"') < html.index('id="toolPanel"')
+    assert html.index('id="toolPanel"') < html.index('id="observedCoveragePanel"')
+    assert "Active Network Scope" in html
+    assert "Global No-Strike" in html
+    assert "10.0.0.0/8" in html
+    assert "Saved Network" in html
+    assert "CIDR range" in html
+    assert "Possible matches shown by evidence" in html
+    assert "Mission Partner Identified IPs" in html
+    assert "Reported addresses" in html
+    assert "Mission Partner Identified" in html
+    assert "primary, alternate, and backup IP addresses" in html
+    assert 'id="roleCatalog" class="role-catalog" open' in html
+    assert "Common network and server roles" in html
+    assert "Choose a role to start a draft" in html
+    assert "does not save, validate, or assign a role" in html
+    assert "Typical ports are examples only" in html
+    assert "Use this role" in html
+    assert "Draft only — not saved" in html
+    assert "Saved role declarations and evidence comparison" in html
+    assert "Possible matches in retained evidence" in html
+    assert "supporting_sources" in html
+    assert "Open exact retained source" in html
+    assert "source time unavailable" in html
+    assert "Scope:" in html
+    assert "Other mission-specific role" in html
+    assert html.count('id="roleScope"') == 1
+    draft_function = html.split("function startRoleDraft", 1)[1].split("function resetRoleForm", 1)[0]
+    assert "api(" not in draft_function
+    assert "roleAddresses')).focus()" in draft_function
+    assert "roleCatalog').open=true" in html
+    assert "roleCatalogGrid" in html and "aria-live=\"polite\"" in html
+    assert "textContent='Clear draft'" in html
+    assert "textContent='Cancel edit'" in html
+    assert html.index('id="observedCoveragePanel"') < html.index('id="specialDeviceRolesPanel"')
+    assert html.index('id="specialDeviceRolesPanel"') < html.index('id="coveragePanel"')
+    assert "Network devices" in html
+    assert "Individual IPs contribute to counts but do not become rows" in html
+    assert "has no authorization effect" in html
+    assert 'data-nct-table-mode="contained"' in html
+    assert "No blind spots recorded':'Not reviewed" in html
+    assert "Catalog matches are investigation leads with exact retained sources" in SHELL_SCRIPT
+    assert "Roles without a reliable generic signal remain declaration-only" in SHELL_SCRIPT
 
 
 def test_cross_task_actions_reveal_their_destination_in_the_new_shell():
@@ -896,7 +959,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "step.kind" in html
     assert "How to read this preview" in html
     assert 'id="preferredScope"' in html
-    assert "This carries the reviewed choice with the reusable collection profile" in html
+    assert "Live SSH contact requires the active scope from Scope &amp; Safety Setup" in html
     assert "preferred_scope_id:$('preferredScope').value||null" in html
     assert "Reusable collection profiles" in html
     assert "Apply profile" in html
@@ -910,7 +973,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "preferredScope:['Suggested Network Scope'" in SHELL_SCRIPT
     assert "(run.additional_commands||[]).join('\\n')" in html
     assert "run.device_scope_assignment?.scope_id||run.preferred_scope_id" in html
-    assert "still confirms that the whole new collection belongs in this scope" in html
+    assert "still confirms that the whole collection belongs in this scope" in html
     assert "VyOS and pfSense create a named temporary output file" in html
     assert "Cisco, Juniper, and UniFi devices return output directly through SSH and do not run SCP" in html
     assert '<option value="unifi">UniFi</option>' in html

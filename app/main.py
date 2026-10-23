@@ -162,14 +162,22 @@ from app.mission_environment_ui import mission_environment_page
 from app.mission_environment import (
     MissionEnvironmentConflict,
     ReviewedMissionScope,
+    create_special_device_roles,
     get_mission_environment,
     init_mission_environment_storage,
     list_mission_history,
+    retire_special_device_role,
     resolve_collection_mission_review,
+    save_special_device_role,
     update_mission_tool,
     update_scope_context,
 )
 from app.network_scope_ui import network_scope_page
+from app.collection_safety_setup import (
+    CollectionSafetySetupIncomplete,
+    get_collection_safety_status,
+    record_collection_safety_review,
+)
 from app.network_scopes import (
     NetworkScopeConflict,
     archive_network_scope,
@@ -683,6 +691,15 @@ class NetworkScopeArchiveRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class CollectionSafetyReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope_id: str = Field(min_length=1, max_length=200)
+    expected_scope_version: int = Field(ge=1)
+    expected_no_strike_revision: int = Field(ge=0)
+    empty_no_strike_reviewed: bool = False
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class MissionToolUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int = Field(ge=0)
@@ -711,6 +728,43 @@ class MissionScopeUpdateRequest(BaseModel):
         "unsupported_parser_field_mapping",
     ]] = Field(default_factory=list, max_length=7)
     notes: str = Field(default="", max_length=1000)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SpecialDeviceRoleCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope_id: str = Field(min_length=1, max_length=200)
+    addresses: list[str] = Field(min_length=1, max_length=50)
+    role_key: Literal[
+        "directory_controller", "dns_server", "dhcp_server", "default_gateway",
+        "ntp_server", "web_proxy", "other",
+    ]
+    custom_role: str = Field(default="", max_length=120)
+    device_label: str = Field(default="", max_length=120)
+    declared_ports: list[str] = Field(default_factory=list, max_length=50)
+    declared_services: list[str] = Field(default_factory=list, max_length=50)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SpecialDeviceRoleUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    scope_id: str = Field(min_length=1, max_length=200)
+    address: str = Field(min_length=1, max_length=64)
+    role_key: Literal[
+        "directory_controller", "dns_server", "dhcp_server", "default_gateway",
+        "ntp_server", "web_proxy", "other",
+    ]
+    custom_role: str = Field(default="", max_length=120)
+    device_label: str = Field(default="", max_length=120)
+    declared_ports: list[str] = Field(default_factory=list, max_length=50)
+    declared_services: list[str] = Field(default_factory=list, max_length=50)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SpecialDeviceRoleRetireRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -2050,6 +2104,43 @@ def network_scopes_page(request: Request) -> HTMLResponse:
     return network_scope_page()
 
 
+@app.get("/settings/scope-safety", response_class=HTMLResponse)
+def collection_safety_page() -> RedirectResponse:
+    return RedirectResponse(
+        url="/settings/mission-environment#scopeSafetyPanel", status_code=307
+    )
+
+
+@app.get("/api/collection-safety-setup")
+def collection_safety_status(request: Request) -> dict:
+    init_poc_storage(DB_PATH)
+    return get_collection_safety_status(DB_PATH)
+
+
+@app.post("/api/collection-safety-setup/reviews", status_code=201)
+def collection_safety_review(
+    request: Request, payload: CollectionSafetyReviewRequest
+) -> dict:
+    actor = require_network_scope_admin(request)
+    try:
+        init_poc_storage(DB_PATH)
+        return record_collection_safety_review(
+            DB_PATH,
+            scope_id=payload.scope_id,
+            expected_scope_version=payload.expected_scope_version,
+            expected_no_strike_revision=payload.expected_no_strike_revision,
+            empty_no_strike_reviewed=payload.empty_no_strike_reviewed,
+            reviewed_by=actor,
+            reason=payload.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/api/network-scopes")
 def network_scopes_list(request: Request, include_archived: bool = False) -> list[dict]:
     require_network_scope_admin(request)
@@ -2174,6 +2265,56 @@ def mission_environment_scope_update(
             nmap_authorization=payload.nmap_authorization,
             device_evidence=payload.device_evidence,
             blind_spots=list(payload.blind_spots), notes=payload.notes,
+            actor=actor, reason=payload.reason,
+        )
+    except (KeyError, ValueError) as exc:
+        raise _mission_environment_error(exc) from exc
+
+
+@app.post("/api/mission-environment/special-roles")
+def mission_environment_special_roles_create(
+    payload: SpecialDeviceRoleCreateRequest, request: Request,
+) -> dict:
+    actor = require_mission_environment_admin(request)
+    try:
+        records = create_special_device_roles(
+            DB_PATH, scope_id=payload.scope_id, addresses=list(payload.addresses),
+            role_key=payload.role_key, custom_role=payload.custom_role,
+            device_label=payload.device_label, actor=actor, reason=payload.reason,
+            declared_ports=list(payload.declared_ports),
+            declared_services=list(payload.declared_services),
+        )
+        return {"created": len(records), "records": records}
+    except (KeyError, ValueError) as exc:
+        raise _mission_environment_error(exc) from exc
+
+
+@app.patch("/api/mission-environment/special-roles/{role_id}")
+def mission_environment_special_role_update(
+    role_id: str, payload: SpecialDeviceRoleUpdateRequest, request: Request,
+) -> dict:
+    actor = require_mission_environment_admin(request)
+    try:
+        return save_special_device_role(
+            DB_PATH, role_id=role_id, expected_version=payload.expected_version,
+            scope_id=payload.scope_id, address=payload.address,
+            role_key=payload.role_key, custom_role=payload.custom_role,
+            device_label=payload.device_label, actor=actor, reason=payload.reason,
+            declared_ports=list(payload.declared_ports),
+            declared_services=list(payload.declared_services),
+        )
+    except (KeyError, ValueError) as exc:
+        raise _mission_environment_error(exc) from exc
+
+
+@app.delete("/api/mission-environment/special-roles/{role_id}")
+def mission_environment_special_role_retire(
+    role_id: str, payload: SpecialDeviceRoleRetireRequest, request: Request,
+) -> dict:
+    actor = require_mission_environment_admin(request)
+    try:
+        return retire_special_device_role(
+            DB_PATH, role_id=role_id, expected_version=payload.expected_version,
             actor=actor, reason=payload.reason,
         )
     except (KeyError, ValueError) as exc:

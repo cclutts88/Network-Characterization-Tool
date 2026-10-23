@@ -186,6 +186,156 @@ A roadmap item should only be marked complete when:
   after review rather than treating partial output as a clean completion. The preview must
   identify every salvageable and excluded item with its reason so operators do not have
   to rebuild a large queue manually.
+- [x] **No-Strike broad-CIDR operator clarity absorbed into Scope & Safety Setup.** The retained safety model already
+  accepts normalized IPv4 hosts and CIDR networks, including a broad exclusion such as
+  `10.0.0.0/8`, for both the shared Global No-Strike list and scan/schedule additions.
+  Make that supported input explicit in the one authoritative Scope & Safety Setup page
+  and in the Operator Guide. Remove shared-list management from Nmap Scan Details; keep
+  only optional run-specific exclusions and the pre-launch impact summary in the scan
+  builder. This work now belongs to the shared collection-safety milestone below.
+- [x] **Scope & Safety Setup and shared active-collection gate complete on the foundation branch.** Add the first
+  Collect destination, `Scope & Safety Setup`, where an administrator selects the active
+  installation Network Scope and records the reviewed Global No-Strike decision before
+  NCT permits any Nmap traffic or live network-device contact. An empty shared exclusion
+  list is valid only after an explicit `none currently required` decision with actor,
+  reason, time, scope revision and safety revision. Read-only review, retained-file
+  imports and local analysis remain available while setup is incomplete. Setup means
+  `Ready for collection planning`; it never grants authorization to scan or connect.
+  Enforce the gate server-side for direct API calls, immediate and queued scans,
+  schedules, restart/retry dispatch, fallback paths, interactive SSH, key-based preflight
+  and device execution. Revalidate immediately before contact and preserve blocked work
+  without changing its target, scope or queue order. Global No-Strike also protects live
+  device contact: resolve hostnames without connecting, reject unresolved or excluded
+  destinations, and bind contact to the validated address. A later safety change must
+  stop affected active scan or device contact when possible and retain the reason. New
+  portable packages retain the reviewed setup decision; already distributed packages
+  cannot receive later server changes and keep that visible limitation. Existing
+  evidence is never rewritten or retroactively scoped. Independent architecture gate:
+  **CLEAR — DOCUMENTED DEVIATION** from scan-only No-Strike management to a shared,
+  audited active-collection prerequisite. Novice workflow gate: **CLEAR** for the first
+  Collect destination, explicit empty-list review, plain readiness wording and direct
+  return links from blocked collection pages.
+  **Completion and deviation record (2026-10-23):** the authoritative page now appears
+  first under Collect. Nmap Scan Details contains only Saved Networks and Scan Profiles;
+  the scan builder retains optional one-run/one-schedule exclusions and its impact
+  preview. Reviews are append-only settings records bound to the exact active scope and
+  Global No-Strike revisions, avoiding a new database migration while preserving actor,
+  reason and time. Manual targets and unscoped new collection plans inherit only the
+  administrator-selected, currently reviewed setup scope; an explicitly differently
+  scoped Saved Network is rejected. This is not the later selector-hiding single-scope
+  mode and does not rewrite historical evidence. Device hostnames are resolved before
+  contact, every returned IPv4 address is checked, and SSH is bound to one recorded safe
+  address. A new intersecting Global No-Strike revision durably cancels waiting device
+  work and requests cancellation of active work. IPv6 device contact and live updates to
+  already downloaded portable packages remain outside this milestone. The clean full
+  Docker suite passes **1,955 tests with 18 skipped** and one existing dependency warning.
+  Focused safety, scan, schedule, device and UI checks pass, and a rebuilt isolated browser verified the
+  review flow, navigation, removed duplicate panel, device return link and a clean
+  console/network log. This is development-ready foundation work only; it is not on
+  `main`, installed on the Range or mission-ready.
+- [~] **Unified Mission Environment workflow — started 2026-10-23.** Replace the
+  separate Scope & Safety destination with one top-level Mission Environment entry
+  before Collect. Present the page in the operator's working order: active Network
+  Scope, installation-wide Global No-Strike review, available tools and access, then
+  the environment picture supported by retained evidence. Keep reviewed declarations
+  separate from automatic observations so evidence never grants collection authority.
+  The automatic table remains network-level: one row per scoped Saved Network or
+  device-identified network, with the Saved Network name, CIDR, unique observed-host
+  count, retained network-device names, Nmap/device/Arkime visibility, blind spots and
+  latest retained evidence times. Individual addresses may contribute to counts but
+  never become rows; addresses outside every saved or device-identified network are
+  reported as omitted rather than guessed into `/32` networks. Calculation is read-only,
+  bounded and makes no network contact. The current independent architecture review is
+  **CLEAR — DOCUMENTED DEVIATION** from the earlier separate first-under-Collect page;
+  final safety, browser and novice gates remain in progress.
+  Add a separate **Special Device Roles** register immediately after the automatic
+  network-level table. Keep the role-creation form separate from a sectioned comparison
+  table. The table presents the role and exact scope, **Mission Partner Identified**
+  addresses, declared ports/services and their retained assessment first, then any
+  other same-scope **Possible Matches Shown By Evidence**, their observed ports/services
+  and the exact reason each match is shown. Possible matches remain investigation leads
+  and never become recommendations, Map markers or automatic role assignments. An administrator may record
+  multiple IPv4 or IPv6 addresses for one role (including primary, alternate and
+  backup services), and one address may hold several roles. A **Specific Special
+  Identifier** option records a required operator-supplied role name for mission systems
+  outside the standard DNS, directory, DHCP, gateway, time and proxy list. Creation
+  may also retain known `port/protocol` pairs and mission-partner service names for
+  each address. Those declared details support bounded comparison with retained Nmap
+  and Arkime evidence but do not prove the role. Each address remains an
+  independently versioned, scope-bound declaration with actor, reason, time, revision
+  and retirement history so reused addresses in different scopes are never merged.
+  Retained Nmap services, device configurations and Arkime session receipts may assess
+  whether available evidence is consistent with a standard declaration, partially supports it,
+  conflicts with it, is insufficient, is stale or has not been assessed. These labels
+  describe retained evidence only: they do not validate live operation, recommend a
+  replacement, grant authorization, change No-Strike, alter Reach or collection, or
+  silently assign a role. Missing or partial observations never establish a conflict.
+  Specific Special Identifiers remain declared identifications and are not automatically
+  inferred or recommended. Map may visibly identify declared special-device addresses and show the exact scope,
+  declaration and supporting evidence status; it must not promote evidence-shown
+  alternatives into recommendations or declarations. The independent reviewer cleared
+  this architecture as a **DOCUMENTED DEVIATION** provided declarations and assessments
+  remain separate, assessment rules and source receipts are versioned, and all other
+  authorization and evidence boundaries remain intact.
+  Operator Guide data-flow refinement started 2026-10-23: replace the ambiguous
+  **Why this matters** block throughout the shared guide with three consistent parts.
+  **How to use this** explains the highlighted page, section or control; **How NCT
+  uses this** explains the context it creates and the next supported pipeline use;
+  **Limits** preserves the evidence, authorization and live-state boundaries. The
+  guide's own help must explain this reading order, and the data-use wording must
+  remain specific to the active NCT workflow rather than promising unsupported future
+  capability. Focused tests, live browser review, novice review and the independent
+  quality gate are required before this refinement is marked complete. The first
+  cumulative re-review **HALTED FOR REVIEW** because the Arkime guide copy described
+  aggregate summaries too broadly, Arkime receipts from separate imports without a
+  session identifier could be collapsed, and the collection-safety regression suite
+  lacked hostile ambient SSH-configuration and live fence-invalidation exercises.
+  The correction now limits cross-source role evidence to individual retained session
+  receipts, preserves every retained receipt in role assessment while leaving verified
+  exact-stream deduplication to Communication History where dataset, source-node and
+  session identity are available together, proves OpenSSH ignores ambient config, and proves a running
+  fenced child is terminated when the reviewed scope becomes stale. Focused Docker
+  verification passes **101 tests** with one existing dependency warning. The shared
+  guide now renders **How to use this**, **How NCT uses this**, and **Limits** for page
+  overviews and focused controls. Live browser checks passed, the novice operator gate
+  is **CLEAR**, the independent gate is **CLEAR — DOCUMENTED DEVIATION** after **133
+  independent tests**, and the then-current full Docker suite passed **1,972 tests with
+  18 skipped** and one existing dependency warning. This guide refinement is complete
+  on the foundation branch only; it is not on `main` or installed on the Range.
+  Common network and server role catalog refinement started 2026-10-23: expose
+  the existing scope-bound role declarations as a collapsible, novice-readable
+  catalog instead of hiding the basic choices in a dropdown. The selected Network
+  Scope is shared with the declaration form. Each catalog entry must distinguish
+  mission-partner declared addresses from bounded, same-scope retained-evidence
+  matches; choosing an entry starts a draft only and cannot save a declaration,
+  select an address, authorize collection, or promote a possible match. Typical
+  ports are examples and are never copied into partner-supplied fields. The saved
+  seven-column declaration/evidence table remains authoritative, custom roles remain
+  available, and the catalog is collapsible. Added role rules are versioned and weak
+  common-port signals remain investigation leads rather than device identification.
+  Independent architecture gate: **CLEAR — DOCUMENTED DEVIATION** with exact-scope,
+  stale-result, bounded-match, optional-detail and no-write selection regressions
+  required. Novice review requires explicit draft-only wording, one synchronized
+  scope selector, a clear Use this role action, and separate saved-table labeling.
+  Implementation completed 2026-10-23 with 17 common and mission-specific role cards,
+  one scope selector, collapsible layout, draft-only selection, optional partner-supplied
+  ports/services, distinct declaration counts, and bounded same-scope evidence matches.
+  Every possible match keeps its exact retained Nmap, Arkime, or device-configuration
+  sources and source times. Source selection occurs before the separate display limit,
+  so a supporting receipt beyond the first 25 visible signals is not lost. Ordinary
+  SNMP agent ports no longer identify a network-management server; that role stays
+  declaration-only until directional evidence can distinguish the manager. The novice
+  gate initially halted because an unsaved catalog selection said Cancel edit; catalog
+  drafts now say **Clear draft**, while saved records retain **Cancel edit**. The
+  independent reviewer halted generic source links, SNMP overclassification and the
+  pre-selection source limit; all were corrected and the final gate is **CLEAR —
+  DOCUMENTED DEVIATION** after **135 independent tests**. Focused Docker validation
+  passes **103 tests** and the cumulative full Docker suite passes **1,974 tests with 18
+  skipped** and one existing dependency warning. Final novice browser checks are
+  **CLEAR** at desktop and 980×900 with the Guide open: keyboard use, collapse state,
+  draft clearing, table headings, contained scrolling and the console all passed. This
+  refinement is development-ready on the foundation branch only; it is not on `main`,
+  installed on the Range or mission-ready.
 - [ ] **R24 explicit fresh installation.** Begin only after the diagnostic and reset
   boundaries are complete. Preview the exact NCT data that will be isolated, verify a
   separately stored backup and require explicit destructive confirmation. Preserve

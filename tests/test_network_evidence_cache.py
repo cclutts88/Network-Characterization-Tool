@@ -255,6 +255,18 @@ def test_exact_database_rows_invalidate_without_timestamp_or_length_changes(tmp_
             "INSERT INTO saved_networks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("net", "Alpha", "10.0.0.0/24", "", "", "[]", "t", "a", "t", "a", 1),
         ),
+        (
+            "INSERT INTO app_settings VALUES (?, ?, ?, ?)",
+            (
+                "mission_special_role:" + "a" * 32 + ":000000000001",
+                json.dumps({
+                    "role_id": "a" * 32, "version": 1, "scope_id": "scope",
+                    "address": "10.0.0.53", "role_key": "dns_server",
+                    "custom_role": "", "device_label": "DNS", "active": True,
+                }, sort_keys=True),
+                "t", "admin",
+            ),
+        ),
     ]
     for statement, parameters in mutations:
         with connect_database(db_path) as db:

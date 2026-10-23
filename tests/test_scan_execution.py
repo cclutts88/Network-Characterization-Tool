@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("bypass_collection_safety_gate")
+
 import app.poc as poc
 from app.poc import (
     NoStrikeUpdate,

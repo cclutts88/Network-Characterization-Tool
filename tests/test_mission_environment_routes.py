@@ -46,6 +46,42 @@ def test_local_operator_can_review_and_update_mission_environment(tmp_path, monk
         assert history.status_code == 200
         assert history.json()["total"] == 1
 
+        roles = client.post("/api/mission-environment/special-roles", json={
+            "scope_id": scope["scope_id"],
+            "addresses": ["10.50.15.10", "10.50.15.11"],
+            "role_key": "dns_server", "custom_role": "",
+            "device_label": "Primary and backup DNS",
+            "declared_ports": ["53/tcp", "53/udp"],
+            "declared_services": ["domain"],
+            "reason": "Mission partner identified both DNS servers",
+        })
+        assert roles.status_code == 200
+        assert roles.json()["created"] == 2
+        refreshed = client.get("/api/mission-environment?limit=25").json()
+        assert [item["address"] for item in refreshed["special_device_roles"]] == [
+            "10.50.15.10", "10.50.15.11"
+        ]
+        assert refreshed["special_device_roles"][0]["declared_ports"] == [
+            "53/tcp", "53/udp"
+        ]
+        first = refreshed["special_device_roles"][0]
+        edited = client.patch(
+            f"/api/mission-environment/special-roles/{first['role_id']}", json={
+                "expected_version": first["version"], "scope_id": scope["scope_id"],
+                "address": first["address"], "role_key": "dns_server",
+                "custom_role": "", "device_label": "Primary DNS",
+                "declared_ports": ["53/udp"], "declared_services": ["domain"],
+                "reason": "Clarify primary member",
+            },
+        )
+        assert edited.status_code == 200
+        retired = client.request(
+            "DELETE", f"/api/mission-environment/special-roles/{first['role_id']}",
+            json={"expected_version": 2, "reason": "Remove retired server"},
+        )
+        assert retired.status_code == 200
+        assert retired.json()["active"] is False
+
 
 def test_page_keeps_headers_before_rows_and_has_contextual_guidance(tmp_path, monkeypatch):
     from app.shell_ui import SHELL_SCRIPT
@@ -59,6 +95,11 @@ def test_page_keeps_headers_before_rows_and_has_contextual_guidance(tmp_path, mo
     assert "button.dataset.missionScope" in html
     assert 'id="saveTool"' in html
     assert 'id="saveScope"' in html
+    assert 'id="specialDeviceRolesPanel"' in html
+    assert 'id="roleAddresses"' in html
+    assert "Mission Partner Identified" in html
+    assert "Possible matches shown by evidence" in html
+    assert "Observed ports and services" in html
     assert 'href="/settings/mission-environment">Mission Environment</a>' in SHELL_SCRIPT
     assert "location.pathname==='/settings/mission-environment'" in SHELL_SCRIPT
     assert "Review Network Scope coverage" in SHELL_SCRIPT

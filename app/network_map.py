@@ -19,6 +19,7 @@ from app.mac_enrichment import (
     parse_neighbor_text,
     reset_oui_database_cache,
 )
+from app.mission_environment import list_active_special_device_roles
 from app.network_evidence_cache import (
     MAX_MAP_CONFIG_BYTES,
     NetworkEvidenceCache,
@@ -2029,6 +2030,105 @@ def annotate_subnet_scan_observations(nodes: dict[str, dict]) -> None:
         subnet["infrastructure_count"] = len(observations)
 
 
+def annotate_mission_partner_roles(nodes: dict[str, dict], db_path: Path) -> int:
+    """Mark operator declarations without converting them into discovered topology."""
+    roles = list_active_special_device_roles(db_path)
+    marked: set[str] = set()
+
+    def node_addresses(node: dict) -> set[str]:
+        values = [node.get("ip"), node.get("address"), *(node.get("addresses") or [])]
+        result = set()
+        for value in values:
+            if not value:
+                continue
+            candidate = str(value).split("/", 1)[0]
+            parsed = valid_ip(candidate)
+            if parsed:
+                result.add(parsed)
+        return result
+
+    def exact_node_scope(node: dict) -> str | None:
+        values = {
+            str(value) for value in (
+                [node.get("scope_id")] + list(node.get("scope_ids") or [])
+            ) if value
+        }
+        return next(iter(values)) if len(values) == 1 else None
+
+    def declaration_node(scope_id: str, scope_label: str, address: str) -> dict:
+        node_id = f"mission:{scope_id}:{address}"
+        if node_id not in nodes:
+            seed: dict[str, dict] = {}
+            node = ensure_ip_node(seed, address)
+            node.update({
+                "id": node_id,
+                "label": address,
+                "scope_id": scope_id,
+                "scope_ids": [scope_id],
+                "scope_label": scope_label,
+                "declaration_only": True,
+                "state": "mission partner identified",
+            })
+            nodes[node_id] = node
+        return nodes[node_id]
+
+    for declaration in roles:
+        address = valid_ip(declaration.get("address"))
+        if address is None:
+            continue
+        scope_id = str(declaration["scope_id"])
+        matches = [
+            node for node in nodes.values()
+            if node.get("kind") in {"host", "device", "gateway"}
+            and address in node_addresses(node)
+            and exact_node_scope(node) == scope_id
+        ]
+        node = next(
+            (item for item in matches if item.get("kind") in {"device", "gateway"}),
+            matches[0] if matches else None,
+        )
+        if node is None:
+            # An unscoped or multi-scope topology node is deliberately not used:
+            # the same address can identify different systems in different scopes.
+            node = declaration_node(scope_id, str(declaration["scope_label"]), address)
+        item = {
+            "role_id": declaration["role_id"],
+            "version": declaration["version"],
+            "scope_id": declaration["scope_id"],
+            "scope_label": declaration["scope_label"],
+            "address": address,
+            "role_key": declaration["role_key"],
+            "role_label": declaration["role_label"],
+            "device_label": declaration.get("device_label") or "",
+            "declared_ports": list(declaration.get("declared_ports") or []),
+            "declared_services": list(declaration.get("declared_services") or []),
+            "declared_by": declaration.get("actor"),
+            "declared_at": declaration.get("recorded_at"),
+            "reason": declaration.get("reason"),
+            "source_url": "/settings/mission-environment#specialDeviceRolesPanel",
+        }
+        signature = (item["role_id"], item["version"])
+        existing = {
+            (value.get("role_id"), value.get("version"))
+            for value in node.setdefault("mission_special_roles", [])
+        }
+        if signature not in existing:
+            node["mission_special_roles"].append(item)
+        node["mission_partner_identified"] = True
+        add_source(node, source_record(
+            "mission_role_declaration",
+            f"{item['scope_label']} · {item['role_label']}",
+            item["declared_at"], item["source_url"],
+        ))
+        marked.add(node["id"])
+    for node in nodes.values():
+        if node.get("mission_special_roles"):
+            node["mission_special_roles"].sort(key=lambda item: (
+                item["scope_label"].casefold(), item["role_label"].casefold(), item["address"]
+            ))
+    return len(marked)
+
+
 def annotate_os_inferences(nodes: dict[str, dict]) -> None:
     """Add non-destructive OS hints after all service and device evidence is merged."""
     for node in nodes.values():
@@ -2045,6 +2145,7 @@ def _build_topology_uncached() -> dict:
     imported_count = imported_hosts(nodes, edges, warnings)
     automated_count = automated_scan_hosts(nodes, edges, warnings)
     config_count = configuration_devices(nodes, edges, warnings)
+    mission_special_count = annotate_mission_partner_roles(nodes, DB_PATH)
     apply_topology_host_identities(nodes, DB_PATH)
     apply_os_overrides(
         [
@@ -2093,6 +2194,7 @@ def _build_topology_uncached() -> dict:
         "relationships": len(edges),
         "nmap_records_read": imported_count + automated_count,
         "configuration_records_read": config_count,
+        "mission_partner_identified_devices": mission_special_count,
         "mac_observations": sum(len(node.get("mac_observations") or []) for node in node_list),
         "mac_identified_hosts": sum(1 for node in node_list if node.get("mac")),
         "mac_conflicts": sum(1 for node in node_list if node.get("mac_conflict")),

@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.usefixtures("bypass_collection_safety_gate")
+
 from app import device_configs
 from app.device_contact_work import (
     get_device_contact_run,
