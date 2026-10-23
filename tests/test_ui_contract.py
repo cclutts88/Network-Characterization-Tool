@@ -66,6 +66,20 @@ def test_active_scan_explains_active_targets_and_finalized_host_records():
     assert "The phase percentage can move while finalized stays at zero" in SHELL_SCRIPT
 
 
+def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
+    html = operator_page().body.decode()
+    assert 'id="scanRecoveryPanel"' in html
+    assert 'data-guide-context="scan-queue-self-check"' in html
+    assert "Investigate scan queue" in html
+    assert "Resume preserved scans" in html
+    assert "Resume passive pulls" in html
+    assert "/api/system/scan-work-recovery" in html
+    assert "/api/system/scan-work-recovery/resume-passive" in html
+    assert "creates and independently verifies a complete backup" in html
+    assert "Resume passive pulls separately authorizes automatic Arkime connector contact" in SHELL_SCRIPT
+    assert "closest?.('#scanRecoveryPanel')" in SHELL_SCRIPT
+
+
 def test_recursive_note_changes_preview_exact_scope_and_report_results():
     assert "/branch-preview`" in SESSION_SCRIPT
     assert "branch_revision:preview.branch_revision" in SESSION_SCRIPT

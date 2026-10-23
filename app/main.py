@@ -125,6 +125,17 @@ from app.runtime_trends import (
 )
 from app.writer_guard import acquire_application_writer_guard
 from app.work_coordination import init_work_coordination_storage
+from app.scan_work_recovery import (
+    ScanWorkRecoveryError,
+    clear_passive_recovery_pause,
+    clear_recovery_pause,
+    diagnose_scan_work,
+    passive_contact_paused,
+    pause_for_diagnosis,
+    recovery_pause,
+    scan_contact_paused,
+    write_recovery_pause,
+)
 from app.device_contact_work import init_device_contact_work_storage
 from app.schema_compatibility import (
     begin_schema_migration,
@@ -196,6 +207,7 @@ from app.poc import (
     get_scan_run_plan,
     init_poc_storage,
     list_scan_run_plans,
+    dispatch_next_queued_run,
     normalize_ipv4_networks,
     recover_scheduler_state,
     resume_scan_workers,
@@ -671,6 +683,18 @@ class StorageCompactionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirmation: str = Field(min_length=1, max_length=100)
+
+
+class ScanRecoveryResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation: str = Field(min_length=1, max_length=120)
+
+
+class PassiveRecoveryResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation: str = Field(min_length=1, max_length=120)
 
 
 class NetworkScopeCreateRequest(BaseModel):
@@ -1717,6 +1741,19 @@ async def lifespan(_: FastAPI):
         recover_missing_automated_nmap_intents(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
+        scan_recovery = recovery_pause(DATA_DIR)
+        if (
+            scan_recovery is None
+            and collection_enabled
+            and not compaction_recovery.get("recovery_required")
+        ):
+            scan_plan = diagnose_scan_work(DB_PATH)
+            if scan_plan.get("blockers") or scan_plan.get("affected_count"):
+                scan_recovery = pause_for_diagnosis(
+                    DATA_DIR,
+                    scan_plan,
+                    "NCT detected unfinished or contradictory scan work during startup",
+                )
         resume_storage_jobs()
         background_workers_started = not compaction_recovery.get("recovery_required")
         if background_workers_started:
@@ -1725,10 +1762,12 @@ async def lifespan(_: FastAPI):
             resume_derived_job_worker()
             recover_interrupted_derived_jobs(DB_PATH)
             start_derived_job_worker(DB_PATH, DATA_DIR)
-            recover_interrupted_pulls(DB_PATH)
-            start_arkime_pull_worker(DB_PATH)
+            if not passive_contact_paused(DATA_DIR):
+                recover_interrupted_pulls(DB_PATH)
+                start_arkime_pull_worker(DB_PATH)
             if collection_enabled:
-                recover_scheduler_state()
+                if not scan_contact_paused(DATA_DIR):
+                    recover_scheduler_state()
                 scheduler_stop = threading.Event()
                 scheduler_thread = _new_scheduler_thread(scheduler_stop)
                 scheduler_thread.start()
@@ -1900,6 +1939,113 @@ def system_runtime_health(request: Request) -> dict:
     result["deployment"] = deployment_profile_status()
     result["active_collection"] = active_collection_status()
     return result
+
+
+@app.get("/api/system/scan-work-recovery")
+def scan_work_recovery_status(request: Request) -> dict:
+    # The scan queue is visible to every signed-in operator, so its read-only
+    # consistency check follows the same boundary. The middleware has already
+    # authenticated the request when authentication is enabled. Applying a
+    # recovery still happens on the stopped host and resuming contact remains
+    # administrator-only below.
+    return {
+        "pause": recovery_pause(DATA_DIR),
+        "plan": diagnose_scan_work(DB_PATH),
+        "resume_confirmation": "RESUME PRESERVED SCANS",
+        "passive_resume_confirmation": "RESUME PASSIVE PULLS",
+        "host_command": "sh scripts/nct-reset-unfinished.sh --container nct",
+    }
+
+
+@app.post("/api/system/scan-work-recovery/resume")
+def resume_recovered_scan_work(
+    request: Request, body: ScanRecoveryResumeRequest
+) -> dict:
+    actor = require_admin(request) if auth_enabled() else {"username": "local-operator"}
+    if body.confirmation.strip() != "RESUME PRESERVED SCANS":
+        raise HTTPException(status_code=422, detail="Type RESUME PRESERVED SCANS exactly")
+    plan = diagnose_scan_work(DB_PATH)
+    if plan.get("blockers"):
+        raise HTTPException(
+            status_code=409,
+            detail="Recovery remains blocked: " + "; ".join(plan["blockers"]),
+        )
+    saved_pause = recovery_pause(DATA_DIR)
+    try:
+        cleared = clear_recovery_pause(DATA_DIR, body.plan_digest)
+    except ScanWorkRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not cleared:
+        raise HTTPException(status_code=409, detail="No reviewed scan recovery is paused")
+    try:
+        dispatched = dispatch_next_queued_run(db_path=DB_PATH, data_dir=DATA_DIR)
+    except Exception as exc:
+        restored = dict(saved_pause or {})
+        restored.pop("path", None)
+        restored.update({
+            "state": "review_required",
+            "plan_digest": body.plan_digest,
+            "scan_contact_paused": True,
+            "reason": "Recovered scans remain paused because dispatch could not start safely",
+        })
+        write_recovery_pause(DATA_DIR, restored)
+        raise HTTPException(
+            status_code=503,
+            detail="Recovered scans remain paused because dispatch could not start safely",
+        ) from exc
+    return {
+        "resumed": True,
+        "resumed_by": actor["username"],
+        "dispatched_run_id": (dispatched or {}).get("run_id"),
+        "remaining_review_items": plan.get("affected_count", 0),
+        "passive_contact_paused": passive_contact_paused(DATA_DIR),
+    }
+
+
+@app.post("/api/system/scan-work-recovery/resume-passive")
+def resume_recovered_passive_work(
+    request: Request, body: PassiveRecoveryResumeRequest
+) -> dict:
+    actor = require_admin(request) if auth_enabled() else {"username": "local-operator"}
+    if body.confirmation.strip() != "RESUME PASSIVE PULLS":
+        raise HTTPException(status_code=422, detail="Type RESUME PASSIVE PULLS exactly")
+    plan = diagnose_scan_work(DB_PATH)
+    if plan.get("blockers"):
+        raise HTTPException(
+            status_code=409,
+            detail="Recovery remains blocked: " + "; ".join(plan["blockers"]),
+        )
+    saved_pause = recovery_pause(DATA_DIR)
+    try:
+        cleared = clear_passive_recovery_pause(DATA_DIR, body.plan_digest)
+    except ScanWorkRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not cleared:
+        raise HTTPException(status_code=409, detail="No reviewed passive recovery is paused")
+    try:
+        recover_interrupted_pulls(DB_PATH)
+        start_arkime_pull_worker(DB_PATH)
+    except Exception as exc:
+        # If the worker cannot be made ready, restore the durable contact pause.
+        # The operator can retry without a partly-authorized passive path.
+        restored = dict(saved_pause or {})
+        restored.pop("path", None)
+        restored.update({
+            "state": "review_required",
+            "plan_digest": body.plan_digest,
+            "passive_contact_paused": True,
+            "reason": "Passive pulls remain paused because the worker could not start",
+        })
+        write_recovery_pause(DATA_DIR, restored)
+        raise HTTPException(
+            status_code=503,
+            detail="Passive pulls remain paused because the worker could not start",
+        ) from exc
+    return {
+        "resumed": True,
+        "resumed_by": actor["username"],
+        "scan_contact_paused": scan_contact_paused(DATA_DIR),
+    }
 
 
 @app.get("/api/system/storage-architecture")

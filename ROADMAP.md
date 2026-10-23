@@ -168,7 +168,7 @@ A roadmap item should only be marked complete when:
   and for terminal-only results before storage separation is proved. Novice gate:
   **CLEAR**. This is committed development work only; it does not reset unfinished work,
   change the installed Range, or claim mission readiness.
-- [ ] **R23 evidence-preserving reset unfinished work.** Begin only after R22 can capture
+- [~] **R23 evidence-preserving reset unfinished work — implementation started 2026-10-23.** R22 now captures
   the pre-reset state. Keep this separate from fresh installation; require a verified cold
   backup, preserve completed evidence and refuse unfamiliar work or unresolved migration.
   Add scan-work self-diagnosis that automatically detects impossible or stranded active,
@@ -186,6 +186,51 @@ A roadmap item should only be marked complete when:
   after review rather than treating partial output as a clean completion. The preview must
   identify every salvageable and excluded item with its reason so operators do not have
   to rebuild a large queue manually.
+  **First scan/schedule recovery slice implemented and independently cleared on 2026-10-23.** Active
+  Scans now provides a read-only queue self-check for every signed-in operator. Startup
+  records a durable pause when it finds stranded or contradictory scan/schedule work;
+  automatic scan dispatch and automatic Arkime pull contact remain paused until review.
+  The host command stops the exact container, refuses shared data, creates and
+  independently restores and verifies a complete cold backup, recalculates the exact
+  plan from that restored copy, and applies only the confirmed plan to the original
+  data. It keeps untouched queued scans in order, removes only proven stale pre-contact
+  ownership, interrupts uncertain-contact scans, preserves completed target batches and
+  evidence, holds affected schedules for review, and releases only the primary scan
+  capacity lease. NCT restarts paused; an administrator must separately type the exact
+  resume confirmation before preserved waiting scans can again compete for capacity and
+  repeat the current scope, Mission Environment and No-Strike checks.
+  **Documented deviation:** this first slice deliberately covers Nmap scans and durable
+  scheduled occurrences only. It pauses automatic Arkime pull contact during the scan
+  recovery boundary but does not rewrite Arkime pull, device-contact, pipeline-job,
+  storage-maintenance or other work records. Those work types require their own proven
+  state contracts before R23 can be marked complete. The first slice therefore remains
+  `[~]`; it must not be described as a universal unfinished-work reset. Focused automated
+  checks and disposable stopped-container tests pass, including a complete backup and
+  restore comparison, named-volume preview, exact-plan apply, preserved evidence,
+  repeated-apply refusal, shared-volume refusal and restoration of the prior running and
+  restart-policy state. Review authorization is split deliberately: **Resume preserved
+  scans** authorizes only Nmap queue contact, while **Resume passive pulls** separately
+  authorizes automatic Arkime connector contact; failure to start either path restores
+  its durable pause. The exact plan now covers the full scan manifest, complete affected
+  schedule and immutable definition records, frozen occurrence and target records, every
+  active-lease ownership field, and every unfinished sibling in an affected occurrence.
+  A schedule or lease change after preview invalidates the reviewed digest. Apply records
+  the original and resulting database rows with the complete
+  plan and receipt in the existing scan audit ledger inside the same transaction, so a
+  later portable-receipt write failure remains diagnosable. The host helper checks every
+  mount destination for named-volume or parent/child bind overlap, proves backup-output
+  separation before creating it, isolates helpers from the network with a read-only root
+  and dropped capabilities, bounds Docker calls, and requires a successful inventory to
+  prove the helper is absent before restarting NCT. If absence cannot be proved, NCT stays
+  stopped with automatic restart disabled and reports the manual recovery boundary. A
+  final full Docker regression run passed **1,997 tests with 18 environment-dependent
+  skips**. Recovery-focused, documentation and UI coverage passed **137 tests** after the
+  cleanup and approval-fingerprint corrections. Disposable stopped-container tests passed
+  for named-volume preview, exact-plan apply, transaction receipt, repeat-apply refusal,
+  same-volume alternate-destination refusal, verified helper absence, and exact
+  `on-failure:4` runtime restoration. The Independent Reviewer / Quality-Gate returned
+  **CLEAR — DOCUMENTED DEVIATION** after **58 independent checks**. The novice operator
+  returned **CLEAR** at normal and narrow widths with no visible or console errors.
 - [x] **No-Strike broad-CIDR operator clarity absorbed into Scope & Safety Setup.** The retained safety model already
   accepts normalized IPv4 hosts and CIDR networks, including a broad exclusion such as
   `10.0.0.0/8`, for both the shared Global No-Strike list and scan/schedule additions.

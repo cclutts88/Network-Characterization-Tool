@@ -481,6 +481,112 @@ def test_packaged_scripts_guide_explains_schema_preflight():
     assert "restores the earlier container" in content
 
 
+def test_unfinished_scan_recovery_wrapper_is_fail_closed_and_documented():
+    content = (SCRIPTS / "nct-reset-unfinished.sh").read_text(encoding="utf-8")
+    quickstart = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'trap cleanup EXIT' in content
+    assert 'restore_runtime' in content
+    assert 'another container has an overlapping NCT data mount' in content
+    assert 'cmp -s "$source_inventory" "$restored_inventory"' in content
+    assert 'sha256sum "$backup" > "$backup.sha256"' in content
+    assert '--plan-digest "$plan_digest"' in content
+    assert 'docker_probe update --restart=no "$CONTAINER"' in content
+    assert 'timeout -k 5 "$PROBE_TIMEOUT" docker' in content
+    assert 'timeout -k 10 "$HELPER_TIMEOUT" docker' in content
+    assert '--network none --read-only --cap-drop ALL' in content
+    assert '--security-opt no-new-privileges' in content
+    assert '--security-opt label=disable' in content
+    assert ':Z' not in content
+    assert "MaximumRetryCount" in content
+    assert "restart policy verification failed" in content
+    assert "recovery helper absence could not be proven" in content
+    assert "NCT will remain stopped with automatic restart disabled" in content
+    assert "volume inspect --format '{{.Mountpoint}}'" in content
+    assert '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Source}}|{{.Destination}}' in content
+    assert 'docker volume rm' not in content
+    assert 'rm -rf' not in content
+    assert "nct-reset-unfinished.sh --container nct --apply" in quickstart
+    assert "Completed work stays intact" in quickstart
+    assert "Resume preserved scans" in PACKAGE_SCRIPTS_README.read_text(encoding="utf-8")
+
+
+def test_unfinished_scan_recovery_times_out_a_stalled_docker_probe(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text("#!/bin/sh\nsleep 20\n", encoding="utf-8")
+    fake_docker.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["NCT_RECOVERY_DOCKER_PROBE_TIMEOUT"] = "1"
+    result = subprocess.run(
+        ["sh", str(SCRIPTS / "nct-reset-unfinished.sh"), "--output-dir", str(tmp_path / "out")],
+        text=True,
+        capture_output=True,
+        timeout=6,
+        env=env,
+    )
+    assert result.returncode == 2
+    assert "NCT container not found" in result.stderr
+
+
+def _recovery_helper_function_block() -> str:
+    content = (SCRIPTS / "nct-reset-unfinished.sh").read_text(encoding="utf-8")
+    start = content.index("remove_helper() {")
+    end = content.index("cleanup() {", start)
+    return content[start:end]
+
+
+def test_recovery_cleanup_does_not_treat_inventory_timeout_as_absence(tmp_path: Path):
+    harness = tmp_path / "cleanup-timeout.sh"
+    harness.write_text(
+        "#!/bin/sh\nset +e\nhelper=test-helper\ncleanup_blocked=no\n"
+        "docker_probe() { return 124; }\n"
+        "restore_runtime() { echo RESTORE; }\n"
+        + _recovery_helper_function_block()
+        + "remove_helper\nstatus=$?\necho STATUS=$status\nexit 0\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["sh", str(harness)], text=True, capture_output=True, timeout=5
+    )
+    assert result.returncode == 0
+    assert "STATUS=1" in result.stdout
+
+
+def test_failed_helper_removal_keeps_nct_stopped_without_restore(tmp_path: Path):
+    harness = tmp_path / "cleanup-removal-failure.sh"
+    log = tmp_path / "docker-actions.log"
+    harness.write_text(
+        f"#!/bin/sh\nset +e\nhelper=test-helper\nCONTAINER=nct\ncleanup_blocked=no\nLOG='{log}'\n"
+        "docker_probe() {\n"
+        "  case \"$1\" in\n"
+        "    ps) echo helper-id; return 0 ;;\n"
+        "    rm) return 1 ;;\n"
+        "    update) echo HOLD >> \"$LOG\"; return 0 ;;\n"
+        "    inspect) case \"$*\" in *RestartPolicy*) echo no:false ;; *) echo false ;; esac; return 0 ;;\n"
+        "    stop) echo STOP; return 0 ;;\n"
+        "  esac\n"
+        "  return 1\n"
+        "}\n"
+        "restore_runtime() { echo RESTORE; }\n"
+        + _recovery_helper_function_block()
+        + "finish_and_restore\nstatus=$?\necho STATUS=$status\necho BLOCKED=$cleanup_blocked\nexit 0\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["sh", str(harness)], text=True, capture_output=True, timeout=5
+    )
+    assert result.returncode == 0
+    assert "STATUS=1" in result.stdout
+    assert "BLOCKED=yes" in result.stdout
+    assert "HOLD" in log.read_text(encoding="utf-8")
+    assert "RESTORE" not in result.stdout
+
+
 def test_upgrade_script_blocks_durable_work_and_restores_before_old_code():
     content = (SCRIPTS / "nct-upgrade.sh").read_text(encoding="utf-8")
 

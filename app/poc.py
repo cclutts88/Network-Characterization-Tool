@@ -142,6 +142,7 @@ from app.work_coordination import (
     release_work_lease_on_connection,
     renew_work_lease,
 )
+from app.scan_work_recovery import scan_contact_paused
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -2517,6 +2518,20 @@ def insert_reviewed_scan_run(
             saved_network_ids=list(manifest.get("saved_network_ids") or []),
         )
         manifest["collection_safety_setup"] = _setup["review"]
+        prior_context = manifest.get("network_scope_context")
+        if (
+            isinstance(context, dict)
+            and isinstance(prior_context, dict)
+            and all(
+                context.get(key) == prior_context.get(key)
+                for key in ("scope_id", "scope_label", "scope_version", "sources")
+            )
+            and prior_context.get("recorded_at")
+        ):
+            # Admission validates the reviewed scope decision;
+            # it does not create a new decision when every reviewed input is
+            # unchanged. Keep the original evidence-context time stable.
+            context["recorded_at"] = prior_context["recorded_at"]
         manifest["network_scope_context"] = context
         manifest["network_scope_status"] = (
             "inherited" if context is not None else "unscoped"
@@ -2704,6 +2719,20 @@ def publish_scan_contact_starting(
             manifest.clear()
             manifest.update(blocked)
             return False
+        prior_context = manifest.get("network_scope_context")
+        if (
+            isinstance(context, dict)
+            and isinstance(prior_context, dict)
+            and all(
+                context.get(key) == prior_context.get(key)
+                for key in ("scope_id", "scope_label", "scope_version", "sources")
+            )
+            and prior_context.get("recorded_at")
+        ):
+            # The contact-boundary check validates the frozen scope decision;
+            # it does not create a new decision when every reviewed input is
+            # unchanged. Keep the original evidence-context time stable.
+            context["recorded_at"] = prior_context["recorded_at"]
         manifest["network_scope_context"] = context
         manifest["network_scope_status"] = (
             "inherited" if context is not None else "unscoped"
@@ -4976,6 +5005,8 @@ def dispatch_next_queued_run(
     *, db_path: Path = DB_PATH, data_dir: Path = DATA_DIR
 ) -> dict | None:
     """Start the oldest queued run if the analyzer has free scan capacity."""
+    if scan_contact_paused(data_dir):
+        return None
     if evidence_mutations_blocked(db_path):
         return None
     with ACTIVE_RUNS_LOCK:
@@ -6074,9 +6105,18 @@ def recover_scheduler_state(
 
 
 def dispatch_due_schedules(
-    now: datetime | None = None, db_path: Path = DB_PATH
+    now: datetime | None = None,
+    db_path: Path = DB_PATH,
+    data_dir: Path | None = None,
 ) -> list[dict]:
     """Queue at most one due batch; its chunks run sequentially on the analyzer."""
+    recovery_data_dir = (
+        data_dir
+        if data_dir is not None
+        else DATA_DIR if db_path == DB_PATH else db_path.parent
+    )
+    if scan_contact_paused(recovery_data_dir):
+        return []
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     dispatched = []
     with ACTIVE_SCHEDULE_BATCHES_LOCK:
@@ -6117,7 +6157,7 @@ def dispatch_due_schedules(
                 selected["schedule_id"],
                 selected["latest_occurrence"]["occurrence_id"],
                 db_path=db_path,
-                data_dir=DATA_DIR,
+                data_dir=recovery_data_dir,
             )
         except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
             blocked = get_scan_schedule(selected["schedule_id"], db_path) or selected

@@ -93,3 +93,40 @@ If the retained earlier container itself cannot restart, use
 performs the same read-only schema gate without requiring the old application
 to run, independently verifies a cold backup, retains both failure sources, and
 does not restart an incompatible old image after replacement-written data.
+
+## Evidence-preserving unfinished-scan recovery
+
+Use the Active Scans **Scan queue self-check** first. It reads saved scan,
+schedule and ownership records without changing them. If it reports unfinished
+work, run this preview from the extracted package:
+
+```bash
+sh scripts/nct-reset-unfinished.sh --container nct
+```
+
+The host helper refuses a shared data mount, stops the exact container, records
+its non-secret runtime identity, creates a complete cold backup outside retained
+data, independently extracts and verifies every file, and recalculates the exact
+recovery plan. Preview mode restores the previous running state and changes no
+scan record. After an administrator reviews the printed plan, apply it with:
+
+```bash
+sh scripts/nct-reset-unfinished.sh --container nct --apply
+```
+
+Apply requires the displayed plan confirmation. Completed scans and evidence
+remain unchanged. Unstarted waiting scans retain their order. Work that may have
+contacted the network becomes Interrupted, affected schedules stay paused for
+review, and NCT restarts with automatic contact paused. Review the affected rows
+in Active Scans, then use **Resume preserved scans** to allow preserved waiting
+Nmap work to pass through the normal scope, No-Strike and pre-contact checks.
+Use **Resume passive pulls** separately to authorize automatic Arkime connector
+contact. Neither review action authorizes the other.
+
+Keep the backup, plan and receipts. The helper stops instead of guessing when it
+finds an unfamiliar schema or state, an unfinished migration, unresolved
+compaction, database damage, another container sharing the data, a failed backup
+verification, or a plan that changed after review. NCT restarts only after Docker
+successfully proves the temporary recovery helper is absent. If that inventory
+cannot complete, NCT remains stopped with automatic restart disabled and reports
+the manual review boundary.
