@@ -1916,6 +1916,40 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "collapseTransitSegments" in html
 
 
+def test_map_gap_prepares_existing_scan_builder_without_direct_network_contact():
+    map_html = network_map_page().body.decode()
+    scan_html = operator_page().body.decode()
+
+    assert "function mapScanPreparation(node)" in map_html
+    assert "function appendMapScanPreparation(node)" in map_html
+    assert "No retained Nmap observation supports this" in map_html
+    assert "Prepare scan in Nmap Scans" in map_html
+    assert "It does not start or queue a scan" in map_html
+    assert "map_saved_network_id" in map_html
+    assert "saved_network_cidr===target" in map_html
+    assert "['device','gateway'].includes(node.kind)" in map_html
+    assert "node.kind==='subnet'" in map_html
+    assert "node.kind==='subnet_group'" not in map_html.split("function mapScanPreparation(node)", 1)[1].split("function mapScanHref", 1)[0]
+    assert "fetch('/api/scan-runs'" not in map_html
+    assert 'id="mapScanHandoff"' in scan_html
+    assert "function applyMapScanHandoff()" in scan_html
+    assert "item.saved_network_id===requestedId&&item.cidr===target" in scan_html
+    assert "This target was prepared as manual and unscoped" in scan_html
+    assert "label.includes(target)?`Selected ${kind}: ${label}`" in scan_html
+    assert "applyMapScanHandoff();await Promise.all" in scan_html
+    assert 'section.dataset.guideContext=\'map-scan-preparation\'' in map_html
+    assert "aside#details .map-scan-preparation a.map-scan-action" in map_html
+    assert "color:#07171b!important" in map_html
+    assert "Prepare a scan from this Map gap" in SHELL_SCRIPT
+    assert "control?.closest?.('[data-map-scan-preparation]')" in SHELL_SCRIPT
+    assert "control?.matches?.('[data-node]')" in SHELL_SCRIPT
+    assert "Review this Map object" in SHELL_SCRIPT
+    assert 'data-guide-context="map-object-details"' in map_html
+    assert "control?.closest?.('#details')" in SHELL_SCRIPT
+    assert "[data-guide-context],[data-node]" in SHELL_SCRIPT
+    assert "Map position and labels never grant permission" in SHELL_SCRIPT
+
+
 def test_large_route_tables_are_filtered_and_map_details_stay_compact():
     analyze_html = analysis_page().body.decode()
     map_html = network_map_page().body.decode()

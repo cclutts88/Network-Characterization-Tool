@@ -319,12 +319,47 @@ def test_saved_network_name_labels_matching_map_subnet_without_hiding_cidr():
 
     apply_saved_network_names(
         {subnet["id"]: subnet},
-        [{"name": "Plant Operations", "cidr": "10.40.0.0/24", "active": True}],
+        [
+            {
+                "saved_network_id": "saved-plant",
+                "name": "Plant Operations",
+                "cidr": "10.40.0.0/24",
+                "active": True,
+            }
+        ],
     )
 
     assert subnet["label"] == "Plant Operations · 10.40.0.0/24"
     assert subnet["saved_network_name"] == "Plant Operations"
+    assert subnet["saved_network_id"] == "saved-plant"
+    assert subnet["saved_network_cidr"] == "10.40.0.0/24"
     assert subnet["zone_names"] == ["OPERATIONS-LAN"]
+
+
+def test_map_saved_network_reference_requires_exact_active_cidr():
+    exact = ensure_subnet_node({}, "10.40.0.0/24")
+    child = ensure_subnet_node({}, "10.40.0.0/25")
+
+    apply_saved_network_names(
+        {exact["id"]: exact, child["id"]: child},
+        [
+            {
+                "saved_network_id": "archived-exact",
+                "name": "Archived exact",
+                "cidr": "10.40.0.0/24",
+                "active": False,
+            },
+            {
+                "saved_network_id": "active-parent",
+                "name": "Active parent",
+                "cidr": "10.40.0.0/16",
+                "active": True,
+            },
+        ],
+    )
+
+    assert "saved_network_id" not in exact
+    assert "saved_network_id" not in child
 
 
 def test_switch_role_promotes_scanned_ip_to_map_device():

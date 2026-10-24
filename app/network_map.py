@@ -287,17 +287,24 @@ def apply_subnet_zone(subnet: dict, zone: str | None, source: dict | None = None
 
 
 def apply_saved_network_names(nodes: dict[str, dict], saved_networks: list[dict]) -> None:
-    """Prefer analyst-assigned Saved Network names while retaining the CIDR."""
-    names_by_cidr = {
-        str(item.get("cidr") or ""): str(item.get("name") or "").strip()
+    """Attach an exact active Saved Network reference without inferring containment."""
+    records_by_cidr = {
+        str(item.get("cidr") or ""): item
         for item in saved_networks
         if item.get("active", True)
     }
     for subnet in (node for node in nodes.values() if node.get("kind") == "subnet"):
-        name = names_by_cidr.get(str(subnet.get("network") or ""))
+        record = records_by_cidr.get(str(subnet.get("network") or ""))
+        if not record:
+            continue
+        name = str(record.get("name") or "").strip()
+        saved_network_id = str(record.get("saved_network_id") or "").strip()
         if not name:
             continue
         subnet["saved_network_name"] = name
+        if saved_network_id:
+            subnet["saved_network_id"] = saved_network_id
+            subnet["saved_network_cidr"] = str(record.get("cidr") or "")
         subnet["label"] = f"{name} · {subnet['network']}"
 
 

@@ -267,6 +267,28 @@ A roadmap item should only be marked complete when:
   the five separate resume decisions, review-required work, host command containment and
   normal/narrow-screen guidance. R23 is committed development readiness on the foundation
   branch only; it is not Range-ready, mission-ready or available on `main`.
+- [x] **Map-to-scan preparation complete on the foundation branch — started and
+  completed 2026-10-23.** A selected retained subnet or network device with no Nmap
+  observation now offers a bounded Map-details action that prepares the existing Nmap
+  scan builder for analyst review. The Map never starts or queues a scan. It uses only an
+  explicit IPv4 address or exact CIDR, requires an address choice for multi-address
+  devices, and excludes synthetic groups and presentation-only objects. An exact active
+  Saved Network is carried only when its retained ID and CIDR still match; stale,
+  archived, mismatched and device targets remain visibly manual and unscoped. Mission
+  Environment, Global and scan-specific No-Strike, authorization, interface, profile,
+  recovery-pause and server-side pre-contact checks remain authoritative. Map placement,
+  labels and address containment do not grant permission or assign a Network Scope, and
+  the existing unsaved-layout navigation warning remains in force. The Operator Guide and
+  built-in How NCT Works guide explain the boundary. Independent architecture gate:
+  **CLEAR — DOCUMENTED DEVIATION** for preparing the existing builder rather than
+  executing network contact from Map. Verification: the complete Docker suite passed
+  **2,014 tests with 19 expected skips**; focused Map, scan-builder and UI checks passed
+  **111 tests with 1 expected skip**; both executable browser regressions passed on the
+  host; and isolated browser checks confirmed desktop and 900-pixel layouts, readable
+  controls, exact and stale handoff behavior, useful contextual guidance, a clean console
+  and an unchanged empty scan queue. The novice operator returned **NOVICE CLEAR** after
+  independently repeating the workflow. This is verified development readiness on the
+  foundation branch only; it is not Range-ready, mission-ready or available on `main`.
 - [x] **No-Strike broad-CIDR operator clarity absorbed into Scope & Safety Setup.** The retained safety model already
   accepts normalized IPv4 hosts and CIDR networks, including a broad exclusion such as
   `10.0.0.0/8`, for both the shared Global No-Strike list and scan/schedule additions.
