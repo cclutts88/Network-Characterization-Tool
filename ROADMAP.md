@@ -382,6 +382,34 @@ A roadmap item should only be marked complete when:
   this architecture as a **DOCUMENTED DEVIATION** provided declarations and assessments
   remain separate, assessment rules and source receipts are versioned, and all other
   authorization and evidence boundaries remain intact.
+  Special-device Map legend clarity started 2026-10-23: every visible
+  Mission Partner Identified marker must have a matching legend key, and its
+  object details must name the declared special-device role without implying
+  that an evidence-only possible match was identified or recommended.
+  Novice review found that the full-screen Map could cover the Operator Guide;
+  that layering defect and the associated full-details control are included in
+  this gate so the Guide stays usable while an analyst inspects the marked
+  object in the expanded workspace. The final novice pass then found that opening
+  those details could move the unpinned Guide to a nearby search-result count. The
+  full-details action must instead focus the declared-role explanation and keep its
+  scope, partner-provided fields, provenance and non-recommendation limits visible.
+  Special-device Map legend clarity implementation completed 2026-10-23: collapsed
+  groups, grouped endpoint rows, individual hosts and WAN Portal presentation now use
+  the same **MP ID** marker only when a Mission Partner Identified declaration exists;
+  the conditional legend defines that marker, and selected-object details show the
+  exact declared role, scope, address, declared ports/services, actor, time and source
+  link. Evidence-only possible matches remain unmarked and are not promoted into Map
+  recommendations or declarations. Expanded Map keeps the Guide above the canvas,
+  places **Open full details** on a usable narrow-screen row, supports native pointer
+  and keyboard activation, and focuses the declared-role Guide explanation after it
+  opens. The executable Map runtime regression passed, the full Docker suite passed
+  **2,014 tests with 19 skips and one dependency warning**, and live normal plus
+  980×900 browser checks confirmed the Guide/details workflow, no page-width overflow
+  and no browser warnings or errors. The novice operator returned **CLEAR** and the
+  independent quality gate returned **CLEAR — DOCUMENTED DEVIATION** after separately
+  verifying 75 focused tests, one skip, the executable Map runtime and whitespace.
+  This remains development work on the foundation branch, not Range-ready,
+  mission-ready or available on `main`.
   Operator Guide data-flow refinement started 2026-10-23: replace the ambiguous
   **Why this matters** block throughout the shared guide with three consistent parts.
   **How to use this** explains the highlighted page, section or control; **How NCT

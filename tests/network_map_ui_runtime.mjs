@@ -190,4 +190,27 @@ await eval(`(() => {
   }
 })()`);
 
+await eval(`(() => {
+  let detailsSuppressed=true,toggleForce=null,syncForce=null;
+  let focused=false,focusOptions=null;
+  const missionRole={focus(options){focused=true;focusOptions=options}};
+  const details={querySelector:selector=>selector==='.mission-role-details'?missionRole:null,focus(){throw new Error('role details should receive focus')}};
+  const open={},summary={hidden:true,_html:'',set innerHTML(value){this._html=value},get innerHTML(){return this._html}},workspace={classList:{contains:name=>name==='map-expanded'}};
+  const $=id=>id==='selectedObjectSummary'?summary:id==='mapWorkspace'?workspace:id==='openSelectedDetails'?open:id==='details'?details:null;
+  const esc=value=>String(value),compactServicePorts=()=> '53/tcp, 53/udp',osInferenceTitle=()=> 'Declared role',displayOs=()=> 'Unclassified';
+  const toggleWorkspace=force=>{toggleForce=force},syncDetailsVisibility=force=>{syncForce=force};
+  const requestAnimationFrame=callback=>callback();
+  ${handler("openSelectedObjectDetails")}
+  ${handler("renderSelectedObjectSummary")}
+
+  renderSelectedObjectSummary({label:'Mission DNS',address:'10.77.0.10'});
+  assert.equal(typeof open.onclick,'function','Open full details has native click activation');
+  open.onclick();
+  assert.equal(detailsSuppressed,false);
+  assert.equal(toggleForce,true);
+  assert.equal(syncForce,true);
+  assert.equal(focused,true,'opening details moves focus to the declared-role explanation');
+  assert.deepEqual(focusOptions,{preventScroll:true});
+})()`);
+
 console.log("Network Map expanded spacing runtime regression passed");

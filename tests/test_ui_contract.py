@@ -1995,6 +1995,15 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "osFamilies.has(key)" in html
     assert "vendors.has(key)" in html
     assert "renderLegend(view)" in html
+    assert 'data-legend="mission-special"' in html
+    assert "Mission Partner Identified special-device role" in html
+    assert "node.mission_partner_identified||(node.grouped_hosts||[]).some(host=>host.mission_partner_identified)" in html
+    assert "showMissionOnGroup=mode==='collapsed'&&!query&&groupedMissionRoles.length>0" in html
+    assert "mission_special_roles:showMissionOnGroup?groupedMissionRoles:[]" in html
+    assert "x:isPortalWan?pos.w-28:pos.w-10,y:isGroup?21:isPortalWan?32:pos.h-9,class:'mission-role-marker'" in html
+    assert "titleRightSpace=isGroup&&node.mission_partner_identified?65:12" in html
+    assert "Mission Partner Identified Special Device Roles" in html
+    assert "They are identification records, not a recommendation or proof of live operation." in html
     assert "Shift-click boxes to select and move them together" not in html
     assert "Use subnet toggles to select the endpoint view" not in html
     assert "placeLevel(" not in html
@@ -2365,6 +2374,11 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert 'id="selectedObjectSummary"' in html
     assert "function renderSelectedObjectSummary(node)" in html
     assert "Open full details" in html
+    assert "function openSelectedObjectDetails(){detailsSuppressed=false;toggleWorkspace(true);syncDetailsVisibility(true);requestAnimationFrame" in html
+    assert "open.onclick=openSelectedObjectDetails" in html
+    assert "section.dataset.guideContext='mission-special-role-details'" in html
+    assert "section.tabIndex=0" in html
+    assert "target.focus({preventScroll:true})" in html
     assert "IP / network" in html
     assert "Hostname" in html
     assert "Ports" in html
@@ -2375,6 +2389,8 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "object-evidence" in html
     assert "Evidence (${(node?.sources||[]).length})" in html
     assert "openSelectedDetails:['Open full object details'" in SHELL_SCRIPT
+    assert "Mission Partner Identified special-device role" in SHELL_SCRIPT
+    assert "turn an evidence-only possible match into an identified device" in SHELL_SCRIPT
     assert "control?.matches?.('.object-evidence > summary')" in SHELL_SCRIPT
     assert "control?.matches?.('.map-role-controls > summary')" in SHELL_SCRIPT
     assert "The counts stay in normal page flow" in SHELL_SCRIPT
@@ -2387,6 +2403,8 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert ".workspace.map-expanded{inset:0}" in html
     assert ".workspace.map-expanded>.map-panel>:not(.map-shell){display:none!important}" in html
     assert ".workspace.map-expanded .canvas{border:0;border-radius:0}" in html
+    assert "body.map-expanded #nct-operator-guide{z-index:360}" in html
+    assert "body.map-expanded #nct-guide-toggle{z-index:380}" in html
     assert 'id="wanGatewayPresentation"' in html
     assert "WAN gateway: Portal" in html
     assert "WAN gateway: Top anchor" in html
@@ -2398,6 +2416,7 @@ def test_map_connection_points_show_interface_ips_and_grouped_shapes_share_one_f
     assert "workspace.map-expanded.details-collapsed" in html
     assert "workspace.map-expanded.details-collapsed .map-shell>#details" in html
     assert ".workspace.map-expanded.details-collapsed .selected-object-summary{margin:var(--expanded-safe-top,70px) 12px 8px}" in html
+    assert ".workspace.map-expanded.details-collapsed #openSelectedDetails{grid-column:1;grid-row:2;justify-self:start}" in html
     assert ".workspace.map-expanded .map-shell>#details" in html
     assert "function syncExpandedDetailsBounds" in html
     assert "function expandedFloatingControlsSafeTop" in html
