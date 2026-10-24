@@ -93,6 +93,71 @@ successfully proves that the temporary recovery helper is gone. If that proof
 fails, NCT remains stopped with automatic restart disabled and the terminal
 prints the exact manual review boundary.
 
+## Start a genuinely fresh NCT installation
+
+Use this only when an administrator has decided to start NCT with no inherited
+accounts, evidence, scopes, Saved Networks, profiles, schedules, notes, settings,
+or unfinished work. This is separate from **reset unfinished work**, which preserves
+all completed application data.
+
+Create the non-destructive preview plan first:
+
+```sh
+sh scripts/nct-fresh-install.sh --container nct
+```
+
+The preview stops the exact container, disables automatic restart, proves no other
+container shares its data, creates a complete cold backup in a separate directory,
+extracts it, and compares file bytes, paths, types, permissions, ownership, symbolic
+links, and hard-link relationships. A successful preview intentionally holds NCT stopped
+so those exact reviewed bytes cannot change before Apply. The screen and private plan
+name the old container, pinned image, old data, proposed empty
+data location, retained TLS files, web bind address and port, Docker network, backup,
+and everything that will not carry into the fresh installation. Previous connector
+credentials and automatic collection settings are deliberately omitted for later
+review.
+
+If the administrator decides not to continue, cancel the preview and restore the old
+restart policy and running state:
+
+```sh
+sh scripts/nct-fresh-install.sh --cancel \
+  --plan /var/lib/nct/deployment/fresh-installs/EXACT_RUN/fresh-install-plan.json
+```
+
+After reviewing the plan, apply that exact file:
+
+```sh
+sh scripts/nct-fresh-install.sh --apply \
+  --plan /var/lib/nct/deployment/fresh-installs/EXACT_RUN/fresh-install-plan.json \
+  --admin-user NEW_ADMIN
+```
+
+Type the plan-specific `FRESH-...` confirmation and enter the new Administrator
+password twice. There is no general `--yes` bypass. NCT rechecks the container, image,
+data mount, backup checksum and complete stopped-data inventory before switching. The
+old container is renamed, stopped, and retained with its old data and exact image. The
+new container uses a different empty bind folder or named volume, reuses the reviewed
+TLS and network presentation, initializes one new Administrator, removes bootstrap
+access, and proves health, empty operator data, and the first Administrator sign-in.
+It cannot begin automatic collection because old schedules, Mission Environment
+decisions, connector credentials and collection settings are not copied.
+
+If initialization or acceptance fails, the helper attempts to restore and verify the
+exact old container name, data mount, restart policy and earlier running state. It
+retains the failed candidate data for review. If any restoration check cannot be
+proved, the helper attempts to disable restart and stop both installations. It says
+they are stopped only after Docker verifies that state. If Docker itself cannot provide
+that proof, the command tells the operator to disconnect NCT network access and inspect
+Docker manually. Every temporary helper is named, time-bounded and proven absent before NCT
+can resume. HTTPS acceptance pins the reviewed certificate and never sends the new
+Administrator password with certificate verification disabled. For an intentional
+later rollback, stop the fresh container and use the exact
+retained container, old data source, pinned image and receipt printed by this command;
+never attach the old data to a different image or delete either data source until the
+fresh installation has been accepted and the backup has been transferred according to
+local retention policy.
+
 ## Before you begin
 
 You need:

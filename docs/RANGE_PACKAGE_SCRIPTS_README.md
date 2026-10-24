@@ -134,3 +134,36 @@ verification, or a plan that changed after review. NCT restarts only after Docke
 successfully proves the temporary recovery helper is absent. If that inventory
 cannot complete, NCT remains stopped with automatic restart disabled and reports
 the manual review boundary.
+
+## Explicit fresh installation
+
+Use this only for an approved blank replacement, separately from unfinished-work
+recovery. Create and review the exact plan first:
+
+```bash
+sh scripts/nct-fresh-install.sh --container nct
+```
+
+The successful preview holds NCT stopped so its exact reviewed data cannot change.
+
+Then apply only that displayed plan and create a new Administrator:
+
+```bash
+sh scripts/nct-fresh-install.sh --apply --plan ABSOLUTE_PLAN_PATH --admin-user NEW_ADMIN
+```
+
+Run `sh scripts/nct-fresh-install.sh --cancel --plan ABSOLUTE_PLAN_PATH` to abandon the
+replacement and resume the old installation.
+
+The old stopped container, data and image remain available for rollback. The helper
+uses a different empty bind folder or named volume, preserves the reviewed TLS and web
+presentation, omits prior connector credentials and automatic collection settings,
+and verifies health, empty operator data and the first Administrator sign-in.
+
+Every temporary helper is named, time-bounded and proven absent before service can
+resume. Apply repeats the container and shared-data checks immediately before the
+replacement. HTTPS sign-in uses the exact certificate pinned by Preview. A failed
+Apply is reported as restored only after the old identity, data mount, restart policy
+and state all match. If restoration fails, the helper attempts to stop both
+installations and reports that state only after Docker verifies it. When Docker cannot
+provide that proof, disconnect NCT network access and inspect Docker manually.

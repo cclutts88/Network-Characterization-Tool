@@ -469,10 +469,45 @@ A roadmap item should only be marked complete when:
   draft clearing, table headings, contained scrolling and the console all passed. This
   refinement is development-ready on the foundation branch only; it is not on `main`,
   installed on the Range or mission-ready.
-- [ ] **R24 explicit fresh installation.** Begin only after the diagnostic and reset
-  boundaries are complete. Preview the exact NCT data that will be isolated, verify a
+- [x] **R24 explicit fresh installation — completed 2026-10-23.** The diagnostic and
+  evidence-preserving reset boundaries are complete. Preview the exact NCT data that
+  will be isolated, verify a
   separately stored backup and require explicit destructive confirmation. Preserve
   unrelated installations and document TLS/network-setting treatment and restoration.
+  **2026-10-23 implementation and correction pass:** Added separate Preview, Apply and
+  Cancel commands. Preview stops the exact instance, disables restart, refuses shared
+  or overlapping storage, creates and independently extracts a complete cold backup,
+  records a digest-bound plan, and deliberately holds the reviewed source stopped.
+  Apply repeats runtime and storage-isolation checks, requires the plan-specific phrase
+  plus a new Administrator, starts on a different empty data source, omits prior
+  connectors and automatic collection, and verifies health, empty operator data and a
+  real first sign-in. SQLite inspection now uses a private WAL-complete snapshot rather
+  than an immutable main-file-only read. Named bounded helpers must be proven absent;
+  HTTPS pins and verifies the reviewed certificate; rollback is reported only after the
+  old identity, mount, restart policy and state are proved. Independent review initially
+  **HALTED FOR REVIEW** on those five safety gaps; the corrections are implemented and
+  passed the repeat gate described below. Focused validation passed **117 tests** before
+  the final two regressions were added. Disposable
+  Docker checks pass named-volume replacement, late shared-writer refusal plus safe
+  Cancel, helper-timeout cleanup and runtime restoration, root-owned bind-data backup,
+  forced post-switch rollback with exact data/identity/runtime verification, and pinned
+  TLS Administrator sign-in.
+  A second independent review reproduced two more fail-closed edge cases: a sidecar
+  mounting the host filesystem root could evade the overlap check, and a Docker
+  inventory timeout could be mistaken for an absent container during emergency stop
+  handling. Root and parent mounts are now rejected, container absence requires a
+  successful exact-name inventory, and every emergency stop path distinguishes a
+  verified stopped state from a Docker state that could not be verified. Both cases
+  have executable regression coverage. The repeat independent quality gate is **CLEAR —
+  DOCUMENTED DEVIATION**, with **13 independent fresh-install tests passing**. The
+  novice-operator gate is **CLEAR**. Final related validation passes **118 tests** with
+  one existing dependency warning; the cumulative Docker suite remains **2,026 passed
+  with 19 skipped**. R24 is tested and development-ready on the foundation
+  branch only; it is not installed on the Range, available on `main`, or mission-ready.
+  **Documented deviation:** “fresh installation” retains the stopped old container,
+  exact image and data plus the verified backup until the administrator accepts the new
+  instance. Immediate deletion would remove the only direct rollback path and is not
+  required to provide a blank replacement.
 - The remaining R01–R21 requests stay tracked in
   `docs/NCT_SCHEDULE_INCIDENT_AND_FIX_HANDOFF_2026-10-23.md`. After R22–R24, implement
   reliability and evidence-correctness items before navigation/presentation work, then

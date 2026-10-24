@@ -123,6 +123,39 @@ maintenance tables, and the database SHA-256. Only exact reviewed version-4 and
 version-5 Range sources are accepted. Unknown, incomplete, or altered schema stops
 the upgrade and restores the earlier container.
 
+## Explicit fresh installation
+
+After diagnosis, use `nct-reset-unfinished.sh` when completed evidence and settings
+must be preserved. Use `nct-fresh-install.sh` only for a deliberate blank replacement.
+Preview first:
+
+```bash
+sh scripts/nct-fresh-install.sh --container nct
+```
+
+The preview produces a verified cold backup and exact private plan, then intentionally
+holds NCT stopped so the reviewed source cannot change. Review it, then apply the
+displayed plan with a new Administrator:
+
+```bash
+sh scripts/nct-fresh-install.sh --apply --plan ABSOLUTE_PLAN_PATH --admin-user NEW_ADMIN
+```
+
+To abandon the replacement and resume the old installation, run
+`sh scripts/nct-fresh-install.sh --cancel --plan ABSOLUTE_PLAN_PATH`.
+
+The helper requires a plan-specific confirmation, retains the old stopped container,
+old data and image for rollback, uses a new empty bind folder or named volume, preserves
+the reviewed TLS/web presentation, and verifies the blank instance and first sign-in.
+It does not inherit old connectors, credentials, schedules or automatic collection.
+Every temporary container has a unique bounded name and must be proven absent before
+NCT can resume. TLS sign-in uses the exact certificate recorded by Preview. A failed
+Apply reports restoration only after rechecking the exact old container, data, restart
+policy and running state. Otherwise it attempts to stop both installations and says
+they are stopped only after Docker verifies it. If Docker cannot provide that proof,
+disconnect NCT network access and inspect Docker manually.
+Follow the complete fresh-install section in the authoritative quickstart.
+
 ## Candidate Kubernetes storage check
 
 `qualify_kubernetes_storage.py` performs a bounded, disposable check of one mounted
