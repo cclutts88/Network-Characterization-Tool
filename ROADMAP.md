@@ -287,8 +287,9 @@ A roadmap item should only be marked complete when:
   host; and isolated browser checks confirmed desktop and 900-pixel layouts, readable
   controls, exact and stale handoff behavior, useful contextual guidance, a clean console
   and an unchanged empty scan queue. The novice operator returned **NOVICE CLEAR** after
-  independently repeating the workflow. This is verified development readiness on the
-  foundation branch only; it is not Range-ready, mission-ready or available on `main`.
+  independently repeating the workflow. This is committed and verified development
+  readiness on the foundation branch only; it is not Range-ready, mission-ready or
+  available on `main`.
 - [x] **No-Strike broad-CIDR operator clarity absorbed into Scope & Safety Setup.** The retained safety model already
   accepts normalized IPv4 hosts and CIDR networks, including a broad exclusion such as
   `10.0.0.0/8`, for both the shared Global No-Strike list and scan/schedule additions.
