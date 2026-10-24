@@ -954,6 +954,9 @@ def _worker(db_path: Path) -> None:
 
 
 def start_arkime_pull_worker(db_path: Path) -> bool:
+    from app.scan_work_recovery import passive_contact_paused
+    if passive_contact_paused(db_path.parent):
+        return False
     global _WORKER_THREAD
     with _WORKER_LOCK:
         if _WORKER_THREAD is not None and _WORKER_THREAD.is_alive():return False

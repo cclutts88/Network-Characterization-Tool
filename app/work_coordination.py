@@ -448,6 +448,9 @@ def clear_work_recovery(
     lease_key: str,
     *,
     detail: str,
+    expected_fencing_epoch: int | None = None,
+    expected_work_kind: str | None = None,
+    expected_work_id: str | None = None,
 ) -> bool:
     """Clear a safety stop only after the caller has independently verified recovery."""
     init_work_coordination_storage(db_path)
@@ -456,10 +459,19 @@ def clear_work_recovery(
     with connect_database(db_path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
-            "SELECT fencing_epoch, state FROM work_leases WHERE lease_key = ?",
+            """SELECT fencing_epoch,state,work_kind,work_id,lease_id,owner_id
+                 FROM work_leases WHERE lease_key = ?""",
             (key,),
         ).fetchone()
         if row is None or row[1] != "recovery_required":
+            return False
+        if row[4] is not None or row[5] is not None:
+            return False
+        if expected_fencing_epoch is not None and int(row[0]) != int(expected_fencing_epoch):
+            return False
+        if expected_work_kind is not None and row[2] != expected_work_kind:
+            return False
+        if expected_work_id is not None and row[3] != expected_work_id:
             return False
         now, _ = _db_time(connection, DEFAULT_LEASE_SECONDS)
         changed = connection.execute(
@@ -467,8 +479,9 @@ def clear_work_recovery(
                   SET state = 'released', released_at = ?, renewed_at = ?,
                       recovery_reason = NULL
                 WHERE lease_key = ? AND fencing_epoch = ?
-                  AND state = 'recovery_required'""",
-            (now, now, key, int(row[0])),
+                  AND state = 'recovery_required' AND work_kind = ? AND work_id = ?
+                  AND lease_id IS NULL AND owner_id IS NULL""",
+            (now, now, key, int(row[0]), row[2], row[3]),
         ).rowcount
         if changed != 1:
             raise WorkLeaseConflict("The safety-stop state changed during recovery")

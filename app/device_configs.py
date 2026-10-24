@@ -303,6 +303,11 @@ def acquire_device_contact_fence(
     db_path: Path | None = None,
 ) -> DeviceContactFence:
     db_path = DB_PATH if db_path is None else db_path
+    from app.scan_work_recovery import device_contact_paused
+    if device_contact_paused(db_path.parent):
+        raise DeviceContactConflict(
+            "Device contact is paused until an administrator reviews unfinished work"
+        )
     create_device_contact_run(
         db_path,
         operation_kind=operation_kind,

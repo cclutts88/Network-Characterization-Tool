@@ -190,6 +190,7 @@ def test_derived_worker_start_failure_releases_guard_without_masking_error(monke
 
     guard = Guard()
     monkeypatch.setattr(main, "acquire_application_writer_guard", lambda *_args: guard)
+    monkeypatch.setattr(main, "local_processing_paused", lambda *_args: False)
     monkeypatch.setattr(
         main,
         "start_derived_job_worker",

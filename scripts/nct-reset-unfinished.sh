@@ -233,7 +233,7 @@ echo "Cold backup verified: $backup"
 echo "Final recovery plan: $plan"
 echo "Plan digest: $plan_digest"
 if [ "$APPLY" != yes ]; then
-    echo "Preview only. No scan or schedule record was changed."
+    echo "Preview only. No saved work record was changed."
     finish_and_restore
     exit 0
 fi
@@ -248,6 +248,6 @@ docker_helper run --name "$helper" --rm "$@" -e PYTHONPATH=/app -v "$data_rw" -v
 printf 'completed=%s\ncontainer=%s\nimage_id=%s\nimage_ref=%s\nplan=%s\nplan_digest=%s\nbackup=%s\nbackup_sha256=%s\nactor=%s\nautomatic_contact=false\n' "$(date -u +%FT%TZ)" "$CONTAINER" "$image" "$image_ref" "$plan" "$plan_digest" "$backup" "$backup_sha" "$ACTOR" > "$receipt"
 chmod 600 "$receipt"
 finish_and_restore
-echo "Recovery applied. NCT restarted with active scans and passive pulls paused separately for administrator review."
+echo "Recovery applied. NCT restarted with Nmap, Arkime, device contact, local processing, and storage maintenance paused separately for administrator review."
 echo "Host receipt: $receipt"
-echo "Open Active Scans to review affected work before authorizing either contact path."
+echo "Open Active Scans and review Unfinished work self-check before resuming any category."

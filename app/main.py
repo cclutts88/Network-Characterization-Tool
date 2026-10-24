@@ -107,6 +107,7 @@ from app.nmap_assignment_workflow import (
     manual_nmap_assignment_for_processing,
 )
 from app.storage_health import (
+    analyze_storage,
     init_storage_health_storage,
     recover_incomplete_compactions,
     resume_storage_jobs,
@@ -114,7 +115,11 @@ from app.storage_health import (
     stop_storage_jobs,
     storage_status,
 )
-from app.evidence_maintenance import EvidenceMaintenanceBlocked, guarded_evidence_mutation
+from app.evidence_maintenance import (
+    EvidenceMaintenanceBlocked,
+    guarded_evidence_mutation,
+    recovery_required as evidence_recovery_required,
+)
 from app.storage_ui import storage_page
 from app.runtime_health import runtime_health_snapshot
 from app.shared_storage_contract import shared_storage_status
@@ -124,16 +129,25 @@ from app.runtime_trends import (
     stop_runtime_trends,
 )
 from app.writer_guard import acquire_application_writer_guard
-from app.work_coordination import init_work_coordination_storage
+from app.work_coordination import (
+    clear_work_recovery,
+    init_work_coordination_storage,
+    work_lease_status,
+)
 from app.scan_work_recovery import (
     ScanWorkRecoveryError,
     clear_passive_recovery_pause,
+    clear_recovery_gate,
     clear_recovery_pause,
+    device_contact_paused,
     diagnose_scan_work,
+    local_processing_paused,
     passive_contact_paused,
     pause_for_diagnosis,
     recovery_pause,
     scan_contact_paused,
+    storage_maintenance_paused,
+    validate_recovery_gate,
     write_recovery_pause,
 )
 from app.device_contact_work import init_device_contact_work_storage
@@ -692,6 +706,12 @@ class ScanRecoveryResumeRequest(BaseModel):
 
 
 class PassiveRecoveryResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmation: str = Field(min_length=1, max_length=120)
+
+
+class RecoveryGateResumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirmation: str = Field(min_length=1, max_length=120)
@@ -1716,8 +1736,6 @@ async def lifespan(_: FastAPI):
         init_work_coordination_storage(DB_PATH)
         init_device_contact_work_storage(DB_PATH)
         init_derived_job_storage(DB_PATH)
-        recover_interrupted_device_collections(CONFIG_DIR)
-        reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
         init_auth_storage(DB_PATH)
         init_achievement_storage(DB_PATH)
         init_workspace_storage(DB_PATH)
@@ -1738,30 +1756,31 @@ async def lifespan(_: FastAPI):
         init_arkime_history_storage(DB_PATH)
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
-        recover_missing_automated_nmap_intents(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
         scan_recovery = recovery_pause(DATA_DIR)
-        if (
-            scan_recovery is None
-            and collection_enabled
-            and not compaction_recovery.get("recovery_required")
-        ):
+        if scan_recovery is None:
             scan_plan = diagnose_scan_work(DB_PATH)
             if scan_plan.get("blockers") or scan_plan.get("affected_count"):
                 scan_recovery = pause_for_diagnosis(
                     DATA_DIR,
                     scan_plan,
-                    "NCT detected unfinished or contradictory scan work during startup",
+                    "NCT detected unfinished or contradictory saved work during startup",
                 )
-        resume_storage_jobs()
+        if not storage_maintenance_paused(DATA_DIR):
+            resume_storage_jobs()
         background_workers_started = not compaction_recovery.get("recovery_required")
         if background_workers_started:
+            if not device_contact_paused(DATA_DIR):
+                recover_interrupted_device_collections(CONFIG_DIR)
+                reconcile_device_evidence_catalog(DB_PATH, CONFIG_DIR)
             if collection_enabled:
                 resume_scan_workers()
-            resume_derived_job_worker()
-            recover_interrupted_derived_jobs(DB_PATH)
-            start_derived_job_worker(DB_PATH, DATA_DIR)
+            if not local_processing_paused(DATA_DIR):
+                recover_missing_automated_nmap_intents(DB_PATH)
+                resume_derived_job_worker()
+                recover_interrupted_derived_jobs(DB_PATH)
+                start_derived_job_worker(DB_PATH, DATA_DIR)
             if not passive_contact_paused(DATA_DIR):
                 recover_interrupted_pulls(DB_PATH)
                 start_arkime_pull_worker(DB_PATH)
@@ -1953,6 +1972,9 @@ def scan_work_recovery_status(request: Request) -> dict:
         "plan": diagnose_scan_work(DB_PATH),
         "resume_confirmation": "RESUME PRESERVED SCANS",
         "passive_resume_confirmation": "RESUME PASSIVE PULLS",
+        "device_resume_confirmation": "RESUME DEVICE CONTACT",
+        "local_resume_confirmation": "RESUME LOCAL PROCESSING",
+        "storage_resume_confirmation": "RESUME STORAGE MAINTENANCE",
         "host_command": "sh scripts/nct-reset-unfinished.sh --container nct",
     }
 
@@ -2046,6 +2068,122 @@ def resume_recovered_passive_work(
         "resumed_by": actor["username"],
         "scan_contact_paused": scan_contact_paused(DATA_DIR),
     }
+
+
+@app.post("/api/system/scan-work-recovery/resume-device")
+def resume_recovered_device_contact(
+    request: Request, body: RecoveryGateResumeRequest
+) -> dict:
+    actor = require_admin(request) if auth_enabled() else {"username": "local-operator"}
+    if body.confirmation.strip() != "RESUME DEVICE CONTACT":
+        raise HTTPException(status_code=422, detail="Type RESUME DEVICE CONTACT exactly")
+    plan = diagnose_scan_work(DB_PATH)
+    if plan.get("blockers"):
+        raise HTTPException(status_code=409, detail="Recovery remains blocked: " + "; ".join(plan["blockers"]))
+    review = [item for item in plan.get("device_contacts", []) if item.get("action") == "preserve_review"]
+    if review:
+        raise HTTPException(
+            status_code=409,
+            detail="Close each interrupted device-contact review before enabling new device contact",
+        )
+    try:
+        cleared = clear_recovery_gate(DATA_DIR, body.plan_digest, "device_contact_paused")
+    except ScanWorkRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not cleared:
+        raise HTTPException(status_code=409, detail="No reviewed device-contact recovery is paused")
+    return {"resumed": True, "resumed_by": actor["username"]}
+
+
+@app.post("/api/system/scan-work-recovery/resume-local")
+def resume_recovered_local_processing(
+    request: Request, body: RecoveryGateResumeRequest
+) -> dict:
+    actor = require_admin(request) if auth_enabled() else {"username": "local-operator"}
+    if body.confirmation.strip() != "RESUME LOCAL PROCESSING":
+        raise HTTPException(status_code=422, detail="Type RESUME LOCAL PROCESSING exactly")
+    plan = diagnose_scan_work(DB_PATH)
+    if plan.get("blockers"):
+        raise HTTPException(status_code=409, detail="Recovery remains blocked: " + "; ".join(plan["blockers"]))
+    saved_pause = recovery_pause(DATA_DIR)
+    try:
+        cleared = clear_recovery_gate(DATA_DIR, body.plan_digest, "local_processing_paused")
+        if not cleared:
+            raise ScanWorkRecoveryError("No reviewed local-processing recovery is paused")
+        recover_missing_automated_nmap_intents(DB_PATH)
+        resume_derived_job_worker()
+        recover_interrupted_derived_jobs(DB_PATH)
+        start_derived_job_worker(DB_PATH, DATA_DIR)
+    except Exception as exc:
+        restored = dict(saved_pause or {})
+        restored.pop("path", None)
+        restored["local_processing_paused"] = True
+        restored["reason"] = "Local processing remains paused because its worker could not start safely"
+        write_recovery_pause(DATA_DIR, restored)
+        raise HTTPException(status_code=503, detail=restored["reason"]) from exc
+    return {"resumed": True, "resumed_by": actor["username"]}
+
+
+@app.post("/api/system/scan-work-recovery/resume-storage")
+def resume_recovered_storage_maintenance(
+    request: Request, body: RecoveryGateResumeRequest
+) -> dict:
+    actor = require_admin(request) if auth_enabled() else {"username": "local-operator"}
+    if body.confirmation.strip() != "RESUME STORAGE MAINTENANCE":
+        raise HTTPException(status_code=422, detail="Type RESUME STORAGE MAINTENANCE exactly")
+    try:
+        reviewed_pause = validate_recovery_gate(
+            DATA_DIR, body.plan_digest, "storage_maintenance_paused",
+        )
+    except ScanWorkRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if reviewed_pause is None:
+        raise HTTPException(status_code=409, detail="No reviewed storage recovery is paused")
+    plan = diagnose_scan_work(DB_PATH)
+    if plan.get("blockers"):
+        raise HTTPException(status_code=409, detail="Recovery remains blocked: " + "; ".join(plan["blockers"]))
+    held = [item for item in plan.get("storage_maintenance", []) if item.get("action") == "preserve_safety_stop"]
+    if evidence_recovery_required(DB_PATH):
+        raise HTTPException(
+            status_code=409,
+            detail="Interrupted exact-content compaction still requires its dedicated recovery review",
+        )
+    if held:
+        report = analyze_storage(DB_PATH)
+        if report.get("issue_count") or report.get("active_collections_skipped"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Storage remains paused because a fresh retained-evidence verification "
+                    "found issues or unfinished collections"
+                ),
+            )
+        lease = work_lease_status(DB_PATH, "storage-maintenance")
+        expected_lease = held[0]["lease_record"]
+        if (
+            not lease or lease.get("state") != "recovery_required"
+            or int(lease.get("fencing_epoch") or -1) != int(expected_lease["fencing_epoch"])
+            or lease.get("work_kind") != expected_lease["work_kind"]
+            or lease.get("work_id") != expected_lease["work_id"]
+        ):
+            raise HTTPException(status_code=409, detail="The storage safety-stop state changed")
+        if not clear_work_recovery(
+            DB_PATH,
+            "storage-maintenance",
+            detail=f"{actor['username']}: fresh retained-evidence verification passed",
+            expected_fencing_epoch=int(expected_lease["fencing_epoch"]),
+            expected_work_kind=str(expected_lease["work_kind"]),
+            expected_work_id=str(expected_lease["work_id"]),
+        ):
+            raise HTTPException(status_code=409, detail="The storage safety-stop state changed")
+    try:
+        cleared = clear_recovery_gate(DATA_DIR, body.plan_digest, "storage_maintenance_paused")
+    except ScanWorkRecoveryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not cleared:
+        raise HTTPException(status_code=409, detail="No reviewed storage recovery is paused")
+    resume_storage_jobs()
+    return {"resumed": True, "resumed_by": actor["username"]}
 
 
 @app.get("/api/system/storage-architecture")

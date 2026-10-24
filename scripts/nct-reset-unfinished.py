@@ -15,7 +15,10 @@ from app.scan_work_recovery import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Preview or apply the stopped-container NCT scan-work recovery plan."
+        description=(
+            "Preview or apply the stopped-container NCT unfinished-work recovery plan "
+            "for scans, schedules, passive pulls, device contact, local processing, and storage."
+        )
     )
     parser.add_argument("--data-dir", type=Path, default=Path("/data"))
     parser.add_argument("--output", type=Path)

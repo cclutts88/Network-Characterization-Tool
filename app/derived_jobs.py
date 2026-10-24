@@ -2479,6 +2479,9 @@ def _worker_loop(db_path: Path, data_dir: Path, stop: threading.Event) -> None:
 def start_derived_job_worker(db_path: Path, data_dir: Path | None = None) -> None:
     path = Path(db_path).resolve()
     root = Path(data_dir) if data_dir is not None else path.parent
+    from app.scan_work_recovery import local_processing_paused
+    if local_processing_paused(root):
+        return
     with _WORKERS_LOCK:
         if _WORKERS_SHUTTING_DOWN:
             return

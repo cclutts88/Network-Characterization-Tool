@@ -55,11 +55,11 @@ Only bounded log signal counts are retained; review paths, IP addresses and
 timestamps before sharing. Docker queries and helper runs have fixed deadlines so
 an unavailable runtime cannot leave the diagnostic hanging indefinitely.
 
-## Recover unfinished scan work after diagnosis
+## Recover unfinished work after diagnosis
 
-If the diagnostic or Active Scans **Scan queue self-check** reports stranded scan
-or schedule work, remain in the extracted package directory and run the read-only
-preview first:
+If the diagnostic or Active Scans **Unfinished work self-check** reports stranded
+scan, schedule, Arkime, device-contact, local-processing, or storage work, remain
+in the extracted package directory and run the read-only preview first:
 
 ```sh
 sh scripts/nct-reset-unfinished.sh --container nct
@@ -69,8 +69,8 @@ The helper stops the exact NCT container, verifies that no other container share
 its data, creates a complete cold backup under
 `/var/lib/nct/deployment/backups`, independently extracts and verifies every file,
 and recalculates the exact saved-work plan. It then restores the earlier running
-state. Preview mode does not change a scan, schedule, account, setting or evidence
-record.
+state. Preview mode does not change a scan, schedule, pull, collection, processing
+attempt, account, setting, or evidence record.
 
 Review the displayed backup path, plan and item reasons. To apply that reviewed
 plan, run:
@@ -80,14 +80,15 @@ sh scripts/nct-reset-unfinished.sh --container nct --apply
 ```
 
 Type the requested plan-digest characters exactly. Completed work stays intact;
-unstarted queued scans keep their order; uncertain-contact scans become
-Interrupted; affected scheduled occurrences remain available for review but do
-not resume. NCT restarts paused. In Active Scans, review **Scan queue self-check**
-and use **Resume preserved scans** only when Nmap contact should be allowed
-again. Use **Resume passive pulls** separately when automatic Arkime connector
-contact should resume; neither action authorizes the other. Normal scope, Mission
-Environment, No-Strike and pre-contact checks still apply. Preserve the backup,
-plan and receipts if the helper refuses recovery. NCT restarts only after Docker
+waiting work keeps its order; possible network contact is never replayed; affected
+scheduled occurrences remain available for review; and one replacement local
+processing attempt is queued when safe. NCT restarts with Nmap, Arkime, device
+contact, local processing, and storage maintenance paused separately. In Active
+Scans, review **Unfinished work self-check** and resume only the named category
+that is ready. Device contact cannot resume until uncertain attempts are closed.
+Storage maintenance runs a fresh retained-evidence verification before it resumes.
+Normal scope, Mission Environment, No-Strike and pre-contact checks still apply.
+Preserve the backup, plan and receipts if the helper refuses recovery. NCT restarts only after Docker
 successfully proves that the temporary recovery helper is gone. If that proof
 fails, NCT remains stopped with automatic restart disabled and the terminal
 prints the exact manual review boundary.

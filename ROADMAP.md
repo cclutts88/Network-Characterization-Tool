@@ -168,7 +168,7 @@ A roadmap item should only be marked complete when:
   and for terminal-only results before storage separation is proved. Novice gate:
   **CLEAR**. This is committed development work only; it does not reset unfinished work,
   change the installed Range, or claim mission readiness.
-- [~] **R23 evidence-preserving reset unfinished work — implementation started 2026-10-23.** R22 now captures
+- [x] **R23 evidence-preserving reset unfinished work — completed 2026-10-23.** R22 captures
   the pre-reset state. Keep this separate from fresh installation; require a verified cold
   backup, preserve completed evidence and refuse unfamiliar work or unresolved migration.
   Add scan-work self-diagnosis that automatically detects impossible or stranded active,
@@ -231,6 +231,42 @@ A roadmap item should only be marked complete when:
   `on-failure:4` runtime restoration. The Independent Reviewer / Quality-Gate returned
   **CLEAR — DOCUMENTED DEVIATION** after **58 independent checks**. The novice operator
   returned **CLEAR** at normal and narrow widths with no visible or console errors.
+  **Remaining-work completion independently cleared 2026-10-23.**
+  The versioned recovery plan now includes Arkime pulls, device-contact attempts and
+  publication state, local pipeline attempts and pending intake, device VLAN intake,
+  storage maintenance, shared leases and the retained storage-status record. It preserves
+  queued work and completed evidence, interrupts a running Arkime pull without changing
+  its saved time window, closes only provably pre-contact device work, holds possibly
+  contacted or published device work for explicit review, and replaces an interrupted
+  local attempt with exactly one traceable queued retry. A former storage owner becomes
+  a safety stop; storage can resume only after a new read-only retained-evidence analysis
+  reports no issue or unfinished collection. Unresolved exact-content compaction,
+  migration, unknown leases and mismatched ownership still refuse recovery. Startup now
+  creates and honors one durable five-category hold before it admits any network contact,
+  local processing or storage maintenance. Administrators resume Nmap, Arkime, device
+  contact, local processing and storage maintenance separately, and a failed local-worker
+  restart restores its hold. The Active Scans panel and Operator Guide name every category,
+  preserve review-required device and storage items on screen, and explain the complete
+  cold backup and separate authorization boundary.
+  **Documented deviation:** all recovery changes and the exact before/after rows are kept
+  transactionally in the existing append-only scan audit ledger instead of introducing a
+  second recovery-only database ledger. A portable receipt is also written after commit;
+  failure of that copy cannot erase the transactional receipt or silently resume work.
+  This reuses an already protected audit path while retaining a distinct v2 contract and
+  recovery identifier. The final focused recovery, storage, connector, worker,
+  host-script, documentation and UI suite passed **264 tests**; the complete Docker
+  regression suite passed **2,012 tests with 18 environment-dependent skips**. A
+  disposable Docker image starts with the recovered volume, reports all five holds,
+  renders the recovery panel at normal and narrow widths without horizontal overflow,
+  and has a clean browser console. Review identified and the implementation corrected
+  two material safety boundaries before completion: unreadable, unknown or malformed
+  pause contracts now keep every work category paused, and a rejected storage-resume
+  request cannot release or alter the retained lease. The final Independent Reviewer /
+  Quality-Gate returned **CLEAR — DOCUMENTED DEVIATION** after **39 independent recovery
+  and ownership checks**. The novice operator returned **NOVICE CLEAR** after confirming
+  the five separate resume decisions, review-required work, host command containment and
+  normal/narrow-screen guidance. R23 is committed development readiness on the foundation
+  branch only; it is not Range-ready, mission-ready or available on `main`.
 - [x] **No-Strike broad-CIDR operator clarity absorbed into Scope & Safety Setup.** The retained safety model already
   accepts normalized IPv4 hosts and CIDR networks, including a broad exclusion such as
   `10.0.0.0/8`, for both the shared Global No-Strike list and scan/schedule additions.

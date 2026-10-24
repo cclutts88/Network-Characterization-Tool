@@ -21,6 +21,8 @@ from app.scan_history_index import sync_scan_history_manifest
 
 PAUSE_FOLDER = "recovery"
 PAUSE_FILE = "scan-work-paused.json"
+PAUSE_CONTRACT = "nct-unfinished-work-recovery-pause-v2"
+LEGACY_PAUSE_CONTRACT = "nct-scan-work-recovery-pause-v1"
 ACTIVE_SCAN_STATES = {
     "queued", "dispatching", "running", "awaiting_fallback_approval"
 }
@@ -70,6 +72,11 @@ def recovery_pause(data_dir: Path) -> dict[str, Any] | None:
         return {
             "state": "invalid",
             "reason": "The scan recovery pause record cannot be read safely.",
+            "scan_contact_paused": True,
+            "passive_contact_paused": True,
+            "device_contact_paused": True,
+            "local_processing_paused": True,
+            "storage_maintenance_paused": True,
             "path": str(path),
         }
     if not isinstance(value, dict) or value.get("state") not in {
@@ -78,12 +85,51 @@ def recovery_pause(data_dir: Path) -> dict[str, Any] | None:
         return {
             "state": "invalid",
             "reason": "The scan recovery pause record has an unsupported format.",
+            "scan_contact_paused": True,
+            "passive_contact_paused": True,
+            "device_contact_paused": True,
+            "local_processing_paused": True,
+            "storage_maintenance_paused": True,
+            "path": str(path),
+        }
+    contract = value.get("contract")
+    modern = contract == PAUSE_CONTRACT
+    if contract not in {LEGACY_PAUSE_CONTRACT, PAUSE_CONTRACT}:
+        return {
+            "state": "invalid",
+            "reason": "The scan recovery pause record uses an unsupported contract.",
+            "scan_contact_paused": True,
+            "passive_contact_paused": True,
+            "device_contact_paused": True,
+            "local_processing_paused": True,
+            "storage_maintenance_paused": True,
+            "path": str(path),
+        }
+    required_gates = (
+        "scan_contact_paused", "passive_contact_paused",
+        "device_contact_paused", "local_processing_paused",
+        "storage_maintenance_paused",
+    ) if modern else ("scan_contact_paused", "passive_contact_paused")
+    if any(name in value and not isinstance(value[name], bool) for name in required_gates) or (
+        modern and any(name not in value for name in required_gates)
+    ):
+        return {
+            "state": "invalid",
+            "reason": "The scan recovery pause record has invalid hold fields.",
+            "scan_contact_paused": True,
+            "passive_contact_paused": True,
+            "device_contact_paused": True,
+            "local_processing_paused": True,
+            "storage_maintenance_paused": True,
             "path": str(path),
         }
     return {
         **value,
         "scan_contact_paused": bool(value.get("scan_contact_paused", True)),
         "passive_contact_paused": bool(value.get("passive_contact_paused", True)),
+        "device_contact_paused": bool(value.get("device_contact_paused", modern)),
+        "local_processing_paused": bool(value.get("local_processing_paused", modern)),
+        "storage_maintenance_paused": bool(value.get("storage_maintenance_paused", modern)),
         "path": str(path),
     }
 
@@ -98,6 +144,33 @@ def passive_contact_paused(data_dir: Path) -> bool:
     return bool(current and current.get("passive_contact_paused", True))
 
 
+def device_contact_paused(data_dir: Path) -> bool:
+    current = recovery_pause(data_dir)
+    return bool(current and current.get("device_contact_paused", False))
+
+
+def local_processing_paused(data_dir: Path) -> bool:
+    current = recovery_pause(data_dir)
+    return bool(current and current.get("local_processing_paused", False))
+
+
+def storage_maintenance_paused(data_dir: Path) -> bool:
+    current = recovery_pause(data_dir)
+    return bool(current and current.get("storage_maintenance_paused", False))
+
+
+def _save_or_remove_pause(data_dir: Path, current: dict[str, Any]) -> None:
+    current.pop("path", None)
+    gates = (
+        "scan_contact_paused", "passive_contact_paused", "device_contact_paused",
+        "local_processing_paused", "storage_maintenance_paused",
+    )
+    if any(bool(current.get(name, False)) for name in gates):
+        write_recovery_pause(data_dir, current)
+    else:
+        pause_path(data_dir).unlink(missing_ok=True)
+
+
 def write_recovery_pause(data_dir: Path, value: dict[str, Any]) -> Path:
     folder = data_dir / PAUSE_FOLDER
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -107,6 +180,24 @@ def write_recovery_pause(data_dir: Path, value: dict[str, Any]) -> Path:
     temporary.chmod(0o600)
     temporary.replace(path)
     return path
+
+
+def _remaining_gate_names(current: dict[str, Any]) -> list[str]:
+    labels = {
+        "scan_contact_paused": "Nmap scans",
+        "passive_contact_paused": "Arkime pulls",
+        "device_contact_paused": "device contact",
+        "local_processing_paused": "local processing",
+        "storage_maintenance_paused": "storage maintenance",
+    }
+    return [label for gate, label in labels.items() if current.get(gate, False)]
+
+
+def _review_reason(current: dict[str, Any], resumed: str) -> str:
+    remaining = _remaining_gate_names(current)
+    if not remaining:
+        return f"{resumed} was reviewed; all recovery holds were cleared"
+    return f"{resumed} was reviewed; still paused: {', '.join(remaining)}"
 
 
 def clear_recovery_pause(data_dir: Path, expected_plan_digest: str) -> bool:
@@ -121,12 +212,8 @@ def clear_recovery_pause(data_dir: Path, expected_plan_digest: str) -> bool:
         return False
     current["scan_contact_paused"] = False
     current["scan_resumed_at"] = utc_now()
-    current["reason"] = "Recovered scans were reviewed; passive pulls remain paused"
-    current.pop("path", None)
-    if current.get("passive_contact_paused", True):
-        write_recovery_pause(data_dir, current)
-    else:
-        pause_path(data_dir).unlink()
+    current["reason"] = _review_reason(current, "Nmap scan work")
+    _save_or_remove_pause(data_dir, current)
     return True
 
 
@@ -142,13 +229,49 @@ def clear_passive_recovery_pause(data_dir: Path, expected_plan_digest: str) -> b
         return False
     current["passive_contact_paused"] = False
     current["passive_resumed_at"] = utc_now()
-    current["reason"] = "Passive pulls were reviewed; recovered scans remain paused"
-    current.pop("path", None)
-    if current.get("scan_contact_paused", True):
-        write_recovery_pause(data_dir, current)
-    else:
-        pause_path(data_dir).unlink()
+    current["reason"] = _review_reason(current, "Arkime pull work")
+    _save_or_remove_pause(data_dir, current)
     return True
+
+
+def clear_recovery_gate(
+    data_dir: Path, expected_plan_digest: str, gate: str,
+) -> bool:
+    current = validate_recovery_gate(data_dir, expected_plan_digest, gate)
+    if current is None:
+        return False
+    current[gate] = False
+    current[f"{gate.removesuffix('_paused')}_resumed_at"] = utc_now()
+    resumed = {
+        "device_contact_paused": "Device contact",
+        "local_processing_paused": "Local processing",
+        "storage_maintenance_paused": "Storage maintenance",
+    }[gate]
+    current["reason"] = _review_reason(current, resumed)
+    _save_or_remove_pause(data_dir, current)
+    return True
+
+
+def validate_recovery_gate(
+    data_dir: Path, expected_plan_digest: str, gate: str,
+) -> dict[str, Any] | None:
+    """Validate one reviewed hold without changing the durable pause record."""
+    allowed = {
+        "device_contact_paused", "local_processing_paused",
+        "storage_maintenance_paused",
+    }
+    if gate not in allowed:
+        raise ScanWorkRecoveryError("Unknown recovery gate")
+    current = recovery_pause(data_dir)
+    if current is None:
+        return None
+    if current.get("state") != "review_required":
+        raise ScanWorkRecoveryError("Recovery has not reached administrator review")
+    if current.get("plan_digest") != expected_plan_digest:
+        raise ScanWorkRecoveryError("The saved recovery plan changed")
+    if not current.get(gate, False):
+        return None
+    return current
 
 
 def _tables(connection: sqlite3.Connection) -> set[str]:
@@ -219,8 +342,33 @@ def _validate_schema(connection: sqlite3.Connection) -> list[str]:
     return blockers
 
 
-def _diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
+def _storage_status_record(data_dir: Path | None) -> dict[str, Any] | None:
+    if data_dir is None:
+        return None
+    path = data_dir / "storage-health.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {"state": "missing", "sha256": None, "size_bytes": 0}
+    except OSError as exc:
+        return {"state": "unreadable", "error": type(exc).__name__}
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        value = None
+    return {
+        "state": "saved",
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size_bytes": len(raw),
+        "reported_status": value.get("status") if isinstance(value, dict) else "invalid",
+    }
+
+
+def _diagnose(
+    connection: sqlite3.Connection, data_dir: Path | None = None,
+) -> dict[str, Any]:
     blockers = _validate_schema(connection)
+    available_tables = _tables(connection)
     quick = str(connection.execute("PRAGMA quick_check(1)").fetchone()[0])
     foreign = connection.execute("PRAGMA foreign_key_check").fetchmany(101)
     if quick != "ok":
@@ -232,16 +380,18 @@ def _diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
         "scan_runs", "work_leases", "scan_schedule_occurrences",
         "scan_schedule_chunks", "scan_schedules", "scan_schedule_definitions",
     }
-    if not query_tables.issubset(_tables(connection)):
+    if not query_tables.issubset(available_tables):
         result = {
-            "contract": "nct-scan-work-recovery-v1",
+            "contract": "nct-unfinished-work-recovery-v2",
             "safe_to_apply": False,
             "blockers": sorted(set(blockers)),
             "scans": [],
             "schedule_chunks": [],
             "schedule_occurrences": [],
-            "schedules": [],
-            "leases": [],
+            "schedules": [], "arkime_pulls": [], "device_contacts": [],
+            "pipeline_attempts": [], "pipeline_intake": [],
+            "device_vlan_intake": [], "storage_maintenance": [], "leases": [],
+            "storage_status_record": _storage_status_record(data_dir),
             "affected_count": 0,
             "completed_evidence_action": "preserve",
             "automatic_contact_after_recovery": False,
@@ -289,16 +439,157 @@ def _diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
         }
         scans.append(item)
 
+    arkime_pulls: list[dict[str, Any]] = []
+    for row in (_snapshot_rows(
+        connection,
+        """SELECT * FROM arkime_pull_runs
+             WHERE state IN ('queued','running') ORDER BY queued_at,run_id""",
+    ) if {"arkime_pull_runs", "arkime_pull_profiles"}.issubset(available_tables) else []):
+        action = "preserve_queue" if row["state"] == "queued" else "interrupt_for_review"
+        arkime_pulls.append({
+            "run_id": row["run_id"], "profile_id": row["profile_id"],
+            "state": row["state"], "window_start": row["query_start"],
+            "window_end": row["query_end"], "action": action,
+            "reason": (
+                "The saved pull window remains queued" if action == "preserve_queue"
+                else "Arkime contact began; retry must reuse this exact saved window"
+            ),
+            "record_digest": content_digest(row),
+        })
+
+    device_contacts: list[dict[str, Any]] = []
+    device_lease_bindings: dict[str, tuple[Any, ...]] = {}
+    for run in (_snapshot_rows(
+        connection,
+        """SELECT * FROM device_contact_runs
+             WHERE state IN ('waiting','preparing','contact_starting','contact_active','needs_attention')
+                OR active_attempt_number IS NOT NULL
+             ORDER BY created_at,run_id""",
+    ) if {"device_contact_runs", "device_contact_attempts", "device_contact_publications"}.issubset(available_tables) else []):
+        attempts = _snapshot_rows(
+            connection,
+            "SELECT * FROM device_contact_attempts WHERE run_id=? ORDER BY attempt_number",
+            (run["run_id"],),
+        )
+        publications = _snapshot_rows(
+            connection,
+            "SELECT * FROM device_contact_publications WHERE run_id=? ORDER BY prepared_at",
+            (run["run_id"],),
+        )
+        active = next(
+            (item for item in attempts if item["attempt_number"] == run["active_attempt_number"]),
+            None,
+        )
+        if active is None and run["state"] == "needs_attention":
+            active = next(
+                (item for item in reversed(attempts) if item["state"] == "needs_attention"),
+                None,
+            )
+        if run["active_attempt_number"] is not None and active is None:
+            blockers.append(f"Device contact {run['run_id']} is missing its active attempt")
+        force_review = bool(publications) or run["contact_phase"] not in {"not_started", "preparing"}
+        action = (
+            "preserve_review" if run["state"] == "needs_attention" else
+            "interrupt_for_review" if force_review else "close_precontact"
+        )
+        if active:
+            for prefix in ("run", "capacity"):
+                device_lease_bindings[str(active[f"{prefix}_lease_key"])] = (
+                    active[f"{prefix}_lease_id"], active["owner_id"],
+                    int(active[f"{prefix}_lease_epoch"]),
+                )
+        device_contacts.append({
+            "run_id": run["run_id"], "state": run["state"],
+            "contact_phase": run["contact_phase"], "action": action,
+            "reason": (
+                "This contact is already retained for administrator review"
+                if action == "preserve_review" else
+                "Contact or file publication may have begun; administrator review is required"
+                if force_review else
+                "No contact start or publication was recorded; close the abandoned attempt"
+            ),
+            "run_record": run, "attempt_records": attempts,
+            "publication_records": publications,
+        })
+
+    pipeline_attempts: list[dict[str, Any]] = []
+    derived_lease_bindings: dict[str, tuple[Any, ...]] = {}
+    for attempt in (_snapshot_rows(
+        connection,
+        """SELECT * FROM pipeline_job_attempts
+             WHERE state IN ('queued','running') ORDER BY requested_at,attempt_id""",
+    ) if {"pipeline_jobs", "pipeline_job_attempts", "pipeline_job_requests"}.issubset(available_tables) else []):
+        job_rows = _snapshot_rows(
+            connection, "SELECT * FROM pipeline_jobs WHERE job_id=?", (attempt["job_id"],),
+        )
+        if len(job_rows) != 1:
+            blockers.append(f"Pipeline attempt {attempt['attempt_id']} has no exact saved job")
+        action = "preserve_queue" if attempt["state"] == "queued" else "interrupt_and_requeue"
+        if attempt["state"] == "running":
+            derived_lease_bindings[f"derived-attempt:{attempt['attempt_id']}"] = (
+                attempt["claim_token"], attempt["lease_owner"],
+                int(attempt["lease_epoch"] or 0),
+            )
+        pipeline_attempts.append({
+            "attempt_id": attempt["attempt_id"], "job_id": attempt["job_id"],
+            "attempt_number": int(attempt["attempt_number"]), "state": attempt["state"],
+            "action": action,
+            "reason": (
+                "The local analysis attempt remains queued" if action == "preserve_queue"
+                else "The former local worker stopped; retain this attempt and queue one replacement"
+            ),
+            "attempt_record": attempt, "job_record": job_rows[0] if job_rows else None,
+        })
+
+    pipeline_intake = _snapshot_rows(
+        connection,
+        """SELECT * FROM pipeline_admission_intents
+             WHERE state='pending' ORDER BY created_at,intent_id""",
+    ) if "pipeline_admission_intents" in available_tables else []
+    device_vlan_intake = _snapshot_rows(
+        connection,
+        """SELECT * FROM device_vlan_admission_intents
+             WHERE state='pending' ORDER BY created_at,intent_id""",
+    ) if "device_vlan_admission_intents" in available_tables else []
+
     leases = _snapshot_rows(
         connection,
         """SELECT * FROM work_leases
              WHERE state IN ('active','recovery_required') ORDER BY lease_key""",
     )
+    storage_maintenance: list[dict[str, Any]] = []
     for item in leases:
-        if item["lease_key"] != SCAN_CAPACITY_LEASE_KEY:
-            blockers.append(
-                f"Unsupported active work lease {item['lease_key']} ({item['work_kind']})"
+        key = str(item["lease_key"])
+        binding = device_lease_bindings.get(key) or derived_lease_bindings.get(key)
+        if key == SCAN_CAPACITY_LEASE_KEY:
+            continue
+        if key == "storage-maintenance" and str(item["work_kind"]).startswith("storage-"):
+            storage_maintenance.append({
+                "lease_key": key, "state": item["state"],
+                "action": (
+                    "mark_recovery_required" if item["state"] == "active"
+                    else "preserve_safety_stop"
+                ),
+                "reason": "Storage ownership must be reviewed before maintenance resumes",
+                "lease_record": item,
+            })
+            continue
+        if binding is None:
+            blockers.append(f"Unsupported active work lease {key} ({item['work_kind']})")
+            continue
+        expected_id, expected_owner, expected_epoch = binding
+        if item["state"] == "recovery_required":
+            matches = (
+                item["lease_id"] is None and item["owner_id"] is None
+                and int(item["fencing_epoch"]) == int(expected_epoch)
             )
+        else:
+            matches = (
+                item["lease_id"] == expected_id and item["owner_id"] == expected_owner
+                and int(item["fencing_epoch"]) == int(expected_epoch)
+            )
+        if not matches:
+            blockers.append(f"Work lease {key} does not match its saved attempt ownership")
 
     chunks: list[dict[str, Any]] = []
     affected_occurrences: set[str] = set()
@@ -424,14 +715,25 @@ def _diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
     changes += [item for item in chunks if item["action"] != "preserve_waiting"]
     changes += [item for item in occurrences if item["action"] != "preserve_waiting"]
     changes += schedules
+    changes += [item for item in arkime_pulls if item["action"] != "preserve_queue"]
+    changes += [item for item in device_contacts if item["action"] != "preserve_review"]
+    changes += [item for item in pipeline_attempts if item["action"] != "preserve_queue"]
+    changes += [item for item in storage_maintenance if item["action"] == "mark_recovery_required"]
     result = {
-        "contract": "nct-scan-work-recovery-v1",
+        "contract": "nct-unfinished-work-recovery-v2",
         "safe_to_apply": not blockers,
         "blockers": sorted(set(blockers)),
         "scans": scans,
         "schedule_chunks": chunks,
         "schedule_occurrences": occurrences,
         "schedules": schedules,
+        "arkime_pulls": arkime_pulls,
+        "device_contacts": device_contacts,
+        "pipeline_attempts": pipeline_attempts,
+        "pipeline_intake": pipeline_intake,
+        "device_vlan_intake": device_vlan_intake,
+        "storage_maintenance": storage_maintenance,
+        "storage_status_record": _storage_status_record(data_dir),
         "leases": leases,
         "affected_count": len(changes),
         "completed_evidence_action": "preserve",
@@ -444,28 +746,33 @@ def _diagnose(connection: sqlite3.Connection) -> dict[str, Any]:
 def diagnose_scan_work(db_path: Path) -> dict[str, Any]:
     if not db_path.is_file():
         return {
-            "contract": "nct-scan-work-recovery-v1", "safe_to_apply": False,
+            "contract": "nct-unfinished-work-recovery-v2", "safe_to_apply": False,
             "blockers": ["The saved NCT database was not found"], "scans": [],
             "schedule_chunks": [], "schedule_occurrences": [], "schedules": [],
-            "leases": [],
+            "arkime_pulls": [], "device_contacts": [], "pipeline_attempts": [],
+            "pipeline_intake": [], "device_vlan_intake": [],
+            "storage_maintenance": [], "leases": [],
             "affected_count": 0, "completed_evidence_action": "preserve",
             "automatic_contact_after_recovery": False,
             "plan_digest": None,
         }
     with connect_database(db_path, read_only=True) as connection:
         connection.execute("BEGIN")
-        return _diagnose(connection)
+        return _diagnose(connection, db_path.parent)
 
 
 def pause_for_diagnosis(data_dir: Path, plan: dict[str, Any], reason: str) -> dict[str, Any]:
     value = {
-        "contract": "nct-scan-work-recovery-pause-v1",
+        "contract": PAUSE_CONTRACT,
         "state": "diagnosis_required",
         "recorded_at": utc_now(),
         "reason": reason[:500],
         "plan_digest": plan.get("plan_digest"),
         "scan_contact_paused": True,
         "passive_contact_paused": True,
+        "device_contact_paused": True,
+        "local_processing_paused": True,
+        "storage_maintenance_paused": True,
         "affected_count": int(plan.get("affected_count") or 0),
         "blockers": list(plan.get("blockers") or []),
     }
@@ -493,7 +800,7 @@ def apply_scan_work_recovery(
     # Fail closed before opening the database for mutation. Startup will remain paused
     # even if the transaction or later receipt write is interrupted.
     write_recovery_pause(data_dir, {
-        "contract": "nct-scan-work-recovery-pause-v1",
+        "contract": PAUSE_CONTRACT,
         "state": "diagnosis_required",
         "recorded_at": now,
         "reason": "A stopped-container recovery is being applied",
@@ -501,12 +808,15 @@ def apply_scan_work_recovery(
         "recovery_id": recovery_id,
         "scan_contact_paused": True,
         "passive_contact_paused": True,
+        "device_contact_paused": True,
+        "local_processing_paused": True,
+        "storage_maintenance_paused": True,
         "affected_count": 0,
         "blockers": [],
     })
     with connect_database(db_path) as connection:
         connection.execute("BEGIN IMMEDIATE")
-        plan = _diagnose(connection)
+        plan = _diagnose(connection, data_dir)
         if not plan["safe_to_apply"]:
             raise ScanWorkRecoveryError("Recovery is blocked: " + "; ".join(plan["blockers"]))
         if plan["plan_digest"] != expected_plan_digest:
@@ -639,6 +949,189 @@ def apply_scan_work_recovery(
                 },
             ))
 
+        for item in plan["arkime_pulls"]:
+            if item["action"] == "preserve_queue":
+                continue
+            before = _snapshot_rows(
+                connection, "SELECT * FROM arkime_pull_runs WHERE run_id=?", (item["run_id"],)
+            )
+            connection.execute(
+                """UPDATE arkime_pull_runs
+                      SET state='interrupted',completed_at=?,claim_token=NULL,
+                          error='NCT stopped after Arkime contact began; retry explicitly with the same saved window'
+                    WHERE run_id=? AND state='running'""",
+                (now, item["run_id"]),
+            )
+            connection.execute(
+                "UPDATE arkime_pull_profiles SET state='attention',updated_at=? WHERE profile_id=?",
+                (now, item["profile_id"]),
+            )
+            change_records.append({
+                "record_type": "arkime_pull", "record_id": item["run_id"],
+                "action": item["action"], "before": before,
+                "after": _snapshot_rows(
+                    connection, "SELECT * FROM arkime_pull_runs WHERE run_id=?", (item["run_id"],)
+                ),
+            })
+
+        for item in plan["device_contacts"]:
+            if item["action"] == "preserve_review":
+                continue
+            run_id = item["run_id"]
+            before = _snapshot_rows(
+                connection, "SELECT * FROM device_contact_runs WHERE run_id=?", (run_id,)
+            )
+            active_number = item["run_record"].get("active_attempt_number")
+            needs_review = item["action"] == "interrupt_for_review"
+            reason = (
+                "Former process may have contacted the device or moved files; administrator review is required."
+                if needs_review else
+                "NCT stopped before device contact; start a new collection with fresh settings and credentials."
+            )
+            if active_number is not None:
+                connection.execute(
+                    """UPDATE device_contact_attempts
+                          SET state=?,contact_phase=?,completed_at=?,status_reason=?
+                        WHERE run_id=? AND attempt_number=?""",
+                    (
+                        "needs_attention" if needs_review else "failed",
+                        "uncertain" if needs_review else "contact_stopped",
+                        now, reason, run_id, int(active_number),
+                    ),
+                )
+                attempt = next(
+                    row for row in item["attempt_records"]
+                    if row["attempt_number"] == active_number
+                )
+                for prefix in ("run", "capacity"):
+                    key = attempt[f"{prefix}_lease_key"]
+                    epoch = int(attempt[f"{prefix}_lease_epoch"])
+                    connection.execute(
+                        """UPDATE work_leases SET state=?,renewed_at=?,released_at=?,
+                                  expires_at=NULL,recovery_reason=?,lease_id=NULL,owner_id=NULL
+                             WHERE lease_key=? AND fencing_epoch=?
+                               AND lease_id=? AND owner_id=?""",
+                        (
+                            "recovery_required" if needs_review else "released", now,
+                            None if needs_review else now, reason if needs_review else None,
+                            key, epoch, attempt[f"{prefix}_lease_id"], attempt["owner_id"],
+                        ),
+                    )
+                    connection.execute(
+                        """INSERT INTO work_lease_events(
+                               event_id,lease_key,fencing_epoch,lease_id,owner_id,event_kind,
+                               recorded_at,detail) VALUES(?,?,?,?,?,?,?,?)""",
+                        (
+                            uuid.uuid4().hex, key, epoch,
+                            attempt[f"{prefix}_lease_id"] if needs_review else None,
+                            attempt["owner_id"] if needs_review else None,
+                            "recovery_required" if needs_review else "released", now, reason,
+                        ),
+                    )
+            connection.execute(
+                """UPDATE device_contact_runs
+                      SET state=?,contact_phase=?,active_attempt_number=NULL,
+                          completed_at=?,updated_at=?,status_reason=?
+                    WHERE run_id=?""",
+                (
+                    "needs_attention" if needs_review else "failed",
+                    "uncertain" if needs_review else "contact_stopped",
+                    None if needs_review else now, now, reason, run_id,
+                ),
+            )
+            change_records.append({
+                "record_type": "device_contact", "record_id": run_id,
+                "action": item["action"], "before": before,
+                "after": _snapshot_rows(
+                    connection, "SELECT * FROM device_contact_runs WHERE run_id=?", (run_id,)
+                ),
+            })
+
+        for item in plan["pipeline_attempts"]:
+            if item["action"] == "preserve_queue":
+                continue
+            attempt_id = item["attempt_id"]
+            before = _snapshot_rows(
+                connection, "SELECT * FROM pipeline_job_attempts WHERE attempt_id=?", (attempt_id,)
+            )
+            connection.execute(
+                """UPDATE pipeline_job_attempts
+                      SET state='interrupted',finished_at=?,
+                          error='The former local worker stopped; a reviewed replacement was queued from retained evidence'
+                    WHERE attempt_id=? AND state='running'""",
+                (now, attempt_id),
+            )
+            attempt = item["attempt_record"]
+            lease_key = f"derived-attempt:{attempt_id}"
+            connection.execute(
+                """UPDATE work_leases SET lease_id=NULL,owner_id=NULL,state='released',
+                           expires_at=NULL,released_at=?,renewed_at=?,recovery_reason=NULL
+                     WHERE lease_key=? AND fencing_epoch=? AND lease_id IS ?
+                       AND owner_id IS ? AND state IN ('active','recovery_required')""",
+                (
+                    now, now, lease_key, int(attempt["lease_epoch"] or 0),
+                    attempt["claim_token"], attempt["lease_owner"],
+                ),
+            )
+            replacement_id = uuid.uuid4().hex
+            connection.execute(
+                """INSERT INTO pipeline_job_attempts(
+                       attempt_id,job_id,attempt_number,state,claim_token,lease_owner,
+                       lease_epoch,lease_expires_at,requested_by,requested_at
+                   ) VALUES(?,?,?,'queued',NULL,NULL,0,NULL,'system-recovery',?)""",
+                (
+                    replacement_id, item["job_id"], int(item["attempt_number"]) + 1, now,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO pipeline_job_requests(
+                       request_token,job_id,request_kind,requested_by,requested_at
+                   ) VALUES(?,?,'retry','system-recovery',?)""",
+                (f"recovery-{attempt_id}-{int(attempt['lease_epoch'] or 0)}", item["job_id"], now),
+            )
+            change_records.append({
+                "record_type": "pipeline_attempt", "record_id": attempt_id,
+                "action": item["action"], "replacement_attempt_id": replacement_id,
+                "before": before,
+                "after": _snapshot_rows(
+                    connection,
+                    "SELECT * FROM pipeline_job_attempts WHERE job_id=? ORDER BY attempt_number",
+                    (item["job_id"],),
+                ),
+            })
+
+        for item in plan["storage_maintenance"]:
+            if item["action"] != "mark_recovery_required":
+                continue
+            before = _snapshot_rows(
+                connection, "SELECT * FROM work_leases WHERE lease_key='storage-maintenance'"
+            )
+            lease = item["lease_record"]
+            reason = "Former storage-maintenance ownership ended; verify retained evidence before resuming."
+            connection.execute(
+                """UPDATE work_leases SET state='recovery_required',expires_at=NULL,
+                           lease_id=NULL,owner_id=NULL,renewed_at=?,recovery_reason=?
+                     WHERE lease_key='storage-maintenance' AND fencing_epoch=?
+                       AND lease_id=? AND owner_id=? AND state='active'""",
+                (now, reason, int(lease["fencing_epoch"]), lease["lease_id"], lease["owner_id"]),
+            )
+            connection.execute(
+                """INSERT INTO work_lease_events(
+                       event_id,lease_key,fencing_epoch,lease_id,owner_id,event_kind,
+                       recorded_at,detail) VALUES(?,?,?,?,?,'recovery_required',?,?)""",
+                (
+                    uuid.uuid4().hex, "storage-maintenance", int(lease["fencing_epoch"]),
+                    lease["lease_id"], lease["owner_id"], now, reason,
+                ),
+            )
+            change_records.append({
+                "record_type": "storage_maintenance", "record_id": "storage-maintenance",
+                "action": item["action"], "before": before,
+                "after": _snapshot_rows(
+                    connection, "SELECT * FROM work_leases WHERE lease_key='storage-maintenance'"
+                ),
+            })
+
         lease_before = _snapshot_rows(
             connection, "SELECT * FROM work_leases WHERE lease_key=?",
             (SCAN_CAPACITY_LEASE_KEY,),
@@ -668,7 +1161,7 @@ def apply_scan_work_recovery(
             })
 
         receipt = {
-            "contract": "nct-scan-work-recovery-receipt-v1",
+            "contract": "nct-unfinished-work-recovery-receipt-v2",
             "recovery_id": recovery_id,
             "applied_at": now,
             "actor": actor.strip(),
@@ -677,6 +1170,17 @@ def apply_scan_work_recovery(
             "backup_sha256": backup_sha256.lower(),
             "changed_run_ids": changed_runs,
             "held_occurrence_ids": sorted(affected_occurrences),
+            "interrupted_arkime_run_ids": [
+                item["run_id"] for item in plan["arkime_pulls"]
+                if item["action"] == "interrupt_for_review"
+            ],
+            "reconciled_device_contact_ids": [
+                item["run_id"] for item in plan["device_contacts"]
+            ],
+            "requeued_pipeline_attempt_ids": [
+                item["attempt_id"] for item in plan["pipeline_attempts"]
+                if item["action"] == "interrupt_and_requeue"
+            ],
             "preserved_queue_run_ids": [
                 item["run_id"] for item in plan["scans"]
                 if item["action"] in {"preserve_queue", "requeue_precontact"}
@@ -704,7 +1208,7 @@ def apply_scan_work_recovery(
     receipt_path = receipt_dir / f"scan-work-recovery-{recovery_id}.json"
     _write_external_receipt(receipt_path, receipt)
     write_recovery_pause(data_dir, {
-        "contract": "nct-scan-work-recovery-pause-v1",
+        "contract": PAUSE_CONTRACT,
         "state": "review_required",
         "recorded_at": now,
         "reason": "Recovered work remains paused until an administrator reviews it",
@@ -712,6 +1216,9 @@ def apply_scan_work_recovery(
         "recovery_id": recovery_id,
         "scan_contact_paused": True,
         "passive_contact_paused": True,
+        "device_contact_paused": True,
+        "local_processing_paused": True,
+        "storage_maintenance_paused": True,
         "affected_count": plan["affected_count"],
         "blockers": [],
         "receipt": str(receipt_path),

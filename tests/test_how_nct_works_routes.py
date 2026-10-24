@@ -224,7 +224,8 @@ def test_readme_route_is_available_to_every_authenticated_role(tmp_path, monkeyp
             assert "raw log text" in response.text
             assert "partial result appears only in the terminal" in response.text
             assert 'data-guide-context="safe-diagnostics"' in response.text
-            assert "Recover unfinished scans without deleting evidence" in response.text
+            assert "Recover unfinished work without deleting evidence" in response.text
+            assert "Resume storage maintenance" in response.text
             assert "nct-reset-unfinished.sh --container nct" in response.text
             assert "Resume preserved scans" in response.text
             assert "Resume passive pulls" in response.text

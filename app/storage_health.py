@@ -1172,6 +1172,11 @@ def start_storage_job(
     plan_id: str | None = None,
     confirmation: str | None = None,
 ) -> dict:
+    from app.scan_work_recovery import storage_maintenance_paused
+    if storage_maintenance_paused(db_path.parent):
+        raise ValueError(
+            "Storage maintenance is paused until an administrator reviews unfinished work"
+        )
     if mode not in {"dry-run", "backfill", "compact"}:
         raise ValueError("Unknown storage operation")
     if mode == "compact":

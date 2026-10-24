@@ -94,11 +94,12 @@ performs the same read-only schema gate without requiring the old application
 to run, independently verifies a cold backup, retains both failure sources, and
 does not restart an incompatible old image after replacement-written data.
 
-## Evidence-preserving unfinished-scan recovery
+## Evidence-preserving unfinished-work recovery
 
-Use the Active Scans **Scan queue self-check** first. It reads saved scan,
-schedule and ownership records without changing them. If it reports unfinished
-work, run this preview from the extracted package:
+Use the Active Scans **Unfinished work self-check** first. It reads saved scan,
+schedule, Arkime pull, device-contact, local-processing, storage-maintenance and
+ownership records without changing them. If it reports unfinished work, run this
+preview from the extracted package:
 
 ```bash
 sh scripts/nct-reset-unfinished.sh --container nct
@@ -108,20 +109,23 @@ The host helper refuses a shared data mount, stops the exact container, records
 its non-secret runtime identity, creates a complete cold backup outside retained
 data, independently extracts and verifies every file, and recalculates the exact
 recovery plan. Preview mode restores the previous running state and changes no
-scan record. After an administrator reviews the printed plan, apply it with:
+work record. After an administrator reviews the printed plan, apply it with:
 
 ```bash
 sh scripts/nct-reset-unfinished.sh --container nct --apply
 ```
 
-Apply requires the displayed plan confirmation. Completed scans and evidence
-remain unchanged. Unstarted waiting scans retain their order. Work that may have
-contacted the network becomes Interrupted, affected schedules stay paused for
-review, and NCT restarts with automatic contact paused. Review the affected rows
-in Active Scans, then use **Resume preserved scans** to allow preserved waiting
-Nmap work to pass through the normal scope, No-Strike and pre-contact checks.
-Use **Resume passive pulls** separately to authorize automatic Arkime connector
-contact. Neither review action authorizes the other.
+Apply requires the displayed plan confirmation. Completed scans, collections,
+evidence, accounts, and settings remain unchanged. Waiting work retains its order.
+Possible network contact is never replayed. Original local-processing attempts
+remain in history and one replacement is queued when safe. NCT restarts with Nmap,
+Arkime, device contact, local processing, and storage maintenance paused separately.
+Review the affected rows in Active Scans, then resume only the named category that
+is ready: **Resume preserved scans**, **Resume passive pulls**, **Resume device
+contact**, **Resume local processing**, or **Resume storage maintenance**. Device
+contact remains blocked until uncertain attempts are closed.
+Storage maintenance performs a fresh retained-evidence verification before its
+hold can clear. Normal scope, No-Strike, and pre-contact checks still apply.
 
 Keep the backup, plan and receipts. The helper stops instead of guessing when it
 finds an unfamiliar schema or state, an unfinished migration, unresolved
