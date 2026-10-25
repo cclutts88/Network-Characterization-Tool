@@ -70,7 +70,129 @@ A roadmap item should only be marked complete when:
 4. The roadmap is updated to reflect what actually shipped.
 5. Any deviation from the original plan has been documented.
 
+## 0.4.1 Hybrid workspace loading and task ownership
+
+Every current and future operator workspace must use a hybrid interface model:
+
+- Reuse the shared NCT shell, visual language, common controls, and safely retained
+  operator state where that reduces duplication.
+- Give each hamburger task one deliberate home. Do not repeat full operational panels,
+  forms, live tables, or primary actions on other tasks when a dedicated task exists.
+  Other tasks may show a short status summary and an explicit link to the owning task.
+- Render and request only the data required by the selected task. Load a task's heavier
+  data when the analyst opens it, retain safe in-memory results for quick return, and
+  refresh only information whose source may have changed.
+- Start polling, elapsed-time updates, and live processing only while their owning task
+  is selected and visible. Cancel timers and in-flight requests where supported when the
+  analyst leaves. A safe completed read may populate that task's hidden in-memory cache,
+  but it must not replace the selected task or surface an error there.
+- A hidden task must not surface its errors, loading states, keyboard focus, or status
+  messages in the selected task. One task's failure must not blank or block an unrelated
+  task.
+- Operator Guide content must explain the selected task and may point to the dedicated
+  destination for related work rather than duplicating that work in place.
+- New features must identify their owning task, initial data contract, refresh trigger,
+  stop/cancellation behavior, and any small cross-task summary before implementation is
+  accepted.
+
+Completion requires automated task-ownership checks plus browser navigation that proves
+dedicated panels remain absent elsewhere and live work stops after navigation.
+
 ## 0.5 Architecture / Roadmap Deviation Log
+
+## Hybrid workspace loading and interface streamlining — started 2026-10-25
+
+- [x] Replace the existing pattern in which several hash-selected hamburger tasks share
+  one fully initialized page with task-aware loading and teardown. Keep shared shell and
+  reusable components, but make data requests, live polling, progress state, errors and
+  primary actions belong to the selected task only. Remove redundant full panels from
+  non-owning tasks, beginning with Active Scan, Live Discoveries and Pending Scans, which
+  belong only to Active Scans. Audit every existing multi-task page and document any
+  evidence-driven exception where multiple tasks intentionally share one bounded source
+  read. This requirement governs all future additions.
+- [x] Task ownership is now enforced for the multi-task Scan, Analyze, Device Collection,
+  Arkime, Reach and Map pages. Those pages load their selected task on demand, stop task-owned
+  polling when the analyst leaves, prevent stale task failures from leaking into the
+  selected task, and retry failed task loads on re-entry. Active Scan, Live Discoveries and Pending Scans now appear only in
+  Active Scans. Scan Profile and Schedule workspaces show only the fields needed to manage
+  those records, and exact-scan links open Import & Investigate rather than appearing under
+  Host Inventory.
+- [x] Current Network remains the only complete host roster. Hunt Network Evidence keeps
+  its service, capability and CVE investigation table and now links to Current Network
+  instead of rendering a second Inventory view. The planned Timeline explanation is kept
+  in the navigation and Operator Guide rather than repeated as a page banner.
+- [x] Full scoped-VLAN receipt controls now live only with Network Device evidence. Other
+  relevant tasks retain a compact contextual link to that evidence, preserving the
+  cross-tool VLAN context requirement without repeating the full table or its requests.
+- [x] Documented bounded-source exceptions: Device Analysis reuses one explicitly selected
+  retained device result across its evidence subsections; Hunt reuses one selected retained
+  evidence response to build its capability groupings; Hostname Evidence reuses one bounded
+  workspace response across its review stages. System Health & Storage is one status task:
+  its cards intentionally summarize the same local health snapshot while live sampling runs
+  only when that page is visible, and destructive or expensive actions still require their
+  explicit controls. These sources do not start hidden polling, surface unrelated task errors,
+  or duplicate a second full operational panel.
+- [x] Focused interface-contract validation passes **79 checks**, all **19 current
+  browser-runtime scripts pass**, and the complete Docker suite passes **2,037 tests with
+  20 expected skips**. A rebuilt isolated container was
+  navigated through Scan, Analyze, Device, Hunt, Reach, Arkime and Map tasks with a clean
+  browser console. Root now opens Mission Environment, the retained Reach outcome reference
+  is collapsed, exposure-report entry makes one catalog request, and the last repeated
+  Scan History and Map panel labels were made task-specific. The novice operator returned
+  **CLEAR WITH NON-BLOCKING FEEDBACK** before those final label refinements. The rebuilt
+  candidate again opens Mission Environment at the root, keeps Scan Profiles free of the
+  Active Scan, Live Discoveries and Pending Scans panels, keeps Scan Comparisons stable on
+  its selected task, opens the Arkime traffic task without unrelated panels, and reports no
+  browser warnings or errors.
+- [x] The first independent completion review **HALTED FOR REVIEW** after finding two
+  task-lifecycle defects: a comparison deep link could reopen its own selected task and
+  reset the analyst's baseline, while an Arkime request failure could be remembered as a
+  successful load and prevent a retry after the analyst returned. The comparison handoff
+  is now applied once without redispatching the task; task caches now record only
+  successful reads. The same swallowed-error pattern was audited and corrected across
+  Scan, Analyze, Device Collections, Arkime and Map. Actual handler regressions now prove
+  comparison selection remains stable and failed reads retry on re-entry. The complete
+  suite, all current browser-runtime scripts, rebuilt-browser checks and clean-console check
+  passed before the repeat review continued to the delayed-response finding below.
+- [x] The repeat independent review verified both earlier corrections, then **HALTED FOR
+  REVIEW** after **120 independent Python checks and six executable UI regressions** on one
+  remaining delayed-response race: an assignment-history response could
+  return after the analyst left Import & Investigate and restart that hidden task's poll.
+  Assignment reads now use a task-owned request revision, reject responses from a departed
+  task, invalidate outstanding reads on departure, and schedule another poll only while
+  Import & Investigate still owns the response. An executable delayed-response regression
+  proves that leaving suppresses the stale render and poll, while returning starts a fresh
+  successful read. The complete suite again passes **2,037 tests with 20 expected skips**,
+  all **19 current browser-runtime scripts pass**, the rebuilt preview is healthy and its
+  Import & Investigate workspace has a clean browser console. Final independent quality
+  gate: **CLEAR — DOCUMENTED DEVIATION** after **85 independent Python checks, four
+  executable UI regressions and committed-diff whitespace validation**. The documented
+  deviation is limited to the bounded shared-source exceptions above. This milestone is
+  development-ready on the foundation branch; it is not Range-ready, mission-ready or on
+  `main`.
+
+## Scan Profile reliability — started 2026-10-25
+
+- [x] R01 implementation now uses one client-generated request token for each Save as
+  new profile, Save new version and Clone action. The server retains an actor-bound,
+  content-bound mutation receipt in the existing `app_settings` namespace and returns
+  the original result when that exact request is retried. Reusing a token for changed
+  content or a different signed-in actor is rejected. A different token may intentionally
+  create a separate profile with identical settings; this is retry protection, not profile
+  content deduplication.
+- [x] **Documented storage/compatibility decision:** mutation receipts use the existing
+  durable settings table instead of adding a new SQLite table during this reliability
+  repair. This avoids a schema-fingerprint migration for a narrow control-plane change
+  while keeping the receipt in the same transaction as the profile mutation. The new API
+  contract requires a request token for create/version/clone and the reviewed base version
+  for new-version requests. Existing profile rows, schedules and retained scan snapshots
+  need no migration; built-in profiles and schedule version pins are unchanged. Receipts
+  remain after later profile deletion so a delayed retry cannot silently recreate deleted
+  work. Concurrent create/version, replay, actor/content conflict, clone provenance,
+  paused old-version schedule blockers, built-in protection, rapid repeated clicks,
+  uncertain retries and delayed-response edit preservation are covered in the passing
+  complete suite above. The novice workflow is clear and the final independent quality
+  gate is **CLEAR — DOCUMENTED DEVIATION** with the storage decision retained above.
 
 ## Scheduled scan incident repair — started 2026-10-23
 
@@ -508,6 +630,16 @@ A roadmap item should only be marked complete when:
   exact image and data plus the verified backup until the administrator accepts the new
   instance. Immediate deletion would remove the only direct rollback path and is not
   required to provide a blank replacement.
+- [x] **R01 Scan Profile reliability — implementation, validation and independent review complete.** Reproduce and correct
+  failed or unclear custom-profile deletion, weak Save feedback, and duplicate records
+  caused by repeated submissions. Keep immutable versions and schedules pinned to their
+  exact saved version. Make Save, Save new version, Clone, and Delete visibly busy and
+  resistant to repeated clicks; make repeated server requests safe; show the exact
+  schedules that block deletion and the operator action needed to resolve them. Verify
+  success, validation and server failures, slow responses, duplicate requests, deletion
+  confirmation, and schedules pinned to current or older profile versions. Update the
+  Operator Guide and require independent reviewer plus novice-operator gates before
+  completion.
 - The remaining R01–R21 requests stay tracked in
   `docs/NCT_SCHEDULE_INCIDENT_AND_FIX_HANDOFF_2026-10-23.md`. After R22–R24, implement
   reliability and evidence-correctness items before navigation/presentation work, then

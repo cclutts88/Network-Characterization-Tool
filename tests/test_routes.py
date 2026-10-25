@@ -72,7 +72,8 @@ def test_import_preserves_authenticated_actor_and_original_filename(monkeypatch)
 
 def test_primary_pages_and_profiles_are_available():
     with TestClient(app) as client:
-        device_page = client.get("/")
+        root_page = client.get("/", follow_redirects=False)
+        device_page = client.get("/device-config")
         scan_page = client.get("/scans")
         analysis_page = client.get("/analysis")
         arkime_page = client.get("/arkime")
@@ -81,6 +82,8 @@ def test_primary_pages_and_profiles_are_available():
         scan_references = client.get("/assets/nct-scan-references.js")
         arkime_owl = client.get("/assets/arkime-betrayed-owl.png")
 
+    assert root_page.status_code == 303
+    assert root_page.headers["location"] == "/settings/mission-environment"
     assert device_page.status_code == 200
     assert "Build a collection plan" in device_page.text
     assert scan_page.status_code == 200

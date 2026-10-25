@@ -419,6 +419,7 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
                 "name": "Authenticated ownership profile",
                 "created_by": "spoofed-client-name",
                 "settings": {},
+                "request_token": "authenticated-profile-owner-0001",
             },
         )
         assert profile.status_code == 201

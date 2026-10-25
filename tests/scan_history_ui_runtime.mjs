@@ -48,6 +48,7 @@ await eval(`(async () => {
   const clearTimeout=()=>{};
   const setTimeout=callback=>{scheduled+=1;scheduledCallback=callback;return scheduled};
   const currentOpenHistoryGroups=()=>new Set(['g']);
+  const currentScanTask=()=> 'scanHistory';
   const renderHistory=()=>{};
   const status=message=>{throw new Error(message)};
   const historyJSON=async()=>{
@@ -81,6 +82,7 @@ await eval(`(async () => {
   let resolveHistoryJSON;
   const historyJSON=()=>new Promise(resolve=>{resolveHistoryJSON=resolve});
   const currentOpenHistoryGroups=()=>new Set(['g']);
+  const currentScanTask=()=> 'scanHistory';
   const renderHistory=()=>{};
   const scheduleHistoryJobRefresh=()=>{};
   const status=message=>{throw new Error(message)};
@@ -197,7 +199,8 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let authenticatedAnalyst=null,activeAssignmentScopes=[],nmapAssignmentPoll=null;
+  let authenticatedAnalyst=null,activeAssignmentScopes=[],nmapAssignmentPoll=null,nmapAssignmentRequest=0;
+  const location={hash:'#xmlImport'},currentAnalysisTask=()=>location.hash.slice(1);
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{innerHTML:'',textContent:'',className:'',classList:{toggle:()=>{}}});return controls.get(id)};
   const esc=value=>String(value??'');

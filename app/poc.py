@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import ipaddress
 import hmac
 import json
@@ -234,6 +235,7 @@ class ScanProfileCreate(BaseModel):
     description: str = Field(default="", max_length=500)
     created_by: str = Field(min_length=1, max_length=100)
     settings: ScanOptions
+    request_token: str = Field(min_length=16, max_length=128)
 
     @field_validator("name", "description", "created_by")
     @classmethod
@@ -247,6 +249,8 @@ class ScanProfileVersionCreate(BaseModel):
     description: str = Field(default="", max_length=500)
     created_by: str = Field(min_length=1, max_length=100)
     settings: ScanOptions
+    expected_version: int = Field(ge=1)
+    request_token: str = Field(min_length=16, max_length=128)
 
 
 class ScanProfileClone(BaseModel):
@@ -256,6 +260,7 @@ class ScanProfileClone(BaseModel):
     description: str = Field(default="", max_length=500)
     created_by: str = Field(min_length=1, max_length=100)
     source_version: int | None = Field(default=None, ge=1)
+    request_token: str = Field(min_length=16, max_length=128)
 
 
 class ReviewedScopeAssociation(BaseModel):
@@ -1827,12 +1832,149 @@ def list_scan_profiles(db_path: Path = DB_PATH, *, all_versions: bool = False) -
     return [_profile_record(row) for row in rows]
 
 
+_PROFILE_MUTATION_RECEIPT_PREFIX = "scan_profile_mutation:v1:"
+_PROFILE_REQUEST_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
+
+
+def _profile_record_on_connection(
+    db: sqlite3.Connection,
+    profile_id: str,
+    version: int | None = None,
+) -> dict | None:
+    if version is None:
+        row = db.execute(
+            """
+            SELECT profile_id, version, name, description, built_in,
+                   created_at, created_by, source_profile_id,
+                   source_profile_version, settings_json
+            FROM scan_profiles
+            WHERE profile_id = ? ORDER BY version DESC LIMIT 1
+            """,
+            (profile_id,),
+        ).fetchone()
+    else:
+        row = db.execute(
+            """
+            SELECT profile_id, version, name, description, built_in,
+                   created_at, created_by, source_profile_id,
+                   source_profile_version, settings_json
+            FROM scan_profiles WHERE profile_id = ? AND version = ?
+            """,
+            (profile_id, version),
+        ).fetchone()
+    return _profile_record(row) if row else None
+
+
+def _profile_mutation_identity(
+    request_token: str,
+    action: str,
+    actor: str,
+    normalized_request: dict,
+) -> tuple[str, str, str]:
+    token = request_token.strip()
+    if not _PROFILE_REQUEST_TOKEN_RE.fullmatch(token):
+        raise ValueError(
+            "Profile request token must contain 16-128 letters, numbers, dots, colons, underscores, or hyphens"
+        )
+    request_json = json.dumps(normalized_request, sort_keys=True, separators=(",", ":"))
+    request_sha256 = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+    return token, request_json, request_sha256
+
+
+def _profile_mutation_replay(
+    db: sqlite3.Connection,
+    *,
+    request_token: str,
+    action: str,
+    actor: str,
+    request_json: str,
+    request_sha256: str,
+) -> dict | None:
+    row = db.execute(
+        "SELECT value_json FROM app_settings WHERE key = ?",
+        (f"{_PROFILE_MUTATION_RECEIPT_PREFIX}{request_token}",),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = json.loads(row[0])
+    if (
+        receipt.get("contract") != "nct-scan-profile-mutation:1"
+        or receipt.get("action") != action
+        or receipt.get("actor") != actor
+        or receipt.get("request_json") != request_json
+        or receipt.get("request_sha256") != request_sha256
+    ):
+        raise RuntimeError(
+            "This profile request token was already used for different work; reload and try again"
+        )
+    result = dict(receipt["result"])
+    if _profile_record_on_connection(
+        db, str(result["profile_id"]), int(result["version"])
+    ) is None:
+        raise RuntimeError(
+            "The profile created by this earlier request was later deleted; reload before trying again"
+        )
+    result["request_replayed"] = True
+    return result
+
+
+def _record_profile_mutation(
+    db: sqlite3.Connection,
+    *,
+    request_token: str,
+    action: str,
+    actor: str,
+    request_json: str,
+    request_sha256: str,
+    result: dict,
+) -> None:
+    receipt = {
+        "contract": "nct-scan-profile-mutation:1",
+        "action": action,
+        "actor": actor,
+        "request_json": request_json,
+        "request_sha256": request_sha256,
+        "result": result,
+    }
+    db.execute(
+        """
+        INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            f"{_PROFILE_MUTATION_RECEIPT_PREFIX}{request_token}",
+            json.dumps(receipt, sort_keys=True),
+            utc_now(),
+            actor,
+        ),
+    )
+
+
 def create_scan_profile(request: ScanProfileCreate, db_path: Path = DB_PATH) -> dict:
     init_poc_storage(db_path)
-    profile_id = uuid.uuid4().hex
-    created_at = utc_now()
+    actor = request.created_by.strip()
     settings = request.settings.normalized()
+    normalized_request = {
+        "name": request.name.strip(),
+        "description": request.description.strip(),
+        "settings": settings,
+    }
+    request_token, request_json, request_sha256 = _profile_mutation_identity(
+        request.request_token, "create", actor, normalized_request
+    )
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        replay = _profile_mutation_replay(
+            db,
+            request_token=request_token,
+            action="create",
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+        )
+        if replay is not None:
+            return replay
+        profile_id = uuid.uuid4().hex
         db.execute(
             """
             INSERT INTO scan_profiles (
@@ -1842,12 +1984,27 @@ def create_scan_profile(request: ScanProfileCreate, db_path: Path = DB_PATH) -> 
             ) VALUES (?, 1, ?, ?, 0, ?, ?, NULL, NULL, ?)
             """,
             (
-                profile_id, request.name.strip(), request.description.strip(),
-                created_at, request.created_by.strip(),
+                profile_id,
+                normalized_request["name"],
+                normalized_request["description"],
+                utc_now(),
+                actor,
                 json.dumps(settings, sort_keys=True),
             ),
         )
-    return get_scan_profile(profile_id, 1, db_path)
+        result = _profile_record_on_connection(db, profile_id, 1)
+        assert result is not None
+        result.update(request_token=request_token, request_replayed=False)
+        _record_profile_mutation(
+            db,
+            request_token=request_token,
+            action="create",
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+            result=result,
+        )
+        return result
 
 
 def create_scan_profile_version(
@@ -1855,13 +2012,40 @@ def create_scan_profile_version(
     request: ScanProfileVersionCreate,
     db_path: Path = DB_PATH,
 ) -> dict:
-    current = get_scan_profile(profile_id, db_path=db_path)
-    if current is None:
-        raise KeyError("Scan profile not found")
-    if current["built_in"]:
-        raise ValueError("Built-in profiles are protected; clone one before editing it")
-    version = int(current["version"]) + 1
+    init_poc_storage(db_path)
+    actor = request.created_by.strip()
+    settings = request.settings.normalized()
+    normalized_request = {
+        "profile_id": profile_id,
+        "expected_version": int(request.expected_version),
+        "description": request.description.strip(),
+        "settings": settings,
+    }
+    request_token, request_json, request_sha256 = _profile_mutation_identity(
+        request.request_token, "version", actor, normalized_request
+    )
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        replay = _profile_mutation_replay(
+            db,
+            request_token=request_token,
+            action="version",
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+        )
+        if replay is not None:
+            return replay
+        current = _profile_record_on_connection(db, profile_id)
+        if current is None:
+            raise KeyError("Scan profile not found")
+        if current["built_in"]:
+            raise ValueError("Built-in profiles are protected; clone one before editing it")
+        if int(current["version"]) != int(request.expected_version):
+            raise RuntimeError(
+                f"This profile changed from v{request.expected_version} to v{current['version']}; reload it before saving a new version"
+            )
+        version = int(current["version"]) + 1
         db.execute(
             """
             INSERT INTO scan_profiles (
@@ -1871,13 +2055,25 @@ def create_scan_profile_version(
             ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
             """,
             (
-                profile_id, version, current["name"], request.description.strip(),
-                utc_now(), request.created_by.strip(), profile_id,
+                profile_id, version, current["name"], normalized_request["description"],
+                utc_now(), actor, profile_id,
                 current["version"],
-                json.dumps(request.settings.normalized(), sort_keys=True),
+                json.dumps(settings, sort_keys=True),
             ),
         )
-    return get_scan_profile(profile_id, version, db_path)
+        result = _profile_record_on_connection(db, profile_id, version)
+        assert result is not None
+        result.update(request_token=request_token, request_replayed=False)
+        _record_profile_mutation(
+            db,
+            request_token=request_token,
+            action="version",
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+            result=result,
+        )
+        return result
 
 
 def clone_scan_profile(
@@ -1885,26 +2081,68 @@ def clone_scan_profile(
     request: ScanProfileClone,
     db_path: Path = DB_PATH,
 ) -> dict:
-    source = get_scan_profile(profile_id, request.source_version, db_path)
-    if source is None:
-        raise KeyError("Source scan profile version not found")
-    clone_request = ScanProfileCreate(
-        name=request.name,
-        description=request.description or f"Cloned from {source['name']} v{source['version']}",
-        created_by=request.created_by,
-        settings=ScanOptions(**source["settings"]),
+    init_poc_storage(db_path)
+    actor = request.created_by.strip()
+    normalized_request = {
+        "source_profile_id": profile_id,
+        "source_version": request.source_version,
+        "name": request.name.strip(),
+        "description": request.description.strip(),
+    }
+    request_token, request_json, request_sha256 = _profile_mutation_identity(
+        request.request_token, "clone", actor, normalized_request
     )
-    clone = create_scan_profile(clone_request, db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        replay = _profile_mutation_replay(
+            db,
+            request_token=request_token,
+            action="clone",
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+        )
+        if replay is not None:
+            return replay
+        source = _profile_record_on_connection(db, profile_id, request.source_version)
+        if source is None:
+            raise KeyError("Source scan profile version not found")
+        clone_id = uuid.uuid4().hex
+        description = normalized_request["description"] or (
+            f"Cloned from {source['name']} v{source['version']}"
+        )
         db.execute(
             """
-            UPDATE scan_profiles
-            SET source_profile_id = ?, source_profile_version = ?
-            WHERE profile_id = ? AND version = 1
+            INSERT INTO scan_profiles (
+                profile_id, version, name, description, built_in,
+                created_at, created_by, source_profile_id,
+                source_profile_version, settings_json
+            ) VALUES (?, 1, ?, ?, 0, ?, ?, ?, ?, ?)
             """,
-            (source["profile_id"], source["version"], clone["profile_id"]),
+            (
+                clone_id,
+                normalized_request["name"],
+                description,
+                utc_now(),
+                actor,
+                source["profile_id"],
+                source["version"],
+                json.dumps(source["settings"], sort_keys=True),
+            ),
         )
-    return get_scan_profile(clone["profile_id"], 1, db_path)
+        result = _profile_record_on_connection(db, clone_id, 1)
+        assert result is not None
+        result.update(request_token=request_token, request_replayed=False)
+        _record_profile_mutation(
+            db,
+            request_token=request_token,
+            action="clone",
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+            result=result,
+        )
+        return result
 
 
 def resolve_scan_profile(plan: ScanRunPlan, db_path: Path = DB_PATH) -> dict:
@@ -3936,29 +4174,95 @@ def consume_delete_challenge(scope: str, identifier: str | None, confirmation: s
         return True
 
 
+class ScanProfileDependencyError(RuntimeError):
+    def __init__(self, review: dict):
+        self.review = review
+        blocker_names = ", ".join(
+            f"{item['name']} (v{item['profile_version']}, "
+            f"{'active' if item['enabled'] else 'paused'})"
+            for item in review["blocking_schedules"]
+        )
+        super().__init__(
+            "This custom profile cannot be deleted until its saved schedules are changed or deleted: "
+            + blocker_names
+        )
+
+
+def _scan_profile_delete_review_on_connection(
+    db: sqlite3.Connection, profile_id: str
+) -> dict:
+    profile = _profile_record_on_connection(db, profile_id)
+    if profile is None:
+        raise KeyError("Scan profile not found")
+    version_count = int(
+        db.execute(
+            "SELECT COUNT(*) FROM scan_profiles WHERE profile_id = ?", (profile_id,)
+        ).fetchone()[0]
+    )
+    blockers = []
+    for row in db.execute(
+        """
+        SELECT schedule_id, name, profile_version, definition_json
+        FROM scan_schedules WHERE profile_id = ?
+        ORDER BY lower(name), schedule_id
+        """,
+        (profile_id,),
+    ).fetchall():
+        try:
+            definition = json.loads(row[3])
+        except (TypeError, json.JSONDecodeError):
+            definition = {}
+        blockers.append(
+            {
+                "schedule_id": row[0],
+                "name": row[1],
+                "profile_version": int(row[2]),
+                "enabled": bool(definition.get("enabled", True)),
+            }
+        )
+    return {
+        "profile_id": profile_id,
+        "profile_name": profile["name"],
+        "latest_version": int(profile["version"]),
+        "version_count": version_count,
+        "built_in": bool(profile["built_in"]),
+        "deletable": not profile["built_in"] and not blockers,
+        "blocking_schedules": blockers,
+        "retained_history_preserved": True,
+    }
+
+
+def scan_profile_delete_review(
+    profile_id: str, db_path: Path = DB_PATH
+) -> dict:
+    init_poc_storage(db_path)
+    with connect_database(db_path) as db:
+        return _scan_profile_delete_review_on_connection(db, profile_id)
+
+
 def delete_scan_profile(
     profile_id: str, confirmation: str, db_path: Path = DB_PATH
 ) -> dict:
-    profile = get_scan_profile(profile_id, db_path=db_path)
-    if profile is None:
-        raise KeyError("Scan profile not found")
-    if profile["built_in"]:
-        raise PermissionError("Built-in profiles are protected and cannot be deleted")
+    init_poc_storage(db_path)
     with connect_database(db_path) as db:
-        pinned = db.execute(
-            "SELECT COUNT(*) FROM scan_schedules WHERE profile_id = ?", (profile_id,)
-        ).fetchone()[0]
-    if pinned:
-        raise RuntimeError(
-            "This profile is pinned to a saved schedule. Change or delete that schedule first."
-        )
-    if not consume_delete_challenge("profile", profile_id, confirmation):
-        raise PermissionError("The confirmation string is invalid or expired")
-    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        review = _scan_profile_delete_review_on_connection(db, profile_id)
+        if review["built_in"]:
+            raise PermissionError("Built-in profiles are protected and cannot be deleted")
+        if review["blocking_schedules"]:
+            raise ScanProfileDependencyError(review)
+        if not consume_delete_challenge("profile", profile_id, confirmation):
+            raise PermissionError("The confirmation string is invalid or expired")
         removed = db.execute(
             "DELETE FROM scan_profiles WHERE profile_id = ?", (profile_id,)
         ).rowcount
-    return {"deleted": True, "profile_id": profile_id, "versions_removed": removed}
+        return {
+            "deleted": True,
+            "profile_id": profile_id,
+            "profile_name": review["profile_name"],
+            "versions_removed": removed,
+            "retained_history_preserved": True,
+        }
 
 
 def delete_scan_schedule(
@@ -6654,6 +6958,8 @@ def save_scan_profile(request: ScanProfileCreate, http_request: Request) -> dict
     try:
         request = bind_signed_in_actor(http_request, request, "created_by")
         return create_scan_profile(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -6667,6 +6973,8 @@ def save_scan_profile_version(
         return create_scan_profile_version(profile_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -6680,18 +6988,23 @@ def clone_saved_scan_profile(
         return clone_scan_profile(profile_id, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/scan-profiles/{profile_id}/delete-challenge")
 def scan_profile_delete_challenge(profile_id: str) -> dict:
-    profile = get_scan_profile(profile_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="Scan profile not found")
-    if profile["built_in"]:
+    try:
+        review = scan_profile_delete_review(profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan profile not found") from exc
+    if review["built_in"]:
         raise HTTPException(status_code=403, detail="Built-in profiles cannot be deleted")
-    return issue_delete_challenge("profile", profile_id)
+    if not review["deletable"]:
+        return review
+    return {**review, **issue_delete_challenge("profile", profile_id)}
 
 
 @router.post("/scan-profiles/{profile_id}/delete")
@@ -6700,6 +7013,11 @@ def delete_saved_scan_profile(profile_id: str, confirmation: DeleteConfirmation)
         return delete_scan_profile(profile_id, confirmation.confirmation)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan profile not found") from exc
+    except ScanProfileDependencyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), **exc.review},
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PermissionError as exc:

@@ -332,7 +332,7 @@ def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     html = hunting_page().body.decode()
     assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
-    assert html.count('data-nct-table-mode="contained"') == 3
+    assert html.count('data-nct-table-mode="contained"') == 2
     assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
     assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important" in SHELL_SCRIPT
 
@@ -552,7 +552,13 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Enter the required approval or mission-constraint note before choosing either action." in html
     assert "note.focus();note.reportValidity()" in html
     assert "Recording approval and preparing the full Nmap fallback" in html
-    assert "Delete profile" in html
+    assert "Delete custom profile" in html
+    assert 'id="profileStatus" class="status" role="status" aria-live="polite"' in html
+    assert "request_token:receipt.token" in html
+    assert "expected_version:source.version" in html
+    assert "Checking this custom profile for saved schedule dependencies" in html
+    assert "Change or delete these saved schedules first" in html
+    assert "$('profileScheduleLink').onclick=()=>{location.href='/scans#scheduledScansPanel'}" in html
     assert "Scheduled scans" in html
     assert "Use selected profile" in html
     assert "Addresses per chunk" in html
@@ -710,7 +716,7 @@ def test_scan_queue_polling_stops_when_the_session_is_rejected():
     html = operator_page().body.decode()
 
     assert "response.status===401||response.status===403" in html
-    assert "queueTimer=keepPolling?setTimeout(loadQueue,2000):null" in html
+    assert "queueTimer=keepPolling&&activeScanWorkspace()?setTimeout(loadQueue,2000):null" in html
     assert "Sign in again to resume queue updates." in html
 
 
@@ -844,9 +850,11 @@ def test_cross_task_actions_reveal_their_destination_in_the_new_shell():
     assert "openScanTask('#scanBuilder')" in scan_html
     assert "openScanTask('#savedNetworkPanel')" in scan_html
     assert "window.NCTOpenTask('#wanDesignationPanel')" in device_html
-    assert "window.NCTOpenTask('#networkChangesPanel')" in analysis_html
+    assert "preparedComparisonDeepLink!==compareRunId&&prepareRunComparison(compareRunId)" in analysis_html
+    assert "function prepareRunComparison(runId)" in analysis_html
+    assert "NCTOpenTask('#networkChangesPanel')" not in analysis_html
     assert "window.NCTOpenTask('#changeScenarioPanel')" in reach_html
-    assert "networkOverview:['analysisPanel'],xmlImport:['analysisPanel']" in SHELL_SCRIPT
+    assert "support:{xmlImport:['analysisPanel']}" in SHELL_SCRIPT
     assert 'id="deviceOverviewSection"' in device_analysis_page().body.decode()
     assert "deviceEvidencePicker:['deviceOverviewSection']" in SHELL_SCRIPT
 
@@ -1107,7 +1115,7 @@ def test_arkime_passive_evidence_intake_is_actionable_while_hunt_timeline_remain
     assert "{title:'Timeline',planned:true" in hunt_group
     assert "if(task.planned)" in SHELL_SCRIPT
     assert "row.setAttribute('aria-disabled','true')" in SHELL_SCRIPT
-    assert "huntTimelinePlanned.hidden=task?.parent!=='Hunt'" in SHELL_SCRIPT
+    assert "nct-hunt-timeline-planned" not in SHELL_SCRIPT
     assert "Timeline will show when retained observations first appeared or changed" in SHELL_SCRIPT
     assert "Network Evidence remains the view of what the selected evidence currently reports" in SHELL_SCRIPT
     assert "Arkime passive-evidence boundary" in SHELL_SCRIPT
@@ -1290,16 +1298,14 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "searchSploitMatchesNetworkFilters" in html
     assert "annotateSearchSploitNetworkData" in html
     assert "after all active filters" in html
-    assert 'id="hostRows"' in html
+    assert 'id="hostRows"' not in html
     assert 'id="systemsPanel" data-workspace-card="systems"' in html
     assert '<th title="The observed port and protocol. Configuration-only findings say Device configuration instead of showing a port.">Port</th>' in html
     assert '>Service / product fingerprint</th>' in html
     assert "Port / source" not in html
-    assert 'id="capabilityViewTab"' in html
-    assert 'id="inventoryViewTab"' in html
-    assert 'id="capabilityView" role="tabpanel"' in html
-    assert 'id="inventoryView" role="tabpanel"' in html
-    assert 'id="inventorySummary"' in html
+    assert 'id="capabilityView" role="region" aria-label="Hunt capability evidence"' in html
+    assert 'href="/analysis#networkOverview">Open complete host inventory</a>' in html
+    assert 'id="inventoryView"' not in html
     assert "Network evidence overview" in html
     assert "<h2>Hosts and services</h2>" in html
     assert 'id="sources"' not in html
@@ -1312,17 +1318,16 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'prepareDatasetPreview' in html
     assert '<details class="panel" data-workspace-card="capability-datasets"><summary>Capability datasets</summary>' in html
     assert "Hosts and services stay in one bulk table" in html
-    assert html.count('data-nct-table-mode="contained"') == 3
+    assert html.count('data-nct-table-mode="contained"') == 2
     assert 'data-nct-table-mode="page"' not in html
     assert ".table-wrap{overflow:visible}" not in html
     assert "max-width:1600px" not in html
     assert "body.nct-guide-open #systemsPanel .table-wrap thead th" not in html
     assert 'aria-label="Hunt capability evidence table"' in html
-    assert 'aria-label="Hunt host and device inventory table"' in html
     assert ".table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent))" in SHELL_SCRIPT
     assert "scroll inside the table to see every column while keeping its headings in view" in html
-    assert "function setSystemView(view)" in html
-    assert "function renderHostInventoryRows()" in html
+    assert "function setSystemView()" in html
+    assert "function renderHostInventoryRows()" not in html
     assert "hosts:[],findings:[]" in html
     assert "details.panel>summary::before" in html
     assert "details.panel[open]>summary::before" in html
@@ -1344,13 +1349,13 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "if(!(item.evidence_states||[]).includes('inferred'))return[]" in html
     assert 'id="findingSummaryRows"' in html
     assert "renderFindingSummaries(data.findings||[])" in html
-    assert "activeSystemView==='inventory'" in html
+    assert "activeSystemView==='inventory'" not in html
     assert 'id="systemPageSize"' in html
     assert 'id="systemPagePrevious"' in html
     assert 'id="systemPageNext"' in html
     assert 'id="systemPageSummary"' in html
     assert "function systemPageSlice(items)" in html
-    assert "function itemMatches(item,isHost)" in html
+    assert "function itemMatches(item)" in html
     assert "renderFindingSummaries(visible.flat())" in html
     assert "findings=(current.findings||[]).filter" in html
     assert "Hunt rows per page" in SHELL_SCRIPT
@@ -1936,7 +1941,7 @@ def test_map_gap_prepares_existing_scan_builder_without_direct_network_contact()
     assert "item.saved_network_id===requestedId&&item.cidr===target" in scan_html
     assert "This target was prepared as manual and unscoped" in scan_html
     assert "label.includes(target)?`Selected ${kind}: ${label}`" in scan_html
-    assert "applyMapScanHandoff();await Promise.all" in scan_html
+    assert "if(ownsTask())applyMapScanHandoff()" in scan_html
     assert 'section.dataset.guideContext=\'map-scan-preparation\'' in map_html
     assert "aside#details .map-scan-preparation a.map-scan-action" in map_html
     assert "color:#07171b!important" in map_html
@@ -2546,7 +2551,8 @@ def test_automated_and_imported_results_share_the_same_renderer():
     assert 'id="comparisonBaseline"' in html
     assert 'id="comparisonCurrent"' in html
     assert "Compare two specific scans" in html
-    assert "await openRun(runId);focusRequestedEvidence()" in html
+    assert "if(runId)await openRun(runId)" in html
+    assert "focusRequestedEvidence()" in html
     assert "coverage_warnings" in html
     assert 'id="comparisonResult"' in html
     assert ">Compare scans</button>" in html
@@ -2583,7 +2589,7 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert "renderNetworkInventory" in html
     assert "networkEvidenceDetails" in html
     assert "Evidence and history" in html
-    assert "else{await loadNetworkOverview()}" in html
+    assert "if(task==='networkOverview'){if(!analysisLoadedTasks.has(task)){const loaded=await loadNetworkOverview();if(loaded&&ownsTask())" in html
     assert "scanRef(item).primary" in html
     assert "Open one specific retained scan" in html
     assert 'id="retainedScanSelect"' in html
@@ -2814,6 +2820,40 @@ def test_nmap_advanced_operations_are_collapsed_without_removing_capability():
     assert html.index('id="scheduledScansPanel"') < html.index('id="runNow"')
 
 
+def test_scan_monitoring_workspace_is_only_visible_on_active_scans():
+    assert "body[data-nct-task]:not([data-nct-task=queuePanel]) #queuePanel{display:none!important}" in SHELL_SCRIPT
+    assert "support:{queuePanel:['currentRunPanel']}" in SHELL_SCRIPT
+
+
+def test_scan_workspace_loads_only_the_selected_task_and_stops_hidden_work():
+    html = operator_page().body.decode()
+
+    assert "async function activateScanTask(" in html
+    assert "async function ensureScanData(" in html
+    assert "if(task==='profileManagementPanel'){await ensureScanData('profiles',loadProfiles);return}" in html
+    assert "if(task==='queuePanel'){await syncActiveScanWorkspace();return}" in html
+    assert "function stopHiddenScanWork()" in html
+    assert "if(liveDiscoveryController){liveDiscoveryController.abort()" in html
+    assert "if(scanDataLoaded.has('history'))await loadHistory(true)" in html
+    assert "window.addEventListener('nct:taskchange',requestScanTaskActivation)" in html
+    assert "await Promise.all([loadProfiles(),loadNetworkScopes(),loadSavedNetworks()" not in html
+
+
+def test_scan_profile_workspace_removes_unrelated_scan_builder_controls():
+    assert "body[data-nct-task=profileManagementPanel]" in SHELL_SCRIPT
+    for selector in (
+        ".builder-heading",
+        "#scopeModeField",
+        "#scanNameField",
+        "#scopeSavedBox",
+        "#scopeManualBox",
+        "#networkScopeReview",
+        "#scanLaunchActions",
+        "#scheduledScansPanel",
+    ):
+        assert selector in SHELL_SCRIPT
+
+
 def test_tcp_udp_top_scopes_are_allowed_and_split_by_the_backend():
     html = operator_page().body.decode()
 
@@ -2885,6 +2925,9 @@ def test_scoped_vlan_context_is_shared_without_changing_other_results():
     ):
         assert path in SHELL_SCRIPT
     assert "panel.id='nct-scoped-vlan-context'" in SHELL_SCRIPT
+    assert "if(location.pathname!=='/device-analysis')" in SHELL_SCRIPT
+    assert "compact.id='nct-vlan-context-link'" in SHELL_SCRIPT
+    assert "Open VLAN evidence" in SHELL_SCRIPT
     assert "Retained scoped VLAN evidence" in SHELL_SCRIPT
     assert "NCT does not attach it to an Nmap host by matching an IP address" in SHELL_SCRIPT
     assert "VLAN evidence does not change a Reach result" in SHELL_SCRIPT
@@ -2906,6 +2949,39 @@ def test_scoped_vlan_context_is_shared_without_changing_other_results():
     assert "Unknown / not assessed" not in SHELL_SCRIPT
     assert "Define Saved Networks and connect them to the reviewed Network Scope" in SHELL_SCRIPT
     assert "Define authorized network scopes first" not in SHELL_SCRIPT
+
+
+def test_shared_shell_loads_only_the_selected_task_and_stops_hidden_polling():
+    scan = operator_page().body.decode()
+    analysis = analysis_page().body.decode()
+    devices = device_config_page().body.decode()
+    arkime = arkime_page().body.decode()
+    reach = reachability_page().body.decode()
+    map_html = network_map_page().body.decode()
+
+    assert "function activateScanTask" in scan
+    assert "function stopHiddenScanWork" in scan
+    assert "window.addEventListener('nct:taskchange',requestScanTaskActivation)" in scan
+    assert "function activateAnalysisTask" in analysis
+    assert "function stopHiddenAnalysisWork" in analysis
+    assert "if(currentAnalysisTask()!=='xmlImport')return false;const request=++nmapAssignmentRequest" in analysis
+    assert "request!==nmapAssignmentRequest||currentAnalysisTask()!=='xmlImport'" in analysis
+    assert "if(currentAnalysisTask()!=='xmlImport'){nmapAssignmentRequest++;clearTimeout(nmapAssignmentPoll)" in analysis
+    assert "window.addEventListener('nct:taskchange',requestAnalysisTaskActivation)" in analysis
+    assert "function activateDeviceTask" in devices
+    assert "function stopHiddenDeviceWork" in devices
+    assert "currentDeviceTask()!=='deviceHistory'" in devices
+    assert "window.addEventListener('nct:taskchange',requestDeviceTaskActivation)" in devices
+    assert "function activateArkimeTask" in arkime
+    assert "window.addEventListener('nct:taskchange',requestArkimeTaskActivation)" in arkime
+    assert "function activateMapTask" in map_html
+    assert "window.addEventListener('nct:taskchange',requestMapTaskActivation)" in map_html
+    assert "function activateReachTask" in reach
+    assert "window.addEventListener('nct:taskchange',requestReachTaskActivation)" in reach
+    assert "if(task==='exposureReportPanel')" in reach
+    assert "await ensureReachContext()" in reach
+    assert "bindClearButton('source','clearSource');bindClearButton('destination','clearDestination');loadContext();" not in reach
+    assert "window.dispatchEvent(new CustomEvent('nct:taskchange'" in SHELL_SCRIPT
 
 
 def test_operator_readme_explains_scope_continuity_and_scoped_vlan_limits():

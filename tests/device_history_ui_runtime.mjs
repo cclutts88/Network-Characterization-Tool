@@ -21,6 +21,7 @@ await eval(`(async () => {
   const clearInterval=()=>{};
   const setInterval=()=>1;
   const setTimeout=callback=>{scheduledCallback=callback;return 1};
+  const currentDeviceTask=()=> 'deviceHistory';
   const renderHistory=records=>{rendered=records.map(item=>item.run_id)};
   const updateWanCollectionOptions=()=>{};
   const historyJSON=async url=>{

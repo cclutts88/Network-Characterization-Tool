@@ -57,6 +57,7 @@ def test_profile_versions_are_immutable_and_schedules_remain_pinned(tmp_path):
             name="DMZ Weekly",
             created_by="analyst01",
             settings=ScanOptions(protocol="tcp", tcp_scope="common"),
+            request_token="create-dmz-weekly-profile-0001",
         ),
         db_path,
     )
@@ -79,6 +80,8 @@ def test_profile_versions_are_immutable_and_schedules_remain_pinned(tmp_path):
         ScanProfileVersionCreate(
             created_by="analyst02",
             description="Add UDP",
+            expected_version=1,
+            request_token="version-dmz-weekly-profile-0001",
             settings=ScanOptions(
                 protocol="tcp_udp", tcp_scope="common", udp_scope="common"
             ),
@@ -111,6 +114,7 @@ def test_custom_profile_delete_is_protected_until_schedule_is_repinned(tmp_path)
             name="Temporary Mission Profile",
             created_by="analyst01",
             settings=ScanOptions(protocol="tcp", tcp_scope="common"),
+            request_token="create-temporary-profile-0001",
         ),
         db_path,
     )
@@ -128,7 +132,7 @@ def test_custom_profile_delete_is_protected_until_schedule_is_repinned(tmp_path)
         db_path,
     )
     challenge = issue_delete_challenge("profile", profile["profile_id"])["challenge"]
-    with pytest.raises(RuntimeError, match="pinned"):
+    with pytest.raises(RuntimeError, match="Mission Schedule"):
         delete_scan_profile(profile["profile_id"], challenge, db_path)
 
     changed = change_scan_schedule_profile(

@@ -330,4 +330,26 @@ await eval([
   "})()",
 ].join("\n"));
 
+await eval([
+  "(async () => {",
+  "const location={hash:'#arkimeCoverageWindows'},arkimeLoadedTasks=new Set();",
+  "let arkimeWorkspaceReady=true,arkimeActivationRevision=0,arkimeScopesReady=true,coverageCalls=0;",
+  "const requestedAnalysis=null,trafficImportId=null,listeners=new Map();",
+  "const window={addEventListener(name,callback){const items=listeners.get(name)||[];items.push(callback);listeners.set(name,items)},async dispatch(name){for(const callback of listeners.get(name)||[])await callback()}};",
+  "const loadCoverage=async()=>{coverageCalls+=1;return coverageCalls>1};",
+  "const loadScopes=async()=>true,loadPulls=async()=>true,load=async()=>true,loadSummaries=async()=>true,loadHistoryStreams=async()=>true,loadLatestHistory=async()=>true,loadTrafficAnalysis=async()=>true;",
+  "const $=()=>({textContent:'',className:''});",
+  syncHandler("currentArkimeTask"),
+  handler("activateArkimeTask"),
+  handler("requestArkimeTaskActivation"),
+  "window.addEventListener('nct:taskchange',requestArkimeTaskActivation);",
+  "await window.dispatch('nct:taskchange');",
+  "assert.equal(coverageCalls,1);assert.equal(arkimeLoadedTasks.has('arkimeCoverageWindows'),false,'a failed first load must not be cached');",
+  "location.hash='#arkimeTrafficAnalysis';await window.dispatch('nct:taskchange');",
+  "location.hash='#arkimeCoverageWindows';await window.dispatch('nct:taskchange');",
+  "assert.equal(coverageCalls,2,'returning to the task must retry a failed first load');",
+  "assert.equal(arkimeLoadedTasks.has('arkimeCoverageWindows'),true,'only the successful retry may be cached');",
+  "})()",
+].join("\n"));
+
 console.log("Arkime UI paging and request-ownership regressions passed");

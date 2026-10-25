@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../app/ui.py", import.meta.url), "utf8");
+const activeScanWorkspace = () => true;
 
 function handler(name) {
   const match = source.match(new RegExp(`^async function ${name}\\(.*$`, "m"));
@@ -199,6 +200,19 @@ await eval(`(async () => {
   requests[2].resolve({ok:true,json:async()=>({run:'ended'})});
   await terminalPending;
   assert.deepEqual(rendered,['current'],'an ended run must not render a late live response');
+})()`);
+
+await eval(`(async () => {
+  const scanDataLoaded=new Set(),scanDataLoading=new Map();
+  let attempts=0;
+  const loader=async()=>{attempts+=1;return attempts>1};
+  ${handler("ensureScanData")}
+  assert.equal(await ensureScanData('retryable',loader),false);
+  assert.equal(scanDataLoaded.has('retryable'),false,'a failed task read must not be cached');
+  assert.equal(await ensureScanData('retryable',loader),true);
+  assert.equal(scanDataLoaded.has('retryable'),true,'the successful retry must be cached');
+  await ensureScanData('retryable',loader);
+  assert.equal(attempts,2,'a successful task read should be reused on return');
 })()`);
 
 console.log("Scan queue UI runtime regressions passed");

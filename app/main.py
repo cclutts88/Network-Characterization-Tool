@@ -6314,9 +6314,9 @@ document.getElementById('analysisHistoryRefresh')?.addEventListener('click',load
 </script></body></html>'''
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
-    return device_config_page()
+@app.get("/", response_class=RedirectResponse)
+def index() -> RedirectResponse:
+    return RedirectResponse("/settings/mission-environment", status_code=303)
 
 @app.get('/operator')
 def operator():
