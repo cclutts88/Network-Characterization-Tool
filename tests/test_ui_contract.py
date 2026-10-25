@@ -679,7 +679,24 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "/api/saved-networks" in html
     assert "/api/scan-runs-grouped?limit=25&offset=0" in html
     assert "Load more subnet groups" in html
-    assert "Every retained scan stays inside the dropdown for its exact recorded subnet" in html
+    assert "Every retained scan stays inside the stable dropdown for its exact recorded subnet" in html
+    assert "Status / historical run name" in html
+    assert "Executed target / recorded context" in html
+    assert "Saved Network at scan time" in html
+    assert "Network Scope at scan time" in html
+    assert "Review network context" in html
+    assert "Review retained network context" in html
+    assert "historical run name will not be copied" in html
+    assert "renameAndAttributeNetwork" not in html
+    assert "networkAttributionRename" not in html
+    assert "ensureScanData('saved-networks',loadSavedNetworks)" in html
+    assert "editingSavedNetworkRevision={updated_at:item.updated_at" in html
+    assert "const editorRevision=editingSavedNetworkRevision" in html
+    assert "expected_updated_at:existing?.updated_at" not in html
+    assert "Your draft was not applied. Select Edit selected again" in html
+    assert 'id="scan-history-responsive-rows"' in html
+    assert "@container (max-width:900px)" in html
+    assert "Executed target / recorded context'" in html
     assert 'class="history-group"' in html
     assert "localeCompare(NCTScanReference.humanize(b.name||'')" in html
     assert "function newestFirst(runs)" in html

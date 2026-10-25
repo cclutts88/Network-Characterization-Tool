@@ -306,13 +306,14 @@ class SavedNetworkContextSave(BaseModel):
     description: str = Field(default="", max_length=500)
     category: str = Field(default="", max_length=100)
     tags: list[str] = Field(default_factory=list, max_length=30)
+    expected_updated_at: str | None = Field(default=None, max_length=64)
     scope_id: str | None = Field(default=None, max_length=100)
     expected_association_id: str | None = Field(default=None, max_length=100)
     expected_revision: int | None = Field(default=None, ge=1)
     scope_reason: str = Field(default="", max_length=500)
 
     @field_validator(
-        "saved_network_id", "scope_id", "expected_association_id"
+        "saved_network_id", "expected_updated_at", "scope_id", "expected_association_id"
     )
     @classmethod
     def clean_context_identifier(cls, value: str | None) -> str | None:
@@ -6691,7 +6692,8 @@ def save_saved_network_with_context(
             db.execute("BEGIN IMMEDIATE")
             if request.saved_network_id is None:
                 if (
-                    request.expected_association_id is not None
+                    request.expected_updated_at is not None
+                    or request.expected_association_id is not None
                     or request.expected_revision is not None
                 ):
                     raise SavedNetworkScopeConflict(
@@ -6732,6 +6734,7 @@ def save_saved_network_with_context(
                         description=request.description,
                         category=request.category,
                         tags=request.tags,
+                        expected_updated_at=request.expected_updated_at or "",
                         updated_by=actor,
                     ),
                 )
@@ -6870,6 +6873,8 @@ def edit_saved_network(
         return update_saved_network(saved_network_id, request, DB_PATH)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Saved Network not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

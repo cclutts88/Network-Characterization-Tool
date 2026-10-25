@@ -35,18 +35,6 @@ def scan_history_memberships(run: dict) -> list[dict]:
     Exact CIDRs are canonicalized, but a host address is never promoted to a
     containing subnet. Saved Network names are presentation metadata only.
     """
-    snapshots_by_cidr: dict[str, dict] = {}
-    for snapshot in _saved_network_snapshots(run):
-        raw = str(snapshot.get("cidr") or "").strip()
-        if not raw or "/" not in raw:
-            continue
-        try:
-            network = ipaddress.ip_network(raw, strict=False)
-        except ValueError:
-            continue
-        if network.version == 4:
-            snapshots_by_cidr.setdefault(str(network), snapshot)
-
     subnets: dict[str, dict] = {}
     hosts: list[str] = []
     unsupported: list[str] = []
@@ -61,18 +49,22 @@ def scan_history_memberships(run: dict) -> list[dict]:
                 unsupported.append(raw)
                 continue
             cidr = str(network)
-            snapshot = snapshots_by_cidr.get(cidr) or {}
             subnets.setdefault(
                 cidr,
                 {
                     "group_id": _group_id("subnet", cidr),
                     "kind": "subnet",
-                    "name": snapshot.get("name") or f"Subnet {cidr}",
+                    # The group represents an exact recorded CIDR, not one
+                    # mutable Saved Network record. Per-run snapshots keep the
+                    # name that was recorded at collection or attribution time.
+                    "name": f"Subnet {cidr}",
                     "cidr": cidr,
-                    "description": snapshot.get("description")
-                    or "Retained scans that explicitly recorded this exact subnet.",
-                    "category": snapshot.get("category") or "",
-                    "tags": list(snapshot.get("tags") or []),
+                    "description": (
+                        "Grouped by exact recorded CIDR. Open the group to see "
+                        "each scan's historical Saved Network snapshot."
+                    ),
+                    "category": "",
+                    "tags": [],
                 },
             )
             continue

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -9,6 +11,7 @@ from app.poc import (
     ScanRunPlan,
     attribute_scan_run_networks,
     build_scan_run_manifest,
+    get_scan_run_plan,
     group_scan_runs_by_saved_network,
     insert_scan_run_manifest,
 )
@@ -18,6 +21,7 @@ from app.saved_networks import (
     SavedNetworkUpdate,
     archive_saved_network,
     create_saved_network,
+    get_saved_network,
     list_saved_networks,
     update_saved_network,
 )
@@ -96,12 +100,25 @@ def test_saved_network_can_be_updated_and_archived_without_deletion(tmp_path: Pa
             description="Updated description",
             category="Training",
             tags=["west"],
+            expected_updated_at=record["updated_at"],
             updated_by="reviewer",
         ),
         db_path,
     )
     assert updated["name"] == "Lab West"
     assert updated["updated_by"] == "reviewer"
+
+    with pytest.raises(RuntimeError, match="changed in another session"):
+        update_saved_network(
+            record["saved_network_id"],
+            SavedNetworkUpdate(
+                name="Stale overwrite",
+                expected_updated_at=record["updated_at"],
+                updated_by="other-reviewer",
+            ),
+            db_path,
+        )
+    assert get_saved_network(record["saved_network_id"], db_path)["name"] == "Lab West"
 
     archived = archive_saved_network(
         record["saved_network_id"],
@@ -111,6 +128,38 @@ def test_saved_network_can_be_updated_and_archived_without_deletion(tmp_path: Pa
     assert archived["active"] is False
     assert list_saved_networks(db_path) == []
     assert list_saved_networks(db_path, include_archived=True)[0]["name"] == "Lab West"
+
+
+def test_concurrent_saved_network_edits_with_one_token_allow_only_one_writer(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "analyzer.db"
+    record = create_network(db_path)
+    start = threading.Barrier(2)
+
+    def attempt(name: str) -> tuple[str, str]:
+        start.wait(timeout=5)
+        try:
+            updated = update_saved_network(
+                record["saved_network_id"],
+                SavedNetworkUpdate(
+                    name=name,
+                    expected_updated_at=record["updated_at"],
+                    updated_by=name,
+                ),
+                db_path,
+            )
+            return "updated", updated["name"]
+        except RuntimeError as exc:
+            return "conflict", str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ["First analyst", "Second analyst"]))
+
+    assert [result[0] for result in results].count("updated") == 1
+    assert [result[0] for result in results].count("conflict") == 1
+    winner = next(result[1] for result in results if result[0] == "updated")
+    assert get_saved_network(record["saved_network_id"], db_path)["name"] == winner
 
 
 def test_archived_network_does_not_invisibly_reserve_name_or_cidr(tmp_path: Path):
@@ -267,6 +316,53 @@ def test_completed_manual_scan_can_be_attributed_to_an_exact_saved_network(tmp_p
     assert updated["targets"] == [saved["cidr"]]
     assert updated["network_attribution_history"][0]["changed_by"] == "reviewer"
     assert group_scan_runs_by_saved_network([updated])[0]["kind"] == "saved_network"
+
+
+def test_saved_network_rename_does_not_rewrite_scan_snapshot_until_explicit_attribution(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path, name="Original subnet name")
+    manifest = build_scan_run_manifest(
+        scan_plan(saved_network_ids=[saved["saved_network_id"]]),
+        status="completed",
+        db_path=db_path,
+    )
+    insert_scan_run_manifest(manifest, db_path)
+    original_targets = list(manifest["targets"])
+    original_scope = manifest.get("network_scope_context")
+
+    renamed = update_saved_network(
+        saved["saved_network_id"],
+        SavedNetworkUpdate(
+            name="Current subnet name",
+            expected_updated_at=saved["updated_at"],
+            updated_by="network-admin",
+        ),
+        db_path,
+    )
+    retained = get_scan_run_plan(manifest["run_id"], db_path)
+
+    assert renamed["name"] == "Current subnet name"
+    assert retained["saved_networks"][0]["name"] == "Original subnet name"
+    assert retained["targets"] == original_targets
+    assert retained.get("network_scope_context") == original_scope
+
+    reviewed = attribute_scan_run_networks(
+        manifest["run_id"],
+        ScanRunNetworkAttribution(
+            saved_network_ids=[saved["saved_network_id"]],
+            changed_by="history-reviewer",
+        ),
+        db_path,
+    )
+
+    assert reviewed["saved_networks"][0]["name"] == "Current subnet name"
+    assert reviewed["network_attribution_history"][-1]["previous_saved_networks"][0][
+        "name"
+    ] == "Original subnet name"
+    assert reviewed["targets"] == original_targets
+    assert reviewed.get("network_scope_context") == original_scope
 
 
 def test_scan_attribution_rejects_a_saved_network_outside_executed_scope(tmp_path: Path):

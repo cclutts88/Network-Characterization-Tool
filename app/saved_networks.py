@@ -18,7 +18,10 @@ _SAVED_NETWORK_STORAGE_LOCK = threading.RLock()
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    # Saved Network edits use this value as an optimistic concurrency token.
+    # Retain microseconds so two reviewed edits in the same second cannot share
+    # the same token and silently overwrite one another.
+    return datetime.now(timezone.utc).isoformat()
 
 
 def normalize_cidr(value: str) -> tuple[str, bool]:
@@ -82,9 +85,10 @@ class SavedNetworkUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     category: str | None = Field(default=None, max_length=100)
     tags: list[str] | None = Field(default=None, max_length=30)
+    expected_updated_at: str = Field(min_length=1, max_length=64)
     updated_by: str = Field(min_length=1, max_length=100)
 
-    @field_validator("name", "cidr", "updated_by")
+    @field_validator("name", "cidr", "expected_updated_at", "updated_by")
     @classmethod
     def clean_required_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -301,6 +305,11 @@ def update_saved_network_record(
         raise KeyError("Saved Network not found")
     values = request.model_dump(exclude_unset=True)
     values.pop("updated_by", None)
+    expected_updated_at = values.pop("expected_updated_at", None)
+    if expected_updated_at != current["updated_at"]:
+        raise RuntimeError(
+            "Saved Network changed in another session; reload and review it again"
+        )
     normalized_from: str | None = None
     if "cidr" in values:
         entered = values["cidr"]
@@ -355,6 +364,10 @@ def update_saved_network(
     init_saved_network_storage(db_path)
     try:
         with connect_database(db_path) as db:
+            # Serialize the read/check/write boundary. Without this lock, two
+            # writers can both validate the same updated_at value before either
+            # update commits and the later writer silently wins.
+            db.execute("BEGIN IMMEDIATE")
             normalized_from = update_saved_network_record(
                 db, saved_network_id, request
             )

@@ -685,6 +685,7 @@ def test_contextual_save_is_atomic_and_local_cross_origin_is_blocked(
                 **payload,
                 "saved_network_id": original["saved_network_id"],
                 "name": "Name that must roll back",
+                "expected_updated_at": original["updated_at"],
                 "expected_association_id": original["network_scope_association"]["association_id"],
                 "expected_revision": original["network_scope_association"]["revision"],
             },
@@ -693,8 +694,35 @@ def test_contextual_save_is_atomic_and_local_cross_origin_is_blocked(
         retained = client.get(
             f"/api/saved-networks/{original['saved_network_id']}"
         ).json()
+        repeated_stale_edit = client.post(
+            "/api/saved-networks/contextual-save",
+            json={
+                **payload,
+                "saved_network_id": original["saved_network_id"],
+                "name": "Name that still must not apply",
+                "expected_updated_at": original["updated_at"],
+                "expected_association_id": original["network_scope_association"]["association_id"],
+                "expected_revision": original["network_scope_association"]["revision"],
+            },
+        )
+        assert repeated_stale_edit.status_code == 409
+        reviewed = client.post(
+            "/api/saved-networks/contextual-save",
+            json={
+                **payload,
+                "saved_network_id": retained["saved_network_id"],
+                "name": "Reviewed after reload",
+                "scope_id": retained["network_scope_association"]["scope_id"],
+                "expected_updated_at": retained["updated_at"],
+                "expected_association_id": retained["network_scope_association"]["association_id"],
+                "expected_revision": retained["network_scope_association"]["revision"],
+            },
+        )
+        assert reviewed.status_code == 200
+        reviewed_record = reviewed.json()
     assert retained["name"] == "Atomic network"
     assert retained["network_scope_association"]["association_id"] == changed["association_id"]
+    assert reviewed_record["name"] == "Reviewed after reload"
 
 
 def test_archived_scope_schedule_enable_returns_conflict_without_state_change(

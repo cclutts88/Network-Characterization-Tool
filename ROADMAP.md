@@ -292,6 +292,55 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   The complete Docker suite passes **2,067 tests with 20 expected skips**, all **19 current
   browser-runtime scripts pass**, and whitespace validation passes.
 
+## Historical Saved Network naming audit — completed 2026-10-25
+
+- [x] R13 traced every Saved Network create, edit, archive, scope-association and
+  Scan History label path. Scheduled execution never renames a Saved Network. The unsafe
+  path was the history correction dialog: it could offer to rename the current Saved
+  Network from a historical run name and then attribute the scan in a separate request.
+  That combined control is removed. Run names, current Saved Network names, per-run Saved
+  Network snapshots, Network Scope snapshots, targets and provenance now have explicit,
+  separate labels and responsibilities.
+- [x] Scan History groups now use one stable neutral heading for the exact recorded CIDR.
+  A current rename, archived/recreated network, manual run or scheduled run cannot rename
+  or reorder that group. Each row still retains the Saved Network and Network Scope names
+  recorded with that exact run. The derived history index is versioned forward and safely
+  rebuilds from retained manifests. An explicit history-context correction records a new
+  attributable snapshot for one run without changing its run name, target, scope, group,
+  evidence or earlier attribution history.
+- [x] Saved Network edits now require the current `updated_at` value and reject stale
+  editor state instead of silently overwriting another analyst's change. The standalone
+  writer locks before its read/check/write boundary, while the combined network-and-scope
+  save keeps that boundary in one transaction so a scope conflict rolls the network edit
+  back. The editor freezes the reviewed network and association versions when editing
+  begins; refreshing the list after a conflict cannot silently advance an old draft. The
+  history action lazily loads current Saved Networks only when an analyst asks to review
+  context; ordinary Scan History does not load the unrelated editor data.
+- [x] Validation covers renamed snapshots, explicit attribution, stale and simultaneous
+  edits, repeated stale retries, explicit reload/review, atomic rollback, stable grouping
+  and the existing history regressions: **130 focused tests pass with one expected skip**,
+  and the two-writer race passed **10 consecutive repetitions** with exactly one accepted
+  writer each time. The complete Docker suite passes **2,070 tests with 20 expected skips**,
+  all **19 browser-runtime scripts pass**, and whitespace validation passes.
+- [x] An isolated browser preview with **31 representative manual and scheduled runs**
+  keeps all runs under one exact-CIDR group across the 25-row boundary, shows old and current
+  snapshots on their own rows, and loads the current exact match only when Review network
+  context opens. At narrow available panel widths, the wide history table becomes labeled
+  scan cards so every field remains reachable with the Operator Guide open; the normal
+  desktop table retains aligned columns and contained horizontal scrolling. The independent
+  reviewer returned **CLEAR — DOCUMENTED DEVIATION** and the novice operator returned
+  **CLEAR**, including 25-to-31 paging, normal and 980-pixel layouts, and no console errors.
+- **Documented deviation:** a history group deliberately uses `Subnet <CIDR>` instead of
+  the newest Saved Network label. One exact CIDR can legitimately contain manual runs and
+  snapshots from renamed, archived or recreated records, so no one mutable label is an
+  honest identity for the complete group. Friendly historical names remain visible per run.
+- **Compatibility note:** clients that edit an existing Saved Network must now send the
+  record's current `updated_at` value. This deliberate writer-boundary change prevents a
+  stale page from overwriting a reviewed name, CIDR or description.
+- **Limitation:** this completion is tested and development-ready on the foundation branch.
+  It is not a Range package, has not been exercised against preserved Range data, and is not
+  available on `main`.
+
 ## Scheduled scan incident repair — started 2026-10-23
 
 - [x] Reproduce and repair the Teams-reported startup failure converting older

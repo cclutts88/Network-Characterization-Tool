@@ -72,6 +72,32 @@ def test_same_cidr_stays_grouped_after_saved_network_recreation_and_manual_use()
     assert catalog[0]["name"] == "Subnet 10.50.15.0/24"
 
 
+def test_group_heading_is_stable_when_newer_snapshots_use_different_names():
+    older = scan_run(1, saved_networks=[{
+        "saved_network_id": "same-record",
+        "name": "Development before rename",
+        "cidr": "10.50.15.0/24",
+    }])
+    newer = scan_run(2, saved_networks=[{
+        "saved_network_id": "same-record",
+        "name": "Development current name",
+        "cidr": "10.50.15.0/24",
+    }])
+
+    catalog = build_scan_history_catalog([older, newer])
+    page = scan_history_group_page(
+        [older, newer], catalog[0]["group_id"], limit=25
+    )
+
+    assert catalog[0]["name"] == "Subnet 10.50.15.0/24"
+    assert catalog[0]["description"].startswith("Grouped by exact recorded CIDR")
+    assert page is not None
+    assert [run["saved_networks"][0]["name"] for run in page["runs"]] == [
+        "Development current name",
+        "Development before rename",
+    ]
+
+
 def test_group_page_preserves_scope_and_marks_other_exact_targets():
     multi = scan_run(
         10,

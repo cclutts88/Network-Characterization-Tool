@@ -12,7 +12,7 @@ from app.scan_history import (
 )
 
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 METADATA_EXPRESSION = (
     "json_remove(r.manifest_json, '$.artifacts', '$.commands', "
     "'$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', "
