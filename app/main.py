@@ -545,6 +545,7 @@ class ReachabilitySimulationQuery(ReachabilityQuery):
     insertion_index: int = Field(default=0, ge=0, le=100_000)
     vendor_rule: str | None = Field(default=None, max_length=20_000)
     template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+    traffic_target: Literal["forwarded", "router_local"] = "forwarded"
 
 
 class ReachabilityPolicyTemplateQuery(ReachabilityQuery):
@@ -553,6 +554,7 @@ class ReachabilityPolicyTemplateQuery(ReachabilityQuery):
     interface_name: str = Field(min_length=1, max_length=160)
     insertion_index: int = Field(default=0, ge=0, le=100_000)
     template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+    traffic_target: Literal["forwarded", "router_local"] = "forwarded"
 
 
 class ReachabilityRouteSimulationQuery(ReachabilityQuery):
@@ -572,6 +574,7 @@ class ReachabilityScenarioPolicy(BaseModel):
     insertion_index: int = Field(default=0, ge=0, le=100_000)
     vendor_rule: str | None = Field(default=None, max_length=20_000)
     template_id: str = Field(default="exact-service", min_length=1, max_length=80)
+    traffic_target: Literal["forwarded", "router_local"] = "forwarded"
 
 
 class ReachabilityScenarioRoute(BaseModel):
@@ -585,7 +588,7 @@ class ReachabilityScenarioRoute(BaseModel):
 
 
 class ReachabilityChangeScenarioQuery(ReachabilityQuery):
-    route: ReachabilityScenarioRoute
+    route: ReachabilityScenarioRoute | None = None
     policy: ReachabilityScenarioPolicy
 
 
@@ -5687,7 +5690,11 @@ def reachability_context() -> dict:
 
 
 @app.get("/api/reachability/policy-context/{run_id}")
-def reachability_policy_context(run_id: str) -> dict:
+def reachability_policy_context(
+    run_id: str,
+    traffic_target: Literal["forwarded", "router_local"] = "forwarded",
+    interface_name: str | None = None,
+) -> dict:
     try:
         selected = next(
             item for item in _latest_device_reachability_evidence()
@@ -5697,7 +5704,9 @@ def reachability_policy_context(run_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
     return {
         "status": "reachability_policy_context_complete",
-        **policy_rule_context(selected),
+        **policy_rule_context(
+            selected, traffic_target=traffic_target, interface_name=interface_name,
+        ),
     }
 
 
@@ -5726,6 +5735,7 @@ def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict
                 insertion_index=query.insertion_index,
                 template_id=query.template_id,
                 source_external=query.source_external,
+                traffic_target=query.traffic_target,
             ),
         }
     except StopIteration:
@@ -5854,6 +5864,7 @@ def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict
             insertion_index=query.insertion_index,
             vendor_rule=query.vendor_rule,
             template_id=query.template_id,
+            traffic_target=query.traffic_target,
             hunting=_latest_network_evidence(),
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
@@ -5897,7 +5908,7 @@ def simulate_retained_change_scenario(query: ReachabilityChangeScenarioQuery) ->
             port=query.port,
             flow_state=query.flow_state,
             source_external=query.source_external,
-            route=query.route.model_dump(),
+            route=query.route.model_dump() if query.route else None,
             policy=query.policy.model_dump(),
             hunting=_latest_network_evidence(),
             saved_networks=list_saved_networks(DB_PATH),

@@ -414,9 +414,9 @@ def test_device_receipt_view_finishes_loading_and_explains_missing_addresses():
     assert "approve the Nmap fallback, finish without Nmap, or cancel the run" in SHELL_SCRIPT
     assert "reports assumed targets separately from confirmed responsive hosts" in SHELL_SCRIPT
     assert "A held run also prevents maintenance or an upgrade from starting" in SHELL_SCRIPT
-    assert "Step 1 defines the exact source, destination, protocol, port" in SHELL_SCRIPT
-    assert "all three steps are required" in SHELL_SCRIPT
-    assert "route device must be connected to the selected source" in SHELL_SCRIPT
+    assert "Start by choosing what the rule protects" in SHELL_SCRIPT
+    assert "no route step is used" in SHELL_SCRIPT
+    assert "Forwarded traffic uses the route-and-forward-policy workflow" in SHELL_SCRIPT
     assert "An earlier matching rule can decide the traffic first" in SHELL_SCRIPT
     assert "Validation uses the written rule" in SHELL_SCRIPT
     assert 'id="nct-guide-pin"' in SHELL_SCRIPT
@@ -1563,10 +1563,12 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "function assessmentPathDevices" in html
     assert "scopeScenarioDevicesToAssessment(latestReachResult)" in html
     assert "Choose a device identified on this path" in html
-    assert "Complete all three steps" in html
-    assert "source-connected routing device" in html
-    assert "Where this rule is checked" in html
-    assert "Retained Rules In Checking Order" in html
+    assert "First choose whether the traffic ends on the selected router/firewall" in html
+    assert 'id="scenarioTrafficTarget"' in html
+    assert 'value="router_local"' in html
+    assert 'id="scenarioRouteStage" class="scenario-stage hidden"' in html
+    assert "Position in this interface and policy plane" in html
+    assert "Retained rules for this interface and policy plane" in html
     assert "policyContextRequestRevision" in html
     assert "policyTemplateRequestRevision" in html
     assert "encounter!==JSON.stringify(policyTemplateBody())" in html
@@ -1580,7 +1582,7 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "nct-reach-latest-assessment-v1" in html
     assert "function restoreLatestAssessment" in html
     assert "source:$('scenarioSource').value.trim()" in html
-    assert "destination:$('scenarioDestination').value.trim()" in html
+    assert "target==='router_local'?$('simulationLocalAddress').value:$('scenarioDestination').value.trim()" in html
     assert "port:Number($('scenarioPort').value)" in html
     assert "function useAssessmentInScenario" in html
     assert html.count("function useAssessmentInScenario") == 1
@@ -1589,6 +1591,7 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert "routeSimulationNetwork').value=routeNetwork" in html
     assert 'id="simulationDevice"' in html
     assert 'id="simulationInterface"' in html
+    assert 'id="simulationLocalAddress"' in html
     assert 'id="simulationAction"' in html
     assert 'id="simulationTemplate"' in html
     assert 'id="simulationPosition"' in html
@@ -1621,6 +1624,8 @@ def test_reachability_view_has_grouped_source_exposure_reports():
     assert 'id="simulateScenario"' in html
     assert "NCT_Proposed_Change_" in html
     assert "policy device on projected path" in html
+    assert "Local input / management" in html
+    assert "NOT APPLIED" in html
     assert "showSimulationOnMap" in html
     assert "version:2" in html
     assert 'id="exposureReportPanel"' in html

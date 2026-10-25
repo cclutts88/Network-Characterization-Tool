@@ -239,6 +239,59 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   limits remain deliberate: text and timing produce Possible NCT, historical gaps remain
   unknown, and Unmatched never establishes malicious or non-NCT activity.
 
+## Router-local proposed-policy workflow — started 2026-10-25
+
+- [x] R07 requires the analyst to choose whether a proposed control protects the
+  selected router/firewall itself or traffic forwarded through it. Router-local work must
+  select an exact retained interface address on that device, use a supported vendor policy
+  path, and must not invent or require a forwarding-route change.
+- [x] Show the retained interface address, policy attachment or chain, rule order, default
+  behavior where known, proposed insertion point, evidence source and material limits.
+  Keep the written rule editable, validate it with the matching policy evaluator, and
+  reject unsupported or ambiguous router-local paths instead of presenting a forwarding
+  rule as protection for the device.
+- [x] Keep simulation and applied-device results separate. This workflow never applies a
+  device change automatically. Later retained configuration or an authorized isolated-
+  device test must be recorded separately before NCT can claim the proposed control worked
+  on a live device.
+- [x] Regression coverage distinguishes the same TCP/22 flow addressed to the router
+  from a downstream host, and cover wrong interface/address/chain, multiple interface
+  addresses, earlier matching rules and defaults, flow state, stale UI results, unsupported
+  vendor paths, NAT limits, and existing forwarded-policy compatibility. Update the
+  Operator Guide and How NCT Works with the exact workflow and boundaries.
+- [x] **Design quality gate:** **CLEAR — DOCUMENTED DEVIATION**. The independent reviewer
+  found the current templates model forwarded traffic only and approved an explicit
+  router-local/forwarded contract. Router-local generation will begin with only the
+  vendor policy paths that the retained parser and evaluator can defensibly validate;
+  unsupported combinations remain unavailable with an explanation. Authorized isolated-
+  device acceptance remains open even after the development simulation slice is complete.
+- [x] The implemented development slice supports retained Cisco inbound interface ACLs.
+  It shows the exact router address and matching rule order, generates an editable rule,
+  validates the written ACL and proposed position, and keeps the result visibly marked
+  **Not applied**. Switching to forwarded mode clears the router address and stale route
+  inputs, then requires an explicit downstream destination and route context before the
+  workflow reports readiness. When retained policy already produces the same outcome,
+  the result identifies that the proposal may be redundant.
+- [x] Independent review initially halted on sequence collisions, shared ACL attachment
+  filtering, edited-rule placement, and collision with an ACL name already used elsewhere.
+  The corrected simulator now filters exact inbound attachment membership, rejects missing
+  or unavailable Cisco sequence gaps, requires edited rules to match the reviewed sequence
+  and policy, and chooses a verified unused ACL name for a new attachment. Executable
+  regressions cover occupied sequence 1, adjacent sequence values, unnumbered ACLs, shared
+  inbound/outbound attachments, edited placement and both attached and unattached name
+  collisions. Final independent gate: **CLEAR — DOCUMENTED DEVIATION** after **173 focused
+  checks**. The bounded deviation remains Cisco-only router-local simulation: it does not
+  establish live device behavior, other vendors' management-policy support or Range
+  readiness.
+- [x] The rebuilt isolated preview was exercised with a retained Cisco edge configuration
+  containing explicit sequences 10 and 20. The browser generated collision-free sequence
+  5, validated the router-local result, displayed the unchanged-outcome/redundancy warning,
+  and cleared all local-only destination and route state when switching to forwarded mode.
+  Normal and 980-by-900 Guide-open checks had no clipping, overlap, page-level horizontal
+  overflow or browser console error. The novice operator's final verdict is **CLEAR**.
+  The complete Docker suite passes **2,067 tests with 20 expected skips**, all **19 current
+  browser-runtime scripts pass**, and whitespace validation passes.
+
 ## Scheduled scan incident repair — started 2026-10-23
 
 - [x] Reproduce and repair the Teams-reported startup failure converting older

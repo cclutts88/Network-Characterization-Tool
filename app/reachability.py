@@ -2264,6 +2264,7 @@ def _compact_route_options(routes: list[dict]) -> list[dict]:
 
 
 SUPPORTED_POLICY_VENDORS = {"cisco", "vyos", "pfsense", "juniper", "unifi"}
+ROUTER_LOCAL_POLICY_VENDORS = {"cisco"}
 
 
 def _selected_policy_device(device_analyses: list[dict], device_key: str) -> dict:
@@ -2301,7 +2302,22 @@ def _policy_vendor(analysis: dict) -> str:
     return vendor
 
 
-def policy_templates(vendor: str) -> list[dict]:
+def policy_templates(vendor: str, *, traffic_target: str = "forwarded") -> list[dict]:
+    if traffic_target == "router_local":
+        if vendor not in ROUTER_LOCAL_POLICY_VENDORS:
+            return []
+        return [
+            {
+                "id": "exact-service",
+                "name": "Inbound interface ACL for this router address",
+                "description": "Match the entered source and exact retained router address on the selected inbound interface.",
+            },
+            {
+                "id": "interface-service",
+                "name": "Inbound interface ACL from any source",
+                "description": "Match any source arriving on the selected interface to the exact retained router service.",
+            },
+        ]
     names = {
         "cisco": "Extended ACL service rule",
         "vyos": "IPv4 forward service rule",
@@ -2323,8 +2339,53 @@ def policy_templates(vendor: str) -> list[dict]:
     ]
 
 
-def policy_rule_context(analysis: dict) -> dict:
+def _interface_ipv4_addresses(analysis: dict, interface_name: str | None = None) -> list[dict]:
+    addresses = []
+    for item in analysis.get("interfaces") or []:
+        name = str(item.get("name") or "").strip()
+        if not name or (interface_name and name != interface_name):
+            continue
+        raw_values = item.get("addresses") or [item.get("address")]
+        if isinstance(raw_values, str):
+            raw_values = [raw_values]
+        for raw in raw_values:
+            value = raw.get("address") if isinstance(raw, dict) else raw
+            try:
+                interface = ipaddress.ip_interface(str(value or ""))
+            except ValueError:
+                continue
+            if interface.version != 4:
+                continue
+            address = str(interface.ip)
+            if not any(existing["address"] == address and existing["interface"] == name for existing in addresses):
+                addresses.append({
+                    "interface": name,
+                    "address": address,
+                    "network": str(interface.network),
+                    "role": item.get("role"),
+                })
+    return addresses
+
+
+def _router_local_destination(analysis: dict, interface_name: str, destination_text: str) -> dict:
+    destination = parse_endpoint(destination_text)
+    if destination.kind != "host" or destination.value is None:
+        raise ValueError("Choose one exact retained IPv4 address on the selected device")
+    candidates = _interface_ipv4_addresses(analysis, interface_name)
+    match = next((item for item in candidates if item["address"] == str(destination.value)), None)
+    if match is None:
+        raise ValueError(
+            "The router-local destination must be an exact retained address on the selected interface"
+        )
+    return match
+
+
+def policy_rule_context(
+    analysis: dict, *, traffic_target: str = "forwarded", interface_name: str | None = None,
+) -> dict:
     """Return interface-aware, ordered policy evidence for a planning UI."""
+    if traffic_target not in {"forwarded", "router_local"}:
+        raise ValueError("Choose router-local or forwarded traffic")
     device = analysis.get("device") or {}
     policy = analysis.get("policy") or {}
     applied = policy.get("applied") or {}
@@ -2336,18 +2397,29 @@ def policy_rule_context(analysis: dict) -> dict:
             attachment for attachment in attachments
             if attachment.get("policy") == item.get("policy")
         ]
+        relevant = matching
+        if interface_name:
+            relevant = [
+                attachment for attachment in matching
+                if str(attachment.get("interface") or "") == interface_name
+                and str(attachment.get("direction") or "in").lower() == "in"
+            ]
+            if matching and not relevant:
+                continue
         rules.append({
             "engine": "vendor",
             "policy": item.get("policy"),
             "order": item.get("sequence") or item.get("order"),
+            "sequence": item.get("sequence"),
             "action": item.get("action"),
             "interface": ", ".join(dict.fromkeys(
-                str(value.get("interface")) for value in matching if value.get("interface")
+                str(value.get("interface")) for value in relevant if value.get("interface")
             )) or item.get("interface") or item.get("input_interface"),
             "direction": ", ".join(dict.fromkeys(
-                str(value.get("direction")) for value in matching if value.get("direction")
+                str(value.get("direction")) for value in relevant if value.get("direction")
             )) or item.get("direction"),
             "evidence": item.get("evidence") or "Parsed vendor policy rule",
+            "traffic_targets": ["forwarded", "router_local"] if _policy_vendor(analysis) == "cisco" else ["forwarded"],
         })
     for item in iptables.get("rules") or []:
         rules.append({
@@ -2360,6 +2432,7 @@ def policy_rule_context(analysis: dict) -> dict:
             "interface": item.get("input_interface"),
             "direction": "in",
             "evidence": item.get("evidence") or "Parsed ordered firewall rule",
+            "traffic_targets": ["router_local"] if str(item.get("chain") or "").upper() == "INPUT" else ["forwarded"],
         })
     if not rules:
         for order, item in enumerate(policy.get("firewall_acl") or [], start=1):
@@ -2371,7 +2444,17 @@ def policy_rule_context(analysis: dict) -> dict:
                 "action": {"allow": "permit", "block": "deny"}.get(action, action),
                 "interface": None, "direction": None,
                 "evidence": evidence or "Retained firewall / ACL evidence",
+                "traffic_targets": ["forwarded"],
             })
+    rules = [
+        item for item in rules
+        if traffic_target in item.get("traffic_targets", [])
+        and (
+            not interface_name
+            or item.get("interface") == interface_name
+            or (traffic_target == "forwarded" and not item.get("interface"))
+        )
+    ]
     for index, item in enumerate(rules):
         item["index"] = index
         item["position"] = index + 1
@@ -2406,7 +2489,16 @@ def policy_rule_context(analysis: dict) -> dict:
             }
             for index in range(len(rules) + 1)
         ],
-        "templates": policy_templates(vendor),
+        "traffic_target": traffic_target,
+        "selected_interface": interface_name,
+        "router_local_supported": vendor in ROUTER_LOCAL_POLICY_VENDORS,
+        "router_local_support_reason": (
+            "Retained Cisco interface ACL syntax can be parsed and evaluated for traffic addressed to this device."
+            if vendor in ROUTER_LOCAL_POLICY_VENDORS else
+            f"Router-local {vendor} generation is not enabled because NCT cannot yet validate that management-plane policy path."
+        ),
+        "local_addresses": _interface_ipv4_addresses(analysis, interface_name),
+        "templates": policy_templates(vendor, traffic_target=traffic_target),
     }
 
 
@@ -2426,35 +2518,72 @@ def _cisco_endpoint(value: str) -> str:
     return f"{network.network_address} {wildcard}"
 
 
-def _policy_sequence(context: dict, insertion_index: int) -> int:
+def _policy_sequence(
+    context: dict, insertion_index: int, *, require_explicit_gap: bool = False,
+) -> int:
+    rules = context.get("rules") or []
+    if require_explicit_gap and any(
+        not str(item.get("sequence") or "").isdigit() for item in rules
+    ):
+        raise ValueError(
+            "The retained ACL does not expose every Cisco sequence number, so NCT cannot prove a collision-free insertion position"
+        )
     existing = [
-        int(item["order"]) for item in context.get("rules") or []
-        if str(item.get("order") or "").isdigit()
+        int(item.get("sequence") if require_explicit_gap else item.get("order"))
+        for item in rules
+        if str(item.get("sequence") if require_explicit_gap else item.get("order") or "").isdigit()
     ]
     if not existing:
         return 10
     if insertion_index <= 0:
-        return max(1, existing[0] // 2)
+        if require_explicit_gap and existing[0] <= 1:
+            raise ValueError(
+                "No unused Cisco sequence number exists before the first retained rule; resequence the ACL outside NCT before using this position"
+            )
+        candidate = max(1, existing[0] // 2)
+        if require_explicit_gap and candidate in existing:
+            raise ValueError(
+                "No unused Cisco sequence number exists before the first retained rule; resequence the ACL outside NCT before using this position"
+            )
+        return candidate
     if insertion_index >= len(existing):
-        return existing[-1] + 10
+        candidate = existing[-1] + 10
+        if require_explicit_gap and candidate > 2_147_483_647:
+            raise ValueError("No valid Cisco sequence number remains after the last retained rule")
+        return candidate
     before, after = existing[insertion_index - 1], existing[insertion_index]
-    return before + max(1, (after - before) // 2)
+    if require_explicit_gap and after - before <= 1:
+        raise ValueError(
+            "No unused Cisco sequence number exists at this retained position; resequence the ACL outside NCT or choose another position"
+        )
+    candidate = before + max(1, (after - before) // 2)
+    if require_explicit_gap and candidate in existing:
+        raise ValueError(
+            "The proposed Cisco sequence would collide with a retained rule; choose another position"
+        )
+    return candidate
 
 
 def build_vendor_policy_rule(
     *, analysis: dict, source_text: str, destination_text: str,
     protocol: str, port: int, action: str, interface_name: str,
     insertion_index: int = 0, template_id: str = "exact-service",
-    source_external: bool = False,
+    source_external: bool = False, traffic_target: str = "forwarded",
 ) -> dict:
     """Build an editable, vendor-native rule for one retained device."""
-    context = policy_rule_context(analysis)
+    context = policy_rule_context(
+        analysis, traffic_target=traffic_target, interface_name=interface_name,
+    )
     vendor = context["vendor"]
     interfaces = {item["name"] for item in context["interfaces"]}
     if interface_name not in interfaces:
         raise ValueError("Choose one retained interface on the selected device")
     if not 0 <= insertion_index <= len(context["rules"]):
         raise ValueError("Choose a valid position in the existing rule order")
+    if traffic_target == "router_local":
+        if vendor not in ROUTER_LOCAL_POLICY_VENDORS:
+            raise ValueError(context["router_local_support_reason"])
+        _router_local_destination(analysis, interface_name, destination_text)
     if template_id not in {item["id"] for item in context["templates"]}:
         raise ValueError("Choose a supported rule template for the selected vendor")
     action = str(action or "").lower()
@@ -2465,17 +2594,41 @@ def build_vendor_policy_rule(
     any_source = template_id == "interface-service"
     source_value = _endpoint_rule_value(source, any_source=any_source)
     destination_value = _endpoint_rule_value(destination)
-    sequence = _policy_sequence(context, insertion_index)
-    output_interface = _egress_interface(destination, analysis)
+    sequence = _policy_sequence(
+        context, insertion_index,
+        require_explicit_gap=traffic_target == "router_local" and vendor == "cisco",
+    )
+    output_interface = None if traffic_target == "router_local" else _egress_interface(destination, analysis)
     token = re.sub(r"[^A-Za-z0-9_-]+", "-", interface_name).strip("-") or "INTERFACE"
     policy_name = f"NCT-IN-{token}"[:48]
     rule_text = ""
     if vendor == "cisco":
-        attached = next((
-            item for item in ((analysis.get("policy") or {}).get("applied") or {}).get("attachments") or []
-            if item.get("interface") == interface_name and item.get("direction") == "in"
-        ), None)
-        policy_name = str((attached or {}).get("policy") or policy_name)
+        applied = (analysis.get("policy") or {}).get("applied") or {}
+        attached_policies = list(dict.fromkeys(
+            str(item.get("policy") or "")
+            for item in applied.get("attachments") or []
+            if item.get("interface") == interface_name
+            and str(item.get("direction") or "in").lower() == "in"
+            and item.get("policy")
+        ))
+        if len(attached_policies) > 1:
+            raise ValueError(
+                "More than one retained inbound Cisco ACL is attached to this interface, so the policy path is ambiguous"
+            )
+        if attached_policies:
+            policy_name = attached_policies[0]
+        else:
+            used_policies = {
+                str(item.get("policy") or "")
+                for item in [*(applied.get("rules") or []), *(applied.get("attachments") or [])]
+                if item.get("policy")
+            }
+            base_name = policy_name
+            suffix = 2
+            while policy_name in used_policies:
+                suffix_text = f"-{suffix}"
+                policy_name = f"{base_name[:48 - len(suffix_text)]}{suffix_text}"
+                suffix += 1
         rule_text = (
             f"ip access-list extended {policy_name}\n"
             f" {sequence} {action} {protocol} {_cisco_endpoint(source_value)} "
@@ -2549,6 +2702,9 @@ def build_vendor_policy_rule(
         "sequence": sequence,
         "insertion_index": insertion_index,
         "placement": placement["label"],
+        "traffic_target": traffic_target,
+        "policy_plane": "Local input / management plane" if traffic_target == "router_local" else "Forward / transit plane",
+        "applied": False,
         "rule_text": rule_text,
         "match_scope": {
             "source": source_value, "destination": destination_value,
@@ -2891,19 +3047,28 @@ def validate_vendor_policy_rule(
     *, analysis: dict, rule_text: str, source_text: str, destination_text: str,
     protocol: str, port: int, action: str, interface_name: str,
     source_external: bool = False, flow_state: str = "new",
+    traffic_target: str = "forwarded",
 ) -> dict:
     """Parse submitted vendor text and prove it decides the selected flow."""
     if not str(rule_text or "").strip():
         raise ValueError("Enter or generate the vendor rule text to validate")
     vendor = _policy_vendor(analysis)
+    if traffic_target not in {"forwarded", "router_local"}:
+        raise ValueError("Choose router-local or forwarded traffic")
+    if traffic_target == "router_local" and vendor not in ROUTER_LOCAL_POLICY_VENDORS:
+        raise ValueError(
+            f"Router-local {vendor} policy validation is not yet supported; NCT will not substitute a forwarding rule"
+        )
     source = parse_endpoint(source_text, external=source_external)
     destination = parse_endpoint(destination_text)
+    if traffic_target == "router_local":
+        _router_local_destination(analysis, interface_name, destination_text)
     input_interface = _endpoint_interface(source, analysis)
     if input_interface and interface_name != input_interface:
         raise ValueError(
             f"The selected flow enters this device on {input_interface or 'an unknown interface'}, not {interface_name}"
         )
-    output_interface = _egress_interface(destination, analysis)
+    output_interface = None if traffic_target == "router_local" else _egress_interface(destination, analysis)
     values = {
         "source": str(source.value) if source.value is not None else None,
         "destination": str(destination.value) if destination.value is not None else None,
@@ -2946,14 +3111,241 @@ def validate_vendor_policy_rule(
         "verdict": result.get("verdict"),
         "interface": interface_name,
         "output_interface": output_interface,
+        "traffic_target": traffic_target,
+        "policy_plane": "Local input / management plane" if traffic_target == "router_local" else "Forward / transit plane",
+        "applied": False,
         "parsed_rule_count": parsed_count,
         "matched_rule": {
             "policy": matched.get("policy") or matched.get("chain"),
             "order": matched.get("order") or matched.get("rule_order"),
+            "sequence": matched.get("sequence"),
             "evidence": matched.get("evidence"),
         },
         "match_basis": result.get("match_basis") or [],
-        "message": f"Validated as {vendor} policy on {interface_name} for this exact flow.",
+        "message": (
+            f"Validated as a simulated {vendor} {('router-local' if traffic_target == 'router_local' else 'forwarded')} policy on {interface_name}; it was not applied."
+        ),
+    }
+
+
+def _policy_outcome(result: dict) -> str:
+    if result.get("status") != "decided":
+        return "Unknown"
+    return "Expected Allowed" if result.get("verdict") == "allow" else "Expected Blocked"
+
+
+def simulate_proposed_router_local_policy_control(
+    *, source_text: str, destination_text: str, protocol: str, port: int,
+    hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
+    action: str, device_key: str, flow_state: str = "new",
+    source_external: bool = False, interface_name: str | None = None,
+    insertion_index: int = 0, vendor_rule: str | None = None,
+    template_id: str = "exact-service",
+) -> dict:
+    """Project policy for traffic addressed to a retained device interface."""
+    del hunting, saved_networks
+    action = str(action or "").strip().lower()
+    if action not in {"permit", "deny"}:
+        raise ValueError("Proposed policy action must be permit or deny")
+    selected = _selected_policy_device(device_analyses, device_key)
+    device = selected.get("device") or {}
+    device_name = str(device.get("name") or device.get("address") or "Network device")
+    device_address = str(device.get("address") or "") or None
+    interface_name = str(interface_name or "").strip()
+    if not interface_name:
+        raise ValueError("Choose the retained interface where traffic enters the device")
+    local_address = _router_local_destination(selected, interface_name, destination_text)
+    source = parse_endpoint(source_text, external=source_external)
+    destination = parse_endpoint(destination_text)
+    generated_rule = build_vendor_policy_rule(
+        analysis=selected, source_text=source_text, destination_text=destination_text,
+        protocol=protocol, port=port, action=action, interface_name=interface_name,
+        insertion_index=insertion_index, template_id=template_id,
+        source_external=source_external, traffic_target="router_local",
+    )
+    rule_text = str(vendor_rule or generated_rule["rule_text"]).strip()
+    validation = validate_vendor_policy_rule(
+        analysis=selected, rule_text=rule_text,
+        source_text=source_text, destination_text=destination_text,
+        protocol=protocol, port=port, action=action,
+        interface_name=interface_name, source_external=source_external,
+        flow_state=flow_state, traffic_target="router_local",
+    )
+    written_sequence = (validation.get("matched_rule") or {}).get("sequence")
+    if written_sequence != generated_rule["sequence"]:
+        raise ValueError(
+            "The written Cisco rule sequence does not match the reviewed insertion position"
+        )
+    written_policy = str((validation.get("matched_rule") or {}).get("policy") or "")
+    if written_policy != generated_rule["policy"]:
+        raise ValueError(
+            "The written Cisco rule policy does not match the retained inbound ACL for this interface"
+        )
+    context = policy_rule_context(
+        selected, traffic_target="router_local", interface_name=interface_name,
+    )
+    applied = (selected.get("policy") or {}).get("applied") or {}
+    values = {
+        "source": str(source.value) if source.value is not None else None,
+        "destination": str(destination.value),
+        "protocol": protocol,
+        "port": port,
+        "source_external": _is_external_endpoint(source),
+        "destination_external": False,
+        "input_interface": interface_name,
+        "output_interface": None,
+        "flow_state": flow_state,
+    }
+    retained_result = (
+        evaluate_vendor_policy(applied, **values)
+        if applied.get("vendor") else
+        {"status": "not_applied", "reason": "No retained vendor policy attachment was available for this interface."}
+    )
+    before = _policy_outcome(retained_result)
+    matched = retained_result.get("rule") or {}
+    existing_match_index = next((
+        item["index"] for item in context["rules"]
+        if (
+            matched.get("evidence") and str(item.get("evidence") or "") == str(matched.get("evidence"))
+        ) or (
+            matched.get("order") is not None and item.get("order") == matched.get("order")
+            and item.get("policy") == matched.get("policy")
+        )
+    ), None)
+    proposal_effective = existing_match_index is None or insertion_index <= existing_match_index
+    after = (
+        before if not proposal_effective else
+        "Expected Blocked" if action == "deny" else "Expected Allowed"
+    )
+    local_label = f"{device_name} {local_address['address']}"
+    evidence = [{
+        "kind": "proposal",
+        "title": f"Proposed {action} for router-local traffic",
+        "detail": (
+            f"{source.entered} → {local_label} · {protocol.upper()}/{port} · "
+            f"{interface_name} inbound · simulation only · not applied"
+        ),
+        "raw": rule_text,
+        "run_id": selected.get("run_id"),
+    }]
+    caveats = [
+        "Simulation only: NCT did not connect to or change this network device.",
+        "The result validates an inbound interface ACL for the exact retained router address; it does not test the live SSH service or device management configuration.",
+        "NAT, control-plane policing, line/management-service restrictions, state tracking, and omitted configuration can change the live result.",
+        "After an administrator implements a reviewed change, collect the device configuration again and reassess before recording an applied result.",
+    ]
+    if not proposal_effective:
+        caveats.append(
+            f"Retained rule {existing_match_index + 1} decides the flow before this proposed position."
+        )
+    explanation = (
+        f"The proposed {action} is valid for traffic entering {interface_name} and addressed to "
+        f"{local_address['address']} on this device. It would model {after} if inserted at "
+        f"{generated_rule['placement']}. The rule has not been applied."
+        if proposal_effective else
+        f"An earlier retained rule decides this router-local flow, so the proposal would not change the modeled result at {generated_rule['placement']}."
+    )
+    if proposal_effective and before == after and before != "Unknown":
+        retained_label = str(
+            matched.get("evidence")
+            or matched.get("policy")
+            or "a retained rule"
+        )
+        explanation += (
+            f" The modeled outcome does not change: {retained_label} already produces "
+            f"{before}, so this proposed rule may be redundant."
+        )
+        caveats.append(
+            "The retained policy already produces the same modeled outcome; confirm whether a new rule is operationally necessary."
+        )
+    source_count = None if generated_rule["match_scope"]["source"] == "any" else _endpoint_address_count(source)
+    scope = {
+        "source_addresses": source_count,
+        "destination_addresses": 1,
+        "address_pairs": source_count,
+        "protocol": protocol.lower(),
+        "port": port,
+    }
+    baseline = {
+        "outcome": before,
+        "confidence": "medium" if before != "Unknown" else "low",
+        "explanation": retained_result.get("reason") or "Retained policy produced an explicit decision.",
+        "path": [
+            {"kind": "source", "label": source.entered, "detail": "External or entered source"},
+            {"kind": "device", "label": device_name, "detail": device_address},
+            {"kind": "destination", "label": local_address["address"], "detail": "Address on the selected device"},
+        ],
+        "evidence": [],
+        "caveats": caveats,
+        "retained_objects": {"policy": context["rules"], "routes": [], "nat": []},
+    }
+    projected = {
+        **deepcopy(baseline),
+        "outcome": after,
+        "confidence": "medium" if proposal_effective else baseline["confidence"],
+        "explanation": explanation,
+        "simulated": True,
+        "applied": False,
+        "evidence": evidence,
+        "caveats": caveats,
+    }
+    return {
+        "status": "reachability_policy_simulation_complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "proposal": {
+            "action": action,
+            "device": device_name,
+            "device_address": device_address,
+            "source": source.entered,
+            "source_external": _is_external_endpoint(source),
+            "destination": local_address["address"],
+            "destination_interface": local_address["interface"],
+            "protocol": protocol.lower(),
+            "port": port,
+            "flow_state": flow_state,
+            "vendor": generated_rule["vendor"],
+            "interface": interface_name,
+            "output_interface": None,
+            "traffic_target": "router_local",
+            "policy_plane": generated_rule["policy_plane"],
+            "template_id": template_id,
+            "insertion_index": insertion_index,
+            "placement": generated_rule["placement"],
+            "rule_text": rule_text,
+            "validation": validation,
+            "applied": False,
+        },
+        "baseline": baseline,
+        "projected": projected,
+        "comparison": {
+            "outcome_changed": before != after,
+            "before": before,
+            "after": after,
+            "selected_device": device_name,
+            "selected_device_address": device_address,
+            "source_attached": True,
+            "proposal_effective": proposal_effective,
+            "existing_matching_rule_index": existing_match_index,
+            "insertion_index": insertion_index,
+            "existing_rules": context["rules"],
+            "scope": scope,
+            "current_path": baseline["path"],
+            "projected_path": projected["path"],
+            "path_changed": False,
+            "collateral_impact": {
+                "bounded": source_count is not None,
+                "address_pairs": source_count,
+                "protocols": [protocol.lower()],
+                "ports": [port],
+                "evaluated_flows": 1,
+                "summary": (
+                    f"The proposal applies to the exact retained device address on {protocol.upper()}/{port}; only this representative flow was evaluated."
+                ),
+            },
+        },
+        "disclaimer": (
+            "Read-only router-local policy simulation from retained evidence. Not applied: it sends no network traffic and changes no device configuration."
+        ),
     }
 
 
@@ -2963,9 +3355,21 @@ def simulate_proposed_policy_control(
     action: str, device_key: str, flow_state: str = "new",
     source_external: bool = False, interface_name: str | None = None,
     insertion_index: int = 0, vendor_rule: str | None = None,
-    template_id: str = "exact-service",
+    template_id: str = "exact-service", traffic_target: str = "forwarded",
 ) -> dict:
     """Project one exact policy control without changing retained or live data."""
+    if traffic_target == "router_local":
+        return simulate_proposed_router_local_policy_control(
+            source_text=source_text, destination_text=destination_text,
+            protocol=protocol, port=port, hunting=hunting,
+            saved_networks=saved_networks, device_analyses=device_analyses,
+            action=action, device_key=device_key, flow_state=flow_state,
+            source_external=source_external, interface_name=interface_name,
+            insertion_index=insertion_index, vendor_rule=vendor_rule,
+            template_id=template_id,
+        )
+    if traffic_target != "forwarded":
+        raise ValueError("Choose router-local or forwarded traffic")
     action = str(action or "").strip().lower()
     if action not in {"permit", "deny"}:
         raise ValueError("Proposed policy action must be permit or deny")
@@ -2993,7 +3397,7 @@ def simulate_proposed_policy_control(
         analysis=selected, source_text=source_text, destination_text=destination_text,
         protocol=protocol, port=port, action=action, interface_name=interface_name,
         insertion_index=insertion_index, template_id=template_id,
-        source_external=source_external,
+        source_external=source_external, traffic_target="forwarded",
     )
     rule_text = str(vendor_rule or generated_rule["rule_text"]).strip()
     validation = validate_vendor_policy_rule(
@@ -3002,8 +3406,11 @@ def simulate_proposed_policy_control(
         protocol=protocol, port=port, action=action,
         interface_name=interface_name, source_external=source_external,
         flow_state=flow_state,
+        traffic_target="forwarded",
     )
-    context = policy_rule_context(selected)
+    context = policy_rule_context(
+        selected, traffic_target="forwarded", interface_name=interface_name,
+    )
     prior_decisions = list((baseline.get("retained_objects") or {}).get("policy") or [])
     selected_decisions = [
         item for item in prior_decisions
@@ -3037,7 +3444,7 @@ def simulate_proposed_policy_control(
         "evidence": rule_text,
         "match_basis": [
             "Written rule parsed with the selected vendor policy engine",
-            f"Applied on input interface {interface_name}",
+            f"Proposed on input interface {interface_name}",
             generated_rule["placement"],
         ],
         "simulated": True,
@@ -3495,10 +3902,105 @@ def _result_traverses_device(result: dict, *, name: str, address: str | None) ->
 def simulate_proposed_change_scenario(
     *, source_text: str, destination_text: str, protocol: str, port: int,
     hunting: dict, saved_networks: list[dict], device_analyses: list[dict],
-    route: dict, policy: dict, flow_state: str = "new",
+    route: dict | None, policy: dict, flow_state: str = "new",
     source_external: bool = False,
 ) -> dict:
     """Project a route change followed by a policy change as one scenario."""
+    traffic_target = str(policy.get("traffic_target") or "forwarded")
+    if traffic_target == "router_local":
+        if route:
+            raise ValueError("Router-local traffic does not use a proposed forwarding route")
+        policy_result = simulate_proposed_policy_control(
+            source_text=source_text, destination_text=destination_text,
+            protocol=protocol, port=port, hunting=hunting,
+            saved_networks=saved_networks, device_analyses=device_analyses,
+            flow_state=flow_state, source_external=source_external,
+            action=policy.get("action"), device_key=policy.get("device_key"),
+            interface_name=policy.get("interface_name"),
+            insertion_index=policy.get("insertion_index", 0),
+            vendor_rule=policy.get("vendor_rule"),
+            template_id=policy.get("template_id", "exact-service"),
+            traffic_target="router_local",
+        )
+        proposal = policy_result["proposal"]
+        comparison = policy_result["comparison"]
+        projected = policy_result["projected"]
+        desired = "Expected Blocked" if proposal.get("action") == "deny" else "Expected Allowed"
+        intent_achieved = bool(comparison.get("proposal_effective") and projected.get("outcome") == desired)
+        return {
+            "status": "reachability_change_scenario_complete",
+            "generated_at": policy_result["generated_at"],
+            "scenario_input": {
+                "source": source_text, "destination": destination_text,
+                "protocol": protocol, "port": port, "flow_state": flow_state,
+                "source_external": source_external, "route": None,
+                "policy": deepcopy(policy),
+            },
+            "evidence_sources": [{
+                "run_id": item.get("run_id"),
+                "device_name": (item.get("device") or {}).get("name"),
+                "device_address": (item.get("device") or {}).get("address"),
+                "collected_at": (
+                    (item.get("collection") or {}).get("completed_at")
+                    or (item.get("collection") or {}).get("created_at")
+                ),
+            } for item in device_analyses if item.get("run_id")],
+            "route_proposal": None,
+            "policy_proposal": proposal,
+            "baseline": policy_result["baseline"],
+            "route_projected": None,
+            "projected": projected,
+            "comparison": {
+                "before": comparison.get("before"),
+                "after_route": None,
+                "after": comparison.get("after"),
+                "outcome_changed": comparison.get("outcome_changed"),
+                "route_path_changed": False,
+                "policy_on_projected_path": True,
+                "policy_effective": comparison.get("proposal_effective"),
+                "intent_achieved": intent_achieved,
+                "scope": comparison.get("scope") or {},
+                "collateral_impact": comparison.get("collateral_impact") or {},
+                "selected_route_before": None,
+                "selected_route_after": None,
+            },
+            "validation": [
+                {
+                    "id": "local_destination", "label": "Exact retained device address",
+                    "status": "pass",
+                    "detail": f"{proposal['destination']} belongs to {proposal['interface']} on the selected device.",
+                },
+                {
+                    "id": "policy_plane", "label": "Router-local policy path",
+                    "status": "pass",
+                    "detail": f"{proposal['policy_plane']} was selected instead of a forwarding path.",
+                },
+                {
+                    "id": "policy_rule", "label": "Written policy rule",
+                    "status": "pass" if proposal.get("validation", {}).get("valid") else "fail",
+                    "detail": proposal.get("validation", {}).get("message") or "The written rule could not be validated.",
+                },
+                {
+                    "id": "policy_order", "label": "Rule order is effective",
+                    "status": "pass" if comparison.get("proposal_effective") else "fail",
+                    "detail": (
+                        "The proposal is evaluated before any retained rule that decides this flow."
+                        if comparison.get("proposal_effective") else
+                        "An earlier retained rule decides this flow before the proposal is reached."
+                    ),
+                },
+                {
+                    "id": "applied_state", "label": "Applied-device result",
+                    "status": "uncertain",
+                    "detail": "Not applied. Recollect the device configuration after an administrator implements the reviewed rule.",
+                },
+            ],
+            "disclaimer": policy_result["disclaimer"],
+        }
+    if traffic_target != "forwarded":
+        raise ValueError("Choose router-local or forwarded traffic")
+    if not route:
+        raise ValueError("Forwarded traffic requires a proposed route step")
     route_result = simulate_proposed_route_control(
         source_text=source_text,
         destination_text=destination_text,
@@ -3536,6 +4038,7 @@ def simulate_proposed_change_scenario(
         insertion_index=policy.get("insertion_index", 0),
         vendor_rule=policy.get("vendor_rule"),
         template_id=policy.get("template_id", "exact-service"),
+        traffic_target="forwarded",
     )
     projected = deepcopy(policy_result["projected"])
     policy_proposal = policy_result["proposal"]

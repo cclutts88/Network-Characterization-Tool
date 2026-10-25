@@ -446,6 +446,306 @@ def test_proposed_rule_after_existing_match_is_valid_but_does_not_override_it():
     assert "already decides this flow" in result["projected"]["explanation"]
 
 
+def router_local_cisco_device():
+    return {
+        **DEVICE,
+        "device": {
+            "name": "Internet Edge", "address": "198.51.100.1",
+            "type": "router", "vendor": "cisco",
+        },
+        "interfaces": [
+            {
+                "name": "outside", "address": "198.51.100.1/24",
+                "network": "198.51.100.0/24", "role": "external",
+            },
+            {
+                "name": "inside", "address": "10.80.0.1/24",
+                "network": "10.80.0.0/24", "role": "internal",
+            },
+        ],
+        "policy": {
+            "firewall_acl": [],
+            "applied": parse_vendor_policy("""ip access-list extended WAN-IN
+ 10 permit tcp any host 198.51.100.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in
+"""),
+        },
+    }
+
+
+def test_router_local_policy_uses_exact_retained_address_without_route_change():
+    device = router_local_cisco_device()
+    result = simulate_proposed_change_scenario(
+        source_text="Internet", destination_text="198.51.100.1",
+        protocol="tcp", port=22, flow_state="new", source_external=True,
+        hunting={"hosts": [], "findings": []}, saved_networks=[],
+        device_analyses=[device], route=None,
+        policy={
+            "action": "deny", "device_key": device["run_id"],
+            "interface_name": "outside", "insertion_index": 0,
+            "template_id": "exact-service", "traffic_target": "router_local",
+        },
+    )
+
+    assert result["route_proposal"] is None
+    assert result["comparison"]["after_route"] is None
+    assert result["comparison"]["after"] == "Expected Blocked"
+    assert result["comparison"]["intent_achieved"] is True
+    assert result["policy_proposal"]["policy_plane"] == "Local input / management plane"
+    assert result["policy_proposal"]["destination"] == "198.51.100.1"
+    assert result["policy_proposal"]["applied"] is False
+    assert "Not applied" in result["validation"][-1]["detail"]
+    assert "no network traffic" in result["disclaimer"]
+
+
+def test_router_local_policy_rejects_address_not_owned_by_selected_interface():
+    device = router_local_cisco_device()
+    with pytest.raises(ValueError, match="exact retained address on the selected interface"):
+        simulate_proposed_policy_control(
+            source_text="Internet", destination_text="10.80.0.1",
+            protocol="tcp", port=22, flow_state="new", source_external=True,
+            hunting={"hosts": [], "findings": []}, saved_networks=[],
+            device_analyses=[device], action="deny", device_key=device["run_id"],
+            interface_name="outside", traffic_target="router_local",
+        )
+
+
+def test_router_local_policy_selects_one_exact_address_when_interface_has_several():
+    device = router_local_cisco_device()
+    device["interfaces"][0]["addresses"] = [
+        "198.51.100.1/24", "198.51.100.2/24",
+    ]
+    context = policy_rule_context(
+        device, traffic_target="router_local", interface_name="outside",
+    )
+    assert [item["address"] for item in context["local_addresses"]] == [
+        "198.51.100.1", "198.51.100.2",
+    ]
+
+    result = simulate_proposed_policy_control(
+        source_text="Internet", destination_text="198.51.100.2",
+        protocol="tcp", port=22, flow_state="new", source_external=True,
+        hunting={"hosts": [], "findings": []}, saved_networks=[],
+        device_analyses=[device], action="deny", device_key=device["run_id"],
+        interface_name="outside", traffic_target="router_local",
+    )
+    assert result["proposal"]["destination"] == "198.51.100.2"
+    assert result["proposal"]["destination_interface"] == "outside"
+
+
+def test_router_local_policy_preserves_earlier_matching_rule_and_reports_limits():
+    device = router_local_cisco_device()
+    result = simulate_proposed_policy_control(
+        source_text="Internet", destination_text="198.51.100.1",
+        protocol="tcp", port=22, flow_state="new", source_external=True,
+        hunting={"hosts": [], "findings": []}, saved_networks=[],
+        device_analyses=[device], action="deny", device_key=device["run_id"],
+        interface_name="outside", insertion_index=1,
+        traffic_target="router_local",
+    )
+
+    assert result["comparison"]["before"] == "Expected Allowed"
+    assert result["comparison"]["after"] == "Expected Allowed"
+    assert result["comparison"]["proposal_effective"] is False
+    assert result["comparison"]["existing_matching_rule_index"] == 0
+    assert "earlier retained rule" in result["projected"]["explanation"].lower()
+    assert any("control-plane policing" in item for item in result["projected"]["caveats"])
+
+
+def test_router_local_policy_refuses_unsupported_vendor_instead_of_using_forward_rule():
+    device = {
+        **router_local_cisco_device(),
+        "device": {**router_local_cisco_device()["device"], "vendor": "vyos"},
+        "policy": {"firewall_acl": []},
+    }
+    with pytest.raises(ValueError, match="Router-local vyos"):
+        build_vendor_policy_rule(
+            analysis=device, source_text="Internet", destination_text="198.51.100.1",
+            protocol="tcp", port=22, action="deny", interface_name="outside",
+            source_external=True, traffic_target="router_local",
+        )
+
+
+def test_router_local_context_limits_rule_order_to_selected_interface_and_plane():
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy("""ip access-list extended WAN-IN
+ 10 permit tcp any host 198.51.100.1 eq 22
+ip access-list extended LAN-IN
+ 10 deny tcp any host 10.80.0.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in
+interface inside
+ ip access-group LAN-IN in
+""")
+    context = policy_rule_context(
+        device, traffic_target="router_local", interface_name="outside",
+    )
+
+    assert context["router_local_supported"] is True
+    assert context["local_addresses"] == [{
+        "interface": "outside", "address": "198.51.100.1",
+        "network": "198.51.100.0/24", "role": "external",
+    }]
+    assert [item["policy"] for item in context["rules"]] == ["WAN-IN"]
+    assert [item["index"] for item in context["rules"]] == [0]
+    assert context["positions"][-1]["index"] == 1
+
+
+def test_router_local_policy_rejects_first_position_when_sequence_one_is_occupied():
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy("""ip access-list extended WAN-IN
+ 1 permit tcp any host 198.51.100.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in
+""")
+
+    with pytest.raises(ValueError, match="No unused Cisco sequence number exists before"):
+        build_vendor_policy_rule(
+            analysis=device, source_text="Internet", destination_text="198.51.100.1",
+            protocol="tcp", port=22, action="deny", interface_name="outside",
+            insertion_index=0, source_external=True, traffic_target="router_local",
+        )
+
+
+def test_router_local_policy_rejects_adjacent_sequence_gap():
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy("""ip access-list extended WAN-IN
+ 10 permit tcp any host 198.51.100.1 eq 443
+ 11 permit tcp any host 198.51.100.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in
+""")
+
+    with pytest.raises(ValueError, match="No unused Cisco sequence number exists at"):
+        build_vendor_policy_rule(
+            analysis=device, source_text="Internet", destination_text="198.51.100.1",
+            protocol="tcp", port=22, action="deny", interface_name="outside",
+            insertion_index=1, source_external=True, traffic_target="router_local",
+        )
+
+
+def test_router_local_context_keeps_shared_acl_only_for_exact_inbound_attachment():
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy("""ip access-list extended WAN-IN
+ 10 permit tcp any host 198.51.100.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in
+interface inside
+ ip access-group WAN-IN out
+""")
+
+    context = policy_rule_context(
+        device, traffic_target="router_local", interface_name="outside",
+    )
+    assert [item["policy"] for item in context["rules"]] == ["WAN-IN"]
+    assert context["rules"][0]["interface"] == "outside"
+    assert context["rules"][0]["direction"] == "in"
+    generated = build_vendor_policy_rule(
+        analysis=device, source_text="Internet", destination_text="198.51.100.1",
+        protocol="tcp", port=22, action="deny", interface_name="outside",
+        insertion_index=0, source_external=True, traffic_target="router_local",
+    )
+    assert generated["policy"] == "WAN-IN"
+    assert generated["sequence"] == 5
+
+
+def test_router_local_policy_rejects_edited_rule_sequence_disagreement():
+    device = router_local_cisco_device()
+    with pytest.raises(ValueError, match="sequence does not match"):
+        simulate_proposed_policy_control(
+            source_text="Internet", destination_text="198.51.100.1",
+            protocol="tcp", port=22, flow_state="new", source_external=True,
+            hunting={"hosts": [], "findings": []}, saved_networks=[],
+            device_analyses=[device], action="deny", device_key=device["run_id"],
+            interface_name="outside", insertion_index=0,
+            traffic_target="router_local",
+            vendor_rule="""ip access-list extended WAN-IN
+ 100 deny tcp any host 198.51.100.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in""",
+        )
+
+
+def test_router_local_policy_explains_redundant_same_outcome():
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy("""ip access-list extended WAN-IN
+ 10 deny ip any any
+!
+interface outside
+ ip access-group WAN-IN in
+""")
+    result = simulate_proposed_policy_control(
+        source_text="Internet", destination_text="198.51.100.1",
+        protocol="tcp", port=22, flow_state="new", source_external=True,
+        hunting={"hosts": [], "findings": []}, saved_networks=[],
+        device_analyses=[device], action="deny", device_key=device["run_id"],
+        interface_name="outside", insertion_index=0,
+        traffic_target="router_local",
+    )
+    assert result["comparison"]["before"] == "Expected Blocked"
+    assert result["comparison"]["after"] == "Expected Blocked"
+    assert "does not change" in result["projected"]["explanation"]
+    assert "may be redundant" in result["projected"]["explanation"]
+
+
+def test_router_local_policy_rejects_unnumbered_retained_acl_order():
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy("""ip access-list extended WAN-IN
+ permit tcp any host 198.51.100.1 eq 22
+!
+interface outside
+ ip access-group WAN-IN in
+""")
+    with pytest.raises(ValueError, match="does not expose every Cisco sequence number"):
+        build_vendor_policy_rule(
+            analysis=device, source_text="Internet", destination_text="198.51.100.1",
+            protocol="tcp", port=22, action="deny", interface_name="outside",
+            insertion_index=0, source_external=True, traffic_target="router_local",
+        )
+
+
+@pytest.mark.parametrize("attachment", ["", """interface inside
+ ip access-group NCT-IN-outside in
+"""])
+def test_router_local_new_acl_name_avoids_retained_policy_collision(attachment):
+    device = router_local_cisco_device()
+    device["policy"]["applied"] = parse_vendor_policy(f"""ip access-list extended NCT-IN-outside
+ 10 permit tcp any host 10.80.0.1 eq 22
+!
+{attachment}""")
+
+    generated = build_vendor_policy_rule(
+        analysis=device, source_text="Internet", destination_text="198.51.100.1",
+        protocol="tcp", port=22, action="deny", interface_name="outside",
+        insertion_index=0, source_external=True, traffic_target="router_local",
+    )
+    assert generated["policy"] == "NCT-IN-outside-2"
+    assert "ip access-list extended NCT-IN-outside-2" in generated["rule_text"]
+    assert generated["sequence"] == 10
+
+
+def test_forwarded_scenario_still_requires_route_and_keeps_forward_template():
+    with pytest.raises(ValueError, match="requires a proposed route"):
+        simulate_proposed_change_scenario(
+            source_text="10.80.0.25", destination_text="10.90.0.10",
+            protocol="tcp", port=443, hunting=HUNTING,
+            saved_networks=SAVED, device_analyses=[DEVICE], route=None,
+            policy={
+                "action": "deny", "device_key": DEVICE["run_id"],
+                "interface_name": "inside", "traffic_target": "forwarded",
+            },
+        )
+    context = policy_rule_context(DEVICE, traffic_target="forwarded")
+    assert context["templates"][0]["name"] == "Extended ACL service rule"
+
+
 def test_proposed_route_addition_is_read_only_and_uses_a_retained_interface():
     device = {**DEVICE, "route_analysis": {"routes": []}}
 
