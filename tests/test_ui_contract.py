@@ -617,6 +617,21 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert 'id="pendingScansPanel"' in html
     assert "Waiting scans run in order after the active scan" in html
     assert "Cancel pending scan" in html
+    assert "Assigned operator:" in html
+    assert "Original requestor:" in html
+    assert 'data-guide-context="queue-assignment"' in html
+    assert "Save assignment" in html
+    assert "It does not rename, reorder, start, or change scan settings." in html
+    assert "@media(max-width:1200px){.queue-detail{grid-template-columns:1fr}" in html
+    assert ".queue-assignment{width:min(100%,260px)}" in html
+    assert "expected_assignment_revision:expectedRevision" in html
+    assert "The assignment was not saved." in html
+    assert "if(error.status===409){queueAssignmentConflictHold=true;queueLoadRevision+=1;clearTimeout(queueTimer);queueTimer=null}" in html
+    assert "queueAssignmentConflictHold=false;queueAssignmentFeedback.clear();return Promise.all([loadQueue(),loadScanRecovery()])" in html
+    assert "if(!activeScanWorkspace()||queueAssignmentConflictHold)return" in html
+    assert "Assigned operator saved as ${data.owner}. Scan name, queue position, targets, settings, authorization, and original requestor are unchanged." in html
+    assert "Assign responsibility for one waiting scan" in SHELL_SCRIPT
+    assert "reload Active Scans, reopen the same scan" in SHELL_SCRIPT
     assert "waiting=runs.filter(run=>run.status==='queued')" in html
     assert "active=runs.find(run=>['dispatching','running','awaiting_fallback_approval'].includes(run.status))" in html
     assert "openWaiting=new Set" in html

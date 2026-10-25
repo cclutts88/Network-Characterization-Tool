@@ -19,7 +19,7 @@ function functionBlock(name, nextName) {
 }
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
   let resolveFetch,openedDuringFetch=false,renderedItem=null;
   const controls=new Map();
@@ -47,7 +47,7 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
   const requests=[];
   const controls=new Map();
@@ -74,6 +74,52 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
+  let queueLoadRevision=0,queueTimer=99,queueAssignmentConflictHold=false,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  const queueAssignmentFeedback=new Map(),CSS={escape:value=>value},esc=value=>String(value??'');
+  const select={value:'bravo',dataset:{expectedOwner:'alpha',assignmentRevision:'0'},disabled:false};
+  const button={disabled:false};
+  const assignmentStatus={textContent:'',className:'',focus(){this.focused=true}};
+  const controls=new Map([['queueList',{_html:'stale-controls',set innerHTML(value){this._html=value},get innerHTML(){return this._html}}]]);
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',innerHTML:''});return controls.get(id)};
+  const document={
+    querySelector(selector){if(selector.includes('data-owner-for'))return select;if(selector.includes('data-reassign'))return button;if(selector.includes('data-assignment-status'))return assignmentStatus;return null},
+    querySelectorAll(){return[]},
+  };
+  let resolveDelayed,statusCalls=0,timerScheduled=false;
+  const fetch=url=>{
+    if(url.includes('/owner'))return Promise.resolve({ok:false,status:409,json:async()=>({detail:'This waiting scan changed. The assignment was not saved. Reload Active Scans.'})});
+    statusCalls+=1;
+    if(statusCalls===1)return new Promise(resolve=>{resolveDelayed=resolve});
+    return Promise.resolve({ok:true,status:200,json:async()=>({runs:[{run_id:'pending',status:'queued',queue_position:1}]})});
+  };
+  const clearTimeout=()=>{};
+  const setTimeout=()=>{timerScheduled=true;return 42};
+  const queueItem=()=>'<details class="queue-item" data-queue-run="pending">fresh-controls</details>';
+  const startActiveView=()=>{},showActiveEmpty=()=>{},cancelQueuedRun=()=>{};
+  const claimActiveStatus=revision=>{if(revision<activeStatusAppliedRevision)return false;activeStatusAppliedRevision=revision;return true};
+  ${handler("loadQueue")}
+  ${handler("reassignQueuedRun")}
+  const delayed=loadQueue();
+  await reassignQueuedRun('pending');
+  assert.equal(queueAssignmentConflictHold,true,'a conflict must hold the reviewed assignment');
+  assert.equal(queueLoadRevision,2,'a conflict must invalidate an in-flight queue response');
+  assert.equal(select.disabled,true,'the stale assignment must stay frozen until explicit refresh');
+  assert.equal(button.disabled,true,'the stale save action must stay frozen until explicit refresh');
+  assert.equal(select.dataset.expectedOwner,'alpha');
+  assert.equal(select.dataset.assignmentRevision,'0');
+  resolveDelayed({ok:true,status:200,json:async()=>({runs:[{run_id:'pending',status:'queued',owner:'charlie',queue_assignment_revision:2}]})});
+  await delayed;
+  assert.equal($('queueList').innerHTML,'stale-controls','a late queue response must not replace stale controls');
+  assert.equal(timerScheduled,false,'a conflict must keep automatic polling paused');
+  await loadQueue();
+  assert.equal(statusCalls,1,'held state must refuse implicit queue refreshes');
+  queueAssignmentConflictHold=false;queueAssignmentFeedback.clear();
+  await loadQueue();
+  assert.equal(statusCalls,2,'explicit refresh must release the hold');
+  assert.match($('queueList').innerHTML,/fresh-controls/);
+})()`);
+
+await eval(`(async () => {
   let activeViewRevision=0,currentId=null,currentLive=false,pollTimer=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0;
   const requests=[];
   const fetch=()=>new Promise(resolve=>requests.push(resolve));
@@ -94,7 +140,7 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentId=null,currentLive=false,pollTimer=null,activeViewRevision=0,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentId=null,currentLive=false,pollTimer=null,activeViewRevision=0,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
   const requests=[];
   const controls=new Map();
@@ -124,7 +170,7 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  let queueLoadRevision=0,queueTimer=null,currentId='active-A',currentLive=true,pollTimer=null,activeViewRevision=1,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
+  let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentId='active-A',currentLive=true,pollTimer=null,activeViewRevision=1,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
   const requests=[];
   const controls=new Map();

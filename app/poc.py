@@ -587,8 +587,10 @@ class ScanRunOwnerChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     owner: str = Field(min_length=1, max_length=100)
+    expected_owner: str = Field(min_length=1, max_length=100)
+    expected_assignment_revision: int = Field(ge=0)
 
-    @field_validator("owner")
+    @field_validator("owner", "expected_owner")
     @classmethod
     def clean_owner(cls, value: str) -> str:
         cleaned = value.strip().lower()
@@ -1452,6 +1454,7 @@ def build_scan_run_manifest(
             "saved_networks": saved_network_snapshots,
             "manual_targets": manual_targets,
         },
+        "queue_assignment_revision": 0,
         "metadata_revision": 0,
         "no_strike": no_strike,
         "no_strike_submission": {
@@ -7333,6 +7336,107 @@ def _require_run_control(request: Request, manifest: dict) -> tuple[str, str]:
     return actor, role or "analyst"
 
 
+class ScanRunAssignmentConflict(RuntimeError):
+    """The waiting scan changed after the assignment control was opened."""
+
+
+def reassign_queued_scan_operator(
+    run_id: str,
+    change: ScanRunOwnerChange,
+    db_path: Path = DB_PATH,
+    *,
+    actor: str | None,
+    role: str | None,
+) -> dict:
+    """Atomically change responsibility for one waiting scan and audit it."""
+    init_poc_storage(db_path)
+    changed_at = utc_now()
+    acting_username = actor or "local-operator"
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        if actor is None:
+            if change.owner != "local-operator":
+                raise PermissionError(
+                    "Assigned operator changes require a signed-in Administrator"
+                )
+        else:
+            actor_row = db.execute(
+                "SELECT role, disabled FROM analyst_users WHERE username = ?",
+                (actor,),
+            ).fetchone()
+            if (
+                actor_row is None
+                or bool(actor_row[1])
+                or str(actor_row[0]) != "admin"
+                or role != "admin"
+            ):
+                raise PermissionError("An active Administrator account is required")
+            target_row = db.execute(
+                "SELECT role, disabled FROM analyst_users WHERE username = ?",
+                (change.owner,),
+            ).fetchone()
+            if target_row is None or bool(target_row[1]):
+                raise ValueError("Choose an active analyst account")
+            if str(target_row[0]) == "viewer":
+                raise ValueError("Viewer accounts cannot be assigned waiting scans")
+
+        row = db.execute(
+            "SELECT status, manifest_json FROM scan_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        manifest = json.loads(row[1])
+        if str(row[0]) != "queued" or manifest.get("status") != "queued":
+            raise ScanRunAssignmentConflict(
+                "The scan is no longer waiting, so the assignment was not saved. Reload Active Scans and review its current state."
+            )
+        current_owner = str(
+            manifest.get("owner")
+            or manifest.get("created_by")
+            or manifest.get("operator")
+            or ""
+        ).strip().lower()
+        raw_revision = manifest.get("queue_assignment_revision", 0)
+        if isinstance(raw_revision, bool) or not isinstance(raw_revision, int) or raw_revision < 0:
+            raise ScanRunAssignmentConflict(
+                "The saved assignment record is invalid. The assignment was not saved; reload Active Scans and review this waiting scan."
+            )
+        if (
+            current_owner != change.expected_owner
+            or raw_revision != change.expected_assignment_revision
+        ):
+            raise ScanRunAssignmentConflict(
+                "This waiting scan changed after you opened it. The assignment was not saved. Reload Active Scans, reopen this scan, and review the current assigned operator before retrying."
+            )
+
+        manifest["owner"] = change.owner
+        manifest["owner_changed_at"] = changed_at
+        manifest["owner_changed_by"] = acting_username
+        manifest["queue_assignment_revision"] = raw_revision + 1
+        changed = db.execute(
+            """UPDATE scan_runs SET manifest_json = ?
+                 WHERE run_id = ? AND status = 'queued'""",
+            (json.dumps(manifest, sort_keys=True), run_id),
+        ).rowcount
+        if changed != 1:
+            raise ScanRunAssignmentConflict(
+                "The scan left the waiting queue. The assignment was not saved. Reload Active Scans and review its current state."
+            )
+        append_scan_audit_on_connection(
+            db,
+            run_id=run_id,
+            event="reassigned",
+            actor=acting_username,
+            details=(
+                f"Assigned operator changed from {current_owner} to {change.owner}; "
+                "original requestor, queue position, targets, settings, and authorization were unchanged"
+            ),
+            changed_at=changed_at,
+        )
+    return manifest
+
+
 @router.post("/scan-runs/{run_id}/cancel", status_code=202)
 def cancel_scan_run(run_id: str, request: Request) -> dict:
     manifest = get_scan_run_plan(run_id, DB_PATH)
@@ -7395,36 +7499,18 @@ def change_scan_run_owner(
     run_id: str, change: ScanRunOwnerChange, request: Request
 ) -> dict:
     actor, role = _scan_actor(request)
-    if actor is not None and role != "admin":
-        raise HTTPException(status_code=403, detail="Administrator role required")
-    manifest = get_scan_run_plan(run_id, DB_PATH)
-    if manifest is None:
-        raise HTTPException(status_code=404, detail="Scan run not found")
-    if manifest.get("status") != "queued":
-        raise HTTPException(status_code=409, detail="Only queued scans can be reassigned")
-    if actor is not None:
-        with connect_database(DB_PATH) as db:
-            row = db.execute(
-                "SELECT role, disabled FROM analyst_users WHERE username = ?",
-                (change.owner,),
-            ).fetchone()
-        if row is None or row[1]:
-            raise HTTPException(status_code=422, detail="Choose an active analyst account")
-        if row[0] == "viewer":
-            raise HTTPException(status_code=422, detail="Viewer accounts cannot own queued scans")
-    previous = manifest.get("owner") or manifest.get("created_by") or manifest.get("operator")
-    manifest["owner"] = change.owner
-    manifest["owner_changed_at"] = utc_now()
-    manifest["owner_changed_by"] = actor or "local-operator"
-    update_scan_run_manifest(manifest, DB_PATH)
-    append_scan_audit(
-        DB_PATH,
-        run_id=run_id,
-        event="reassigned",
-        actor=actor or "local-operator",
-        details=f"Queue owner changed from {previous} to {change.owner}",
-        changed_at=manifest["owner_changed_at"],
-    )
+    try:
+        manifest = reassign_queued_scan_operator(
+            run_id, change, DB_PATH, actor=actor, role=role
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Scan run not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ScanRunAssignmentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return with_queue_state(manifest, DB_PATH)
 
 

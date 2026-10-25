@@ -74,6 +74,23 @@ Administrators are locked out. Recovery is limited to an existing Administrator,
 requires no active work, creates a backup, resets through a password-file mount,
 and revokes the account's existing sessions. It cannot create or promote users.
 
+An Administrator can change the **Assigned operator** for a scan only while it
+is waiting. The original requestor, queue position, target, settings,
+authorization and retained evidence stay unchanged. The selected account must
+still be active and must be an Analyst or Administrator when the save occurs.
+The change and its audit record commit together, and scan dispatch rereads the
+saved assignment before starting the worker.
+
+The assignment API requires all three fields: `owner`, `expected_owner`, and
+`expected_assignment_revision`. A retained waiting scan without a revision is
+revision 0. Every successful assignment increments the revision. A client must
+reload and review the current assigned operator after any conflict; it may not
+silently retry with new values. This required request shape is a compatibility
+change for older development clients. Authenticated assignment is available to
+Administrators; authentication-disabled Test mode has no named-account
+assignment workflow.
+
 This is a foundation, not Mission readiness. External identity integration,
-comprehensive shared-change auditing, scan ownership/queuing, the formal
-promotion gate, and fully validated authenticated HTTPS deployment remain open.
+comprehensive shared-change auditing, broader collaboration workflows, the
+formal promotion gate, and fully validated authenticated HTTPS deployment
+remain open.

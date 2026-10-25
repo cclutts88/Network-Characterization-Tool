@@ -70,16 +70,38 @@ def test_queue_control_roles_reassignment_and_personal_drafts(monkeypatch, tmp_p
         assert queue["runs"][0]["can_cancel"] is False
         assert client.post(f"/api/scan-runs/{queued['run_id']}/cancel").status_code == 403
         assert client.post(
-            f"/api/scan-runs/{queued['run_id']}/owner", json={"owner": "bravo"}
+            f"/api/scan-runs/{queued['run_id']}/owner",
+            json={
+                "owner": "bravo",
+                "expected_owner": "alpha",
+                "expected_assignment_revision": 0,
+            },
         ).status_code == 403
 
         client.post("/api/auth/logout")
         login(client, "nctadmin", "bootstrap password 123")
         reassigned = client.post(
-            f"/api/scan-runs/{queued['run_id']}/owner", json={"owner": "bravo"}
+            f"/api/scan-runs/{queued['run_id']}/owner",
+            json={
+                "owner": "bravo",
+                "expected_owner": "alpha",
+                "expected_assignment_revision": 0,
+            },
         )
         assert reassigned.status_code == 200
         assert reassigned.json()["owner"] == "bravo"
+        assert reassigned.json()["queue_assignment_revision"] == 1
+
+        stale = client.post(
+            f"/api/scan-runs/{queued['run_id']}/owner",
+            json={
+                "owner": "alpha",
+                "expected_owner": "alpha",
+                "expected_assignment_revision": 0,
+            },
+        )
+        assert stale.status_code == 409
+        assert "assignment was not saved" in stale.json()["detail"]
 
         client.post("/api/auth/logout")
         login(client, "bravo", "bravo password 123")

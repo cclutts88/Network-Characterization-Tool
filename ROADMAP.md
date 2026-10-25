@@ -375,6 +375,53 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   records eagerly, change evidence, create a Range package or make the capability available
   on `main`.
 
+## Pending scan operator assignment clarity — completed 2026-10-25
+
+- [x] R17 confirms what the pending-scan operator control changes, separates assignment
+  from any run-name editing, and labels the control **Assigned operator** wherever it is
+  shown.
+- [x] Explain the authority and queue effect in plain language, report a clear saved or
+  rejected result, and keep the Operator Guide synchronized with the final behavior.
+- [x] Verify direct links, refresh, narrow layout, keyboard use, permissions and failure
+  handling with independent and novice-operator gates before completion.
+- **Reliability behavior:** an assignment save now rechecks the signed-in Administrator,
+  target account, queued state, expected operator and exact assignment revision inside one
+  protected transaction. The assignment revision prevents an old A-to-B page from being
+  accepted after a later B-to-A change. Scan dispatch uses the same writer boundary and
+  rereads the saved manifest, so assignment-first starts with the new operator while
+  dispatch-first rejects the late assignment without changing either record.
+- **Preservation boundary:** only assigned operator, change actor/time and assignment
+  revision change. Original requestor, queue position, run name, targets, profile, settings,
+  authorization, scope, evidence and audit history are retained. Assignment and audit
+  either commit together or both roll back.
+- **Compatibility note / documented deviation:** the development assignment API now
+  requires `owner`, `expected_owner` and `expected_assignment_revision`; legacy waiting
+  manifests start at revision 0. This intentionally rejects old clients instead of allowing
+  a stale silent overwrite. The exact request contract is recorded in
+  `docs/MULTI_ANALYST_FOUNDATION.md`.
+- **Operator behavior:** every analyst can see **Assigned operator** and **Original
+  requestor** separately. Only an Administrator receives the active account picker and
+  **Save assignment** action. Success names the one changed fact and the preserved facts;
+  a conflict remains on the expanded row and directs the operator to reload Active Scans,
+  reopen that scan and review the current assignment.
+- **Validation:** 90 focused Docker tests pass with one skipped browser-runtime launcher;
+  that executable JavaScript regression passes directly under Node. The complete
+  Docker suite passes with **2,098 passed and 20 skipped**. A populated authenticated
+  browser preview verified the direct Active Scans link, retained open row, accessible
+  labels, normal layout and dedicated four-step Operator Guide with no browser-console
+  errors.
+- **Final-gate repairs:** the first independent pass found that an already-running queue
+  refresh could arrive after a rejected assignment and replace the row. A rejected stale
+  save now invalidates that response, pauses polling and freezes the reviewed controls
+  until explicit Refresh; the timed regression covers that complete sequence. The first
+  novice pass found the three-column row overflowed at 980 by 900 with the Guide open;
+  the row now reflows into one column below 1200 pixels. The final independent verdict is
+  **CLEAR — DOCUMENTED DEVIATION** for the required API contract and the final novice
+  verdict is **CLEAR**.
+- **Limitation:** this is foundation-branch development work. It does not change a running
+  Range deployment, produce a release package, promote the capability to `main`, or claim
+  Mission readiness.
+
 ## Scheduled scan incident repair — started 2026-10-23
 
 - [x] Reproduce and repair the Teams-reported startup failure converting older
