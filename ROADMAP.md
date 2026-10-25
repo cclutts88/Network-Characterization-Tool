@@ -422,6 +422,78 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   Range deployment, produce a release package, promote the capability to `main`, or claim
   Mission readiness.
 
+## Installed-build restart recovery acceptance — started 2026-10-25
+
+- [x] **R18 — recover a stopped or restarting retained installation without guessing,
+  reinstalling, or bypassing unfinished-work checks.** Add one terminal-only path that
+  starts with the read-only diagnostic, identifies the exact saved container, image, port,
+  data mount, and restart policy while the application is unavailable, creates and
+  independently verifies a cold backup before any write, inspects all retained work
+  categories from stopped data, and either restarts that exact installation or stops with
+  one precise evidence-preserving next step. Bind mounts, named volumes, restart loops,
+  WAL state, overlapping writers, ambiguous ports, helper cleanup, and bounded Docker
+  calls must fail closed. Keep ordinary upgrade, unfinished-work repair, and deliberately
+  blank installation as separate operator choices. Update the air-gapped runbook, script
+  index, built-in How NCT Works guidance, and tests. Preserve accounts, TLS, history,
+  evidence, configuration, exact build identity, and the complete restart policy.
+- **Acceptance boundary:** controller acceptance must include exact-build health, sign-in,
+  retained-data checks, and a restart cycle. Until that target-host proof is recorded, this
+  remains development acceptance.
+- **Start architecture gate:** `CLEAR — DOCUMENTED DEVIATION`. R22–R24 provide reliable
+  diagnosis, unfinished-work repair, and blank installation, but they do not provide a
+  same-installed-build unavailable-app recovery path. The existing upgrade script still
+  depends on `docker exec` and running-container port discovery before its stopped-data
+  check; the historical unhealthy-upgrade helper is build-specific and bind-mount-only.
+  The new path is intentionally separate from upgrade and must reuse the established
+  diagnostic and recovery safeguards rather than weakening them.
+- **Novice-operator start gate:** `HALTED FOR REVIEW` for the previous workflow. The
+  diagnostic itself is understandable, but its result does not name the next command, the
+  in-app guide begins with an unavailable page, restart-loop plus stranded-work handling
+  has no linear route, and `reset` currently names several unrelated operations. R18 must
+  make the app-unavailable path achievable from the terminal and external runbook alone,
+  with distinct labels for diagnosing an existing installation, repairing unfinished
+  work, recovering the stopped installed build, and starting a blank installation.
+- **Completed 2026-10-25.** Added `nct-recover-installed.sh` as the linear
+  diagnostic-first path for the exact saved container and image. It preserves the
+  listener, data mount, accounts, TLS, evidence and complete restart policy; verifies a
+  cold backup and every stopped-work category; and refuses ambiguous ports, overlapping
+  storage, changed identity, unreadable work, unresolved helpers, failed health or a
+  failed restart cycle. Upgrade now routes an unavailable installation to this path
+  instead of depending on a running `docker exec` or `docker port` query.
+- **Safety and recovery result.** The stopped-work helper now gives the coordinator one
+  explicit handoff receipt only after its helper is absent, NCT is verified stopped, and
+  the plan is complete. Container identity and plan digest must match before restoration
+  is possible. Missing, interrupted, mismatched or unsafe handoff remains stopped with
+  automatic restart disabled. Executable fault tests cover output/data overlap, Docker
+  timeout, helper-removal failure, interruption both during handoff and after action
+  begins, missing and mismatched plans, and enabled automation becoming due.
+- **Documented operational limit.** Starting the exact saved installation resumes its
+  normal workers. Existing enabled scan schedules, Arkime pulls and other saved
+  automation may contact their configured networks when due. Terminal output, package
+  runbooks, the built-in guide and the receipt disclose this; the receipt does not call
+  normal startup passive. Controller acceptance still requires a target-host sign-in,
+  retained-history/evidence check and restart proof.
+- **Completion gates:** focused recovery, schema, navigation and reliability checks pass;
+  the complete Docker test suite passes with **2,113 passed and 20 skipped**;
+  the rebuilt browser candidate renders the terminal recovery guidance and Mission
+  Environment navigation at normal and narrow widths. The novice operator returned
+  **CLEAR**. The Independent Reviewer returned **CLEAR — DOCUMENTED DEVIATION** after
+  independently checking the explicit handoff boundary and navigation consolidation.
+  This is committed foundation-branch development and is not a Range acceptance, release
+  package, `main` promotion or Mission-readiness claim.
+
+## Network Scope navigation consolidation — started 2026-10-25
+
+- [x] **Completed 2026-10-25.** Remove the redundant Network Scopes entry from the account hamburger now that
+  Mission Environment is the owning operator workspace. Keep scope creation and
+  management available from the Network Scope controls inside Mission Environment,
+  and preserve the direct `/settings/network-scopes` route for bookmarks and focused
+  administration. Verify the hamburger, Mission Environment handoff, and direct route
+  in the rebuilt browser candidate.
+- Browser and contract checks confirm the hamburger shows Mission Environment without a
+  second Network Scopes destination, Mission Environment still exposes scope creation and
+  management, and the direct route remains usable for bookmarks and focused administration.
+
 ## Scheduled scan incident repair — started 2026-10-23
 
 - [x] Reproduce and repair the Teams-reported startup failure converting older

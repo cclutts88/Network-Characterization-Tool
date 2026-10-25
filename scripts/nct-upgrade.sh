@@ -49,7 +49,15 @@ mount_source=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/
     die "$CONTAINER does not store /data at $DATA_DIR. Run nct-migrate-data.sh first."
 original_container_id=$(docker inspect --format '{{.Id}}' "$CONTAINER")
 original_image_id=$(docker inspect --format '{{.Image}}' "$CONTAINER")
-original_host_port=$(docker port "$CONTAINER" 8445/tcp 2>/dev/null | awk -F: 'NR == 1 { print $NF }')
+original_state=$(docker inspect --format '{{.State.Status}}' "$CONTAINER")
+original_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' "$CONTAINER")
+if [ "$original_state" != running ] || [ "$original_health" = unhealthy ]; then
+    die "NCT is $original_state/$original_health. Preserve it and run the read-only diagnostic, then preview sh scripts/nct-recover-installed.sh --container $CONTAINER. Ordinary upgrade will not bypass the stopped-data work check."
+fi
+original_port_lines=$(docker inspect --format '{{range $port,$items := .HostConfig.PortBindings}}{{if or (eq $port "8080/tcp") (eq $port "8445/tcp")}}{{range $items}}{{printf "%s|%s\n" $port .HostPort}}{{end}}{{end}}{{end}}' "$CONTAINER" | tr -d '\r' | sed '/^$/d' | sort -u)
+[ "$(printf '%s\n' "$original_port_lines" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] ||
+    die "The current NCT listener and host port are missing or ambiguous. Run the diagnostic; do not guess."
+original_host_port=${original_port_lines#*|}
 case "$original_host_port" in ''|*[!0-9]*) die "The current NCT HTTPS host port could not be identified." ;; esac
 [ "$original_host_port" -ge 1 ] && [ "$original_host_port" -le 65535 ] || die "The current NCT HTTPS host port is invalid."
 
@@ -390,7 +398,10 @@ say "Starting the release with the $MODE path..."
 candidate_may_have_written=yes
 NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"
 snapshot "$after" container
-candidate_host_port=$(docker port "$CONTAINER" 8445/tcp 2>/dev/null | awk -F: 'NR == 1 { print $NF }')
+candidate_port_lines=$(docker inspect --format '{{range $port,$items := .HostConfig.PortBindings}}{{if or (eq $port "8080/tcp") (eq $port "8445/tcp")}}{{range $items}}{{printf "%s|%s\n" $port .HostPort}}{{end}}{{end}}{{end}}' "$CONTAINER" | tr -d '\r' | sed '/^$/d' | sort -u)
+[ "$(printf '%s\n' "$candidate_port_lines" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] ||
+    die "The upgraded NCT listener and host port are missing or ambiguous."
+candidate_host_port=${candidate_port_lines#*|}
 case "$candidate_host_port" in ''|*[!0-9]*) die "The upgraded NCT HTTPS host port could not be identified." ;; esac
 [ "$candidate_host_port" -ge 1 ] && [ "$candidate_host_port" -le 65535 ] || die "The upgraded NCT HTTPS host port is invalid."
 

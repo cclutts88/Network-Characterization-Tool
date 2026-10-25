@@ -3,12 +3,44 @@
 This directory contains both the current small operator scripts and older
 deployment automation retained for compatibility.
 
-## Recommended reset workflow
+## Choose one operator workflow
 
 The authoritative instructions are in
 `../AIR-GAPPED-RANGE-QUICKSTART.md`. Follow that guide from the beginning. This
 file is a short reference for the scripts and must not replace the required
 preflight and acceptance steps.
+
+| Need | First command |
+| --- | --- |
+| Diagnose an existing installation without changing it | `sh scripts/nct-diagnostic-report.sh` |
+| Recover the exact stopped or restarting installed build | `sh scripts/nct-recover-installed.sh --container nct` |
+| Repair retained unfinished work | `sh scripts/nct-reset-unfinished.sh --container nct` |
+| Preview an explicitly approved blank installation | `sh scripts/nct-fresh-install.sh --container nct` |
+
+The diagnostic prints the matching next command. Do not use upgrade, a start script,
+or a blank installation as a shortcut around an unknown or unreadable work check.
+
+## Exact installed-build recovery
+
+After the diagnostic names a stopped, restarting, or unhealthy saved container, run:
+
+```bash
+sh scripts/nct-recover-installed.sh --container nct
+```
+
+Preview records the exact container, image, listener, data mount and full restart
+policy, creates and independently verifies a cold backup, and inspects every work
+category from stopped data. It supports bind storage and named volumes. Apply is
+offered only when the work plan is clear; it starts and restart-tests the same saved
+container and exact local image. Unfinished work routes to the separate repair command.
+Unknown storage, work, schema, image, port or helper state stops the process. Normal
+sign-in and retained history/evidence review remain required for controller acceptance.
+Applying recovery resumes normal NCT workers. Existing enabled scan schedules,
+Arkime pulls, and other saved automation may contact their configured networks when
+due. Review or pause them first when that is not intended. The receipt records possible
+network contact instead of describing normal startup as passive.
+
+## Start or administer an already reviewed installation
 
 1. Confirm Docker is available:
 
@@ -88,15 +120,19 @@ maintenance tables, and the database SHA-256. Only exact reviewed version-4 and
 version-5 Range sources are accepted. Unknown, incomplete, or altered schema stops
 the upgrade and restores the earlier container.
 
-If the retained earlier container itself cannot restart, use
-`nct-recover-unhealthy-upgrade.sh` only through step 6A of the main guide. It
-performs the same read-only schema gate without requiring the old application
-to run, independently verifies a cold backup, retains both failure sources, and
-does not restart an incompatible old image after replacement-written data.
+If the retained earlier container itself cannot restart, begin with the
+read-only diagnostic and `nct-recover-installed.sh`. Use
+`nct-recover-unhealthy-upgrade.sh` only when that exact-installed recovery and
+step 6A of the main guide identify the reviewed historical package-specific
+migration case. It performs the same read-only schema gate without requiring
+the old application to run, independently verifies a cold backup, retains both
+failure sources, and does not restart an incompatible old image after
+replacement-written data.
 
-## Evidence-preserving unfinished-work recovery
+## Evidence-preserving unfinished-work repair
 
-Use the Active Scans **Unfinished work self-check** first. It reads saved scan,
+Use the Active Scans **Unfinished work self-check** when the page is available. If NCT
+cannot open, use the terminal diagnostic and its printed repair command. Both read saved scan,
 schedule, Arkime pull, device-contact, local-processing, storage-maintenance and
 ownership records without changing them. If it reports unfinished work, run this
 preview from the extracted package:

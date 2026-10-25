@@ -8,20 +8,26 @@ OUTPUT_ROOT="${NCT_RECOVERY_DIR:-/var/lib/nct/deployment/backups}"
 ACTOR="administrator"
 APPLY=no
 ASSUME_YES=no
+HOLD_STOPPED=no
 PROBE_TIMEOUT="${NCT_RECOVERY_DOCKER_PROBE_TIMEOUT:-30}"
 HELPER_TIMEOUT="${NCT_RECOVERY_DOCKER_HELPER_TIMEOUT:-3600}"
 
 usage() {
     cat <<'EOF'
-Create a verified cold backup, preview exact unfinished scan work, and optionally
-apply the evidence-preserving reset.
+Create a verified cold backup, preview every unfinished work category, and
+optionally apply the evidence-preserving repair.
 
 Usage:
   sh scripts/nct-reset-unfinished.sh [--container NAME] [--output-dir ABSOLUTE_PATH]
       [--actor NAME] [--apply] [--yes]
 
 Preview restores the exact prior runtime state after backup verification. Apply
-requires the reviewed plan digest. Completed evidence is never deleted.
+requires the reviewed plan digest. Completed evidence is never deleted. The
+--yes option is reserved for reviewed automation that has already verified and
+recorded the plan digest; interactive operators should review and type the
+displayed digest prefix.
+The installed-build recovery coordinator may add --hold-stopped so an Apply
+check remains stable until that same command starts the reviewed container.
 EOF
 }
 
@@ -32,6 +38,7 @@ while [ "$#" -gt 0 ]; do
         --actor) [ "$#" -ge 2 ] || exit 2; ACTOR=$2; shift 2 ;;
         --apply) APPLY=yes; shift ;;
         --yes) ASSUME_YES=yes; shift ;;
+        --hold-stopped) HOLD_STOPPED=yes; shift ;;
         -h|--help) usage; exit 0 ;;
         *) printf '%s\n' "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -62,7 +69,7 @@ image_ref=$(docker_probe inspect --format '{{.Config.Image}}' "$CONTAINER")
 old_restart=$(docker_probe inspect --format '{{.HostConfig.RestartPolicy.Name}}' "$CONTAINER")
 old_restart_max=$(docker_probe inspect --format '{{.HostConfig.RestartPolicy.MaximumRetryCount}}' "$CONTAINER")
 old_state=$(docker_probe inspect --format '{{.State.Status}}' "$CONTAINER")
-case "$old_state" in running|exited|created) ;; *) echo "HALT: unsupported container state: $old_state" >&2; exit 2;; esac
+case "$old_state" in running|restarting|exited|created) ;; *) echo "HALT: unsupported container state: $old_state" >&2; exit 2;; esac
 
 mount_lines=$(docker_probe inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}|{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}{{"\n"}}{{end}}{{end}}' "$CONTAINER")
 [ "$(printf '%s\n' "$mount_lines" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] || { echo "HALT: expected exactly one /data mount" >&2; exit 2; }
@@ -129,6 +136,7 @@ source_inventory="$run_dir/source-inventory.sha256"
 restored_inventory="$run_dir/restored-inventory.sha256"
 plan="$run_dir/scan-work-plan.json"
 receipt="$run_dir/host-recovery.receipt"
+handoff_receipt="$run_dir/coordinator-handoff.receipt"
 verify_dir="$run_dir/verified-restore"
 helper="nct-scan-recovery-$timestamp-$$"
 runtime_restored=no
@@ -140,7 +148,7 @@ restore_runtime() {
     [ "$runtime_restored" = no ] || return 0
     docker_probe update --restart="${restart_value:-no}" "$CONTAINER" >/dev/null || { echo "HALT: could not restore the prior restart policy" >&2; return 1; }
     case "$old_state" in
-        running) docker_probe start "$CONTAINER" >/dev/null || { echo "HALT: could not restart NCT" >&2; return 1; } ;;
+        running|restarting) docker_probe start "$CONTAINER" >/dev/null || { echo "HALT: could not restart NCT" >&2; return 1; } ;;
         exited|created)
             if [ "$(docker_probe inspect --format '{{.State.Running}}' "$CONTAINER")" = true ]; then
                 docker_probe stop --time 30 "$CONTAINER" >/dev/null || { echo "HALT: could not restore the stopped state" >&2; return 1; }
@@ -148,7 +156,7 @@ restore_runtime() {
     esac
     actual_policy=$(docker_probe inspect --format '{{.HostConfig.RestartPolicy.Name}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}' "$CONTAINER")
     [ "$actual_policy" = "$old_restart:$old_restart_max" ] || { echo "HALT: restart policy verification failed" >&2; return 1; }
-    if [ "$old_state" = running ]; then
+    if [ "$old_state" = running ] || [ "$old_state" = restarting ]; then
         [ "$(docker_probe inspect --format '{{.State.Running}}' "$CONTAINER")" = true ] || { echo "HALT: NCT running-state verification failed" >&2; return 1; }
     fi
     runtime_restored=yes
@@ -180,11 +188,17 @@ finish_and_restore() {
         hold_nct_stopped || echo "HALT: verify NCT is stopped before taking any further action" >&2
         return 1
     fi
-    restore_runtime
+    if [ "$HOLD_STOPPED" = yes ]; then
+        hold_nct_stopped || return 1
+        runtime_restored=yes
+    else
+        restore_runtime
+    fi
 }
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM
+    [ "$status" -eq 0 ] || HOLD_STOPPED=no
     failed=no
     if [ "$cleanup_blocked" = yes ]; then
         remove_helper || true
@@ -235,6 +249,12 @@ echo "Plan digest: $plan_digest"
 if [ "$APPLY" != yes ]; then
     echo "Preview only. No saved work record was changed."
     finish_and_restore
+    if [ "$HOLD_STOPPED" = yes ]; then
+        printf 'contract=nct-stopped-work-handoff:1\nsafe_to_restore=true\ncontainer_id=%s\nplan_digest=%s\n' "$target_id" "$plan_digest" > "$handoff_receipt"
+        chmod 600 "$handoff_receipt"
+        echo "The exact container is held stopped with automatic restart disabled for the installed-build recovery coordinator."
+        echo "Coordinator handoff: $handoff_receipt"
+    fi
     exit 0
 fi
 if [ "$ASSUME_YES" != yes ]; then

@@ -55,7 +55,54 @@ Only bounded log signal counts are retained; review paths, IP addresses and
 timestamps before sharing. Docker queries and helper runs have fixed deadlines so
 an unavailable runtime cannot leave the diagnostic hanging indefinitely.
 
-## Recover unfinished work after diagnosis
+## Choose the recovery path printed by the diagnostic
+
+Do not substitute one path for another:
+
+| What the diagnostic says | Next action |
+| --- | --- |
+| Running and healthy | Continue normal investigation. Do not reset or reinstall from this result. |
+| Stopped, restarting, or running but unhealthy; stopped work check is readable and clear | Run `sh scripts/nct-recover-installed.sh --container nct` to preview recovery of the exact installed container. |
+| Unfinished scan, schedule, Arkime, device-contact, local-processing, or storage work | Run `sh scripts/nct-reset-unfinished.sh --container nct` to preview evidence-preserving repair. |
+| Database, work state, image, mount, port, or container identity cannot be proved | Stop. Preserve the report and data. Do not bypass the check or start a blank installation. |
+| An administrator explicitly approved an empty replacement after reviewing what will not carry forward | Use the separate fresh-install preview only. |
+
+### Recover the exact stopped installation
+
+For a stopped, restarting, or unhealthy installation whose saved work can be read
+safely, run:
+
+```sh
+sh scripts/nct-recover-installed.sh --container nct
+```
+
+Preview runs the diagnostic first, records the exact container, image, port, mount,
+and full restart policy, creates and independently verifies a cold backup before any
+write, and inspects all unfinished-work categories from stopped data. It supports a
+bind folder or named volume and stops if another container can reach overlapping data,
+if one listener cannot be identified, or if saved work is unknown or unreadable.
+
+If unfinished work exists, the command does not restart NCT. It prints the exact
+unfinished-work repair command. If the plan is clear, apply the same recovery path:
+
+```sh
+sh scripts/nct-recover-installed.sh --container nct --apply
+```
+
+Apply starts the same saved container from the same local image with the same port,
+data, accounts, settings, TLS material, evidence, and complete restart policy. It
+checks health and exact build identity, performs one restart cycle, and creates a
+private receipt plus a second diagnostic. It never creates a blank installation.
+If health or the restart test fails, NCT is held stopped with automatic restart
+disabled and the verified backup is preserved. Before controller acceptance, sign in
+normally and confirm retained history and evidence; the receipt deliberately records
+that controller sign-in remains unverified. Applying recovery resumes normal NCT
+workers. Existing enabled scan schedules, Arkime pulls, and other saved automation
+may contact their configured networks when due. Review or pause them before `--apply`
+when that is not intended. The receipt records this as possible network contact.
+that this final human sign-in check is still required.
+
+## Repair unfinished work after diagnosis
 
 If the diagnostic or Active Scans **Unfinished work self-check** reports stranded
 scan, schedule, Arkime, device-contact, local-processing, or storage work, remain
@@ -97,7 +144,7 @@ prints the exact manual review boundary.
 
 Use this only when an administrator has decided to start NCT with no inherited
 accounts, evidence, scopes, Saved Networks, profiles, schedules, notes, settings,
-or unfinished work. This is separate from **reset unfinished work**, which preserves
+or unfinished work. This is separate from **repair unfinished work**, which preserves
 all completed application data.
 
 Create the non-destructive preview plan first:
@@ -351,6 +398,13 @@ the prompt without an error. Continue with step 7.
 ## 6. Upgrade an existing host-folder installation
 
 Use this step only when step 3 showed `/var/lib/nct/data -> /data`.
+If the installed NCT container is stopped, unhealthy, or repeatedly restarting,
+do not use upgrade as a startup repair. Run the read-only diagnostic and the
+exact-installed recovery path first. That path preserves the current image,
+ports, data, accounts, evidence, settings, and restart policy. Upgrade is only
+for changing to the reviewed image after the installed copy is stable, or after
+the exact recovery path explicitly identifies the historical package-specific
+compatibility case described in step 6A.
 
 Replace `RANGE_IP` with the server's real IP address:
 
@@ -394,12 +448,14 @@ new staging folder, confirm the new release identity and checksums, and then rep
 step 6. If the original container was not confirmed restored, stop and involve the
 administrator instead of retrying.
 
-### 6A. Recover when the retained earlier container cannot restart
+### 6A. Historical package-specific migration after exact recovery stops
 
-Use this path only when the existing `nct` container is stopped or repeatedly
-restarting with a saved-schema fingerprint error and the ordinary upgrade did
-not create a new schema-audit record. Do not delete or rename the old container
-or `/var/lib/nct/data`.
+Use this path only when the exact-installed recovery has already preserved the
+container and verified backup, has identified the reviewed historical
+saved-schema fingerprint case, and the ordinary upgrade did not create a new
+schema-audit record. It is not the first response to a stopped, unhealthy, or
+restarting container. Do not delete or rename the old container or
+`/var/lib/nct/data`.
 
 Keep the same terminal used in step 1 so `NCT_WORKDIR` and
 `NCT_PACKAGE_SHA256` are still set. For the older Range Docker engine, run:

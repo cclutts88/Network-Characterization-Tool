@@ -3,12 +3,21 @@
 This directory contains both the current small operator scripts and older
 deployment automation retained for compatibility.
 
-## Recommended reset workflow
+## Choose one operator workflow
 
 The authoritative instructions are in
 `../docs/AIR_GAPPED_RANGE_QUICKSTART.md`. Follow that guide from the beginning.
 This file is a short reference for the scripts and must not replace the required
 preflight and acceptance steps.
+
+| Need | First command | Meaning |
+| --- | --- | --- |
+| Understand an existing unhealthy installation | `sh scripts/nct-diagnostic-report.sh` | Read-only diagnosis; always start here. |
+| Recover the exact installed build after it stopped or began restarting | `sh scripts/nct-recover-installed.sh --container nct` | Preview exact-container restart recovery with a verified cold backup and stopped-data work check. |
+| Repair retained unfinished work | `sh scripts/nct-reset-unfinished.sh --container nct` | Preserve completed data and prepare exact interrupted work for separate review. |
+| Start an explicitly approved blank installation | `sh scripts/nct-fresh-install.sh --container nct` | Preview an empty replacement while retaining the old installation. |
+
+Do not use a start script, upgrade, or blank installation as a recovery shortcut.
 
 ## Diagnose before changing anything
 
@@ -35,7 +44,7 @@ under `/var/lib/nct/deployment/diagnostics` by default. An existing report-root
 directory keeps its current permissions.
 
 The summary uses **OK**, **Needs attention**, and **Not checked — reason**. Preserve
-the report and follow its state-specific next step. Do not delete a container,
+the report and follow the exact command in its state-specific next step. Do not delete a container,
 database, WAL file, lock, or evidence during diagnosis. The report excludes
 passwords, tokens, environment values, raw log text, raw device configurations,
 raw evidence, and raw database rows. It can still contain container names, host
@@ -44,6 +53,30 @@ sharing. Every Docker query has a deadline. If Docker or the target container
 cannot be identified safely, the command prints a partial result and next step
 to the terminal without creating a report directory whose separation from NCT
 data has not yet been proved.
+
+## Recover the exact installed build
+
+When the diagnostic names a stopped, restarting, or unhealthy installation, preview:
+
+```bash
+sh scripts/nct-recover-installed.sh --container nct
+```
+
+The preview records the exact saved runtime, creates and verifies a cold backup, and
+inspects every unfinished-work category while the data is stopped. It changes no work
+record. If the plan is clear, use the displayed `--apply` command. The same container
+and local image are started, health and exact build are checked, and one restart cycle
+is verified. Ports, bind folder or named volume, accounts, TLS, evidence, settings and
+the full restart policy are retained. If work is stranded, the command stops and names
+the separate unfinished-work repair. If any identity or work check is unavailable, it
+stops instead of bypassing the check. Controller acceptance still requires a normal
+sign-in and retained history/evidence review.
+The apply step also resumes normal NCT workers. Existing enabled schedules,
+connectors, and other saved automation may contact their configured networks when
+due, so review or pause them first when that is not intended. The receipt records
+that possibility.
+
+## Start or administer an already reviewed installation
 
 1. Confirm Docker is available:
 

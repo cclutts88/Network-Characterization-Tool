@@ -303,21 +303,28 @@ def status_label(report: dict[str, Any]) -> str:
 def next_step(report: dict[str, Any]) -> str:
     state = report["container"].get("state", "unknown")
     health = report["container"].get("health", "unknown")
+    container_name = report["container"].get("name") or "nct"
+    installed_recovery = (
+        "sh scripts/nct-recover-installed.sh --container " + container_name
+    )
+    unfinished_repair = (
+        "sh scripts/nct-reset-unfinished.sh --container " + container_name
+    )
     database = report["database"]
     if state == "restarting":
-        return "Do not repeatedly restart or remove NCT. Preserve this report and use the reviewed recovery path with the Range administrator."
+        return "Do not repeatedly restart or remove NCT. Preserve this report, then preview the exact installed-build recovery: " + installed_recovery
     if report["collection"]["state_changed_during_report"]:
         return "The container changed while the report was collected. Preserve this report and rerun once before choosing a recovery action."
     if database["status"] == "needs_attention" or database.get("unfinished_work"):
-        return "Preserve this report and involve the NCT administrator. Do not delete locks, WAL files, evidence or database rows."
+        return "Preserve this report. Preview the evidence-preserving unfinished-work repair: " + unfinished_repair
     if database["status"] == "not_checked":
-        return "The database check was unavailable. Preserve this partial report, keep NCT data unchanged, and rerun or provide it to the NCT administrator."
+        return "The database check was unavailable. Preserve this partial report and keep NCT data unchanged. Preview " + installed_recovery + "; it must stop rather than bypass an unreadable work check."
     if state == "running" and health in {"healthy", "none", "unknown"}:
         return "Preserve this report and continue normal investigation. A reset is not recommended from this result."
     if state == "running":
-        return "NCT is running but not healthy. Preserve this report and use the reviewed recovery path; do not restart blindly."
+        return "NCT is running but not healthy. Preserve this report, then preview " + installed_recovery + "; do not restart blindly."
     if state in {"exited", "dead", "created", "paused"}:
-        return "Do not delete, rename or recreate the container or its data. Use the reported build, port and mount with the reviewed recovery instructions."
+        return "Do not delete, rename or recreate the container or its data. Preserve this report, then preview " + installed_recovery + "."
     return "Some checks were unavailable. Preserve this partial report and rerun with approved administrator access or provide it to the Range administrator."
 
 
