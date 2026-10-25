@@ -19,6 +19,22 @@ from app.storage_ui import storage_page
 from app.ui import operator_page
 
 
+def test_historical_network_context_explains_authority_conflicts_and_recovery():
+    html = operator_page().body.decode()
+
+    assert "Who can record this:" in html
+    assert 'data-network="${esc(run.run_id)}" data-guide-context="historical-network-context"' in html
+    assert "$('applyNetworkAttribution').focus()" in html
+    assert "the scan owner or an Administrator" in html
+    assert "expected_metadata_revision:Number(pendingAttributionRun.metadata_revision||0)" in html
+    assert "attributionStatus.focus()" in html
+    assert "Correct one retained scan\\'s network context" in SHELL_SCRIPT
+    assert "record the correction.',['Confirm the exact run" in SHELL_SCRIPT
+    assert "record the correction.',2,[" not in SHELL_SCRIPT
+    assert "reload Scan History" in SHELL_SCRIPT
+    assert "Reopen the run and verify the new attributed snapshot." in SHELL_SCRIPT
+
+
 def test_personal_and_shared_note_panels_are_mutually_exclusive():
     assert "other.panel.classList.remove('open')" in SESSION_SCRIPT
     assert "other.tab.setAttribute('aria-expanded','false')" in SESSION_SCRIPT

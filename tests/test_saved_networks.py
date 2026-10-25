@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+import json
 from pathlib import Path
 import threading
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from app import poc
+from app.database import connect_database
 from app.poc import (
+    ScanRunMetadataConflict,
     ScanRunNetworkAttribution,
     ScanRunPlan,
     attribute_scan_run_networks,
@@ -15,6 +22,7 @@ from app.poc import (
     group_scan_runs_by_saved_network,
     insert_scan_run_manifest,
 )
+from app.scan_collaboration import scan_audit_history
 from app.saved_networks import (
     SavedNetworkArchive,
     SavedNetworkCreate,
@@ -306,7 +314,9 @@ def test_completed_manual_scan_can_be_attributed_to_an_exact_saved_network(tmp_p
     updated = attribute_scan_run_networks(
         manifest["run_id"],
         ScanRunNetworkAttribution(
-            saved_network_ids=[saved["saved_network_id"]], changed_by="reviewer"
+            saved_network_ids=[saved["saved_network_id"]],
+            changed_by="reviewer",
+            expected_metadata_revision=0,
         ),
         db_path,
     )
@@ -353,6 +363,7 @@ def test_saved_network_rename_does_not_rewrite_scan_snapshot_until_explicit_attr
         ScanRunNetworkAttribution(
             saved_network_ids=[saved["saved_network_id"]],
             changed_by="history-reviewer",
+            expected_metadata_revision=0,
         ),
         db_path,
     )
@@ -377,7 +388,353 @@ def test_scan_attribution_rejects_a_saved_network_outside_executed_scope(tmp_pat
         attribute_scan_run_networks(
             manifest["run_id"],
             ScanRunNetworkAttribution(
-                saved_network_ids=[saved["saved_network_id"]], changed_by="reviewer"
+                saved_network_ids=[saved["saved_network_id"]],
+                changed_by="reviewer",
+                expected_metadata_revision=0,
             ),
             db_path,
         )
+
+
+@pytest.mark.parametrize(
+    ("status", "execution_method", "scheduled"),
+    [
+        ("completed", "manual", False),
+        ("completed", "imported", False),
+        ("completed", "scheduled", True),
+        ("interrupted", "manual", False),
+    ],
+)
+def test_terminal_scan_attribution_ignores_expired_worker_claims_and_preserves_run_truth(
+    tmp_path: Path, status: str, execution_method: str, scheduled: bool
+):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    plan = scan_plan(
+        targets=[saved["cidr"]],
+        scheduled=scheduled,
+        scheduled_by="scheduler" if scheduled else None,
+    )
+    manifest = build_scan_run_manifest(plan, status=status, db_path=db_path)
+    manifest["execution_method"] = execution_method
+    manifest["execution_claim"] = {"lease_id": "expired-execution"}
+    manifest["work_claim"] = {"lease_id": "expired-schedule"}
+    manifest["evidence_receipt"] = {"sha256": "retained"}
+    manifest["target_selection"]["review_note"] = "preserve this field"
+    insert_scan_run_manifest(manifest, db_path)
+    before = deepcopy(get_scan_run_plan(manifest["run_id"], db_path))
+
+    updated = attribute_scan_run_networks(
+        manifest["run_id"],
+        ScanRunNetworkAttribution(
+            saved_network_ids=[saved["saved_network_id"]],
+            changed_by="owner",
+            expected_metadata_revision=0,
+        ),
+        db_path,
+        actor="operator",
+        role="analyst",
+    )
+
+    allowed = {
+        "saved_network_ids",
+        "saved_networks",
+        "manual_targets",
+        "target_selection",
+        "network_attribution_changed_at",
+        "network_attribution_changed_by",
+        "network_attribution_history",
+        "metadata_revision",
+    }
+    assert {key: value for key, value in updated.items() if key not in allowed} == {
+        key: value for key, value in before.items() if key not in allowed
+    }
+    assert updated["target_selection"]["review_note"] == "preserve this field"
+    assert updated["execution_claim"] == before["execution_claim"]
+    assert updated["work_claim"] == before["work_claim"]
+    assert updated["metadata_revision"] == 1
+    assert updated["network_attribution_changed_by"] == "operator"
+    audit = scan_audit_history(db_path, manifest["run_id"])
+    assert audit[0]["event"] == "network_attribution_changed"
+    assert audit[0]["actor"] == "operator"
+    with connect_database(db_path) as db:
+        membership = db.execute(
+            "SELECT kind, name, cidr FROM scan_history_memberships WHERE run_id = ?",
+            (manifest["run_id"],),
+        ).fetchone()
+        dirty = db.execute(
+            "SELECT 1 FROM scan_history_index_dirty WHERE run_id = ?",
+            (manifest["run_id"],),
+        ).fetchone()
+    assert tuple(membership) == ("subnet", f"Subnet {saved['cidr']}", saved["cidr"])
+    assert dirty is None
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["planned", "queued", "dispatching", "running", "awaiting_fallback_approval", "recovering", "future_state"],
+)
+def test_active_or_unknown_scan_state_rejects_historical_attribution(
+    tmp_path: Path, status: str
+):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status=status, db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+
+    with pytest.raises(ValueError, match="only after the scan has stopped"):
+        attribute_scan_run_networks(
+            manifest["run_id"],
+            ScanRunNetworkAttribution(
+                saved_network_ids=[saved["saved_network_id"]],
+                changed_by="operator",
+                expected_metadata_revision=0,
+            ),
+            db_path,
+        )
+
+
+@pytest.mark.parametrize("bad_revision", [-1, True, "0", 1.5, None])
+def test_malformed_retained_metadata_revision_is_rejected(
+    tmp_path: Path, bad_revision
+):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    manifest["metadata_revision"] = bad_revision
+    insert_scan_run_manifest(manifest, db_path)
+
+    with pytest.raises(ScanRunMetadataConflict, match="invalid historical-context"):
+        attribute_scan_run_networks(
+            manifest["run_id"],
+            ScanRunNetworkAttribution(
+                saved_network_ids=[saved["saved_network_id"]],
+                changed_by="operator",
+                expected_metadata_revision=0,
+            ),
+            db_path,
+        )
+
+
+def test_legacy_revision_zero_accepts_once_then_requires_current_revision(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    manifest.pop("metadata_revision")
+    insert_scan_run_manifest(manifest, db_path)
+    request = ScanRunNetworkAttribution(
+        saved_network_ids=[saved["saved_network_id"]],
+        changed_by="operator",
+        expected_metadata_revision=0,
+    )
+
+    first = attribute_scan_run_networks(manifest["run_id"], request, db_path)
+    assert first["metadata_revision"] == 1
+    with pytest.raises(ScanRunMetadataConflict, match="Another analyst changed"):
+        attribute_scan_run_networks(manifest["run_id"], request, db_path)
+    second = attribute_scan_run_networks(
+        manifest["run_id"],
+        request.model_copy(update={"expected_metadata_revision": 1}),
+        db_path,
+    )
+    assert second["metadata_revision"] == 2
+
+
+def test_only_one_simultaneous_historical_attribution_wins(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+    barrier = threading.Barrier(2)
+
+    def apply_once():
+        barrier.wait()
+        try:
+            return attribute_scan_run_networks(
+                manifest["run_id"],
+                ScanRunNetworkAttribution(
+                    saved_network_ids=[saved["saved_network_id"]],
+                    changed_by="operator",
+                    expected_metadata_revision=0,
+                ),
+                db_path,
+            )["metadata_revision"]
+        except ScanRunMetadataConflict:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _item: apply_once(), range(2)))
+    assert sorted(results, key=str) == [1, "conflict"]
+
+
+def test_historical_attribution_rechecks_current_owner_inside_transaction(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+    with connect_database(db_path) as db:
+        retained = json.loads(
+            db.execute(
+                "SELECT manifest_json FROM scan_runs WHERE run_id = ?",
+                (manifest["run_id"],),
+            ).fetchone()[0]
+        )
+        retained["owner"] = "new-owner"
+        db.execute(
+            "UPDATE scan_runs SET manifest_json = ? WHERE run_id = ?",
+            (json.dumps(retained, sort_keys=True), manifest["run_id"]),
+        )
+
+    with pytest.raises(PermissionError, match="scan owner"):
+        attribute_scan_run_networks(
+            manifest["run_id"],
+            ScanRunNetworkAttribution(
+                saved_network_ids=[saved["saved_network_id"]],
+                changed_by="old-owner",
+                expected_metadata_revision=0,
+            ),
+            db_path,
+            actor="old-owner",
+            role="analyst",
+        )
+    admin = attribute_scan_run_networks(
+        manifest["run_id"],
+        ScanRunNetworkAttribution(
+            saved_network_ids=[saved["saved_network_id"]],
+            changed_by="administrator",
+            expected_metadata_revision=0,
+        ),
+        db_path,
+        actor="administrator",
+        role="admin",
+    )
+    assert admin["network_attribution_changed_by"] == "administrator"
+
+
+def test_history_index_failure_rolls_back_manifest_and_audit(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+    before = get_scan_run_plan(manifest["run_id"], db_path)
+    monkeypatch.setattr(
+        poc,
+        "sync_scan_history_manifest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("index failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="index failure"):
+        attribute_scan_run_networks(
+            manifest["run_id"],
+            ScanRunNetworkAttribution(
+                saved_network_ids=[saved["saved_network_id"]],
+                changed_by="operator",
+                expected_metadata_revision=0,
+            ),
+            db_path,
+        )
+    after = get_scan_run_plan(manifest["run_id"], db_path)
+    assert after["metadata_revision"] == before["metadata_revision"] == 0
+    assert after["saved_network_ids"] == before["saved_network_ids"]
+    assert scan_audit_history(db_path, manifest["run_id"]) == []
+    with connect_database(db_path) as db:
+        assert db.execute(
+            "SELECT 1 FROM scan_history_index_dirty WHERE run_id = ?",
+            (manifest["run_id"],),
+        ).fetchone() is None
+
+
+def test_audit_failure_rolls_back_manifest_and_history_index(tmp_path: Path):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+    with connect_database(db_path) as db:
+        before_memberships = db.execute(
+            "SELECT group_id, kind, name, cidr FROM scan_history_memberships WHERE run_id = ? ORDER BY group_id",
+            (manifest["run_id"],),
+        ).fetchall()
+        db.execute(
+            """CREATE TRIGGER reject_attribution_audit
+               BEFORE INSERT ON scan_run_audit
+               WHEN NEW.event = 'network_attribution_changed'
+               BEGIN SELECT RAISE(ABORT, 'audit failure'); END"""
+        )
+
+    with pytest.raises(Exception, match="audit failure"):
+        attribute_scan_run_networks(
+            manifest["run_id"],
+            ScanRunNetworkAttribution(
+                saved_network_ids=[saved["saved_network_id"]],
+                changed_by="operator",
+                expected_metadata_revision=0,
+            ),
+            db_path,
+        )
+    retained = get_scan_run_plan(manifest["run_id"], db_path)
+    assert retained["metadata_revision"] == 0
+    assert retained["saved_network_ids"] == []
+    with connect_database(db_path) as db:
+        after_memberships = db.execute(
+            "SELECT group_id, kind, name, cidr FROM scan_history_memberships WHERE run_id = ? ORDER BY group_id",
+            (manifest["run_id"],),
+        ).fetchall()
+    assert after_memberships == before_memberships
+    assert scan_audit_history(db_path, manifest["run_id"]) == []
+
+
+def test_attribution_endpoint_keeps_stale_conflict_until_current_revision_is_reopened(
+    tmp_path: Path, monkeypatch
+):
+    db_path = tmp_path / "analyzer.db"
+    saved = create_network(db_path)
+    manifest = build_scan_run_manifest(
+        scan_plan(targets=[saved["cidr"]]), status="completed", db_path=db_path
+    )
+    insert_scan_run_manifest(manifest, db_path)
+    monkeypatch.setattr(poc, "DB_PATH", db_path)
+    api = FastAPI()
+    api.include_router(poc.router)
+    payload = {
+        "saved_network_ids": [saved["saved_network_id"]],
+        "changed_by": "client-supplied-name",
+        "expected_metadata_revision": 0,
+    }
+
+    with TestClient(api) as client:
+        first = client.put(
+            f"/api/scan-runs/{manifest['run_id']}/network-attribution", json=payload
+        )
+        assert first.status_code == 200
+        assert first.json()["metadata_revision"] == 1
+        assert first.json()["network_attribution_changed_by"] == "local-operator"
+
+        stale = client.put(
+            f"/api/scan-runs/{manifest['run_id']}/network-attribution", json=payload
+        )
+        assert stale.status_code == 409
+        assert "Your choice was not saved" in stale.json()["detail"]
+        assert "reopen Review network context" in stale.json()["detail"]
+
+        payload["expected_metadata_revision"] = get_scan_run_plan(
+            manifest["run_id"], db_path
+        )["metadata_revision"]
+        current = client.put(
+            f"/api/scan-runs/{manifest['run_id']}/network-attribution", json=payload
+        )
+        assert current.status_code == 200
+        assert current.json()["metadata_revision"] == 2

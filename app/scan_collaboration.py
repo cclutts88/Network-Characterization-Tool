@@ -141,15 +141,35 @@ def append_scan_audit(
     changed_at: str | None = None,
 ) -> dict:
     init_scan_collaboration_storage(db_path)
+    with connect_database(db_path) as db:
+        return append_scan_audit_on_connection(
+            db,
+            run_id=run_id,
+            event=event,
+            actor=actor,
+            details=details,
+            changed_at=changed_at,
+        )
+
+
+def append_scan_audit_on_connection(
+    db,
+    *,
+    run_id: str,
+    event: str,
+    actor: str,
+    details: str = "",
+    changed_at: str | None = None,
+) -> dict:
+    """Append an audit event inside the caller's existing transaction."""
     changed_at = changed_at or utc_now()
     actor = str(actor or "system").strip()[:100] or "system"
     event = str(event or "update").strip()[:64] or "update"
     details = str(details or "").strip()[:500]
-    with connect_database(db_path) as db:
-        cursor = db.execute(
-            "INSERT INTO scan_run_audit (run_id, event, actor, changed_at, details) VALUES (?, ?, ?, ?, ?)",
-            (run_id, event, actor, changed_at, details),
-        )
+    cursor = db.execute(
+        "INSERT INTO scan_run_audit (run_id, event, actor, changed_at, details) VALUES (?, ?, ?, ?, ?)",
+        (run_id, event, actor, changed_at, details),
+    )
     return {
         "event_id": int(cursor.lastrowid),
         "run_id": run_id,

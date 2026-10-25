@@ -211,6 +211,14 @@ def get_saved_network(saved_network_id: str, db_path: Path) -> dict | None:
     return _row_record(row)
 
 
+def get_saved_network_on_connection(db, saved_network_id: str) -> dict | None:
+    """Read one Saved Network using the caller's active transaction."""
+    row = db.execute(
+        f"{_select_sql()} WHERE saved_network_id = ?", (saved_network_id,)
+    ).fetchone()
+    return _row_record(row)
+
+
 def _overlap_warnings(cidr: str, saved_network_id: str | None, db_path: Path) -> list[dict]:
     candidate = ipaddress.ip_network(cidr)
     with connect_database(db_path) as db:

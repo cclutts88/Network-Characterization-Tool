@@ -341,6 +341,40 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   It is not a Range package, has not been exercised against preserved Range data, and is not
   available on `main`.
 
+## Historical scan metadata ownership — completed 2026-10-25
+
+- [x] R16 separates an analyst's explicit historical network-context decision from the
+  worker lease that protected active scan execution. The action must validate the current
+  signed-in operator and the exact current metadata revision, then preserve the original
+  evidence, execution provenance, target, Network Scope and finished worker claim.
+- [x] Add atomic writer and stale-page protection for completed, interrupted, imported and
+  scheduled scan records. Simultaneous edits may not both succeed; retrying an old dialog
+  may not silently adopt a newer revision. Active scans remain unavailable for historical
+  correction.
+- [x] Complete independent architecture and evidence review plus novice-operator browser
+  validation. Keep the correction language explicit, show conflicts as reload-and-review
+  decisions, and record any compatibility change or remaining limitation before commit.
+- **Documented deviation:** R16 does not relax or reuse the active worker-lease writer.
+  It adds a narrow terminal-record writer that may change only the reviewed Saved Network
+  snapshot, attribution history and metadata revision. The manifest, history index and
+  audit event commit together, while worker claims, execution provenance, targets, scope,
+  schedules and evidence remain unchanged. This avoids creating a general unfenced writer
+  while still allowing an authorized owner or Administrator to correct finished history.
+- **Compatibility note:** the historical network-context API now requires the exact
+  `expected_metadata_revision`. Older retained manifests without that field are revision 0;
+  after the first successful correction, clients must reload before another change.
+- **Operator behavior:** the correction dialog names who may record the decision, the
+  Operator Guide gives the complete review-and-verify workflow, and a stale dialog remains
+  open with focus on an explicit reload-and-review message instead of overwriting a peer.
+- **Validation:** 113 focused tests, 208 extended tests, and the complete Docker suite
+  (**2,093 passed, 20 skipped**) pass. The independent quality gate returned **CLEAR —
+  DOCUMENTED DEVIATION**. The novice browser gate returned **CLEAR** after its initial
+  guide-workflow finding was fixed, protected by a regression check and reverified without
+  browser-console errors.
+- **Limitation:** this is foundation-branch development work. It does not migrate old
+  records eagerly, change evidence, create a Range package or make the capability available
+  on `main`.
+
 ## Scheduled scan incident repair — started 2026-10-23
 
 - [x] Reproduce and repair the Teams-reported startup failure converting older

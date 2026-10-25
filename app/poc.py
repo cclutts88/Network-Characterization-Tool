@@ -58,6 +58,7 @@ from app.saved_networks import (
     archive_saved_network,
     create_saved_network,
     get_saved_network,
+    get_saved_network_on_connection,
     get_saved_network_with_warnings,
     init_saved_network_storage,
     insert_saved_network_record,
@@ -113,7 +114,12 @@ from app.scan_history_index import (
     scan_history_group_page_from_index,
     sync_scan_history_manifest,
 )
-from app.scan_collaboration import append_scan_audit, init_scan_collaboration_storage, scan_audit_history
+from app.scan_collaboration import (
+    append_scan_audit,
+    append_scan_audit_on_connection,
+    init_scan_collaboration_storage,
+    scan_audit_history,
+)
 from app.scheduled_work import (
     abandon_chunk_after_worker_error,
     WorkLeaseConflict,
@@ -598,6 +604,7 @@ class ScanRunNetworkAttribution(BaseModel):
 
     saved_network_ids: list[str] = Field(default_factory=list, max_length=100)
     changed_by: str = Field(min_length=1, max_length=100)
+    expected_metadata_revision: int = Field(ge=0)
 
     @field_validator("changed_by")
     @classmethod
@@ -1445,6 +1452,7 @@ def build_scan_run_manifest(
             "saved_networks": saved_network_snapshots,
             "manual_targets": manual_targets,
         },
+        "metadata_revision": 0,
         "no_strike": no_strike,
         "no_strike_submission": {
             "global": global_no_strike,
@@ -3829,101 +3837,179 @@ def get_scan_run_plan(run_id: str, db_path: Path = DB_PATH) -> dict | None:
     return with_queue_state(with_host_count(json.loads(row[0])), db_path) if row else None
 
 
+class ScanRunMetadataConflict(RuntimeError):
+    """Historical metadata changed after the operator opened the record."""
+
+
+HISTORICAL_METADATA_STATES = {
+    "completed",
+    "completed_without_nmap",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "stopped_no_targets",
+    "interrupted",
+}
+
+
+def _manifest_metadata_revision(manifest: dict) -> int:
+    revision = manifest.get("metadata_revision", 0)
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise ScanRunMetadataConflict(
+            "This scan has invalid historical-context revision data. An administrator must review it before changes can be recorded."
+        )
+    return revision
+
+
 def attribute_scan_run_networks(
     run_id: str,
     request: ScanRunNetworkAttribution,
     db_path: Path = DB_PATH,
+    *,
+    actor: str | None = None,
+    role: str | None = None,
 ) -> dict:
-    """Reclassify retained scan history without changing the executed scope."""
-    manifest = get_scan_run_plan(run_id, db_path)
-    if manifest is None:
-        raise KeyError("Scan run not found")
-    if manifest.get("status") in {"queued", "dispatching", "running", "awaiting_fallback_approval"}:
-        raise RuntimeError("Wait for the scan to finish before changing its network attribution")
-
-    target_cidrs = {
-        str(ipaddress.ip_network(value, strict=False))
-        for value in (manifest.get("targets") or [])
-    }
-    snapshots: list[dict] = []
-    selected_ids: list[str] = []
-    for saved_network_id in dict.fromkeys(request.saved_network_ids):
-        record = get_saved_network(saved_network_id, db_path)
-        if record is None or not record.get("active"):
-            raise ValueError("Choose an active Saved Network")
-        if record["cidr"] not in target_cidrs:
-            raise ValueError(
-                f"{record['name']} ({record['cidr']}) is not an exact target of this scan"
+    """Atomically revise only terminal-scan attribution metadata and its audit."""
+    init_poc_storage(db_path)
+    signed_in_actor = str(actor or request.changed_by).strip()[:100]
+    signed_in_role = str(role or "admin").strip().lower()
+    changed_at = utc_now()
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError("Scan run not found")
+        manifest = json.loads(row[0])
+        owner = str(
+            manifest.get("owner")
+            or manifest.get("created_by")
+            or manifest.get("operator")
+            or ""
+        ).strip()
+        if signed_in_role not in {"analyst", "admin"} or (
+            signed_in_role != "admin" and signed_in_actor != owner
+        ):
+            raise PermissionError(
+                "Only the scan owner or an Administrator can record historical scan context."
             )
-        selected_ids.append(record["saved_network_id"])
-        snapshots.append(
+        if manifest.get("status") not in HISTORICAL_METADATA_STATES:
+            raise ValueError(
+                "Historical scan context can be changed only after the scan has stopped."
+            )
+        current_revision = _manifest_metadata_revision(manifest)
+        if request.expected_metadata_revision != current_revision:
+            raise ScanRunMetadataConflict(
+                "Another analyst changed this scan's recorded context after you opened it. Your choice was not saved. Reload Scan History, reopen Review network context, and review the latest context and attribution history before trying again."
+            )
+
+        target_cidrs: set[str] = set()
+        for value in manifest.get("targets") or []:
+            try:
+                target_cidrs.add(str(ipaddress.ip_network(value, strict=False)))
+            except ValueError:
+                continue
+        snapshots: list[dict] = []
+        selected_ids: list[str] = []
+        for saved_network_id in dict.fromkeys(request.saved_network_ids):
+            record = get_saved_network_on_connection(db, saved_network_id)
+            if record is None or not record.get("active"):
+                raise ValueError("Choose an active Saved Network")
+            if record["cidr"] not in target_cidrs:
+                raise ValueError(
+                    f"{record['name']} ({record['cidr']}) is not an exact target of this scan"
+                )
+            selected_ids.append(record["saved_network_id"])
+            snapshots.append(
+                {
+                    "saved_network_id": record["saved_network_id"],
+                    "name": record["name"],
+                    "cidr": record["cidr"],
+                    "description": record["description"],
+                    "category": record["category"],
+                    "tags": list(record["tags"]),
+                }
+            )
+
+        previous = {
+            "metadata_revision": current_revision,
+            "saved_network_ids": list(manifest.get("saved_network_ids") or []),
+            "saved_networks": list(manifest.get("saved_networks") or []),
+            "manual_targets": list(manifest.get("manual_targets") or []),
+        }
+        selected_cidrs = {item["cidr"] for item in snapshots}
+        manual_targets = [
+            value for value in sorted(target_cidrs) if value not in selected_cidrs
+        ]
+        manifest["saved_network_ids"] = selected_ids
+        manifest["saved_networks"] = snapshots
+        manifest["manual_targets"] = manual_targets
+        target_selection = dict(manifest.get("target_selection") or {})
+        target_selection["saved_networks"] = snapshots
+        target_selection["manual_targets"] = manual_targets
+        manifest["target_selection"] = target_selection
+        manifest["network_attribution_changed_at"] = changed_at
+        manifest["network_attribution_changed_by"] = signed_in_actor
+        manifest["metadata_revision"] = current_revision + 1
+        prior_history = manifest.get("network_attribution_history")
+        if prior_history is not None and not isinstance(prior_history, list):
+            raise ScanRunMetadataConflict(
+                "This scan has invalid historical attribution data. An administrator must review it before changes can be recorded."
+            )
+        history = list(prior_history or [])
+        history.append(
             {
-                "saved_network_id": record["saved_network_id"],
-                "name": record["name"],
-                "cidr": record["cidr"],
-                "description": record["description"],
-                "category": record["category"],
-                "tags": list(record["tags"]),
+                "metadata_revision": manifest["metadata_revision"],
+                "changed_at": changed_at,
+                "changed_by": signed_in_actor,
+                "previous_saved_networks": [
+                    {
+                        "saved_network_id": item.get("saved_network_id"),
+                        "name": item.get("name"),
+                        "cidr": item.get("cidr"),
+                    }
+                    for item in previous["saved_networks"]
+                    if isinstance(item, dict)
+                ],
+                "saved_networks": [
+                    {
+                        "saved_network_id": item["saved_network_id"],
+                        "name": item["name"],
+                        "cidr": item["cidr"],
+                    }
+                    for item in snapshots
+                ],
+                "previous": previous,
+                "current": {
+                    "saved_network_ids": list(selected_ids),
+                    "saved_networks": list(snapshots),
+                    "manual_targets": list(manual_targets),
+                },
             }
         )
-
-    changed_at = utc_now()
-    previous = [
-        {
-            "saved_network_id": item.get("saved_network_id"),
-            "name": item.get("name"),
-            "cidr": item.get("cidr"),
-        }
-        for item in (manifest.get("saved_networks") or [])
-        if isinstance(item, dict)
-    ]
-    selected_cidrs = {item["cidr"] for item in snapshots}
-    manual_targets = [value for value in sorted(target_cidrs) if value not in selected_cidrs]
-    manifest.update(
-        {
-            "saved_network_ids": selected_ids,
-            "saved_networks": snapshots,
-            "manual_targets": manual_targets,
-            "target_selection": {
-                "saved_networks": snapshots,
-                "manual_targets": manual_targets,
-            },
-            "network_attribution_changed_at": changed_at,
-            "network_attribution_changed_by": request.changed_by,
-        }
-    )
-    history = list(manifest.get("network_attribution_history") or [])
-    history.append(
-        {
-            "changed_at": changed_at,
-            "changed_by": request.changed_by,
-            "previous_saved_networks": previous,
-            "saved_networks": [
-                {
-                    "saved_network_id": item["saved_network_id"],
-                    "name": item["name"],
-                    "cidr": item["cidr"],
-                }
-                for item in snapshots
-            ],
-        }
-    )
-    manifest["network_attribution_history"] = history
-    update_scan_run_manifest(manifest, db_path)
-    details = (
-        "Attributed retained scan to "
-        + ", ".join(f"{item['name']} ({item['cidr']})" for item in snapshots)
-        if snapshots
-        else "Returned retained scan to manual/ad hoc history"
-    )
-    append_scan_audit(
-        db_path,
-        run_id=run_id,
-        event="network_attribution_changed",
-        actor=request.changed_by,
-        details=details,
-        changed_at=changed_at,
-    )
+        manifest["network_attribution_history"] = history
+        db.execute(
+            "UPDATE scan_runs SET manifest_json = ? WHERE run_id = ?",
+            (json.dumps(manifest, sort_keys=True), run_id),
+        )
+        sync_scan_history_manifest(db, manifest)
+        details = (
+            "Attributed retained scan to "
+            + ", ".join(f"{item['name']} ({item['cidr']})" for item in snapshots)
+            if snapshots
+            else "Returned retained scan to manual/ad hoc history"
+        )
+        append_scan_audit_on_connection(
+            db,
+            run_id=run_id,
+            event="network_attribution_changed",
+            actor=signed_in_actor,
+            details=(
+                f"Historical context revision {manifest['metadata_revision']}. {details}"
+            ),
+            changed_at=changed_at,
+        )
     return with_queue_state(with_host_count(manifest), db_path)
 
 
@@ -7346,16 +7432,20 @@ def change_scan_run_owner(
 def change_scan_run_network_attribution(
     run_id: str, change: ScanRunNetworkAttribution, request: Request
 ) -> dict:
-    manifest = get_scan_run_plan(run_id, DB_PATH)
-    if manifest is None:
-        raise HTTPException(status_code=404, detail="Scan run not found")
-    actor, _ = _require_run_control(request, manifest)
-    if actor != "local-operator":
-        change = change.model_copy(update={"changed_by": actor})
+    actor, role = _scan_actor(request)
+    actor = actor or "local-operator"
+    role = role or "admin"
+    change = change.model_copy(update={"changed_by": actor})
     try:
-        return attribute_scan_run_networks(run_id, change, DB_PATH)
+        return attribute_scan_run_networks(
+            run_id, change, DB_PATH, actor=actor, role=role
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Scan run not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ScanRunMetadataConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
