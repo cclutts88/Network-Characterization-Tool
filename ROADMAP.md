@@ -194,7 +194,7 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   complete suite above. The novice workflow is clear and the final independent quality
   gate is **CLEAR — DOCUMENTED DEVIATION** with the storage decision retained above.
 
-## Device command attribution — implementation complete; final quality gate pending 2026-10-25
+## Device command attribution — completed 2026-10-25
 
 - [x] R06 now assesses retained device command history against verified NCT command-
   execution receipts without rewriting the original collection. Every usable history
@@ -234,8 +234,10 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   Unmatched and 2 linked receipts, with distinct timed and untimed explanations and the
   shared Operator Guide visible. The novice review limitation is retained: its own browser
   surface was unavailable, so the primary agent independently completed the visual check.
-- [ ] Final independent quality-gate re-review of the corrected commit is pending; no
-  downstream roadmap work will begin and this branch will not be pushed until it clears.
+- [x] Final independent quality-gate re-review of corrected commit `4a92bac` is
+  **CLEAR — DOCUMENTED DEVIATION** after 30 independent focused checks. The retained
+  limits remain deliberate: text and timing produce Possible NCT, historical gaps remain
+  unknown, and Unmatched never establishes malicious or non-NCT activity.
 
 ## Scheduled scan incident repair — started 2026-10-23
 
