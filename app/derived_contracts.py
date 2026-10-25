@@ -39,9 +39,9 @@ NMAP_TOPOLOGY_PARAMETERS = MappingProxyType({
 })
 
 DEVICE_SUMMARY_FAMILY = "device_collection_summary"
-DEVICE_SUMMARY_VERSION = "device-collection-summary:1"
-DEVICE_SUMMARY_SCHEMA_VERSION = 1
-DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
+LEGACY_DEVICE_SUMMARY_VERSION = "device-collection-summary:1"
+LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION = 1
+LEGACY_DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
     "snapshot_contract": 1,
     "configuration_selection": "sorted-uploaded_then_sorted-collected_then-stdout",
     "raw_selection": "stdout_then_configuration-order",
@@ -50,6 +50,19 @@ DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
     "max_history_text_chars": MAX_RESPONSE_OUTPUT_CHARS,
     "max_summary_items": MAX_SUMMARY_ITEMS,
     "parser_bundle": "device-summary-parsers:1",
+})
+DEVICE_SUMMARY_VERSION = "device-collection-summary:2"
+DEVICE_SUMMARY_SCHEMA_VERSION = 2
+DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
+    "snapshot_contract": 1,
+    "configuration_selection": "sorted-uploaded_then_sorted-collected_then-stdout",
+    "raw_selection": "stdout_then_configuration-order",
+    "utf8_errors": "replace",
+    "max_summary_text_bytes": MAX_SUMMARY_TEXT_BYTES,
+    "max_history_text_chars": MAX_RESPONSE_OUTPUT_CHARS,
+    "max_summary_items": MAX_SUMMARY_ITEMS,
+    "parser_bundle": "device-summary-parsers:2",
+    "command_history_contract": 2,
 })
 
 SEARCHSPLOIT_CANDIDATES_FAMILY = "nmap_searchsploit_candidates"

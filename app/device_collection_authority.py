@@ -10,6 +10,7 @@ from typing import Callable
 
 from app.artifacts import init_artifact_storage, utc_now
 from app.database import connect_database, initialize_once_per_database
+from app.device_command_receipt_contract import command_receipt_is_valid
 
 
 AUTHORITY_MARKER = "summary_authority"
@@ -530,29 +531,15 @@ def collected_device_manifest_semantics(manifest: dict) -> dict:
             "vendor": str(manifest.get("vendor") or "").lower(),
         }
         for sequence, receipt in enumerate(receipts, start=1):
-            command = str(receipt.get("command") or "")
-            source = {
-                "schema_version": 1,
-                "run_id": str(manifest.get("run_id") or ""),
-                "sequence": sequence,
-                "command": command,
-                "device_identity": identity,
-                "contact_started_at": str(manifest.get("contact_started_at") or ""),
-                "contact_completed_at": str(manifest.get("completed_at") or ""),
-            }
-            expected_id = _digest_text(_canonical_json(source))
             if (
-                receipt.get("receipt_id") != expected_id
-                or receipt.get("run_id") != source["run_id"]
-                or receipt.get("sequence") != sequence
-                or receipt.get("device_identity") != identity
-                or receipt.get("contact_started_at") != source["contact_started_at"]
-                or receipt.get("contact_completed_at") != source["contact_completed_at"]
-                or receipt.get("execution_status")
-                != "sent_in_completed_authenticated_session"
-                or receipt.get("acknowledgement")
-                != "session_completed_command_not_individually_acknowledged"
-                or receipt.get("normalized_command") != " ".join(command.split())
+                receipt.get("sequence") != sequence
+                or not command_receipt_is_valid(
+                    receipt,
+                    run_id=str(manifest.get("run_id") or ""),
+                    device_identity=identity,
+                    contact_started_at=str(manifest.get("contact_started_at") or ""),
+                    contact_completed_at=str(manifest.get("completed_at") or ""),
+                )
             ):
                 raise DeviceCollectionIntegrityError(
                     "Device collection command receipt is inconsistent with its session"

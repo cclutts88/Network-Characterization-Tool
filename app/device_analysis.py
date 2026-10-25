@@ -26,6 +26,14 @@ from app.device_summary_result import (
     analyze_collected_device_summary,
     analyze_manual_upload_summary,
 )
+from app.derived_contracts import (
+    DEVICE_SUMMARY_PARAMETERS as DERIVED_DEVICE_SUMMARY_PARAMETERS,
+    DEVICE_SUMMARY_SCHEMA_VERSION as DERIVED_DEVICE_SUMMARY_SCHEMA_VERSION,
+    DEVICE_SUMMARY_VERSION as DERIVED_DEVICE_SUMMARY_VERSION,
+    LEGACY_DEVICE_SUMMARY_PARAMETERS,
+    LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
+    LEGACY_DEVICE_SUMMARY_VERSION,
+)
 from app.database import configure_database, connect_database
 from app.nmap_base_analysis import scan_run_has_registered_nmap_xml
 from app.nmap_topology_analysis import analyze_scan_run_nmap_topology
@@ -40,6 +48,49 @@ router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
 DEVICE_SUMMARY_VERSION = 4
 _DEVICE_STORAGE_READY: set[str] = set()
 _DEVICE_STORAGE_LOCK = threading.RLock()
+
+
+def _retained_device_summary_contract(db_path: Path, result_id: str) -> dict:
+    with connect_database(db_path, read_only=True) as db:
+        row = db.execute(
+            """SELECT family, analysis_version, payload_schema_version, parameters_json
+               FROM derived_results WHERE result_id = ?""",
+            (result_id,),
+        ).fetchone()
+    if row is None or row[0] != "device_collection_summary":
+        raise DeviceCollectionIntegrityError(
+            "The completed device processing result is unavailable"
+        )
+    try:
+        parameters = json.loads(row[3])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise DeviceCollectionIntegrityError(
+            "The completed device processing contract is unreadable"
+        ) from exc
+    supported = {
+        (
+            DERIVED_DEVICE_SUMMARY_VERSION,
+            DERIVED_DEVICE_SUMMARY_SCHEMA_VERSION,
+            json.dumps(dict(DERIVED_DEVICE_SUMMARY_PARAMETERS), sort_keys=True),
+        ),
+        (
+            LEGACY_DEVICE_SUMMARY_VERSION,
+            LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
+            json.dumps(dict(LEGACY_DEVICE_SUMMARY_PARAMETERS), sort_keys=True),
+        ),
+    }
+    candidate = (
+        str(row[1]), int(row[2]), json.dumps(parameters, sort_keys=True),
+    )
+    if candidate not in supported:
+        raise DeviceCollectionIntegrityError(
+            "The completed device processing result uses an unsupported contract"
+        )
+    return {
+        "analysis_version": candidate[0],
+        "payload_schema_version": candidate[1],
+        "parameters": parameters,
+    }
 
 
 def init_device_analysis_storage(db_path: Path = DB_PATH) -> None:
@@ -173,21 +224,23 @@ def _device_summary_snapshot(
                 )
             expected_result_id = attempt["output_id"]
         if authority.get("selection_contract") == MANUAL_UPLOAD_SELECTION_CONTRACT:
-            verified = analyze_manual_upload_summary(
-                db_path, run_id, run_dir,
-                allow_create=False if read_only_verified else not marked,
-                initialize_storage=not read_only_verified,
-            )
+            analyzer = analyze_manual_upload_summary
         elif authority.get("selection_contract") == COLLECTED_DEVICE_SELECTION_CONTRACT:
-            verified = analyze_collected_device_summary(
-                db_path, run_id, run_dir,
-                allow_create=False if read_only_verified else not marked,
-                initialize_storage=not read_only_verified,
-            )
+            analyzer = analyze_collected_device_summary
         else:
             raise DeviceCollectionIntegrityError(
                 "Verified device collection uses an unsupported analysis contract"
             )
+        contract_kwargs = (
+            _retained_device_summary_contract(db_path, expected_result_id)
+            if expected_result_id else {}
+        )
+        verified = analyzer(
+            db_path, run_id, run_dir,
+            **contract_kwargs,
+            allow_create=False if read_only_verified else not marked,
+            initialize_storage=not read_only_verified,
+        )
         if expected_result_id and verified.get("result_id") != expected_result_id:
             raise DeviceCollectionIntegrityError(
                 "The completed device processing job points to a different result"

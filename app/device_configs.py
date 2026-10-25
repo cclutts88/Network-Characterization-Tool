@@ -71,6 +71,13 @@ from app.device_collection_profiles import (
     get_device_collection_profile,
     list_device_collection_profiles,
 )
+from app.device_command_receipt_contract import (
+    COMMAND_RECEIPT_ACKNOWLEDGEMENT,
+    COMMAND_RECEIPT_EXECUTION_STATUS,
+    command_receipt_id,
+    command_receipt_source,
+    normalize_command_for_attribution,
+)
 from app.request_identity import bind_signed_in_actor, signed_in_username
 from app.network_scopes import get_network_scope
 from app.collection_safety_setup import (
@@ -1526,24 +1533,18 @@ def command_execution_receipts(manifest: dict, commands: Iterable[str]) -> list[
         command_text = str(command).strip()
         if not command_text:
             continue
-        receipt_source = {
-            "schema_version": 1,
-            "run_id": str(manifest.get("run_id") or ""),
-            "sequence": sequence,
-            "command": command_text,
-            "device_identity": identity,
-            "contact_started_at": started_at,
-            "contact_completed_at": completed_at,
-        }
-        receipt_id = hashlib.sha256(
-            json.dumps(receipt_source, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        receipt_source = command_receipt_source(
+            run_id=manifest.get("run_id"), sequence=sequence, command=command_text,
+            device_identity=identity, contact_started_at=started_at,
+            contact_completed_at=completed_at,
+        )
+        receipt_id = command_receipt_id(receipt_source)
         receipts.append({
             **receipt_source,
             "receipt_id": receipt_id,
             "normalized_command": normalize_command_for_attribution(command_text),
-            "execution_status": "sent_in_completed_authenticated_session",
-            "acknowledgement": "session_completed_command_not_individually_acknowledged",
+            "execution_status": COMMAND_RECEIPT_EXECUTION_STATUS,
+            "acknowledgement": COMMAND_RECEIPT_ACKNOWLEDGEMENT,
         })
     return receipts
 
@@ -2994,11 +2995,6 @@ def _history_command_value(raw_line: str) -> str:
     value = re.sub(r"^\s*\d+\s+", "", value)
     value = re.sub(r"^[^\s]{1,80}[>#]\s*", "", value)
     return value.strip()
-
-
-def normalize_command_for_attribution(command: str) -> str:
-    """Normalize layout only; preserve argument case and quoted values."""
-    return " ".join(str(command).strip().split())
 
 
 def _history_timestamp(raw_line: str) -> tuple[str | None, str | None]:

@@ -194,7 +194,7 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   complete suite above. The novice workflow is clear and the final independent quality
   gate is **CLEAR — DOCUMENTED DEVIATION** with the storage decision retained above.
 
-## Device command attribution — completed 2026-10-25
+## Device command attribution — implementation complete; final quality gate pending 2026-10-25
 
 - [x] R06 now assesses retained device command history against verified NCT command-
   execution receipts without rewriting the original collection. Every usable history
@@ -217,12 +217,25 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   Unmatched indefinitely. No commands or broader collection were added to manufacture
   confirmation. The design review and novice workflow review are **CLEAR — DOCUMENTED
   DEVIATION**.
-- [x] Validation passed with **2,046 tests and 20 intentional skips**, all 19 browser-
-  runtime checks, receipt-tamper and identity regressions, and an isolated production
-  container. The browser workflow displayed the expected 0 Confirmed, 2 Possible, 1
+- [x] The first final independent review **HALTED FOR REVIEW** after reproducing three
+  evidence-contract gaps: whitespace inside quoted arguments was collapsed, the changed
+  parser still advertised the older immutable summary version, and receipt candidates
+  were read without a bound or revalidating their saved digest and receipt contract.
+  The correction preserves quoted contents exactly, publishes new summaries under
+  `device-collection-summary:2`, reads completed version-1 summaries through their exact
+  retained contract, limits receipt candidates to the newest 256 exact-device records,
+  and excludes altered or malformed candidates with an analyst-visible limitation.
+- [x] Validation after those corrections passed with **2,052 tests and 20 intentional
+  skips**, including stored version-1 compatibility, current version-2 separation,
+  quote-sensitive command arguments, exact scope/device boundaries, bounded timezone-
+  aware candidate selection and tampered-receipt rejection. The 19 browser-runtime checks
+  also passed, and the isolated production container remained healthy. The browser
+  workflow displayed the expected 0 Confirmed, 2 Possible, 1
   Unmatched and 2 linked receipts, with distinct timed and untimed explanations and the
   shared Operator Guide visible. The novice review limitation is retained: its own browser
   surface was unavailable, so the primary agent independently completed the visual check.
+- [ ] Final independent quality-gate re-review of the corrected commit is pending; no
+  downstream roadmap work will begin and this branch will not be pushed until it clears.
 
 ## Scheduled scan incident repair — started 2026-10-23
 

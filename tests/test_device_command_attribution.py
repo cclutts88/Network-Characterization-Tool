@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+import sqlite3
 
 from app import device_command_attribution as attribution
 from app.device_configs import (
     command_execution_receipts,
+    normalize_command_for_attribution,
     parse_command_history,
 )
 from app.device_collection_authority import (
@@ -120,6 +124,19 @@ def test_normalization_does_not_erase_case_sensitive_arguments():
     assert result["entries"][0]["classification"] == "unmatched"
 
 
+def test_normalization_preserves_quoted_whitespace_and_only_collapses_layout():
+    assert normalize_command_for_attribution(
+        '  show   x   "a  b"   tail  '
+    ) == 'show x "a  b" tail'
+    assert normalize_command_for_attribution('show x "a  b"') != (
+        normalize_command_for_attribution('show x "a b"')
+    )
+    result = parse_command_history(
+        '1 show x "a  b"\n', True, nct_commands=['show   x "a b"']
+    )
+    assert result["entries"][0]["classification"] == "unmatched"
+
+
 def test_verified_receipt_is_possible_without_direct_occurrence_link(monkeypatch):
     history = parse_command_history(
         "[2026-10-25T12:00:01Z] 1 show version\n2 show version\n", True
@@ -128,7 +145,7 @@ def test_verified_receipt_is_possible_without_direct_occurrence_link(monkeypatch
         _source("current"),
         _source("prior", receipts=[_receipt()]),
     ]
-    monkeypatch.setattr(attribution, "_active_semantics", lambda _path: sources)
+    monkeypatch.setattr(attribution, "_attribution_sources", lambda _path, _run: (sources, []))
     result = attribution.assess_command_attribution(
         history, run_id="current", db_path=Path("unused.db")
     )
@@ -143,7 +160,7 @@ def test_verified_receipt_is_possible_without_direct_occurrence_link(monkeypatch
 def test_untimed_receipt_match_does_not_claim_occurrence_timing(monkeypatch):
     history = parse_command_history("1 show version\n", True)
     sources = [_source("current"), _source("prior", receipts=[_receipt()])]
-    monkeypatch.setattr(attribution, "_active_semantics", lambda _path: sources)
+    monkeypatch.setattr(attribution, "_attribution_sources", lambda _path, _run: (sources, []))
     result = attribution.assess_command_attribution(
         history, run_id="current", db_path=Path("unused.db")
     )
@@ -158,7 +175,7 @@ def test_direct_occurrence_link_can_be_confirmed(monkeypatch):
     )
     history["entries"][0]["occurrence_receipt_id"] = "receipt-1"
     sources = [_source("current"), _source("prior", receipts=[_receipt()])]
-    monkeypatch.setattr(attribution, "_active_semantics", lambda _path: sources)
+    monkeypatch.setattr(attribution, "_attribution_sources", lambda _path, _run: (sources, []))
     result = attribution.assess_command_attribution(
         history, run_id="current", db_path=Path("unused.db")
     )
@@ -173,7 +190,7 @@ def test_same_address_in_different_scope_does_not_link_receipt(monkeypatch):
         _source("current"),
         _source("prior", identity=other_identity, receipts=[_receipt()]),
     ]
-    monkeypatch.setattr(attribution, "_active_semantics", lambda _path: sources)
+    monkeypatch.setattr(attribution, "_attribution_sources", lambda _path, _run: (sources, []))
     result = attribution.assess_command_attribution(
         history, run_id="current", db_path=Path("unused.db")
     )
@@ -183,9 +200,120 @@ def test_same_address_in_different_scope_does_not_link_receipt(monkeypatch):
 
 def test_truncated_and_historical_collections_explain_limits(monkeypatch):
     history = parse_command_history("1 show version\n", True)
-    monkeypatch.setattr(attribution, "_active_semantics", lambda _path: [])
+    monkeypatch.setattr(attribution, "_attribution_sources", lambda _path, _run: ([], []))
     result = attribution.assess_command_attribution(
         history, run_id="historical", db_path=Path("unused.db"), history_truncated=True
     )
     assert any("predates verified" in item for item in result["limitations"])
     assert any("collection limit" in item for item in result["limitations"])
+
+
+def test_retained_legacy_template_match_remains_possible(monkeypatch):
+    history = {
+        "status": "captured",
+        "attempted": True,
+        "entries": [{
+            "position": 1,
+            "line_number": 1,
+            "command": "show version",
+            "classification": "nct_collection",
+            "label": "Matches a known NCT collection command (origin unverified)",
+        }],
+        "nct_command_count": 1,
+        "other_command_count": 0,
+    }
+    monkeypatch.setattr(
+        attribution, "_attribution_sources", lambda _path, _run: ([], [])
+    )
+    result = attribution.assess_command_attribution(
+        history, run_id="legacy", db_path=Path("unused.db")
+    )
+    assert result["possible_nct_count"] == 1
+    assert result["unmatched_count"] == 0
+    assert result["entries"][0]["attribution_basis"] == "legacy_summary_template_match"
+    assert any("earlier command-history contract" in item for item in result["limitations"])
+
+
+def test_candidate_source_digest_failure_is_visible_and_not_used(tmp_path):
+    db_path = tmp_path / "authority.db"
+    identity = dict(IDENTITY)
+    current = {
+        "device_identity": identity,
+        "contact_started_at": "2026-10-25T12:10:00Z",
+    }
+    candidate = {
+        "command_receipt_schema_version": 1,
+        "device_identity": identity,
+        "contact_started_at": "2026-10-25T11:59:00Z",
+        "contact_completed_at": "2026-10-25T12:00:00Z",
+        "command_execution_receipts": [{"receipt_id": "tampered"}],
+    }
+    current_json = json.dumps(current, sort_keys=True, separators=(",", ":"))
+    candidate_json = json.dumps(candidate, sort_keys=True, separators=(",", ":"))
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """CREATE TABLE device_collection_authority (
+                   run_id TEXT PRIMARY KEY, state TEXT, semantic_manifest_json TEXT,
+                   semantic_manifest_sha256 TEXT, activated_at TEXT
+               )"""
+        )
+        db.execute(
+            "INSERT INTO device_collection_authority VALUES (?, 'active', ?, ?, ?)",
+            (
+                "current", current_json,
+                hashlib.sha256(current_json.encode()).hexdigest(),
+                "2026-10-25T12:10:00Z",
+            ),
+        )
+        db.execute(
+            "INSERT INTO device_collection_authority VALUES (?, 'active', ?, ?, ?)",
+            ("prior", candidate_json, "invalid-digest", "2026-10-25T12:00:00Z"),
+        )
+    sources, limitations = attribution._attribution_sources(db_path, "current")
+    assert [item["run_id"] for item in sources] == ["current"]
+    assert any("failed integrity" in item for item in limitations)
+
+
+def test_bounded_source_reader_accepts_valid_timezone_offset_receipt(tmp_path):
+    db_path = tmp_path / "authority.db"
+    current = {
+        "device_identity": dict(IDENTITY),
+        "contact_started_at": "2026-10-25T12:10:00Z",
+    }
+    manifest = {
+        "run_id": "prior",
+        "status": "completed",
+        "preferred_scope_id": "scope-a",
+        "device_address": "10.0.0.1",
+        "ssh_port": 22,
+        "username": "collector",
+        "vendor": "cisco",
+        "contact_started_at": "2026-10-25T11:59:00+00:00",
+        "completed_at": "2026-10-25T12:00:00+00:00",
+    }
+    candidate = {
+        "command_receipt_schema_version": 1,
+        "device_identity": dict(IDENTITY),
+        "contact_started_at": manifest["contact_started_at"],
+        "contact_completed_at": manifest["completed_at"],
+        "command_execution_receipts": command_execution_receipts(
+            manifest, ["show version"]
+        ),
+    }
+    rows = [("current", current), ("prior", candidate)]
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """CREATE TABLE device_collection_authority (
+                   run_id TEXT PRIMARY KEY, state TEXT, semantic_manifest_json TEXT,
+                   semantic_manifest_sha256 TEXT, activated_at TEXT
+               )"""
+        )
+        for run_id, semantics in rows:
+            raw = json.dumps(semantics, sort_keys=True, separators=(",", ":"))
+            db.execute(
+                "INSERT INTO device_collection_authority VALUES (?, 'active', ?, ?, ?)",
+                (run_id, raw, hashlib.sha256(raw.encode()).hexdigest(), "2026-10-25T12:10:00Z"),
+            )
+    sources, limitations = attribution._attribution_sources(db_path, "current")
+    assert [item["run_id"] for item in sources] == ["current", "prior"]
+    assert limitations == []

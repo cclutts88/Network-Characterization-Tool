@@ -13,6 +13,12 @@ from app.device_collection_authority import (
 )
 from app import device_configs
 from app.device_summary_result import analyze_collected_device_summary
+from app.derived_contracts import (
+    DEVICE_SUMMARY_VERSION,
+    LEGACY_DEVICE_SUMMARY_PARAMETERS,
+    LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
+    LEGACY_DEVICE_SUMMARY_VERSION,
+)
 
 
 CONFIG = """===== show running-config =====
@@ -94,6 +100,71 @@ def test_completed_ssh_collection_uses_verified_reusable_summary(tmp_path, monke
             "SELECT COUNT(*) FROM derived_result_observation_links WHERE result_id = ?",
             (first["result_id"],),
         ).fetchone()[0] == 3
+
+
+def test_changed_history_parser_uses_new_contract_without_rewriting_legacy_result(
+    tmp_path, monkeypatch,
+):
+    db_path, _, run_dir, manifest = finalized_collection(tmp_path, monkeypatch)
+    run_id = manifest["run_id"]
+    legacy = analyze_collected_device_summary(
+        db_path,
+        run_id,
+        run_dir,
+        analysis_version=LEGACY_DEVICE_SUMMARY_VERSION,
+        payload_schema_version=LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
+        parameters=dict(LEGACY_DEVICE_SUMMARY_PARAMETERS),
+    )
+    current = analyze_collected_device_summary(db_path, run_id, run_dir)
+    assert legacy["result_id"] != current["result_id"]
+    assert legacy["analysis_version"] == LEGACY_DEVICE_SUMMARY_VERSION
+    assert current["analysis_version"] == DEVICE_SUMMARY_VERSION
+    with connect_database(db_path, read_only=True) as db:
+        rows = db.execute(
+            """SELECT analysis_version, payload_schema_version
+               FROM derived_results WHERE family = 'device_collection_summary'
+               ORDER BY analysis_version"""
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (LEGACY_DEVICE_SUMMARY_VERSION, LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION),
+        (DEVICE_SUMMARY_VERSION, 2),
+    ]
+
+
+def test_read_only_analysis_can_open_completed_legacy_summary(
+    tmp_path, monkeypatch,
+):
+    from app import derived_jobs, device_analysis, pipeline_intake
+
+    db_path, config_dir, run_dir, manifest = finalized_collection(tmp_path, monkeypatch)
+    run_id = manifest["run_id"]
+    legacy = analyze_collected_device_summary(
+        db_path,
+        run_id,
+        run_dir,
+        analysis_version=LEGACY_DEVICE_SUMMARY_VERSION,
+        payload_schema_version=LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
+        parameters=dict(LEGACY_DEVICE_SUMMARY_PARAMETERS),
+    )
+    monkeypatch.setattr(
+        pipeline_intake, "get_admission_intent", lambda *_args, **_kwargs: {"marked": True}
+    )
+    monkeypatch.setattr(
+        derived_jobs,
+        "device_summary_job_for_run",
+        lambda *_args, **_kwargs: {
+            "latest_attempt": {
+                "state": "completed",
+                "output_kind": "derived_result",
+                "output_id": legacy["result_id"],
+            }
+        },
+    )
+    summary, loaded_manifest = device_analysis._device_summary_snapshot(
+        run_id, config_dir, db_path, read_only_verified=True
+    )
+    assert summary["counts"]["routes"] == 1
+    assert loaded_manifest["run_id"] == run_id
 
 
 def test_interactive_finalization_uses_same_verified_authority(tmp_path, monkeypatch):

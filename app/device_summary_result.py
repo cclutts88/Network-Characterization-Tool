@@ -302,12 +302,17 @@ def _combined_guard(
 def analyze_manual_upload_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
+    payload_schema_version: int = DEVICE_SUMMARY_SCHEMA_VERSION,
+    parameters: dict | None = None,
     allow_create: bool = True,
     initialize_storage: bool = True,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
     transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Reuse one immutable result only while upload authority remains active."""
+    contract_parameters = dict(
+        DEVICE_SUMMARY_PARAMETERS if parameters is None else parameters
+    )
     if initialize_storage:
         init_derived_result_storage(db_path)
     snapshot = capture_manual_upload_snapshot(db_path, run_id, run_dir)
@@ -326,8 +331,8 @@ def analyze_manual_upload_summary(
     identity = derived_result_identity(
         family=DEVICE_SUMMARY_FAMILY,
         analysis_version=analysis_version,
-        payload_schema_version=DEVICE_SUMMARY_SCHEMA_VERSION,
-        parameters=dict(DEVICE_SUMMARY_PARAMETERS),
+        payload_schema_version=payload_schema_version,
+        parameters=contract_parameters,
         inputs=inputs,
     )
     guard = _authority_guard(run_id, snapshot, authority)
@@ -371,8 +376,8 @@ def analyze_manual_upload_summary(
     prepared = prepare_derived_result(
         family=DEVICE_SUMMARY_FAMILY,
         analysis_version=analysis_version,
-        payload_schema_version=DEVICE_SUMMARY_SCHEMA_VERSION,
-        parameters=dict(DEVICE_SUMMARY_PARAMETERS),
+        payload_schema_version=payload_schema_version,
+        parameters=contract_parameters,
         inputs=inputs,
         payload=payload,
     )
@@ -667,12 +672,17 @@ def _collected_authority_guard(run_id: str, snapshot: dict, authority: dict):
 def analyze_collected_device_summary(
     db_path: Path, run_id: str, run_dir: Path,
     *, analysis_version: str = DEVICE_SUMMARY_VERSION,
+    payload_schema_version: int = DEVICE_SUMMARY_SCHEMA_VERSION,
+    parameters: dict | None = None,
     allow_create: bool = True,
     initialize_storage: bool = True,
     transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
     transaction_finalize: Callable[[sqlite3.Connection, bool, str], None] | None = None,
 ) -> dict:
     """Analyze a finalized SSH collection only through its verified frozen inputs."""
+    contract_parameters = dict(
+        DEVICE_SUMMARY_PARAMETERS if parameters is None else parameters
+    )
     if initialize_storage:
         init_derived_result_storage(db_path)
     snapshot = capture_collected_device_snapshot(db_path, run_id, run_dir)
@@ -685,8 +695,8 @@ def analyze_collected_device_summary(
     identity = derived_result_identity(
         family=DEVICE_SUMMARY_FAMILY,
         analysis_version=analysis_version,
-        payload_schema_version=DEVICE_SUMMARY_SCHEMA_VERSION,
-        parameters=dict(DEVICE_SUMMARY_PARAMETERS),
+        payload_schema_version=payload_schema_version,
+        parameters=contract_parameters,
         inputs=inputs,
     )
     guard = _collected_authority_guard(run_id, snapshot, authority)
@@ -725,8 +735,8 @@ def analyze_collected_device_summary(
     prepared = prepare_derived_result(
         family=DEVICE_SUMMARY_FAMILY,
         analysis_version=analysis_version,
-        payload_schema_version=DEVICE_SUMMARY_SCHEMA_VERSION,
-        parameters=dict(DEVICE_SUMMARY_PARAMETERS), inputs=inputs, payload=payload,
+        payload_schema_version=payload_schema_version,
+        parameters=contract_parameters, inputs=inputs, payload=payload,
     )
     publication = publish_derived_result(
         db_path, prepared,
