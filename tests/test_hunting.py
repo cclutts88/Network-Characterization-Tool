@@ -665,7 +665,7 @@ def test_analyze_network_control_route_search_filters_before_limiting(monkeypatc
     })
     monkeypatch.setattr(
         "app.main.analyze_device_collection",
-        lambda run_id: {"route_analysis": {"routes": routes}},
+        lambda run_id, **_kwargs: {"route_analysis": {"routes": routes}},
     )
 
     with TestClient(app) as client:

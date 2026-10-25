@@ -496,7 +496,7 @@ def collected_device_manifest_semantics(manifest: dict) -> dict:
     commands = manifest.get("commands") or []
     if not isinstance(commands, list):
         raise DeviceCollectionIntegrityError("Device collection commands must be a list")
-    return {
+    semantics = {
         "vendor": str(manifest.get("vendor") or "").lower(),
         "commands": [str(value) for value in commands],
         "history_command": str(manifest.get("history_command") or "show history"),
@@ -511,6 +511,60 @@ def collected_device_manifest_semantics(manifest: dict) -> dict:
         "output_truncated": bool(manifest.get("output_truncated")),
         "command_history_truncated": bool(manifest.get("command_history_truncated")),
     }
+    if manifest.get("command_receipt_schema_version") is not None:
+        receipts = manifest.get("command_execution_receipts") or []
+        if not isinstance(receipts, list) or not all(isinstance(item, dict) for item in receipts):
+            raise DeviceCollectionIntegrityError(
+                "Device collection command receipts must be a list of records"
+            )
+        receipt_version = int(manifest.get("command_receipt_schema_version") or 0)
+        if receipt_version != 1 or manifest.get("status") != "completed":
+            raise DeviceCollectionIntegrityError(
+                "Device collection command receipt version or state is invalid"
+            )
+        identity = {
+            "scope_id": str(manifest.get("preferred_scope_id") or ""),
+            "device_address": str(manifest.get("device_address") or ""),
+            "ssh_port": int(manifest.get("ssh_port") or 22),
+            "username": str(manifest.get("username") or ""),
+            "vendor": str(manifest.get("vendor") or "").lower(),
+        }
+        for sequence, receipt in enumerate(receipts, start=1):
+            command = str(receipt.get("command") or "")
+            source = {
+                "schema_version": 1,
+                "run_id": str(manifest.get("run_id") or ""),
+                "sequence": sequence,
+                "command": command,
+                "device_identity": identity,
+                "contact_started_at": str(manifest.get("contact_started_at") or ""),
+                "contact_completed_at": str(manifest.get("completed_at") or ""),
+            }
+            expected_id = _digest_text(_canonical_json(source))
+            if (
+                receipt.get("receipt_id") != expected_id
+                or receipt.get("run_id") != source["run_id"]
+                or receipt.get("sequence") != sequence
+                or receipt.get("device_identity") != identity
+                or receipt.get("contact_started_at") != source["contact_started_at"]
+                or receipt.get("contact_completed_at") != source["contact_completed_at"]
+                or receipt.get("execution_status")
+                != "sent_in_completed_authenticated_session"
+                or receipt.get("acknowledgement")
+                != "session_completed_command_not_individually_acknowledged"
+                or receipt.get("normalized_command") != " ".join(command.split())
+            ):
+                raise DeviceCollectionIntegrityError(
+                    "Device collection command receipt is inconsistent with its session"
+                )
+        semantics.update({
+            "command_receipt_schema_version": receipt_version,
+            "command_execution_receipts": receipts,
+            "device_identity": identity,
+            "contact_started_at": str(manifest.get("contact_started_at") or ""),
+            "contact_completed_at": str(manifest.get("completed_at") or ""),
+        })
+    return semantics
 
 
 def activate_collected_device_authority(

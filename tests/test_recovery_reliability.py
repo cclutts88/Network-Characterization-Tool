@@ -261,10 +261,10 @@ def test_failed_config_is_not_compared(error):
 
 def test_history_command_match_does_not_claim_attribution():
     result = device_configs.parse_command_history('1 show version\n2 configure terminal\n', True)
-    assert result['entries'][0]['classification'] == 'nct_collection'
+    assert result['entries'][0]['classification'] == 'possible_nct'
     assert 'unverified' in result['entries'][0]['label']
-    assert result['entries'][1]['classification'] == 'other'
-    assert result['entries'][1]['label'] == 'Not matched to an NCT collection command'
+    assert result['entries'][1]['classification'] == 'unmatched'
+    assert result['entries'][1]['label'] == 'Unmatched · no retained NCT command match'
     assert device_configs.parse_command_history('% Invalid input detected', True)['status'] == 'unavailable'
 
 
@@ -274,7 +274,7 @@ def test_custom_collection_command_is_labeled_as_nct_activity():
         True,
         nct_commands=['show platform custom-status'],
     )
-    assert result['entries'][1]['classification'] == 'nct_collection'
+    assert result['entries'][1]['classification'] == 'possible_nct'
 
 
 def test_uncached_summary_parser_preserves_command_history_line_numbers(tmp_path):

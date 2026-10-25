@@ -1262,9 +1262,13 @@ def test_latest_reachability_evidence_uses_exact_private_device_cache(monkeypatc
     analyzed = []
 
     def analyze(
-        run_id, *, include_correlations=True, read_only_verified=False,
+        run_id, *, include_correlations=True, include_command_attribution=True,
+        read_only_verified=False,
     ):
-        analyzed.append((run_id, include_correlations, read_only_verified))
+        analyzed.append((
+            run_id, include_correlations, include_command_attribution,
+            read_only_verified,
+        ))
         return {"run_id": run_id}
 
     monkeypatch.setattr(main, "analyze_device_collection", analyze)
@@ -1275,7 +1279,7 @@ def test_latest_reachability_evidence_uses_exact_private_device_cache(monkeypatc
     assert cached == [{"run_id": "usable"}, {"run_id": "upload"}]
     assert cached is not result
     assert analyzed == [
-        ("usable", False, True), ("upload", False, True),
+        ("usable", False, False, True), ("upload", False, False, True),
     ]
 
 

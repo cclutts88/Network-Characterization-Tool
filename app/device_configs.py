@@ -1508,6 +1508,46 @@ def manifest_for(plan: DeviceConfigPlan, preview: dict, status: str, **extra: ob
     return value
 
 
+def command_execution_receipts(manifest: dict, commands: Iterable[str]) -> list[dict]:
+    """Describe commands sent by one completed authenticated collection session."""
+    if manifest.get("status") != "completed":
+        return []
+    started_at = str(manifest.get("contact_started_at") or manifest.get("created_at") or "")
+    completed_at = str(manifest.get("completed_at") or "")
+    identity = {
+        "scope_id": str(manifest.get("preferred_scope_id") or ""),
+        "device_address": str(manifest.get("device_address") or ""),
+        "ssh_port": int(manifest.get("ssh_port") or 22),
+        "username": str(manifest.get("username") or ""),
+        "vendor": str(manifest.get("vendor") or "").lower(),
+    }
+    receipts = []
+    for sequence, command in enumerate(commands, start=1):
+        command_text = str(command).strip()
+        if not command_text:
+            continue
+        receipt_source = {
+            "schema_version": 1,
+            "run_id": str(manifest.get("run_id") or ""),
+            "sequence": sequence,
+            "command": command_text,
+            "device_identity": identity,
+            "contact_started_at": started_at,
+            "contact_completed_at": completed_at,
+        }
+        receipt_id = hashlib.sha256(
+            json.dumps(receipt_source, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        receipts.append({
+            **receipt_source,
+            "receipt_id": receipt_id,
+            "normalized_command": normalize_command_for_attribution(command_text),
+            "execution_status": "sent_in_completed_authenticated_session",
+            "acknowledgement": "session_completed_command_not_individually_acknowledged",
+        })
+    return receipts
+
+
 def key_preflight(key_path: str | None) -> dict:
     """Check only the analyzer-local key file; never return key material."""
     if not key_path:
@@ -1762,6 +1802,11 @@ def _finish_interactive_session(
     session.manifest["output_complete"] = (
         status == "completed" and not bool(session.manifest.get("output_truncated"))
     )
+    if status == "completed":
+        session.manifest["command_receipt_schema_version"] = 1
+        session.manifest["command_execution_receipts"] = command_execution_receipts(
+            session.manifest, session.preview.get("commands") or []
+        )
     stdout = stdout_path.read_text(errors="replace")[:200_000]
     publication_id = None
     if status != "cancelled":
@@ -2941,9 +2986,36 @@ def _history_command_value(raw_line: str) -> str:
     value = raw_line.strip()
     if not value or value.startswith("[NCT]") or re.fullmatch(r"#\d{9,}", value):
         return ""
+    value = re.sub(
+        r"^\[?(?:\d{4}-\d{2}-\d{2})[T ](?:\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?\s+",
+        "",
+        value,
+    )
     value = re.sub(r"^\s*\d+\s+", "", value)
     value = re.sub(r"^[^\s]{1,80}[>#]\s*", "", value)
     return value.strip()
+
+
+def normalize_command_for_attribution(command: str) -> str:
+    """Normalize layout only; preserve argument case and quoted values."""
+    return " ".join(str(command).strip().split())
+
+
+def _history_timestamp(raw_line: str) -> tuple[str | None, str | None]:
+    match = re.match(
+        r"^\[?(?P<value>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\]?\s+",
+        raw_line.strip(),
+    )
+    if not match:
+        return None, None
+    raw_value = match.group("value")
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return raw_value, "unparsed"
+    if parsed.tzinfo is None:
+        return parsed.isoformat(), "device_local_timezone_unknown"
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"), "absolute"
 
 
 def parse_command_history(
@@ -2951,48 +3023,73 @@ def parse_command_history(
     attempted: bool,
     nct_commands: Iterable[str] | None = None,
 ) -> dict:
-    known = _known_nct_device_commands()
+    known = {
+        normalize_command_for_attribution(value)
+        for value in _known_nct_device_commands()
+    }
     planned = {
-        " ".join(str(command).lower().split())
+        normalize_command_for_attribution(command)
         for command in (nct_commands or [])
         if str(command).strip()
     }
     known.update(planned)
-    if re.search(r"(?im)^\s*(?:%|\[NCT\]|.*(?:permission denied|command not found|no such file|syntax error|unknown command))", raw_history):
-        raw_history = ""
     entries = []
+    errors = []
+    source_sha256 = hashlib.sha256(raw_history.encode("utf-8", errors="replace")).hexdigest()
     for line_number, raw_line in enumerate(raw_history.splitlines(), start=1):
+        if re.search(
+            r"(?i)^\s*(?:%|\[NCT\]|.*(?:permission denied|command not found|no such file|syntax error|unknown command))",
+            raw_line,
+        ):
+            errors.append({"line_number": line_number, "raw_line": raw_line[:2000]})
+            continue
         command = _history_command_value(raw_line)
         if not command:
             continue
-        normalized = " ".join(command.lower().split())
-        classification = "nct_collection" if normalized in known else "other"
+        normalized = normalize_command_for_attribution(command)
+        classification = "possible_nct" if normalized in known else "unmatched"
+        observed_at, timestamp_assumption = _history_timestamp(raw_line)
         entries.append(
             {
                 "position": len(entries) + 1,
                 "line_number": line_number,
+                "raw_line": raw_line[:2000],
                 "command": command[:1000],
+                "normalized_command": normalized[:1000],
+                "observed_at": observed_at,
+                "timestamp_assumption": timestamp_assumption,
                 "classification": classification,
                 "label": (
-                    "Matches this NCT collection plan (origin unverified)"
+                    "Possible NCT · matches this collection plan; origin unverified"
                     if normalized in planned
-                    else "Matches a known NCT collection command (origin unverified)"
-                    if classification == "nct_collection"
-                    else "Not matched to an NCT collection command"
+                    else "Possible NCT · matches a known collection command; origin unverified"
+                    if classification == "possible_nct"
+                    else "Unmatched · no retained NCT command match"
                 ),
+                "attribution_basis": (
+                    "current_plan_only" if normalized in planned
+                    else "known_template_only" if normalized in known
+                    else "none"
+                ),
+                "receipt_refs": [],
             }
         )
     status = "captured" if entries else "unavailable" if attempted else "not_collected"
     return {
         "status": status,
         "attempted": attempted,
+        "source_sha256": source_sha256,
+        "parse_errors": errors,
         "entries": entries,
         "nct_command_count": sum(
-            item["classification"] == "nct_collection" for item in entries
+            item["classification"] in {"confirmed_nct", "possible_nct"} for item in entries
         ),
-        "other_command_count": sum(item["classification"] == "other" for item in entries),
+        "confirmed_nct_count": 0,
+        "possible_nct_count": sum(item["classification"] == "possible_nct" for item in entries),
+        "other_command_count": sum(item["classification"] == "unmatched" for item in entries),
+        "unmatched_count": sum(item["classification"] == "unmatched" for item in entries),
         "scope_note": (
-            "NCT labels exact command-text matches to the retained collection plan or known collection commands, but command text alone cannot establish who ran it. Unmatched entries are investigation leads, not proof of operator or adversary activity. Device history varies by platform and account and is not a replacement for centralized AAA command accounting."
+            "Possible NCT means the command text matches retained NCT activity but does not prove who ran that occurrence. Confirmed NCT requires an occurrence-level link to an authenticated NCT session. Unmatched means no defensible NCT link was found; it is not proof of unauthorized or malicious activity. Device history is not a replacement for centralized AAA command accounting."
         ),
     }
 
@@ -4456,6 +4553,11 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
         "command_history_truncated": history_truncated,
         "command_history_artifact": "command-history.txt",
     })
+    if status == "completed":
+        manifest["command_receipt_schema_version"] = 1
+        manifest["command_execution_receipts"] = command_execution_receipts(
+            manifest, preview_data.get("commands") or []
+        )
     publication_id = (
         None if status == "cancelled"
         else _promote_device_contact_files(work_dir, run_dir, fence)

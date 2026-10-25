@@ -5398,7 +5398,9 @@ def analyze_network_control_routes(
     )
     if analysis is None:
         try:
-            analysis = analyze_device_collection(run_id)
+            analysis = analyze_device_collection(
+                run_id, include_command_attribution=False,
+            )
         except DeviceCollectionDeleted:
             raise HTTPException(status_code=404, detail="Device collection was deleted") from None
         except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError) as exc:
@@ -5425,6 +5427,7 @@ def _latest_device_reachability_evidence() -> list[dict]:
                 analyses.append(analyze_device_collection(
                     run_id,
                     include_correlations=False,
+                    include_command_attribution=False,
                     read_only_verified=True,
                 ))
             except (

@@ -194,6 +194,36 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   complete suite above. The novice workflow is clear and the final independent quality
   gate is **CLEAR — DOCUMENTED DEVIATION** with the storage decision retained above.
 
+## Device command attribution — completed 2026-10-25
+
+- [x] R06 now assesses retained device command history against verified NCT command-
+  execution receipts without rewriting the original collection. Every usable history
+  occurrence is preserved and labeled **Confirmed NCT**, **Possible NCT**, or
+  **Unmatched**. Unmatched remains an attribution limit, not a claim that the command was
+  unauthorized or malicious. Matching uses the exact Network Scope and device identity,
+  command text that preserves case-sensitive arguments, compatible retained timing, and
+  one receipt per history occurrence.
+- [x] Completed authenticated collections now retain immutable dispatch receipts with the
+  scoped device identity, command sequence, session window, acknowledgement limit and
+  content identity. Failed, interrupted and cancelled sessions do not create those
+  receipts. Dynamic cross-collection assessment keeps receipt links, raw history lines,
+  source line numbers, source hashes, parsed timestamps and timezone limits separate from
+  immutable device summaries. Mixed history errors preserve the valid neighboring entries
+  and remain visible to the analyst.
+- [x] **Documented deviation retained:** command text, device identity and approximate
+  timing support only **Possible NCT**. **Confirmed NCT** requires a direct occurrence-
+  level link from device history to the authenticated NCT session. Existing evidence is
+  never upgraded by inference, and historical collections can remain Possible or
+  Unmatched indefinitely. No commands or broader collection were added to manufacture
+  confirmation. The design review and novice workflow review are **CLEAR — DOCUMENTED
+  DEVIATION**.
+- [x] Validation passed with **2,046 tests and 20 intentional skips**, all 19 browser-
+  runtime checks, receipt-tamper and identity regressions, and an isolated production
+  container. The browser workflow displayed the expected 0 Confirmed, 2 Possible, 1
+  Unmatched and 2 linked receipts, with distinct timed and untimed explanations and the
+  shared Operator Guide visible. The novice review limitation is retained: its own browser
+  surface was unavailable, so the primary agent independently completed the visual check.
+
 ## Scheduled scan incident repair — started 2026-10-23
 
 - [x] Reproduce and repair the Teams-reported startup failure converting older

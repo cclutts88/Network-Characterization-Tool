@@ -403,7 +403,7 @@ SHELL_SCRIPT = r"""
         {title:'Hunt',icon:'hunt',children:[
           {title:'Timeline',planned:true,description:'When available, Timeline will show when retained observations first appeared or changed across saved scans and device collections. Network Evidence remains the view of what the selected evidence currently reports.'},
           {href:'/hunting#huntOverview',title:'Network evidence',description:'Investigate the roster’s observed services and saved offline CVE candidates. Expand a related row to inspect references without recalculating them.'},
-          {href:'/device-analysis#activityEvidenceSection',title:'Device command history and changes',description:'Open one exact retained device collection. Review command-history text as leads, then compare collected running configuration with saved startup configuration.'}
+          {href:'/device-analysis#activityEvidenceSection',title:'Device command history and changes',description:'Open one exact retained device collection. Confirmed NCT requires a direct occurrence link; Possible NCT is compatible with retained collection activity; Unmatched means no defensible NCT link and does not mean malicious or unauthorized. Then compare collected running configuration with saved startup configuration.'}
         ]},
         {title:'Reach',icon:'reach',children:[
           {href:'/reachability#reachAssessment',title:'Path assessment',description:'Evaluate a source, destination, and service using retained routes, policy, NAT, Saved Networks, and observed hosts.'},

@@ -1080,6 +1080,15 @@ def test_network_device_analysis_has_unified_evidence_and_comparison_views():
     assert "Interfaces changed" in html
     assert "Firewall / ACL added" in html
     assert "Device command history and changes" in html
+    assert "Confirmed NCT requires a direct occurrence link" in html
+    assert "Confirmed NCT" in html
+    assert "Possible NCT" in html
+    assert "Linked receipts" in html
+    assert "A linked receipt is a retained record that NCT sent the matching command" in html
+    assert "Unmatched means no defensible NCT link was found" in html
+    assert "history-confirmed" in html
+    assert "history-possible" in html
+    assert "history-unmatched" in html
     assert 'id="loadOlderCollections"' in html
     assert "HISTORY_PAGE_SIZE=100" in html
     assert "Running and startup line comparison" in html

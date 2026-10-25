@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from app.device_configs import CONFIG_DIR, device_collection_directory
+from app.device_command_attribution import assess_command_attribution
 from app.device_collection_authority import (
     COLLECTED_DEVICE_SELECTION_CONTRACT,
     MANUAL_UPLOAD_SELECTION_CONTRACT,
@@ -36,7 +37,7 @@ router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
 
 # Increment whenever retained device evidence parsing changes so previously
 # completed pulls are re-analyzed without requiring another network collection.
-DEVICE_SUMMARY_VERSION = 3
+DEVICE_SUMMARY_VERSION = 4
 _DEVICE_STORAGE_READY: set[str] = set()
 _DEVICE_STORAGE_LOCK = threading.RLock()
 
@@ -567,6 +568,7 @@ def analyze_device_collection(
     db_path: Path | None = None,
     data_dir: Path | None = None,
     include_correlations: bool = True,
+    include_command_attribution: bool = True,
     read_only_verified: bool = False,
 ) -> dict:
     config_dir = CONFIG_DIR if config_dir is None else config_dir
@@ -702,17 +704,24 @@ def analyze_device_collection(
             "detail": "No usable port, learned-MAC, aggregation, or spanning-tree records were found. Confirm the vendor profile and rerun with the current guarded switch commands.",
         })
     command_history = summary.get("command_history") or {}
+    if include_command_attribution:
+        command_history = assess_command_attribution(
+            command_history,
+            run_id=run_id,
+            db_path=db_path,
+            history_truncated=bool(manifest.get("command_history_truncated")),
+        )
     if command_history.get("attempted") and command_history.get("status") != "captured":
         review_items.append({
             "severity": "warning", "category": "command history",
             "title": "Command history was not available",
             "detail": "NCT attempted the history command before the configuration pull, but the device returned no usable entries. Review platform history settings and centralized AAA accounting.",
         })
-    elif command_history.get("other_command_count"):
+    elif command_history.get("unmatched_count"):
         review_items.append({
             "severity": "info", "category": "command history",
-            "title": f"{command_history['other_command_count']} command(s) not matched to NCT collection activity",
-            "detail": "Review the highlighted unmatched commands as leads. Exact matches to the retained NCT collection plan or known collection commands are labeled separately, but command text alone does not prove who ran it.",
+            "title": f"{command_history['unmatched_count']} command occurrence(s) remain unmatched",
+            "detail": "Review unmatched commands as leads. Unmatched means NCT found no defensible retained link; it does not mean malicious, unauthorized, or definitely non-NCT.",
         })
     volatile_configuration = summary.get("volatile_configuration") or {}
     if volatile_configuration.get("status") == "different":
