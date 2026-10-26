@@ -74,7 +74,7 @@ await eval(`(async () => {
   storage.set(BATCH_ATTEMPT_KEY,JSON.stringify({state:'reviewed',fingerprint:batchFingerprint(base),request_token:batchRequestToken,preview:batchPreview}));
   const requests=[];
   let failConnection=true;
-  const fetch=async(_url,options)=>{requests.push(options.body);if(failConnection)throw new Error('connection lost');return{ok:true,json:async()=>({accepted_count:2,requested_count:2,batch_id:'batch-one',request_replayed:true,dispatch_pending:false,runs:[]})}};
+  const fetch=async(_url,options)=>{requests.push(options.body);if(failConnection)throw new Error('connection lost');return{ok:true,status:200,json:async()=>({contract:'nct-scan-run-batch:1',accepted_count:2,requested_count:2,batch_id:'batch-one',request_token:'scan-batch-stable-token',all_accepted:true,sequential_execution:true,request_replayed:true,dispatch_pending:false,runs:[{selection_order:1,run_id:'run-alpha'},{selection_order:2,run_id:'run-bravo'}]})}};
   let receipt=null;
   const renderBatchReceipt=data=>{receipt=data};
   const renderBatchPreview=data=>{batchPreview=data};
@@ -114,7 +114,7 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
-  async function exerciseAmbiguousResponse(response) {
+  async function exerciseResponse(response, expectUnknown=true) {
     let batchPreview={preview_digest:'digest-ambiguous',global_no_strike_revision:4,runs:[{selection_order:1}]},batchReviewInFlight=false,batchSubmitInFlight=false,batchEditorLocked=false,batchSubmissionUncertain=false,batchOperationRevision=0,batchRequestToken='scan-batch-ambiguous-token',batchPendingSubmission=null,batchSelectionOrder=['alpha','bravo'];
     let activeCollectionEnabled=true,sessionAnalyst={role:'analyst'};
     const controls=new Map(),lockedNodes=[fakeElement(),fakeElement()];
@@ -128,7 +128,7 @@ await eval(`(async () => {
     const batchPayloadBase=()=>structuredClone(base),batchFingerprint=value=>JSON.stringify(value);
     storage.set(BATCH_ATTEMPT_KEY,JSON.stringify({state:'reviewed',fingerprint:batchFingerprint(base),request_token:batchRequestToken,preview:batchPreview}));
     const fetch=async()=>response;
-    const renderBatchReceipt=()=>assert.fail('ambiguous response must not render an accepted receipt');
+    const renderBatchReceipt=()=>assert.fail('a rejected or ambiguous response must not render an accepted receipt');
     const renderBatchPreview=data=>{batchPreview=data};
     const status=()=>{};
     const renderBatchOrder=()=>{},renderNetworkScopeReview=()=>{},scheduleDraftSave=()=>{};
@@ -138,18 +138,26 @@ await eval(`(async () => {
     ${functionLine("storeBatchAttempt")}
     ${functionLine("queueReviewedBatch")}
     await queueReviewedBatch();
-    const saved=JSON.parse(storage.get(BATCH_ATTEMPT_KEY));
-    assert.equal(saved.state,'submitting');
-    assert.equal(saved.request_token,'scan-batch-ambiguous-token');
-    assert.equal(batchSubmissionUncertain,true);
-    assert.equal(batchEditorLocked,true);
-    assert.equal($('queueBatch').textContent,'Retry saved submission');
+    if (expectUnknown) {
+      const saved=JSON.parse(storage.get(BATCH_ATTEMPT_KEY));
+      assert.equal(saved.state,'submitting');
+      assert.equal(saved.request_token,'scan-batch-ambiguous-token');
+      assert.equal(batchSubmissionUncertain,true);
+      assert.equal(batchEditorLocked,true);
+      assert.equal($('queueBatch').textContent,'Retry saved submission');
+    } else {
+      assert.equal(storage.has(BATCH_ATTEMPT_KEY),false,'a validated pre-admission rejection clears the saved attempt');
+      assert.equal(batchSubmissionUncertain,false);
+      assert.equal(batchEditorLocked,false);
+      assert.equal(batchPreview,null);
+    }
   }
 
-  for (const statusCode of [502,504]) {
-    await exerciseAmbiguousResponse({ok:false,status:statusCode,json:async()=>({detail:'gateway did not confirm the result'})});
-  }
-  await exerciseAmbiguousResponse({ok:false,status:500,json:async()=>{throw new SyntaxError('malformed gateway body')}});
+  await exerciseResponse({ok:false,status:502,json:async()=>null});
+  await exerciseResponse({ok:false,status:504,json:async()=>({detail:'gateway did not confirm the result'})});
+  await exerciseResponse({ok:false,status:500,json:async()=>{throw new SyntaxError('malformed gateway body')}});
+  await exerciseResponse({ok:true,status:200,json:async()=>({})});
+  await exerciseResponse({ok:false,status:409,json:async()=>({detail:'reviewed inputs changed'})},false);
 })()`);
 
 console.log("Scan batch UI request ownership regressions passed");

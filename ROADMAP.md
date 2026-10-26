@@ -302,6 +302,9 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   IPs so operators do not confuse per-network addresses with the number of selected networks.
   The New Scan page and Guide call the retained work an **unfinished scan setup** instead of
   an unexplained "personal draft," and state plainly that saving it creates no network activity.
+  The final novice pass found the Hostname Evidence summary and server-collection grids still
+  overflowing at a 980-pixel viewport with the navigation open and Guide closed; those grids
+  now reflow before the reduced workspace reaches that width, covering both Hostname views.
 
 ## Multi-network scan queueing — started 2026-10-25
 

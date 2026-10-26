@@ -141,6 +141,7 @@ def test_hostname_page_moves_import_and_explains_zero_touch_refresh():
     assert 'id="identityFile"' in html
     assert "/api/hostnames/import" in html
     assert "/api/hostnames/select" in html
+    assert "@media(max-width:1100px){.methods,.collector-grid{grid-template-columns:1fr 1fr}" in html
     assert "/api/hostnames/select-source" in html
     assert "DHCP / lease" in html
     assert "LLDP / CDP" in html
