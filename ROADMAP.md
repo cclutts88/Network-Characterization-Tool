@@ -277,23 +277,23 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
 
 ## Whole-tool active-theme contract — strengthened 2026-10-25
 
-- [~] Every existing and future NCT workspace must inherit the analyst-selected palette
+- [x] Every existing and future NCT workspace must inherit the analyst-selected palette
   across page, panel, table, form, dialog, menu, hover control, status and Operator Guide
   surfaces. Semantic warning, success and danger states may preserve distinct meaning,
   but must remain legible and visually integrated with the selected palette.
-- [~] Theme compatibility is now a permanent completion criterion in the project
+- [x] Theme compatibility is now a permanent completion criterion in the project
   operating rules and a standing whole-tool novice-operator check. New surfaces must use
   shared theme tokens or be added to the central theme-surface registry; browser review
   must cover the default palette and at least one materially different palette, with the
   Operator Guide open and closed where it changes available space.
-- [~] The first whole-tool novice pass found remaining fixed-color surfaces in Device
+- [x] The first whole-tool novice pass found remaining fixed-color surfaces in Device
   Collections, How NCT Works, Arkime, Hunt, the multi-network selection state and Operator
   Guide controls, plus narrow-screen crowding while the Guide was open. Those surfaces now
   inherit the central palette and the shared Guide-open responsive rule collapses affected
   cards, controls and review rows before they overlap. Graphite and Halloween browser
-  checks now pass on the reported pages with no browser-console errors; independent novice
-  re-review remains the completion gate.
-- [~] Operator Guide typography is now a permanent novice-review criterion across NCT.
+  checks now pass on the reported pages with no browser-console errors; the final novice
+  re-review is **CLEAR**.
+- [x] Operator Guide typography is now a permanent novice-review criterion across NCT.
   Explanations keep normal-sized, normal-weight body text, contextual titles remain concise,
   and emphasized labels do not turn the whole explanation into a large bold block. The New
   Scan queue-order topic now uses the visible **Selected Queue Order** name, and its rows
@@ -308,25 +308,25 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
 
 ## Multi-network scan queueing — started 2026-10-25
 
-- [~] R11 will let an analyst select several active Saved Networks, choose one exact
+- [x] R11 lets an analyst select several active Saved Networks, choose one exact
   profile version and preview one separately accountable scan per network before any
   submission. A scan-name template may contain `$subnet`; NCT replaces that token with
   the Saved Network name while retaining the original name template and selected order.
   The Scan targets selector calls this **Queue Separate Scans for Multiple Networks** so
   analysts do not mistake the ordered batch for one combined multi-network scan.
-- [~] The server must validate the complete batch against the signed-in actor, current
+- [x] The server validates the complete batch against the signed-in actor, current
   Mission Environment scope, reviewed Saved Network associations, Global and run-specific
   No-Strike controls, interface, exact profile version and name limits before writing any
   run. Accepted runs enter the existing shared FIFO in the reviewed order and retain
   separate target, scope, profile, requestor and evidence records. This does not authorize
   simultaneous scanning or change the one-active-scan execution limit.
-- [~] Submission will use one actor-bound and content-bound request token so an uncertain
+- [x] Submission uses one actor-bound and content-bound request token so an uncertain
   retry returns the original batch instead of creating duplicate scans. Completion requires
   all-or-nothing creation or a durable exact accepted-run receipt, stale Saved Network,
   profile and scope conflict checks, queue-order and retry races, clear preview/result
   guidance, keyboard and narrow-screen browser checks, the complete regression suite,
   novice-operator validation and an independent quality gate.
-- [~] The first independent quality gate **HALTED FOR REVIEW** after reproducing two
+- [x] The first independent quality gate **HALTED FOR REVIEW** after reproducing two
   request-safety defects: volatile review timestamps changed an otherwise identical preview
   digest, and the browser did not own an in-flight review or submission strongly enough to
   reject stale responses and preserve an uncertain retry. The preview identity now excludes
@@ -336,8 +336,17 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   failure after commit now returns the accepted receipt with an explicit pending-dispatch
   warning instead of inviting a new batch. Ambiguous 5xx, gateway-timeout, and malformed
   server responses also preserve the exact locked request for token-safe retry; only an
-  accepted receipt or a validated client-side pre-admission rejection clears it. Focused
-  backend, runtime and UI-contract checks pass; independent re-review remains open.
+  accepted receipt or a validated client-side pre-admission rejection clears it. A valid
+  acceptance must return the exact request token, complete batch contract and one ordered
+  durable run receipt per accepted network before the browser clears its saved retry.
+- [x] Final validation: the complete Docker suite passes with **2,136 passed and 21
+  skipped**; the focused batch, authentication, UI and Hostname suite passes with **112
+  passed and one environment skip**; the executable browser-request regression passes;
+  `git diff --check` is clean; the independent gate is **CLEAR — DOCUMENTED DEVIATION**;
+  and the novice gate is **CLEAR** after Graphite/Halloween, Guide, keyboard, 980×900 and
+  browser-console checks. This milestone queues separate runs now and intentionally retains
+  one-at-a-time analyzer execution. It is development-ready only: it is not yet Range-ready,
+  mission-ready, on stable `main`, or a claim of production-scale performance.
 
 ## Device command attribution — completed 2026-10-25
 
