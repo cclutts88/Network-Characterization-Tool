@@ -110,6 +110,7 @@ from app.automated_nmap_foundation import get_automated_scan_foundation_status
 from app.derived_jobs import scan_run_job_statuses, start_derived_job_worker
 from app.scan_history_index import (
     init_scan_history_index_storage,
+    ScanHistoryCatalogChanged,
     scan_history_catalog_page,
     scan_history_group_page_from_index,
     sync_scan_history_manifest,
@@ -7735,8 +7736,22 @@ def _enrich_scan_history_runs(runs: list[dict]) -> list[dict]:
 def scan_history_group_catalog(
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    sort: Literal["alphabetical", "newest"] = Query(default="alphabetical"),
+    snapshot: str | None = Query(default=None, min_length=64, max_length=64),
 ) -> dict:
-    return scan_history_catalog_page(DB_PATH, limit=limit, offset=offset)
+    try:
+        return scan_history_catalog_page(
+            DB_PATH,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+            snapshot=snapshot,
+        )
+    except ScanHistoryCatalogChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "scan_history_catalog_changed", "message": str(exc)},
+        ) from exc
 
 
 @router.get("/scan-history-groups/{group_id}/runs")

@@ -238,6 +238,43 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   complete suite above. The novice workflow is clear and the final independent quality
   gate is **CLEAR — DOCUMENTED DEVIATION** with the storage decision retained above.
 
+## Scan History organization and ordering — completed 2026-10-25
+
+- [x] R10 makes the retained Scan History catalog explicitly sortable by **Alphabetical**
+  order, which remains the default, or **Newest activity**. The selected order must be
+  applied to the full metadata-only group catalog before paging, use deterministic group
+  identity tie-breakers, remain stable while additional catalog pages load, and be retained
+  when the analyst leaves and returns. Runs inside every exact-subnet or target group stay
+  newest-first and continue loading older records inside that same group.
+- [x] Scan History remains the only owner of retained scan browsing. It must not render
+  Profile Behavior, Active Scan, Live Discoveries or Pending Scans. The page and Operator
+  Guide will explain that current and waiting work is managed in **Active Scans**, while
+  History is a read-only starting point for retained evidence actions.
+- [x] Completion requires catalog and browser regressions with more than 100 groups, more
+  than 25 runs in one group, equal and missing sort values, catalog changes during paging,
+  delayed responses during sort changes, preserved expanded groups, keyboard operation,
+  responsive table/card headings and independent reviewer plus novice-operator gates.
+
+  Completion evidence: the isolated populated preview contained 105 exact-CIDR groups and
+  30 runs in one group. Browser checks confirmed both whole-catalog sort modes, loading the
+  remaining five groups, 25-plus-five per-group run paging, retained sort/open/load state
+  after visiting Active Scans, keyboard operation, aligned desktop tables, fully labelled
+  980 x 900 cards, an internally scrollable Operator Guide, no unrelated live/profile
+  panels, and no application console or network errors. The novice gate is **PASS**. The
+  repository gate is 2,123 passed / 20 skipped, all 19 JavaScript runtime checks passed,
+  and `git diff --check` passed. The independent quality gate is
+  **CLEAR — DOCUMENTED DEVIATION**.
+
+  Documented scale boundary: each catalog-page request currently reads and orders the full
+  metadata-only group catalog before slicing the requested page. This prevents offset pages
+  from applying conflicting local sorts, and a snapshot rejects paging after an order-
+  relevant catalog change. A disposable 1,000-group / 1,000,000-membership development
+  check took approximately 0.37-0.39 seconds per page on the development host. That is
+  accepted for this milestone, not a production-scale guarantee; indexed or keyset catalog
+  ordering remains a later optimization if Range history volume or measured latency warrants
+  it. This gate is development-ready only, not Range, mission, stable-main or production-
+  scale acceptance.
+
 ## Device command attribution — completed 2026-10-25
 
 - [x] R06 now assesses retained device command history against verified NCT command-

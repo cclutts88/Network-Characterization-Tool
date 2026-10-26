@@ -303,6 +303,164 @@ def test_scan_history_index_backfills_legacy_rows_and_pages_in_storage(tmp_path)
         assert db.execute("SELECT COUNT(*) FROM scan_history_groups").fetchone()[0] == catalog["total"]
 
 
+def test_scan_history_catalog_sorts_full_catalog_before_paging(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import scan_history_catalog_page
+
+    db_path = tmp_path / "analyzer.db"
+    for index in range(105):
+        record = scan_run(index + 1, targets=[f"10.{index}.0.0/16"])
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+
+    first = scan_history_catalog_page(
+        db_path, limit=100, offset=0, sort="alphabetical"
+    )
+    second = scan_history_catalog_page(
+        db_path,
+        limit=100,
+        offset=100,
+        sort="alphabetical",
+        snapshot=first["snapshot"],
+    )
+    group_ids = [item["group_id"] for item in [*first["groups"], *second["groups"]]]
+    assert len(group_ids) == 105
+    assert len(set(group_ids)) == 105
+    assert first["sort"] == "alphabetical"
+    assert second["has_more"] is False
+
+
+def test_scan_history_newest_activity_uses_completion_then_stable_identity(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import scan_history_catalog_page
+
+    db_path = tmp_path / "analyzer.db"
+    created_later = scan_run(1, targets=["10.20.0.0/16"])
+    created_later.update({
+        "created_at": "2026-10-20T10:00:00+00:00",
+        "completed_at": "2026-10-20T10:10:00+00:00",
+    })
+    completed_later = scan_run(2, targets=["10.10.0.0/16"])
+    completed_later.update({
+        "created_at": "2026-10-19T10:00:00+00:00",
+        "completed_at": "2026-10-21T10:10:00+00:00",
+    })
+    tied_alpha = scan_run(3, targets=["10.30.0.0/16"])
+    tied_alpha.update({
+        "created_at": "2026-10-18T10:00:00+00:00",
+        "completed_at": "2026-10-20T10:10:00+00:00",
+    })
+    for record in (created_later, completed_later, tied_alpha):
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+
+    page = scan_history_catalog_page(db_path, limit=100, offset=0, sort="newest")
+    assert [item["cidr"] for item in page["groups"]] == [
+        "10.10.0.0/16", "10.20.0.0/16", "10.30.0.0/16"
+    ]
+    assert page["groups"][0]["latest_scan_at"] == "2026-10-21T10:10:00+00:00"
+
+
+def test_scan_history_catalog_rejects_changed_snapshot(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import (
+        ScanHistoryCatalogChanged,
+        scan_history_catalog_page,
+    )
+
+    db_path = tmp_path / "analyzer.db"
+    for index in range(101):
+        record = scan_run(index + 1, targets=[f"10.{index}.0.0/16"])
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+    first = scan_history_catalog_page(db_path, limit=100, offset=0, sort="newest")
+
+    inserted = scan_run(500, targets=["192.0.2.0/24"])
+    inserted.update({
+        "created_at": "2030-01-01T00:00:00+00:00",
+        "completed_at": "2030-01-01T00:10:00+00:00",
+        "operator": "analyst", "reason": "test",
+        "originating_host": "test-host", "interface": "eth0",
+        "profile": "safe",
+    })
+    poc.insert_scan_run_manifest(inserted, db_path)
+
+    try:
+        scan_history_catalog_page(
+            db_path,
+            limit=100,
+            offset=100,
+            sort="newest",
+            snapshot=first["snapshot"],
+        )
+    except ScanHistoryCatalogChanged as exc:
+        assert "Reload the catalog" in str(exc)
+    else:
+        raise AssertionError("A changed catalog snapshot must not continue offset paging")
+
+
+def test_scan_history_newest_snapshot_tracks_completion_and_group_deletion(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import (
+        ScanHistoryCatalogChanged,
+        scan_history_catalog_page,
+    )
+
+    db_path = tmp_path / "analyzer.db"
+    records = [
+        scan_run(1, targets=["10.1.0.0/16"]),
+        scan_run(2, targets=["10.2.0.0/16"]),
+    ]
+    for record in records:
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+    first = scan_history_catalog_page(db_path, limit=1, offset=0, sort="newest")
+
+    records[0]["completed_at"] = "2031-01-01T00:00:00+00:00"
+    poc.update_scan_run_manifest(records[0], db_path)
+    try:
+        scan_history_catalog_page(
+            db_path, limit=1, offset=1, sort="newest", snapshot=first["snapshot"]
+        )
+    except ScanHistoryCatalogChanged:
+        pass
+    else:
+        raise AssertionError("A later retained completion must invalidate newest paging")
+
+    refreshed = scan_history_catalog_page(db_path, limit=1, offset=0, sort="newest")
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA foreign_keys = ON")
+        db.execute("DELETE FROM scan_runs WHERE run_id = ?", (records[1]["run_id"],))
+    try:
+        scan_history_catalog_page(
+            db_path,
+            limit=1,
+            offset=1,
+            sort="newest",
+            snapshot=refreshed["snapshot"],
+        )
+    except ScanHistoryCatalogChanged:
+        pass
+    else:
+        raise AssertionError("Deleting a group must invalidate catalog paging")
+
+
 def test_scan_history_index_tracks_manifest_updates_and_deletes(tmp_path):
     import app.poc as poc
     from app.scan_history_index import scan_history_catalog_page

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 from app.database import connect_database, initialize_once_per_database
@@ -12,12 +13,16 @@ from app.scan_history import (
 )
 
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 METADATA_EXPRESSION = (
     "json_remove(r.manifest_json, '$.artifacts', '$.commands', "
     "'$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', "
     "'$.command', '$.exact_execution_command')"
 )
+
+
+class ScanHistoryCatalogChanged(RuntimeError):
+    """Raised when a caller continues paging an outdated catalog snapshot."""
 
 
 @initialize_once_per_database
@@ -215,7 +220,10 @@ def sync_scan_history_manifest(
     resolved_run_id = str(run_id or manifest["run_id"])
     resolved_created_at = str(created_at or manifest.get("created_at") or "")
     latest_scan_at = str(
-        manifest.get("completed_at") or manifest.get("created_at") or resolved_created_at
+        manifest.get("completed_at")
+        or manifest.get("started_at")
+        or manifest.get("created_at")
+        or resolved_created_at
     )
     latest_scan_name = manifest.get("display_name") or manifest.get("name")
     host_count = manifest.get("host_count")
@@ -287,25 +295,61 @@ def reconcile_scan_history_index(db_path: Path) -> None:
         _reconcile_scan_history_index(db)
 
 
+def _catalog_snapshot(groups: list[dict], sort: str) -> str:
+    # Bind only the fields that define catalog membership and order. Progress,
+    # host counts, labels on individual runs, and local analysis state can
+    # change without creating a paging skip or duplicate.
+    identity = [
+        {
+            "group_id": item["group_id"],
+            "kind": item["kind"],
+            "name": item["name"],
+            "cidr": item["cidr"],
+            **(
+                {"latest_scan_at": item.get("latest_scan_at") or ""}
+                if sort == "newest"
+                else {}
+            ),
+        }
+        for item in groups
+    ]
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def scan_history_catalog_page(
-    db_path: Path, *, limit: int, offset: int
+    db_path: Path,
+    *,
+    limit: int,
+    offset: int,
+    sort: str = "alphabetical",
+    snapshot: str | None = None,
 ) -> dict:
+    if sort not in {"alphabetical", "newest"}:
+        raise ValueError("Scan history sort must be alphabetical or newest")
     with connect_database(db_path, read_only=True) as db:
         db.execute("BEGIN")
-        total = int(db.execute("SELECT COUNT(*) FROM scan_history_groups").fetchone()[0])
         rows = db.execute(
             """
             SELECT group_id, kind, name, cidr, description, category, tags_json,
-                   scan_count, latest_scan_at, latest_scan_name, latest_host_count
-              FROM scan_history_groups
-             ORDER BY CASE kind
-                        WHEN 'subnet' THEN 0 WHEN 'host_targets' THEN 1
-                        WHEN 'legacy_targets' THEN 2 WHEN 'missing_targets' THEN 3
-                        ELSE 99 END,
-                      name COLLATE NOCASE, cidr, group_id
-             LIMIT ? OFFSET ?
+                   scan_count,
+                   (SELECT m.latest_scan_at
+                               FROM scan_history_memberships m
+                              WHERE m.group_id = g.group_id
+                              ORDER BY m.latest_scan_at DESC, m.created_at DESC,
+                                       m.run_id DESC LIMIT 1),
+                   (SELECT m.latest_scan_name
+                               FROM scan_history_memberships m
+                              WHERE m.group_id = g.group_id
+                              ORDER BY m.latest_scan_at DESC, m.created_at DESC,
+                                       m.run_id DESC LIMIT 1),
+                   (SELECT m.host_count
+                               FROM scan_history_memberships m
+                              WHERE m.group_id = g.group_id
+                              ORDER BY m.latest_scan_at DESC, m.created_at DESC,
+                                       m.run_id DESC LIMIT 1)
+              FROM scan_history_groups g
             """,
-            (limit, offset),
         ).fetchall()
     groups = [
         {
@@ -317,9 +361,47 @@ def scan_history_catalog_page(
         }
         for row in rows
     ]
+    kind_order = {
+        "subnet": 0,
+        "host_targets": 1,
+        "legacy_targets": 2,
+        "missing_targets": 3,
+    }
+    alphabetical_key = lambda item: (
+        kind_order.get(item["kind"], 99),
+        str(item.get("name") or "").casefold(),
+        str(item.get("cidr") or ""),
+        item["group_id"],
+    )
+    groups.sort(key=alphabetical_key)
+    if sort == "newest":
+        # All current timestamps use an ISO-8601 UTC representation, which is
+        # lexically sortable. Missing legacy values stay at the end, and the
+        # complete alphabetical identity is the deterministic tie-breaker.
+        groups.sort(key=lambda item: str(item.get("latest_scan_at") or ""), reverse=True)
+        timestamp_groups: dict[str, list[dict]] = {}
+        for item in groups:
+            timestamp_groups.setdefault(str(item.get("latest_scan_at") or ""), []).append(item)
+        groups = [
+            item
+            for timestamp in sorted(timestamp_groups, reverse=True)
+            for item in sorted(timestamp_groups[timestamp], key=alphabetical_key)
+        ]
+    current_snapshot = _catalog_snapshot(groups, sort)
+    if snapshot is not None and snapshot != current_snapshot:
+        raise ScanHistoryCatalogChanged(
+            "Scan history changed while more groups were loading. Reload the catalog."
+        )
+    total = len(groups)
+    page = groups[offset : offset + limit]
     return {
-        "groups": groups, "total": total, "limit": limit, "offset": offset,
-        "has_more": offset + len(groups) < total,
+        "groups": page,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort,
+        "snapshot": current_snapshot,
+        "has_more": offset + len(page) < total,
     }
 
 

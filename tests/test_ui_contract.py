@@ -278,7 +278,11 @@ def test_scan_history_offers_durable_local_saved_analysis_work():
     assert "Math.random().toString(36).slice(2)" in html
     assert "request_token:analysisRequestToken()" in html
     assert "Load 25 older scans for this subnet" in html
-    assert "/api/scan-history-groups?limit=100&offset=${offset}" in html
+    assert "new URLSearchParams({limit:String(limit),offset:String(offset),sort:sortMode})" in html
+    assert "params.set('snapshot',snapshot)" in html
+    assert 'id="historySort"' in html
+    assert "Alphabetical (default)" in html
+    assert "Newest activity" in html
     assert "/runs?limit=25${suffix}" in html
     assert "Saved scope handoff needs correction" in html
     assert "data-scope-handoff-correct" in html
@@ -292,7 +296,7 @@ def test_scan_history_offers_durable_local_saved_analysis_work():
     assert "!requested.has(run.run_id)||byId.has(run.run_id)" in html
     assert "revision!==historyRefreshRevision" in html
     assert "historyGroupWindow(group.group_id,loadedTargets.get(group.group_id)||25)" in html
-    assert "historyCatalogWindow(catalogTarget)" in html
+    assert "historyCatalogWindow(catalogTarget,requestedSort)" in html
     assert "item.open=openGroups.has(id)" in html
     assert "Also covers:" in html
 
@@ -710,7 +714,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "selectedSavedNetworkIds" in html
     assert "/api/saved-networks" in html
     assert "/api/scan-runs-grouped?limit=25&offset=0" in html
-    assert "Load more subnet groups" in html
+    assert "Load more groups in this order" in html
+    assert "Load next groups by ${orderLabel}" in html
     assert "Every retained scan stays inside the stable dropdown for its exact recorded subnet" in html
     assert "Status / historical run name" in html
     assert "Executed target / recorded context" in html
@@ -730,7 +735,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "@container (max-width:900px)" in html
     assert "Executed target / recorded context'" in html
     assert 'class="history-group"' in html
-    assert "localeCompare(NCTScanReference.humanize(b.name||'')" in html
+    assert "localeCompare(NCTScanReference.humanize(b.name||'')" not in html
+    assert "const groups=[...historyGroups],orderLabel=" in html
     assert "function newestFirst(runs)" in html
     assert 'data-compare="' in html
     assert "candidateSavedName" in html

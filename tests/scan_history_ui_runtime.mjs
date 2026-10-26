@@ -104,7 +104,7 @@ await eval(`(async () => {
     ],has_more:false,next_cursor:null},
     {group_id:'h',scan_count:1,runs:[{run_id:'h-stays',status:'completed'}],has_more:false,next_cursor:null}
   ];
-  let historyBusy=false,historyJobTimer=null,historyRefreshRevision=0,historyCatalogOffset=0,historyCatalogHasMore=false,presetHistoryRuns=[];
+  let historyBusy=false,historyJobTimer=null,historyRefreshRevision=0,historyCatalogOffset=0,historyCatalogHasMore=false,historyCatalogSnapshot=null,historyLoadRevision=0,historyViewRevision=0,historySortMode='alphabetical',presetHistoryRuns=[];
   const requested=[];
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{disabled:false,innerHTML:''});return controls.get(id)};
@@ -121,7 +121,7 @@ await eval(`(async () => {
     if(url.startsWith('/api/scan-history-groups?'))return {groups:[
       {group_id:'g',scan_count:2},
       {group_id:'h',scan_count:2}
-    ],has_more:false};
+    ],has_more:false,snapshot:'catalog-a'};
     if(url==='/api/scan-runs-grouped?limit=25&offset=0')return [];
     if(url.startsWith('/api/scan-history-groups/g/runs'))return {
       group:{group_id:'g',scan_count:2},total:2,has_more:false,next_cursor:null,
@@ -157,7 +157,7 @@ await eval(`(async () => {
     runs:index===100?Array.from({length:30},(_,run)=>({run_id:'old-'+run,status:'completed'})):[],
     has_more:false,next_cursor:null
   }));
-  let historyGroups=initialGroups,historyBusy=false,historyJobTimer=null,historyRefreshRevision=0,historyCatalogOffset=101,historyCatalogHasMore=false,presetHistoryRuns=[];
+  let historyGroups=initialGroups,historyBusy=false,historyJobTimer=null,historyRefreshRevision=0,historyCatalogOffset=101,historyCatalogHasMore=false,historyCatalogSnapshot=null,historyLoadRevision=0,historyViewRevision=0,historySortMode='alphabetical',presetHistoryRuns=[];
   const requested=[];
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{disabled:false,innerHTML:''});return controls.get(id)};
@@ -171,12 +171,12 @@ await eval(`(async () => {
   const setInterval=()=>1;
   const historyJSON=async url=>{
     requested.push(url);
-    if(url==='/api/scan-history-groups?limit=100&offset=0')return {
+    if(url==='/api/scan-history-groups?limit=100&offset=0&sort=alphabetical')return {
       groups:Array.from({length:100},(_,index)=>({group_id:'g'+index,scan_count:1})),
-      total:101,has_more:true
+      total:101,has_more:true,snapshot:'catalog-a'
     };
-    if(url==='/api/scan-history-groups?limit=1&offset=100')return {
-      groups:[{group_id:'g100',scan_count:30}],total:101,has_more:false
+    if(url==='/api/scan-history-groups?limit=1&offset=100&sort=alphabetical&snapshot=catalog-a')return {
+      groups:[{group_id:'g100',scan_count:30}],total:101,has_more:false,snapshot:'catalog-a'
     };
     if(url==='/api/scan-runs-grouped?limit=25&offset=0')return [];
     if(url.startsWith('/api/scan-history-groups/g100/runs'))return {
@@ -194,8 +194,40 @@ await eval(`(async () => {
   assert.ok(oldestLoaded);
   assert.equal(oldestLoaded.runs.length,30);
   assert.equal(oldestLoaded.runs[0].run_id,'fresh-0');
-  assert.ok(requested.includes('/api/scan-history-groups?limit=1&offset=100'));
+  assert.ok(requested.includes('/api/scan-history-groups?limit=1&offset=100&sort=alphabetical&snapshot=catalog-a'));
   assert.deepEqual([...renderedOpenGroups],['g100']);
+})()`);
+
+await eval(`(async () => {
+  let historyGroups=[],historyBusy=false,historyJobTimer=null,historyRefreshRevision=0,historyCatalogOffset=0,historyCatalogHasMore=false,historyCatalogSnapshot=null,historyLoadRevision=0,historyViewRevision=0,historySortMode='alphabetical',presetHistoryRuns=[];
+  let resolveAlphabetical;
+  const controls=new Map();
+  const $=id=>{if(!controls.has(id))controls.set(id,{disabled:false,innerHTML:''});return controls.get(id)};
+  const currentOpenHistoryGroups=()=>new Set();
+  const renderHistory=()=>{};
+  const scheduleHistoryJobRefresh=()=>{};
+  const esc=value=>String(value);
+  const clearTimeout=()=>{};
+  const clearInterval=()=>{};
+  const setInterval=()=>1;
+  const historyJSON=async url=>{
+    if(url==='/api/scan-runs-grouped?limit=25&offset=0')return [];
+    if(url.includes('sort=alphabetical'))return new Promise(resolve=>{resolveAlphabetical=resolve});
+    if(url.includes('sort=newest'))return {groups:[{group_id:'newest-group',scan_count:1}],total:1,has_more:false,snapshot:'newest-snapshot'};
+    throw new Error('Unexpected URL '+url);
+  };
+  ${handler("historyCatalogWindow")}
+  ${handler("historyGroupWindow")}
+  ${handler("loadHistory")}
+  const delayed=loadHistory(true,true);
+  historySortMode='newest';
+  const newest=loadHistory(true,true);
+  await newest;
+  resolveAlphabetical({groups:[{group_id:'alphabetical-group',scan_count:1}],total:1,has_more:false,snapshot:'alphabetical-snapshot'});
+  await delayed;
+  assert.deepEqual(historyGroups.map(group=>group.group_id),['newest-group']);
+  assert.equal(historyCatalogSnapshot,'newest-snapshot');
+  assert.equal(controls.get('historySort').disabled,false);
 })()`);
 
 await eval(`(async () => {
