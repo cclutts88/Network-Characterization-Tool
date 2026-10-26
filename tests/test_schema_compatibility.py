@@ -883,7 +883,10 @@ def test_phase5_package_preflight_refuses_version_five_source(
     _create_verified_version_five_fixture(db_path)
     running_build_id, running_build_commit = SUPPORTED_V5_RANGE_BUILDS[0]
 
-    with pytest.raises(SchemaCompatibilityError, match="requires exact schema version 6"):
+    with pytest.raises(
+        SchemaCompatibilityError,
+        match="requires exact schema version 6.*exact Phase 4 bridge package first",
+    ):
         schema_upgrade_preflight(
             db_path,
             expected_build_id=running_build_id,

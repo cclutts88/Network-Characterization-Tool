@@ -363,9 +363,14 @@ def schema_upgrade_preflight(
             required_source_version is not None
             and schema_version != required_source_version
         ):
+            bridge = (
+                " Use the exact Phase 4 bridge package first, then run this upgrade again."
+                if required_source_version == 6 and schema_version == 5
+                else ""
+            )
             raise SchemaCompatibilityError(
                 f"This replacement package requires exact schema version {required_source_version}; "
-                f"the saved data is version {schema_version}."
+                f"the saved data is version {schema_version}.{bridge}"
             )
         if contract_version != schema_version or schema_version not in (4, 5, 6):
             raise SchemaCompatibilityError(
