@@ -206,6 +206,50 @@ def test_traceroute_hops_become_observed_map_relationships():
     assert any(edge["relation"] == "trace_hop" for edge in edges.values())
 
 
+def test_map_services_preserve_observed_address_and_source_when_aliases_merge():
+    nodes, edges = {}, {}
+    wan_source = {
+        "kind": "automated_nmap",
+        "label": "WAN observation",
+        "timestamp": "2026-10-25T10:00:00+00:00",
+        "url": "/api/scan-runs/wan/artifacts/xml",
+    }
+    lan_source = {
+        "kind": "automated_nmap",
+        "label": "LAN observation",
+        "timestamp": "2026-10-25T10:05:00+00:00",
+        "url": "/api/scan-runs/lan/artifacts/xml",
+    }
+    add_analysis_hosts(
+        nodes,
+        {"hosts": [{"ip": "198.51.100.1", "ports": [{
+            "port": 443, "protocol": "tcp", "service": "https",
+            "product": "nginx", "version": "1.26",
+        }]}]},
+        wan_source,
+        edges,
+    )
+    add_analysis_hosts(
+        nodes,
+        {"hosts": [{"ip": "10.0.0.1", "ports": [{
+            "port": 443, "protocol": "tcp", "service": "https",
+            "product": "admin portal", "version": "4",
+        }]}]},
+        lan_source,
+        edges,
+    )
+    firewall = ensure_ip_node(nodes, "10.0.0.1", role="firewall")
+    merge_device_alias(nodes, edges, firewall, "198.51.100.1", {})
+
+    services = sorted(firewall["services"], key=lambda item: item["address"])
+    assert [(item["address"], item["port"], item["product"]) for item in services] == [
+        ("10.0.0.1", 443, "admin portal"),
+        ("198.51.100.1", 443, "nginx"),
+    ]
+    assert services[0]["sources"][0]["label"] == "LAN observation"
+    assert services[1]["sources"][0]["url"] == "/api/scan-runs/wan/artifacts/xml"
+
+
 def test_docker_bridge_gateway_stays_in_path_but_out_of_mission_map(monkeypatch):
     monkeypatch.setattr(
         "app.network_map.container_default_gateway", lambda: "172.17.0.1"

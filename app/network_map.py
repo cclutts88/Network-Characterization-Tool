@@ -134,6 +134,53 @@ def add_source(node: dict, source: dict) -> None:
         node["sources"].append(source)
 
 
+def service_signature(service: dict) -> tuple:
+    return (
+        service.get("address"),
+        service.get("port"),
+        service.get("protocol"),
+        service.get("service"),
+        service.get("product"),
+        service.get("version"),
+    )
+
+
+def merge_service_observation(
+    destination: list[dict],
+    service: dict,
+    *,
+    default_address: str | None = None,
+    source: dict | None = None,
+) -> None:
+    observation = dict(service)
+    if default_address and not observation.get("address"):
+        observation["address"] = default_address
+    references = [dict(item) for item in observation.pop("sources", []) if isinstance(item, dict)]
+    if isinstance(source, dict):
+        references.append(dict(source))
+    existing = next((item for item in destination if service_signature(item) == service_signature(observation)), None)
+    if existing is None:
+        observation["sources"] = []
+        destination.append(observation)
+        existing = observation
+    retained = existing.setdefault("sources", [])
+    known = {
+        (item.get("kind"), item.get("label"), item.get("timestamp"), item.get("url"))
+        for item in retained
+        if isinstance(item, dict)
+    }
+    for reference in references:
+        signature = (
+            reference.get("kind"),
+            reference.get("label"),
+            reference.get("timestamp"),
+            reference.get("url"),
+        )
+        if signature not in known:
+            retained.append(reference)
+            known.add(signature)
+
+
 def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
     node_id = f"ip:{ip}"
     node = nodes.setdefault(
@@ -172,12 +219,12 @@ def ensure_ip_node(nodes: dict[str, dict], ip: str, **values: object) -> dict:
     if isinstance(source, dict):
         add_source(node, source)
     for service in values.get("services") or []:
-        signature = (service.get("port"), service.get("protocol"), service.get("service"))
-        if signature not in {
-            (item.get("port"), item.get("protocol"), item.get("service"))
-            for item in node["services"]
-        }:
-            node["services"].append(service)
+        merge_service_observation(
+            node["services"],
+            service,
+            default_address=ip,
+            source=source if isinstance(source, dict) else None,
+        )
     return node
 
 
@@ -497,6 +544,7 @@ def add_analysis_hosts(
         for port in host.get("ports") or []:
             services.append(
                 {
+                    "address": ip,
                     "port": port.get("port"),
                     "protocol": port.get("protocol"),
                     "service": port.get("service"),
@@ -1354,12 +1402,11 @@ def merge_device_alias(nodes: dict[str, dict], edges: dict[tuple[str, str, str],
     for source in alias.get("sources") or []:
         add_source(device, source)
     for service in alias.get("services") or []:
-        signature = (service.get("port"), service.get("protocol"), service.get("service"))
-        if signature not in {
-            (item.get("port"), item.get("protocol"), item.get("service"))
-            for item in device.get("services") or []
-        }:
-            device["services"].append(service)
+        merge_service_observation(
+            device.setdefault("services", []),
+            service,
+            default_address=alias_ip,
+        )
     for field in ("hostname", "mac", "os"):
         if not device.get(field) and alias.get(field):
             device[field] = alias[field]

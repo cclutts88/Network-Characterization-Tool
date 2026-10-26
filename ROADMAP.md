@@ -348,6 +348,50 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   one-at-a-time analyzer execution. It is development-ready only: it is not yet Range-ready,
   mission-ready, on stable `main`, or a claim of production-scale performance.
 
+## Reach-to-Map exact-path and retained-service presentation — started 2026-10-25
+
+- [x] Reconcile R02–R05 against the current foundation interface and complete one
+  bounded Map/table presentation pass. R02 binds Map services to the exact retained
+  interface/address where supported and leaves unmatched observations explicit. R03
+  aligns every Hunt port/protocol with its matching service/product fingerprint. R04
+  keeps all separate-port services for one Hunt IP in one visible host group and never
+  splits that host group across pages. In the Dataset-filtered Hunt view, the host and
+  subnet identity appear once across the grouped service lines so separate ports cannot
+  be mistaken for unrelated hosts. R05 places the Hunt Network Evidence quick filter
+  beside that table's page-size and paging controls without weakening its advanced
+  evidence filters; Current Network retains its own equivalent inventory controls.
+- [x] Correct the operator-reproduced Reach-to-Map focus defect: when only **Primary**
+  is selected, Map must highlight only the exact selected path, its supported routing
+  objects, and the endpoint subnet actually supported by that path. A subnet or link
+  reached only by broad node matching must remain dim. This is a separate confirmed
+  Map defect included in the same bounded pass because it touches the same presentation
+  surface; it does not redefine the Hunt-specific R03–R05 requirements.
+- [x] When the analyst intentionally selects more than one retained path, each path must
+  retain a distinct accessible color from Reach through Map and its legend. A shared
+  segment must be labeled and rendered as shared instead of silently inheriting the
+  first matching path's color. Single-path and multi-path behavior require executable
+  browser regressions plus default and alternate-theme checks with the Operator Guide
+  open and closed at normal and narrow widths.
+- [x] Independent-review corrections: the first gate reproduced two additional ambiguity
+  cases. A selected router address could inherit every subnet attached to that router,
+  and duplicate retained interface addresses could be assigned by interface list order.
+  Reach-to-Map now follows a router endpoint only into the exact retained or address-
+  matching subnet. Map service attribution now requires one unambiguous retained
+  interface match, or one explicit retained interface match; otherwise it says the
+  interface/address is not established. Executable adversarial regressions preserve both
+  decisions. The final independent gate is **CLEAR — DOCUMENTED DEVIATION**.
+- [x] Operator validation: in the populated isolated preview, selecting the Web
+  Applications dataset shows `10.77.0.10` once as one host group, states **3 matching
+  services on this host**, and keeps `80/tcp` nginx, `443/tcp` Apache and `8080/tcp`
+  Jetty on their own aligned lines. The novice gate is **CLEAR** after quick-filter,
+  clear-filter, paging, 980×900, Graphite/Halloween, Guide open/closed, Map grouping,
+  Current Network controls and browser-console checks.
+- [x] Validation: the complete Docker suite passes with **2,138 passed and 21 skipped**;
+  both executable Map/Hunt runtime suites pass; focused independent verification passes
+  **121 Python tests**; whitespace checks are clean. This milestone is development-ready
+  only. It is not yet Range-ready, mission-ready, available on stable `main`, or a claim
+  that ambiguous evidence has been resolved automatically.
+
 ## Device command attribution — completed 2026-10-25
 
 - [x] R06 now assesses retained device command history against verified NCT command-

@@ -191,6 +191,32 @@ await eval(`(() => {
 })()`);
 
 await eval(`(() => {
+  const esc=value=>String(value??'').replace(/[&<>"']/g,character=>character);
+  ${handler("serviceObservedAddress")}
+  ${handler("interfaceObservedAddresses")}
+  ${handler("serviceExposureGroup")}
+  ${handler("serviceEvidenceMarkup")}
+  ${handler("renderServiceGroups")}
+  const node={kind:'device',ip:'192.0.2.1',addresses:['192.0.2.1','10.0.0.1'],interfaces:[{name:'wan0',zone:'WAN',addresses:['192.0.2.1/24']},{name:'lan0',zone:'LAN',addresses:['10.0.0.1/24']}]};
+  const services=[
+    {address:'192.0.2.1',port:443,protocol:'tcp',service:'https',product:'nginx',version:'1.26',sources:[{label:'WAN scan',url:'/source/wan'}]},
+    {address:'10.0.0.1',port:443,protocol:'tcp',service:'https',product:'admin portal',version:'4',sources:[{label:'LAN scan'}]},
+    {address:'172.16.0.1',port:22,protocol:'tcp',service:'ssh',product:'OpenSSH'},
+  ];
+  const html=renderServiceGroups(node,services);
+  assert.match(html,/WAN · 192\.0\.2\.1/);
+  assert.match(html,/LAN · 10\.0\.0\.1/);
+  assert.match(html,/Interface \\/ address not established/);
+  assert.match(html,/Observed address 172\.16\.0\.1/);
+  assert.match(html,/WAN scan/);
+  assert.equal((html.match(/443\\/tcp/g)||[]).length,2,'the same port on two interfaces remains two attributable rows');
+  assert.ok(html.indexOf('443/tcp')<html.indexOf('nginx'),'the port and matching fingerprint are rendered in one row');
+  const ambiguousNode={kind:'device',addresses:['10.1.0.1'],interfaces:[{name:'red',zone:'RED',addresses:['10.1.0.1/24']},{name:'blue',zone:'BLUE',addresses:['10.1.0.1/24']}]};
+  assert.equal(serviceExposureGroup(ambiguousNode,{address:'10.1.0.1',port:443}).kind,'unmatched','duplicate retained interface addresses cannot be attributed by array order');
+  assert.equal(serviceExposureGroup(ambiguousNode,{address:'10.1.0.1',interface:'blue',port:443}).label,'BLUE · 10.1.0.1','an explicit retained interface resolves an otherwise ambiguous address');
+})()`);
+
+await eval(`(() => {
   let detailsSuppressed=true,toggleForce=null,syncForce=null;
   let focused=false,focusOptions=null;
   const missionRole={focus(options){focused=true;focusOptions=options}};
@@ -211,6 +237,86 @@ await eval(`(() => {
   assert.equal(syncForce,true);
   assert.equal(focused,true,'opening details moves focus to the declared-role explanation');
   assert.deepEqual(focusOptions,{preventScroll:true});
+})()`);
+
+await eval(`(() => {
+  const reachPathColors={equal_cost:'#73bfff'},reachPathPalette=['#57d6bf','#73bfff','#f4c95d','#c49aff','#ff9f68','#ff7b7b','#35d0f2','#9ad86a'];
+  const makeClassList=()=>({values:new Set(),toggle(name,enabled){if(enabled)this.values.add(name);else this.values.delete(name)},contains(name){return this.values.has(name)}});
+  const makeItem=dataset=>({dataset:{...dataset},classList:makeClassList(),style:{values:new Map(),setProperty(name,value){this.values.set(name,value)},removeProperty(name){this.values.delete(name)}},attributes:{},setAttribute(name,value){this.attributes[name]=value},removeAttribute(name){delete this.attributes[name]}});
+  const nodeItems=['ip:10.1.0.50','subnet:10.1.0.0/24','ip:10.0.0.1','ip:10.0.0.2','subnet:10.2.0.0/24'].map(node=>makeItem({node}));
+  const edges=[
+    makeItem({edgeSource:'ip:10.1.0.50',edgeTarget:'subnet:10.1.0.0/24',edgeRelation:'subnet_membership'}),
+    makeItem({edgeSource:'ip:10.0.0.1',edgeTarget:'subnet:10.1.0.0/24',edgeRelation:'directly_connected'}),
+    makeItem({edgeSource:'ip:10.0.0.1',edgeTarget:'subnet:10.2.0.0/24',edgeRelation:'directly_connected'}),
+    makeItem({edgeSource:'ip:10.0.0.2',edgeTarget:'subnet:10.1.0.0/24',edgeRelation:'directly_connected'}),
+  ];
+  const document={querySelectorAll(selector){if(selector==='[data-node]')return nodeItems;if(selector==='[data-group-host]')return[];if(selector==='[data-edge-source]')return edges;return[]}};
+  const requestAnimationFrame=callback=>callback(),fitBounds=()=>{},boundsForIds=()=>({});
+  const currentPositions=new Map(nodeItems.map(item=>[item.dataset.node,{}]));
+  let reachFocusPendingFit=false;
+  const topology={
+    nodes:[
+      {id:'ip:10.1.0.50',ip:'10.1.0.50',label:'Endpoint'},
+      {id:'subnet:10.1.0.0/24',network:'10.1.0.0/24',label:'Assessed subnet'},
+      {id:'ip:10.0.0.1',ip:'10.0.0.1',label:'Core A'},
+      {id:'ip:10.0.0.2',ip:'10.0.0.2',label:'Core B'},
+      {id:'subnet:10.2.0.0/24',network:'10.2.0.0/24',label:'Unrelated subnet'},
+    ],
+    edges:[
+      {source:'ip:10.1.0.50',target:'subnet:10.1.0.0/24',relation:'subnet_membership'},
+      {source:'ip:10.0.0.1',target:'subnet:10.1.0.0/24',relation:'directly_connected'},
+      {source:'ip:10.0.0.1',target:'subnet:10.2.0.0/24',relation:'directly_connected'},
+      {source:'ip:10.0.0.2',target:'subnet:10.1.0.0/24',relation:'directly_connected'},
+    ],
+  };
+  const path=id=>({id,role:'equal_cost',label:id==='a'?'Primary retained path':'Alternate retained path',query:{source:'Internet',destination:'10.1.0.50'},destination_network:{cidr:'10.1.0.0/24'},path:[{kind:'route',label:'10.1.0.0/24'}],retained_objects:{selected_path_routes:[{network:'10.1.0.0/24',device:id==='a'?'Core A':'Core B',device_address:id==='a'?'10.0.0.1':'10.0.0.2'}]}});
+  let reachFocus={result:{query:{source:'Internet'},active_path_id:'a',path_options:[path('a'),path('b')]},visible_path_ids:['a']};
+  const reachFocusNodeIds=new Set(),reachFocusPathNodeIds=new Map(),reachFocusNodeColors=new Map(),reachFocusEdgeColors=new Map();
+  ${handler("reachPathOptions", false, true)}
+  ${handler("reachPathColorAssignments", false, true)}
+  ${handler("reachPathColor", false, true)}
+  ${handler("visibleReachPathOptions", false, true)}
+  ${handler("addReachFocusValue", false, true)}
+  ${handler("ipv4InCidr", false, true)}
+  ${handler("resolveReachResultNodes", false, true)}
+  ${handler("addReachFocusColor", false, true)}
+  ${handler("resolveReachFocusNodes", false, true)}
+  ${handler("reachPathMatchesEdge", false, true)}
+  ${handler("applyReachFocus", false, true)}
+
+  applyReachFocus();
+  assert.equal(reachFocusNodeIds.has('subnet:10.2.0.0/24'),false,'a router-adjacent unrelated subnet is not part of the selected path');
+  assert.equal(nodeItems[4].classList.contains('reach-focus-dim'),true);
+  assert.equal(edges[2].classList.contains('reach-focus-dim'),true,'the unrelated subnet link remains dim');
+  assert.equal(edges[0].classList.contains('reach-focus-match'),true,'the exact endpoint membership remains highlighted');
+  assert.equal(edges[1].classList.contains('reach-focus-match'),true,'the selected router branch remains highlighted');
+  assert.equal(edges[3].classList.contains('reach-focus-dim'),true,'the unselected alternate router branch remains dim');
+
+  reachFocus.visible_path_ids=['a','b'];
+  applyReachFocus();
+  const colors=reachPathColorAssignments();
+  assert.notEqual(colors.get('a'),colors.get('b'),'two selected same-role paths receive distinct colors');
+  assert.equal(edges[0].classList.contains('reach-focus-shared'),true,'a common endpoint segment is explicitly marked shared');
+  assert.equal(edges[1].classList.contains('reach-focus-shared'),false);
+  assert.equal(edges[3].classList.contains('reach-focus-shared'),false);
+  assert.notEqual(edges[1].style.values.get('--reach-focus-color'),edges[3].style.values.get('--reach-focus-color'));
+
+  reachFocus.visible_path_ids=[];
+  assert.deepEqual(visibleReachPathOptions(),[],'an explicitly empty path selection remains empty');
+  reachFocus.visible_path_ids=['stale-path'];
+  assert.deepEqual(visibleReachPathOptions(),[],'a stale path id cannot broaden the selection');
+
+  topology.nodes.push({id:'device:edge',kind:'device',label:'Edge router',addresses:['10.1.0.1','10.2.0.1']});
+  topology.edges.push(
+    {source:'device:edge',target:'subnet:10.1.0.0/24',relation:'subnet_membership'},
+    {source:'device:edge',target:'subnet:10.2.0.0/24',relation:'subnet_membership'},
+  );
+  const routerEndpointPath={query:{source:'10.1.0.1',destination:'10.1.0.50'},destination_network:{cidr:'10.1.0.0/24'},path:[],retained_objects:{}};
+  reachFocus={result:routerEndpointPath,visible_path_ids:[]};
+  const routerEndpointResolved=resolveReachResultNodes(routerEndpointPath);
+  assert.equal(routerEndpointResolved.nodes.has('device:edge'),true,'the exact queried router address resolves the router endpoint');
+  assert.equal(routerEndpointResolved.nodes.has('subnet:10.1.0.0/24'),true,'the exact queried router address retains its supported subnet');
+  assert.equal(routerEndpointResolved.nodes.has('subnet:10.2.0.0/24'),false,'another subnet on the same multi-interface router stays unrelated');
 })()`);
 
 console.log("Network Map expanded spacing runtime regression passed");

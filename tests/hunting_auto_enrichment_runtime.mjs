@@ -252,10 +252,15 @@ await eval(`(() => {
   const findingTransportMarkup=item=>'<code>'+esc(item.port||'-')+'/'+esc(item.protocol||'-')+'</code>';
   const findingMatchKey=item=>[item.host_key,item.protocol,item.port,item.service,item.product,item.version].join('|');
   const renderMatchBasis=item=>esc((item.match_basis||[]).join('; '));
+  const pager={systemPageSummary:{textContent:''},systemPagePrevious:{disabled:false},systemPageNext:{disabled:false}};
+  const $=id=>pager[id];
+  let systemPage=1,systemPageSize=1;
   ${syncHandler("findingGroupKey")}
   ${syncHandler("findingGroups")}
   ${syncHandler("findingRowMarkup")}
+  ${syncHandler("servicePairGrid")}
   ${syncHandler("renderFindingSummaries")}
+  ${syncHandler("systemPageSlice")}
   const findings=[
     {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Web',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:80,service:'http',product:'nginx',version:'1.24',match_basis:['port']},
     {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Web',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:80,service:'http',product:'Apache',version:'2.4',match_basis:['product']},
@@ -265,16 +270,31 @@ await eval(`(() => {
   ];
   const summary=renderFindingSummaries(findings);
   assert.equal((summary.match(/<tr class="finding-summary-row"/g)||[]).length,3,'unkeyed retained rows must remain separate rather than merging by IP or hostname');
-  for(const row of summary.split('<tr class="finding-summary-row"').slice(1))assert.equal((row.match(/<td>/g)||[]).length,8,'every combined row must match the eight visible headings');
+  for(const row of summary.split('<tr class="finding-summary-row"').slice(1)){
+    assert.equal((row.match(/<th /g)||[]).length,1,'every combined row keeps one visible host heading');
+    assert.equal((row.match(/<td(?: |>)?/g)||[]).length,6,'the aligned service cell spans two of the eight visible headings');
+    assert.match(row,/colspan="2"/);
+  }
   assert.match(summary,/nginx/);
   assert.match(summary,/Apache/,'different product facts on the same port must both remain visible');
-  assert.ok((summary.match(/80\\/tcp/g)||[]).length>=3,'the transport list shows the port once and each same-port service fingerprint repeats it');
-  assert.match(summary,/Each service fingerprint repeats its port/);
+  assert.equal((summary.match(/80\\/tcp/g)||[]).length,2,'each retained same-port fingerprint keeps one aligned transport row');
+  assert.match(summary,/Ports and service fingerprints stay aligned/);
   assert.match(summary,/data-hostkey="scope-a\|10\.0\.0\.10"/);
+  const groups=findingGroups(findings),firstPage=systemPageSlice(groups);
+  assert.equal(firstPage.length,1);
+  assert.equal(firstPage[0].length,3,'all separate-port services for the first Hunt IP remain in one paged host group');
+  assert.match(pager.systemPageSummary.textContent,/host groups 1–1 of 3/);
   const detailed=findingRowMarkup(findings[0]);
-  assert.equal((detailed.match(/<td>/g)||[]).length,8,'every filtered row must match the eight visible headings');
+  assert.equal((detailed.match(/<th /g)||[]).length,1,'every filtered row keeps one visible host heading');
+  assert.equal(detailed.split('<td').length-1,7,'every standalone filtered row still covers the eight visible headings');
   assert.match(detailed,/finding-match-slot/);
   assert.ok(detailed.indexOf('finding-match-slot')>detailed.indexOf('nginx'),'the CVE cell must follow the service and product cell');
+  const groupedDetailed=firstPage[0].map((item,index)=>findingRowMarkup(item,index,firstPage[0].length)).join('');
+  assert.equal((groupedDetailed.match(/class="finding-row /g)||[]).length,3,'filtered services remain on separate table lines');
+  assert.equal(groupedDetailed.split('<strong>10.0.0.10</strong>').length-1,1,'a filtered host identity is shown once for its grouped services');
+  assert.equal((groupedDetailed.match(/rowspan="3"/g)||[]).length,2,'host and subnet identity span the filtered service group');
+  assert.equal((groupedDetailed.match(/data-host-continuation="true"/g)||[]).length,2,'later service lines are explicitly marked as the same host group');
+  assert.match(groupedDetailed,/3 matching services on this host/);
 })()`);
 
 console.log("Hunt saved candidate runtime regressions passed");

@@ -329,7 +329,10 @@ def test_active_task_workspace_cannot_be_collapsed_from_its_page_header():
 def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
     assert "--nct-surface-subtle:color-mix(" in SHELL_SCRIPT
     for selector in (
+        ".finding-summary-row th",
         ".finding-summary-row td",
+        ".service-pair-transport",
+        ".service-exposure-group",
         ".lfa-threshold-control",
         ".progress-track",
         ".os-review-state",
@@ -351,7 +354,7 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
         ".contract",
     ):
         assert selector in SHELL_SCRIPT
-    assert ":is(.finding-summary-row td,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
+    assert ":is(.finding-summary-row th,.finding-summary-row td,.service-pair-transport,.service-exposure-group,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
     assert ":is(.nav a,.source-links a,.reach-shortcut){background:var(--nct-control)!important" in SHELL_SCRIPT
     assert ":is(input,select,textarea,option,th){background:var(--nct-background)!important" in SHELL_SCRIPT
     assert ":is(input[type=checkbox],input[type=radio],input[type=range]){accent-color:var(--nct-accent)}" in SHELL_SCRIPT
@@ -386,7 +389,7 @@ def test_operator_guide_typography_stays_subordinate_and_readable():
 
 def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     html = hunting_page().body.decode()
-    assert ".finding-summary-row td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
+    assert ".finding-summary-row :is(th,td){background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
     assert html.count('data-nct-table-mode="contained"') == 2
     assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
@@ -1387,11 +1390,14 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert '<details class="panel" id="networkFiltersPanel" data-workspace-card="network-filters" open>' not in html
     assert '<details class="panel" data-workspace-card="network-overview">' in html
     assert '<details class="panel" data-workspace-card="network-overview" open>' not in html
-    assert 'id="huntQuickSearch" class="panel hunt-quick-search"' in html
-    assert "repeat(auto-fit,minmax(min(100%,420px),1fr))" in html
+    assert 'id="huntQuickSearch" class="hunt-quick-search-control"' in html
+    assert html.index('id="huntQuickSearch"') < html.index('id="systemPageSize"')
+    assert html.index('id="systemPageSize"') < html.index('id="systemPagePrevious"')
+    assert "service-pair-grid" in html
+    assert "grid-template-columns:minmax(110px,.65fr) minmax(220px,1.35fr)" in html
     assert "Loading the newest completed scan for each network scope" in html
     assert "Loading retained network evidence" in html
-    assert html.index('id="search"') < html.index('id="networkFiltersPanel"')
+    assert html.index('id="networkFiltersPanel"') < html.index('id="systemsPanel"') < html.index('id="search"')
     assert "search:['Quick filter hosts and services'" in SHELL_SCRIPT
     assert 'id="activeFilterSummary"' in html
     assert 'id="searchsploitFilterSummary"' in html
@@ -1425,6 +1431,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "max-width:1600px" not in html
     assert "body.nct-guide-open #systemsPanel .table-wrap thead th" not in html
     assert 'aria-label="Hunt capability evidence table"' in html
+    assert "[...row.cells].reduce((total,cell)=>total+Number(cell.colSpan||1),0)" in html
     assert ".table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent))" in SHELL_SCRIPT
     assert "scroll inside the table to see every column while keeping its headings in view" in html
     assert "function setSystemView()" in html
@@ -1449,16 +1456,20 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "renderMatchBasis(item)" in html
     assert "if(!(item.evidence_states||[]).includes('inferred'))return[]" in html
     assert 'id="findingSummaryRows"' in html
-    assert "renderFindingSummaries(data.findings||[])" in html
+    assert "renderFindingSummaries(visible.flat())" in html
     assert "activeSystemView==='inventory'" not in html
     assert 'id="systemPageSize"' in html
     assert 'id="systemPagePrevious"' in html
     assert 'id="systemPageNext"' in html
     assert 'id="systemPageSummary"' in html
-    assert "function systemPageSlice(items)" in html
+    assert "function systemPageSlice(items,noun='host groups')" in html
     assert "function itemMatches(item)" in html
     assert "renderFindingSummaries(visible.flat())" in html
-    assert "findings=(current.findings||[]).filter" in html
+    assert "matching=(current.findings||[]).filter" in html
+    assert "groups=findingGroups(matching),visible=systemPageSlice(groups)" in html
+    assert "group.map((item,index)=>findingRowMarkup(item,index,group.length))" in html
+    assert 'data-host-continuation="true"' in html
+    assert "matching service${groupSize===1?'':'s'} on this host" in html
     assert "Hunt rows per page" in SHELL_SCRIPT
     assert "Filters apply to the complete loaded evidence before NCT chooses the page" in SHELL_SCRIPT
     assert "function anyHuntFilterActive()" in html
@@ -1466,9 +1477,9 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "content-visibility:auto" in html
     assert "finding${Number(item.finding_count||0)===1?'':'s'}" in html
     assert "capability classification${group.length===1?'':'s'} across" in html
-    assert "Select a Dataset badge to filter, or use Network filters to show one classification per row." in html
+    assert "Ports and service fingerprints stay aligned inside this host group." in html
     assert "Combined view · one entry per IP with all ports visible." in html
-    assert "Filtered view · individual matching findings." in html
+    assert "Filtered view · individual matching findings kept together by host." in html
     assert "function osIdentity(item)" in html
     assert "item.os_inference?.evidence" in html
     assert "os-inferred-label" in html
@@ -1533,7 +1544,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert ".finding-match-slot,.finding-host-match-slot,.host-cve-slot{min-width:0;max-width:100%}" in html
     assert "#capabilityView table{min-width:1440px;table-layout:fixed}" in html
     assert "#capabilityView th:nth-child(7),#capabilityView td:nth-child(7){width:360px}" in html
-    assert "function findingRowMarkup(item)" in html
+    assert "function findingRowMarkup(item,groupIndex=0,groupSize=1)" in html
     assert "function findingGroupKey(item,index)" in html
     assert "configureCveFilters" in html
     assert "applySearchSploitFilters" in html
@@ -1899,6 +1910,8 @@ def test_reachability_results_can_open_a_temporary_map_focus():
     assert 'id="reachFocusPanel"' in map_html
     assert 'id="exitReachFocus"' in map_html
     assert "function resolveReachFocusNodes" in map_html
+    assert "function ipv4InCidr" in map_html
+    assert "endpointSubnetIds.has(edge.target)" in map_html
     assert "function applyReachFocus" in map_html
     assert "reach-focus-match" in map_html
     assert "reach-focus-dim" in map_html
@@ -1914,10 +1927,10 @@ def test_reachability_paths_have_color_key_and_visibility_toggles():
 
     assert 'id="pathOptions"' in reach_html
     assert "function renderPathOptions" in reach_html
-    assert "Only the active path is shown by default" in reach_html
+    assert "Only the assessed path is shown by default" in reach_html
     assert "Selections carry to Map" in reach_html
     assert "Show all paths" in reach_html
-    assert "Active only" in reach_html
+    assert "Assessed path only" in reach_html
     assert "data-path-action" in reach_html
     assert "Show only this path on Map" not in reach_html
     assert "visible_path_ids" in reach_html
@@ -1927,12 +1940,17 @@ def test_reachability_paths_have_color_key_and_visibility_toggles():
     assert 'id="reachPathKey"' in map_html
     assert "function visibleReachPathOptions" in map_html
     assert "reachPathColors" in map_html
+    assert "reachPathPalette" in map_html
+    assert "function reachPathColorAssignments" in map_html
     assert "reach-path-toggle" in map_html
     assert "Show all paths" in map_html
-    assert "Active only" in map_html
+    assert "Assessed path only" in map_html
     assert "function setReachPathVisibility" in map_html
     assert "--reach-focus-color" in map_html
     assert "reachFocusPathNodeIds" in map_html
+    assert "reach-focus-shared" in map_html
+    assert "Shared by selected paths" in map_html
+    assert "data-edge-relation" in map_html
 
 
 def test_primary_navigation_follows_the_operator_workflow():
@@ -2025,6 +2043,20 @@ def test_network_map_surfaces_mac_arp_pcap_and_offline_oui_evidence():
     assert "infrastructure_count" in html
     assert "observed_count" in html
     assert "collapseTransitSegments" in html
+
+
+def test_network_map_groups_services_by_observed_interface_or_explicit_unmatched_state():
+    html = network_map_page().body.decode()
+    assert "Open services by interface / address" in html
+    assert "function serviceExposureGroup" in html
+    assert "addressMatches.length===1" in html
+    assert "explicitMatches.length===1" in html
+    assert "Interface / address not established" in html
+    assert "cannot confidently name the exposing interface" in html
+    assert "Port / protocol" in html
+    assert "Service / product fingerprint" in html
+    assert "service.sources" in html
+    assert ".service-exposure-table{min-width:680px;table-layout:fixed}" in html
 
 
 def test_map_gap_prepares_existing_scan_builder_without_direct_network_contact():
@@ -2714,6 +2746,10 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'value="last">Last observed</option>' in html
     assert 'id="networkHostRows"' in html
     assert 'id="networkPageSize"' in html
+    assert 'class="network-workflow" aria-label="Inventory organization controls"' in html
+    assert 'class="network-table-controls" aria-label="Host Inventory table controls"' in html
+    assert html.index('id="networkSearch"') < html.index('id="networkPageSize"')
+    assert html.index('id="networkPageSize"') < html.index('id="networkPrevious"')
     assert "renderNetworkInventory" in html
     assert "networkEvidenceDetails" in html
     assert "Evidence and history" in html
