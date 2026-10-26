@@ -5920,9 +5920,9 @@ Dated implementation records are retained in their original order. This record i
 completed work, work in progress, validation, deviations and deployment limitations.
 
 
-### Phase 5 Range transfer candidate — started 2026-10-25
+### Phase 5 Range transfer candidate — completed 2026-10-25
 
-- [~] Seal the exact foundation checkpoint as an air-gapped Range package with the
+- [x] Seal the exact foundation checkpoint as an air-gapped Range package with the
   NCT image, Caddy image, checksums, package manifest, release receipt, installation,
   upgrade, recovery and rollback helpers, and the Arkime connector setup material.
 - [x] Compatibility discovery: package preparation found that the installed
@@ -5946,10 +5946,30 @@ completed work, work in progress, validation, deviations and deployment limitati
   returned `CLEAR — DOCUMENTED DEVIATION` after independently exercising startup and
   restart from the historical fixture with network access disabled. That clearance
   covers the versioned compatibility correction, not deployment on the Range.
-- [ ] Complete exact-image fresh and retained-data startup plus restart checks,
-  browser/API smoke, package extraction/checksum/script checks,
-  independent review and novice-operator review. Record exact image, commit, archive
-  digest and package status here before calling the package locally ready for transfer.
+- [x] Exact-image and transfer validation completed for build
+  `0.16.0-range-test-20261025-phase5-r1`. The application image was built from
+  `be92fb78e938adc3fced581629d4609ac0a43f6a`; the packaged guides and helpers were
+  sealed at `120a50ef86c70679258482de6fe5aba6963f6b90`. The NCT image ID is
+  `sha256:e28add6f985925c19a73c61876c710a61cbfc18111f257a39f58c2989372f658`.
+  Fresh start, ordinary restart, exact `phase4-r5` upgrade to schema 7, post-upgrade
+  restart and checksum-matched rollback restoration all passed. A schema-5 source was
+  refused with the required exact-bridge instruction.
+- [x] Browser and package acceptance completed locally. Mission Environment, Active
+  Scans, Arkime, Hunt Network Evidence and System Health rendered from the exact image
+  without browser-console errors. The novice operator gate is CLEAR. The final
+  independent package gate is `CLEAR — DOCUMENTED DEVIATION` after checking release
+  identifiers, rollback guidance, 32 manifest entries, 19 shell helpers, five Python
+  helpers and the extracted archive.
+- [x] Transfer artifact:
+  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip`, 98,001,433 bytes,
+  SHA-256 `562f5e8b00295eb0bd2f5430833041de4042f2f42eebec504e9cd44303ef83c3`.
+  The nested offline image archive is 98,760,192 bytes with SHA-256
+  `a41b30bd5a365095c1828fddb98a57c726a8039f3a8cc10da055ca9c03a2e70c`.
+  A fresh extraction retained one package root and 33 files; all manifest, nested-image,
+  script-syntax, helper-parse and embedded-tag checks passed.
+- Delivery status: locally verified transfer candidate, ready for the operator to copy
+  into the isolated Range. It is not yet Range accepted, mission ready or available on
+  `main`; those labels require installation and acceptance checks on the target.
 
 
 ### Unified Mission Environment collection context — completed 2026-10-25
