@@ -3919,9 +3919,20 @@ def _scan_batch_preview_digest(
                 "profile_id": manifest["profile_id"],
                 "profile_version": manifest["profile_version"],
                 "profile_settings": manifest["profile_settings"],
-                "no_strike_submission": manifest["no_strike_submission"],
-                "network_scope_context": manifest.get("network_scope_context"),
-                "mission_environment_review": manifest.get("mission_environment_review"),
+                "no_strike_submission": {
+                    key: value for key, value in manifest["no_strike_submission"].items()
+                    if key != "certified_at"
+                },
+                "network_scope_context": {
+                    key: value
+                    for key, value in (manifest.get("network_scope_context") or {}).items()
+                    if key != "recorded_at"
+                },
+                "mission_environment_review": {
+                    key: value
+                    for key, value in (manifest.get("mission_environment_review") or {}).items()
+                    if key != "certified_at"
+                },
                 "scope_hosts_total": manifest["progress"]["scope_hosts_total"],
             }
             for index, (_plan, manifest, network) in enumerate(prepared, start=1)
@@ -4199,7 +4210,17 @@ def launch_scan_run_batch(
             )
     # A retry after commit but before dispatch still reaches this idempotent
     # dispatcher, so accepted work cannot remain stranded solely by a lost response.
-    dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+    try:
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+        result["dispatch_pending"] = False
+    except Exception:
+        # Admission is already durable. Return the accepted receipt instead of
+        # turning a dispatcher wake-up failure into an ambiguous submission.
+        result["dispatch_pending"] = True
+        result["dispatch_warning"] = (
+            "The batch was accepted, but the analyzer dispatcher did not wake up; "
+            "Active Scans or scan recovery can resume the retained queue."
+        )
     if replayed:
         result["request_replayed"] = True
     return result

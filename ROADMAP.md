@@ -286,6 +286,22 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   shared theme tokens or be added to the central theme-surface registry; browser review
   must cover the default palette and at least one materially different palette, with the
   Operator Guide open and closed where it changes available space.
+- [~] The first whole-tool novice pass found remaining fixed-color surfaces in Device
+  Collections, How NCT Works, Arkime, Hunt, the multi-network selection state and Operator
+  Guide controls, plus narrow-screen crowding while the Guide was open. Those surfaces now
+  inherit the central palette and the shared Guide-open responsive rule collapses affected
+  cards, controls and review rows before they overlap. Graphite and Halloween browser
+  checks now pass on the reported pages with no browser-console errors; independent novice
+  re-review remains the completion gate.
+- [~] Operator Guide typography is now a permanent novice-review criterion across NCT.
+  Explanations keep normal-sized, normal-weight body text, contextual titles remain concise,
+  and emphasized labels do not turn the whole explanation into a large bold block. The New
+  Scan queue-order topic now uses the visible **Selected Queue Order** name, and its rows
+  distinguish the Saved Network, CIDR and scope from the generated run name. Batch previews
+  label each row's address count as target IPs after exclusions versus originally requested
+  IPs so operators do not confuse per-network addresses with the number of selected networks.
+  The New Scan page and Guide call the retained work an **unfinished scan setup** instead of
+  an unexplained "personal draft," and state plainly that saving it creates no network activity.
 
 ## Multi-network scan queueing — started 2026-10-25
 
@@ -293,6 +309,8 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   profile version and preview one separately accountable scan per network before any
   submission. A scan-name template may contain `$subnet`; NCT replaces that token with
   the Saved Network name while retaining the original name template and selected order.
+  The Scan targets selector calls this **Queue Separate Scans for Multiple Networks** so
+  analysts do not mistake the ordered batch for one combined multi-network scan.
 - [~] The server must validate the complete batch against the signed-in actor, current
   Mission Environment scope, reviewed Saved Network associations, Global and run-specific
   No-Strike controls, interface, exact profile version and name limits before writing any
@@ -305,6 +323,16 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   profile and scope conflict checks, queue-order and retry races, clear preview/result
   guidance, keyboard and narrow-screen browser checks, the complete regression suite,
   novice-operator validation and an independent quality gate.
+- [~] The first independent quality gate **HALTED FOR REVIEW** after reproducing two
+  request-safety defects: volatile review timestamps changed an otherwise identical preview
+  digest, and the browser did not own an in-flight review or submission strongly enough to
+  reject stale responses and preserve an uncertain retry. The preview identity now excludes
+  display-only timestamps, the editor locks and versions every request, stale responses are
+  ignored, and an uncertain submission keeps the exact actor/content-bound retry until the
+  server returns the durable accepted receipt or a definite rejection. A dispatcher wake
+  failure after commit now returns the accepted receipt with an explicit pending-dispatch
+  warning instead of inviting a new batch. Focused backend, runtime and UI-contract checks
+  pass; the complete suite and independent re-review remain open.
 
 ## Device command attribution — completed 2026-10-25
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from app.database import connect_database
+from app.collection_safety_setup import record_collection_safety_review
 from app.network_scopes import create_network_scope
 from app.poc import (
     ScanRunBatchPreviewRequest,
@@ -30,6 +32,16 @@ def _reviewed_batch(tmp_path, *, count=3, template="Mission $subnet"):
     scope = create_network_scope(
         db_path, label="Mission", created_by="admin", reason="Reviewed mission context"
     )
+    safety = record_collection_safety_review(
+        db_path,
+        scope_id=scope["scope_id"],
+        expected_scope_version=scope["version"],
+        expected_no_strike_revision=0,
+        empty_no_strike_reviewed=True,
+        reviewed_by="admin",
+        reason="Reviewed exact scope and empty Global No-Strike before testing",
+    )
+    assert safety["ready"] is True
     selections = []
     networks = []
     for index in range(count):
@@ -131,6 +143,19 @@ def test_preview_and_atomic_submit_preserve_explicit_order_and_profile(tmp_path,
     ]
     assert len({item["profile_version"] for item in manifests}) == 1
     assert len(dispatches) == 1
+
+
+def test_unchanged_real_safety_review_survives_human_preview_delay(tmp_path, monkeypatch):
+    db_path, _networks, _request, _preview, submit = _reviewed_batch(tmp_path)
+    monkeypatch.setattr("app.poc.dispatch_next_queued_run", lambda **_kwargs: None)
+
+    time.sleep(1.1)
+    result = launch_scan_run_batch(
+        submit, db_path=db_path, data_dir=tmp_path / "data", interfaces={"eth0"}
+    )
+
+    assert result["accepted_count"] == 3
+    assert len(_run_rows(db_path)) == 3
 
 
 def test_retry_replays_same_runs_and_changed_content_conflicts(tmp_path, monkeypatch):
@@ -255,10 +280,11 @@ def test_committed_batch_can_be_recovered_when_dispatch_response_is_lost(tmp_pat
         "app.poc.dispatch_next_queued_run",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("dispatcher unavailable")),
     )
-    with pytest.raises(RuntimeError, match="dispatcher unavailable"):
-        launch_scan_run_batch(
-            submit, db_path=db_path, data_dir=tmp_path / "data", interfaces={"eth0"}
-        )
+    accepted = launch_scan_run_batch(
+        submit, db_path=db_path, data_dir=tmp_path / "data", interfaces={"eth0"}
+    )
+    assert accepted["dispatch_pending"] is True
+    assert "accepted" in accepted["dispatch_warning"]
     assert len(_run_rows(db_path)) == 3
 
     monkeypatch.setattr("app.poc.dispatch_next_queued_run", lambda **_kwargs: None)

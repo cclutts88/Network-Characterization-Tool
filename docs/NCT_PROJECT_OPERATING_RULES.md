@@ -125,6 +125,11 @@ Routine implementation details do not require constant updates. Prioritize notif
   browser review must exercise at least the default palette and one materially different
   palette. Semantic warning, success and danger meaning may retain distinct contrast, but
   must remain readable and visually integrated with the selected palette.
+- Treats Operator Guide typography as a standing whole-tool check: explanations use
+  normal-sized, normal-weight body text; contextual titles stay short and subordinate to
+  the page; labels may be emphasized without turning the explanation into a large bold
+  block. Review includes wrapped titles, dense controls, hover or focus changes, resizing
+  and the selected theme at narrow widths.
 - Reports exact pages and visible reproductions to the primary agent and remains
   read-only unless the user explicitly changes that role.
 

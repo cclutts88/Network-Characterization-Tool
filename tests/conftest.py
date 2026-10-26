@@ -53,6 +53,8 @@ def bypass_collection_safety_gate(monkeypatch):
 @pytest.fixture(autouse=True)
 def keep_legacy_tests_focused_on_their_original_contract(request):
     """Only the dedicated setup suite exercises the new global prerequisite."""
-    if request.node.path.name != "test_collection_safety_setup.py":
+    if request.node.path.name not in {
+        "test_collection_safety_setup.py", "test_scan_run_batch.py",
+    }:
         request.getfixturevalue("bypass_collection_safety_gate")
     yield

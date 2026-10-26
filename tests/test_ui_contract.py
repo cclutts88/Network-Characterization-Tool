@@ -339,6 +339,16 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
         ".map-layout-completeness",
         ".delete-dialog",
         ".network-dialog",
+        ".profile-manager",
+        ".quick-links a",
+        ".status-card",
+        ".storage-card",
+        ".truth-card",
+        ".action-card",
+        ".phase",
+        ".callout",
+        ".dataset-preview",
+        ".contract",
     ):
         assert selector in SHELL_SCRIPT
     assert ":is(.finding-summary-row td,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
@@ -346,6 +356,32 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
     assert ":is(input,select,textarea,option,th){background:var(--nct-background)!important" in SHELL_SCRIPT
     assert ":is(input[type=checkbox],input[type=radio],input[type=range]){accent-color:var(--nct-accent)}" in SHELL_SCRIPT
     assert ":is(fieldset,.scenario-stage,.scenario-flow-context,.scenario-check,.ordered-rules){border-color:var(--nct-line)!important" in SHELL_SCRIPT
+    assert "body.nct-shell main #batchSelectionCount{background:var(--nct-surface-raised)!important" in SHELL_SCRIPT
+    assert "#nct-operator-guide :is(button,.button-link){background:var(--nct-control)!important" in SHELL_SCRIPT
+
+
+def test_open_operator_guide_reflows_narrowed_workspaces():
+    assert "@media(min-width:851px) and (max-width:1400px)" in SHELL_SCRIPT
+    assert "body.nct-shell.nct-guide-open main :is(.grid,.cards,.methods,.collector-grid,.controls,.import-grid,.collection-upload" in SHELL_SCRIPT
+    assert "body.nct-shell.nct-guide-open main .batch-network-choices{grid-template-columns:minmax(0,1fr)!important}" in SHELL_SCRIPT
+    assert "body.nct-shell.nct-guide-open main :is(.batch-order-row,.batch-preview-row){grid-template-columns:36px minmax(0,1fr)!important" in SHELL_SCRIPT
+    assert "body.nct-shell.nct-guide-open main :is(.batch-order-row,.batch-preview-row)>:nth-child(n+3){grid-column:2!important}" in SHELL_SCRIPT
+
+
+def test_operator_guide_typography_stays_subordinate_and_readable():
+    html = operator_page().body.decode()
+
+    assert "#nct-operator-guide h3{margin:0 0 9px;font-size:16px;font-weight:700;line-height:1.35}" in SHELL_SCRIPT
+    assert "#nct-operator-guide p{margin:0 0 14px;color:var(--nct-muted);font-size:13px;font-weight:400;line-height:1.55}" in SHELL_SCRIPT
+    assert "['Selected queue order','Choose at least two Saved Networks" in SHELL_SCRIPT
+    assert "<h3>Selected Queue Order</h3>" in html
+    assert 'class="batch-row-label">Generated run name</span>' in html
+    assert 'class="batch-run-name">${esc(generatedBatchName(item)' in html
+    assert "target IPs after exclusions · ${Number(row.requested_address_count).toLocaleString()} requested" in html
+    assert "saveDraft:['Save unfinished scan setup'" in SHELL_SCRIPT
+    assert "A personal draft preserves preparation work" not in SHELL_SCRIPT
+    assert '>Save unfinished setup</button>' in html
+    assert "target IP count after exclusions, and original requested IP count before queueing" in SHELL_SCRIPT
 
 
 def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
@@ -2029,7 +2065,7 @@ def test_map_gap_prepares_existing_scan_builder_without_direct_network_contact()
 def test_scan_builder_has_reviewed_atomic_saved_network_batch_workflow():
     html = operator_page().body.decode()
 
-    assert '<option value="batch">Queue one scan per Saved Network</option>' in html
+    assert '<option value="batch">Queue Separate Scans for Multiple Networks</option>' in html
     assert 'id="batchNetworkChoices"' in html
     assert 'id="batchOrderPanel"' in html
     assert 'id="reviewBatch"' in html
