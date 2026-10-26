@@ -532,6 +532,91 @@ class ScanRunRequest(ScanRunPlan):
     timeout_seconds: int = Field(default=2700, ge=10, le=3600)
 
 
+class ScanBatchNetworkSelection(BaseModel):
+    """One explicitly ordered Saved Network reviewed by the browser."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    saved_network_id: str = Field(min_length=1, max_length=64)
+    expected_updated_at: str = Field(min_length=1, max_length=64)
+    expected_association_id: str | None = Field(default=None, max_length=64)
+    expected_association_revision: int | None = Field(default=None, ge=1)
+
+    @field_validator(
+        "saved_network_id", "expected_updated_at", "expected_association_id"
+    )
+    @classmethod
+    def clean_selection_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("Batch Saved Network fields cannot be blank")
+        return cleaned
+
+
+class ScanRunBatchPreviewRequest(BaseModel):
+    """A bounded ordered request used for preview and atomic batch admission."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_token: str = Field(min_length=16, max_length=128)
+    operator: str = Field(min_length=1, max_length=100)
+    created_by: str | None = Field(default=None, max_length=100)
+    executed_by: str | None = Field(default=None, max_length=100)
+    name_template: str = Field(min_length=1, max_length=100)
+    reason: str = Field(
+        default="NCT ordered multi-network scan batch initiated through the operator workspace",
+        max_length=500,
+    )
+    originating_host: str = Field(min_length=1, max_length=255)
+    interface: str = Field(min_length=1, max_length=64)
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: int = Field(ge=1)
+    selections: list[ScanBatchNetworkSelection] = Field(min_length=2, max_length=50)
+    reviewed_mission_scopes: list[ReviewedMissionScope] = Field(default_factory=list)
+    no_strike: list[str] = Field(default_factory=list)
+    capture: Literal[True] = True
+    timeout_seconds: int = Field(default=2700, ge=10, le=3600)
+
+    @field_validator(
+        "request_token", "operator", "name_template", "originating_host",
+        "interface", "profile_id",
+    )
+    @classmethod
+    def clean_batch_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("Batch fields cannot be blank")
+        return cleaned
+
+    @field_validator("created_by", "executed_by")
+    @classmethod
+    def clean_batch_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("reason")
+    @classmethod
+    def clean_batch_reason(cls, value: str) -> str:
+        cleaned = value.strip()
+        return cleaned or "NCT ordered multi-network scan batch initiated through the operator workspace"
+
+    @field_validator("interface")
+    @classmethod
+    def validate_batch_interface(cls, value: str) -> str:
+        if not INTERFACE_RE.fullmatch(value):
+            raise ValueError("Interface must be a simple local interface name")
+        return value
+
+
+class ScanRunBatchRequest(ScanRunBatchPreviewRequest):
+    preview_digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    expected_global_no_strike_revision: int = Field(ge=0)
+
+
 class DeleteConfirmation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2686,158 +2771,177 @@ def insert_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
         sync_scan_history_manifest(db, manifest)
 
 
+def _insert_reviewed_scan_run_on_connection(
+    db: sqlite3.Connection,
+    manifest: dict,
+    plan: ScanRunPlan,
+    *,
+    audit_event: str | None = None,
+    audit_details: str = "Submitted to the shared analyzer queue",
+    scheduled_chunk_claim: tuple[str, int, WorkLease] | None = None,
+) -> None:
+    """Recheck and retain one run using the caller's write transaction."""
+    reviewed = [item.model_dump() for item in plan.reviewed_scope_associations]
+    mission_reviewed = [item.model_dump() for item in plan.reviewed_mission_scopes]
+    if plan.scheduled and plan.schedule_id:
+        schedule_row = db.execute(
+            "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
+            (plan.schedule_id,),
+        ).fetchone()
+        if schedule_row is None:
+            raise MissionEnvironmentConflict("The saved schedule is no longer available")
+        schedule = json.loads(schedule_row[0])
+        if scheduled_chunk_claim is not None:
+            occurrence_row = db.execute(
+                """SELECT schedule_id, definition_version, definition_digest
+                     FROM scan_schedule_occurrences WHERE occurrence_id = ?""",
+                (scheduled_chunk_claim[0],),
+            ).fetchone()
+            if occurrence_row is None or tuple(occurrence_row) != (
+                plan.schedule_id, *definition_identity(schedule)[:2]
+            ):
+                raise WorkLeaseConflict(
+                    "The schedule definition no longer matches its frozen occurrence"
+                )
+        resolve_reviewed_scope_context(
+            db,
+            saved_network_ids=list(schedule.get("saved_network_ids") or []),
+            manual_targets=list(schedule.get("manual_targets") or []),
+            reviewed_associations=list(
+                schedule.get("reviewed_scope_associations") or []
+            ),
+        )
+        context = resolve_schedule_scope_context_in_transaction(
+            db, plan.schedule_id
+        )
+        # Preserve the reviewed selection as provenance, not execution
+        # targets. Feeding IDs back into the generic builder would expand
+        # this chunk to the whole Saved Network. The final contact check
+        # must use the same reviewed associations rather than an empty
+        # selection that would silently replace inherited scope with None.
+        for field in (
+            "saved_network_ids", "saved_networks", "manual_targets",
+            "reviewed_scope_associations", "reviewed_mission_scopes",
+        ):
+            manifest[field] = list(schedule.get(field) or [])
+        mission_reviewed = list(schedule.get("reviewed_mission_scopes") or [])
+        manifest["target_selection"] = {
+            "saved_networks": manifest["saved_networks"],
+            "manual_targets": manifest["manual_targets"],
+        }
+    else:
+        context = resolve_reviewed_scope_context(
+            db,
+            saved_network_ids=manifest.get("saved_network_ids") or [],
+            manual_targets=manifest.get("manual_targets") or [],
+            reviewed_associations=reviewed,
+        )
+    _setup, context = bind_collection_scope_context_on_connection(
+        db,
+        context=context,
+        saved_network_ids=list(manifest.get("saved_network_ids") or []),
+    )
+    mission_review = resolve_collection_mission_review(
+        db,
+        saved_network_ids=manifest.get("saved_network_ids") or [],
+        manual_targets=manifest.get("manual_targets") or [],
+        reviewed_scopes=mission_reviewed,
+        collection_scope_id=(context or {}).get("scope_id"),
+    )
+    manifest["collection_safety_setup"] = _setup["review"]
+    prior_context = manifest.get("network_scope_context")
+    if (
+        isinstance(context, dict)
+        and isinstance(prior_context, dict)
+        and all(
+            context.get(key) == prior_context.get(key)
+            for key in ("scope_id", "scope_label", "scope_version", "sources")
+        )
+        and prior_context.get("recorded_at")
+    ):
+        # Admission validates the reviewed scope decision;
+        # it does not create a new decision when every reviewed input is
+        # unchanged. Keep the original evidence-context time stable.
+        context["recorded_at"] = prior_context["recorded_at"]
+    manifest["network_scope_context"] = context
+    manifest["network_scope_status"] = (
+        "inherited" if context is not None else "unscoped"
+    )
+    manifest["mission_environment_review"] = mission_review
+    db.execute(
+        """
+        INSERT INTO scan_runs (
+            run_id, created_at, status, operator_name, reason,
+            originating_host, interface_name, profile, manifest_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            manifest["run_id"], manifest["created_at"], manifest["status"],
+            manifest["operator"], manifest["reason"],
+            manifest["originating_host"], manifest["interface"],
+            manifest["profile"], json.dumps(manifest, sort_keys=True),
+        ),
+    )
+    if scheduled_chunk_claim is not None:
+        occurrence_id, chunk_number, lease = scheduled_chunk_claim
+        bind_chunk_scan_run_on_connection(
+            db,
+            occurrence_id=occurrence_id,
+            chunk_number=chunk_number,
+            scan_run_id=manifest["run_id"],
+            lease=lease,
+        )
+    sync_scan_history_manifest(db, manifest)
+
+    insert_run_scope_context(db, manifest["run_id"], context)
+    mark_pipeline_source(
+        db,
+        source_kind=AUTOMATED_NMAP_SOURCE,
+        source_id=manifest["run_id"],
+        marked_by=(
+            manifest.get("requested_by") or manifest.get("created_by")
+            or manifest.get("operator") or "system"
+        ),
+        marked_at=manifest["created_at"],
+        policy_version=NMAP_INGESTION_POLICY_VERSION,
+    )
+    if audit_event:
+        db.execute(
+            """
+            INSERT INTO scan_run_audit (
+                run_id, event, actor, changed_at, details
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                manifest["run_id"], audit_event,
+                manifest.get("requested_by") or manifest.get("created_by")
+                or manifest["operator"],
+                manifest["created_at"],
+                audit_details,
+            ),
+        )
+
+
+
 def insert_reviewed_scan_run(
     manifest: dict,
     plan: ScanRunPlan,
     db_path: Path = DB_PATH,
     *,
     audit_event: str | None = None,
+    audit_details: str = "Submitted to the shared analyzer queue",
     scheduled_chunk_claim: tuple[str, int, WorkLease] | None = None,
 ) -> None:
     """Atomically recheck reviewed context, retain the run, and snapshot context."""
     init_poc_storage(db_path)
     init_pipeline_intake_storage(db_path)
-    reviewed = [item.model_dump() for item in plan.reviewed_scope_associations]
-    mission_reviewed = [item.model_dump() for item in plan.reviewed_mission_scopes]
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        if plan.scheduled and plan.schedule_id:
-            schedule_row = db.execute(
-                "SELECT definition_json FROM scan_schedules WHERE schedule_id = ?",
-                (plan.schedule_id,),
-            ).fetchone()
-            if schedule_row is None:
-                raise MissionEnvironmentConflict("The saved schedule is no longer available")
-            schedule = json.loads(schedule_row[0])
-            if scheduled_chunk_claim is not None:
-                occurrence_row = db.execute(
-                    """SELECT schedule_id, definition_version, definition_digest
-                         FROM scan_schedule_occurrences WHERE occurrence_id = ?""",
-                    (scheduled_chunk_claim[0],),
-                ).fetchone()
-                if occurrence_row is None or tuple(occurrence_row) != (
-                    plan.schedule_id, *definition_identity(schedule)[:2]
-                ):
-                    raise WorkLeaseConflict(
-                        "The schedule definition no longer matches its frozen occurrence"
-                    )
-            resolve_reviewed_scope_context(
-                db,
-                saved_network_ids=list(schedule.get("saved_network_ids") or []),
-                manual_targets=list(schedule.get("manual_targets") or []),
-                reviewed_associations=list(
-                    schedule.get("reviewed_scope_associations") or []
-                ),
-            )
-            context = resolve_schedule_scope_context_in_transaction(
-                db, plan.schedule_id
-            )
-            # Preserve the reviewed selection as provenance, not execution
-            # targets. Feeding IDs back into the generic builder would expand
-            # this chunk to the whole Saved Network. The final contact check
-            # must use the same reviewed associations rather than an empty
-            # selection that would silently replace inherited scope with None.
-            for field in (
-                "saved_network_ids", "saved_networks", "manual_targets",
-                "reviewed_scope_associations", "reviewed_mission_scopes",
-            ):
-                manifest[field] = list(schedule.get(field) or [])
-            mission_reviewed = list(schedule.get("reviewed_mission_scopes") or [])
-            manifest["target_selection"] = {
-                "saved_networks": manifest["saved_networks"],
-                "manual_targets": manifest["manual_targets"],
-            }
-        else:
-            context = resolve_reviewed_scope_context(
-                db,
-                saved_network_ids=manifest.get("saved_network_ids") or [],
-                manual_targets=manifest.get("manual_targets") or [],
-                reviewed_associations=reviewed,
-            )
-        _setup, context = bind_collection_scope_context_on_connection(
-            db,
-            context=context,
-            saved_network_ids=list(manifest.get("saved_network_ids") or []),
+        _insert_reviewed_scan_run_on_connection(
+            db, manifest, plan, audit_event=audit_event,
+            audit_details=audit_details,
+            scheduled_chunk_claim=scheduled_chunk_claim,
         )
-        mission_review = resolve_collection_mission_review(
-            db,
-            saved_network_ids=manifest.get("saved_network_ids") or [],
-            manual_targets=manifest.get("manual_targets") or [],
-            reviewed_scopes=mission_reviewed,
-            collection_scope_id=(context or {}).get("scope_id"),
-        )
-        manifest["collection_safety_setup"] = _setup["review"]
-        prior_context = manifest.get("network_scope_context")
-        if (
-            isinstance(context, dict)
-            and isinstance(prior_context, dict)
-            and all(
-                context.get(key) == prior_context.get(key)
-                for key in ("scope_id", "scope_label", "scope_version", "sources")
-            )
-            and prior_context.get("recorded_at")
-        ):
-            # Admission validates the reviewed scope decision;
-            # it does not create a new decision when every reviewed input is
-            # unchanged. Keep the original evidence-context time stable.
-            context["recorded_at"] = prior_context["recorded_at"]
-        manifest["network_scope_context"] = context
-        manifest["network_scope_status"] = (
-            "inherited" if context is not None else "unscoped"
-        )
-        manifest["mission_environment_review"] = mission_review
-        db.execute(
-            """
-            INSERT INTO scan_runs (
-                run_id, created_at, status, operator_name, reason,
-                originating_host, interface_name, profile, manifest_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                manifest["run_id"], manifest["created_at"], manifest["status"],
-                manifest["operator"], manifest["reason"],
-                manifest["originating_host"], manifest["interface"],
-                manifest["profile"], json.dumps(manifest, sort_keys=True),
-            ),
-        )
-        if scheduled_chunk_claim is not None:
-            occurrence_id, chunk_number, lease = scheduled_chunk_claim
-            bind_chunk_scan_run_on_connection(
-                db,
-                occurrence_id=occurrence_id,
-                chunk_number=chunk_number,
-                scan_run_id=manifest["run_id"],
-                lease=lease,
-            )
-        sync_scan_history_manifest(db, manifest)
-
-        insert_run_scope_context(db, manifest["run_id"], context)
-        mark_pipeline_source(
-            db,
-            source_kind=AUTOMATED_NMAP_SOURCE,
-            source_id=manifest["run_id"],
-            marked_by=(
-                manifest.get("requested_by") or manifest.get("created_by")
-                or manifest.get("operator") or "system"
-            ),
-            marked_at=manifest["created_at"],
-            policy_version=NMAP_INGESTION_POLICY_VERSION,
-        )
-        if audit_event:
-            db.execute(
-                """
-                INSERT INTO scan_run_audit (
-                    run_id, event, actor, changed_at, details
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    manifest["run_id"], audit_event,
-                    manifest.get("requested_by") or manifest.get("created_by")
-                    or manifest["operator"],
-                    manifest["created_at"],
-                    "Submitted to the shared analyzer queue",
-                ),
-            )
 
 
 def _assert_manifest_fences_on_connection(db, manifest: dict) -> None:
@@ -3688,6 +3792,417 @@ def prepare_scan_run(
         scheduled_chunk_claim=scheduled_chunk_claim,
     )
     return manifest
+
+
+_SCAN_BATCH_RECEIPT_PREFIX = "scan_run_batch:v1:"
+_SCAN_BATCH_REQUEST_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
+
+
+def _scan_batch_request_content(request: ScanRunBatchPreviewRequest) -> dict:
+    excluded = {
+        "request_token", "preview_digest", "expected_global_no_strike_revision",
+    }
+    return request.model_dump(mode="json", exclude=excluded)
+
+
+def _scan_batch_request_identity(
+    request: ScanRunBatchPreviewRequest,
+    *,
+    include_preview_contract: bool,
+) -> tuple[str, str, str]:
+    token = request.request_token.strip()
+    if not _SCAN_BATCH_REQUEST_TOKEN_RE.fullmatch(token):
+        raise ValueError(
+            "Batch request token must contain 16-128 letters, numbers, dots, colons, underscores, or hyphens"
+        )
+    excluded = {"request_token"}
+    if not include_preview_contract:
+        excluded.update({"preview_digest", "expected_global_no_strike_revision"})
+    content = request.model_dump(mode="json", exclude=excluded)
+    request_json = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    return token, request_json, hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+
+
+def _scan_batch_replay(
+    db: sqlite3.Connection,
+    *,
+    request_token: str,
+    actor: str,
+    request_json: str,
+    request_sha256: str,
+) -> dict | None:
+    row = db.execute(
+        "SELECT value_json FROM app_settings WHERE key = ?",
+        (f"{_SCAN_BATCH_RECEIPT_PREFIX}{request_token}",),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = json.loads(row[0])
+    if (
+        receipt.get("contract") != "nct-scan-run-batch:1"
+        or receipt.get("actor") != actor
+        or receipt.get("request_json") != request_json
+        or receipt.get("request_sha256") != request_sha256
+    ):
+        raise RuntimeError(
+            "This batch request token was already used for different work; review the batch and try again"
+        )
+    result = dict(receipt["result"])
+    run_ids = [str(item["run_id"]) for item in result.get("runs") or []]
+    if run_ids:
+        placeholders = ",".join("?" for _ in run_ids)
+        count = int(db.execute(
+            f"SELECT COUNT(*) FROM scan_runs WHERE run_id IN ({placeholders})",
+            tuple(run_ids),
+        ).fetchone()[0])
+        if count != len(run_ids):
+            raise RuntimeError(
+                "An earlier accepted batch no longer has all of its retained run records"
+            )
+    result["request_replayed"] = True
+    return result
+
+
+def _record_scan_batch_receipt(
+    db: sqlite3.Connection,
+    *,
+    request_token: str,
+    actor: str,
+    request_json: str,
+    request_sha256: str,
+    result: dict,
+) -> None:
+    receipt = {
+        "contract": "nct-scan-run-batch:1",
+        "actor": actor,
+        "request_json": request_json,
+        "request_sha256": request_sha256,
+        "result": result,
+    }
+    db.execute(
+        """
+        INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            f"{_SCAN_BATCH_RECEIPT_PREFIX}{request_token}",
+            json.dumps(receipt, sort_keys=True),
+            utc_now(), actor,
+        ),
+    )
+
+
+def _scan_batch_preview_digest(
+    request: ScanRunBatchPreviewRequest,
+    *,
+    profile_record: dict,
+    global_no_strike_revision: int,
+    prepared: list[tuple[ScanRunRequest, dict, dict]],
+) -> str:
+    review = {
+        "contract": "nct-scan-run-batch-preview:1",
+        "request": _scan_batch_request_content(request),
+        "profile": {
+            "profile_id": profile_record["profile_id"],
+            "profile_version": int(profile_record["version"]),
+            "profile_name": profile_record["name"],
+            "settings": profile_record["settings"],
+        },
+        "global_no_strike_revision": int(global_no_strike_revision),
+        "runs": [
+            {
+                "selection_order": index,
+                "saved_network": network,
+                "name": manifest["name"],
+                "targets": manifest["targets"],
+                "saved_networks": manifest["saved_networks"],
+                "profile_id": manifest["profile_id"],
+                "profile_version": manifest["profile_version"],
+                "profile_settings": manifest["profile_settings"],
+                "no_strike_submission": manifest["no_strike_submission"],
+                "network_scope_context": manifest.get("network_scope_context"),
+                "mission_environment_review": manifest.get("mission_environment_review"),
+                "scope_hosts_total": manifest["progress"]["scope_hosts_total"],
+            }
+            for index, (_plan, manifest, network) in enumerate(prepared, start=1)
+        ],
+    }
+    canonical = json.dumps(review, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _prepare_scan_batch_on_connection(
+    db: sqlite3.Connection,
+    request: ScanRunBatchPreviewRequest,
+    *,
+    db_path: Path,
+    batch_id: str,
+    persist: bool,
+) -> tuple[list[tuple[ScanRunRequest, dict, dict]], dict, int, str]:
+    if "$subnet" not in request.name_template:
+        raise ValueError(
+            "The multi-network run name template must include the literal $subnet placeholder"
+        )
+    selected_ids = [item.saved_network_id for item in request.selections]
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("Choose each Saved Network only once in a scan batch")
+    profile_record = _profile_record_on_connection(
+        db, request.profile_id, request.profile_version
+    )
+    if profile_record is None:
+        raise SavedNetworkScopeConflict(
+            "The selected profile version changed after review; review the batch again"
+        )
+    global_state = _global_no_strike_state_in_transaction(db)
+    prepared: list[tuple[ScanRunRequest, dict, dict]] = []
+    generated_names: set[str] = set()
+    for ordinal, selection in enumerate(request.selections, start=1):
+        network = get_saved_network_on_connection(db, selection.saved_network_id)
+        if network is None or not network["active"]:
+            raise SavedNetworkScopeConflict(
+                "A selected Saved Network was removed; review the batch again"
+            )
+        if network["updated_at"] != selection.expected_updated_at:
+            raise SavedNetworkScopeConflict(
+                f"Saved Network {network['name']} changed after review; review the batch again"
+            )
+        association = current_scope_association_in_transaction(
+            db, selection.saved_network_id
+        )
+        if association is None or not association.get("scope_id"):
+            raise SavedNetworkScopeConflict(
+                f"Saved Network {network['name']} must be assigned to the active Network Scope before it can be queued in a batch"
+            )
+        current_association_id = association["association_id"] if association else None
+        current_association_revision = int(association["revision"]) if association else None
+        if (
+            selection.expected_association_id != current_association_id
+            or selection.expected_association_revision != current_association_revision
+        ):
+            raise SavedNetworkScopeConflict(
+                f"Saved Network context for {network['name']} changed after review; review the batch again"
+            )
+        generated_name = request.name_template.replace("$subnet", network["name"])
+        if len(generated_name) > 100:
+            raise ValueError(
+                f"The generated name for {network['name']} is longer than 100 characters"
+            )
+        if generated_name.casefold() in generated_names:
+            raise ValueError(
+                "The run-name template produced duplicate names; use distinct Saved Network names or revise the template"
+            )
+        generated_names.add(generated_name.casefold())
+        reviewed_associations = []
+        if association is not None:
+            reviewed_associations.append({
+                "association_id": association["association_id"],
+                "revision": int(association["revision"]),
+            })
+        plan = ScanRunRequest(
+            operator=request.operator,
+            name=generated_name,
+            reason=request.reason,
+            originating_host=request.originating_host,
+            interface=request.interface,
+            profile=profile_record["name"],
+            profile_id=profile_record["profile_id"],
+            profile_version=int(profile_record["version"]),
+            created_by=request.created_by or request.operator,
+            executed_by=request.executed_by or request.operator,
+            targets=[network["cidr"]],
+            manual_targets=[],
+            saved_network_ids=[network["saved_network_id"]],
+            reviewed_scope_associations=reviewed_associations,
+            reviewed_mission_scopes=request.reviewed_mission_scopes,
+            no_strike=request.no_strike,
+            capture=request.capture,
+            timeout_seconds=request.timeout_seconds,
+        )
+        manifest = build_scan_run_manifest(
+            plan,
+            capture=plan.capture,
+            timeout_seconds=plan.timeout_seconds,
+            status="queued",
+            db_path=db_path,
+        )
+        manifest["scan_batch"] = {
+            "contract": "nct-scan-run-batch:1",
+            "batch_id": batch_id,
+            "request_token": request.request_token,
+            "selection_order": ordinal,
+            "size": len(request.selections),
+            "name_template": request.name_template,
+            "saved_network_updated_at": network["updated_at"],
+        }
+        detail = (
+            f"Accepted in ordered batch {batch_id}, selection {ordinal} of "
+            f"{len(request.selections)}; execution remains sequential"
+        )
+        _insert_reviewed_scan_run_on_connection(
+            db, manifest, plan, audit_event="queued", audit_details=detail,
+        )
+        prepared.append((plan, manifest, {
+            "saved_network_id": network["saved_network_id"],
+            "name": network["name"],
+            "cidr": network["cidr"],
+            "updated_at": network["updated_at"],
+            "association_id": current_association_id,
+            "association_revision": current_association_revision,
+        }))
+    digest = _scan_batch_preview_digest(
+        request,
+        profile_record=profile_record,
+        global_no_strike_revision=int(global_state["revision"]),
+        prepared=prepared,
+    )
+    if not persist:
+        # The caller owns the surrounding transaction. This preview savepoint
+        # exercises the exact admission path without retaining any record.
+        db.execute("ROLLBACK TO scan_batch_preview")
+        db.execute("RELEASE scan_batch_preview")
+    return prepared, profile_record, int(global_state["revision"]), digest
+
+
+def preview_scan_run_batch(
+    request: ScanRunBatchPreviewRequest,
+    *,
+    db_path: Path = DB_PATH,
+    interfaces: set[str] | None = None,
+) -> dict:
+    validate_runtime_interface(request.interface, interfaces)
+    init_poc_storage(db_path)
+    init_pipeline_intake_storage(db_path)
+    init_saved_network_storage(db_path)
+    init_saved_network_scope_storage(db_path)
+    init_mission_environment_storage(db_path)
+    _scan_batch_request_identity(request, include_preview_contract=False)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("SAVEPOINT scan_batch_preview")
+        prepared, profile, revision, digest = _prepare_scan_batch_on_connection(
+            db, request, db_path=db_path, batch_id="preview", persist=False,
+        )
+    return {
+        "contract": "nct-scan-run-batch-preview:1",
+        "request_token": request.request_token,
+        "preview_digest": digest,
+        "global_no_strike_revision": revision,
+        "requested_count": len(prepared),
+        "profile": {
+            "profile_id": profile["profile_id"],
+            "profile_version": int(profile["version"]),
+            "profile_name": profile["name"],
+        },
+        "sequential_execution": True,
+        "runs": [
+            {
+                "selection_order": index,
+                "saved_network_id": network["saved_network_id"],
+                "saved_network_name": network["name"],
+                "cidr": network["cidr"],
+                "generated_name": manifest["name"],
+                "profile_id": manifest["profile_id"],
+                "profile_version": manifest["profile_version"],
+                "profile_name": manifest["profile"],
+                "scope": manifest.get("network_scope_context"),
+                "requested_address_count": target_address_count(manifest["targets"]),
+                "effective_address_count": int(manifest["progress"]["scope_hosts_total"]),
+            }
+            for index, (_plan, manifest, network) in enumerate(prepared, start=1)
+        ],
+    }
+
+
+@guarded_evidence_mutation(lambda *args, **kwargs: kwargs.get("db_path", DB_PATH))
+def launch_scan_run_batch(
+    request: ScanRunBatchRequest,
+    *,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+    interfaces: set[str] | None = None,
+) -> dict:
+    validate_runtime_interface(request.interface, interfaces)
+    init_poc_storage(db_path)
+    init_pipeline_intake_storage(db_path)
+    init_saved_network_storage(db_path)
+    init_saved_network_scope_storage(db_path)
+    init_mission_environment_storage(db_path)
+    token, request_json, request_sha256 = _scan_batch_request_identity(
+        request, include_preview_contract=True,
+    )
+    actor = request.created_by or request.operator
+    replayed = False
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        replay = _scan_batch_replay(
+            db,
+            request_token=token,
+            actor=actor,
+            request_json=request_json,
+            request_sha256=request_sha256,
+        )
+        if replay is not None:
+            result = replay
+            replayed = True
+        else:
+            batch_id = uuid.uuid4().hex
+            prepared, _profile, revision, digest = _prepare_scan_batch_on_connection(
+                db, request, db_path=db_path, batch_id=batch_id, persist=True,
+            )
+            if revision != request.expected_global_no_strike_revision:
+                raise SavedNetworkScopeConflict(
+                    "Global No-Strike changed after preview; review the batch again"
+                )
+            if not hmac.compare_digest(digest, request.preview_digest):
+                raise SavedNetworkScopeConflict(
+                    "The batch changed after preview; review it again before queueing"
+                )
+            queued_ids = [
+                str(row[0]) for row in db.execute(
+                    "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
+                ).fetchall()
+            ]
+            queue_positions = {run_id: index for index, run_id in enumerate(queued_ids, start=1)}
+            accepted_at = utc_now()
+            result = {
+                "contract": "nct-scan-run-batch:1",
+                "batch_id": batch_id,
+                "request_token": token,
+                "accepted_at": accepted_at,
+                "requested_count": len(prepared),
+                "accepted_count": len(prepared),
+                "all_accepted": True,
+                "sequential_execution": True,
+                "request_replayed": False,
+                "runs": [
+                    {
+                        "selection_order": index,
+                        "run_id": manifest["run_id"],
+                        "generated_name": manifest["name"],
+                        "saved_network_id": network["saved_network_id"],
+                        "saved_network_name": network["name"],
+                        "cidr": network["cidr"],
+                        "profile_id": manifest["profile_id"],
+                        "profile_version": manifest["profile_version"],
+                        "initial_queue_position": queue_positions[manifest["run_id"]],
+                    }
+                    for index, (_plan, manifest, network) in enumerate(prepared, start=1)
+                ],
+            }
+            _record_scan_batch_receipt(
+                db,
+                request_token=token,
+                actor=actor,
+                request_json=request_json,
+                request_sha256=request_sha256,
+                result=result,
+            )
+    # A retry after commit but before dispatch still reaches this idempotent
+    # dispatcher, so accepted work cannot remain stranded solely by a lost response.
+    dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+    if replayed:
+        result["request_replayed"] = True
+    return result
 
 
 SCAN_HISTORY_METADATA_EXPRESSION = (
@@ -7346,6 +7861,50 @@ def start_scan_run(request: ScanRunRequest, http_request: Request) -> dict:
             status_code=409, detail=f"Mission Environment: {exc}"
         ) from exc
     except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scan-runs/batch-preview")
+def review_scan_run_batch(
+    request: ScanRunBatchPreviewRequest, http_request: Request
+) -> dict:
+    try:
+        request = bind_signed_in_actor(
+            http_request, request, "operator", "created_by", "executed_by"
+        )
+        return preview_scan_run_batch(request)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Mission Environment: {exc}"
+        ) from exc
+    except (SavedNetworkScopeConflict, MissionEnvironmentConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scan-runs/batch", status_code=202)
+@guarded_evidence_mutation(lambda *args, **kwargs: DB_PATH)
+def start_scan_run_batch(
+    request: ScanRunBatchRequest, http_request: Request
+) -> dict:
+    require_active_collection()
+    try:
+        request = bind_signed_in_actor(
+            http_request, request, "operator", "created_by", "executed_by"
+        )
+        return launch_scan_run_batch(request)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(
+            status_code=409, detail=f"Mission Environment: {exc}"
+        ) from exc
+    except (SavedNetworkScopeConflict, MissionEnvironmentConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

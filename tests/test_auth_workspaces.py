@@ -220,6 +220,16 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         assert "nct-guide-toggle-label" in account_script.text
         assert 'html[data-nct-theme^="dcc_"] #nct-operator-guide' in account_script.text
         assert 'html[data-nct-theme="dcc_donut"] body{text-transform:uppercase}' in account_script.text
+        for surface in (
+            ".batch-network-choice",
+            ".batch-panel",
+            ".batch-order-row",
+            ".batch-preview-row",
+            ".batch-receipt",
+        ):
+            assert surface in account_script.text
+        assert ".batch-network-choice:has(input:checked)" in account_script.text
+        assert "background:var(--nct-surface-raised)!important" in account_script.text
         assert "Dungeon Anarchist’s Cookbook" in account_script.text
         assert "applyCookbookIdentity" in account_script.text
         assert "NEW CODEX ENTRY: Shared by Crawler" in account_script.text

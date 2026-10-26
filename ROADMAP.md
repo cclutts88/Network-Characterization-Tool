@@ -275,6 +275,37 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   it. This gate is development-ready only, not Range, mission, stable-main or production-
   scale acceptance.
 
+## Whole-tool active-theme contract — strengthened 2026-10-25
+
+- [~] Every existing and future NCT workspace must inherit the analyst-selected palette
+  across page, panel, table, form, dialog, menu, hover control, status and Operator Guide
+  surfaces. Semantic warning, success and danger states may preserve distinct meaning,
+  but must remain legible and visually integrated with the selected palette.
+- [~] Theme compatibility is now a permanent completion criterion in the project
+  operating rules and a standing whole-tool novice-operator check. New surfaces must use
+  shared theme tokens or be added to the central theme-surface registry; browser review
+  must cover the default palette and at least one materially different palette, with the
+  Operator Guide open and closed where it changes available space.
+
+## Multi-network scan queueing — started 2026-10-25
+
+- [~] R11 will let an analyst select several active Saved Networks, choose one exact
+  profile version and preview one separately accountable scan per network before any
+  submission. A scan-name template may contain `$subnet`; NCT replaces that token with
+  the Saved Network name while retaining the original name template and selected order.
+- [~] The server must validate the complete batch against the signed-in actor, current
+  Mission Environment scope, reviewed Saved Network associations, Global and run-specific
+  No-Strike controls, interface, exact profile version and name limits before writing any
+  run. Accepted runs enter the existing shared FIFO in the reviewed order and retain
+  separate target, scope, profile, requestor and evidence records. This does not authorize
+  simultaneous scanning or change the one-active-scan execution limit.
+- [~] Submission will use one actor-bound and content-bound request token so an uncertain
+  retry returns the original batch instead of creating duplicate scans. Completion requires
+  all-or-nothing creation or a durable exact accepted-run receipt, stale Saved Network,
+  profile and scope conflict checks, queue-order and retry races, clear preview/result
+  guidance, keyboard and narrow-screen browser checks, the complete regression suite,
+  novice-operator validation and an independent quality gate.
+
 ## Device command attribution — completed 2026-10-25
 
 - [x] R06 now assesses retained device command history against verified NCT command-

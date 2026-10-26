@@ -118,8 +118,25 @@ Routine implementation details do not require constant updates. Prioritize notif
   from their table; headings and cells must remain aligned while scrolling, at narrower
   widths and while the Operator Guide is open; horizontal overflow may not make column
   meaning ambiguous.
+- Treats active-theme consistency as a standing whole-tool check on every page and at
+  narrow widths: page, panel, table, form, dialog, menu, hover control, status state and
+  Operator Guide surfaces must inherit the analyst-selected NCT palette. New components
+  must use the shared theme tokens or be registered in the shared theme-surface contract;
+  browser review must exercise at least the default palette and one materially different
+  palette. Semantic warning, success and danger meaning may retain distinct contrast, but
+  must remain readable and visually integrated with the selected palette.
 - Reports exact pages and visible reproductions to the primary agent and remains
   read-only unless the user explicitly changes that role.
+
+# Whole-tool presentation contract
+
+Theme compatibility is part of the completion criteria for every user-visible NCT
+change. The primary agent must keep shared theme-token aliases and the central
+theme-surface registry current instead of solving palette differences independently on
+one page. A feature is not complete when it works only in the default colors. Focused
+tests must cover the shared contract, and meaningful browser validation must check the
+changed surface with the Operator Guide both open and closed when it affects available
+space. This requirement applies across all existing and future NCT workspaces.
 
 The reviewer should evaluate meaningful implementation milestones using these states:
 

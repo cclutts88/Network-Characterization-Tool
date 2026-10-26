@@ -2026,6 +2026,27 @@ def test_map_gap_prepares_existing_scan_builder_without_direct_network_contact()
     assert "Map position and labels never grant permission" in SHELL_SCRIPT
 
 
+def test_scan_builder_has_reviewed_atomic_saved_network_batch_workflow():
+    html = operator_page().body.decode()
+
+    assert '<option value="batch">Queue one scan per Saved Network</option>' in html
+    assert 'id="batchNetworkChoices"' in html
+    assert 'id="batchOrderPanel"' in html
+    assert 'id="reviewBatch"' in html
+    assert 'id="queueBatch"' in html
+    assert "'/api/scan-runs/batch-preview'" in html
+    assert "'/api/scan-runs/batch'" in html
+    assert "name_template:template" in html
+    assert "preview_digest:batchPreview.preview_digest" in html
+    assert "expected_global_no_strike_revision" in html
+    assert "batchSubmitInFlight" in html
+    assert "request_replayed?'Recovered from the saved receipt after a retry.'" in html
+    assert "Only one scan uses the analyzer at a time." in html
+    assert "location.hash='queuePanel'" not in html.split(
+        "async function queueReviewedBatch", 1
+    )[1].split("function", 1)[0]
+
+
 def test_large_route_tables_are_filtered_and_map_details_stay_compact():
     analyze_html = analysis_page().body.decode()
     map_html = network_map_page().body.decode()
