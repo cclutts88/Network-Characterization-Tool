@@ -1651,13 +1651,15 @@ def resolve_collection_mission_review(
     saved_network_ids: list[str],
     manual_targets: list[str],
     reviewed_scopes: list[dict],
+    collection_scope_id: str | None = None,
     enforce_prohibited: bool = True,
 ) -> dict:
     """Recheck reviewed Mission declarations while the caller holds a write lock.
 
-    Network context comes only from the selected Saved Network association leaves.
-    Manual targets and unassociated Saved Networks remain explicitly unknown even if
-    their addresses happen to overlap a declared scope.
+    New collections use the explicitly reviewed active Mission Environment scope.
+    Saved Network associations must agree with that scope. Historical callers without
+    a collection scope retain the older association-only behavior; addresses are never
+    mapped to a scope merely because they overlap a CIDR declaration.
     """
     db.row_factory = sqlite3.Row
     unique_ids = list(dict.fromkeys(str(value) for value in saved_network_ids))
@@ -1702,6 +1704,8 @@ def resolve_collection_mission_review(
             unassociated.append(saved_network_id)
         else:
             scope_ids.add(str(association[0]))
+    if collection_scope_id:
+        scope_ids.add(str(collection_scope_id))
 
     current_versions: dict[str, int] = {}
     snapshots: list[dict] = []
@@ -1719,6 +1723,13 @@ def resolve_collection_mission_review(
         snapshot = _scope_snapshot(row, scope)
         current_versions[scope_id] = int(snapshot["version"])
         snapshots.append(snapshot)
+    if collection_scope_id and collection_scope_id not in submitted:
+        # The active collection scope was already selected through the reviewed
+        # Mission Environment safety gate. API clients that predate the scope
+        # preview do not need to duplicate that declaration version; retain the
+        # exact current declaration in the admitted record. A submitted version
+        # is still compared strictly when the client reviewed one.
+        submitted[collection_scope_id] = current_versions.get(collection_scope_id, 0)
     if submitted != current_versions:
         raise MissionEnvironmentConflict(
             "Mission Environment changed after review; review the scan again"
@@ -1754,7 +1765,8 @@ def resolve_collection_mission_review(
     prohibited = [
         item for item in snapshots if item["nmap_authorization"] == "prohibited"
     ]
-    unknown = bool(manual_targets or unassociated) or any(
+    unbound_context = not collection_scope_id and bool(manual_targets or unassociated)
+    unknown = unbound_context or any(
         item["nmap_authorization"] == "unknown" for item in snapshots
     )
     result = {
@@ -1763,7 +1775,7 @@ def resolve_collection_mission_review(
         "scopes": snapshots,
         "tools": tool_snapshots,
         "passive_pivots": pivots,
-        "manual_targets_unknown": bool(manual_targets),
+        "manual_targets_unknown": bool(manual_targets) and not collection_scope_id,
         "unassociated_saved_network_ids": unassociated,
         "authorization_notice": (
             "Mission Environment is an administrator-reviewed declaration. Existing "

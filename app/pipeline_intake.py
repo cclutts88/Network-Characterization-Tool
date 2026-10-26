@@ -460,18 +460,31 @@ def record_automated_nmap_intent(
     ).fetchall()
     reasons: list[str] = []
     state = "pending"
+    context_source = str(
+        (manifest.get("network_scope_context") or {}).get("context_source") or ""
+    )
     manual_targets = manifest.get("manual_targets") or (
         manifest.get("target_selection") or {}
     ).get("manual_targets")
-    if manual_targets:
+    if manual_targets and context_source != "collection_safety_setup":
         state = "needs_scope"
+        # Preserve the retained defect signature used by the narrowly bounded
+        # historical scope-handoff correction workflow. New collection with a
+        # reviewed active scope does not take this branch.
         reasons.append("Scans containing manual targets remain explicitly unscoped")
     if len(observations) != 1:
         state = "blocked"
         reasons.append("One registered aggregate scan.xml is required")
     observation = observations[0] if len(observations) == 1 else None
     if observation is not None and state == "pending":
-        if not observation[3] or not observation[8] or int(observation[9] or 0) < 1:
+        if (
+            not observation[3]
+            or not observation[8]
+            or (
+                int(observation[9] or 0) < 1
+                and context_source != "collection_safety_setup"
+            )
+        ):
             state = "needs_scope"
             reasons.append("A retained authoritative Network Scope is required")
         elif not bool(observation[7]):

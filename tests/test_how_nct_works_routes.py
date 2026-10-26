@@ -18,8 +18,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     for storage in ("Artifact storage", "SQLite database", "Derived-result storage", "This browser"):
         assert storage in html
     assert "does not guess from a CIDR or filename" in html
-    assert "associate a Saved Network with one active Network Scope" in html
-    assert "Mixed, combined, manual, and unassociated scan targets" in html
+    assert "Mission Environment provides one administrator-reviewed active scope" in html
+    assert "New mixed, combined, manual, and unassociated collection retains" in html
+    assert "historical evidence may remain Unknown or unscoped" in html
     assert "New schedules pin the reviewed context" in html
     assert "Scheduled scan startup recovery:" in html
     assert "Genuinely older interrupted schedules are converted once and paused for review" in html
@@ -38,7 +39,7 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "New uploads then enter background processing automatically" in html
     assert "Older retained scans keep Queue retained evidence" in html
     assert "records an automatic admission decision before the background job" in html
-    assert "Unscoped or mixed-context scans remain unavailable" in html
+    assert "Older unscoped or cross-context imported scans remain unavailable" in html
     assert "Several subnets may share one scope" in html
     assert "saves the analysis and its source and scope links all at once" in html
     assert "If any part fails, none of those new processing records is published" in html
@@ -73,8 +74,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Analysts and administrators can create, version, and archive" in html
     assert "Uploading existing Nmap XML" in html
     assert "Saved Network" in html and "Network Scope" in html
-    assert "choose the Network Scope that gives future scans" in html
-    assert "affects future scans only" in html
+    assert "an optional Network Scope association supplies stable reusable context" in html
+    assert "affects future collection only" in html
     assert "Hunt reads that saved assessment" in html
     assert "does not claim that every historical scan or manual import already has one" in html
     assert "Historical adoption and refresh against a new dataset require separate explicit actions" in html

@@ -1239,7 +1239,7 @@ def test_marked_completed_scan_without_registered_xml_is_visible_and_blocked(tmp
     assert jobs.dispatch_next_pipeline_intake(db_path) is False
 
 
-def test_marked_manual_target_scan_remains_needs_scope(tmp_path):
+def test_legacy_manual_target_scan_without_reviewed_context_needs_scope(tmp_path):
     db_path = tmp_path / "analyzer.db"
     request = ScanRunRequest(
         operator="analyst",

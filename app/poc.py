@@ -98,7 +98,7 @@ from app.saved_network_scope_associations import (
     resolve_schedule_scope_context_in_transaction,
 )
 from app.request_identity import bind_signed_in_actor
-from app.active_collection import require_active_collection
+from app.active_collection import active_collection_enabled, require_active_collection
 from app.pipeline_intake import (
     AUTOMATED_NMAP_SOURCE,
     NMAP_INGESTION_POLICY_VERSION,
@@ -2432,6 +2432,7 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
             saved_network_ids=definition["saved_network_ids"],
             manual_targets=definition["manual_targets"],
             reviewed_scopes=definition["reviewed_mission_scopes"],
+            collection_scope_id=(context or {}).get("scope_id"),
             enforce_prohibited=bool(request.enabled),
         )
         definition["mission_environment_review"] = mission_review
@@ -2524,6 +2525,7 @@ def set_scan_schedule_enabled(
                 saved_network_ids=list(schedule.get("saved_network_ids") or []),
                 manual_targets=list(schedule.get("manual_targets") or []),
                 reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
+                collection_scope_id=(bound_context or {}).get("scope_id"),
             )
             schedule["mission_environment_review"] = mission_review
             schedule["mission_environment_status"] = mission_review["decision"]
@@ -2729,12 +2731,6 @@ def insert_reviewed_scan_run(
             context = resolve_schedule_scope_context_in_transaction(
                 db, plan.schedule_id
             )
-            mission_review = resolve_collection_mission_review(
-                db,
-                saved_network_ids=list(schedule.get("saved_network_ids") or []),
-                manual_targets=list(schedule.get("manual_targets") or []),
-                reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
-            )
             # Preserve the reviewed selection as provenance, not execution
             # targets. Feeding IDs back into the generic builder would expand
             # this chunk to the whole Saved Network. The final contact check
@@ -2745,6 +2741,7 @@ def insert_reviewed_scan_run(
                 "reviewed_scope_associations", "reviewed_mission_scopes",
             ):
                 manifest[field] = list(schedule.get(field) or [])
+            mission_reviewed = list(schedule.get("reviewed_mission_scopes") or [])
             manifest["target_selection"] = {
                 "saved_networks": manifest["saved_networks"],
                 "manual_targets": manifest["manual_targets"],
@@ -2756,16 +2753,17 @@ def insert_reviewed_scan_run(
                 manual_targets=manifest.get("manual_targets") or [],
                 reviewed_associations=reviewed,
             )
-            mission_review = resolve_collection_mission_review(
-                db,
-                saved_network_ids=manifest.get("saved_network_ids") or [],
-                manual_targets=manifest.get("manual_targets") or [],
-                reviewed_scopes=mission_reviewed,
-            )
         _setup, context = bind_collection_scope_context_on_connection(
             db,
             context=context,
             saved_network_ids=list(manifest.get("saved_network_ids") or []),
+        )
+        mission_review = resolve_collection_mission_review(
+            db,
+            saved_network_ids=manifest.get("saved_network_ids") or [],
+            manual_targets=manifest.get("manual_targets") or [],
+            reviewed_scopes=mission_reviewed,
+            collection_scope_id=(context or {}).get("scope_id"),
         )
         manifest["collection_safety_setup"] = _setup["review"]
         prior_context = manifest.get("network_scope_context")
@@ -2947,8 +2945,17 @@ def publish_scan_contact_starting(
             manifest.clear()
             manifest.update(cancelled)
             return False
+        prior_context = manifest.get("network_scope_context")
+        prior_setup = manifest.get("collection_safety_setup")
         try:
-            context = resolve_reviewed_scope_context(
+            strict_collection_context = active_collection_enabled()
+            if strict_collection_context and (
+                not isinstance(prior_context, dict) or not isinstance(prior_setup, dict)
+            ):
+                raise CollectionSafetySetupIncomplete(
+                    "The admitted scan has no frozen Mission Environment collection context"
+                )
+            reviewed_context = resolve_reviewed_scope_context(
                 db,
                 saved_network_ids=list(manifest.get("saved_network_ids") or []),
                 manual_targets=list(manifest.get("manual_targets") or []),
@@ -2956,51 +2963,67 @@ def publish_scan_contact_starting(
                     manifest.get("reviewed_scope_associations") or []
                 ),
             )
+            setup, context = bind_collection_scope_context_on_connection(
+                db,
+                context=(
+                    prior_context if isinstance(prior_context, dict)
+                    else reviewed_context
+                ),
+                saved_network_ids=list(manifest.get("saved_network_ids") or []),
+            )
+            if (
+                isinstance(prior_context, dict)
+                and reviewed_context is not None
+                and any(
+                    reviewed_context.get(key) != prior_context.get(key)
+                    for key in (
+                        "scope_id", "scope_label", "scope_version", "sources",
+                    )
+                )
+            ):
+                raise CollectionSafetySetupIncomplete(
+                    "The reviewed Saved Network context changed after scan admission"
+                )
+            current_setup = setup.get("review") or {}
+            if isinstance(prior_setup, dict) and any(
+                current_setup.get(key) != prior_setup.get(key)
+                for key in (
+                    "revision", "scope_id", "scope_version", "no_strike_revision",
+                )
+            ):
+                raise CollectionSafetySetupIncomplete(
+                    "Mission Environment scope or safety review changed after scan admission"
+                )
+            # The contact boundary may validate the frozen decision but must never
+            # replace it with a newer active scope or setup review.
+            if isinstance(prior_context, dict):
+                context = dict(prior_context)
             mission_review = resolve_collection_mission_review(
                 db,
                 saved_network_ids=list(manifest.get("saved_network_ids") or []),
                 manual_targets=list(manifest.get("manual_targets") or []),
                 reviewed_scopes=list(manifest.get("reviewed_mission_scopes") or []),
+                collection_scope_id=(context or {}).get("scope_id"),
             )
-        except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
+        except (
+            CollectionSafetySetupIncomplete,
+            MissionEnvironmentConflict,
+            SavedNetworkScopeConflict,
+        ) as exc:
             blocked = _close_precontact_mission_block_on_connection(
                 db, manifest, str(exc)
             )
             manifest.clear()
             manifest.update(blocked)
             return False
-        prior_context = manifest.get("network_scope_context")
-        if (
-            isinstance(context, dict)
-            and isinstance(prior_context, dict)
-            and all(
-                context.get(key) == prior_context.get(key)
-                for key in ("scope_id", "scope_label", "scope_version", "sources")
-            )
-            and prior_context.get("recorded_at")
-        ):
-            # The contact-boundary check validates the frozen scope decision;
-            # it does not create a new decision when every reviewed input is
-            # unchanged. Keep the original evidence-context time stable.
-            context["recorded_at"] = prior_context["recorded_at"]
         manifest["network_scope_context"] = context
         manifest["network_scope_status"] = (
             "inherited" if context is not None else "unscoped"
         )
         manifest["mission_environment_review"] = mission_review
-        try:
-            setup = require_collection_safety_ready_on_connection(
-                db,
-                expected_scope_id=context.get("scope_id") if context else None,
-            )
-        except CollectionSafetySetupIncomplete as exc:
-            blocked = _close_precontact_mission_block_on_connection(
-                db, manifest, f"Mission Environment: {exc}"
-            )
-            manifest.clear()
-            manifest.update(blocked)
-            return False
-        manifest["collection_safety_setup"] = setup["review"]
+        manifest["collection_safety_setup"] = (
+            dict(prior_setup) if isinstance(prior_setup, dict) else setup["review"]
+        )
         manifest["started_at"] = utc_now()
         manifest["status"] = "running"
         if isinstance(scheduled_claim, dict):
@@ -3476,7 +3499,32 @@ def certify_scan_contact_phase(
     setup = require_collection_safety_ready(
         db_path, expected_scope_id=context.get("scope_id")
     )
-    manifest["collection_safety_setup"] = setup["review"]
+    current_review = setup["review"]
+    admitted_review = manifest.get("collection_safety_setup")
+    if active_collection_enabled():
+        if not isinstance(admitted_review, dict) or not context.get("scope_id"):
+            raise CollectionSafetySetupIncomplete(
+                "The admitted scan has no frozen Mission Environment collection context"
+            )
+        if any(
+            current_review.get(key) != admitted_review.get(key)
+            for key in (
+                "revision", "scope_id", "scope_version", "no_strike_revision",
+            )
+        ) or any(
+            context.get(key) != admitted_review.get(review_key)
+            for key, review_key in (
+                ("scope_id", "scope_id"),
+                ("scope_version", "scope_version"),
+            )
+        ):
+            raise CollectionSafetySetupIncomplete(
+                "Mission Environment scope or safety review changed after scan admission"
+            )
+    elif not isinstance(admitted_review, dict):
+        # Analysis-only legacy test and recovery paths have no active collection
+        # boundary to freeze, but retain the current review for diagnostics.
+        manifest["collection_safety_setup"] = current_review
     global_state = get_global_no_strike(db_path)
     coverage = manifest.setdefault("coverage", {})
     submission = manifest.get("no_strike_submission") or {}
@@ -4792,6 +4840,18 @@ def execute_scan_run(
         certify_scan_contact_phase(
             manifest, "queue_start", db_path=db_path, data_dir=data_dir
         )
+    except CollectionSafetySetupIncomplete:
+        # Publication performs the durable, fenced transition to a visible
+        # Mission Environment block while preserving the admitted review.
+        if publish_scan_contact_starting(manifest, db_path=db_path):
+            raise RuntimeError(
+                "Mission Environment certification changed but contact was not blocked"
+            )
+        write_manifest_file(manifest, data_dir)
+        with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
+        dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
+        return
     except NoScannableTargetsError as exc:
         if requeue_scan_after_precontact_failure(
             manifest,
@@ -5569,6 +5629,7 @@ def prepare_schedule_occurrence(
             saved_network_ids=list(schedule.get("saved_network_ids") or []),
             manual_targets=list(schedule.get("manual_targets") or []),
             reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
+            collection_scope_id=(scope_context or {}).get("scope_id"),
         )
     moment = _as_utc(now or datetime.now(timezone.utc))
     if advance_schedule:
@@ -5659,6 +5720,7 @@ def prepare_schedule_occurrence(
             saved_network_ids=list(schedule.get("saved_network_ids") or []),
             manual_targets=list(schedule.get("manual_targets") or []),
             reviewed_scopes=list(schedule.get("reviewed_mission_scopes") or []),
+            collection_scope_id=(scope_context or {}).get("scope_id"),
         )
         if content_digest({
             key: value for key, value in live_mission.items() if key != "certified_at"
@@ -6546,6 +6608,9 @@ def dispatch_due_schedules(
                     reviewed_scopes=list(
                         selected.get("reviewed_mission_scopes") or []
                     ),
+                    collection_scope_id=(
+                        selected.get("network_scope_context") or {}
+                    ).get("scope_id"),
                 )
             started = _start_prepared_schedule_occurrence(
                 selected["schedule_id"],

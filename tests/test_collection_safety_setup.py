@@ -174,6 +174,208 @@ def test_manual_scan_is_blocked_until_setup_then_inherits_reviewed_scope(
         assert retained["collection_safety_setup"] == status["review"]
 
 
+def test_completed_manual_scan_keeps_active_scope_into_foundation_intake(
+    tmp_path, monkeypatch,
+):
+    from app.artifacts import register_artifact_file
+    from app.automated_nmap_foundation import get_automated_scan_foundation_status
+    from app.pipeline_intake import AUTOMATED_NMAP_INTENT, get_admission_intent
+    from app.poc import ScanRunRequest, prepare_scan_run, update_scan_run_manifest
+    from app.saved_network_scope_associations import get_run_scope_context
+
+    db_path = tmp_path / "analyzer.db"
+    with client_for(tmp_path, monkeypatch) as client:
+        scope = reviewed_setup(client)
+        run = prepare_scan_run(
+            ScanRunRequest(
+                operator="analyst.one",
+                originating_host="nct-test",
+                interface="eth0",
+                targets=["192.0.2.10"],
+                manual_targets=["192.0.2.10"],
+                capture=True,
+            ),
+            db_path,
+            interfaces={"eth0"},
+        )
+        run["status"] = "completed"
+        run["completed_at"] = "2030-01-01T00:01:00+00:00"
+        xml_path = tmp_path / "manual-scoped.xml"
+        xml_path.write_text(
+            '<nmaprun scanner="nmap" version="7.95" start="100">'
+            '<scaninfo type="syn" protocol="tcp" numservices="1" services="443"/>'
+            '<host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/>'
+            '<ports><port protocol="tcp" portid="443"><state state="open"/>'
+            '<service name="https"/></port></ports></host>'
+            '<runstats><finished time="110"/><hosts up="1" down="0" total="1"/>'
+            '</runstats></nmaprun>',
+            encoding="utf-8",
+        )
+        register_artifact_file(
+            db_path=db_path,
+            source_path=xml_path,
+            source_kind="nmap_scan",
+            source_ref=run["run_id"],
+            original_filename="scan.xml",
+            actor="analyst.one",
+            observed_at=run["completed_at"],
+            observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+            run_id=run["run_id"],
+            scope_context=get_run_scope_context(db_path, run["run_id"]),
+        )
+        update_scan_run_manifest(run, db_path)
+
+        foundation = get_automated_scan_foundation_status(db_path, run["run_id"])
+        intent = get_admission_intent(
+            db_path,
+            intent_kind=AUTOMATED_NMAP_INTENT,
+            source_id=run["run_id"],
+        )
+        assert foundation["eligible"] is True
+        assert foundation["scope_id"] == scope["scope_id"]
+        assert intent is not None
+        assert intent["state"] in {"pending", "admitted"}
+
+
+def test_combined_and_unassociated_targets_retain_active_reviewed_scope(
+    tmp_path, monkeypatch,
+):
+    from app.poc import ScanRunRequest, prepare_scan_run
+    from app.saved_networks import SavedNetworkCreate, create_saved_network
+
+    with client_for(tmp_path, monkeypatch) as client:
+        scope = reviewed_setup(client)
+        network = create_saved_network(
+            SavedNetworkCreate(
+                name="Unassociated operations network",
+                cidr="192.0.2.0/30",
+                created_by="analyst.one",
+            ),
+            tmp_path / "analyzer.db",
+        )
+        base = {
+            "operator": "analyst.one",
+            "originating_host": "nct-test",
+            "interface": "eth0",
+            "saved_network_ids": [network["saved_network_id"]],
+            "targets": [network["cidr"]],
+            "capture": True,
+        }
+        unassociated = prepare_scan_run(
+            ScanRunRequest(**base),
+            tmp_path / "analyzer.db",
+            interfaces={"eth0"},
+        )
+        combined = prepare_scan_run(
+            ScanRunRequest(
+                **{
+                    **base,
+                    "targets": [network["cidr"], "198.51.100.10"],
+                    "manual_targets": ["198.51.100.10"],
+                }
+            ),
+            tmp_path / "analyzer.db",
+            interfaces={"eth0"},
+        )
+        assert unassociated["network_scope_context"]["scope_id"] == scope["scope_id"]
+        assert combined["network_scope_context"]["scope_id"] == scope["scope_id"]
+        assert unassociated["network_scope_context"]["context_source"] == "collection_safety_setup"
+
+
+def test_saved_network_scope_must_match_active_mission_environment_scope(
+    tmp_path, monkeypatch,
+):
+    from app.collection_safety_setup import CollectionSafetySetupIncomplete
+    from app.network_scopes import create_network_scope
+    from app.poc import ScanRunRequest, prepare_scan_run
+    from app.saved_networks import SavedNetworkCreate, create_saved_network
+    from app.saved_network_scope_associations import change_saved_network_scope_association
+
+    with client_for(tmp_path, monkeypatch) as client:
+        reviewed_setup(client, label="Active mission")
+        db_path = tmp_path / "analyzer.db"
+        other = create_network_scope(
+            db_path,
+            label="Different mission",
+            created_by="admin",
+            reason="Separate context",
+        )
+        network = create_saved_network(
+            SavedNetworkCreate(
+                name="Different network",
+                cidr="198.51.100.0/30",
+                created_by="analyst.one",
+            ),
+            db_path,
+        )
+        association = change_saved_network_scope_association(
+            db_path,
+            network["saved_network_id"],
+            scope_id=other["scope_id"],
+            expected_association_id=None,
+            expected_revision=None,
+            actor="analyst.one",
+            reason="Reviewed separate context",
+        )
+        request = ScanRunRequest(
+            operator="analyst.one",
+            originating_host="nct-test",
+            interface="eth0",
+            targets=[network["cidr"]],
+            saved_network_ids=[network["saved_network_id"]],
+            reviewed_scope_associations=[{
+                "association_id": association["association_id"],
+                "revision": association["revision"],
+            }],
+            reviewed_mission_scopes=[{"scope_id": other["scope_id"], "version": 0}],
+            capture=True,
+        )
+        with pytest.raises(CollectionSafetySetupIncomplete, match="different Network Scope"):
+            prepare_scan_run(request, db_path, interfaces={"eth0"})
+
+
+def test_device_preview_names_missing_inherited_matching_and_conflicting_scope(
+    tmp_path, monkeypatch,
+):
+    base = {
+        "operator": "analyst.one",
+        "originating_host": "nct-test",
+        "vendor": "vyos",
+        "device_type": "router",
+        "device_types": ["router"],
+        "device_address": "192.0.2.10",
+        "username": "operator",
+        "accountability_interface": "eth0",
+    }
+    with client_for(tmp_path, monkeypatch) as client:
+        missing = client.post("/api/device-configs/preview", json=base)
+        assert missing.status_code == 200, missing.text
+        assert missing.json()["collection_scope_preview"]["ready"] is False
+        assert missing.json()["collection_scope_preview"]["compatible"] is False
+
+        active = reviewed_setup(client)
+        inherited = client.post("/api/device-configs/preview", json=base).json()
+        assert inherited["collection_scope_preview"]["compatible"] is True
+        assert inherited["collection_scope_preview"]["active_scope"]["scope_id"] == active["scope_id"]
+        assert inherited["collection_scope_preview"]["selected_scope_id"] is None
+
+        matching = client.post(
+            "/api/device-configs/preview",
+            json={**base, "preferred_scope_id": active["scope_id"]},
+        ).json()
+        assert matching["collection_scope_preview"]["compatible"] is True
+
+        other = client.post(
+            "/api/network-scopes", json={"label": "Different mission"}
+        ).json()
+        conflicting = client.post(
+            "/api/device-configs/preview",
+            json={**base, "preferred_scope_id": other["scope_id"]},
+        ).json()
+        assert conflicting["collection_scope_preview"]["compatible"] is False
+        assert conflicting["collection_scope_preview"]["active_scope"]["scope_id"] == active["scope_id"]
+
+
 def test_device_hostname_checks_every_ipv4_and_inherits_active_scope(
     tmp_path, monkeypatch,
 ):
@@ -458,8 +660,8 @@ def test_restart_preserves_reviewed_queue_but_stale_scope_blocks_contact(
     tmp_path, monkeypatch,
 ):
     import app.poc as poc
-    from app.collection_safety_setup import CollectionSafetySetupIncomplete
 
+    monkeypatch.setenv("NCT_ACTIVE_COLLECTION_MODE", "enabled")
     data_dir = tmp_path / "data"
     with client_for(tmp_path, monkeypatch) as client:
         scope = reviewed_setup(client)
@@ -477,6 +679,8 @@ def test_restart_preserves_reviewed_queue_but_stale_scope_blocks_contact(
         retained = poc.get_scan_run_plan(manifest["run_id"], tmp_path / "analyzer.db")
         assert retained["network_scope_context"]["scope_id"] == scope["scope_id"]
         assert retained["collection_safety_setup"]["scope_id"] == scope["scope_id"]
+        admitted_context = dict(retained["network_scope_context"])
+        admitted_setup = dict(retained["collection_safety_setup"])
         client.patch(
             f"/api/network-scopes/{scope['scope_id']}",
             json={
@@ -485,11 +689,106 @@ def test_restart_preserves_reviewed_queue_but_stale_scope_blocks_contact(
             },
         )
         launched = []
-        with pytest.raises(CollectionSafetySetupIncomplete, match="Network Scope changed"):
-            poc.execute_scan_run(
-                manifest["run_id"], poc.RunControl(),
-                db_path=tmp_path / "analyzer.db", data_dir=data_dir,
-                popen_factory=lambda *args, **kwargs: launched.append((args, kwargs)),
-                sleep_fn=lambda _seconds: None,
-            )
+        poc.execute_scan_run(
+            manifest["run_id"], poc.RunControl(),
+            db_path=tmp_path / "analyzer.db", data_dir=data_dir,
+            popen_factory=lambda *args, **kwargs: launched.append((args, kwargs)),
+            sleep_fn=lambda _seconds: None,
+        )
         assert launched == []
+        blocked = poc.get_scan_run_plan(manifest["run_id"], tmp_path / "analyzer.db")
+        assert blocked["status"] == "blocked_mission_environment"
+        assert "Mission Environment" in blocked["execution_note"]
+        assert blocked["network_scope_context"] == admitted_context
+        assert blocked["collection_safety_setup"] == admitted_setup
+
+
+def test_contact_publication_rejects_active_scope_switch_after_queue_claim(
+    tmp_path, monkeypatch,
+):
+    import app.poc as poc
+
+    monkeypatch.setenv("NCT_ACTIVE_COLLECTION_MODE", "enabled")
+    db_path = tmp_path / "analyzer.db"
+    with client_for(tmp_path, monkeypatch) as client:
+        first_scope = reviewed_setup(client, label="Mission A")
+        queued = poc.prepare_scan_run(
+            poc.ScanRunRequest(
+                operator="analyst.one", originating_host="nct-test", interface="eth0",
+                targets=["192.0.2.10/32"], manual_targets=["192.0.2.10/32"],
+                capture=True,
+            ),
+            db_path,
+            interfaces={"eth0"},
+        )
+        claimed = poc.claim_next_queued_scan(db_path)
+        assert claimed is not None
+        assert claimed["network_scope_context"]["scope_id"] == first_scope["scope_id"]
+
+        second_scope = reviewed_setup(client, label="Mission B")
+        assert second_scope["scope_id"] != first_scope["scope_id"]
+        assert poc.publish_scan_contact_starting(claimed, db_path=db_path) is False
+
+        retained = poc.get_scan_run_plan(queued["run_id"], db_path)
+        assert retained["status"] != "running"
+        assert retained["network_scope_context"]["scope_id"] == first_scope["scope_id"]
+        assert "Mission Environment" in retained["execution_note"]
+
+
+def test_contact_publication_rejects_same_scope_revision_change_after_queue_claim(
+    tmp_path, monkeypatch,
+):
+    import app.poc as poc
+
+    monkeypatch.setenv("NCT_ACTIVE_COLLECTION_MODE", "enabled")
+    db_path = tmp_path / "analyzer.db"
+    with client_for(tmp_path, monkeypatch) as client:
+        scope = reviewed_setup(client, label="Mission A")
+        queued = poc.prepare_scan_run(
+            poc.ScanRunRequest(
+                operator="analyst.one", originating_host="nct-test", interface="eth0",
+                targets=["192.0.2.10/32"], manual_targets=["192.0.2.10/32"],
+                capture=True,
+            ),
+            db_path,
+            interfaces={"eth0"},
+        )
+        claimed = poc.claim_next_queued_scan(db_path)
+        assert claimed is not None
+        changed = client.patch(
+            f"/api/network-scopes/{scope['scope_id']}",
+            json={
+                "expected_version": scope["version"],
+                "label": "Mission A revised",
+                "reason": "Exercise the final contact boundary",
+            },
+        )
+        assert changed.status_code == 200, changed.text
+
+        rereviewed = client.post(
+            "/api/collection-safety-setup/reviews",
+            json={
+                "scope_id": scope["scope_id"],
+                "expected_scope_version": changed.json()["version"],
+                "expected_no_strike_revision": 0,
+                "empty_no_strike_reviewed": True,
+                "reason": "Review the revised scope",
+            },
+        )
+        assert rereviewed.status_code == 201, rereviewed.text
+        admitted_setup = dict(claimed["collection_safety_setup"])
+        with pytest.raises(
+            poc.CollectionSafetySetupIncomplete,
+            match="changed after scan admission",
+        ):
+            poc.certify_scan_contact_phase(
+                claimed, "queue_start", db_path=db_path, data_dir=tmp_path
+            )
+        assert claimed["collection_safety_setup"] == admitted_setup
+
+        assert poc.publish_scan_contact_starting(claimed, db_path=db_path) is False
+        retained = poc.get_scan_run_plan(queued["run_id"], db_path)
+        assert retained["status"] != "running"
+        assert retained["network_scope_context"]["scope_id"] == scope["scope_id"]
+        assert retained["network_scope_context"]["scope_version"] == scope["version"]
+        assert "Mission Environment" in retained["execution_note"]

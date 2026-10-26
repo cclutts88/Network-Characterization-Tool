@@ -14,7 +14,8 @@ def test_local_operator_can_review_and_update_mission_environment(tmp_path, monk
         page = client.get("/settings/mission-environment")
         assert page.status_code == 200
         assert "Exact-scope collection gate active" in page.text
-        assert "Manual and unassociated targets remain Unknown" in page.text
+        assert "Every new Nmap or live device collection retains the reviewed active scope" in page.text
+        assert "Historical evidence can remain Unknown or unscoped" in page.text
         scope = client.post("/api/network-scopes", json={"label": "Range"}).json()
         initial = client.get("/api/mission-environment?limit=25").json()
         assert initial["can_edit"] is True

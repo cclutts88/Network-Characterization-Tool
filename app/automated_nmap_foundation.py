@@ -155,13 +155,21 @@ def _run_evidence(db: sqlite3.Connection, run_id: str) -> dict:
     reasons: list[str] = []
     if run["status"] != "completed" or manifest.get("status") != "completed":
         reasons.append("Only completed scans with aggregate Nmap XML are eligible")
-    if manifest.get("manual_targets") or (manifest.get("target_selection") or {}).get("manual_targets"):
-        reasons.append("Scans containing manual targets remain explicitly unscoped")
     if len(observations) != 1:
         reasons.append("One registered aggregate scan.xml with retained scope context is required")
     observation = observations[0] if len(observations) == 1 else None
-    if observation is not None and int(observation["source_count"] or 0) < 1:
-        reasons.append("The retained scope has no authoritative Saved Network source")
+    context_source = str(
+        (manifest.get("network_scope_context") or {}).get("context_source") or ""
+    )
+    if (
+        observation is not None
+        and int(observation["source_count"] or 0) < 1
+        and context_source != "collection_safety_setup"
+    ):
+        reasons.append(
+            "The retained scope has neither an authoritative Saved Network source "
+            "nor the reviewed active Mission Environment context"
+        )
     return {
         "run_id": run_id,
         "run_status": run["status"],

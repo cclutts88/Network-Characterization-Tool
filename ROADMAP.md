@@ -100,6 +100,50 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
 
 ## 0.5 Architecture / Roadmap Deviation Log
 
+## Unified Mission Environment collection context — completed 2026-10-25
+
+- [x] Reconcile the earlier adaptive-collection rule with the completed Scope & Safety
+  Setup model. Every new Nmap or live device collection must show and freeze the one
+  administrator-reviewed active Mission Environment scope before contact. This applies
+  to manual targets, combined targets, Saved Networks without a reusable association,
+  Map-prepared targets and blank device scope selections. A Saved Network association
+  remains an optional reusable context and must match the active scope; it does not
+  replace the current safety review. Missing, stale or incompatible context blocks
+  preview, package, schedule and contact with a visible reason. The device preview must
+  distinguish the scope used for live contact from any later evidence-assignment
+  suggestion.
+- **Documented deviation:** the 2026-10-13 adaptive-collection slice deliberately kept
+  manual targets and unassociated Saved Networks Unknown because no reviewed default
+  existed then. The later, independently reviewed Mission Environment design added an
+  explicit active collection scope chosen by an administrator. Using that exact reviewed
+  choice for new work is an operator decision, not inference from an address, CIDR, name,
+  previous observation or tool installation. Existing evidence is never rewritten and
+  may remain Unknown or unscoped. Authorization and Global plus run-specific No-Strike
+  controls remain separate and authoritative.
+- **Completion and quality-gate record (2026-10-25):** new manual, combined,
+  Map-prepared, unassociated Saved Network and blank device selections now display and
+  retain the exact reviewed active Mission Environment scope. Missing or incompatible
+  setup visibly blocks preview and contact; historical evidence remains unchanged. The
+  operator-facing wording is synchronized across Mission Environment, Nmap, device
+  collection, Map and How NCT Works. The device plan and preview stack cleanly at
+  980×900 with the Guide open and without page-width overflow.
+- The independent review twice **HALTED FOR REVIEW** on final contact-boundary races.
+  First, publication could replace a queued scan's admitted scope after the active scope
+  changed. Second, the preceding contact certification could replace the frozen safety
+  review before publication compared it. Both paths now validate the immutable admitted
+  scope and setup. An active-scope switch, same-scope version change, or safety-review
+  change stops before a process starts, persists a visible Mission Environment block,
+  and preserves the original queued context and review. Regressions exercise the full
+  admission, queue claim, administrator change and re-review, certification and
+  publication sequence, including restart recovery and scheduled work.
+- Final validation passes **2,119 tests with 20 expected skips** and one existing
+  dependency warning; all **19 current executable interface regressions** pass;
+  whitespace validation is clean. The novice operator gate is **CLEAR**. The final
+  independent quality gate is **CLEAR — DOCUMENTED DEVIATION** after **177 independent
+  tests**, the executable Map handoff regression and whitespace validation. This
+  milestone is development-ready on the foundation branch only; it is not Range-ready,
+  mission-ready or available on `main`.
+
 ## Hybrid workspace loading and interface streamlining — started 2026-10-25
 
 - [x] Replace the existing pattern in which several hash-selected hamburger tasks share
@@ -696,11 +740,13 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   explicit IPv4 address or exact CIDR, requires an address choice for multi-address
   devices, and excludes synthetic groups and presentation-only objects. An exact active
   Saved Network is carried only when its retained ID and CIDR still match; stale,
-  archived, mismatched and device targets remain visibly manual and unscoped. Mission
+  archived, mismatched and device targets remain visibly manual and retain the reviewed
+  active Mission Environment collection scope when the analyst submits them. Mission
   Environment, Global and scan-specific No-Strike, authorization, interface, profile,
   recovery-pause and server-side pre-contact checks remain authoritative. Map placement,
   labels and address containment do not grant permission or assign a Network Scope, and
-  the existing unsaved-layout navigation warning remains in force. The Operator Guide and
+  the existing unsaved-layout navigation warning remains in force. Map does not create a
+  reusable Saved Network association. The Operator Guide and
   built-in How NCT Works guide explain the boundary. Independent architecture gate:
   **CLEAR — DOCUMENTED DEVIATION** for preparing the existing builder rather than
   executing network contact from Map. Verification: the complete Docker suite passed
@@ -760,7 +806,7 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   review flow, navigation, removed duplicate panel, device return link and a clean
   console/network log. This is development-ready foundation work only; it is not on
   `main`, installed on the Range or mission-ready.
-- [~] **Unified Mission Environment workflow — started 2026-10-23.** Replace the
+- [x] **Unified Mission Environment workflow — completed 2026-10-25.** Replace the
   separate Scope & Safety destination with one top-level Mission Environment entry
   before Collect. Present the page in the operator's working order: active Network
   Scope, installation-wide Global No-Strike review, available tools and access, then
@@ -772,9 +818,10 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   latest retained evidence times. Individual addresses may contribute to counts but
   never become rows; addresses outside every saved or device-identified network are
   reported as omitted rather than guessed into `/32` networks. Calculation is read-only,
-  bounded and makes no network contact. The current independent architecture review is
-  **CLEAR — DOCUMENTED DEVIATION** from the earlier separate first-under-Collect page;
-  final safety, browser and novice gates remain in progress.
+  bounded and makes no network contact. The independent architecture review is
+  **CLEAR — DOCUMENTED DEVIATION** from the earlier separate first-under-Collect page.
+  The final active-collection safety, browser, novice and independent gates are complete
+  in the 2026-10-25 completion record above.
   Add a separate **Special Device Roles** register immediately after the automatic
   network-level table. Keep the role-creation form separate from a sectioned comparison
   table. The table presents the role and exact scope, **Mission Partner Identified**
@@ -2494,7 +2541,7 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
 | 2026-10-20 | Phase 6 initial passive intake | Begin Arkime support with the lowest-cost Tier A summary export | Begin with a bounded manual Tier D Sessions JSON intake using an exact retained source, explicit Network Scope, sensor, query window and completeness declaration. Retain exact bytes in the Artifact Registry and publish immutable normalized session receipts only after whole-file validation. Do not ingest PCAP, contact Arkime, infer coverage, merge observations across imports or treat passive traffic as proof of an open listener | The isolated range validation produced a structured Arkime export, while no verified Tier A export is yet available. The retained Range file is not available on the development workstation, so the first adapter is checked against the documented Sessions API shape and representative fixtures without resuming the unstable range host | Tier A remains required and Phase 6 remains incomplete. This first slice is capped for interactive use, reports partial and unknown coverage explicitly, preserves overlapping observations separately and requires the retained Range export to pass a separate compatibility check before Range readiness or any high-volume, live API, correlation or timeline work |
 | 2026-10-13 | Phase 3 Range recovery and clean-state acceptance | Recover preserved data through the guarded Phase 3 R3 path after identifying the stopped source container's HTTPS binding | Read the binding from the stopped container's saved configuration and fail closed for missing, multiple, or invalid values. Preserve the exact schema-origin guard: the retained `phase2-r2` database remains ineligible for the supported late-phase2 recovery path. After the operator declared the retained NCT evidence and accounts nonessential, perform an explicitly authorized NCT-only reset and validate a fresh Phase 3 R3 install | `docker port` cannot report the binding of a stopped container, and the retained database came from a different schema origin than the reviewed preserved-data migration boundary | Clean-state Phase 3 R3 Range acceptance passed. Preserved-data migration from `phase2-r2` remains unclaimed. The running Range image is unchanged; the recovery-helper correction must be included in a future transfer package |
 | 2026-10-13 | Phase 3 Range schema compatibility | Require unconditional equality between the recorded schema fingerprint and the live database before every version 4 to version 5 upgrade | For version 4 to version 5 only, permit a mismatch solely when every present late phase2 maintenance group is complete and exactly matches the known SearchSploit cache, Artifact Registry backfill, or exact-content compaction definitions, and removing an allowed subset reproduces the recorded version 4 fingerprint. All altered, incomplete, unrelated, later-version, and otherwise unexplained drift still fails closed | The `phase2-r4` build legitimately created these maintenance tables after sealing its version 4 fingerprint. The first `phase3-r1` Range attempt therefore rejected supported phase2 state even though the migration guard correctly protected the saved database | `phase3-r1` is withdrawn. Version 5 now initializes all supported maintenance schemas before sealing its fingerprint. No Range fingerprint is rewritten and no retained maintenance state is deleted. The replacement requires a read-only stopped-database audit, a new exact package, guarded retry, preserved-data checks, and independent review before Range acceptance |
-| 2026-10-13 | Phase 3.6 adaptive collection | Let Mission Environment guide collection and show relevant pivots | Enforce the first adaptive gate only where the operator selected exact Saved Network records and reviewed their current Network Scope associations and Mission Environment declaration versions. Any reviewed Nmap-prohibited scope blocks preview, portable package generation, active-run admission, enabled schedule creation, schedule enabling, manual occurrence creation and final waiting-occurrence dispatch. Manual targets and unassociated Saved Networks remain Unknown even when their CIDRs overlap a scope. Arkime/Kibana guidance appears only when the tool is declared available and that exact scope declares available or partial coverage | Addresses, CIDRs, names, previous evidence and tool installation cannot safely establish mission authorization. Exact Saved Network leaves plus optimistic versions provide a reviewable boundary that can be rechecked in the same transaction before accepted work is retained or contact can begin | This supersedes only the non-enforcement portion of the declaration-first deviation below. Authorized remains descriptive and does not grant permission; existing operator authorization and No-Strike controls remain authoritative. Multi-scope selections are reviewed separately and one prohibited scope blocks the complete request. Actual Arkime/Kibana queries, evidence ingestion and broader analysis adaptation remain open, so Phase 3 is still incomplete |
+| 2026-10-13, reconciled 2026-10-25 | Phase 3.6 adaptive collection | Let Mission Environment guide collection and show relevant pivots | The first slice required exact Saved Network associations and left manual targets and unassociated Saved Networks Unknown because no reviewed installation default existed. The later Scope & Safety Setup milestone introduced one explicit administrator-reviewed active Mission Environment scope. Every new Nmap and live device collection now displays and freezes that exact scope before contact, including manual, combined, Map-prepared, unassociated Saved Network and blank device selections. An optional reusable Saved Network association must match it. Missing, stale, prohibited or incompatible context blocks preview, package, schedule and contact with a visible reason. Arkime/Kibana guidance appears only when the tool is declared available and that exact scope declares available or partial coverage | Addresses, CIDRs, names, previous evidence and tool installation still cannot establish mission authorization. The active context comes only from the administrator's explicit reviewed Mission Environment choice and is rechecked immediately before contact. Requiring new work to retain that reviewed context closes an evidence-provenance gap without turning address matching into scope inference | This formally supersedes only the earlier manual/unassociated-Unknown rule. Historical evidence is never rewritten and may remain Unknown or unscoped. Authorized remains descriptive and does not grant permission; operator authorization and Global plus run-specific No-Strike controls remain authoritative. Device preview separates the scope used for live contact from any later evidence-assignment suggestion. Actual broader analysis adaptation remains separately gated |
 | 2026-10-13 | Phase 3 Mission Environment authorization | Use Mission Environment declarations to guide collection and analysis | The first slice stores and displays administrator-reviewed availability, coverage, authorization and blind-spot declarations. It does not grant permission, block scans, or change analysis. Existing authorization procedures and No-Strike controls remain authoritative | A durable, reviewable declaration layer must exist before it can safely affect network contact. Inferring permission from installed tools, addresses, names, targets or old evidence could authorize activity that an operator did not approve | Unknown is the default; Nmap-prohibited is derived into the blind-spot view; later reviewed gates must add scope-aware warnings/enforcement, adaptive pivots and Arkime/Kibana use. This is an accepted declaration-first deviation and Phase 3 remains incomplete until those gates pass |
 | 2026-10-12 | Gate 7 shared storage | Make PostgreSQL or object storage a dependency for ordinary standalone NCT, or place SQLite behind a sidecar/network service | Preserve embedded SQLite plus local content-addressed files for standalone and single-replica operation. Select PostgreSQL as the future multi-replica transactional authority and an S3-compatible immutable content-addressed object API as its artifact authority. Keep the profile disabled until implementation plus Gate 8 concurrency/failure testing passes | The approved offline package must remain portable and efficient. SQLite cannot safely provide multi-replica transactional authority through a sidecar, while a shared writable filesystem would leave artifact behavior tied to path and mount semantics. PostgreSQL supplies shared transactions and database time; the object contract supplies immutable conditional creation without making listing authoritative | Migration is offline into an empty target with a verified cold backup, exact artifact inventory, stable-ID preservation, a cutover receipt and no dual writes. Before the target admits a write, cut back to the unchanged source is allowed. After any target write, preserve the target and restore/reconcile through a separate reviewed generation; automatic reverse migration is not claimed. See `docs/SHARED_STORAGE_ARCHITECTURE.md`. |
 | 2026-10-12 | Gate 6 scheduled occurrence controls | Treat pausing a schedule as a stop request for any occurrence that has not started its next chunk | Define Pause future occurrences as a cadence control only. An already-created occurrence retains its complete frozen chunk plan and may continue; stopping that occurrence uses the scan cancellation path. Protect the cadence control with a monotonic control revision so worker progress cannot overwrite a concurrent pause. If ownership is lost after contact, later chunks remain blocked until an administrator verifies the former scanner stopped and records a reviewed closure; the ambiguous chunk never reopens | A durable occurrence is one authorized execution with one immutable plan. Silently changing or partly discarding that plan when the reusable cadence is paused would make the occurrence record disagree with what was authorized. Operators also need separate, explicit meaning for pausing future work and stopping contact already assigned | Schedule actions and the Operator Guide state the boundary. Reviewed closure records actor, reason and confirmation, cancels only unstarted chunks, clears exact recovery blocks and leaves future cadence paused. Tests must retain pause-race, recovery-closure and later-chunk blocking coverage. |
@@ -5517,6 +5564,9 @@ high-volume passive evidence.
    passed**, independent focused suite **95 passed**, novice operator review **PASS**,
    and live browser save, inherited scan review and console checks passed. No scope is
    inferred and no earlier run or evidence is rewritten. No architecture deviation.
+   **Superseded for new collection on 2026-10-25:** the later reviewed Mission
+   Environment active-scope decision now gives new manual, combined and unassociated
+   collection explicit context without rewriting this historical behavior or evidence.
    2026-09-27 finalized-scan foundation processing start: add an explicit, retryable
    Scan History action for the retained aggregate `scan.xml` from a finalized automated
    run whose immutable run and artifact-observation context already carry one reviewed
@@ -5975,10 +6025,12 @@ attributed changes. Archived scopes keep their declarations and history but reje
 new changes. The active-scan-prohibited blind spot is derived from the single Nmap
 authorization value so the two displays cannot disagree. Schema contract v5 provides
 a restart-safe migration from v4 and fails closed on unrecognized drift. New scan
-work now rechecks exact selected Saved Network associations and Mission Environment
-versions before it can be retained or contact can begin. A reviewed prohibited scope
-blocks preview, portable package generation, active-run admission, runnable schedules
-and dispatch. Manual and unassociated targets remain explicitly Unknown.
+work now rechecks the reviewed active Mission Environment scope, any selected Saved
+Network association and Mission Environment versions before it can be retained or
+contact can begin. A reviewed prohibited scope blocks preview, portable package
+generation, active-run admission, runnable schedules and dispatch. New manual and
+unassociated collection retains the explicit reviewed active scope; historical
+evidence may remain Unknown or unscoped.
 
 **Accepted authorization boundary:** “Authorized” is an administrator-recorded
 description, not permission granted by NCT. “Prohibited” is enforced only after exact
@@ -5988,7 +6040,8 @@ controls remain authoritative. The
 implementation does not infer authorization from installed software, addresses,
 CIDRs, names, Saved Networks, targets, prior evidence, or scan history. Scope-based
 scanner warnings, collection enforcement and relevant passive-pivot guidance now use
-exact reviewed Saved Network context. Actual Arkime/Kibana queries and ingestion,
+the exact reviewed active Mission Environment context; optional Saved Network context
+must match it. Actual Arkime/Kibana queries and ingestion,
 evidence-driven coverage, automatic stale/gap detection and broader analysis adaptation
 remain later gates. Phase 3, Range readiness and mission readiness remain open.
 
@@ -6029,8 +6082,9 @@ Under the settings/hamburger menu, define the hunt environment:
 ## 3.2 Authorization scope
 
 - [x] Explicit per-Network Scope Nmap authorization description with Unknown default,
-  plus exact Saved Network collection warnings and prohibited-scope enforcement.
-  Manual/unassociated targets remain Unknown; broader analysis adaptation remains open.
+  plus exact active-scope collection warnings, optional Saved Network compatibility and
+  prohibited-scope enforcement. Historical manual/unassociated evidence can remain
+  Unknown; broader analysis adaptation remains open.
 
 Examples:
 
@@ -6086,15 +6140,17 @@ Explicitly model:
 
 ## 3.6 Adaptive UI
 
-[x] **Exact-scope adaptive collection gate completed 2026-10-13.** Resolve every
-selected Saved Network through its current reviewed Network Scope and Mission
-Environment declaration. Relevant passive pivots require both tool availability and
+[x] **Exact-scope adaptive collection gate completed 2026-10-13 and reconciled
+2026-10-25.** Resolve every new collection through the reviewed active Mission
+Environment Network Scope and declaration. Optional Saved Network associations must
+match that active context. Relevant passive pivots require both tool availability and
 per-scope coverage. A known Nmap-prohibited scope must block runnable previews, active
 run admission, portable packages, enabled schedules, manual schedule starts and final
 dispatch using one server-side decision. Association and declaration versions are
 rechecked before admission/contact and retained with accepted work. Manual,
-unassociated and mixed manual portions remain Unknown and never inherit permission
-from a matching CIDR. No-Strike and the established operator authorization process
+unassociated and mixed manual portions retain the explicit reviewed active scope; they
+never inherit permission from a matching CIDR or create a reusable Saved Network
+association. Historical evidence remains unchanged. No-Strike and the established operator authorization process
 remain separately authoritative. A prohibited paused schedule may be retained as a
 clearly blocked planning record, but enabling, manual occurrence creation, cadence
 dispatch and a previously prepared waiting occurrence all recheck the live decision

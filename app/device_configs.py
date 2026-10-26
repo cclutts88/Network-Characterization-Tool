@@ -3721,6 +3721,25 @@ def preview(plan: DeviceConfigPlan, request: Request) -> dict:
         raise _device_profile_error(exc) from exc
     value = build_plan(plan)
     value.update(_profile_preview_fields(profile, plan))
+    setup = get_collection_safety_status(DB_PATH)
+    active_scope = setup.get("scope") if setup.get("ready") else None
+    selected_scope_id = plan.preferred_scope_id
+    compatible = bool(
+        active_scope
+        and (
+            not selected_scope_id
+            or selected_scope_id == active_scope.get("scope_id")
+        )
+    )
+    value["collection_scope_preview"] = {
+        "ready": bool(setup.get("ready")),
+        "message": setup.get("message"),
+        "missing_checks": list(setup.get("missing_checks") or []),
+        "active_scope": active_scope,
+        "selected_scope_id": selected_scope_id,
+        "compatible": compatible,
+        "source": "reviewed_mission_environment",
+    }
     value.pop("ssh_args", None)
     value.pop("remote_input", None)
     return value

@@ -405,7 +405,7 @@ def test_operator_guide_describes_current_button_behavior_and_side_effects():
     assert "The action is not complete until the page reports success" in SHELL_SCRIPT
     assert "Export scan report" in SHELL_SCRIPT
     assert "currently open scan analysis and its active host filters" in SHELL_SCRIPT
-    assert "A portable run becomes retained NCT evidence only after its completed XML files" in SHELL_SCRIPT
+    assert "Generate Package downloads a protected portable bundle" in SHELL_SCRIPT
     assert "Waiting scans stay in the separate Pending Scans dropdown" in SHELL_SCRIPT
     assert "Reviewing a waiting scan does not replace or change the active scan" in SHELL_SCRIPT
     assert "Opens or closes the waiting-scan list" in SHELL_SCRIPT
@@ -487,8 +487,9 @@ def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     assert "scope → named subnet → CIDR → IP address" in html
     assert "Development Servers" in html and "10.50.15.0/24" in html
     assert "one exact manual Nmap upload from Analyze" in html
-    assert "Saved Network with an active scope for future scans" in html
-    assert "Mixed or manual scan targets remain unscoped" in html
+    assert "A Saved Network may also retain an optional reusable scope association" in html
+    assert "Every new collection freezes that explicit active scope" in html
+    assert "Older retained evidence remains unchanged and may remain unscoped" in html
     assert "cannot currently be undone" in html
     assert "[hidden]{display:none!important}" in html
     assert "$('save').disabled=false" in html
@@ -498,7 +499,7 @@ def test_network_scope_page_and_guide_explain_operator_decisions_and_limits():
     assert "'Manage network scope'" in SHELL_SCRIPT
     assert "Analysts can select an active scope from Saved Networks for future scans" in SHELL_SCRIPT
     assert "AFB Dev can contain Development Servers at 10.50.15.0/24" in SHELL_SCRIPT
-    assert "Network Scope for future scans" in SHELL_SCRIPT
+    assert "Reusable Network Scope association" in SHELL_SCRIPT
 
 
 def test_air_gapped_designation_uses_active_theme_palette():
@@ -1035,7 +1036,8 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "step.kind" in html
     assert "How to read this preview" in html
     assert 'id="preferredScope"' in html
-    assert "Live SSH contact requires the active scope from Scope &amp; Safety Setup" in html
+    assert "Leaving this blank uses the reviewed active Mission Environment scope" in html
+    assert "Live contact scope and later retained-evidence assignment are separate decisions" in html
     assert "preferred_scope_id:$('preferredScope').value||null" in html
     assert "Reusable collection profiles" in html
     assert "Apply profile" in html
@@ -1046,10 +1048,10 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "The copy is not a named profile" in html
     assert "collection_profile_id:collectionProfileExact" in html
     assert "collectionProfile:['Saved device collection profile'" in SHELL_SCRIPT
-    assert "preferredScope:['Suggested Network Scope'" in SHELL_SCRIPT
+    assert "preferredScope:['Reviewed live-contact scope and retained-evidence suggestion'" in SHELL_SCRIPT
     assert "(run.additional_commands||[]).join('\\n')" in html
     assert "run.device_scope_assignment?.scope_id||run.preferred_scope_id" in html
-    assert "still confirms that the whole collection belongs in this scope" in html
+    assert "after local analysis, an analyst separately confirms whether the whole retained collection belongs in that scope" in html
     assert "VyOS and pfSense create a named temporary output file" in html
     assert "Cisco, Juniper, and UniFi devices return output directly through SSH and do not run SCP" in html
     assert '<option value="unifi">UniFi</option>' in html
@@ -2001,7 +2003,8 @@ def test_map_gap_prepares_existing_scan_builder_without_direct_network_contact()
     assert 'id="mapScanHandoff"' in scan_html
     assert "function applyMapScanHandoff()" in scan_html
     assert "item.saved_network_id===requestedId&&item.cidr===target" in scan_html
-    assert "This target was prepared as manual and unscoped" in scan_html
+    assert "This target was prepared as a manual target" in scan_html
+    assert "reviewed Mission Environment scope is shown below" in scan_html
     assert "label.includes(target)?`Selected ${kind}: ${label}`" in scan_html
     assert "if(ownsTask())applyMapScanHandoff()" in scan_html
     assert 'section.dataset.guideContext=\'map-scan-preparation\'' in map_html

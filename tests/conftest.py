@@ -44,6 +44,7 @@ def bypass_collection_safety_gate(monkeypatch):
     monkeypatch.setattr("app.poc.require_collection_safety_ready", ready)
     monkeypatch.setattr("app.poc.require_collection_safety_ready_on_connection", ready)
     monkeypatch.setattr("app.poc.bind_collection_scope_context_on_connection", bind)
+    monkeypatch.setattr("app.poc.active_collection_enabled", lambda: False)
     monkeypatch.setattr("app.device_configs.require_collection_safety_ready", ready)
     monkeypatch.setattr("app.device_configs.require_device_contact_manifest_ready", ready)
     yield
