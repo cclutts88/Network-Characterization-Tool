@@ -113,4 +113,43 @@ await eval(`(async () => {
   assert.equal(storage.has(BATCH_ATTEMPT_KEY),false,'accepted receipt must clear only its completed pending attempt');
 })()`);
 
+await eval(`(async () => {
+  async function exerciseAmbiguousResponse(response) {
+    let batchPreview={preview_digest:'digest-ambiguous',global_no_strike_revision:4,runs:[{selection_order:1}]},batchReviewInFlight=false,batchSubmitInFlight=false,batchEditorLocked=false,batchSubmissionUncertain=false,batchOperationRevision=0,batchRequestToken='scan-batch-ambiguous-token',batchPendingSubmission=null,batchSelectionOrder=['alpha','bravo'];
+    let activeCollectionEnabled=true,sessionAnalyst={role:'analyst'};
+    const controls=new Map(),lockedNodes=[fakeElement(),fakeElement()];
+    const $=id=>{if(!controls.has(id))controls.set(id,fakeElement());return controls.get(id)};
+    $('scopeMode').value='batch';
+    const document={querySelectorAll(){return lockedNodes}};
+    const storage=new Map(),localStorage={getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)};
+    const BATCH_ATTEMPT_KEY='attempt';
+    const collectionContactBlocked=()=>false,updateSchedulePin=()=>{};
+    const base={name_template:'Mission $subnet',selections:[{saved_network_id:'alpha'},{saved_network_id:'bravo'}]};
+    const batchPayloadBase=()=>structuredClone(base),batchFingerprint=value=>JSON.stringify(value);
+    storage.set(BATCH_ATTEMPT_KEY,JSON.stringify({state:'reviewed',fingerprint:batchFingerprint(base),request_token:batchRequestToken,preview:batchPreview}));
+    const fetch=async()=>response;
+    const renderBatchReceipt=()=>assert.fail('ambiguous response must not render an accepted receipt');
+    const renderBatchPreview=data=>{batchPreview=data};
+    const status=()=>{};
+    const renderBatchOrder=()=>{},renderNetworkScopeReview=()=>{},scheduleDraftSave=()=>{};
+    ${functionLine("updateMissionActionState")}
+    ${functionLine("setBatchEditorLocked")}
+    ${functionLine("clearStoredBatchAttempt")}
+    ${functionLine("storeBatchAttempt")}
+    ${functionLine("queueReviewedBatch")}
+    await queueReviewedBatch();
+    const saved=JSON.parse(storage.get(BATCH_ATTEMPT_KEY));
+    assert.equal(saved.state,'submitting');
+    assert.equal(saved.request_token,'scan-batch-ambiguous-token');
+    assert.equal(batchSubmissionUncertain,true);
+    assert.equal(batchEditorLocked,true);
+    assert.equal($('queueBatch').textContent,'Retry saved submission');
+  }
+
+  for (const statusCode of [502,504]) {
+    await exerciseAmbiguousResponse({ok:false,status:statusCode,json:async()=>({detail:'gateway did not confirm the result'})});
+  }
+  await exerciseAmbiguousResponse({ok:false,status:500,json:async()=>{throw new SyntaxError('malformed gateway body')}});
+})()`);
+
 console.log("Scan batch UI request ownership regressions passed");

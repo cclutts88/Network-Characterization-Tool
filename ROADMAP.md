@@ -331,8 +331,10 @@ dedicated panels remain absent elsewhere and live work stops after navigation.
   ignored, and an uncertain submission keeps the exact actor/content-bound retry until the
   server returns the durable accepted receipt or a definite rejection. A dispatcher wake
   failure after commit now returns the accepted receipt with an explicit pending-dispatch
-  warning instead of inviting a new batch. Focused backend, runtime and UI-contract checks
-  pass; the complete suite and independent re-review remain open.
+  warning instead of inviting a new batch. Ambiguous 5xx, gateway-timeout, and malformed
+  server responses also preserve the exact locked request for token-safe retry; only an
+  accepted receipt or a validated client-side pre-admission rejection clears it. Focused
+  backend, runtime and UI-contract checks pass; independent re-review remains open.
 
 ## Device command attribution — completed 2026-10-25
 
