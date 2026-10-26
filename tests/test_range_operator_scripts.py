@@ -127,9 +127,9 @@ def test_quick_start_verifies_the_outer_package_before_extraction():
     assert 'export NCT_PACKAGE_SHA256="$actual_package_sha256"' in content
     assert "A missing" in content
     assert "stops installation before extraction" in content
-    assert "0.16.0-range-test-20261013-phase3-r3" in content
-    assert "f6ba1ad4a754b904511e3d726110d6fc35b9f237" in content
-    assert "Every other version-5" in content
+    assert "0.16.0-range-test-20261025-phase5-r1" in content
+    assert "b908834cb60327a640e9987fddff036c4df9fb75" in content
+    assert "version-5 installation must first" in content
 
 
 def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():
@@ -149,6 +149,7 @@ def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():
     assert "wal_checkpoint(TRUNCATE)" in script
     assert script.index("wal_checkpoint(TRUNCATE)") < script.rindex("active_check")
     assert "nct-schema-preflight.py" in script
+    assert "--required-source-version 6" in script
     assert "report.get(\"database_sha256\")" in script
     assert "recovery-backup-verify" in script
     assert "cmp -s \"$before\" \"$verify_inventory\"" in script
@@ -329,8 +330,8 @@ def test_quick_start_requires_release_specific_scope_handoff_acceptance():
     )
     normalized = " ".join(content.split())
 
-    assert "NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip" in content
-    assert "0.16.0-range-test-20261013-phase3-r3" in content
+    assert "NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip" in content
+    assert "0.16.0-range-test-20261025-phase5-r1" in content
     assert "$NCT_WORKDIR/RELEASE-RECEIPT.txt" in content
     assert "Saved scope handoff needs correction" in content
     assert "Repair saved scope handoff" in content
@@ -425,6 +426,7 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert '"$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db' in content
     assert '--expected-build-id "$original_build_id"' in content
     assert '--expected-build-commit "$original_build_commit"' in content
+    assert "--required-source-version 6" in content
     assert 'schema_preflight_sha256=%s' in content
     assert 'preflight_binding_code' in content
     assert 'schema_preflight=%s' in content

@@ -169,7 +169,8 @@ docker run --rm \
     -v "$SCHEMA_PREFLIGHT:/opt/nct-schema-preflight.py:ro,Z" \
     "$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db \
         --expected-build-id "$original_build_id" \
-        --expected-build-commit "$original_build_commit" > "$audit" ||
+        --expected-build-commit "$original_build_commit" \
+        --required-source-version 6 > "$audit" ||
     die "The saved schema is not an exact supported recovery source."
 chmod 600 "$audit"
 snapshot "$DATA_DIR" "$before"

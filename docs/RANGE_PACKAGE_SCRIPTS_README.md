@@ -116,9 +116,13 @@ retained original image to complete SQLite's normal stopped-database WAL
 checkpoint, and then runs `nct-schema-preflight.py` through the replacement
 image with the data mounted read-only. The audit records database integrity,
 fingerprints, migration history, originating build identity, known version-4
-maintenance tables, and the database SHA-256. Only exact reviewed version-4 and
-version-5 Range sources are accepted. Unknown, incomplete, or altered schema stops
-the upgrade and restores the earlier container.
+maintenance tables, and the database SHA-256. This Phase 5 package accepts only
+the exact reviewed schema-version-6 `phase4-r5` Range source. Version-5 data must
+first use the exact Phase 4 bridge package. Unknown, incomplete, altered, or other
+schema versions stop the upgrade and the helper restores the earlier container.
+
+Rollback restores the matching pre-upgrade data backup before starting the earlier
+image. Restarting the earlier image against schema-version-7 data is not a rollback.
 
 If the retained earlier container itself cannot restart, begin with the
 read-only diagnostic and `nct-recover-installed.sh`. Use

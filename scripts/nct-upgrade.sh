@@ -358,7 +358,8 @@ docker run --rm \
     -v "$SCHEMA_PREFLIGHT:/opt/nct-schema-preflight.py:ro,Z" \
     "$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db \
         --expected-build-id "$original_build_id" \
-        --expected-build-commit "$original_build_commit" > "$schema_preflight" ||
+        --expected-build-commit "$original_build_commit" \
+        --required-source-version 6 > "$schema_preflight" ||
     die "The saved schema is not an exact supported upgrade source. The original NCT container will be restored."
 chmod 600 "$schema_preflight"
 snapshot "$before"

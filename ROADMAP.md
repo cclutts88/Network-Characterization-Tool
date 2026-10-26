@@ -5920,6 +5920,38 @@ Dated implementation records are retained in their original order. This record i
 completed work, work in progress, validation, deviations and deployment limitations.
 
 
+### Phase 5 Range transfer candidate — started 2026-10-25
+
+- [~] Seal the exact foundation checkpoint as an air-gapped Range package with the
+  NCT image, Caddy image, checksums, package manifest, release receipt, installation,
+  upgrade, recovery and rollback helpers, and the Arkime connector setup material.
+- [x] Compatibility discovery: package preparation found that the installed
+  `phase4-r5` Range image and the current application both reported schema version 6,
+  even though the current application adds the reviewed Arkime/runtime storage
+  objects. Leaving both structures under one version could allow the replacement to
+  start once, then fail its fingerprint check after a restart.
+- [x] Revised architecture: version the new structure as schema 7. Admit an existing
+  Range only when its running image, recorded origin, exact historical schema
+  fingerprint, six completed migrations, plan, layout, integrity and foreign-key
+  checks match the reviewed `phase4-r5` source. Apply and seal the Arkime/runtime
+  schema as migration 7, then require a successful restart against the sealed result.
+- [x] Package boundary: this Phase 5 package accepts only exact schema-version-6
+  `phase4-r5` data. Version-5 data must first use the exact Phase 4 bridge package;
+  the Phase 5 image and package preflight stop with that instruction rather than
+  attempting an ambiguous two-stage migration.
+- [x] Regression fixture: retain a schema-only, credential-free database definition
+  created by the exact historical `phase4-r5` image so upgrade behavior is tested
+  against the real predecessor structure instead of a synthetic self-description.
+- [x] Source validation: `2133 passed, 21 skipped`; the independent quality gate
+  returned `CLEAR — DOCUMENTED DEVIATION` after independently exercising startup and
+  restart from the historical fixture with network access disabled. That clearance
+  covers the versioned compatibility correction, not deployment on the Range.
+- [ ] Complete exact-image fresh and retained-data startup plus restart checks,
+  browser/API smoke, package extraction/checksum/script checks,
+  independent review and novice-operator review. Record exact image, commit, archive
+  digest and package status here before calling the package locally ready for transfer.
+
+
 ### Unified Mission Environment collection context — completed 2026-10-25
 
 - [x] Reconcile the earlier adaptive-collection rule with the completed Scope & Safety

@@ -209,10 +209,10 @@ local retention policy.
 
 You need:
 
-- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip` uploaded to
+- the file `NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip` uploaded to
   the Range server;
 - the matching adjacent file
-  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip.sha256` uploaded to
+  `NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip.sha256` uploaded to
   the same folder;
 - access to a terminal on the Range server with root or `sudo` privileges;
 - the Range server's IP address; and
@@ -228,7 +228,7 @@ Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
 cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261013-phase3-r3.zip
+package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip
 checksum_file="$package_zip.sha256"
 [ -f "$checksum_file" ] || {
     echo "HALT: the matching package checksum file is missing: $checksum_file" >&2
@@ -427,11 +427,12 @@ first completes SQLite's normal stopped-database checkpoint so the audit cannot
 miss recently committed records. The replacement image then audits the saved
 database through a read-only mount without changing it. The audit verifies database
 integrity, the complete saved migration history, and the exact recorded structure
-and build identity. Only exact reviewed version-4 sources and the version-5 Range
-source `0.16.0-range-test-20261013-phase3-r3` at commit
-`f6ba1ad4a754b904511e3d726110d6fc35b9f237` are accepted. Every other version-5
-source, and any unknown, incomplete, or altered structure, stops the upgrade and
-restores the original container. After the audit passes, the helper backs up the permanent
+and build identity. This Phase 5 package accepts only the exact schema-version-6
+Range source `0.16.0-range-test-20261019-phase4-r5` at commit
+`b908834cb60327a640e9987fddff036c4df9fb75`. A version-5 installation must first
+use the exact Phase 4 bridge package; do not point this package directly at it.
+Any other version, build, incomplete history, or altered structure stops the upgrade
+and restores the original container. After the audit passes, the helper backs up the permanent
 data, retains the old container, preserves the installation's current web port,
 starts NCT 0.16.0, and confirms that stored file and record counts did not go
 down.
@@ -476,6 +477,10 @@ If replacement validation fails after the new application may have written,
 the helper preserves the failed container and data, restores and verifies the
 cold backup, and leaves the incompatible old image stopped. It never starts the
 old image against replacement-written data.
+
+Rollback must restore the matching pre-upgrade data backup before the older image
+is started. The older image cannot safely open data after the schema-version-7
+transition.
 
 What success looks like: the helper verifies retained files, registered
 artifacts, database record counts, accounts, image identity, mount, port, build,
@@ -536,21 +541,20 @@ following:
 
 - the `nct` container is running;
 - the health response shows version `0.16.0`;
-- the build ID is `0.16.0-range-test-20261013-phase3-r3`;
+- the build ID is `0.16.0-range-test-20261025-phase5-r1`;
 - the `/data` mount points to `/var/lib/nct/data`; and
 - the logs do not show repeated startup errors.
 
-Both the ZIP name and build ID end in `phase3-r3`. Open
+Both the ZIP name and build ID end in `phase5-r1`. Open
 `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it lists this same package
 revision, image name, build ID, and source commit before continuing.
 
-This `phase3-r3` package predates the automatic Arkime connector. Do not add the
-connector by copying files into this package. A later connector-capable release must
-list `compose.arkime.yaml` in its verified package manifest and include
-[`ARKIME_CONNECTOR_RANGE_SETUP.md`](ARKIME_CONNECTOR_RANGE_SETUP.md). That procedure
-creates a separate read-only Arkime account, installs the trusted CA and password as
-root-only files, and adds the verified Compose override. Do not place the Arkime
-password in a guide, Compose file or shell command line.
+This `phase5-r1` package includes the automatic Arkime connector. Follow
+[`ARKIME_CONNECTOR_RANGE_SETUP.md`](ARKIME_CONNECTOR_RANGE_SETUP.md); do not copy
+individual connector files from another release. That procedure creates a separate
+read-only Arkime account, installs the trusted CA and password as root-only files,
+and applies the verified Compose override. Do not place the Arkime password in a
+guide, Compose file or shell command line.
 
 Then verify the saved information in the browser:
 
