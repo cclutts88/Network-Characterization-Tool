@@ -507,6 +507,7 @@ def test_unfinished_scan_recovery_wrapper_is_fail_closed_and_documented():
     assert 'restore_runtime' in content
     assert 'another container has an overlapping NCT data mount' in content
     assert 'cmp -s "$source_inventory" "$restored_inventory"' in content
+    assert content.count("LC_ALL=C sort -z") == 2
     assert 'sha256sum "$backup" > "$backup.sha256"' in content
     assert '--plan-digest "$plan_digest"' in content
     assert 'docker_probe update --restart=no "$CONTAINER"' in content

@@ -9011,6 +9011,16 @@ Reason: The generic worker is a later Phase 1 item; Settings must not hash evide
 
 Impact / Follow-up: Interrupted jobs are shown as interrupted and can be explicitly rerun; deploy with the existing single application worker until cross-process scheduling is implemented
 
+#### 2026-10-26 · Phase 5 dual-Range deployment and 247_835th clean start
+
+Planned: Upgrade both isolated Range installations to the sealed Phase 5 R1 package while retaining existing NCT data
+
+Revised / Implemented: Install Phase 5 R1 as a clean NCT instance on both Ranges. The 247_42nd Range had no required retained NCT data and was started clean earlier in this deployment. On the 247_835th Range, the old version-6 scheduled-work state recreated unfinished work when the rollback build was started for its normal upgrade check. The packaged stopped-container recovery helper could not run against that older image because its required recovery module was absent. At the user's explicit direction, only `/var/lib/nct` and the `nct` container were removed; the controller and all non-NCT system files were left unchanged. Phase 5 R1 was then installed with a new database and administrator credentials
+
+Reason: The saved scans and evidence on 247_835th were not needed, and continuing a one-off migration would have delayed Range testing while adding avoidable recovery risk
+
+Impact / Follow-up: 247_835th is accepted only as a clean installation. It passed exact build and commit checks, HTTPS `/health`, an administrator-login check, and a stop/start persistence check. Build `0.16.0-range-test-20261025-phase5-r1` at commit `be92fb78e938adc3fced581629d4609ac0a43f6a` is running with restart policy `unless-stopped`. No claim is made that version-6 retained data can migrate through this package. During this installation the interactive administrator-password confirmation failed, so the operator completed the password reset directly and removed the secret content. That manual recovery did not reach the packaged launcher's normal container recreation step, leaving its temporary bootstrap path attached; deleting the path then prevented restart on the older Docker engine. The accepted Range therefore leaves a protected empty file at that exact path. This is a documented one-installation deviation, not a defect attributed to the launcher's completed path. A future package should make an interrupted password prompt easy to resume or clean up, and its stopped-container recovery must run from a helper image that contains the required recovery module
+
 #### 2026-09-27 · Phase 1 reliability
 
 Planned: Read-only storage inventory connection

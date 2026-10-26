@@ -225,13 +225,13 @@ if [ "$(docker_probe inspect --format '{{.State.Running}}' "$CONTAINER")" = true
 
 if [ "$mount_type" = bind ]; then data_mount="$data_path:/data:ro"; else data_mount="$data_source:/data:ro"; fi
 set -- --network none --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt label=disable --pids-limit 128 --tmpfs /tmp:rw,noexec,nosuid,size=16m
-docker_helper run --name "$helper" --rm "$@" -v "$data_mount" "$image" sh -c 'cd /data && find . -type f -print0 | sort -z | xargs -0 -r sha256sum' > "$source_inventory"
+docker_helper run --name "$helper" --rm "$@" -v "$data_mount" "$image" sh -c 'cd /data && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum' > "$source_inventory"
 docker_helper run --name "$helper" --rm "$@" -v "$data_mount" -v "$run_dir:/backup" "$image" sh -c "cd /data && tar -czf /backup/$backup_name ."
 [ -s "$backup" ] || { echo "HALT: cold backup was not created" >&2; exit 2; }
 sha256sum "$backup" > "$backup.sha256"
 mkdir -m 0700 "$verify_dir"
 tar -C "$verify_dir" -xzf "$backup"
-(cd "$verify_dir" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum) > "$restored_inventory"
+(cd "$verify_dir" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum) > "$restored_inventory"
 cmp -s "$source_inventory" "$restored_inventory" || { echo "HALT: independently extracted backup does not match retained data" >&2; exit 2; }
 
 plan_status=0
