@@ -20,6 +20,19 @@ preflight and acceptance steps.
 The diagnostic prints the matching next command. Do not use upgrade, a start script,
 or a blank installation as a shortcut around an unknown or unreadable work check.
 
+## Package contents
+
+Run a script only when the main quickstart or the diagnostic names it. Python files
+in this folder are internal helpers called by the shell workflow; do not run them as
+standalone repair commands.
+
+| Class | Files | Purpose |
+| --- | --- | --- |
+| Normal operator entry points | `nct-diagnostic-report.sh`, `nct-recover-installed.sh`, `nct-reset-unfinished.sh`, `nct-fresh-install.sh`, `nct-set-admin.sh` | Diagnose, recover, repair retained work, perform an approved blank replacement, or manage the Administrator. |
+| Main quickstart only | `nct-upgrade.sh`, `nct-rollback-upgrade.sh`, `nct-recover-unhealthy-upgrade.sh`, `nct-migrate-data.sh`, `nct-start-compose.sh`, `nct-start-docker.sh`, `nct-start-legacy.sh` | Upgrade, roll back, migrate older storage, or start through the exact path selected by the guide. |
+| Internal Python helpers | `nct-diagnostic-report.py`, `nct-reset-unfinished.py`, `nct-fresh-install.py`, `nct-schema-preflight.py`, `nct-range-data-check.py` | Read and verify saved state for the matching shell workflow. These are not independent operator commands. |
+| Compatibility or administrator tools | `install-nct.sh`, `nct-deploy.sh`, `nct-range-direct-deploy.sh`, `nct-admin-recover.sh`, `nct-set-admin-password.sh`, `setup-lab-https.sh`, `nct-range-matrix.sh` | Preserve older deployment and lab procedures. Use only when the authoritative guide or an administrator explicitly names the exact command. |
+
 ## Exact installed-build recovery
 
 After the diagnostic names a stopped, restarting, or unhealthy saved container, run:
@@ -118,8 +131,11 @@ image with the data mounted read-only. The audit records database integrity,
 fingerprints, migration history, originating build identity, known version-4
 maintenance tables, and the database SHA-256. This Phase 5 package accepts only
 the exact reviewed schema-version-6 `phase4-r5` Range source. Version-5 data must
-first use the exact Phase 4 bridge package. Unknown, incomplete, altered, or other
-schema versions stop the upgrade and the helper restores the earlier container.
+first use `NCT-Air-Gapped-Range-Deployment-0.16.0-20261019-phase4-r5.zip` with its
+matching adjacent checksum. That bridge is not included here. Stop, preserve the
+current installation, obtain the exact bridge, and follow its guide through acceptance
+before returning to this package. Unknown, incomplete, altered, or other schema versions
+stop the upgrade and the helper restores the earlier container.
 
 Rollback restores the matching pre-upgrade data backup before starting the earlier
 image. Restarting the earlier image against schema-version-7 data is not a rollback.

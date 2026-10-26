@@ -220,15 +220,17 @@ You need:
   required.
 
 In the examples below, the ZIP is in `/root`. If your browser placed it in a
-different folder, use that folder in the first command.
+different folder, set `package_dir` to that full folder path in the first command.
+The remaining commands use that one value.
 
 ## 1. Open the package
 
 Open the Range server's terminal and run these commands one line at a time:
 
 ```sh
-cd /root
-package_zip=/root/NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip
+package_dir=/root
+cd "$package_dir"
+package_zip="$package_dir/NCT-Air-Gapped-Range-Deployment-0.16.0-20261025-phase5-r1.zip"
 checksum_file="$package_zip.sha256"
 [ -f "$checksum_file" ] || {
     echo "HALT: the matching package checksum file is missing: $checksum_file" >&2
@@ -237,15 +239,15 @@ checksum_file="$package_zip.sha256"
 actual_package_sha256=$(sha256sum "$package_zip" | awk '{print $1}')
 export NCT_PACKAGE_SHA256="$actual_package_sha256"
 echo "Package SHA-256: $actual_package_sha256"
-(cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1
-if [ -e /root/NCT-Air-Gapped-Range-Deployment ]; then
-    staging_dir="/root/nct-package-$(date -u +%Y%m%dT%H%M%SZ)"
+(cd "$package_dir" && sha256sum -c "$(basename "$checksum_file")") || exit 1
+if [ -e "$package_dir/NCT-Air-Gapped-Range-Deployment" ]; then
+    staging_dir="$package_dir/nct-package-$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir -m 0700 "$staging_dir"
     unzip "$package_zip" -d "$staging_dir"
     export NCT_WORKDIR="$staging_dir/NCT-Air-Gapped-Range-Deployment"
 else
-    unzip "$package_zip" -d /root
-    export NCT_WORKDIR=/root/NCT-Air-Gapped-Range-Deployment
+    unzip "$package_zip" -d "$package_dir"
+    export NCT_WORKDIR="$package_dir/NCT-Air-Gapped-Range-Deployment"
 fi
 cd "$NCT_WORKDIR"
 sha256sum -c PACKAGE-MANIFEST.sha256 || exit 1
@@ -430,7 +432,12 @@ integrity, the complete saved migration history, and the exact recorded structur
 and build identity. This Phase 5 package accepts only the exact schema-version-6
 Range source `0.16.0-range-test-20261019-phase4-r5` at commit
 `b908834cb60327a640e9987fddff036c4df9fb75`. A version-5 installation must first
-use the exact Phase 4 bridge package; do not point this package directly at it.
+use `NCT-Air-Gapped-Range-Deployment-0.16.0-20261019-phase4-r5.zip`, whose build is
+`0.16.0-range-test-20261019-phase4-r5` at that same commit. That bridge and its
+adjacent checksum are not included in this package. Stop, preserve the current
+installation, obtain the exact bridge ZIP and checksum, and follow its own guide
+through acceptance before extracting this Phase 5 package into a new staging folder.
+Do not point this package directly at version-5 data or guess at a helper here.
 Any other version, build, incomplete history, or altered structure stops the upgrade
 and restores the original container. After the audit passes, the helper backs up the permanent
 data, retains the old container, preserves the installation's current web port,
@@ -548,6 +555,34 @@ following:
 Both the ZIP name and build ID end in `phase5-r1`. Open
 `$NCT_WORKDIR/RELEASE-RECEIPT.txt` and confirm that it lists this same package
 revision, image name, build ID, and source commit before continuing.
+
+Now verify that the accepted build survives an ordinary restart. Do this before
+starting any new scan or collection:
+
+```sh
+docker restart nct || exit 1
+attempt=0
+until health=$(curl --connect-timeout 2 --max-time 5 -k https://RANGE_IP:8445/health 2>/dev/null); do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 30 ] || {
+        echo "HALT: NCT did not become healthy after restart." >&2
+        exit 1
+    }
+    sleep 1
+done
+printf '%s\n' "$health"
+printf '%s\n' "$health" | grep -q '"status":"ok"' || exit 1
+printf '%s\n' "$health" | grep -q '"build_id":"0.16.0-range-test-20261025-phase5-r1"' || exit 1
+docker ps --filter name=nct
+docker inspect nct --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+docker logs --since 2m nct
+```
+
+Use the same approved HTTPS port substituted above if it is not 8445. Confirm the
+same build, `/data` mount and absence of repeated startup errors after this restart.
+If any restart check fails, stop acceptance, preserve the output, and use section 10
+with the exact upgrade receipt. Do not keep restarting or attach the older image to
+schema-version-7 data.
 
 This `phase5-r1` package includes the automatic Arkime connector. Follow
 [`ARKIME_CONNECTOR_RANGE_SETUP.md`](ARKIME_CONNECTOR_RANGE_SETUP.md); do not copy

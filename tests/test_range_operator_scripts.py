@@ -105,7 +105,7 @@ def test_quick_start_keeps_an_existing_package_folder_separate():
         encoding="utf-8"
     )
 
-    assert "if [ -e /root/NCT-Air-Gapped-Range-Deployment ]; then" in content
+    assert 'if [ -e "$package_dir/NCT-Air-Gapped-Range-Deployment" ]; then' in content
     assert 'mkdir -m 0700 "$staging_dir"' in content
     assert 'unzip "$package_zip" -d "$staging_dir"' in content
     assert 'export NCT_WORKDIR="$staging_dir/NCT-Air-Gapped-Range-Deployment"' in content
@@ -117,12 +117,15 @@ def test_quick_start_verifies_the_outer_package_before_extraction():
     content = (ROOT / "docs" / "AIR_GAPPED_RANGE_QUICKSTART.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(content.split())
 
     verify = 'checksum_file="$package_zip.sha256"'
     extract = 'unzip "$package_zip"'
     assert verify in content
     assert content.index(verify) < content.index(extract)
-    assert '(cd /root && sha256sum -c "$(basename "$checksum_file")") || exit 1' in content
+    assert 'package_dir=/root' in content
+    assert 'package_zip="$package_dir/NCT-Air-Gapped-Range-Deployment' in content
+    assert '(cd "$package_dir" && sha256sum -c "$(basename "$checksum_file")") || exit 1' in content
     assert 'echo "Package SHA-256: $actual_package_sha256"' in content
     assert 'export NCT_PACKAGE_SHA256="$actual_package_sha256"' in content
     assert "A missing" in content
@@ -130,6 +133,11 @@ def test_quick_start_verifies_the_outer_package_before_extraction():
     assert "0.16.0-range-test-20261025-phase5-r1" in content
     assert "b908834cb60327a640e9987fddff036c4df9fb75" in content
     assert "version-5 installation must first" in content
+    assert "0.16.0-20261019-phase4-r5.zip" in content
+    assert "That bridge and its adjacent checksum are not included" in normalized
+    assert "docker restart nct || exit 1" in content
+    assert "NCT did not become healthy after restart" in content
+    assert '"build_id":"0.16.0-range-test-20261025-phase5-r1' in content
 
 
 def test_unhealthy_source_recovery_is_fail_closed_and_fully_verified():
@@ -481,6 +489,12 @@ def test_packaged_scripts_guide_explains_schema_preflight():
     assert "nct-schema-preflight.py" in content
     assert "data mounted read-only" in content
     assert "restores the earlier container" in content
+    assert "## Package contents" in content
+    assert "Normal operator entry points" in content
+    assert "Main quickstart only" in content
+    assert "Internal Python helpers" in content
+    assert "Compatibility or administrator tools" in content
+    assert "That bridge is not included here" in content
 
 
 def test_unfinished_scan_recovery_wrapper_is_fail_closed_and_documented():
