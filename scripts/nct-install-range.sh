@@ -5,6 +5,7 @@ umask 077
 NCT_PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 export NCT_WORKDIR="$NCT_PACKAGE_ROOT"
 NCT_RANGE_IP=${1:-}
+NCT_RECOVERY_BIND_ADDRESS=${NCT_RECOVERY_BIND_ADDRESS:-$NCT_RANGE_IP}
 NCT_SETUP_MODE=${2:-all}
 NCT_TARGET_CONTAINER=${NCT_CONTAINER:-nct}
 export NCT_CONTAINER="$NCT_TARGET_CONTAINER"
@@ -17,7 +18,7 @@ case "$NCT_SETUP_MODE" in all|check|enable-console) ;; *) die "Mode must be all,
 for tool in docker python3 systemctl sha256sum openssl curl ss flock; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required on the offline host. Nothing was installed or downloaded."
 done
-python3 -c 'import sys,ipaddress,fcntl,sqlite3,ssl; assert sys.version_info >= (3,9), "Python 3.9 or newer is required"; ipaddress.ip_address(sys.argv[1])' "$NCT_RANGE_IP" || die "Host Python or address check failed."
+python3 -c 'import sys,ipaddress,fcntl,sqlite3,ssl; assert sys.version_info >= (3,9), "Python 3.9 or newer is required"; [ipaddress.ip_address(value) for value in sys.argv[1:]]' "$NCT_RANGE_IP" "$NCT_RECOVERY_BIND_ADDRESS" || die "Host Python or address check failed."
 docker run --help | grep -q -- '--pull' || die "The host Docker CLI must support --pull=never for the independent recovery helper."
 docker info >/dev/null 2>&1 || die "Docker is unavailable."
 systemctl show-environment >/dev/null 2>&1 || die "A working systemd host service is required."
@@ -45,7 +46,7 @@ NCT_CA=${NCT_CA_FILE:-$NCT_PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}
 if [ -f "$NCT_CERT" ]; then
     [ -f "$NCT_KEY" ] && [ -f "$NCT_CA" ] || die "Existing HTTPS key or root CA is missing. Set NCT_CA_FILE to the issuing CA; do not substitute an unrelated server certificate."
     openssl verify -CAfile "$NCT_CA" "$NCT_CERT" >/dev/null || die "Existing certificate is not trusted by the selected CA."
-    curl --cacert "$NCT_CA" --connect-timeout 3 --max-time 10 -fsS "https://$NCT_RANGE_IP:$NCT_APP_PORT/health" >/dev/null || die "Issuing-CA verified HTTPS to this host IP failed. Preserve existing TLS and review its address or trust chain."
+    curl --noproxy '*' --cacert "$NCT_CA" --connect-timeout 3 --max-time 10 -fsS "https://$NCT_RANGE_IP:$NCT_APP_PORT/health" >/dev/null || die "Issuing-CA verified HTTPS to this host IP failed. Preserve existing TLS and review its address or trust chain."
 fi
 if ! docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
     if [ -e "$NCT_PERSIST_ROOT/data" ] && [ -n "$(find "$NCT_PERSIST_ROOT/data" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -74,7 +75,7 @@ NCT_ACTUAL_COMMIT=$(docker exec "$NCT_TARGET_CONTAINER" python -c 'from app.buil
 NCT_CONSOLE_ID=$(docker image inspect --format '{{.Id}}' "$NCT_CONSOLE_IMAGE")
 python3 "$NCT_PACKAGE_ROOT/scripts/install_nct_recovery.py" --container "$NCT_TARGET_CONTAINER" --console-container "${NCT_RECOVERY_CONTAINER:-$NCT_TARGET_CONTAINER-recovery-console}" \
     --console-image "$NCT_CONSOLE_ID" --application-url "https://$NCT_RANGE_IP:$NCT_APP_PORT" \
-    --console-url "https://$NCT_RANGE_IP:$NCT_CONSOLE_PORT" --bind-address "$NCT_RANGE_IP" \
+    --console-url "https://$NCT_RANGE_IP:$NCT_CONSOLE_PORT" --bind-address "$NCT_RECOVERY_BIND_ADDRESS" \
     --data-dir "$NCT_PERSIST_ROOT/data" --state-dir "$NCT_PERSIST_ROOT/deployment/recovery-console" \
     --install-dir "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}" \
     --cert-file "$NCT_CERT" --key-file "$NCT_KEY" --ca-file "$NCT_CA" --enable-container

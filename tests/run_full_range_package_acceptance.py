@@ -12,6 +12,7 @@ from pathlib import Path
 import secrets
 import shutil
 import signal
+import socket
 import ssl
 import subprocess
 import sys
@@ -39,7 +40,7 @@ def main():
     name = "nct-full-package-" + secrets.token_hex(6)
     console_name = name + "-console"
     authority = Path("/etc/hostname").read_text().strip()
-    gateway = json.loads(engine.command("network", "inspect", "bridge"))[0]["IPAM"]["Config"][0]["Gateway"]
+    gateway = socket.gethostbyname("host.docker.internal")
     persist, installed = root / "persist", root / "installed"
     data = persist / "data"
     data.mkdir(parents=True)
@@ -50,7 +51,7 @@ def main():
     bootstrap.write_text(password)
     os.chmod(bootstrap, 0o600)
     original_id = engine.command("run", "-d", "--name", name, "--restart", "on-failure:3", "--cap-add", "NET_RAW",
-        "-p", gateway + ":18159:8445", "-v", f"{data}:/data", "-v", f"{tls}/tls/nct-server.crt:/run/tls/nct-server.crt:ro",
+        "-p", "127.0.0.1:18159:8445", "-v", f"{data}:/data", "-v", f"{tls}/tls/nct-server.crt:/run/tls/nct-server.crt:ro",
         "-v", f"{tls}/tls/nct-server.key:/run/tls/nct-server.key:ro", "-v", f"{bootstrap}:/run/retained-bootstrap:ro",
         "-e", "NCT_AUTH_MODE=local", "-e", "NCT_COOKIE_SECURE=1", "-e", "NCT_BOOTSTRAP_ADMIN=package-operator",
         "-e", "NCT_BOOTSTRAP_PASSWORD_FILE=/run/retained-bootstrap", "-e", "NCT_PACKAGE_PRESERVE_ME=retained-setting",
@@ -93,6 +94,7 @@ def main():
     env = {**os.environ, "PATH": str(bin_dir) + ":" + os.environ["PATH"], "PYTHONPATH": str(shim),
         "NCT_CONTAINER": name, "NCT_RECOVERY_CONTAINER": console_name, "NCT_PERSIST_ROOT": str(persist),
         "NCT_RECOVERY_INSTALL_DIR": str(installed), "NCT_HTTPS_PORT": "18159", "NCT_RECOVERY_PORT": "18160"}
+    env["NCT_RECOVERY_BIND_ADDRESS"] = "127.0.0.1"
     launcher = str(package / "scripts/nct-install-range.sh")
     with (root / "bootstrap.log").open("wb") as log:
         for mode in ("check", "all"):

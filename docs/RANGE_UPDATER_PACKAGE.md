@@ -59,6 +59,11 @@ export NCT_RECOVERY_PORT=8446
 export NCT_PERSIST_ROOT=/var/lib/nct
 ```
 
+The recovery listener normally binds the same host IP used in its HTTPS URL. An
+administrator using an approved local proxy may explicitly set
+`NCT_RECOVERY_BIND_ADDRESS` separately; this does not change the advertised address,
+certificate validation or approved-source firewall requirements.
+
 ## Finish in the browser
 
 After application acceptance, the trusted host installer enables the independent
