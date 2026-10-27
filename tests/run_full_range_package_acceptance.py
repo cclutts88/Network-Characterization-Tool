@@ -16,6 +16,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
 
@@ -125,15 +126,54 @@ def main():
     time.sleep(4)
     assert not engine.inspect(console_name)["State"]["Running"]
     engine.command("stop", name)
+    old_check = root / "old-image-copy"
+    old_check.mkdir()
+    shutil.copyfile(data / "analyzer.db", old_check / "analyzer.db")
+    refusal = engine.command("run", "--rm", "--network", "none", "-v", f"{old_check}:/data",
+        "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1", "python", "-c",
+        "from pathlib import Path; from app.schema_compatibility import begin_schema_migration,SchemaCompatibilityError;\ntry: begin_schema_migration(Path('/data/analyzer.db'))\nexcept SchemaCompatibilityError as e:\n assert 'newer than' in str(e); print('OLD_IMAGE_REFUSED_SCHEMA8')\nelse: raise RuntimeError('Old image opened version8')")
+    assert "OLD_IMAGE_REFUSED_SCHEMA8" in refusal
     engine.command("start", name)
     probe.wait_url(app_url + "/health/readiness", lambda value: value.get("healthy") is True)
     request("/api/auth/login", {"username": "package-operator", "password": password})
+    def isolated_ready(candidate):
+        for _ in range(60):
+            try:
+                value = json.loads(engine.command("exec", candidate, "python", "-c", "import json,urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/health/readiness').read().decode())"))
+                if value.get("healthy") is True:
+                    return
+            except ValueError:
+                pass
+            time.sleep(1)
+        raise ValueError("Isolated release failed readiness")
+    restored = root / "restored-seven"
+    restored.mkdir()
+    archive_path = next((persist / "deployment/backups").glob("nct-data-*.tar.gz"))
+    with tarfile.open(archive_path) as archive:
+        archive.extractall(restored, filter="data")
+    restored_name = name + "-restored"
+    engine.command("run", "-d", "--name", restored_name, "--network", "none", "-e", "NCT_AUTH_MODE=local", "-v", f"{restored / 'data'}:/data",
+        "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1")
+    isolated_ready(restored_name)
+    engine.command("exec", restored_name, "python", "-c", "import sqlite3; d=sqlite3.connect('/data/analyzer.db'); assert d.execute('select schema_version from nct_schema_state').fetchone()[0]==7; assert d.execute('select count(*) from artifact_registry').fetchone()[0]>=1; assert d.execute('select count(*) from analyst_users').fetchone()[0]>=1")
+    engine.command("stop", restored_name)
+    fresh_name = name + "-fresh"
+    fresh_data = root / "fresh-data"
+    fresh_data.mkdir()
+    engine.command("run", "-d", "--name", fresh_name, "--network", "none", "-e", "NCT_AUTH_MODE=local",
+        "-e", "NCT_BOOTSTRAP_ADMIN=fresh-operator", "-e", "NCT_BOOTSTRAP_PASSWORD=" + secrets.token_urlsafe(20), "-v", f"{fresh_data}:/data", release["application_image"])
+    isolated_ready(fresh_name)
+    engine.command("stop", fresh_name)
+    engine.command("start", fresh_name)
+    isolated_ready(fresh_name)
+    engine.command("stop", fresh_name)
     receipt = {"result": "pass", "tested_manifest_sha256": tested, "commit": release["commit"], "build_id": release["build_id"],
         "source_build": "0.16.0-range-test-20261025-phase5-r1", "full_shell_bootstrap": True,
         "issuing_ca_https_verified": True, "retained_account_and_evidence": True,
         "environment_mount_port_and_restart_policy_preserved": True, "protected_empty_bootstrap_mount_preserved": True,
         "independent_console_handoff_and_sign_in": True, "console_stops_after_return": True,
         "stop_start_sign_in": True, "range_accepted": False, "real_systemd_boot_tested": False,
+        "schema_version": 8, "old_image_refuses_schema8": True, "original_schema7_backup_booted": True, "fresh_schema8_stop_start": True,
         "test_substitutions": ["administrative fixture peer exclusion", "systemctl launches exact copied service process", "ss replaced; Docker performs actual port admission"]}
     (root / "acceptance.json").write_text(json.dumps(receipt, indent=2))
     print("PASS: full package upgraded exact previous release with retained evidence/accounts/config, enabled independent console using issuing CA, verified sign-in/stop/start and closed console.", flush=True)

@@ -222,7 +222,7 @@ def test_v3_requires_staged_upgrade_through_version_five(tmp_path: Path) -> None
         begin_schema_migration(db_path)
 
 
-def test_version_three_image_rejects_completed_version_six(
+def test_version_three_image_rejects_completed_current_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app import schema_compatibility
@@ -234,6 +234,8 @@ def test_version_three_image_rejects_completed_version_six(
     init_mission_environment_storage(db_path)
     from app.device_vlan_observations import init_device_vlan_observation_storage
     init_device_vlan_observation_storage(db_path)
+    from app.poc import init_poc_storage
+    init_poc_storage(db_path)
     complete_schema_migration(db_path, attempt)
 
     monkeypatch.setattr(schema_compatibility, "SCHEMA_CONTRACT_VERSION", 3)

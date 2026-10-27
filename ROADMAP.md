@@ -7324,6 +7324,12 @@ completed work, work in progress, validation, deviations and deployment limitati
   from the exact Phase 5 R1 schema-7 release with retained data before sealing it;
   include explicit offline host prerequisites and a root-CA verified console setup.
   Existing packages, production evidence and Range installations remain unchanged.
+  **Qualification deviation started 2026-10-27:** the real retained Phase 5 source
+  passed first startup but failed the subsequent restart: two corrected Scan History
+  triggers had changed while the saved contract still said version 7. Package held.
+  Implement explicit version 8 ownership, immutable prior receipts, exact source/target
+  trigger validation and atomic trigger replacement; rehearse the entire retained
+  upgrade again before sealing. No fingerprint bypass, in-place reseal or reset.
   **Started 2026-10-27; implementation and isolated acceptance completed:** independent
   on-demand console, bounded package intake and trusted host broker. Real Docker
   acceptance passed intake, authenticated HTTP upload, exact replacement, fresh-account
@@ -9225,3 +9231,30 @@ boot and exact Range storage/network/retained-data acceptance remain deployment 
 No production evidence, Range installation, stable main checkout or deployment package
 was changed by this development work.
 
+
+#### 2026-10-27 · Full-package retained-data restart qualification and schema 8
+
+Planned: Qualify the full offline release, including the independent console and
+one-time host installation, against the exact retained Phase 5 R1 installation.
+
+Revised / Implemented: Qualification found that two Scan History grouping rules had
+changed under schema version 7. The first startup succeeded but the next restart
+correctly rejected the changed fingerprint. Hold the package and introduce explicit
+schema version 8. A transactional migration intent binds the original sealed schema,
+its exact rule pair and all seven prior receipts. Retry accepts only that original
+pair or the frozen target pair, reconstructs the original fingerprint, and rejects
+unrelated changes. Rule replacement is atomic. Completion requires the exact target
+pair for both fresh and retained installations; prior receipts are never rewritten.
+Startup explicitly initializes the selected database rather than a captured default.
+
+Reason: Loosening the guard or resealing version 7 would conceal an unrecorded schema
+change and let an older image open incompatible data. The upgrade must be owned,
+restart-safe and independently recoverable.
+
+Impact / Follow-up: The full launcher qualifies only exact Phase 5 R1 schema 7 to
+schema 8. Version 6 still requires a separately qualified staged bridge. An older
+image must refuse upgraded version 8; rollback uses its untouched version-7 cold
+backup. Focused independent schema review returned CLEAR — DOCUMENTED DEVIATION
+with 67 checks passed. Full regression, exact-image retained upgrade, repeated
+restart, old-image refusal and original-backup boot are required before sealing.
+Real Range installation and real systemd boot remain separate acceptance gates.

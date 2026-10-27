@@ -8,7 +8,8 @@ import shutil
 import sqlite3
 import tempfile
 
-from app.schema_compatibility import begin_schema_migration
+from app.schema_compatibility import begin_schema_migration, complete_schema_migration
+from app.scan_history_index import init_scan_history_index_storage
 
 PHASE5 = ("0.16.0-range-test-20261025-phase5-r1", "be92fb78e938adc3fced581629d4609ac0a43f6a")
 
@@ -38,11 +39,16 @@ def audit(db_path, build_id, commit, required=7):
         copied = Path(temporary) / "analyzer.db"
         shutil.copyfile(db_path, copied)
         # Exact current ledger/fingerprint validation, on a disposable copy only.
+        attempt = begin_schema_migration(copied)
+        if attempt is None or attempt.target_schema_version != 8:
+            raise ValueError("Expected the reviewed version-7 to version-8 history migration")
+        init_scan_history_index_storage(copied)
+        complete_schema_migration(copied, attempt)
         if begin_schema_migration(copied) is not None:
-            raise ValueError("Unexpected migration required for this same-schema full package")
+            raise ValueError("Replacement schema did not remain verified after migration")
     if digest(db_path) != original_hash:
         raise ValueError("Stopped source changed during compatibility checking")
-    return {"status": "pass", "compatibility": "exact-phase5-r1-v7-disposable-image-gate",
+    return {"status": "pass", "compatibility": "exact-phase5-r1-v7-to-v8-disposable-image-gate",
         "schema_version": 7, "database_sha256": original_hash,
         "retained_running_build_id": build_id, "retained_running_build_commit": commit}
 

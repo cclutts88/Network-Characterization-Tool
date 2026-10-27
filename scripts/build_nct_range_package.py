@@ -126,7 +126,7 @@ def stage(source, output, image, console, commit, build_id):
     (archive.with_suffix(".tar.sha256")).write_text(digest(archive) + "  nct-range-images.tar\n", encoding="utf-8")
     release = {"contract": "nct-full-range-package-v1", "build_id": build_id, "commit": commit,
         "branch": "foundation/evidence-engine-v2", "application_image": image, "console_image": console,
-        "images": images, "source_bindings": bindings, "schema_gate": "exact-phase5-r1-v7-disposable-image-gate",
+        "images": images, "source_bindings": bindings, "schema_gate": "exact-phase5-r1-v7-to-v8-disposable-image-gate",
         "range_accepted": False, "kubernetes_updater_available": False}
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     write_manifest(output)

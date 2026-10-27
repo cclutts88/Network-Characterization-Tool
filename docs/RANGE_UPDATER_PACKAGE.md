@@ -22,6 +22,12 @@ trusted release source. No software is downloaded during installation.
   `/var/lib/nct/data` bind folder. Other versions, named-volume migrations and failed
   installations need their reviewed bridge/recovery procedure. This package never
   turns an unsupported upgrade into an empty installation.
+  This release performs an explicit **version-7 to version-8** migration for the
+  corrected Scan History grouping rules. It preserves migrations 1–7 and records
+  the new step separately. Unknown or already-drifted schemas are refused. An older
+  image must use the preserved version-7 backup for rollback, never the version-8
+  database. Version-6 sources need a separately qualified Phase 5 staging path;
+  this package does not perform that bridge.
 - Finish scans and device pulls and disable schedules/automatic pulls during the
   maintenance window. Keep the current password: existing accounts are preserved.
 - Use the same host IP and HTTPS port as the working NCT. The issuing root CA must

@@ -15,9 +15,9 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 
 
-SCHEMA_CONTRACT_VERSION = 7
-WRITABLE_SCHEMA_VERSION = 7
-READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7)
+SCHEMA_CONTRACT_VERSION = 8
+WRITABLE_SCHEMA_VERSION = 8
+READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8)
 DATA_LAYOUT_CONTRACT = "nct-data-layout-v1"
 LEGACY_MIGRATION_ID = "nct-foundation-data-contract-v1"
 WORK_COORDINATION_MIGRATION_ID = "nct-work-coordination-v2"
@@ -26,7 +26,8 @@ DEVICE_CONTACT_MIGRATION_ID = "nct-device-contact-fencing-v4"
 MISSION_ENVIRONMENT_MIGRATION_ID = "nct-mission-environment-v5"
 VLAN_EVIDENCE_MIGRATION_ID = "nct-scoped-vlan-evidence-v6"
 ARKIME_RUNTIME_MIGRATION_ID = "nct-arkime-and-runtime-schema-v7"
-MIGRATION_ID = ARKIME_RUNTIME_MIGRATION_ID
+HISTORY_RULES_MIGRATION_ID = "nct-scan-history-rules-v8"
+MIGRATION_ID = HISTORY_RULES_MIGRATION_ID
 MIGRATION_PLAN = (
     LEGACY_MIGRATION_ID,
     WORK_COORDINATION_MIGRATION_ID,
@@ -34,7 +35,8 @@ MIGRATION_PLAN = (
     DEVICE_CONTACT_MIGRATION_ID,
     MISSION_ENVIRONMENT_MIGRATION_ID,
     VLAN_EVIDENCE_MIGRATION_ID,
-    MIGRATION_ID,
+    ARKIME_RUNTIME_MIGRATION_ID,
+    HISTORY_RULES_MIGRATION_ID,
 )
 
 # Exact version-4 Range images that may have created or subsequently opened the
@@ -159,8 +161,9 @@ def _digest(value: object) -> str:
 
 
 def migration_plan_digest(
-    migration_ids: tuple[str, ...] = MIGRATION_PLAN,
+    migration_ids: tuple[str, ...] | None = None,
 ) -> str:
+    migration_ids = MIGRATION_PLAN if migration_ids is None else migration_ids
     return _digest({"migration_ids": list(migration_ids)})
 
 
@@ -513,6 +516,72 @@ class MigrationAttempt:
     attempt: int
 
 
+HISTORY_TRIGGER_NAMES = frozenset({"scan_history_membership_group_insert", "scan_history_membership_group_delete"})
+HISTORY_INTENT_DDL = """CREATE TABLE nct_schema_migration_intents (
+    migration_id TEXT PRIMARY KEY, plan_digest TEXT NOT NULL,
+    source_schema_fingerprint TEXT NOT NULL, source_history_json TEXT NOT NULL,
+    source_ledger_json TEXT NOT NULL, base_schema_fingerprint TEXT NOT NULL
+)"""
+
+
+def _history_pair(connection):
+    return {row[1]: row[3] for row in _schema_rows(connection) if row[1] in HISTORY_TRIGGER_NAMES}
+
+
+def _history_target():
+    value = json.loads(Path(__file__).with_name("scan_history_v8_triggers.json").read_text())
+    if set(value) != HISTORY_TRIGGER_NAMES:
+        raise RuntimeError("The image-owned history migration target is incomplete")
+    return value
+
+
+def _history_prior_ledger(connection):
+    return [list(row) for row in connection.execute("SELECT * FROM nct_schema_migrations WHERE target_schema_version <= 7 ORDER BY target_schema_version,migration_id")]
+
+
+def _validate_history_intent(connection, recorded):
+    row = connection.execute("SELECT plan_digest,source_schema_fingerprint,source_history_json,source_ledger_json,base_schema_fingerprint FROM nct_schema_migration_intents WHERE migration_id=?", (HISTORY_RULES_MIGRATION_ID,)).fetchone()
+    sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='nct_schema_migration_intents'").fetchone()
+    if not sql or _normalized_sql(sql[0]) != _normalized_sql(HISTORY_INTENT_DDL) or connection.execute("SELECT COUNT(*) FROM nct_schema_migration_intents").fetchone()[0] != 1:
+        raise SchemaCompatibilityError("The history migration intent schema or ownership changed")
+    if row is None or row[0] != migration_plan_digest() or row[1] != recorded or json.loads(row[3]) != _history_prior_ledger(connection):
+        raise SchemaCompatibilityError("The history migration intent or prior ledger changed")
+    source_pair = json.loads(row[2])
+    if set(source_pair) != HISTORY_TRIGGER_NAMES:
+        raise SchemaCompatibilityError("The original history migration pair is incomplete")
+    original_rows = [list(item[:3]) + [source_pair.get(item[1], item[3])] for item in _schema_rows(connection) if item[1] != "nct_schema_migration_intents"]
+    if _digest(original_rows) != recorded:
+        raise SchemaCompatibilityError("The migration intent no longer reconstructs the sealed source")
+    if _history_pair(connection) not in (source_pair, _history_target()):
+        raise SchemaCompatibilityError("History rules are not an exact recorded source or target pair")
+    if schema_fingerprint(connection, excluded_names=HISTORY_TRIGGER_NAMES) != row[4]:
+        raise SchemaCompatibilityError("Unrelated schema changed during the history migration")
+
+
+def _begin_history_rules(connection, contract, plan_digest, recorded):
+    if contract != 7 or plan_digest != migration_plan_digest(MIGRATION_PLAN[:7]) or not recorded:
+        raise SchemaCompatibilityError("Version 7 history migration source contract is inconsistent")
+    ledger = connection.execute("SELECT migration_id,target_schema_version,status,after_schema_fingerprint FROM nct_schema_migrations WHERE target_schema_version<=7 ORDER BY target_schema_version,migration_id").fetchall()
+    if len(ledger) != 7 or any(tuple(row[:3]) != (identity, target, "completed") or not row[3] for target, (identity, row) in enumerate(zip(MIGRATION_PLAN[:7], ledger), 1)) or ledger[-1][3] != recorded:
+        raise SchemaCompatibilityError("Version 7 history migration requires its exact completed ledger")
+    pending = connection.execute("SELECT migration_id,target_schema_version,status,before_schema_fingerprint,after_schema_fingerprint,error_summary,completed_at,attempts FROM nct_schema_migrations WHERE target_schema_version>7").fetchall()
+    if pending:
+        if len(pending) != 1 or pending[0][0] != HISTORY_RULES_MIGRATION_ID or pending[0][1] != 8 or pending[0][2] not in {"started", "failed"} or pending[0][3] != recorded:
+            raise SchemaCompatibilityError("The history migration ledger is inconsistent")
+        item = pending[0]
+        if item[6] is not None or item[7] < 1 or (item[2] == "started" and (item[4] is not None or item[5] is not None)) or (item[2] == "failed" and (item[4] != schema_fingerprint(connection) or not item[5])):
+            raise SchemaCompatibilityError("The history migration retry status is inconsistent")
+        _validate_history_intent(connection, recorded)
+        return
+    if schema_fingerprint(connection) != recorded:
+        raise SchemaCompatibilityError("The saved schema fingerprint does not match the live database")
+    pair = _history_pair(connection)
+    if set(pair) != HISTORY_TRIGGER_NAMES:
+        raise SchemaCompatibilityError("The source history rules are incomplete")
+    connection.execute(HISTORY_INTENT_DDL)
+    connection.execute("INSERT INTO nct_schema_migration_intents VALUES (?,?,?,?,?,?)", (HISTORY_RULES_MIGRATION_ID, migration_plan_digest(), recorded, json.dumps(pair, sort_keys=True), json.dumps(_history_prior_ledger(connection)), schema_fingerprint(connection, excluded_names=HISTORY_TRIGGER_NAMES)))
+
+
 def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
     """Start or resume the image-owned migration before other schema writers run."""
     now = _utc_now()
@@ -548,6 +617,8 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         "The bootstrap schema state has no resumable migration."
                     )
             elif int(schema_version) == WRITABLE_SCHEMA_VERSION:
+                if int(contract_version) != WRITABLE_SCHEMA_VERSION:
+                    raise SchemaCompatibilityError("The saved schema contract and version are inconsistent")
                 if plan_digest != migration_plan_digest():
                     raise SchemaCompatibilityError(
                         "The saved migration plan does not match this image."
@@ -588,6 +659,10 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                         "The saved migration ledger is incomplete or inconsistent."
                     )
                 return None
+            elif int(schema_version) == 7:
+                recorded = connection.execute("SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1").fetchone()[0]
+                connection.execute("BEGIN IMMEDIATE")
+                _begin_history_rules(connection, int(contract_version), plan_digest, recorded)
             elif int(schema_version) == 5:
                 if SCHEMA_CONTRACT_VERSION >= 7:
                     raise SchemaCompatibilityError(
@@ -681,6 +756,8 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                             "The saved schema fingerprint does not match an exact resumable migration."
                         )
             elif int(schema_version) == 6:
+                if SCHEMA_CONTRACT_VERSION >= 8:
+                    raise SchemaCompatibilityError("Use the exact Phase 5 R1 bridge to upgrade version 6 to sealed version 7 before starting version 8")
                 if int(contract_version) != 6:
                     raise SchemaCompatibilityError(
                         "The saved version 6 schema contract is inconsistent."
@@ -784,7 +861,7 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
         else:
             current_version = 0
 
-        before = schema_fingerprint(connection)
+        before = connection.execute("SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1").fetchone()[0] if current_version == 7 else schema_fingerprint(connection)
         if current_version == 0:
             connection.execute(
                 """INSERT INTO nct_schema_migrations(
@@ -923,6 +1000,13 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                     now, now, now, before, before,
                 ),
             )
+        if current_version == 0 and WRITABLE_SCHEMA_VERSION >= 8:
+            existing_intent = connection.execute("SELECT sql FROM sqlite_master WHERE name='nct_schema_migration_intents'").fetchone()
+            if existing_intent is None:
+                connection.execute(HISTORY_INTENT_DDL)
+            elif _normalized_sql(existing_intent[0]) != _normalized_sql(HISTORY_INTENT_DDL):
+                raise SchemaCompatibilityError("Bootstrap migration intent storage changed")
+            connection.execute("""INSERT INTO nct_schema_migrations VALUES (?,7,?,?,'completed',1,?,?,?,?,?,NULL) ON CONFLICT(migration_id) DO NOTHING""", (ARKIME_RUNTIME_MIGRATION_ID, BUILD_ID, BUILD_COMMIT, now, now, now, before, before))
         target_migration_id = (
             VLAN_EVIDENCE_MIGRATION_ID if current_version == 5 else MIGRATION_ID
         )
@@ -972,12 +1056,12 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                    originating_build_commit = excluded.originating_build_commit,
                    updated_at = excluded.updated_at""",
             (
-                current_version if current_version in {5, 6} else SCHEMA_CONTRACT_VERSION,
+                current_version if current_version in {5, 6, 7} else SCHEMA_CONTRACT_VERSION,
                 current_version,
                 DATA_LAYOUT_CONTRACT,
                 (
                     migration_plan_digest(MIGRATION_PLAN[:current_version])
-                    if current_version in {5, 6} else migration_plan_digest()
+                    if current_version in {5, 6, 7} else migration_plan_digest()
                 ),
                 BUILD_ID,
                 BUILD_COMMIT,
@@ -991,7 +1075,7 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
 def complete_schema_migration(db_path: Path, attempt: MigrationAttempt | None) -> None:
     if attempt is None:
         return
-    if attempt.target_schema_version == 7:
+    if attempt.target_schema_version in {7, 8}:
         from app.arkime_connector import init_arkime_connector_storage
         from app.arkime_evidence import init_arkime_evidence_storage
         from app.arkime_history import init_arkime_history_storage
@@ -1038,6 +1122,16 @@ def complete_schema_migration(db_path: Path, attempt: MigrationAttempt | None) -
                 raise SchemaCompatibilityError(
                     "The version 7 upgrade schema fingerprint is not the reviewed result."
                 )
+        elif attempt.target_schema_version == 8:
+            if current_version == 7:
+                recorded = connection.execute("SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1").fetchone()[0]
+                _validate_history_intent(connection, recorded)
+                if _history_pair(connection) != _history_target():
+                    raise SchemaCompatibilityError("The exact version 8 history rules were not applied")
+            elif current_version != 0 or not _matches_exact_v7_runtime_schema(connection, base_fingerprint=None):
+                raise SchemaCompatibilityError("Version 8 bootstrap runtime schema is incomplete")
+            if _history_pair(connection) != _history_target():
+                raise SchemaCompatibilityError("Version 8 bootstrap history rules are inconsistent")
         else:
             raise SchemaCompatibilityError("The active migration target is unsupported.")
         updated = connection.execute(
@@ -1121,6 +1215,8 @@ def schema_state(db_path: Path) -> dict[str, object]:
                     WHEN 'nct-device-contact-fencing-v4' THEN 4
                     WHEN 'nct-mission-environment-v5' THEN 5
                     WHEN 'nct-scoped-vlan-evidence-v6' THEN 6
+                    WHEN 'nct-arkime-and-runtime-schema-v7' THEN 7
+                    WHEN 'nct-scan-history-rules-v8' THEN 8
                     ELSE 99 END,
                     first_started_at, migration_id"""
         ).fetchall()

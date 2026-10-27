@@ -40,6 +40,7 @@ def init_scan_history_index_storage(db_path: Path) -> None:
         )
         db.executescript(
             """
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS scan_history_memberships (
                 run_id TEXT NOT NULL,
                 group_id TEXT NOT NULL,
@@ -234,6 +235,7 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                 DELETE FROM scan_history_memberships WHERE run_id = OLD.run_id;
                 DELETE FROM scan_history_index_dirty WHERE run_id = OLD.run_id;
             END;
+            COMMIT;
             """
         )
         version_row = db.execute(

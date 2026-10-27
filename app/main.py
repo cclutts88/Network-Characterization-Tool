@@ -1727,7 +1727,7 @@ async def lifespan(_: FastAPI):
         configure_database(DB_PATH)
         schema_migration = begin_schema_migration(DB_PATH)
         init_storage()
-        init_poc_storage()
+        init_poc_storage(DB_PATH)
         retire_legacy_scan_analysis_cache(DB_PATH)
         init_device_analysis_storage(DB_PATH)
         init_device_collection_authority_storage(DB_PATH)

@@ -13,7 +13,7 @@ from app.schema_compatibility import (
     EXPECTED_V7_UPGRADE_SCHEMA_FINGERPRINT,
     LEGACY_MIGRATION_ID,
     MISSION_ENVIRONMENT_MIGRATION_ID,
-    MIGRATION_ID,
+    ARKIME_RUNTIME_MIGRATION_ID as MIGRATION_ID,
     MIGRATION_PLAN,
     SCHEDULED_WORK_MIGRATION_ID,
     SUPPORTED_V4_RANGE_BUILDS,
@@ -45,6 +45,20 @@ from app.storage_health import (
     _init_compaction_journal,
     init_storage_health_storage,
 )
+
+# Retain the historical v7/bridge contract checks. Current v8 behavior is tested
+# separately against an intact v7 source, interrupted ownership and real releases.
+MIGRATION_PLAN = MIGRATION_PLAN[:7]
+
+
+@pytest.fixture(autouse=True)
+def historical_version_seven_contract(monkeypatch):
+    import app.schema_compatibility as schema
+    monkeypatch.setattr(schema, "SCHEMA_CONTRACT_VERSION", 7)
+    monkeypatch.setattr(schema, "WRITABLE_SCHEMA_VERSION", 7)
+    monkeypatch.setattr(schema, "READABLE_SCHEMA_VERSIONS", (1, 2, 3, 4, 5, 6, 7))
+    monkeypatch.setattr(schema, "MIGRATION_PLAN", MIGRATION_PLAN)
+    monkeypatch.setattr(schema, "MIGRATION_ID", MIGRATION_ID)
 
 
 def complete_schema_migration(db_path: Path, attempt) -> None:
