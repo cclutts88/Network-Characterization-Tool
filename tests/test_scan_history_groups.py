@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
+import sys
 
 from fastapi.testclient import TestClient
 
@@ -519,6 +521,147 @@ def test_scan_history_index_prefers_saved_network_name_over_newer_manual_target(
     assert catalog["groups"][0]["name"] == "Operations Users"
     assert catalog["groups"][0]["cidr"] == "10.50.15.0/24"
     assert catalog["groups"][0]["category"] == "saved_network"
+
+
+def test_scan_history_index_separates_newest_run_from_newest_saved_name(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import scan_history_catalog_page
+
+    db_path = tmp_path / "analyzer.db"
+    old_named = scan_run(1, saved_networks=[{
+        "saved_network_id": "operations",
+        "name": "Operations before rename",
+        "cidr": "10.50.15.0/24",
+    }])
+    newest_manual = scan_run(3, targets=["10.50.15.9/24"])
+    current_named = scan_run(2, saved_networks=[{
+        "saved_network_id": "operations",
+        "name": "Operations current name",
+        "cidr": "10.50.15.0/24",
+    }])
+    for record in (old_named, newest_manual, current_named):
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+
+    catalog = scan_history_catalog_page(db_path, limit=100, offset=0)
+    group = catalog["groups"][0]
+    with sqlite3.connect(db_path) as db:
+        latest = db.execute(
+            "SELECT latest_run_id, latest_scan_name FROM scan_history_groups"
+        ).fetchone()
+
+    assert group["name"] == "Operations current name"
+    assert tuple(latest) == (newest_manual["run_id"], newest_manual["display_name"])
+
+
+def test_scan_history_index_recomputes_name_and_latest_run_after_deletes(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import scan_history_catalog_page
+
+    db_path = tmp_path / "analyzer.db"
+    named = scan_run(1, saved_networks=[{
+        "saved_network_id": "operations",
+        "name": "Operations Users",
+        "cidr": "10.50.15.0/24",
+    }])
+    middle_manual = scan_run(2, targets=["10.50.15.9/24"])
+    newest_manual = scan_run(3, targets=["10.50.15.10/24"])
+    for record in (named, middle_manual, newest_manual):
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA foreign_keys = ON")
+        db.execute("DELETE FROM scan_runs WHERE run_id = ?", (newest_manual["run_id"],))
+    group = scan_history_catalog_page(db_path, limit=100, offset=0)["groups"][0]
+    with sqlite3.connect(db_path) as db:
+        latest = db.execute(
+            "SELECT latest_run_id, latest_scan_name FROM scan_history_groups"
+        ).fetchone()
+    assert group["name"] == "Operations Users"
+    assert tuple(latest) == (middle_manual["run_id"], middle_manual["display_name"])
+
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA foreign_keys = ON")
+        db.execute("DELETE FROM scan_runs WHERE run_id = ?", (named["run_id"],))
+    group = scan_history_catalog_page(db_path, limit=100, offset=0)["groups"][0]
+    with sqlite3.connect(db_path) as db:
+        latest_run_id = db.execute(
+            "SELECT latest_run_id FROM scan_history_groups"
+        ).fetchone()[0]
+    assert group["name"] == "Subnet 10.50.15.0/24"
+    assert group["category"] == ""
+    assert latest_run_id == middle_manual["run_id"]
+
+
+def test_scan_history_index_upgrade_replaces_derived_triggers_and_rebuilds(tmp_path):
+    import app.poc as poc
+
+    db_path = tmp_path / "analyzer.db"
+    named = scan_run(1, saved_networks=[{
+        "saved_network_id": "operations",
+        "name": "Operations Users",
+        "cidr": "10.50.15.0/24",
+    }])
+    named.update({
+        "operator": "analyst", "reason": "test",
+        "originating_host": "test-host", "interface": "eth0",
+        "profile": "safe",
+    })
+    poc.insert_scan_run_manifest(named, db_path)
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            """
+            DROP TRIGGER scan_history_membership_group_insert;
+            CREATE TRIGGER scan_history_membership_group_insert
+            AFTER INSERT ON scan_history_memberships
+            BEGIN
+                SELECT 1;
+            END;
+            UPDATE scan_history_index_meta SET version = 5 WHERE singleton = 1;
+            DELETE FROM scan_history_groups;
+            DELETE FROM scan_history_memberships;
+            """
+        )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from pathlib import Path; "
+                "from app.scan_history_index import init_scan_history_index_storage; "
+                "init_scan_history_index_storage(Path(sys.argv[1]))"
+            ),
+            str(db_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    with sqlite3.connect(db_path) as db:
+        version = db.execute(
+            "SELECT version FROM scan_history_index_meta WHERE singleton = 1"
+        ).fetchone()[0]
+        trigger_sql = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'trigger' "
+            "AND name = 'scan_history_membership_group_insert'"
+        ).fetchone()[0]
+        group = db.execute(
+            "SELECT name, category, scan_count FROM scan_history_groups"
+        ).fetchone()
+    assert version == 6
+    assert "ON CONFLICT(group_id) DO UPDATE" in trigger_sql
+    assert tuple(group) == ("Operations Users", "saved_network", 1)
 
 
 def test_scan_history_index_accepts_rollback_writes_and_repairs_them(tmp_path):

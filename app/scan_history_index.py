@@ -13,7 +13,7 @@ from app.scan_history import (
 )
 
 
-INDEX_VERSION = 5
+INDEX_VERSION = 6
 METADATA_EXPRESSION = (
     "json_remove(r.manifest_json, '$.artifacts', '$.commands', "
     "'$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', "
@@ -90,7 +90,13 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                 FOREIGN KEY (run_id) REFERENCES scan_runs(run_id) ON DELETE CASCADE
             );
 
-            CREATE TRIGGER IF NOT EXISTS scan_history_membership_group_insert
+            DROP TRIGGER IF EXISTS scan_history_membership_group_insert;
+            DROP TRIGGER IF EXISTS scan_history_membership_group_delete;
+            DROP TRIGGER IF EXISTS scan_history_run_dirty_insert;
+            DROP TRIGGER IF EXISTS scan_history_run_dirty_update;
+            DROP TRIGGER IF EXISTS scan_history_run_index_delete;
+
+            CREATE TRIGGER scan_history_membership_group_insert
             AFTER INSERT ON scan_history_memberships
             BEGIN
                 INSERT INTO scan_history_groups (
@@ -163,9 +169,19 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                                    OR (excluded.latest_created_at = scan_history_groups.latest_created_at
                                        AND excluded.latest_run_id > scan_history_groups.latest_run_id)
                                 THEN excluded.latest_run_id ELSE scan_history_groups.latest_run_id END;
+                UPDATE scan_history_groups
+                   SET (kind, name, cidr, description, category, tags_json) = (
+                       SELECT kind, name, cidr, description, category, tags_json
+                         FROM scan_history_memberships
+                        WHERE group_id = NEW.group_id
+                        ORDER BY (category = 'saved_network') DESC,
+                                 created_at DESC, run_id DESC
+                        LIMIT 1
+                   )
+                 WHERE group_id = NEW.group_id;
             END;
 
-            CREATE TRIGGER IF NOT EXISTS scan_history_membership_group_delete
+            CREATE TRIGGER scan_history_membership_group_delete
             AFTER DELETE ON scan_history_memberships
             BEGIN
                 UPDATE scan_history_groups
@@ -174,22 +190,29 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                 DELETE FROM scan_history_groups
                  WHERE group_id = OLD.group_id AND scan_count <= 0;
                 UPDATE scan_history_groups
-                   SET (kind, name, cidr, description, category, tags_json,
-                        latest_created_at, latest_run_id, latest_scan_at,
-                        latest_scan_name, latest_host_count) = (
-                       SELECT kind, name, cidr, description, category, tags_json,
-                              created_at, run_id, latest_scan_at,
-                              latest_scan_name, host_count
+                   SET (kind, name, cidr, description, category, tags_json) = (
+                       SELECT kind, name, cidr, description, category, tags_json
                          FROM scan_history_memberships
                         WHERE group_id = OLD.group_id
                         ORDER BY (category = 'saved_network') DESC,
                                  created_at DESC, run_id DESC
                         LIMIT 1
                    )
-                 WHERE group_id = OLD.group_id AND latest_run_id = OLD.run_id;
+                 WHERE group_id = OLD.group_id;
+                UPDATE scan_history_groups
+                   SET (latest_created_at, latest_run_id, latest_scan_at,
+                        latest_scan_name, latest_host_count) = (
+                       SELECT created_at, run_id, latest_scan_at,
+                              latest_scan_name, host_count
+                         FROM scan_history_memberships
+                        WHERE group_id = OLD.group_id
+                        ORDER BY created_at DESC, run_id DESC
+                        LIMIT 1
+                   )
+                 WHERE group_id = OLD.group_id;
             END;
 
-            CREATE TRIGGER IF NOT EXISTS scan_history_run_dirty_insert
+            CREATE TRIGGER scan_history_run_dirty_insert
             AFTER INSERT ON scan_runs
             BEGIN
                 INSERT INTO scan_history_index_dirty (run_id, changed_at)
@@ -197,7 +220,7 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                 ON CONFLICT(run_id) DO UPDATE SET changed_at = excluded.changed_at;
             END;
 
-            CREATE TRIGGER IF NOT EXISTS scan_history_run_dirty_update
+            CREATE TRIGGER scan_history_run_dirty_update
             AFTER UPDATE OF manifest_json ON scan_runs
             BEGIN
                 INSERT INTO scan_history_index_dirty (run_id, changed_at)
@@ -205,7 +228,7 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                 ON CONFLICT(run_id) DO UPDATE SET changed_at = excluded.changed_at;
             END;
 
-            CREATE TRIGGER IF NOT EXISTS scan_history_run_index_delete
+            CREATE TRIGGER scan_history_run_index_delete
             AFTER DELETE ON scan_runs
             BEGIN
                 DELETE FROM scan_history_memberships WHERE run_id = OLD.run_id;

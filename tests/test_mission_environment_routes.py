@@ -106,6 +106,7 @@ def test_page_keeps_headers_before_rows_and_has_contextual_guidance(tmp_path, mo
     assert "Mission Partner Identified" in html
     assert "Possible matches shown by evidence" in html
     assert "Observed ports and services" in html
+    assert "automatic evidence summary in Networks, Devices and Visibility" in html
     assert "title:'Mission Environment',icon:'mission'" in SHELL_SCRIPT
     assert "#missionScopePanel" in SHELL_SCRIPT
     assert 'href="/help/how-nct-works">How NCT Works</a></main>' not in html

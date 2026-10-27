@@ -7286,7 +7286,9 @@ completed work, work in progress, validation, deviations and deployment limitati
   editable. The Tools workspace owns its coverage declarations, and repeated bottom-of-
   page How NCT Works links are removed in favor of the dedicated Help destination.
   Browser review confirmed the focused navigation, runtime-populated tools, corrected
-  declaration heading order, and removal of duplicate Help links.
+  declaration heading order, and removal of duplicate Help links. Novice review also
+  corrected the Tools wording so it points to the automatic summary in the separate
+  Networks, Devices and Visibility task rather than describing it as above the table.
 - [x] 2026-10-27 Scan History label correction complete. Exact CIDR remains the stable
   grouping identity so retained scans stay together, but the newest retained Saved
   Network designation becomes the primary group label whenever any scan in that group
@@ -7294,7 +7296,15 @@ completed work, work in progress, validation, deviations and deployment limitati
   scans without a retained Saved Network snapshot fall back to their honest CIDR or
   recorded target rather than receiving an inferred name. The disposable history index
   now rebuilds from retained manifests without rewriting existing evidence; focused
-  history and saved-network regression tests passed.
+  history and saved-network regression tests passed. The first independent review halted
+  this item because an existing installation could retain the prior derived triggers,
+  out-of-order inserts could preserve an older Saved Network name, and deletion could
+  mix the preferred label source with the newest scan metadata. Index version 6 now
+  replaces every derived trigger, rebuilds the disposable rows from retained manifests,
+  selects the newest retained Saved Network designation independently from the newest
+  scan, and recomputes both values after deletion. Upgrade, arbitrary insertion-order,
+  named-record deletion and newest-record deletion regressions were added before the
+  quality gate was rerun.
 - [x] 2026-10-27 Active Scan unfinished-work self-check wording correction complete.
   The existing in-tool read-only check must have an explicit Run self-check button,
   visible running state, and plain result that says when no terminal command is needed.
