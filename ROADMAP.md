@@ -7305,6 +7305,9 @@ completed work, work in progress, validation, deviations and deployment limitati
   scan, and recomputes both values after deletion. Upgrade, arbitrary insertion-order,
   named-record deletion and newest-record deletion regressions were added before the
   quality gate was rerun.
+  Independent re-review returned **CLEAR** on `6626b17`; the combined pass is
+  development-ready on `foundation/evidence-engine-v2`, with Range acceptance and
+  promotion to `main` remaining separate gates.
 - [x] 2026-10-27 Active Scan unfinished-work self-check wording correction complete.
   The existing in-tool read-only check must have an explicit Run self-check button,
   visible running state, and plain result that says when no terminal command is needed.
