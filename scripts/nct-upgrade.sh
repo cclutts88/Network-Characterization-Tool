@@ -55,6 +55,10 @@ original_container_id=$(docker inspect --format '{{.Id}}' "$CONTAINER")
 original_image_id=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 original_state=$(docker inspect --format '{{.State.Status}}' "$CONTAINER")
 original_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' "$CONTAINER")
+original_restart_policy=""
+if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
+    original_restart_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if eq .HostConfig.RestartPolicy.Name "on-failure"}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$CONTAINER")
+fi
 if [ "$original_state" != running ] || [ "$original_health" = unhealthy ]; then
     die "NCT is $original_state/$original_health. Preserve it and run the read-only diagnostic, then preview sh scripts/nct-recover-installed.sh --container $CONTAINER. Ordinary upgrade will not bypass the stopped-data work check."
 fi
@@ -258,6 +262,7 @@ verify_rollback_identity() {
 }
 start_original_if_needed() {
     [ "$was_running" = "true" ] || return 0
+    [ -z "$original_restart_policy" ] || docker update --restart="$original_restart_policy" "$CONTAINER" >/dev/null 2>&1 || return 1
     docker start "$CONTAINER" >/dev/null 2>&1 || return 1
     attempt=0
     until health=$(curl --connect-timeout 2 --max-time 5 -ksS "https://$RANGE_IP:$original_host_port/health" 2>/dev/null); do
@@ -381,6 +386,16 @@ tar -C "$PERSIST_ROOT" -czf "$backup" data
 chmod 600 "$backup"
 sha256sum "$backup" > "$backup.sha256"
 chmod 600 "$backup.sha256"
+if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
+    verification_root=$(mktemp -d "$BACKUP_DIR/verify-$timestamp-XXXXXX")
+    tar -C "$verification_root" -xzf "$backup" || die "Cold backup could not be independently extracted; replacement was not started."
+    original_data_directory=$DATA_DIR
+    DATA_DIR="$verification_root/data"
+    snapshot "$BACKUP_DIR/backup-verification-$timestamp.json" || die "Extracted backup inventory failed; replacement was not started."
+    DATA_DIR=$original_data_directory
+    cmp -s "$before" "$BACKUP_DIR/backup-verification-$timestamp.json" || die "Extracted backup differs from stopped evidence; replacement was not started."
+    case "$verification_root" in "$BACKUP_DIR"/verify-"$timestamp"-*) python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$verification_root" ;; *) die "Unexpected verification folder; preserve it for review." ;; esac
+fi
 backup_ready=yes
 
 rollback="nct-upgrade-rollback-$timestamp"
@@ -401,7 +416,12 @@ start_script="$WORKDIR/scripts/nct-start-$MODE.sh"
 [ -f "$start_script" ] || die "Missing $start_script"
 say "Starting the release with the $MODE path..."
 candidate_may_have_written=yes
-NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"
+if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
+    [ "$NCT_PACKAGE_RUNTIME_CLONE" = "$WORKDIR/scripts/nct-clone-release-runtime.py" ] || die "Unrecognized package runtime adapter."
+    python3 "$NCT_PACKAGE_RUNTIME_CLONE" --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" --url "https://$RANGE_IP:$original_host_port" --ca-file "${NCT_CA_FILE:-$PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}"
+else
+    NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"
+fi
 snapshot "$after" container
 candidate_port_lines=$(docker inspect --format '{{range $port,$items := .HostConfig.PortBindings}}{{if or (eq $port "8080/tcp") (eq $port "8445/tcp")}}{{range $items}}{{printf "%s|%s\n" $port .HostPort}}{{end}}{{end}}{{end}}' "$CONTAINER" | tr -d '\r' | sed '/^$/d' | sort -u)
 [ "$(printf '%s\n' "$candidate_port_lines" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] ||
@@ -420,6 +440,8 @@ for path, identity in before["files"].items():
 if after["artifact_registry"] != before["artifact_registry"]:
     raise SystemExit("Registered artifact identity changed during upgrade")
 for table, count in before["database"]["tables"].items():
+    if table in {"scan_history_index_dirty", "scan_history_groups", "scan_history_memberships"}:
+        continue  # Disposable history metadata; retained scan_runs remain checked.
     if after["database"]["tables"].get(table, 0) < count:
         raise SystemExit(f"Stored record count decreased for {table}")
 ' "$(basename "$before")" "$(basename "$after")"

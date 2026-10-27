@@ -7318,6 +7318,12 @@ completed work, work in progress, validation, deviations and deployment limitati
   review confirmed the clear outcome remains visible with no terminal command shown.
   Focused self-check and recovery regressions passed 118 tests.
 - [x] Add an Updates workspace to the hamburger for air-gapped NCT packages.
+  **Range package started 2026-10-27:** preparing a new single-transfer full package
+  containing exact application/independent-console/HTTPS images, trusted host setup,
+  internal checksums and operator instructions. Qualify the full terminal upgrade
+  from the exact Phase 5 R1 schema-7 release with retained data before sealing it;
+  include explicit offline host prerequisites and a root-CA verified console setup.
+  Existing packages, production evidence and Range installations remain unchanged.
   **Started 2026-10-27; implementation and isolated acceptance completed:** independent
   on-demand console, bounded package intake and trusted host broker. Real Docker
   acceptance passed intake, authenticated HTTP upload, exact replacement, fresh-account
