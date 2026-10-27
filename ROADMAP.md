@@ -7318,11 +7318,11 @@ completed work, work in progress, validation, deviations and deployment limitati
   review confirmed the clear outcome remains visible with no terminal command shown.
   Focused self-check and recovery regressions passed 118 tests.
 - [x] Add an Updates workspace to the hamburger for air-gapped NCT packages.
-  **Range package started 2026-10-27:** preparing a new single-transfer full package
+  **Range package completed locally 2026-10-27:** sealed a new single-transfer full package
   containing exact application/independent-console/HTTPS images, trusted host setup,
-  internal checksums and operator instructions. Qualify the full terminal upgrade
+  internal checksums and operator instructions. Qualified the full terminal upgrade
   from the exact Phase 5 R1 schema-7 release with retained data before sealing it;
-  include explicit offline host prerequisites and a root-CA verified console setup.
+  Included explicit offline host prerequisites and a root-CA verified console setup.
   Existing packages, production evidence and Range installations remain unchanged.
   **Qualification deviation started 2026-10-27:** the real retained Phase 5 source
   passed first startup but failed the subsequent restart: two corrected Scan History
@@ -9258,3 +9258,46 @@ backup. Focused independent schema review returned CLEAR — DOCUMENTED DEVIATIO
 with 67 checks passed. Full regression, exact-image retained upgrade, repeated
 restart, old-image refusal and original-backup boot are required before sealing.
 Real Range installation and real systemd boot remain separate acceptance gates.
+
+#### 2026-10-27 · Full offline Updates and Recovery transfer candidate
+
+Completed: Sealed `NCT-Full-Range-20261027-Recovery-r1.zip` (97,992,605 bytes)
+from exact foundation source `0bd11969ffd81aad7cbc8335af755b80c9af0639`, build
+`0.16.0-range-test-20261027-recovery-r1`. Application, independent pinned console,
+Caddy, trusted one-time host setup, internal checksums and START-HERE instructions
+are included in this single ZIP. No separate checksum download or Internet access
+is needed for the included software; documented Linux host prerequisites still apply.
+
+Validation: Production-release dependencies passed 2,205 tests with 21 skipped and
+one dependency deprecation warning. Forty packaged/source bindings, exact archive
+image identities, Python syntax, Linux shell syntax and line endings passed. The
+real full shell launcher upgraded the exact Phase 5 R1 image over issuing-CA-verified
+HTTPS while retaining its account, evidence, environment, mounts, ports, protected
+empty bootstrap file and complete restart policy. Original containers remain stopped
+with automatic restart disabled. The independently installed console passed handoff,
+existing-account verification, final normal-service restart and automatic close.
+Ordinary stop/start sign-in passed. The actual older image refused a disposable
+upgraded version-8 database, then successfully booted its extracted original version-7
+cold backup. A fresh version-8 instance also survived stop/start. Earlier staging
+candidates remain unaccepted and must not be distributed.
+
+The final ZIP passed fresh extraction and every internal checksum. The tested
+pre-seal manifest is `fea4873b709a77072a7e332aa88fbed085d3e656bd5a478df5603c591cb984c1`;
+the final manifest, including VALIDATION.json, is
+`5347e29056ea3254b041b5197c80ef57c93eb42cad0011144c84a23a9b452a92`.
+Removing only that added receipt entry reconstructs the tested manifest exactly.
+ZIP SHA-256: `42e4ddb889e89c65f0994c6729d4567a2d18a1abffcb996c96e8bf0ebb91d38f`.
+The receipt binds the full rehearsal and regression results to that committed source.
+Novice instructions review: CLEAR. Independent final archive gate:
+CLEAR — DOCUMENTED DEVIATION. The reviewer independently verified the ZIP, every
+extracted file, both manifest identities, the embedded receipt and the zero-failure
+production-dependency test report.
+
+Boundaries: Locally qualified transfer candidate only; neither Range was changed.
+The fixture substituted systemctl with the actual copied service process, excluded
+only its administrative coordinator from peer checks, and used Docker port admission
+instead of host ss. Real systemd boot and target Range storage, networking, sign-in
+and operator acceptance remain required. The Kubernetes GUI updater remains pending;
+this full package qualifies the standalone bind-mounted Docker/Compose adapter.
+Stable main remains clean and unchanged. This roadmap completion is a separate
+recording commit; the sealed image remains bound to the source checkpoint above.
