@@ -21,6 +21,7 @@ from app.scan_history_index import sync_scan_history_manifest
 
 PAUSE_FOLDER = "recovery"
 PAUSE_FILE = "scan-work-paused.json"
+UPDATE_PAUSE_CONTRACT = "nct-update-pause-v1"
 PAUSE_CONTRACT = "nct-unfinished-work-recovery-pause-v2"
 LEGACY_PAUSE_CONTRACT = "nct-scan-work-recovery-pause-v1"
 ACTIVE_SCAN_STATES = {
@@ -63,6 +64,15 @@ def pause_path(data_dir: Path) -> Path:
 
 
 def recovery_pause(data_dir: Path) -> dict[str, Any] | None:
+    update_path = Path(data_dir) / PAUSE_FOLDER / "update-maintenance.json"
+    if update_path.exists() or update_path.is_symlink():
+        # A malformed marker also fences work. Only the independent host helper
+        # clears this marker after runtime/account/evidence verification.
+        return {"contract": UPDATE_PAUSE_CONTRACT, "state": "update_in_progress",
+            "reason": "The independent recovery console is verifying this NCT version",
+            "scan_contact_paused": True, "passive_contact_paused": True,
+            "device_contact_paused": True, "local_processing_paused": True,
+            "storage_maintenance_paused": True, "path": str(update_path)}
     path = pause_path(data_dir)
     try:
         value = json.loads(path.read_text(encoding="utf-8"))

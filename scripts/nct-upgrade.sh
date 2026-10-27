@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+NCT_LOCK_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+. "$NCT_LOCK_SCRIPT_DIR/nct-maintenance-lock.sh"
+nct_maintenance_lock "${NCT_PERSIST_ROOT:-/var/lib/nct}/deployment/maintenance.lock"
+
 WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
 DATA_DIR="$PERSIST_ROOT/data"

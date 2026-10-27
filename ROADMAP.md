@@ -7317,14 +7317,29 @@ completed work, work in progress, validation, deviations and deployment limitati
   The manual check retains the expanded result after completion, and isolated browser
   review confirmed the clear outcome remains visible with no terminal command shown.
   Focused self-check and recovery regressions passed 118 tests.
-- [ ] Add an Updates workspace to the hamburger for air-gapped NCT packages. In a
-  self-contained deployment, every signed-in operator may be granted the complete
+- [x] Add an Updates workspace to the hamburger for air-gapped NCT packages.
+  **Started 2026-10-27; implementation and isolated acceptance completed:** independent
+  on-demand console, bounded package intake and trusted host broker. Real Docker
+  acceptance passed intake, authenticated HTTP upload, exact replacement, fresh-account
+  verification, explicit rollback, automatic failed-release restore and reviewed work
+  repair preserving a waiting scan. Final restart activates normal background services:
+  a queued local analysis completed and passive/storage workers became available;
+  ordinary recovery gates remained intact after repair. HTTPS one-time installation,
+  independent host-service restart and one-use host recovery also passed; only the
+  fixture's systemctl call was substituted. Full Docker regression: 2,181 passed,
+  21 skipped, one dependency deprecation warning. Independent quality gate:
+  **CLEAR — DOCUMENTED DEVIATION**, reviewed staged tree
+  `c2e47f207c7c165703d344311a39ba68e278d14a`. Development-ready on foundation only;
+  real systemd boot, Range deployment and the Kubernetes controller remain separate gates.
+  Novice browser review cleared Graphite/Sage themes, narrow layout, table headings,
+  normal Guide typography and page scrolling. No Range rollout is included.
+  In a self-contained deployment, every signed-in operator may be granted the complete
   Upload, Validate, Apply and Rollback workflow; every action still records the operator.
   The GUI must also support a later deployment policy that limits these controls without
   changing the package or recovery contract. The workspace must accept packages in a
   bounded private staging area, validate package structure, build identity, checksums,
   compatibility, available space and rollback prerequisites before an Apply action is
-  available. Upload and validation do not install anything. A narrowly limited host
+  available. Upload and validation do not replace the application. A narrowly limited host
   update helper performs the reviewed cold backup,
   container replacement, health/sign-in/evidence checks and durable rollback record; the
   NCT web container never receives unrestricted Docker or host access. Preserve progress
@@ -9130,4 +9145,77 @@ Revised / Implemented: Extended the shared database helper with read-only mode
 Reason: Full regression testing caught the initial inventory bypassing the shared lock policy
 
 Impact / Follow-up: Inventory now retains the common timeout and connection handling; no inventory-time schema writes
+
+#### 2026-10-27 · Independent on-demand update and recovery console
+
+Planned: A signed-in operator uploads one offline update file, reviews validation,
+updates NCT through a temporary independent GUI, and can recover without the main
+application. Retain evidence, accounts, operator attribution and the terminal fallback;
+define the matching Kubernetes controller contract before closing the design gate.
+
+Revised / Implemented: The Docker/Compose adapter uses a trusted native host service
+with separate launch-only and authenticated fixed-action sockets. Neither web container
+receives Docker control; the console also receives no evidence mount. Short-lived
+one-use handoffs, independent recovery codes, a private session store, exact
+container/image/plan bindings, shared terminal/GUI maintenance locks and named fenced
+helpers protect the boundary. Uploads are bounded while streaming, staged privately,
+and checked before tagless image load. A versioned two-file gzip package carries its
+checksum and exact tested source builds; existing terminal ZIP packages are deliberately
+not executed by this GUI. Image configuration digests and loaded runtime IDs are bound
+separately to support OCI image stores without overwriting installed tags.
+
+Reason: The recovery GUI must remain usable when NCT fails. Uploading new host scripts
+through the application would defeat that independence. Compatibility is checked by
+the candidate's own schema gate on a consistent disposable SQLite copy, then checked
+again cold; the older terminal preflight recognizes only schema versions 4/5/6 whereas
+this foundation is on version 7. The one-time host installation therefore ships through
+the reviewed full release. Live pre-installation work inspection uses a fixed trusted
+script with SQL mode=ro and a writable evidence mount solely for SQLite WAL/SHM
+housekeeping; an entirely read-only mount can reject a valid read when sidecars are
+absent. Stopped immutable checks remain mounted read-only, and repair previews operate
+on a verified disposable copy. The isolated HTTPS installer reproduced and verified
+this distinction. Disposable Scan History index tables may rebuild; retained scan rows,
+artifact identities and original evidence remain checked.
+
+Impact / Follow-up: A durable phase journal, independently extracted cold backup,
+inode-bound folder swaps and explicit quarantine preserve both backup-time and later
+data. An older image is never started against replacement-modified data. Update,
+restore and repair each require fresh account verification. A generation-bound final
+restart releases only the update-owned pause and starts normal background services;
+ordinary unfinished-work recovery gates remain. Restart replay preserves work produced
+after release. Failed final readiness proves the exact writer stopped before recording
+a new pause. Restore is explicit once post-release work may exist. Recovery controls
+include diagnosis, backup verification, start/stop/restart, exact reviewed work repair
+and safe summary export, without an arbitrary shell. Existing waiting scans survive
+repair and interrupted contacts remain reviewable. The focused standalone GUI inherits
+the NCT palette and normal Guide typography without duplicating the entire application
+shell. Its latest-operation controls retain older private receipts/backups for
+administrator-led recovery. Upload staging has explicit quotas and capacity checks;
+backups and preserved evidence are not silently deleted.
+
+Validation: Independent focused review passed 41 tests, including bounded chunked
+requests, policy revocation, corrupt backups, interrupted folder swaps, ownership of
+the pause, final-restart crash replay and failed-readiness fencing. Persistent isolated
+Docker acceptance passed real NCT file intake, GUI HTTP upload, update, explicit
+restore, a deliberately failing release's automatic cold restore, fresh sign-ins,
+queued local analysis resumption, passive/storage worker availability and work repair
+that preserved the waiting scan and all ordinary contact gates. Separate real HTTPS
+installer acceptance passed bootstrap verification, on-demand stop, independent
+service-process restart and one-use host recovery. Only systemctl was substituted;
+an earlier interrupted volatile fixture and an intermediate test-harness error are
+not accepted results. Novice browser review passed Graphite and Sage themes, normal
+Guide typography, narrow screens, aligned headings and page scrolling. Full Docker
+regression passed 2,181 tests with 21 skipped and one dependency deprecation warning.
+Independent completion gate: **CLEAR — DOCUMENTED DEVIATION**, reviewed staged tree
+`c2e47f207c7c165703d344311a39ba68e278d14a`. Reviewer independently reran the 41 focused
+tests and verified both persistent acceptance result files. All earlier material
+findings were resolved. The final roadmap-only edit records this clearance.
+
+Limitations: This is foundation development acceptance for the qualified standalone
+bind-mounted Docker/Compose adapter. The equivalent bounded Kubernetes Job/controller
+and fencing contract is documented in docs/NCT_UPDATES_AND_RECOVERY.md and linked from
+docs/KUBERNETES_ARCHITECTURE.md; its controller remains unimplemented. A real systemd
+boot and exact Range storage/network/retained-data acceptance remain deployment gates.
+No production evidence, Range installation, stable main checkout or deployment package
+was changed by this development work.
 

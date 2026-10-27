@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+
+NCT_LOCK_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+. "$NCT_LOCK_SCRIPT_DIR/nct-maintenance-lock.sh"
+nct_maintenance_lock "${NCT_PERSIST_ROOT:-/var/lib/nct}/deployment/maintenance.lock"
 umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)

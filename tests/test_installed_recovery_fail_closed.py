@@ -167,6 +167,7 @@ def recovery_harness(tmp_path: Path):
     scripts.mkdir()
     recovery = scripts / "nct-recover-installed.sh"
     shutil.copy2(ROOT / "scripts" / "nct-recover-installed.sh", recovery)
+    shutil.copy2(ROOT / "scripts" / "nct-maintenance-lock.sh", scripts / "nct-maintenance-lock.sh")
     diagnostic = scripts / "nct-diagnostic-report.sh"
     diagnostic.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     reset = scripts / "nct-reset-unfinished.sh"

@@ -346,3 +346,15 @@ network activities transfer merely because ownership expires. Gate 7 may now def
 the shared database and artifact-storage boundary; multiple application replicas remain
 unsupported until that decision is implemented and Gate 8 concurrency and failure
 testing passes.
+
+## On-demand update and recovery console
+
+The standalone implementation and the required equivalent Kubernetes controller
+contract are documented in [NCT Updates and Recovery](NCT_UPDATES_AND_RECOVERY.md#kubernetes-adapter-boundary).
+They share the versioned package, exact plan/identity bindings, phase journal,
+operator attribution, cold backup and independent restore, generation-specific
+sign-in and evidence verification, and old-image/new-schema exclusion. A Kubernetes
+adapter must prove previous pods stopped and writer/storage fencing before a Job
+can write evidence. It cannot use a replica count or ReadWriteOnce as that proof.
+The current GUI executes only the qualified single-container Docker/Compose adapter;
+the bounded Kubernetes controller and exact-cluster acceptance remain unimplemented.

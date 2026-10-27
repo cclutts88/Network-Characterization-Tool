@@ -1914,6 +1914,7 @@ async def local_authentication_guard(request: Request, call_next):
         if (
             analyst["role"] == "viewer"
             and request.url.path != "/api/auth/logout"
+            and request.url.path != "/api/updates/launch"
             and not personal_default_change
         ):
             return JSONResponse({"detail": "Viewer accounts cannot make changes"}, status_code=403)
@@ -1938,6 +1939,25 @@ def require_saved_analysis_operator(request: Request) -> str:
 def system_health_page(request: Request) -> HTMLResponse:
     require_storage_admin(request)
     return storage_page()
+
+
+@app.get("/settings/updates", response_class=HTMLResponse)
+def updates_workspace(request: Request):
+    from app.update_ui import updates_page
+    return updates_page()
+
+
+@app.post("/api/updates/launch")
+def launch_recovery_workspace(request: Request):
+    from app.update_transport import local_request
+    analyst = request.state.analyst
+    if not auth_enabled() or analyst is None:
+        raise HTTPException(status_code=403, detail="Sign in to NCT before opening recovery. Host access remains available through the recovery launcher.")
+    socket_path = os.environ.get("NCT_UPDATE_LAUNCH_SOCKET", "/run/nct-update/launch.sock")
+    try:
+        return local_request(socket_path, "POST", "/launch", {"actor": analyst["username"]})
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="The trusted update helper is unavailable. Install or start the host recovery service before opening this workspace.") from exc
 
 
 @app.get("/help/how-nct-works", response_class=HTMLResponse)
