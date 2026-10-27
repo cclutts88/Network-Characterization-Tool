@@ -101,6 +101,9 @@ requires this independent access code. Application failure never bypasses sign-i
 The first release containing this feature needs the normal full-package deployment
 so its application image includes the new workspace. Then install the host helper
 from that reviewed source release. Do not install host code from a GUI upload.
+The full package's `nct-install-range.sh` launcher already performs this host setup;
+do not run the manual example again after successful bootstrap. The example below
+is only for an administrator completing a separately reviewed manual installation.
 The host needs Python 3.9 or newer, a Docker CLI supporting `--pull=never`, systemd,
 and working local POSIX file locks. Helpers use only locally retained images.
 Use a dedicated, locally attached evidence bind mount with proven SQLite WAL,
@@ -118,7 +121,7 @@ sudo python3 scripts/install_nct_recovery.py \
   --bind-address NCT_HOST_IP \
   --cert-file /var/lib/nct/tls-material/tls/nct-server.crt \
   --key-file /var/lib/nct/tls-material/tls/nct-server.key \
-  --ca-file /var/lib/nct/tls-material/tls/nct-server.crt \
+  --ca-file /var/lib/nct/tls-material/certs/nct-lab-root.crt \
   --enable-container
 ```
 

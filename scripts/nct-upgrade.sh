@@ -265,7 +265,7 @@ start_original_if_needed() {
     [ -z "$original_restart_policy" ] || docker update --restart="$original_restart_policy" "$CONTAINER" >/dev/null 2>&1 || return 1
     docker start "$CONTAINER" >/dev/null 2>&1 || return 1
     attempt=0
-    until health=$(curl --connect-timeout 2 --max-time 5 -ksS "https://$RANGE_IP:$original_host_port/health" 2>/dev/null); do
+    until health=$(curl --noproxy '*' --connect-timeout 2 --max-time 5 -ksS "https://$RANGE_IP:$original_host_port/health" 2>/dev/null); do
         attempt=$((attempt + 1))
         if [ "$attempt" -ge 15 ]; then
             docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || true
