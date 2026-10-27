@@ -95,6 +95,7 @@ def main():
         "NCT_CONTAINER": name, "NCT_RECOVERY_CONTAINER": console_name, "NCT_PERSIST_ROOT": str(persist),
         "NCT_RECOVERY_INSTALL_DIR": str(installed), "NCT_HTTPS_PORT": "18159", "NCT_RECOVERY_PORT": "18160"}
     env["NCT_RECOVERY_BIND_ADDRESS"] = "127.0.0.1"
+    env["NCT_RECOVERY_STATE_DIR"] = str(root / "s")
     launcher = str(package / "scripts/nct-install-range.sh")
     with (root / "bootstrap.log").open("wb") as log:
         for mode in ("check", "all"):

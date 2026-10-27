@@ -10,6 +10,7 @@ NCT_SETUP_MODE=${2:-all}
 NCT_TARGET_CONTAINER=${NCT_CONTAINER:-nct}
 export NCT_CONTAINER="$NCT_TARGET_CONTAINER"
 NCT_PERSIST_ROOT=${NCT_PERSIST_ROOT:-/var/lib/nct}
+NCT_RECOVERY_STATE_DIR=${NCT_RECOVERY_STATE_DIR:-$NCT_PERSIST_ROOT/deployment/recovery-console}
 export NCT_PERSIST_ROOT
 die() { printf '%s\n' "[NCT package] $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "Run as root."
@@ -57,6 +58,7 @@ if ss -ltn | awk -v p="$NCT_CONSOLE_PORT" 'NR>1 && $4 ~ (":" p "$") {f=1} END {e
     die "Recovery port is already in use; inspect the existing console or choose NCT_RECOVERY_PORT."
 fi
 printf '%s\n' "Offline prerequisites and package checks passed. Existing evidence and accounts have not been changed."
+python3 -c 'import sys; from pathlib import Path; root=Path(sys.argv[1]); assert root.is_absolute() and all(len(str(root/"sockets"/kind/name).encode())<108 for kind,name in (("launch","launch.sock"),("control","control.sock"))), "Recovery state path is too long; choose a shorter dedicated NCT_RECOVERY_STATE_DIR"' "$NCT_RECOVERY_STATE_DIR" || die "Recovery socket path check failed before changing NCT."
 [ "$NCT_SETUP_MODE" != check ] || exit 0
 docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"
 NCT_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_image"])' "$NCT_PACKAGE_ROOT/release.json")
@@ -76,7 +78,7 @@ NCT_CONSOLE_ID=$(docker image inspect --format '{{.Id}}' "$NCT_CONSOLE_IMAGE")
 python3 "$NCT_PACKAGE_ROOT/scripts/install_nct_recovery.py" --container "$NCT_TARGET_CONTAINER" --console-container "${NCT_RECOVERY_CONTAINER:-$NCT_TARGET_CONTAINER-recovery-console}" \
     --console-image "$NCT_CONSOLE_ID" --application-url "https://$NCT_RANGE_IP:$NCT_APP_PORT" \
     --console-url "https://$NCT_RANGE_IP:$NCT_CONSOLE_PORT" --bind-address "$NCT_RECOVERY_BIND_ADDRESS" \
-    --data-dir "$NCT_PERSIST_ROOT/data" --state-dir "$NCT_PERSIST_ROOT/deployment/recovery-console" \
+    --data-dir "$NCT_PERSIST_ROOT/data" --state-dir "$NCT_RECOVERY_STATE_DIR" \
     --install-dir "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}" \
     --cert-file "$NCT_CERT" --key-file "$NCT_KEY" --ca-file "$NCT_CA" --enable-container
 printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates and verify an existing account to finish."
