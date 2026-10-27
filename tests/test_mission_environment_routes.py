@@ -22,6 +22,11 @@ def test_local_operator_can_review_and_update_mission_environment(tmp_path, monk
         assert initial["declaration_only"] is False
         assert initial["collection_gate"] == "exact_saved_network_review"
         assert initial["scopes"][0]["nmap_authorization"] == "unknown"
+        tools = {item["tool_key"]: item for item in initial["tools"]}
+        assert tools["nmap"]["runtime_managed"] is True
+        assert tools["device_config"]["runtime_managed"] is True
+        assert tools["device_config"]["availability"] == "available"
+        assert tools["device_config"]["version_text"]
 
         tool = client.patch("/api/mission-environment/tools/nmap", json={
             "expected_version": 0, "availability": "available",
@@ -101,7 +106,9 @@ def test_page_keeps_headers_before_rows_and_has_contextual_guidance(tmp_path, mo
     assert "Mission Partner Identified" in html
     assert "Possible matches shown by evidence" in html
     assert "Observed ports and services" in html
-    assert 'href="/settings/mission-environment">Mission Environment</a>' in SHELL_SCRIPT
+    assert "title:'Mission Environment',icon:'mission'" in SHELL_SCRIPT
+    assert "#missionScopePanel" in SHELL_SCRIPT
+    assert 'href="/help/how-nct-works">How NCT Works</a></main>' not in html
     assert "location.pathname==='/settings/mission-environment'" in SHELL_SCRIPT
     assert "Review Network Scope coverage" in SHELL_SCRIPT
     assert "No-Strike controls remain separately authoritative" in SHELL_SCRIPT

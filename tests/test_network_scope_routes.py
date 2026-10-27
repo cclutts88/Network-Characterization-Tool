@@ -67,7 +67,7 @@ def test_scope_routes_require_administrator(tmp_path, monkeypatch, role, expecte
         lambda *args: {"username": "test", "display_name": "Test", "role": role} if role else None,
     )
     with TestClient(main.app, follow_redirects=False) as client:
-        page_expected = 303 if role is None else expected
+        page_expected = 303 if role is None else 307 if role == "admin" else expected
         assert client.get("/settings/network-scopes").status_code == page_expected
         assert client.get("/api/network-scopes").status_code == expected
         response = client.post("/api/network-scopes", json={"label": "Test scope"})

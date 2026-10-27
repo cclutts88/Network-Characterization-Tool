@@ -7250,6 +7250,93 @@ completed work, work in progress, validation, deviations and deployment limitati
   classes cannot conceal an unclassified table. Exact-diff rerun: 67 focused passed
   and 1,664 passed, 17 skipped in the complete suite. Independent quality gate:
   CLEAR; novice-operator gate: CLEAR.
+- [x] 2026-10-27 whole-tool page-flow presentation correction complete after direct
+  operator review of Hunt / Network Evidence on the working Range. Long ordinary page
+  tables and evidence lists must grow with their contents and use the document scrollbar
+  for vertical navigation; narrow tables may retain horizontal overflow so columns are
+  not hidden. The resizable Operator Guide, dialogs, Map overlays, bounded selectors and
+  the explicitly height-matched Active Scan Live Discoveries panel remain purpose-built
+  contained surfaces. Hunt port and service values stay aligned without a boxed inner
+  grid, and purple styling alone identifies a nonstandard port without a diamond glyph.
+  Horizontally scrollable ordinary tables keep their headings in normal document flow;
+  they must not apply a page-header offset that can place headings beneath the first
+  data row, including when the Guide is open or the viewport is narrow.
+  Apply the shared vertical page-flow rule to existing and future ordinary NCT tables,
+  update operator wording, and recheck default/alternate themes, Guide open/closed,
+  desktop/narrow layouts, page scrolling, and console output before completion. The
+  shared table contract now keeps horizontally contained headings above their rows,
+  ordinary evidence lists use the page scrollbar, Hunt keeps aligned unboxed values,
+  and nonstandard ports use theme color without a redundant glyph. Browser review
+  covered the corrected table and page flow; the complete Docker suite passed 2,137
+  tests with 21 skipped.
+- [x] 2026-10-27 Mission Environment navigation and repeated-role correction complete
+  from direct operator review. Mission Environment becomes a top-level expandable
+  workspace with its own compass symbol and focused Network Scope, Global No-Strike,
+  Available Tools and Access, Networks/Devices/Visibility, and Special Device Roles
+  tasks. Coverage declarations remain part of Available Tools and Access rather than a
+  duplicate navigation destination. The account menu and old Network Scope page no
+  longer duplicate this work; old bookmarks redirect to the inline scope manager.
+  Repeated Special Device Role entry must retain the selected scope and role after a
+  successful save, explain duplicate declarations, and provide an explicit retained-
+  evidence refresh with visible counts. Possible same-scope evidence matches remain
+  recognition leads with source links, not recommendations, live validation, automatic
+  assignments, or authorization.
+  Nmap availability/version and the built-in Device Configuration capability/version
+  are read from the running container while administrator access-path notes remain
+  editable. The Tools workspace owns its coverage declarations, and repeated bottom-of-
+  page How NCT Works links are removed in favor of the dedicated Help destination.
+  Browser review confirmed the focused navigation, runtime-populated tools, corrected
+  declaration heading order, and removal of duplicate Help links.
+- [x] 2026-10-27 Scan History label correction complete. Exact CIDR remains the stable
+  grouping identity so retained scans stay together, but the newest retained Saved
+  Network designation becomes the primary group label whenever any scan in that group
+  has one. The CIDR remains visible as supporting context. Manual, legacy, and older
+  scans without a retained Saved Network snapshot fall back to their honest CIDR or
+  recorded target rather than receiving an inferred name. The disposable history index
+  now rebuilds from retained manifests without rewriting existing evidence; focused
+  history and saved-network regression tests passed.
+- [x] 2026-10-27 Active Scan unfinished-work self-check wording correction complete.
+  The existing in-tool read-only check must have an explicit Run self-check button,
+  visible running state, and plain result that says when no terminal command is needed.
+  Show the stopped-container host recovery command only when the saved plan actually
+  requires it. Do not let the live NCT container stop or replace itself, skip the verified
+  cold backup, or turn a diagnosis click into a repair or network-contact authorization.
+  The manual check retains the expanded result after completion, and isolated browser
+  review confirmed the clear outcome remains visible with no terminal command shown.
+  Focused self-check and recovery regressions passed 118 tests.
+- [ ] Add an Updates workspace to the hamburger for air-gapped NCT packages. In a
+  self-contained deployment, every signed-in operator may be granted the complete
+  Upload, Validate, Apply and Rollback workflow; every action still records the operator.
+  The GUI must also support a later deployment policy that limits these controls without
+  changing the package or recovery contract. The workspace must accept packages in a
+  bounded private staging area, validate package structure, build identity, checksums,
+  compatibility, available space and rollback prerequisites before an Apply action is
+  available. Upload and validation do not install anything. A narrowly limited host
+  update helper performs the reviewed cold backup,
+  container replacement, health/sign-in/evidence checks and durable rollback record; the
+  NCT web container never receives unrestricted Docker or host access. Preserve progress
+  across the expected disconnect/restart, show the exact running build afterward, and
+  define the equivalent Kubernetes Job/controller contract before implementation is
+  considered complete. This is a formal architecture, security and recovery gate, not a
+  request to expose the existing host scripts directly through the web process.
+  Provide the workflow through an on-demand NCT Recovery Console container on an
+  independent management port. Keep the console stopped during normal operation; start
+  it only for a planned update, a detected failed/restarting application, or an explicit
+  host recovery launch. Before a planned stop, NCT must prove the console GUI is ready,
+  issue a short-lived handoff session, and move the operator to the temporary management
+  page. After the exact running build, health, sign-in and retained-evidence check pass,
+  record the result and stop the console. A minimal launcher/health trigger may remain
+  available, but it must not expose the recovery GUI or Docker control while idle.
+  In the self-contained deployment, signed-in
+  operators have full GUI control over the approved diagnose, backup verification,
+  unfinished-work repair, update, rollback, start, stop, restart, build verification and
+  diagnostic-export actions. The console executes versioned allowlisted recovery
+  workflows and records the operator, inputs, plan digest, result and retained receipt;
+  it does not provide an arbitrary browser shell. It keeps its own durable state separate
+  from NCT evidence, refuses ambiguous containers or shared data, prevents concurrent
+  recovery actions, survives the expected NCT outage, and leaves the original terminal
+  scripts as the fallback if the console is unavailable. The Kubernetes form uses a
+  least-privilege service account and bounded Jobs against the single-writer workload.
 - [x] Post-presentation operator correction gate complete after commit `dd632df`.
   Hunt now keeps eight cells under eight headings, groups host-level CVE summaries only
   by canonical `host_key`, preserves separate unkeyed rows and distinct same-port

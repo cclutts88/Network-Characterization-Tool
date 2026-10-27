@@ -35,6 +35,18 @@ def scan_history_memberships(run: dict) -> list[dict]:
     Exact CIDRs are canonicalized, but a host address is never promoted to a
     containing subnet. Saved Network names are presentation metadata only.
     """
+    saved_names: dict[str, str] = {}
+    for snapshot in _saved_network_snapshots(run):
+        raw_cidr = str(snapshot.get("cidr") or "").strip()
+        name = str(snapshot.get("name") or "").strip()
+        if not raw_cidr or not name:
+            continue
+        try:
+            network = ipaddress.ip_network(raw_cidr, strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            saved_names.setdefault(str(network), name)
     subnets: dict[str, dict] = {}
     hosts: list[str] = []
     unsupported: list[str] = []
@@ -49,21 +61,24 @@ def scan_history_memberships(run: dict) -> list[dict]:
                 unsupported.append(raw)
                 continue
             cidr = str(network)
+            saved_name = saved_names.get(cidr, "")
             subnets.setdefault(
                 cidr,
                 {
                     "group_id": _group_id("subnet", cidr),
                     "kind": "subnet",
-                    # The group represents an exact recorded CIDR, not one
-                    # mutable Saved Network record. Per-run snapshots keep the
-                    # name that was recorded at collection or attribution time.
-                    "name": f"Subnet {cidr}",
+                    # The group remains tied to the exact recorded CIDR. When
+                    # this run retained a Saved Network snapshot, its designated
+                    # name is presentation metadata for the shared group.
+                    "name": saved_name or f"Subnet {cidr}",
                     "cidr": cidr,
                     "description": (
-                        "Grouped by exact recorded CIDR. Open the group to see "
-                        "each scan's historical Saved Network snapshot."
+                        f"Saved Network designation for exact recorded CIDR {cidr}."
+                        if saved_name else
+                        "Grouped by exact recorded CIDR. No Saved Network name "
+                        "was retained for this scan."
                     ),
-                    "category": "",
+                    "category": "saved_network" if saved_name else "",
                     "tags": [],
                 },
             )
@@ -167,6 +182,15 @@ def build_scan_history_catalog(runs: Iterable[dict]) -> list[dict]:
                     "latest_host_count": run.get("host_count"),
                 }
                 groups[group_id] = group
+            elif (
+                membership.get("category") == "saved_network"
+                and group.get("category") != "saved_network"
+            ):
+                group.update({
+                    "name": membership["name"],
+                    "description": membership["description"],
+                    "category": membership["category"],
+                })
             group["scan_count"] += 1
 
     kind_order = {
@@ -198,7 +222,10 @@ def scan_history_group_page(
         )
         if current is None:
             continue
-        if group is None:
+        if group is None or (
+            current.get("category") == "saved_network"
+            and group.get("category") != "saved_network"
+        ):
             group = dict(current)
         other_groups = [
             {

@@ -368,6 +368,7 @@ await eval(`(() => {
   assert.match(controls.get('datasetPreview').innerHTML,/22\\/tcp/);
   const marked=findingTransportMarkup({port:8443,protocol:'tcp',service:'https',nonstandard_port:true});
   assert.match(marked,/nonstandard-port-evidence/);
-  assert.match(marked,/◆ 8443\\/tcp/);
+  assert.match(marked,/>8443\\/tcp</);
+  assert.doesNotMatch(marked,/◆/);
   assert.equal(findingTransportMarkup({port:443,protocol:'tcp',nonstandard_port:false}),'<code>443/tcp</code>');
 })()`);

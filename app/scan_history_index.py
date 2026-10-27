@@ -13,7 +13,7 @@ from app.scan_history import (
 )
 
 
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 METADATA_EXPRESSION = (
     "json_remove(r.manifest_json, '$.artifacts', '$.commands', "
     "'$.execution_steps', '$.stdout', '$.stderr', '$.profile_settings', "
@@ -108,22 +108,40 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                                    OR (excluded.latest_created_at = scan_history_groups.latest_created_at
                                        AND excluded.latest_run_id > scan_history_groups.latest_run_id)
                                 THEN excluded.kind ELSE scan_history_groups.kind END,
-                    name = CASE WHEN excluded.latest_created_at > scan_history_groups.latest_created_at
-                                   OR (excluded.latest_created_at = scan_history_groups.latest_created_at
-                                       AND excluded.latest_run_id > scan_history_groups.latest_run_id)
-                                THEN excluded.name ELSE scan_history_groups.name END,
+                    name = CASE
+                                WHEN excluded.category = 'saved_network'
+                                     AND scan_history_groups.category != 'saved_network'
+                                THEN excluded.name
+                                WHEN excluded.category = scan_history_groups.category
+                                     AND (excluded.latest_created_at > scan_history_groups.latest_created_at
+                                          OR (excluded.latest_created_at = scan_history_groups.latest_created_at
+                                              AND excluded.latest_run_id > scan_history_groups.latest_run_id))
+                                THEN excluded.name
+                                ELSE scan_history_groups.name END,
                     cidr = CASE WHEN excluded.latest_created_at > scan_history_groups.latest_created_at
                                    OR (excluded.latest_created_at = scan_history_groups.latest_created_at
                                        AND excluded.latest_run_id > scan_history_groups.latest_run_id)
                                 THEN excluded.cidr ELSE scan_history_groups.cidr END,
-                    description = CASE WHEN excluded.latest_created_at > scan_history_groups.latest_created_at
-                                   OR (excluded.latest_created_at = scan_history_groups.latest_created_at
-                                       AND excluded.latest_run_id > scan_history_groups.latest_run_id)
-                                THEN excluded.description ELSE scan_history_groups.description END,
-                    category = CASE WHEN excluded.latest_created_at > scan_history_groups.latest_created_at
-                                   OR (excluded.latest_created_at = scan_history_groups.latest_created_at
-                                       AND excluded.latest_run_id > scan_history_groups.latest_run_id)
-                                THEN excluded.category ELSE scan_history_groups.category END,
+                    description = CASE
+                                WHEN excluded.category = 'saved_network'
+                                     AND scan_history_groups.category != 'saved_network'
+                                THEN excluded.description
+                                WHEN excluded.category = scan_history_groups.category
+                                     AND (excluded.latest_created_at > scan_history_groups.latest_created_at
+                                          OR (excluded.latest_created_at = scan_history_groups.latest_created_at
+                                              AND excluded.latest_run_id > scan_history_groups.latest_run_id))
+                                THEN excluded.description
+                                ELSE scan_history_groups.description END,
+                    category = CASE
+                                WHEN excluded.category = 'saved_network'
+                                     AND scan_history_groups.category != 'saved_network'
+                                THEN excluded.category
+                                WHEN excluded.category = scan_history_groups.category
+                                     AND (excluded.latest_created_at > scan_history_groups.latest_created_at
+                                          OR (excluded.latest_created_at = scan_history_groups.latest_created_at
+                                              AND excluded.latest_run_id > scan_history_groups.latest_run_id))
+                                THEN excluded.category
+                                ELSE scan_history_groups.category END,
                     tags_json = CASE WHEN excluded.latest_created_at > scan_history_groups.latest_created_at
                                    OR (excluded.latest_created_at = scan_history_groups.latest_created_at
                                        AND excluded.latest_run_id > scan_history_groups.latest_run_id)
@@ -164,7 +182,8 @@ def init_scan_history_index_storage(db_path: Path) -> None:
                               latest_scan_name, host_count
                          FROM scan_history_memberships
                         WHERE group_id = OLD.group_id
-                        ORDER BY created_at DESC, run_id DESC
+                        ORDER BY (category = 'saved_network') DESC,
+                                 created_at DESC, run_id DESC
                         LIMIT 1
                    )
                  WHERE group_id = OLD.group_id AND latest_run_id = OLD.run_id;

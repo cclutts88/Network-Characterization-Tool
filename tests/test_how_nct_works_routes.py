@@ -181,8 +181,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "download Markdown first" in html
     assert "foundation/evidence-engine-v2" in html
     assert 'href="/settings/system-health"' in html
-    assert 'href="/settings/network-scopes"' in html
-    assert 'href="/settings/mission-environment"' in html
+    assert 'href="/settings/network-scopes"' not in html
+    assert 'href="/settings/mission-environment#missionScopePanel"' in html
     assert "Mission Environment declarations" in html
     assert "A scope marked Prohibited blocks command preview" in html
 

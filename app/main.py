@@ -197,7 +197,7 @@ from app.mission_environment import (
     update_mission_tool,
     update_scope_context,
 )
-from app.network_scope_ui import network_scope_page
+from app.runtime_tool_inventory import apply_bundled_tool_inventory
 from app.collection_safety_setup import (
     CollectionSafetySetupIncomplete,
     get_collection_safety_status,
@@ -2385,16 +2385,18 @@ def _network_scope_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=status, detail=message)
 
 
-@app.get("/settings/network-scopes", response_class=HTMLResponse)
-def network_scopes_page(request: Request) -> HTMLResponse:
+@app.get("/settings/network-scopes")
+def network_scopes_page(request: Request) -> RedirectResponse:
     require_network_scope_admin(request)
-    return network_scope_page()
+    return RedirectResponse(
+        url="/settings/mission-environment#missionScopePanel", status_code=307
+    )
 
 
 @app.get("/settings/scope-safety", response_class=HTMLResponse)
 def collection_safety_page() -> RedirectResponse:
     return RedirectResponse(
-        url="/settings/mission-environment#scopeSafetyPanel", status_code=307
+        url="/settings/mission-environment#noStrikePanel", status_code=307
     )
 
 
@@ -2512,6 +2514,7 @@ def mission_environment_status(
     result = get_mission_environment(
         DB_PATH, limit=limit, offset=offset, include_archived=include_archived,
     )
+    result["tools"] = apply_bundled_tool_inventory(result["tools"])
     analyst = request.state.analyst
     result["can_edit"] = not auth_enabled() or bool(
         analyst and analyst.get("role") == "admin"

@@ -10,6 +10,7 @@ from app.device_ui import device_config_page
 from app.hunting_ui import hunting_page
 from app.hostname_ui import hostname_page
 from app.how_nct_works_ui import how_nct_works_page
+from app.mission_environment_ui import mission_environment_page
 from app.network_map_ui import network_map_page
 from app.network_scope_ui import network_scope_page
 from app.reachability_ui import reachability_page
@@ -86,7 +87,13 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     html = operator_page().body.decode()
     assert 'id="scanRecoveryPanel"' in html
     assert 'data-guide-context="scan-queue-self-check"' in html
-    assert "Investigate scan queue" in html
+    assert "Run unfinished work self-check" in html
+    assert "The button above already ran the read-only self-check" in html
+    assert "No terminal command or record change is required" in html
+    assert "const hostRecoveryNeeded=" in html
+    assert "loadScanRecovery(keepOpen=false)" in html
+    assert "Boolean(keepOpen||pause||blockers.length||issues.length)" in html
+    assert "$('checkScanRecovery').onclick=event=>{event.preventDefault();event.stopPropagation();return loadScanRecovery(true)}" in html
     assert "Resume preserved scans" in html
     assert "Resume passive pulls" in html
     assert "Resume device contact" in html
@@ -94,7 +101,8 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     assert "Resume storage maintenance" in html
     assert "/api/system/scan-work-recovery" in html
     assert "/api/system/scan-work-recovery/resume-passive" in html
-    assert "creates and independently verifies a complete backup" in html
+    assert "create and independently verify a complete backup" in html
+    assert "Select Run unfinished work self-check" in SHELL_SCRIPT
     assert "Resume local processing starts retained-data calculations without network contact" in SHELL_SCRIPT
     assert "Resume storage maintenance permits local inspection, backfill, and compaction" in SHELL_SCRIPT
     assert 'class="recovery-host-command"' in html
@@ -277,7 +285,7 @@ def test_scan_history_offers_durable_local_saved_analysis_work():
     assert "function analysisRequestToken()" in html
     assert "Math.random().toString(36).slice(2)" in html
     assert "request_token:analysisRequestToken()" in html
-    assert "Load 25 older scans for this subnet" in html
+    assert "Load 25 older scans for this network" in html
     assert "new URLSearchParams({limit:String(limit),offset:String(offset),sort:sortMode})" in html
     assert "params.set('snapshot',snapshot)" in html
     assert 'id="historySort"' in html
@@ -392,8 +400,8 @@ def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     assert ".finding-summary-row :is(th,td){background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
     assert html.count('data-nct-table-mode="contained"') == 2
-    assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
-    assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important" in SHELL_SCRIPT
+    assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:none!important;overflow-x:auto!important;overflow-y:visible!important}" in SHELL_SCRIPT
+    assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]>table>thead>tr>th{position:static!important;top:auto!important;z-index:auto}" in SHELL_SCRIPT
 
 
 def test_nmap_analysis_distinguishes_confirmed_hosts_from_pn_assumptions():
@@ -708,7 +716,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Built-in profile protected" in html
     assert 'id="noStrikePanel"' not in html
     assert "Add to global No-Strike list" not in html
-    assert 'href="/settings/mission-environment#scopeSafetyPanel">Mission Environment</a>' in html
+    assert 'href="/settings/mission-environment#missionScopePanel">Mission Environment</a>' in html
     assert "optional exclusions below apply only to this scan or schedule" in html
     assert "safety summary below counts their effect" in html
     assert "changed_by:auditActor()" in html
@@ -859,7 +867,13 @@ def test_scan_workflow_is_grouped_under_scan_details_navigation():
 
     assert "{title:'Nmap scans',icon:'scan'" in collect_group
     assert "href:'/settings/scope-safety',title:'Scope & Safety Setup'" not in collect_group
-    assert "href:'/settings/mission-environment',title:'Mission Environment'" in SHELL_SCRIPT
+    assert "{title:'Mission Environment',icon:'mission'" in SHELL_SCRIPT
+    assert "mission:'M12 2a10 10" in SHELL_SCRIPT
+    assert "href:'/settings/mission-environment#missionScopePanel',title:'Network Scope'" in SHELL_SCRIPT
+    assert "href:'/settings/mission-environment#noStrikePanel',title:'No-Strike'" in SHELL_SCRIPT
+    assert "href:'/settings/mission-environment#coveragePanel'" not in SHELL_SCRIPT
+    assert "support:{toolPanel:['coveragePanel']}" in SHELL_SCRIPT
+    assert 'id="nct-mission-environment-link"' not in SHELL_SCRIPT
     assert "sidebar.append(missionSection)" in SHELL_SCRIPT
     assert SHELL_SCRIPT.index("sidebar.append(missionSection)") < SHELL_SCRIPT.index("for(const group of groups)")
     assert "{title:'Scan Details',description:" in collect_group
@@ -889,7 +903,15 @@ def test_mission_environment_unifies_safety_tools_and_network_level_visibility()
     from app.mission_environment_ui import mission_environment_page
 
     html = mission_environment_page().body.decode()
-    assert html.index('id="scopeSafetyPanel"') < html.index('id="toolPanel"')
+    assert html.index('id="missionScopePanel"') < html.index('id="noStrikePanel"') < html.index('id="toolPanel"')
+    assert 'id="scopeIdentityForm"' in html
+    assert 'id="scopeIdentityList"' in html
+    assert 'id="noStrikeScopeContext"' in html
+    assert "updateNoStrikeScopeContext()" in html
+    assert 'href="/settings/network-scopes"' not in html
+    assert 'id="refreshRoleEvidence"' in html
+    assert "Ready to add another address" in html
+    assert "already has this active role in the selected scope" in html
     assert html.index('id="toolPanel"') < html.index('id="observedCoveragePanel"')
     assert "Active Network Scope" in html
     assert "Global No-Strike" in html
@@ -983,10 +1005,26 @@ def test_scan_workflow_pages_share_human_readable_scan_references():
 def test_table_headers_use_one_shared_explicit_scroll_contract():
     assert ".table-wrap[data-nct-table-mode=page]{overflow:visible!important}" in SHELL_SCRIPT
     assert "top:calc(var(--nct-header-height) + 6px)!important" in SHELL_SCRIPT
-    assert ".table-wrap[data-nct-table-mode=contained]{max-height:var(--nct-table-max-height,70vh);overflow:auto!important}" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-table-mode=contained]{max-height:none!important;overflow-x:auto!important;overflow-y:visible!important}" in SHELL_SCRIPT
     assert ".table-wrap[data-nct-table-mode=static]{overflow-x:auto!important;overflow-y:visible!important}" in SHELL_SCRIPT
     assert ".table-wrap[data-nct-table-mode=static]>table>thead>tr>th{position:static!important" in SHELL_SCRIPT
     assert ".table-wrap[data-nct-guide-mode=contained]" in SHELL_SCRIPT
+
+
+def test_ordinary_long_lists_use_the_main_page_for_vertical_navigation():
+    hostname = hostname_page().body.decode()
+    analysis = analysis_page().body.decode()
+    reach = reachability_page().body.decode()
+    mission = mission_environment_page().body.decode()
+    scans = operator_page().body.decode()
+
+    assert ".table-wrap{max-height:none;overflow-x:auto;overflow-y:visible" in hostname
+    assert ".lfa-host-list-body{max-height:none;overflow:visible" in analysis
+    assert ".ordered-rules{max-height:none;overflow:visible" in reach
+    assert ".history{max-height:none;overflow:visible" in mission
+    assert "#nct-operator-guide{position:fixed" in SHELL_SCRIPT
+    assert "height:min(46vh,420px);padding:0;overflow:auto" in SHELL_SCRIPT
+    assert ".live-discoveries-scroll{min-height:0;flex:1 1 auto;overflow-y:auto" in scans
     assert ".table-wrap[data-nct-narrow-mode=contained]" in SHELL_SCRIPT
 
     for source in (Path(__file__).parents[1] / "app").glob("*.py"):
@@ -1395,6 +1433,10 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert html.index('id="systemPageSize"') < html.index('id="systemPagePrevious"')
     assert "service-pair-grid" in html
     assert "grid-template-columns:minmax(110px,.65fr) minmax(220px,1.35fr)" in html
+    assert "column-gap:16px;row-gap:6px;align-items:start" in html
+    assert ".service-pair-grid>*{min-width:0;padding:0;border:0;background:transparent" in html
+    assert ">◆ nonstandard port</span>" not in html
+    assert ">◆ ${transport}</code>" not in html
     assert "Loading the newest completed scan for each network scope" in html
     assert "Loading retained network evidence" in html
     assert html.index('id="networkFiltersPanel"') < html.index('id="systemsPanel"') < html.index('id="search"')
@@ -1433,7 +1475,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'aria-label="Hunt capability evidence table"' in html
     assert "[...row.cells].reduce((total,cell)=>total+Number(cell.colSpan||1),0)" in html
     assert ".table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent))" in SHELL_SCRIPT
-    assert "scroll inside the table to see every column while keeping its headings in view" in html
+    assert "The table grows with the page so vertical navigation uses the main page scrollbar" in html
+    assert "use the table's horizontal scrollbar only when extra columns do not fit" in html
     assert "function setSystemView()" in html
     assert "function renderHostInventoryRows()" not in html
     assert "hosts:[],findings:[]" in html
@@ -2771,18 +2814,20 @@ def test_analyze_opens_with_a_paginated_network_wide_current_evidence_view():
     assert 'class="lfa-host-list"' in html
     assert 'class="lfa-list-closed">show list' in html
     assert 'class="lfa-list-open">hide list' in html
-    assert ".lfa-host-list-body{max-height:260px;overflow:auto" in html
+    assert ".lfa-host-list-body{max-height:none;overflow:visible" in html
     assert '.lfa-host-list-body:focus{outline:2px solid var(--accent)' in html
     assert 'role="region" tabindex="0" aria-label="${esc(label)}"' in html
     assert "Affected addresses for ${item.port||'unknown'}/${item.protocol||'unknown'}" in html
     assert 'data-nct-table-mode="page" data-nct-guide-mode="contained" data-nct-narrow-mode="contained"' in html
     assert "@media(min-width:851px){body.nct-shell.nct-guide-open .table-wrap[data-nct-guide-mode=contained]" in SHELL_SCRIPT
     assert "max-width:1600px" not in html
-    assert ".table-wrap[data-nct-guide-mode=contained]>table>thead>tr>th{position:sticky!important;top:0!important" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-guide-mode=contained]>table>thead>tr>th{position:static!important;top:auto!important;z-index:auto}" in SHELL_SCRIPT
     assert "@media(max-width:1400px){body.nct-shell .table-wrap[data-nct-narrow-mode=contained]" in SHELL_SCRIPT
+    assert ".table-wrap[data-nct-narrow-mode=contained]>table>thead>tr>th{position:static!important;top:auto!important;z-index:auto}" in SHELL_SCRIPT
     assert 'aria-label="Current network evidence table"' in html
     assert ".table-wrap[data-nct-table-mode]:focus{outline:2px solid var(--nct-accent,var(--accent))" in SHELL_SCRIPT
-    assert "scroll inside the table to see every column while keeping its headings in view" in html
+    assert "The table grows with the page so vertical navigation uses the main page scrollbar" in html
+    assert "use the table's horizontal scrollbar only when extra columns do not fit" in html
     assert '<div class="table-wrap" data-nct-table-mode="static"><table><thead><tr><th>Uncommon port</th>' in html
     assert html.index("<thead><tr><th>Uncommon port</th>") < html.index("<tbody>${group.unusual.map")
     assert 'id="networkChangesPanel"' in html

@@ -466,7 +466,7 @@ def test_terminal_scan_attribution_ignores_expired_worker_claims_and_preserves_r
             "SELECT 1 FROM scan_history_index_dirty WHERE run_id = ?",
             (manifest["run_id"],),
         ).fetchone()
-    assert tuple(membership) == ("subnet", f"Subnet {saved['cidr']}", saved["cidr"])
+    assert tuple(membership) == ("subnet", saved["name"], saved["cidr"])
     assert dirty is None
 
 

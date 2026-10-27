@@ -43,8 +43,8 @@ def test_scope_and_safety_review_is_bound_to_exact_revisions(tmp_path, monkeypat
         assert page.status_code == 200
         assert page.history
         assert page.url.path == "/settings/mission-environment"
-        assert page.url.fragment == "scopeSafetyPanel"
-        assert "Scope and collection safety" in page.text
+        assert page.url.fragment == "noStrikePanel"
+        assert "Global No-Strike and collection review" in page.text
         assert "10.0.0.0/8" in page.text
 
         scope = client.post(

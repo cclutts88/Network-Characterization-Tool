@@ -69,7 +69,8 @@ def test_same_cidr_stays_grouped_after_saved_network_recreation_and_manual_use()
     assert len(catalog) == 1
     assert catalog[0]["cidr"] == "10.50.15.0/24"
     assert catalog[0]["scan_count"] == 3
-    assert catalog[0]["name"] == "Subnet 10.50.15.0/24"
+    assert catalog[0]["name"] == "AFB Development"
+    assert catalog[0]["category"] == "saved_network"
 
 
 def test_group_heading_is_stable_when_newer_snapshots_use_different_names():
@@ -89,8 +90,8 @@ def test_group_heading_is_stable_when_newer_snapshots_use_different_names():
         [older, newer], catalog[0]["group_id"], limit=25
     )
 
-    assert catalog[0]["name"] == "Subnet 10.50.15.0/24"
-    assert catalog[0]["description"].startswith("Grouped by exact recorded CIDR")
+    assert catalog[0]["name"] == "Development current name"
+    assert catalog[0]["description"].startswith("Saved Network designation")
     assert page is not None
     assert [run["saved_networks"][0]["name"] for run in page["runs"]] == [
         "Development current name",
@@ -491,6 +492,33 @@ def test_scan_history_index_tracks_manifest_updates_and_deletes(tmp_path):
     assert [(item["cidr"], item["scan_count"]) for item in catalog["groups"]] == [
         ("10.20.0.0/16", 1)
     ]
+
+
+def test_scan_history_index_prefers_saved_network_name_over_newer_manual_target(tmp_path):
+    import app.poc as poc
+    from app.scan_history_index import scan_history_catalog_page
+
+    db_path = tmp_path / "analyzer.db"
+    associated = scan_run(1, saved_networks=[{
+        "saved_network_id": "operations",
+        "name": "Operations Users",
+        "cidr": "10.50.15.0/24",
+    }])
+    manual = scan_run(2, targets=["10.50.15.9/24"])
+    for record in (associated, manual):
+        record.update({
+            "operator": "analyst", "reason": "test",
+            "originating_host": "test-host", "interface": "eth0",
+            "profile": "safe",
+        })
+        poc.insert_scan_run_manifest(record, db_path)
+
+    catalog = scan_history_catalog_page(db_path, limit=100, offset=0)
+
+    assert len(catalog["groups"]) == 1
+    assert catalog["groups"][0]["name"] == "Operations Users"
+    assert catalog["groups"][0]["cidr"] == "10.50.15.0/24"
+    assert catalog["groups"][0]["category"] == "saved_network"
 
 
 def test_scan_history_index_accepts_rollback_writes_and_repairs_them(tmp_path):
