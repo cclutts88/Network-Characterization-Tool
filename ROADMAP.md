@@ -9328,3 +9328,19 @@ tests and host Node runtime checks: CLEAR — DOCUMENTED DEVIATION. Novice brows
 review cleared filtering independence, paging, evidence labels, themes, normal Guide
 text and headings; narrow screens retain horizontal table navigation. Full regression
 and final completion recording remain pending. The sealed transfer ZIP is unchanged.
+
+Completion 2026-10-27: the bounded inverse comparison is locally complete at source
+`17af9e44ca0fbf1d1e85228fb2750c3c460abb26`. The full Docker regression passed
+2,213 tests with21 skipped and one existing dependency deprecation warning. Host Node
+runtime checks additionally verified later-page revision propagation, source replacement,
+stale error handling and task-generation ownership. Independent focused review passed
+123 tests and returned CLEAR — DOCUMENTED DEVIATION; novice browser review returned
+CLEAR. Final browser recheck confirmed revised paging, exact source links, separate
+UTC windows, static headings, page vertical scrolling and no console warnings/errors.
+The isolated synthetic preview is available at127.0.0.1:18161 under Arkime → Traffic
+Patterns; active collection is disabled. No schema, production evidence, Range,
+sealed ZIP or stable main change. This is not the completion of all Phase6 correlation:
+unknown destination fields/summary groups remain unsupported, each candidate page
+reselects current retained Nmap reports, and no physical identity, live-state, complete
+visibility, Last Seen or missing-service finding is created. The next broader downstream
+work remains historical/service-change interpretation and supported cross-view reuse.
