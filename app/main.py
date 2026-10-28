@@ -2718,6 +2718,16 @@ def arkime_unobserved_services(import_id: str, limit: int = Query(default=25, ge
         raise _arkime_error(exc) from exc
 
 
+@app.get("/api/arkime/service-utilization")
+def arkime_service_utilization(import_id: str, limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), candidate_revision: str | None = Query(default=None, pattern="^[0-9a-f]{64}$")) -> dict:
+    try:
+        return compare_unobserved_services(DB_PATH, import_id, limit=limit, offset=offset, candidate_revision=candidate_revision, include_traffic=True)
+    except ArkimeComparisonChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ArkimeAnalyticsError as exc:
+        raise _arkime_error(exc) from exc
+
+
 @app.get("/api/arkime/traffic-analysis")
 def arkime_retained_traffic_analysis(
     import_id: str,

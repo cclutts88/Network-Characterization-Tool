@@ -354,7 +354,7 @@ await eval([
 
 await eval([
   "(async () => {",
-  "const currentArkimeTask=()=>'arkimeTrafficAnalysis';let arkimeActivationRevision=1;let trafficImportId='older-source',trafficRequest=1,serviceComparisonRequest=0,serviceComparisonPage={source:null,revision:null};",
+  "const currentArkimeTask=()=>'arkimeTrafficAnalysis';let arkimeActivationRevision=1;let trafficImportId='older-source',trafficRequest=1,serviceComparisonRequest=0,serviceComparisonPage={source:null,revision:null},serviceComparisonCache=null;",
   "const host={textContent:'',innerHTML:''},pending=[],$=()=>host;",
   "const api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));",
   "const esc=value=>String(value),trafficUtc=value=>String(value),serviceComparisonEvidence=()=>'';",
@@ -363,9 +363,10 @@ await eval([
   "const result={pagination:{candidate_total:0,has_more:false},rows:[],scope:{label:'newer-source'},operator_sensor:'sensor',query_start:'start',query_end:'end',raw_url:'/raw',checked_candidates:0,candidate_revision:'a'.repeat(64)};",
   "pending[1].resolve(result);await newer;pending[0].resolve({...result,scope:{label:'older-source'}});await older;",
   "assert.ok(host.innerHTML.includes('newer-source'));assert.ok(!host.innerHTML.includes('older-source'),'stale source must not replace comparison');",
-  "const page=loadServiceComparison(25);assert.ok(pending[2].url.includes('candidate_revision='+'a'.repeat(64)),'later pages must carry exact membership revision');pending[2].reject(new Error('candidate list changed'));await page;assert.ok(host.textContent.includes('No missing-traffic conclusion'));",
+  "const page=loadServiceComparison(25);assert.ok(pending[2].url.includes('candidate_revision='+'a'.repeat(64)),'later pages must carry exact membership revision');pending[2].reject(new Error('candidate list changed'));await page;assert.ok(host.textContent.includes('No missing-traffic conclusion'));assert.equal(serviceComparisonCache,null,'a failed fresh check must not resurrect cached evidence on expression redraw');",
   "const before=host.innerHTML,leaving=loadServiceComparison(0);arkimeActivationRevision+=1;pending[3].resolve({...result,scope:{label:'after-leaving'}});await leaving;assert.equal(host.innerHTML,before,'leaving or refreshing traffic task fences late comparison');",
   "})()",
 ].join("\n"));
 
+eval(["(() => {", "const esc=String,trafficUtc=String;",syncHandler("serviceTrafficSpan"),syncHandler("serviceUtilizationMetric"),"assert.ok(serviceTrafficSpan({traffic_status:'observed',span_milliseconds:90000,first_packet:'first',last_packet:'last'}).startsWith('1m 30s'));","assert.ok(serviceTrafficSpan({traffic_status:'observed',span_milliseconds:0}).startsWith('0s'));","assert.equal(serviceTrafficSpan({traffic_status:'not_recorded'}),'Not recorded');","assert.equal(serviceTrafficSpan({traffic_status:'unresolved',span_milliseconds:null}),'Unknown');","assert.equal(serviceUtilizationMetric({traffic_status:'observed',packet_count:{total:'18000000000000000000'}},'packet_count'),'18000000000000000000');","assert.ok(serviceUtilizationMetric({traffic_status:'observed',packet_count:{total:null,known_subtotal:'0',missing_rows:1}},'packet_count').startsWith('Unknown'));","})()"].join("\n"));
 console.log("Arkime UI paging and request-ownership regressions passed");

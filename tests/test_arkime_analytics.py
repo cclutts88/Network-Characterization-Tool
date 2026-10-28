@@ -25,6 +25,72 @@ START = "2030-01-01T00:00:00+00:00"
 END = "2030-01-01T02:00:00+00:00"
 
 
+def test_unified_utilization_keeps_observed_and_nmap_only_services(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "unified.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    _process_nmap(db, scope, _nmap_xml([22, 53], [("tcp", 22, "open"), ("tcp", 53, "open")], address="8.8.8.8"), "active")
+    result = compare_unobserved_services(db, imported["import_id"], include_traffic=True)
+    rows = {(r["address"], r["port"]): r for r in result["rows"]}
+    observed = rows[("8.8.8.8", 53)]
+    assert observed["retained_session_rows"] == 2  # duplicate IDs stay distinct receipts
+    assert observed["packet_count"]["total"] == "18000000000000000000"
+    assert observed["byte_count"]["total"] == "9000000000000000000"
+    assert observed["first_packet"] < observed["last_packet"]
+    assert observed["span_milliseconds"] == 90000
+    assert observed["active_source"]
+    missing = rows[("8.8.8.8", 22)]
+    assert missing["traffic_status"] == "not_recorded" and missing["retained_session_rows"] == 0
+    assert missing["packet_count"]["total"] is None and missing["first_packet"] is None
+    assert missing["span_milliseconds"] is None
+    unknown = rows[("192.168.1.2", 443)]
+    assert unknown["traffic_status"] == "observed" and unknown["active_source"] is None
+    assert unknown["packet_count"] == {"total": None, "known_subtotal": "0", "missing_rows": 1}
+    assert unknown["span_milliseconds"] == 30000
+
+
+def test_unified_utilization_works_without_processed_nmap_and_binds_import(tmp_path):
+    from app.arkime_service_comparison import ArkimeComparisonChanged, compare_unobserved_services
+    db = tmp_path / "unified.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    first = compare_unobserved_services(db, imported["import_id"], include_traffic=True, limit=1)
+    assert first["rows"][0]["traffic_status"] == "observed"
+    again = _import_sessions(db, scope)
+    with pytest.raises(ArkimeComparisonChanged):
+        compare_unobserved_services(db, again["import_id"], include_traffic=True, offset=1, candidate_revision=first["candidate_revision"])
+
+
+def test_unified_unknown_destination_fields_never_create_negative_claim(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "unified.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    content = json.dumps({"data": [_session(1, source="10.0.0.1", destination="8.8.8.8", port=None, packets=0, byte_count=0)]}).encode()
+    imported = import_arkime_sessions_json(db, content=content, original_filename="unknown.json", media_type="application/json", scope_id=scope["scope_id"], operator_sensor="sensor", query_start=START, query_end=END, bounding_mode="both", operator_export_assessment="complete", capture_coverage="unknown", query_expression="", actor="analyst")
+    _process_nmap(db, scope, _nmap_xml([53], [("tcp", 53, "open")], address="8.8.8.8"), "active")
+    result = compare_unobserved_services(db, imported["import_id"], include_traffic=True)
+    observed, unresolved = result["rows"]
+    assert observed["port"] is None and observed["traffic_status"] == "observed"
+    assert observed["packet_count"]["total"] == "0"  # a measured zero stays zero
+    assert unresolved["port"] == 53 and unresolved["traffic_status"] == "unresolved"
+    assert unresolved["retained_session_rows"] is None
+    assert all(row["traffic_status"] != "not_recorded" for row in result["rows"])
+
+
+def test_unified_protocols_stay_separate_and_negative_rows_ignore_other_sources(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "unified.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    udp = _nmap_xml([53], [("udp", 53, "open")], address="8.8.8.8").replace(b'protocol="tcp"', b'protocol="udp"').replace(b'<extraports state="closed" count="1"/>', b'')
+    _process_nmap(db, scope, udp, "udp")
+    result = compare_unobserved_services(db, imported["import_id"], include_traffic=True)
+    rows = {r["protocol"]: r for r in result["rows"] if r["address"] == "8.8.8.8"}
+    assert rows["tcp"]["traffic_status"] == "observed"
+    assert rows["udp"]["traffic_status"] == "not_recorded"
+
+
 def test_inverse_comparison_uses_entire_exact_source_and_latest_state(tmp_path):
     from app.arkime_service_comparison import compare_unobserved_services
     db = tmp_path / "comparison.db"

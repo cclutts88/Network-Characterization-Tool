@@ -9344,3 +9344,35 @@ unknown destination fields/summary groups remain unsupported, each candidate pag
 reselects current retained Nmap reports, and no physical identity, live-state, complete
 visibility, Last Seen or missing-service finding is created. The next broader downstream
 work remains historical/service-change interpretation and supported cross-view reuse.
+
+#### 2026-10-27 · Unified destination-port utilization — started
+
+User-directed revision: replace separate primary path and missing-traffic displays
+with one destination IP/transport/port table containing first/last reported packet
+times, retained session rows, packets and bytes. Observed services do not require
+Nmap; only latest defensible same-scope Nmap-open services may have a no-traffic row.
+Unknown destination fields keep affected comparisons unresolved and remain visible
+as separate observed groups. Totals are exact decimal text; missing totals remain
+Unknown with known subtotals, and no-traffic counters/times are Not recorded. Keep
+query/capture declarations, raw evidence and separate Nmap windows. No cross-import
+merge, deduplication, live-state, utilization-capacity or continuous-activity claim.
+One bounded union inventory and source/scope-bound revision protect paging. The
+full-source table loads with the selected Sessions source; cached results survive
+expression changes without repeating heavy work. Expressions apply explicitly to
+collapsed individual-path and ranking drilldowns; they cannot manufacture absence.
+Legacy inverse API remains compatible. Architecture gate: CLEAR — DOCUMENTED
+DEVIATION from separate views at the user's request. Same-change Guide, How NCT Works,
+semantic tests, browser/novice review and completion regression remain required.
+No schema, Range or sealed-package changes.
+
+Follow-up user direction: replace the primary first/last timestamp columns with
+Recorded traffic span. This is the exact earliest-to-latest retained packet interval,
+not continuous activity or summed session duration; gaps are explicitly explained.
+Exact UTC timestamps remain in each row's details. Tests verify90-second/30-second
+spans, zero and unknown formatting, large counter precision, and unchanged Not recorded
+semantics. Novice duration review: CLEAR. Independent duration/cache review: CLEAR.
+A failed fresh utilization request invalidates cached results so an expression redraw
+cannot silently resurrect stale evidence. The first full regression passed2,216 tests
+and caught one old Guide phrase expectation; retained-data wording was restored without
+changing the new filter boundary. The affected analytics/UI checks pass; final full
+regression completion remains pending. No sealed-package change.
