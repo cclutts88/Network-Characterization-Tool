@@ -38,6 +38,7 @@ from app.arkime_analytics import (
     parse_arkime_filter_expression,
 )
 from app.arkime_ui import arkime_page
+from app.arkime_service_comparison import ArkimeComparisonChanged, compare_unobserved_services
 from app.arkime_connector import (
     ArkimeConnectorConflict,
     ArkimeConnectorError,
@@ -2704,6 +2705,16 @@ def arkime_coverage_window_history(
             collection_delay_seconds=collection_delay_seconds,
         )
     except ArkimeCoverageError as exc:
+        raise _arkime_error(exc) from exc
+
+
+@app.get("/api/arkime/unobserved-services")
+def arkime_unobserved_services(import_id: str, limit: int = Query(default=25, ge=1, le=100), offset: int = Query(default=0, ge=0), candidate_revision: str | None = Query(default=None, pattern="^[0-9a-f]{64}$")) -> dict:
+    try:
+        return compare_unobserved_services(DB_PATH, import_id, limit=limit, offset=offset, candidate_revision=candidate_revision)
+    except ArkimeComparisonChanged as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ArkimeAnalyticsError as exc:
         raise _arkime_error(exc) from exc
 
 

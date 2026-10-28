@@ -25,6 +25,126 @@ START = "2030-01-01T00:00:00+00:00"
 END = "2030-01-01T02:00:00+00:00"
 
 
+def test_inverse_comparison_uses_entire_exact_source_and_latest_state(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    other = create_network_scope(db, label="Other", created_by="admin")
+    imported = _import_sessions(db, scope)
+    _process_nmap(db, scope, _nmap_xml([22, 53], [("tcp", 22, "open"), ("tcp", 53, "open")], address="8.8.8.8"), "first")
+    _process_nmap(db, other, _nmap_xml([80], [("tcp", 80, "open")], address="8.8.8.8"), "other")
+    result = compare_unobserved_services(db, imported["import_id"])
+    assert [(row["port"], row["protocol"]) for row in result["rows"]] == [(22, "tcp")]
+    assert result["rows"][0]["active_source"]
+    assert result["export_completeness"] == "complete"
+    # A later narrower scan does not carry older open state forward.
+    _process_nmap(db, scope, _nmap_xml([53], [("tcp", 53, "open")], address="8.8.8.8", start=1893451000), "narrower")
+    assert compare_unobserved_services(db, imported["import_id"])["rows"] == []
+
+
+def test_inverse_comparison_pages_candidates_and_is_read_only(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    _process_nmap(db, scope, _nmap_xml([20, 21, 22], [("tcp", port, "open") for port in [20, 21, 22]]), "ports")
+    before = db.read_bytes()
+    first = compare_unobserved_services(db, imported["import_id"], limit=1)
+    pages = [first] + [compare_unobserved_services(db, imported["import_id"], limit=1, offset=index, candidate_revision=first["candidate_revision"]) for index in range(1, 3)]
+    assert [page["rows"][0]["port"] for page in pages] == [20, 21, 22]
+    assert [page["pagination"]["has_more"] for page in pages] == [True, True, False]
+    assert db.read_bytes() == before
+    with pytest.raises(ArkimeAnalyticsError):
+        compare_unobserved_services(db, imported["import_id"], limit=True)
+
+
+def test_inverse_comparison_keeps_transport_direction_and_filters_separate(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    udp = _nmap_xml([53], [("udp", 53, "open")], address="8.8.8.8").replace(b'protocol="tcp"', b'protocol="udp"').replace(b'<extraports state="closed" count="1"/>', b'')
+    _process_nmap(db, scope, udp, "udp")
+    _process_nmap(db, scope, _nmap_xml([50001], [("tcp", 50001, "open")], address="10.0.0.5"), "source")
+    analyze_arkime_import(db, imported["import_id"], path_limit=1, filters=[{"field": "ip.dst", "operator": "==", "value": "1.1.1.1"}])
+    result = compare_unobserved_services(db, imported["import_id"])
+    assert {(row["address"], row["protocol"], row["port"]) for row in result["rows"]} == {("8.8.8.8", "udp", 53), ("10.0.0.5", "tcp", 50001)}
+
+
+def test_inverse_comparison_fails_closed_on_unknown_receipts_and_limits(tmp_path, monkeypatch):
+    import app.arkime_service_comparison as comparison
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    _process_nmap(db, scope, _nmap_xml([22, 23], [("tcp", 22, "open"), ("tcp", 23, "open")]), "ports")
+    monkeypatch.setattr(comparison, "MAX_CANDIDATE_SERVICES", 1)
+    with pytest.raises(ArkimeAnalyticsError, match="candidate-service bound"):
+        comparison.compare_unobserved_services(db, imported["import_id"])
+    with pytest.raises(ArkimeAnalyticsError, match="Sessions import"):
+        comparison.compare_unobserved_services(db, "missing")
+    unknown = import_arkime_sessions_json(db, original_filename="unknown.json", media_type="application/json", bounding_mode="both", content=json.dumps({"data": [_session(0, source="10.0.0.5", destination="8.8.8.8", port=None)]}).encode(), scope_id=scope["scope_id"], operator_sensor="sensor", query_start=START, query_end=END, operator_export_assessment="complete", capture_coverage="unknown", query_expression="", actor="analyst")
+    with pytest.raises(ArkimeAnalyticsError, match="unknown or unsupported"):
+        comparison.compare_unobserved_services(db, unknown["import_id"])
+
+
+def test_inverse_comparison_changed_candidate_list_requires_restart(tmp_path):
+    from app.arkime_service_comparison import ArkimeComparisonChanged, compare_unobserved_services
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    _process_nmap(db, scope, _nmap_xml([22], [("tcp", 22, "open")]), "first")
+    first = compare_unobserved_services(db, imported["import_id"], limit=1)
+    _process_nmap(db, scope, _nmap_xml([23], [("tcp", 23, "open")], address="192.0.2.11"), "new-member")
+    with pytest.raises(ArkimeComparisonChanged, match="start again"):
+        compare_unobserved_services(db, imported["import_id"], limit=1, offset=1, candidate_revision=first["candidate_revision"])
+    with pytest.raises(ArkimeComparisonChanged):
+        compare_unobserved_services(db, imported["import_id"], limit=1, offset=1)
+
+
+def test_inverse_comparison_excludes_later_closed_and_tied_reports(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    _process_nmap(db, scope, _nmap_xml([22], [("tcp", 22, "open")]), "first")
+    _process_nmap(db, scope, _nmap_xml([22], [("tcp", 22, "closed")], start=1893451000), "later")
+    assert compare_unobserved_services(db, imported["import_id"])["rows"] == []
+    _process_nmap(db, scope, _nmap_xml([22], [("tcp", 22, "open")], start=1893451000), "tie")
+    assert compare_unobserved_services(db, imported["import_id"])["rows"] == []
+
+
+def test_inverse_comparison_rejects_missing_receipt_inventory(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    # Simulate corruption only in this disposable fixture, bypassing immutable storage.
+    with connect_database(db) as connection:
+        for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='arkime_session_receipts'").fetchall():
+            connection.execute('DROP TRIGGER "' + name.replace('"', '""') + '"')
+        connection.execute("DELETE FROM arkime_session_receipts WHERE import_id=? AND source_ordinal=0", (imported["import_id"],))
+    with pytest.raises(ArkimeAnalyticsError, match="inventory is incomplete"):
+        compare_unobserved_services(db, imported["import_id"])
+
+
+def test_inverse_comparison_http_route_bounds_and_authentication(tmp_path, monkeypatch):
+    import app.main as main
+    db = tmp_path / "comparison.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    monkeypatch.setattr(main, "DB_PATH", db)
+    with TestClient(main.app) as client:
+        url = "/api/arkime/unobserved-services"
+        assert client.get(url, params={"import_id": imported["import_id"]}).status_code == 200
+        assert client.get(url, params={"import_id": imported["import_id"], "offset": 1}).status_code == 409
+        assert client.get(url, params={"import_id": imported["import_id"], "limit": 101}).status_code == 422
+    from app.auth import create_user
+    create_user(db, username="fixture-admin", display_name="Disposable fixture", created_by="fixture", password="FixtureOnly-NotARealAccount-123!", role="admin")
+    monkeypatch.setenv("NCT_AUTH_MODE", "local")
+    with TestClient(main.app) as client:
+        assert client.get(url, params={"import_id": imported["import_id"]}).status_code == 401
+
+
 def _session(index, *, source, destination, port, packets="missing", byte_count="missing",
              applications=None, vlans=None, transport="tcp"):
     row = {

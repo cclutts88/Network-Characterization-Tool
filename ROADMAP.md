@@ -9301,3 +9301,30 @@ and operator acceptance remain required. The Kubernetes GUI updater remains pend
 this full package qualifies the standalone bind-mounted Docker/Compose adapter.
 Stable main remains clean and unchanged. This roadmap completion is a separate
 recording commit; the sealed image remains bound to the source checkpoint above.
+
+#### 2026-10-27 · Phase 6.11 inverse exact-source service comparison — started
+
+Add an on-demand Arkime Traffic Patterns comparison of latest defensible, same-scope
+Nmap-reported open services against every destination receipt in one Sessions import.
+Match exact destination address, transport and port before any traffic filters or
+path paging. Show only “No destination traffic in this selected source,” separate
+source windows and completeness declarations; never infer unused services, live
+state, physical identity, capture blind spots or shared events. Summary groups and
+unknown fields remain unsupported. Read-only bounded candidate pages use the existing
+service-state selector and preserve uncertainty. The page must explain when a checked
+candidate page contains no qualifying result, independently of later candidate pages.
+Load only on explicit operator request and discard stale responses after selection
+changes. No schema change, Range operation or sealed-package modification.
+Architecture start gate: CLEAR — DOCUMENTED DEVIATION. Completion requires focused
+semantic/paging tests, browser and novice review, regression and independent gate.
+
+Implementation checkpoint: on-demand comparison, explicit static/page-flow table,
+exact source and UTC context, Guide and How NCT Works are implemented. Later pages
+carry a scope-bound candidate-membership revision and return409/restart guidance
+if retained membership changes. Every page still selects the latest defensible Nmap
+state in one read snapshot. Request ownership includes source, traffic request, task
+activation generation and destination element. Independent focused review passed123
+tests and host Node runtime checks: CLEAR — DOCUMENTED DEVIATION. Novice browser
+review cleared filtering independence, paging, evidence labels, themes, normal Guide
+text and headings; narrow screens retain horizontal table navigation. Full regression
+and final completion recording remain pending. The sealed transfer ZIP is unchanged.

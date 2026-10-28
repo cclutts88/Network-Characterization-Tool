@@ -352,4 +352,20 @@ await eval([
   "})()",
 ].join("\n"));
 
+await eval([
+  "(async () => {",
+  "const currentArkimeTask=()=>'arkimeTrafficAnalysis';let arkimeActivationRevision=1;let trafficImportId='older-source',trafficRequest=1,serviceComparisonRequest=0,serviceComparisonPage={source:null,revision:null};",
+  "const host={textContent:'',innerHTML:''},pending=[],$=()=>host;",
+  "const api=url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject}));",
+  "const esc=value=>String(value),trafficUtc=value=>String(value),serviceComparisonEvidence=()=>'';",
+  handler("loadServiceComparison"),
+  "const older=loadServiceComparison(0);trafficImportId='newer-source';trafficRequest+=1;const newer=loadServiceComparison(0);",
+  "const result={pagination:{candidate_total:0,has_more:false},rows:[],scope:{label:'newer-source'},operator_sensor:'sensor',query_start:'start',query_end:'end',raw_url:'/raw',checked_candidates:0,candidate_revision:'a'.repeat(64)};",
+  "pending[1].resolve(result);await newer;pending[0].resolve({...result,scope:{label:'older-source'}});await older;",
+  "assert.ok(host.innerHTML.includes('newer-source'));assert.ok(!host.innerHTML.includes('older-source'),'stale source must not replace comparison');",
+  "const page=loadServiceComparison(25);assert.ok(pending[2].url.includes('candidate_revision='+'a'.repeat(64)),'later pages must carry exact membership revision');pending[2].reject(new Error('candidate list changed'));await page;assert.ok(host.textContent.includes('No missing-traffic conclusion'));",
+  "const before=host.innerHTML,leaving=loadServiceComparison(0);arkimeActivationRevision+=1;pending[3].resolve({...result,scope:{label:'after-leaving'}});await leaving;assert.equal(host.innerHTML,before,'leaving or refreshing traffic task fences late comparison');",
+  "})()",
+].join("\n"));
+
 console.log("Arkime UI paging and request-ownership regressions passed");
