@@ -9376,3 +9376,28 @@ cannot silently resurrect stale evidence. The first full regression passed2,216 
 and caught one old Guide phrase expectation; retained-data wording was restored without
 changing the new filter boundary. The affected analytics/UI checks pass; final full
 regression completion remains pending. No sealed-package change.
+
+Completion 2026-10-27: unified destination-port utilization and recorded traffic span
+are accepted locally at source `b3f0caffca3d572f19547eb1f58ec626f6bee557`. Final full
+Docker regression:2,217 passed,21 skipped, one existing dependency warning. Focused
+analytics/UI checks passed122 tests; independent combined source review passed127,
+duration-focused review passed4, and host Node runtime checks passed stale-response,
+revision, failed-cache, zero/unknown duration and large-counter precision cases.
+Independent final gate: CLEAR — DOCUMENTED DEVIATION. Novice combined-table and
+length walkthroughs: CLEAR. Browser confirmed1m30s/30s spans, exact UTC row details,
+Not recorded versus Unknown/known subtotal, separate Nmap evidence, numeric paging,
+static headings, page vertical flow and an empty error/warning log. The user-requested
+single primary table replaces separate primary displays; full-source totals remain
+independent of expression-filtered path/ranking drilldowns and that boundary is explicit.
+
+No schema change, production evidence, Range operation, stable main update or sealed
+transfer-package modification occurred. The existing Recovery-r1 ZIP does not contain
+this later development milestone and retains its previously recorded checksum. Range
+installation, real systemd acceptance and Kubernetes GUI updating remain separate gates.
+
+End-of-session handoff: at the user's request, stop after this milestone, commit/push
+all verified work to foundation/evidence-engine-v2, then request normal PC shutdown.
+The synthetic loopback-only preview uses the persistent nct-phase6-comparison-preview
+volume and has active collection disabled. After Docker Desktop is running next session,
+`docker start nct-phase6-comparison-preview` resumes the local18161 preview. Pending
+roadmap work remains pending; this completion does not close all Phase6 integration.
