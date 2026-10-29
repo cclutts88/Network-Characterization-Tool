@@ -88,21 +88,23 @@ def file_identity(path):
     return [value.st_dev, value.st_ino]
 
 
-def run(args, *, timeout=120, input_file=None):
+def run(args, *, timeout=120, input_file=None, max_output_bytes=8 * 1024**2):
+    if not 0 < max_output_bytes <= 64 * 1024**2:
+        raise ValueError("Invalid bounded host output limit")
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
         process = subprocess.Popen(args, stdin=input_file, stdout=output, stderr=errors)
         deadline = time.monotonic() + timeout
         try:
             while process.poll() is None:
-                if time.monotonic() > deadline or os.fstat(output.fileno()).st_size + os.fstat(errors.fileno()).st_size > 8 * 1024**2:
+                if time.monotonic() > deadline or os.fstat(output.fileno()).st_size + os.fstat(errors.fileno()).st_size > max_output_bytes:
                     raise ValueError("Host operation exceeded its time or output limit")
                 time.sleep(.05)
             if process.returncode:
                 raise ValueError("Trusted host operation failed: " + args[0] + " " + args[1])
-            if os.fstat(output.fileno()).st_size > 8 * 1024**2:
+            if os.fstat(output.fileno()).st_size + os.fstat(errors.fileno()).st_size > max_output_bytes:
                 raise ValueError("Host operation output exceeds its limit")
             output.seek(0)
-            return output.read(8 * 1024**2).decode()
+            return output.read(max_output_bytes).decode()
         finally:
             if process.poll() is None:
                 process.kill()
@@ -119,8 +121,8 @@ class Docker:
                 return self.inspect(item["Id"])
         return None
 
-    def command(self, *args):
-        return run(["docker", *args], timeout=180)
+    def command(self, *args, max_output_bytes=8 * 1024**2):
+        return run(["docker", *args], timeout=180, max_output_bytes=max_output_bytes)
 
     def create(self, name, config):
         result = self.api("POST", "/containers/create?name=" + urllib.parse.quote(name), config)
@@ -471,7 +473,7 @@ class Host:
             helper = self.engine.inspect(identity)
             if helper["Image"] != image or helper["State"]["Running"]:
                 raise ValueError("Created maintenance helper identity/state mismatch")
-            output = self.engine.command("start", "--attach", identity)
+            output = self.engine.command("start", "--attach", identity, max_output_bytes=64 * 1024**2)
             completed = self.engine.inspect(identity)
             if completed["State"]["Running"] or completed["State"].get("ExitCode") != 0:
                 raise ValueError("Maintenance helper did not complete successfully")

@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ class Engine:
     def __init__(self, failure=None):
         self.failure, self.calls, self.item, self.created = failure, [], None, None
 
-    def command(self, *args):
+    def command(self, *args, **kwargs):
         self.calls.append(args)
         assert args[0] not in {"run", "pull"} and "--pull=never" not in args
         if args[:2] == ("image", "inspect"):
@@ -24,6 +25,7 @@ class Engine:
                 raise ValueError("Image missing")
             return json.dumps([{"Id": IMAGE}])
         if args[0] == "start":
+            assert kwargs == {"max_output_bytes": 64 * 1024**2}
             self.item["State"] = {"Running": True, "ExitCode": 0}
             if self.failure == "timeout":
                 raise ValueError("Bounded timeout")
@@ -73,11 +75,11 @@ def test_helper_failures_never_pull_and_cleanup_is_proved(tmp_path, failure):
     if failure == "stop":
         # Simulate an attach timeout followed by a helper that refuses to stop.
         original = engine.command
-        def command(*args):
+        def command(*args, **kwargs):
             if args[0] == "start":
                 engine.item["State"]["Running"] = True
                 raise ValueError("Bounded timeout")
-            return original(*args)
+            return original(*args, **kwargs)
         engine.command = command
     with pytest.raises(ValueError):
         host(tmp_path, engine).run_helper(IMAGE, [], ["check.py"])
@@ -100,3 +102,20 @@ def test_unreviewed_helper_options_refused_before_create(tmp_path, options):
     with pytest.raises(ValueError):
         host(tmp_path, engine).run_helper(IMAGE, options, ["check.py"])
     assert engine.created is None
+
+
+def test_large_inventory_is_complete_with_helper_bound_but_generic_limit_stays_small():
+    command = [sys.executable, "-c", "import sys;sys.stdout.write('x'*(9*1024**2))"]
+    with pytest.raises(ValueError, match="limit"):
+        module.run(command, timeout=10)
+    result = module.run(command, timeout=10, max_output_bytes=64 * 1024**2)
+    assert len(result) == 9 * 1024**2
+
+
+def test_inventory_output_remains_bounded_and_timeout_is_enforced():
+    with pytest.raises(ValueError, match="limit"):
+        module.run([sys.executable, "-c", "import sys;sys.stdout.write('x'*(65*1024**2))"], timeout=10, max_output_bytes=64 * 1024**2)
+    with pytest.raises(ValueError, match="limit"):
+        module.run([sys.executable, "-c", "import time;time.sleep(10)"], timeout=0.1, max_output_bytes=64 * 1024**2)
+    with pytest.raises(ValueError, match="Invalid"):
+        module.run([sys.executable, "-c", "pass"], max_output_bytes=65 * 1024**2)

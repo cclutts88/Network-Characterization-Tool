@@ -9527,3 +9527,18 @@ console images remain the sealed source54aa0df images. Actual Python3.9 host che
 and retained-image adapter check passed; original system Python and running NCT
 identities are unchanged. Do not describe the operational installer as byte-identical
 to the sealed ZIP or silently modify that ZIP for future transfers.
+
+Recovery-enable interruption: the terminal application upgrade reached exact R2,
+but the new host helper's 8 MiB generic output bound rejected the real retained
+evidence inventory before the recovery-enable backup or replacement was created.
+Its attempted reconciliation encountered the same limit and correctly left NCT
+stopped. The saved operation has no candidate, no verified helper backup and no
+candidate-write flag; the separate terminal upgrade backup remains preserved.
+Develop a fixed 64 MiB bound only for trusted maintenance-helper attach output,
+retaining the generic 8 MiB bound, timeout, temporary-file capture, final combined
+stdout/stderr bound and stop-proof cleanup. Large-output/default-refusal/ceiling/
+timeout and affected recovery tests: 65 passed. Reconcile the saved operation under
+the maintenance lock and require account verification before collection release.
+Review continuation of launch-socket installation separately rather than rerunning
+the one-time installer over existing helper state. Original and corrected host
+scripts, operational patch hashes and interrupted receipts must be preserved.
