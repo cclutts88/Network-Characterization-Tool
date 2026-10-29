@@ -25,19 +25,46 @@ trusted release source. No software is downloaded during installation.
 - The retained-data upgrade is qualified from the exact Phase 5 R1 build
   `0.16.0-range-test-20261025-phase5-r1` at
   `be92fb78e938adc3fced581629d4609ac0a43f6a`, with its schema-7 data and a dedicated
-  `/var/lib/nct/data` bind folder. Other versions, named-volume migrations and failed
+  `/var/lib/nct/data` bind folder, or Recovery R1 build
+  `0.16.0-range-test-20261027-recovery-r1` at
+  `0bd11969ffd81aad7cbc8335af755b80c9af0639` with intact schema-8 data.
+  Other versions, named-volume migrations and failed
   installations need their reviewed bridge/recovery procedure. This package never
   turns an unsupported upgrade into an empty installation.
-  This release performs an explicit **version-7 to version-8** migration for the
+  A version-7 source receives an explicit **version-7 to version-8** migration for the
   corrected Scan History grouping rules. It preserves migrations 1–7 and records
   the new step separately. Unknown or already-drifted schemas are refused. An older
   image must use the preserved version-7 backup for rollback, never the version-8
-  database. Version-6 sources need a separately qualified Phase 5 staging path;
+  database. A version-8 source receives a read-only compatibility check on a
+  disposable copy, with no additional schema migration or fingerprint reset.
+  Version-6 sources need a separately qualified Phase 5 staging path;
   this package does not perform that bridge.
 - Finish scans and device pulls and disable schedules/automatic pulls during the
   maintenance window. Keep the current password: existing accounts are preserved.
 - Use the same host IP and HTTPS port as the working NCT. The issuing root CA must
   validate its certificate and that IP must appear in the certificate's SAN.
+
+### Offline Python on older RHEL hosts
+
+If the prerequisite check reports Python 3.6, keep that system interpreter intact.
+An administrator can add the vendor's versioned Python 3.9 from matching, trusted
+offline RHEL installation media. Use the media's BaseOS and AppStream repositories
+with normal vendor signature verification. Preview the transaction first: it must
+only add the versioned runtime and required dependencies, with no removals,
+downgrades or replacement of system Python. Do not bypass package signatures or
+dependency checks. If matching signed dependencies are unavailable, preserve NCT
+and obtain the correct offline media before proceeding.
+
+After that runtime is installed, select its actual absolute path for both setup
+commands, for example:
+
+```sh
+export NCT_RECOVERY_PYTHON=/usr/bin/python3.9
+```
+
+The ZIP contains the complete NCT payload, but does not contain vendor operating
+system packages. Installing that prerequisite and testing the real recovery service
+on the target host remain separate from local package acceptance.
 
 ## Check first, then install
 

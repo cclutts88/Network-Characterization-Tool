@@ -43,7 +43,8 @@ if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
     [ "$NCT_PORT" = "$NCT_APP_PORT" ] || die "Existing NCT port differs. Set NCT_HTTPS_PORT to its actual single HTTPS port before retrying."
     if [ "$NCT_SETUP_MODE" != enable-console ]; then
         NCT_SOURCE=$(docker exec "$NCT_TARGET_CONTAINER" python -c 'from app.build_info import BUILD_ID,BUILD_COMMIT; print(BUILD_ID+"@"+BUILD_COMMIT)')
-        [ "$NCT_SOURCE" = '0.16.0-range-test-20261025-phase5-r1@be92fb78e938adc3fced581629d4609ac0a43f6a' ] || die "This full-package upgrade is qualified only from the exact Phase 5 R1 release. Preserve the current installation and review its bridge or already-completed upgrade."
+        NCT_REQUIRED_SOURCE_VERSION=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; sources=json.load(open(sys.argv[1])); matches=[s for s in sources if s["build_id"]+"@"+s["commit"]==sys.argv[2]]; assert len(matches)==1, "Unqualified source build"; print(matches[0]["schema_version"])' "$NCT_PACKAGE_ROOT/scripts/nct-package-sources.json" "$NCT_SOURCE") || die "This full-package upgrade refuses an unqualified source build. Preserve the current installation."
+        export NCT_REQUIRED_SOURCE_VERSION
     fi
 fi
 NCT_CERT="$NCT_PERSIST_ROOT/tls-material/tls/nct-server.crt"

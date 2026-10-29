@@ -434,7 +434,7 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert '"$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db' in content
     assert '--expected-build-id "$original_build_id"' in content
     assert '--expected-build-commit "$original_build_commit"' in content
-    assert "--required-source-version 6" in content
+    assert '--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}"' in content
     assert 'schema_preflight_sha256=%s' in content
     assert 'preflight_binding_code' in content
     assert 'schema_preflight=%s' in content

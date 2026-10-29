@@ -19,16 +19,24 @@ spec.loader.exec_module(package)
 def staged(tmp_path):
     root = tmp_path / "stage"
     root.mkdir()
-    (root / "release.json").write_text(json.dumps({"commit": "a" * 40}))
+    sources = json.loads((SCRIPTS / "nct-package-sources.json").read_text())
+    (root / "release.json").write_text(json.dumps({"commit": "a" * 40, "supported_sources": sources, "images": {"app": "exact-id"}}))
     (root / "image.tar").write_bytes(b"exact image archive")
     package.write_manifest(root)
     return root
 
 
+def evidence(root):
+    release = json.loads((root / "release.json").read_text())
+    result = {"result": "pass", "commit": release["commit"], "tested_manifest_sha256": package.verify_manifest(root)}
+    result["source_results"] = [{**result, "source_build": s["build_id"], "source_commit": s["commit"], "source_schema_version": s["schema_version"], "images": release["images"]} for s in release["supported_sources"]]
+    return result
+
+
 def test_seal_binds_tested_files_and_includes_checksums_in_one_transfer(tmp_path):
     root = staged(tmp_path)
     receipt = tmp_path / "acceptance.json"
-    receipt.write_text(json.dumps({"result": "pass", "commit": "a" * 40, "tested_manifest_sha256": package.verify_manifest(root)}))
+    receipt.write_text(json.dumps(evidence(root)))
     output = tmp_path / "release.zip"
     result = package.seal(root, receipt, output)
     assert result["sha256"] == package.digest(output)
@@ -42,23 +50,92 @@ def test_seal_binds_tested_files_and_includes_checksums_in_one_transfer(tmp_path
 @pytest.mark.parametrize("change", ["tamper", "extra", "wrong_commit", "wrong_manifest", "failed"])
 def test_seal_rejects_changed_or_unaccepted_payload(tmp_path, change):
     root = staged(tmp_path)
-    evidence = {"result": "pass", "commit": "a" * 40, "tested_manifest_sha256": package.verify_manifest(root)}
+    proof = evidence(root)
     if change == "tamper":
         (root / "image.tar").write_bytes(b"changed")
     elif change == "extra":
         (root / "unexpected-secret.txt").write_text("not admitted")
     elif change == "wrong_commit":
-        evidence["commit"] = "b" * 40
+        proof["commit"] = "b" * 40
     elif change == "wrong_manifest":
-        evidence["tested_manifest_sha256"] = "0" * 64
+        proof["tested_manifest_sha256"] = "0" * 64
     else:
-        evidence["result"] = "fail"
+        proof["result"] = "fail"
     receipt = tmp_path / "acceptance.json"
-    receipt.write_text(json.dumps(evidence))
+    receipt.write_text(json.dumps(proof))
     output = tmp_path / "release.zip"
     with pytest.raises(ValueError):
         package.seal(root, receipt, output)
     assert not output.exists()
+
+
+@pytest.mark.parametrize("damage", ["missing", "duplicate", "image", "manifest", "commit", "version", "failed", "empty_registry", "missing_registry", "duplicate_registry"])
+def test_seal_requires_both_exact_source_acceptances(tmp_path, damage):
+    root = staged(tmp_path)
+    proof = evidence(root)
+    if damage.endswith("registry"):
+        release = json.loads((root / "release.json").read_text())
+        if damage == "missing_registry":
+            del release["supported_sources"]
+        elif damage == "empty_registry":
+            release["supported_sources"] = []
+        else:
+            release["supported_sources"].append(release["supported_sources"][0])
+        (root / "release.json").write_text(json.dumps(release))
+        package.write_manifest(root)
+        proof["tested_manifest_sha256"] = package.verify_manifest(root)
+    elif damage == "missing":
+        proof["source_results"].pop()
+    elif damage == "duplicate":
+        proof["source_results"].append(proof["source_results"][0])
+    else:
+        key = {"image": "images", "manifest": "tested_manifest_sha256", "commit": "commit", "version": "source_schema_version", "failed": "result"}[damage]
+        proof["source_results"][0][key] = "changed"
+    receipt = tmp_path / "proof.json"
+    receipt.write_text(json.dumps(proof))
+    with pytest.raises(ValueError):
+        package.seal(root, receipt, tmp_path / "no.zip")
+
+
+def test_standalone_gate_registry_matches_bootstrap_registry():
+    spec = importlib.util.spec_from_file_location("gate", SCRIPTS / "nct-package-schema-preflight.py")
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    assert gate.SOURCES == {(s["build_id"], s["commit"]): s["schema_version"] for s in json.loads((SCRIPTS / "nct-package-sources.json").read_text())}
+
+
+@pytest.mark.parametrize("damage", [None, "origin", "ledger", "drift", "version", "wal"])
+def test_schema8_gate_checks_migrated_ledger_without_changing_source(tmp_path, monkeypatch, damage):
+    from test_schema_history_v8 import source_v7
+    import app.schema_compatibility as schema
+    from app.scan_history_index import init_scan_history_index_storage
+    source = json.loads((SCRIPTS / "nct-package-sources.json").read_text())[1]
+    monkeypatch.setattr(schema, "BUILD_ID", source["build_id"])
+    monkeypatch.setattr(schema, "BUILD_COMMIT", source["commit"])
+    db = source_v7(tmp_path)
+    attempt = schema.begin_schema_migration(db)
+    init_scan_history_index_storage(db)
+    schema.complete_schema_migration(db, attempt)
+    if damage in ("origin", "ledger", "drift"):
+        with __import__("sqlite3").connect(db) as connection:
+            if damage == "origin":
+                connection.execute("UPDATE nct_schema_state SET originating_build_commit='unrecognized'")
+            elif damage == "ledger":
+                connection.execute("DELETE FROM nct_schema_migrations WHERE target_schema_version=4")
+            else:
+                connection.execute("CREATE TABLE unrelated(id)")
+    if damage == "wal":
+        db.with_name(db.name + "-wal").write_bytes(b"uncheckpointed")
+    before = db.read_bytes()
+    spec = importlib.util.spec_from_file_location("gate", SCRIPTS / "nct-package-schema-preflight.py")
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    if damage:
+        with pytest.raises((ValueError, schema.SchemaCompatibilityError)):
+            gate.audit(db, source["build_id"], source["commit"], 7 if damage == "version" else 8)
+    else:
+        assert gate.audit(db, source["build_id"], source["commit"], 8)["schema_version"] == 8
+    assert db.read_bytes() == before
 
 
 def test_schema_adapter_refuses_unknown_source_without_touching_data(tmp_path):

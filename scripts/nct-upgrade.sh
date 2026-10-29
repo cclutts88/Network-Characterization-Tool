@@ -153,6 +153,9 @@ original_build_commit=$(docker exec "$CONTAINER" python -c 'from app.build_info 
     die "The running NCT build commit could not be read."
 [ -n "$original_build_id" ] && [ -n "$original_build_commit" ] ||
     die "The running NCT build identity is incomplete."
+if [ -f "$WORKDIR/scripts/nct-package-sources.json" ]; then
+    NCT_REQUIRED_SOURCE_VERSION=$("$NCT_UPGRADE_PYTHON" -c 'import json,sys; sources=json.load(open(sys.argv[1])); matches=[s for s in sources if (s["build_id"],s["commit"])==tuple(sys.argv[2:])]; assert len(matches)==1, "Unqualified source build"; print(matches[0]["schema_version"])' "$WORKDIR/scripts/nct-package-sources.json" "$original_build_id" "$original_build_commit") || die "This package does not qualify the running source build."
+fi
 
 say "Loading the verified release image..."
 docker load -i "$ARCHIVE" >/dev/null
@@ -375,7 +378,7 @@ docker run --rm \
     "$IMAGE" python /opt/nct-schema-preflight.py --db /data/analyzer.db \
         --expected-build-id "$original_build_id" \
         --expected-build-commit "$original_build_commit" \
-        --required-source-version 6 > "$schema_preflight" ||
+        --required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}" > "$schema_preflight" ||
     die "The saved schema is not an exact supported upgrade source. The original NCT container will be restored."
 chmod 600 "$schema_preflight"
 snapshot "$before"

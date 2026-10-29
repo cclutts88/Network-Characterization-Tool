@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--package", type=Path, required=True)
+    parser.add_argument("--source-image", default="network-characterization-tool:0.16.0-range-test-20261025-phase5-r1")
     args = parser.parse_args()
     root = args.root
     if root.name != "_data" or not root.parent.name.startswith("nct-full-package-acceptance-") or root.parent.parent != Path("/var/lib/docker/volumes"):
@@ -38,6 +39,9 @@ def main():
     tested = verify_manifest(package)
     release = json.loads((package / "release.json").read_text())
     engine = Docker()
+    source_env = dict(value.split("=", 1) for value in json.loads(engine.command("image", "inspect", args.source_image))[0]["Config"]["Env"] if "=" in value)
+    source = next(s for s in release["supported_sources"] if s["build_id"] == source_env["NCT_BUILD_ID"] and s["commit"] == source_env["NCT_BUILD_COMMIT"])
+    source_version = source["schema_version"]
     name = "nct-full-package-" + secrets.token_hex(6)
     console_name = name + "-console"
     authority = Path("/etc/hostname").read_text().strip()
@@ -51,13 +55,17 @@ def main():
     bootstrap = root / "retained-bootstrap"
     bootstrap.write_text(password)
     os.chmod(bootstrap, 0o600)
-    original_id = engine.command("run", "-d", "--name", name, "--restart", "on-failure:3", "--cap-add", "NET_RAW",
+    launch = ["run", "-d", "--name", name, "--restart", "on-failure:3", "--cap-add", "NET_RAW",
         "-p", "127.0.0.1:18159:8445", "-v", f"{data}:/data", "-v", f"{tls}/tls/nct-server.crt:/run/tls/nct-server.crt:ro",
         "-v", f"{tls}/tls/nct-server.key:/run/tls/nct-server.key:ro", "-v", f"{bootstrap}:/run/retained-bootstrap:ro",
         "-e", "NCT_AUTH_MODE=local", "-e", "NCT_COOKIE_SECURE=1", "-e", "NCT_BOOTSTRAP_ADMIN=package-operator",
         "-e", "NCT_BOOTSTRAP_PASSWORD_FILE=/run/retained-bootstrap", "-e", "NCT_PACKAGE_PRESERVE_ME=retained-setting",
-        "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8445",
-        "--ssl-certfile", "/run/tls/nct-server.crt", "--ssl-keyfile", "/run/tls/nct-server.key")
+        args.source_image, "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8445",
+        "--ssl-certfile", "/run/tls/nct-server.crt", "--ssl-keyfile", "/run/tls/nct-server.key"]
+    initial = list(launch)
+    if source_version == 8:
+        initial[initial.index(args.source_image)] = "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1"
+    original_id = engine.command(*initial)
     app_url, console_url = f"https://{gateway}:18159", f"https://{gateway}:18160"
     probe = Host({"state_dir": str(root / "probe"), "data_dir": str(data), "application_url": app_url,
         "ca_file": str(tls / "certs/nct-lab-root.crt")})
@@ -75,6 +83,16 @@ def main():
     body = b'--' + boundary.encode() + b'\r\nContent-Disposition: form-data; name="file"; filename="retained.xml"\r\nContent-Type: application/xml\r\n\r\n' + xml + b'\r\n--' + boundary.encode() + b'--\r\n'
     with browser.open(urllib.request.Request(app_url + "/api/import", data=body, headers={"Content-Type": "multipart/form-data; boundary=" + boundary}), timeout=30) as response:
         imported = json.load(response)
+    if source_version == 8:
+        engine.command("update", "--restart=no", original_id)
+        engine.command("stop", original_id)
+        engine.command("rename", original_id, name + "-schema7-seed")
+        original_id = engine.command(*launch)
+        probe.wait_url(app_url + "/health/readiness", lambda value: value.get("healthy") is True)
+        request("/api/auth/login", {"username": "package-operator", "password": password})
+        assert request("/health")["build_commit"] == source["commit"]
+        ledger = json.loads(engine.command("exec", name, "python", "-c", "import json,sqlite3;d=sqlite3.connect('/data/analyzer.db');print(json.dumps(d.execute('select target_schema_version, originating_build_commit from nct_schema_migrations order by target_schema_version').fetchall()))"))
+        assert len(ledger) == 8 and ledger[0][1] == "be92fb78e938adc3fced581629d4609ac0a43f6a" and ledger[-1][1] == source["commit"]
     bootstrap.write_text("")  # Protected empty legacy mount must survive both replacements.
     print("Exact previous release booted over issuing-CA verified HTTPS; existing account and evidence created.", flush=True)
     bin_dir, shim = root / "bin", root / "shim"
@@ -112,6 +130,8 @@ def main():
     request("/api/verify-sign-in", {"username": "package-operator", "password": password}, console=True)
     assert request("/api/status", console=True)["operation"]["phase"] == "complete"
     current = engine.inspect(name)
+    assert current["Image"] == json.loads(engine.command("image", "inspect", release["application_image"]))[0]["Id"]
+    assert engine.inspect(console_name)["Image"] == json.loads(engine.command("image", "inspect", release["console_image"]))[0]["Id"]
     assert current["HostConfig"]["RestartPolicy"] == {"Name": "on-failure", "MaximumRetryCount": 3}
     assert "NCT_PACKAGE_PRESERVE_ME=retained-setting" in current["Config"]["Env"]
     assert any(m["Source"] == str(bootstrap) for m in current["Mounts"])
@@ -146,16 +166,16 @@ def main():
                 pass
             time.sleep(1)
         raise ValueError("Isolated release failed readiness")
-    restored = root / "restored-seven"
+    restored = root / "restored-original"
     restored.mkdir()
     archive_path = next((persist / "deployment/backups").glob("nct-data-*.tar.gz"))
     with tarfile.open(archive_path) as archive:
         archive.extractall(restored, filter="data")
     restored_name = name + "-restored"
     engine.command("run", "-d", "--name", restored_name, "--network", "none", "-e", "NCT_AUTH_MODE=local", "-v", f"{restored / 'data'}:/data",
-        "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1")
+        args.source_image)
     isolated_ready(restored_name)
-    engine.command("exec", restored_name, "python", "-c", "import sqlite3; d=sqlite3.connect('/data/analyzer.db'); assert d.execute('select schema_version from nct_schema_state').fetchone()[0]==7; assert d.execute('select count(*) from artifact_registry').fetchone()[0]>=1; assert d.execute('select count(*) from analyst_users').fetchone()[0]>=1")
+    engine.command("exec", restored_name, "python", "-c", "import sqlite3; d=sqlite3.connect('/data/analyzer.db'); assert d.execute('select schema_version from nct_schema_state').fetchone()[0]==" + str(source_version) + "; assert d.execute('select count(*) from artifact_registry').fetchone()[0]>=1; assert d.execute('select count(*) from analyst_users').fetchone()[0]>=1")
     engine.command("stop", restored_name)
     fresh_name = name + "-fresh"
     fresh_data = root / "fresh-data"
@@ -168,12 +188,15 @@ def main():
     isolated_ready(fresh_name)
     engine.command("stop", fresh_name)
     receipt = {"result": "pass", "tested_manifest_sha256": tested, "commit": release["commit"], "build_id": release["build_id"],
-        "source_build": "0.16.0-range-test-20261025-phase5-r1", "full_shell_bootstrap": True,
+        "source_build": source["build_id"], "source_commit": source["commit"], "source_schema_version": source_version,
+        "source_migrated_from_schema7": source_version == 8,
+        "images": release["images"], "full_shell_bootstrap": True,
         "issuing_ca_https_verified": True, "retained_account_and_evidence": True,
         "environment_mount_port_and_restart_policy_preserved": True, "protected_empty_bootstrap_mount_preserved": True,
         "independent_console_handoff_and_sign_in": True, "console_stops_after_return": True,
         "stop_start_sign_in": True, "range_accepted": False, "real_systemd_boot_tested": False,
-        "schema_version": 8, "old_image_refuses_schema8": True, "original_schema7_backup_booted": True, "fresh_schema8_stop_start": True,
+        "schema_version": 8, "old_image_refuses_schema8": True, "original_backup_booted": True,
+        "original_backup_schema_version": source_version, "fresh_schema8_stop_start": True,
         "test_substitutions": ["administrative fixture peer exclusion", "systemctl launches exact copied service process", "ss replaced; Docker performs actual port admission"]}
     (root / "acceptance.json").write_text(json.dumps(receipt, indent=2))
     print("PASS: full package upgraded exact previous release with retained evidence/accounts/config, enabled independent console using issuing CA, verified sign-in/stop/start and closed console.", flush=True)

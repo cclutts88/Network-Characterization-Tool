@@ -89,7 +89,7 @@ def stage(source, output, image, console, commit, build_id):
     (output / "offline-images").mkdir()
     tracked = command("git", "-C", str(source), "ls-tree", "-r", "--name-only", commit).splitlines()
     selected = [name for name in tracked if name.startswith("scripts/nct-") and Path(name).suffix in {".py", ".sh"}]
-    selected += ["scripts/install_nct_recovery.py", "scripts/nct_update_host.py", "scripts/nct_update_work.py", "scripts/build_nct_update.py", "scripts/setup-lab-https.sh",
+    selected += ["scripts/nct-package-sources.json", "scripts/install_nct_recovery.py", "scripts/nct_update_host.py", "scripts/nct_update_work.py", "scripts/build_nct_update.py", "scripts/setup-lab-https.sh",
         "compose.range.yaml", "compose.arkime.yaml", "Caddyfile", "docs/NCT_UPDATES_AND_RECOVERY.md", "docs/ARKIME_CONNECTOR_RANGE_SETUP.md", "docs/RANGE_UPDATER_PACKAGE.md"]
     bindings = []
     for name in selected:
@@ -99,16 +99,17 @@ def stage(source, output, image, console, commit, build_id):
             text = text.replace(SOURCE_TAG, build_id)
             if Path(name).name == "nct-recover-unhealthy-upgrade.sh":
                 text = text.replace("f6ba1ad4a754b904511e3d726110d6fc35b9f237", commit)
+                text = text.replace('scripts/nct-schema-preflight.py', 'scripts/nct-schema-preflight-legacy.py')
         if name == "scripts/nct-upgrade.sh":
-            if text.count("--required-source-version 6") != 1:
+            if text.count('--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}"') != 1:
                 raise ValueError("Upgrade template changed; review its source-version binding")
-            text = text.replace("--required-source-version 6", "--required-source-version 7")
+            text = text.replace('--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}"', '--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-7}"')
         package_name = "scripts/nct-schema-preflight-legacy.py" if name == "scripts/nct-schema-preflight.py" else name
         destination = output / package_name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8", newline="\n")
         bindings.append({"source": name, "source_sha256": hashlib.sha256(data).hexdigest(), "package": package_name, "sha256": digest(destination)})
-    # This full release accepts only its explicitly tested schema-7 source. Keep
+    # This full release accepts only its explicitly tested schema-7/8 sources. Keep
     # the legacy public preflight beside the adapter for traceability/fallback.
     (output / "scripts/nct-schema-preflight.py").write_bytes((output / "scripts/nct-package-schema-preflight.py").read_bytes())
     (output / "START-HERE.md").write_bytes((output / "docs/RANGE_UPDATER_PACKAGE.md").read_bytes())
@@ -126,7 +127,8 @@ def stage(source, output, image, console, commit, build_id):
     (archive.with_suffix(".tar.sha256")).write_text(digest(archive) + "  nct-range-images.tar\n", encoding="utf-8")
     release = {"contract": "nct-full-range-package-v1", "build_id": build_id, "commit": commit,
         "branch": "foundation/evidence-engine-v2", "application_image": image, "console_image": console,
-        "images": images, "source_bindings": bindings, "schema_gate": "exact-phase5-r1-v7-to-v8-disposable-image-gate",
+        "images": images, "source_bindings": bindings, "schema_gate": "exact-supported-v7-or-v8-to-v8-disposable-image-gate",
+        "supported_sources": json.loads((output / "scripts/nct-package-sources.json").read_text()),
         "range_accepted": False, "kubernetes_updater_available": False}
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     write_manifest(output)
@@ -139,6 +141,20 @@ def seal(root, acceptance, output):
     release = json.loads((root / "release.json").read_text())
     if result.get("result") != "pass" or result.get("tested_manifest_sha256") != tested or result.get("commit") != release["commit"]:
         raise ValueError("Acceptance does not bind this exact staged package")
+    if not release.get("supported_sources"):
+        raise ValueError("Release must declare its supported upgrade sources")
+    if release["supported_sources"]:
+        expected = {(s["build_id"], s["commit"], s["schema_version"]) for s in release["supported_sources"]}
+        if len(expected) != len(release["supported_sources"]) or any(not b or len(c) != 40 or v not in (7, 8) for b, c, v in expected):
+            raise ValueError("Invalid or duplicate supported upgrade sources")
+        seen = set()
+        for proof in result.get("source_results", []):
+            identity = (proof.get("source_build"), proof.get("source_commit"), proof.get("source_schema_version"))
+            if identity not in expected or identity in seen or proof.get("result") != "pass" or proof.get("commit") != release["commit"] or proof.get("tested_manifest_sha256") != tested or proof.get("images") != release["images"]:
+                raise ValueError("Source acceptance is missing, duplicated or bound to different package/images")
+            seen.add(identity)
+        if seen != expected:
+            raise ValueError("Every supported source needs its own exact-package acceptance")
     (root / "VALIDATION.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     write_manifest(root)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
