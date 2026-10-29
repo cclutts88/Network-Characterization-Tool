@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 from unittest.mock import patch
 
@@ -21,6 +22,23 @@ def test_explicit_valid_interpreter_is_resolved_and_pinned():
     result = select({"NCT_RECOVERY_PYTHON": sys.executable})
     assert result.returncode == 0
     assert result.stdout.strip() == str(Path(sys.executable).resolve())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Host POSIX installer")
+def test_minimal_host_tree_without_app_or_pythonpath_selects_runtime(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in ("nct-recovery-python.sh", "nct_update_host.py", "nct_update_work.py"):
+        shutil.copyfile(SCRIPTS / name, scripts / name)
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment["NCT_RECOVERY_PYTHON"] = sys.executable
+    result = subprocess.run(["/bin/sh", "-c", '. "$1/scripts/nct-recovery-python.sh"; nct_select_recovery_python "$1"', "sh", str(tmp_path)],
+        cwd=tmp_path, env=environment, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(Path(sys.executable).resolve())
+    assert not (tmp_path / "app").exists()
+    assert not list(scripts.glob("__pycache__"))
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Host POSIX installer")

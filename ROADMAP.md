@@ -9494,3 +9494,36 @@ not established. The workaround changes transport only, not the release payload.
 Package transfer is complete; no extraction, installation, host prerequisite change
 or application restart occurred. Actual Range/recovery-service acceptance remains
 open. Private operational evidence retains the terminal verification screenshot.
+
+### 2026-10-29 — Recovery-r2 target installation started
+
+User authorized installation after intact transfer. Fresh extraction verified the
+sealed manifest. Live retained Recovery-r1/schema8 is healthy with 1 account, 13
+scan records and 176 registered artifacts; original runtime and system-Python binary
+identity are recorded privately. No recovery helper is installed. The actual Docker
+client is 20.10.7 and server 18.09.1; earlier descriptions conflating client/server
+versions are corrected here. The local-only helper adapter remains appropriate.
+Read-only matching vendor media supplies the separate Python 3.9 prerequisite.
+Independent transaction review cleared exactly four signed additive packages from
+offline-only repositories with signature checks enabled and weak dependencies
+disabled. Preserve system Python and verify it remains unchanged. Exact old-engine
+console restrictions, bootstrap preflight, cold backup, retained accounts/evidence,
+real systemd, HTTPS and recovery sign-in remain target acceptance gates; no success
+is inferred from package or prerequisite qualification.
+
+Target prerequisite deviation: four signed vendor packages installed Python 3.9.13
+additively; platform Python binary SHA256 and installed platform packages remain
+unchanged. The real minimal host exposed an interpreter-selector packaging error:
+it imported nct_update_work, whose app.scan_work_recovery dependency exists only
+inside the application image. Workspace-based fixtures had masked that boundary.
+Correct the selector to import the stdlib host service only; the work adapter stays
+in the application image and is separately checked there. A new isolated-host test
+copies only host scripts, removes PYTHONPATH and runs outside the repository.
+Affected selector/package/helper tests: 56 passed. Reviewer design gate:
+CLEAR — DOCUMENTED DEVIATION. Original sealed ZIP and extraction remain unchanged;
+a separate operational staging copy changes exactly this one line, records original
+and corrected script SHA256, and maintains its own manifest/patch receipt. App and
+console images remain the sealed source54aa0df images. Actual Python3.9 host check
+and retained-image adapter check passed; original system Python and running NCT
+identities are unchanged. Do not describe the operational installer as byte-identical
+to the sealed ZIP or silently modify that ZIP for future transfers.

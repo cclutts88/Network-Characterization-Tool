@@ -19,7 +19,7 @@ assert os.path.isabs(path) and os.access(path, os.X_OK)
 assert not any(c.isspace() or c in "%\\\"" for c in path), "Unsupported interpreter path"
 assert not path.startswith(("/root/", "/home/", "/run/user/")), "Interpreter is hidden by service ProtectHome"
 sys.path.insert(0, sys.argv[1] + "/scripts")
-import nct_update_host, nct_update_work
+import nct_update_host
 print(path)
 ' "$nct_python_root" 2>/dev/null) || continue
         printf '%s\n' "$nct_python_selected"
