@@ -36,7 +36,6 @@ if [ -f "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}/config.json" ] || docker
     die "A recovery helper is already installed. Preserve it and use the reviewed helper-upgrade procedure before changing NCT."
 fi
 "$NCT_RECOVERY_PYTHON" -c 'import sys,ipaddress; [ipaddress.ip_address(value) for value in sys.argv[1:]]' "$NCT_RANGE_IP" "$NCT_RECOVERY_BIND_ADDRESS" || die "Host address check failed."
-docker run --help | grep -q -- '--pull' || die "The host Docker CLI must support --pull=never for the independent recovery helper."
 docker info >/dev/null 2>&1 || die "Docker is unavailable."
 systemctl show-environment >/dev/null 2>&1 || die "A working systemd host service is required."
 (cd "$NCT_PACKAGE_ROOT" && sha256sum -c PACKAGE-MANIFEST.sha256) || die "Package integrity check failed; preserve the installed NCT."

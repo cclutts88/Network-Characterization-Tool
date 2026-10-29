@@ -12,7 +12,7 @@ trusted release source. No software is downloaded during installation.
 
 - This is the standalone Docker/Compose package. It does not install a Kubernetes
   updater, change a cluster or enable multiple NCT application replicas.
-- The offline Linux host needs working Docker with `--pull=never` support, Python
+- The offline Linux host needs working Docker with its local Engine interface, Python
   **3.9 or newer**, systemd, OpenSSL, curl, ss, flock, tar and standard shell tools.
   These are host prerequisites, not operating-system upgrades supplied by this ZIP.
   Check mode stops before changing NCT if a prerequisite is missing.

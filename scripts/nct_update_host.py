@@ -434,22 +434,63 @@ class Host:
         return json.loads(raw or "[]")
 
     def run_helper(self, image, options, command):
-        self.engine.command("image", "inspect", image)  # Never substitute an unverified missing image.
+        inspected = json.loads(self.engine.command("image", "inspect", image))
+        image = inspected[0]["Id"]
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+            raise ValueError("Maintenance helper requires an immutable local image")
+        readonly, mounts = False, []
+        iterator = iter(options)
+        for option in iterator:
+            if option == "--read-only":
+                readonly = True
+            elif option == "--mount":
+                value = next(iterator, None)
+                if not isinstance(value, str):
+                    raise ValueError("Incomplete maintenance mount")
+                fields = {}
+                for item in value.split(","):
+                    key, separator, setting = item.partition("=")
+                    if key in fields or key not in {"type", "src", "dst", "readonly"} or (key != "readonly" and not separator):
+                        raise ValueError("Unsupported maintenance mount")
+                    fields[key] = setting if separator else True
+                if fields.get("type") != "bind" or not all(isinstance(fields.get(k), str) and Path(fields[k]).is_absolute() for k in ("src", "dst")) or fields.get("readonly", True) is not True:
+                    raise ValueError("Maintenance mounts require explicit absolute bind paths")
+                mounts.append({"Type": "bind", "Source": fields["src"], "Target": fields["dst"], "ReadOnly": "readonly" in fields})
+            else:
+                raise ValueError("Unsupported maintenance helper option")
         name = "nct-maintenance-helper-" + secrets.token_hex(12)
         receipt = self.root / (name + ".json")
         save(receipt, {"name": name, "image": image, "phase": "create_intent"})
         try:
-            return self.engine.command("run", "--pull=never", "--name", name, "--network", "none", "--entrypoint", "python", "-e", "PYTHONPATH=/app",
-                *options, image, *command)
+            # Engine create never pulls an image. This also supports older CLIs
+            # without --pull=never while preserving the offline guarantee.
+            identity = self.engine.create(name, {"Image": image, "Entrypoint": ["python"], "Cmd": command,
+                "Env": ["PYTHONPATH=/app"], "AttachStdout": True, "AttachStderr": True,
+                "Tty": False, "HostConfig": {"NetworkMode": "none", "ReadonlyRootfs": readonly,
+                    "Mounts": mounts, "RestartPolicy": {"Name": "no"}}})
+            helper = self.engine.inspect(identity)
+            if helper["Image"] != image or helper["State"]["Running"]:
+                raise ValueError("Created maintenance helper identity/state mismatch")
+            output = self.engine.command("start", "--attach", identity)
+            completed = self.engine.inspect(identity)
+            if completed["State"]["Running"] or completed["State"].get("ExitCode") != 0:
+                raise ValueError("Maintenance helper did not complete successfully")
+            return output
         finally:
             helper = self.engine.exists(name)
             if helper:
                 if helper["Image"] != image:
                     raise ValueError("Helper identity mismatch; maintenance halted")
-                self.engine.command("update", "--restart=no", helper["Id"])
+                fence_error = None
+                try:
+                    self.engine.command("update", "--restart=no", helper["Id"])
+                except ValueError as error:
+                    fence_error = error
                 self.engine.command("stop", helper["Id"])
                 if self.engine.inspect(helper["Id"])["State"]["Running"]:
                     raise ValueError("Maintenance helper did not stop; writer handoff refused")
+                if fence_error is not None:
+                    raise ValueError("Maintenance helper stopped but restart-policy verification failed; handoff refused") from fence_error
                 self.engine.command("rm", helper["Id"])
             save(receipt, {"name": name, "image": image, "phase": "stopped"})
 
