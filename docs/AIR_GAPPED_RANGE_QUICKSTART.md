@@ -414,14 +414,22 @@ Replace `RANGE_IP` with the server's real IP address:
 sh "$NCT_WORKDIR/scripts/nct-upgrade.sh" RANGE_IP
 ```
 
-The helper automatically chooses Compose when it is available. If step 2 told
-you to use `legacy`, add that word to the end:
+Upgrades preserve the current container's settings rather than using a fresh-install
+launcher. The historical mode arguments are still accepted; for example:
 
 ```sh
 sh "$NCT_WORKDIR/scripts/nct-upgrade.sh" RANGE_IP legacy
 ```
 
-For current Docker without Compose, add `docker` instead.
+The application-only upgrade helper requires Python 3.6 or newer on the host.
+It preserves existing security options, mounts, environment, startup command,
+ports and full restart policy, including any existing compatibility setting.
+It does not add compatibility permissions to an installation that lacks them.
+Custom Docker networks and remote/mismatched Docker connections are refused before
+stopping NCT. Keep these configurations for a separately reviewed adapter.
+The old container stays stopped with automatic restart disabled after success.
+Rollback restores its original policy only after verifying the restored backup.
+The independent recovery-console bootstrap still requires Python 3.9 or newer.
 
 The upgrade will refuse to start if a scan or collection is running. It checks
 the packaged image and stops the current NCT writer. The retained original image

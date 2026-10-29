@@ -17,6 +17,7 @@ CHECKSUM="$WORKDIR/offline-images/nct-range-images.tar.sha256"
 STATE_DIR="$PERSIST_ROOT/deployment"
 BACKUP_DIR="$STATE_DIR/backups"
 SCHEMA_PREFLIGHT="$WORKDIR/scripts/nct-schema-preflight.py"
+RUNTIME_CLONE="$WORKDIR/scripts/nct-clone-release-runtime.py"
 
 say() { printf '%s\n' "[NCT upgrade] $*"; }
 die() { printf '%s\n' "[NCT upgrade] ERROR: $*" >&2; exit 1; }
@@ -36,13 +37,16 @@ api_at_least() {
 [ "$(id -u)" -eq 0 ] || die "Run this script as root."
 [ -n "$RANGE_IP" ] || die "Usage: sh $WORKDIR/scripts/nct-upgrade.sh RANGE_IP [auto|compose|docker|legacy]"
 case "$MODE" in auto|compose|docker|legacy) ;; *) die "Mode must be auto, compose, docker, or legacy." ;; esac
-for command_name in docker sha256sum tar cmp curl grep; do
+for command_name in docker python3 sha256sum tar cmp curl grep; do
     command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required."
 done
 docker info >/dev/null 2>&1 || die "Docker is not reachable."
 [ -f "$ARCHIVE" ] || die "Missing $ARCHIVE"
 [ -f "$CHECKSUM" ] || die "Missing $CHECKSUM"
 [ -f "$SCHEMA_PREFLIGHT" ] || die "Missing $SCHEMA_PREFLIGHT"
+[ -f "$RUNTIME_CLONE" ] || die "Missing the trusted runtime-preservation helper."
+[ "${NCT_PACKAGE_RUNTIME_CLONE:-$RUNTIME_CLONE}" = "$RUNTIME_CLONE" ] || die "Unrecognized package runtime adapter."
+python3 -c 'import sys; assert sys.version_info >= (3,6)' || die "Python 3.6 or newer is required for application-only upgrades."
 verify_archive_checksum || die "The offline image archive checksum does not match."
 docker inspect "$CONTAINER" >/dev/null 2>&1 ||
     die "Container $CONTAINER was not found. Use a start script for a new installation."
@@ -55,10 +59,7 @@ original_container_id=$(docker inspect --format '{{.Id}}' "$CONTAINER")
 original_image_id=$(docker inspect --format '{{.Image}}' "$CONTAINER")
 original_state=$(docker inspect --format '{{.State.Status}}' "$CONTAINER")
 original_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' "$CONTAINER")
-original_restart_policy=""
-if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
-    original_restart_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if eq .HostConfig.RestartPolicy.Name "on-failure"}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$CONTAINER")
-fi
+original_restart_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if eq .HostConfig.RestartPolicy.Name "on-failure"}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$CONTAINER")
 if [ "$original_state" != running ] || [ "$original_health" = unhealthy ]; then
     die "NCT is $original_state/$original_health. Preserve it and run the read-only diagnostic, then preview sh scripts/nct-recover-installed.sh --container $CONTAINER. Ordinary upgrade will not bypass the stopped-data work check."
 fi
@@ -68,6 +69,11 @@ original_port_lines=$(docker inspect --format '{{range $port,$items := .HostConf
 original_host_port=${original_port_lines#*|}
 case "$original_host_port" in ''|*[!0-9]*) die "The current NCT HTTPS host port could not be identified." ;; esac
 [ "$original_host_port" -ge 1 ] && [ "$original_host_port" -le 65535 ] || die "The current NCT HTTPS host port is invalid."
+server_api=$(docker version --format '{{.Server.APIVersion}}')
+api_at_least "$server_api" 1.39 || die "Docker API $server_api is older than the supported Range floor of 1.39."
+python3 "$RUNTIME_CLONE" --check --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" \
+    --url "https://$RANGE_IP:$original_host_port" --ca-file "${NCT_CA_FILE:-$PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}" ||
+    die "The installed runtime cannot be preserved safely. NCT has not been stopped."
 
 active_check_code='
 import glob, json, pathlib, sqlite3, sys
@@ -386,7 +392,7 @@ tar -C "$PERSIST_ROOT" -czf "$backup" data
 chmod 600 "$backup"
 sha256sum "$backup" > "$backup.sha256"
 chmod 600 "$backup.sha256"
-if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
+{
     verification_root=$(mktemp -d "$BACKUP_DIR/verify-$timestamp-XXXXXX")
     tar -C "$verification_root" -xzf "$backup" || die "Cold backup could not be independently extracted; replacement was not started."
     original_data_directory=$DATA_DIR
@@ -395,33 +401,17 @@ if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
     DATA_DIR=$original_data_directory
     cmp -s "$before" "$BACKUP_DIR/backup-verification-$timestamp.json" || die "Extracted backup differs from stopped evidence; replacement was not started."
     case "$verification_root" in "$BACKUP_DIR"/verify-"$timestamp"-*) python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$verification_root" ;; *) die "Unexpected verification folder; preserve it for review." ;; esac
-fi
+}
 backup_ready=yes
 
 rollback="nct-upgrade-rollback-$timestamp"
 docker rename "$CONTAINER" "$rollback"
 
-if [ "$MODE" = "auto" ]; then
-    server_api=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null || printf unknown)
-    case "$server_api" in unknown|'') die "Docker server API version could not be read." ;; esac
-    if api_at_least "$server_api" 1.41; then
-        if docker compose version >/dev/null 2>&1; then MODE=compose; else MODE=docker; fi
-    elif api_at_least "$server_api" 1.39; then
-        MODE=legacy
-    else
-        die "Docker API $server_api is older than the supported Range floor of 1.39."
-    fi
-fi
-start_script="$WORKDIR/scripts/nct-start-$MODE.sh"
-[ -f "$start_script" ] || die "Missing $start_script"
-say "Starting the release with the $MODE path..."
+# Historical mode arguments remain accepted; existing runtimes are always preserved.
+say "Starting the release with the exact saved runtime..."
 candidate_may_have_written=yes
-if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then
-    [ "$NCT_PACKAGE_RUNTIME_CLONE" = "$WORKDIR/scripts/nct-clone-release-runtime.py" ] || die "Unrecognized package runtime adapter."
-    python3 "$NCT_PACKAGE_RUNTIME_CLONE" --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" --url "https://$RANGE_IP:$original_host_port" --ca-file "${NCT_CA_FILE:-$PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}"
-else
-    NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"
-fi
+python3 "$RUNTIME_CLONE" --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" \
+    --url "https://$RANGE_IP:$original_host_port" --ca-file "${NCT_CA_FILE:-$PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}"
 snapshot "$after" container
 candidate_port_lines=$(docker inspect --format '{{range $port,$items := .HostConfig.PortBindings}}{{if or (eq $port "8080/tcp") (eq $port "8445/tcp")}}{{range $items}}{{printf "%s|%s\n" $port .HostPort}}{{end}}{{end}}{{end}}' "$CONTAINER" | tr -d '\r' | sed '/^$/d' | sort -u)
 [ "$(printf '%s\n' "$candidate_port_lines" | sed '/^$/d' | wc -l | tr -d ' ')" = 1 ] ||
@@ -461,6 +451,7 @@ receipt="$STATE_DIR/upgrade-$timestamp.receipt"
     printf 'rollback_data_mount_type=%s\n' "$mount_type"
     printf 'rollback_data_mount_source=%s\n' "$mount_source"
     printf 'rollback_host_port=%s\n' "$original_host_port"
+    printf 'rollback_restart_policy=%s\n' "$original_restart_policy"
     printf 'candidate_host_port=%s\n' "$candidate_host_port"
     printf 'pre_upgrade_inventory=%s\n' "$before"
     printf 'post_upgrade_inventory=%s\n' "$after"

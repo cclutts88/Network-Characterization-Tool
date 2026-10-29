@@ -438,7 +438,7 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert 'schema_preflight_sha256=%s' in content
     assert 'preflight_binding_code' in content
     assert 'schema_preflight=%s' in content
-    assert 'NCT_HTTPS_PORT="$original_host_port" NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script" "$RANGE_IP"' in content
+    assert 'python3 "$RUNTIME_CLONE" --original-id "$original_container_id"' in content
     assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
     assert 'snapshot "$before"' in content
     assert content.index('docker stop "$CONTAINER"') < content.index('snapshot "$before"')
@@ -461,7 +461,6 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert content.index("trap restore_original EXIT") < content.index(
         'original_stopped=yes\n    docker stop "$CONTAINER"'
     )
-    assert 'api_at_least "$server_api" 1.41' in content
     assert 'api_at_least "$server_api" 1.39' in content
     assert 'docker volume rm' not in content
     assert 'rm -rf' not in content

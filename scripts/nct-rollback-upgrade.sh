@@ -47,6 +47,8 @@ snapshot() {
 }
 stop_unhealthy_previous() {
     reason=$1
+    restart_fenced=yes
+    docker update --restart=no "$CONTAINER" >/dev/null 2>&1 || restart_fenced=no
     if ! docker stop "$CONTAINER" >/dev/null 2>&1; then
         die "EMERGENCY: $reason Docker could not stop the previous container; it may still be running. Preserve all recovery sources and contact the Range administrator now."
     fi
@@ -54,6 +56,7 @@ stop_unhealthy_previous() {
         die "EMERGENCY: $reason The previous container's stopped state could not be confirmed. Preserve all recovery sources and contact the Range administrator now."
     [ "$running" = "false" ] ||
         die "EMERGENCY: $reason The previous container is still running. Preserve all recovery sources and contact the Range administrator now."
+    [ "$restart_fenced" = yes ] || die "$reason The previous container was stopped, but its restart policy could not be disabled. Preserve all recovery sources and review it before restarting Docker."
     die "$reason The previous container was stopped. Preserve all recovery sources."
 }
 
@@ -76,6 +79,7 @@ rollback_image_id=$(receipt_value rollback_image_id)
 rollback_data_mount_type=$(receipt_value rollback_data_mount_type)
 rollback_data_mount_source=$(receipt_value rollback_data_mount_source)
 rollback_host_port=$(receipt_value rollback_host_port)
+rollback_restart_policy=$(receipt_value rollback_restart_policy)
 before=$(receipt_value pre_upgrade_inventory)
 case "$backup" in "$BACKUP_DIR"/nct-data-*.tar.gz) ;; *) die "Receipt backup path is outside $BACKUP_DIR." ;; esac
 [ "$checksum" = "$backup.sha256" ] || die "Receipt backup checksum path does not match the backup."
@@ -97,6 +101,12 @@ docker inspect "$rollback" >/dev/null 2>&1 || die "Rollback container $rollback 
 [ "$(docker inspect --format '{{.Image}}' "$rollback")" = "$rollback_image_id" ] ||
     die "The retained rollback container does not use the exact image recorded during upgrade."
 retained_mount_type=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}{{end}}{{end}}' "$rollback")
+if [ -z "$rollback_restart_policy" ]; then
+    rollback_restart_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if eq .HostConfig.RestartPolicy.Name "on-failure"}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$rollback")
+    say "Older receipt has no restart policy; preserving the retained container's current policy without guessing a lost policy."
+fi
+printf '%s' "$rollback_restart_policy" | grep -Eq '^(no|always|unless-stopped|on-failure(:[0-9]+)?)$' ||
+    die "Receipt restart policy is invalid."
 retained_mount_source=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$rollback")
 [ "$retained_mount_type" = "$rollback_data_mount_type" ] && [ "$retained_mount_source" = "$rollback_data_mount_source" ] ||
     die "The retained rollback container's data mount does not match the upgrade receipt."
@@ -115,7 +125,9 @@ rollback_receipt="$STATE_DIR/rollback-$timestamp.receipt"
 docker inspect "$failed_container" >/dev/null 2>&1 && die "Preservation container already exists: $failed_container"
 
 say "Stopping the candidate and confirming that no work remains active..."
+docker update --restart=no "$CONTAINER" >/dev/null
 docker stop "$CONTAINER" >/dev/null
+[ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER")" = false ] || die "Candidate did not stop; preserve all recovery sources."
 check_active
 docker rename "$CONTAINER" "$failed_container"
 mv "$DATA_DIR" "$failed_data"
@@ -129,6 +141,7 @@ cmp -s "$before" "$restored_inventory" ||
 
 say "Starting the previous container only after the restored inventory matched..."
 docker rename "$rollback" "$CONTAINER"
+docker update --restart="$rollback_restart_policy" "$CONTAINER" >/dev/null
 docker start "$CONTAINER" >/dev/null
 if ! health=$(curl --connect-timeout 2 --max-time 5 -ksS "https://$RANGE_IP:$rollback_host_port/health"); then
     stop_unhealthy_previous "The previous container's health check failed."
@@ -148,6 +161,7 @@ fi
     printf 'restored_image_id=%s\n' "$rollback_image_id"
     printf 'restored_data_mount=%s\n' "$rollback_data_mount_source"
     printf 'restored_host_port=%s\n' "$rollback_host_port"
+    printf 'restored_restart_policy=%s\n' "$rollback_restart_policy"
     printf 'health=%s\n' "$health"
 } > "$rollback_receipt"
 chmod 600 "$rollback_receipt"

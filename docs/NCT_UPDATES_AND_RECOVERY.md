@@ -98,6 +98,18 @@ requires this independent access code. Application failure never bypasses sign-i
 
 ## One-time host installation
 
+Terminal application upgrades preserve the exact installed container settings by
+default, including its security options, mounts, environment, startup command and
+complete restart policy. Only the image and release identity change. The standalone
+runtime helper supports host Python 3.6 or newer and does not install the recovery
+service. It verifies a freshly extracted cold backup before starting the replacement.
+New upgrade receipts retain the original restart policy, including retry counts;
+verified rollback restores it after checking the restored data. Older receipts use
+the retained container's current policy and warn that a missing policy is not guessed.
+Unsupported network layouts or mismatched Docker connections stop the upgrade before
+NCT is stopped. Fresh-install launchers retain their normal defaults. Recovery-console
+installation remains a separate Python 3.9-or-newer prerequisite.
+
 The first release containing this feature needs the normal full-package deployment
 so its application image includes the new workspace. Then install the host helper
 from that reviewed source release. Do not install host code from a GUI upload.

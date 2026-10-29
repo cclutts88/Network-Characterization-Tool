@@ -119,7 +119,7 @@ def test_full_upgrade_extracts_backup_before_candidate_can_start(tmp_path, corru
     before = backups / "before"
     before.write_text("original evidence")
     script = (SCRIPTS / "nct-upgrade.sh").read_text()
-    start = script.index('if [ -n "${NCT_PACKAGE_RUNTIME_CLONE:-}" ]; then\n    verification_root=')
+    start = script.index('{\n    verification_root=')
     body = script[start:script.index("backup_ready=yes", start)]
     harness = 'set -eu\nNCT_PACKAGE_RUNTIME_CLONE=qualified\nsnapshot() { cat "$DATA_DIR/evidence" > "$1"; }\ndie() { echo "$*" >&2; exit 1; }\n' + body + '\nprintf CANDIDATE_WOULD_START\n'
     result = subprocess.run(["sh", "-c", harness], capture_output=True, text=True, env={**os.environ,
