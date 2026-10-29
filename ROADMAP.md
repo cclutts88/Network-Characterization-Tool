@@ -9438,3 +9438,48 @@ Prepare a new immutable full offline package from committed foundation source, i
 Preparation review: the initial candidate passed both complete package paths, including schema8 data actually migrated from the exact schema7 release. Reviewer caught a standalone-checker registry dependency and missing fail-closed receipt coverage; both were corrected before those runs. Novice review then caught an emergency command selecting default Python and ambiguity around already-installed helpers. Instructions now use the pinned printed command and exact UI labels. Existing recovery state, configuration, console, service or occupied setup paths are refused before image loading or application changes. Existing-helper upgrades remain outside this package's qualified bootstrap; no receipts are overwritten. A revised committed candidate must repeat both package paths before sealing. The earlier acceptance does not qualify changed payloads.
 
 Old-engine compatibility correction: Docker 18.09 lacks the CLI pull-policy option used by maintenance helpers. Helpers now use the existing local Engine create interface, which cannot download missing images, with the inspected immutable image ID. Fixed reviewed mount/read-only/network-none/entrypoint/environment and restart settings are preserved; unknown options are refused. Bounded attach, explicit exit-code validation and stop-proof cleanup remain required. Missing-image, nonzero-exit, timeout, refused-stop and unsupported-option tests pass; a real local daemon proved create/output/cleanup. This is a scoped compatibility correction, not a Docker upgrade or target qualification. Both intermediate package paths passed, but final source/images must be rebuilt and exercised again. Full regression before this correction: 2,267 passed, 21 skipped; latest affected helper/recovery/package subset: 94 passed.
+
+### 2026-10-29 — Full Recovery-r2 transfer candidate complete
+
+Sealed `NCT-Full-Range-20261029-Recovery-r2.zip`, 121,479,037 bytes, SHA256
+`1463616f8e222d09fd00714193c4672cf3f56a249666e6e9f17545058424bbcb`.
+Release build `0.16.0-range-test-20261029-recovery-r2` binds application and distinct
+recovery-console images to full source `54aa0df9cbc7dd30cb68adbaf21a055761776b5c`.
+The ZIP contains all application/console/HTTPS images, host setup and recovery tools,
+START-HERE instructions, checksums and both exact-source acceptance records. Vendor
+operating-system packages are not included. The prior Recovery-r1 ZIP retains its
+original SHA256 and was not overwritten.
+
+Both final staged-package paths passed against tested manifest
+`7a8910094cc81f56c8e73e5e4cd49b16a585216a3b6777bbb9692edce857ae87`:
+exact Phase5 R1/schema7 and exact Recovery-r1/schema8. The schema8 fixture first
+created its account/evidence under Phase5, then migrated through exact Recovery-r1,
+preserving completed migrations 1–7 and the independently recorded step 8. Each path
+proved retained account/evidence/runtime/bootstrap mounts/restart policy, independently
+verified backup and original-image backup boot, issuing-CA HTTPS, console handoff,
+existing-account verification, console shutdown and application stop/start. Fresh
+schema8 boot/restart and old-image refusal of schema8 were also exercised. Final
+helper changes passed 96 affected tests and 109 tests in the exact release image.
+The prior full regression passed 2,267 tests with 21 skips and one existing warning;
+it preceded the narrow host-helper compatibility correction, which received the
+affected and real-daemon checks above.
+
+Independent review verified all 42 source bindings, three archive image configuration
+digests/build identities, all 46 manifest-listed files in the ZIP and fresh extraction,
+the exact aggregate/embedded receipts and both source histories. Final manifest:
+`2d7836f501454686fcfde1272631aa89ea7ebb2dc81228c50908b1bf85c0d9f1`.
+All extracted shell scripts passed syntax checks. The final restricted console
+passed the specific clone3-permission-denial thread/import reproduction; this does
+not simulate the entire older engine. An earlier final fixture was safely refused
+for its overly long disposable socket path; a shorter fresh fixture passed without
+changing the payload. Novice instructions gate: CLEAR. Independent transfer gate:
+CLEAR — DOCUMENTED DEVIATION.
+
+Status: locally qualified transfer candidate on foundation only, not promoted to
+main or installed on the Range. Next target gate: provision separately installed
+vendor Python 3.9+ from trusted offline media, validate the exact images on the actual
+older engine, then verify real systemd, approved network access/trust, existing-account
+sign-in, retained evidence and independent-console recovery. Local fixtures substitute
+systemctl with the actual copied host service running as a process and explicitly
+record actual Range/systemd acceptance as false. No target data, security settings,
+host runtime or running application changed during package preparation.
