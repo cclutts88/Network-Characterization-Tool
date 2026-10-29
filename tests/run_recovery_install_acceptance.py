@@ -21,6 +21,7 @@ import urllib.request
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--console-image", help="Separate independently pinned console image to qualify")
     args = parser.parse_args()
     root = args.root
     if root.name != "_data" or not root.parent.name.startswith("nct-update-acceptance-") or root.parent.parent != Path("/var/lib/docker/volumes"):
@@ -73,10 +74,15 @@ def main():
             return subprocess.CompletedProcess(command, 0)
         return real_run(command, *arguments, **keywords)
     installer.subprocess.run = system_service
-    installer.install(argparse.Namespace(container=name, console_container=name + "-console", console_image=image,
+    console_image = args.console_image or image
+    console_id = json.loads(engine.command("image", "inspect", console_image))[0]["Id"]
+    if args.console_image and console_id == image:
+        raise ValueError("Separate-console acceptance requires a distinct immutable image")
+    installer.install(argparse.Namespace(container=name, console_container=name + "-console", console_image=console_id,
         application_url=configuration["application_url"], console_url="https://host.docker.internal:18154", bind_address="127.0.0.1",
         data_dir=data, state_dir=root / "state", install_dir=installed, cert_file=cert, key_file=key, ca_file=cert, enable_container=True))
     print("One-time installer completed through real HTTPS and the independent service.", flush=True)
+    assert engine.inspect(name + "-console")["Image"] == console_id
     context = ssl.create_default_context(cafile=str(cert))
     cookies = http.cookiejar.CookieJar()
     browser = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), urllib.request.HTTPCookieProcessor(cookies), urllib.request.ProxyHandler({}))
@@ -111,7 +117,13 @@ def main():
     request("/api/exchange", {"code": access_code}, console=True)
     assert request("/api/status", console=True)["operation"]["id"] == state["id"]
     request("/api/close", {}, console=True)
+    for _ in range(20):
+        if not engine.inspect(name + "-console")["State"]["Running"]:
+            break
+        time.sleep(1)
+    assert not engine.inspect(name + "-console")["State"]["Running"]
     module.save(root / "installer-acceptance-result.json", {"result": "pass", "https": True, "independent_service_restart": True,
+        "console_image_id": console_id, "distinct_console_image": console_id != image,
         "on_demand_console_stop": True, "docker_socket_absent_from_web_containers": True, "systemd_boot_tested": False})
     print("PASS: HTTPS handoff, bootstrap account verification, console stop, durable service restart and host-code recovery.", flush=True)
     service.terminate()

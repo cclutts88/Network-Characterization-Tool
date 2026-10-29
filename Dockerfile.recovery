@@ -1,0 +1,13 @@
+# Independent console: musl avoids the glibc clone3 fallback problem on older hosts.
+# Target-engine compatibility must still pass the restricted-console acceptance gate.
+FROM python:3.12-alpine@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
+ARG NCT_BUILD_COMMIT=uncommitted
+ARG NCT_BUILD_ID=development-recovery
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    NCT_BUILD_COMMIT=${NCT_BUILD_COMMIT} NCT_BUILD_ID=${NCT_BUILD_ID}
+WORKDIR /app
+COPY requirements-recovery.txt ./
+RUN pip install --no-cache-dir -r requirements-recovery.txt
+COPY app/recovery_console.py app/update_transport.py app/update_ui.py ./app/
+EXPOSE 8446
+CMD ["uvicorn", "app.recovery_console:app", "--host", "0.0.0.0", "--port", "8446", "--loop", "asyncio", "--http", "h11"]

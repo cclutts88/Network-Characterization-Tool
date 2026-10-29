@@ -225,6 +225,18 @@ supports both classic Docker image IDs and the newer OCI image-store representat
 
 ## Development acceptance boundary
 
+The dedicated console is built with `Dockerfile.recovery` and its pinned
+`requirements-recovery.txt`. It contains only the recovery web interface and socket
+transport, not the main application or network collection tools. The pinned official
+Python Alpine base uses a different C runtime to avoid the observed thread-creation
+failure under the older host's security filter. Do not assume compatibility from the
+base name alone: qualify the exact immutable image under read-only root, dropped
+capabilities and no-new-privileges on the target. Do not inherit an application's
+unrestricted compatibility setting into this console. Local syscall-failure
+reproduction and HTTPS acceptance do not substitute for target-engine acceptance.
+The existing sealed release and its console tag are unchanged; a new console must
+be packaged and transferred with its own exact identity and qualification results.
+
 Automated Docker exercises cover real NCT intake, HTTP upload, replacement, fresh
 account checks, backup restore, failed-release recovery and unfinished-work repair.
 A separate fixture executes the real host installer, real HTTPS console and copied
