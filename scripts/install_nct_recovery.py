@@ -5,6 +5,7 @@ import copy
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shlex
@@ -36,6 +37,85 @@ def service_command(interpreter, trusted, config_path):
 
 def access_command(interpreter, trusted, config_path):
     return shlex.join([interpreter, str(trusted / "nct_update_host.py"), "--config", str(config_path), "--access-code"])
+
+
+def enable_console(host, original, container, *, require_reconciled=False, locked_guard=None):
+    engine, state = host.engine, host.root
+    launch_dir = Path(host.config["launch_socket"]).parent
+    candidate = copy.deepcopy(original["Config"])
+    candidate.pop("Hostname", None)
+    candidate["Image"] = original["Image"]
+    candidate["HostConfig"] = copy.deepcopy(original["HostConfig"])
+    candidate["HostConfig"]["RestartPolicy"] = {"Name": "no", "MaximumRetryCount": 0}
+    candidate["HostConfig"]["Binds"] = list(candidate["HostConfig"].get("Binds") or []) + [f"{launch_dir}:/run/nct-update:ro"]
+    candidate["Env"] = [value for value in candidate.get("Env", []) if not value.startswith("NCT_UPDATE_LAUNCH_SOCKET=")] + ["NCT_UPDATE_LAUNCH_SOCKET=/run/nct-update/launch.sock"]
+    retained = container + "-before-recovery-" + secrets.token_hex(5)
+    with host.exclusive():
+        if locked_guard is not None:
+            locked_guard()
+        prior_id = None
+        if require_reconciled:
+            previous = host.read()
+            if previous.get("phase") not in {"complete", "restored"} or not previous.get("controller_sign_in_verified"):
+                raise ValueError("Verify the reconciled existing account before continuing setup")
+            host.target(expected_id=original["Id"])
+            prior_id = previous["id"]
+            if not re.fullmatch(r"[0-9a-f]{32}", prior_id):
+                raise ValueError("Invalid prior recovery operation identity")
+            receipt = state / prior_id / "reconciled-operation.json"
+            if receipt.exists():
+                if receipt.read_bytes() != canonical(previous):
+                    raise ValueError("The retained reconciliation receipt differs")
+            else:
+                with receipt.open("xb") as record:
+                    record.write(canonical(previous))
+        operation_id = secrets.token_hex(16)
+        (state / operation_id).mkdir(mode=0o700)
+        env = dict(value.split("=", 1) for value in original["Config"]["Env"] if "=" in value)
+        build = {"build_id": env.get("NCT_BUILD_ID"), "build_commit": env.get("NCT_BUILD_COMMIT")}
+        operation = {"id": operation_id, "kind": "enable_console", "actor": "host-installer",
+            "original": original, "original_build": build, "manifest": build,
+            "candidate_image_id": original["Image"], "prior_operation_id": prior_id, **build}
+        host.phase(operation, "fence_intent", detail="Enabling the independent console on the exact existing NCT image.")
+        replacement_id = None
+        writer = None
+        try:
+            host.stop_exact(original)
+            writer = host.writer_lock()
+            host.checkpoint(original["Image"])
+            host.helper(original["Image"], "active")
+            host.backup(operation)
+            host.phase(operation, "backup_verified")
+            host.phase(operation, "replace_intent", candidate_may_have_written=True)
+            host.hold_collection(operation)
+            engine.command("rename", original["Id"], retained)
+            candidate["Labels"] = {**(candidate.get("Labels") or {}), "org.nct.update-operation": operation_id}
+            replacement_id = engine.create(container, candidate)
+            host.phase(operation, "candidate_created", candidate_id=replacement_id)
+            os.close(writer)
+            writer = None
+            engine.command("start", replacement_id)
+            host.verify_health(operation)
+            host.stop_exact(engine.inspect(replacement_id))
+            writer = host.writer_lock()
+            host.checkpoint(original["Image"])
+            host.verify_evidence(operation)
+            os.close(writer)
+            writer = None
+            engine.command("start", replacement_id)
+            host.verify_health(operation)
+            host.phase(operation, "awaiting_sign_in", completion_kind="console_enable", detail="Recovery console enabled. Open Updates & Recovery and verify an existing NCT account before resuming collection.")
+        except Exception as exc:
+            if writer is not None:
+                os.close(writer)
+                writer = None
+            host.phase(operation, "interrupted", detail="Console setup interrupted: " + str(exc)[:300])
+            host.restore(operation, "host-installer")
+            raise
+        finally:
+            if writer is not None:
+                os.close(writer)
+    return retained
 
 
 def install(args):
@@ -108,61 +188,7 @@ def install(args):
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "nct-recovery-host.service"], check=True)
     host.launch("host-installer")  # Prove the independent GUI and broker before stopping NCT.
-    candidate = copy.deepcopy(original["Config"])
-    candidate.pop("Hostname", None)
-    candidate["Image"] = original["Image"]
-    candidate["HostConfig"] = copy.deepcopy(original["HostConfig"])
-    candidate["HostConfig"]["RestartPolicy"] = {"Name": "no", "MaximumRetryCount": 0}
-    candidate["HostConfig"]["Binds"] = list(candidate["HostConfig"].get("Binds") or []) + [f"{launch_dir}:/run/nct-update:ro"]
-    candidate["Env"] = [value for value in candidate.get("Env", []) if not value.startswith("NCT_UPDATE_LAUNCH_SOCKET=")] + ["NCT_UPDATE_LAUNCH_SOCKET=/run/nct-update/launch.sock"]
-    retained = args.container + "-before-recovery-" + secrets.token_hex(5)
-    with host.exclusive():
-        operation_id = secrets.token_hex(16)
-        (state / operation_id).mkdir(mode=0o700)
-        env = dict(value.split("=", 1) for value in original["Config"]["Env"] if "=" in value)
-        build = {"build_id": env.get("NCT_BUILD_ID"), "build_commit": env.get("NCT_BUILD_COMMIT")}
-        operation = {"id": operation_id, "kind": "enable_console", "actor": "host-installer",
-            "original": original, "original_build": build, "manifest": build,
-            "candidate_image_id": original["Image"], **build}
-        host.phase(operation, "fence_intent", detail="Enabling the independent console on the exact existing NCT image.")
-        replacement_id = None
-        writer = None
-        try:
-            host.stop_exact(original)
-            writer = host.writer_lock()
-            host.checkpoint(original["Image"])
-            host.helper(original["Image"], "active")
-            host.backup(operation)
-            host.phase(operation, "backup_verified")
-            host.phase(operation, "replace_intent", candidate_may_have_written=True)
-            host.hold_collection(operation)
-            engine.command("rename", original["Id"], retained)
-            candidate["Labels"] = {**(candidate.get("Labels") or {}), "org.nct.update-operation": operation_id}
-            replacement_id = engine.create(args.container, candidate)
-            host.phase(operation, "candidate_created", candidate_id=replacement_id)
-            os.close(writer)
-            writer = None
-            engine.command("start", replacement_id)
-            host.verify_health(operation)
-            host.stop_exact(engine.inspect(replacement_id))
-            writer = host.writer_lock()
-            host.checkpoint(original["Image"])
-            host.verify_evidence(operation)
-            os.close(writer)
-            writer = None
-            engine.command("start", replacement_id)
-            host.verify_health(operation)
-            host.phase(operation, "awaiting_sign_in", completion_kind="console_enable", detail="Recovery console enabled. Open Updates & Recovery and verify an existing NCT account before resuming collection.")
-        except Exception as exc:
-            if writer is not None:
-                os.close(writer)
-                writer = None
-            host.phase(operation, "interrupted", detail="Console setup interrupted: " + str(exc)[:300])
-            host.restore(operation, "host-installer")
-            raise
-        finally:
-            if writer is not None:
-                os.close(writer)
+    retained = enable_console(host, original, args.container)
     print("Recovery helper installed. Collection stays paused until existing-account verification.")
     print("Open NCT → Account and settings → Updates & Recovery.")
     print("If NCT is unavailable: " + access_command(interpreter, trusted, config_path))

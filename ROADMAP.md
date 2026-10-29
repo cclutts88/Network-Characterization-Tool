@@ -1,6 +1,13 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Operator usability requirement (2026-10-29): deployment and recovery are operated
+by trusted personnel in an isolated environment. Favor a short GUI workflow and
+avoid repeated access-code/sign-in friction where an already authenticated
+operator session can safely provide the handoff. Preserve evidence verification,
+tested backups, rollback, and clear completion/failure results. Simplification is
+planned work; the currently shipped Recovery-r2 account checks remain in force.
+
 - Roadmap status: Approved governing direction
 - Working product expansion: NCT = Network Correlation & Triage
 - Foundation branch: `foundation/evidence-engine-v2`
@@ -9542,3 +9549,19 @@ the maintenance lock and require account verification before collection release.
 Review continuation of launch-socket installation separately rather than rerunning
 the one-time installer over existing helper state. Original and corrected host
 scripts, operational patch hashes and interrupted receipts must be preserved.
+
+Recovery continuation implementation: the shared first-install transaction now
+supports an administrator-reviewed continuation after the earlier operation has
+been reconciled and an existing account verified. Preserve the earlier receipt,
+create a new operation, verify a new cold backup and reuse the same replacement,
+evidence/account verification and rollback. No existing service, configuration or
+console is recreated. Exact release/runtime and console mount checks repeat under
+the maintenance lock before any journal or stop. Affected tests: 55 passed;
+independent reviewer: 39 focused tests passed. Fresh installation and injected
+interruption/reconciliation/continuation each passed real HTTPS, account handoff,
+console shutdown, helper restart and emergency access on isolated persistent Docker
+fixtures. Their systemctl is substituted; actual target acceptance remains open.
+Reviewer gate: CLEAR — DOCUMENTED DEVIATION, conditional on actual prior-account
+verification before target continuation. Target R2 is running with retained evidence
+verified; collection is paused pending that check. Do not claim console setup or
+target acceptance complete yet.

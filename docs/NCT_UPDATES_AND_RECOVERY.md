@@ -227,6 +227,28 @@ supports both classic Docker image IDs and the newer OCI image-store representat
 
 ## Development acceptance boundary
 
+### Interrupted first installation
+
+Do not rerun the one-time installer over an existing recovery service. Keep its
+configuration, operation history and console. First reconcile the interrupted
+operation using the installed helper, then verify the existing NCT account in the
+recovery workspace. Collection stays paused until that check completes.
+
+For an administrator-reviewed interruption before the launch socket was connected,
+`scripts/finish_nct_recovery.py` continues the existing installation. It requires
+the exact application/console image identities, build ID and full commit, and the
+reviewed console certificate/key file paths. It checks the installed service and
+runtime again under the maintenance lock, preserves the previous reconciliation
+receipt, creates a new operation and independently verifies a new cold backup.
+It then uses the same replacement, evidence check, account check and rollback
+transaction as first installation. It does not reinstall the host service, change
+accounts or treat an incomplete operation as success. This is an administrator
+recovery path, not an extra step in the normal operator update workflow.
+
+Trusted, isolated deployments should prioritize a short operator workflow.
+Reducing repeated access and sign-in prompts is planned; the current release's
+checks still apply until a simpler flow is implemented and tested.
+
 The dedicated console is built with `Dockerfile.recovery` and its pinned
 `requirements-recovery.txt`. It contains only the recovery web interface and socket
 transport, not the main application or network collection tools. The pinned official
