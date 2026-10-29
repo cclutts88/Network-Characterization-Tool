@@ -11,8 +11,9 @@ import tempfile
 from app.schema_compatibility import begin_schema_migration, complete_schema_migration
 from app.scan_history_index import init_scan_history_index_storage
 
+PHASE5 = ("0.16.0-range-test-20261025-phase5-r1", "be92fb78e938adc3fced581629d4609ac0a43f6a")
 SOURCES = {
-    ("0.16.0-range-test-20261025-phase5-r1", "be92fb78e938adc3fced581629d4609ac0a43f6a"): 7,
+    PHASE5: 7,
     ("0.16.0-range-test-20261027-recovery-r1", "0bd11969ffd81aad7cbc8335af755b80c9af0639"): 8,
 }
 

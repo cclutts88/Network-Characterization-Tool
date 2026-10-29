@@ -85,10 +85,12 @@ Resuming without repair can restart the original queues and automation; its
 confirmation says so explicitly. A changed plan or failed repair leaves NCT stopped
 with its backup available. These controls never silently empty the scan queue.
 
-When NCT cannot provide a signed-in handoff, run this on its host:
+When NCT cannot provide a signed-in handoff, use the exact emergency command
+printed during installation. It pins the selected Python interpreter and actual
+paths. For a separate Python 3.9 and the default installation paths, for example:
 
 ```sh
-sudo python3 /opt/nct-recovery/nct_update_host.py \
+sudo /usr/bin/python3.9 /opt/nct-recovery/nct_update_host.py \
   --config /opt/nct-recovery/config.json --access-code
 ```
 

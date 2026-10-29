@@ -170,7 +170,7 @@ def test_missing_container_cannot_adopt_nonempty_retained_data(tmp_path):
     shutil.copyfile(SCRIPTS / "nct-install-range.sh", root / "scripts/nct-install-range.sh")
     for helper in ("nct-recovery-python.sh", "nct_update_host.py", "nct_update_work.py"):
         shutil.copyfile(SCRIPTS / helper, root / "scripts" / helper)
-    for name, body in {"docker": 'case "$1" in run) echo --pull;; info) exit 0;; inspect) exit 1;; load) echo UNEXPECTED_LOAD; exit 99;; esac', "systemctl": "exit 0", "ss": "echo State", "curl": "exit 99"}.items():
+    for name, body in {"docker": 'case "$1" in run) echo --pull;; info) exit 0;; inspect) exit 1;; load) echo UNEXPECTED_LOAD; exit 99;; esac', "systemctl": "echo not-found", "ss": "echo State", "curl": "exit 99"}.items():
         path = tools / name
         path.write_text("#!/bin/sh\n" + body + "\n")
         path.chmod(0o700)
@@ -181,6 +181,43 @@ def test_missing_container_cannot_adopt_nonempty_retained_data(tmp_path):
     assert "Retained evidence exists" in result.stderr
     assert "UNEXPECTED_LOAD" not in result.stdout
     assert (persistent / "data/analyzer.db").read_bytes() == b"preserve"
+
+
+@pytest.mark.parametrize("existing", ["state", "config", "container", "service", "state_file", "install_file"])
+def test_bootstrap_refuses_existing_helper_before_application_changes(tmp_path, existing):
+    if os.name != "posix" or os.geteuid() != 0:
+        pytest.skip("Linux root container fixture")
+    root, tools = tmp_path / "package", tmp_path / "bin"
+    (root / "scripts").mkdir(parents=True)
+    tools.mkdir()
+    for name in ("nct-install-range.sh", "nct-recovery-python.sh", "nct_update_host.py", "nct_update_work.py"):
+        shutil.copyfile(SCRIPTS / name, root / "scripts" / name)
+    state, installed = tmp_path / "state", tmp_path / "installed"
+    state.mkdir()
+    installed.mkdir()
+    if existing == "state":
+        (state / "receipt").write_text("preserve receipt")
+    if existing == "config":
+        (installed / "config.json").write_text("preserve config")
+    if existing == "state_file":
+        state.rmdir()
+        state.write_text("preserve state file")
+    if existing == "install_file":
+        installed.rmdir()
+        installed.write_text("preserve install file")
+    for name in ("docker", "systemctl", "openssl", "curl", "ss"):
+        script = tools / name
+        body = "echo " + ("loaded" if existing == "service" else "not-found") + "\n" if name == "systemctl" else ("exit 0\n" if name != "docker" or existing == "container" else "exit 1\n")
+        script.write_text("#!/bin/sh\n" + body)
+        script.chmod(0o700)
+    result = subprocess.run(["sh", str(root / "scripts/nct-install-range.sh"), "127.0.0.1", "check"], capture_output=True, text=True,
+        env={**os.environ, "PATH": str(tools) + ":" + os.environ["PATH"], "NCT_RECOVERY_STATE_DIR": str(state), "NCT_RECOVERY_INSTALL_DIR": str(installed)})
+    assert result.returncode != 0
+    assert "already exists" in result.stderr or "already installed" in result.stderr or "occupied" in result.stderr
+    if state.is_dir():
+        assert sorted(p.name for p in state.iterdir()) == (["receipt"] if existing == "state" else [])
+    else:
+        assert state.read_text() == "preserve state file"
 
 
 @pytest.mark.parametrize("corrupt", [False, True])

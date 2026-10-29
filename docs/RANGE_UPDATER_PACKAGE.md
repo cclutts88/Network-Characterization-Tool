@@ -39,6 +39,10 @@ trusted release source. No software is downloaded during installation.
   disposable copy, with no additional schema migration or fingerprint reset.
   Version-6 sources need a separately qualified Phase 5 staging path;
   this package does not perform that bridge.
+- Both supported upgrade paths assume the independent recovery helper has not
+  already been installed. If it is installed, preserve its configuration and
+  receipts and obtain a reviewed helper-upgrade procedure. This installer refuses
+  that case before loading images or changing the application.
 - Finish scans and device pulls and disable schedules/automatic pulls during the
   maintenance window. Keep the current password: existing accounts are preserved.
 - Use the same host IP and HTTPS port as the working NCT. The issuing root CA must
@@ -68,7 +72,8 @@ on the target host remain separate from local package acceptance.
 
 ## Check first, then install
 
-Replace `NCT_HOST_IP` with the actual NCT host address. Run as root:
+Replace `NCT_HOST_IP` with the actual NCT host address. Enter the root shell first,
+then set any environment values below and run both commands in that same shell:
 
 ```sh
 sh scripts/nct-install-range.sh NCT_HOST_IP check
@@ -105,6 +110,10 @@ certificate validation or approved-source firewall requirements.
 
 ## Finish in the browser
 
+Before installing, an administrator must allow the application and recovery ports
+from the authorized workstation and prepare trust in the issuing CA. The installer
+does not change firewall policy or disable certificate validation.
+
 After application acceptance, the trusted host installer enables the independent
 recovery service and proves its separate HTTPS endpoint is ready. Collection stays
 paused until you sign in to NCT, open **Account and settings → Updates & Recovery**,
@@ -112,6 +121,10 @@ select **Open update and recovery workspace** and verify an existing NCT account
 The helper verifies the exact build, saved evidence and readiness, activates normal
 background services through a final restart, and returns you to NCT. The console
 then stops; the small host launcher remains available for later recovery.
+The application address is `https://NCT_HOST_IP:8445` unless a custom port was
+selected. Enter the existing account under **3. Verify sign-in and finish**, then
+select **Verify sign-in**. Finish by confirming that recovery reports completion, NCT displays the new
+build, the existing account works, and representative saved evidence is visible.
 
 Apply the site's existing approved-source firewall policy to the recovery port
 before using it from an analyst workstation. This package does not open a broad
@@ -144,10 +157,13 @@ This mode requires the exact packaged application already running; it does not
 repeat the older-source upgrade. If a recovery service is already installed, preserve
 its configuration and receipts and investigate it instead of overwriting it.
 
-When NCT is down, a root operator can reopen the independent console:
+When NCT is down, a root operator can reopen the independent console. Save and use
+the exact emergency command printed during installation: it contains the selected
+Python interpreter and actual installation paths. For example, where a separate
+Python 3.9 was selected and the default paths were used:
 
 ```sh
-python3 /opt/nct-recovery/nct_update_host.py \
+/usr/bin/python3.9 /opt/nct-recovery/nct_update_host.py \
   --config /opt/nct-recovery/config.json --access-code
 ```
 

@@ -24,6 +24,17 @@ NCT_RECOVERY_PYTHON=$(nct_select_recovery_python "$NCT_PACKAGE_ROOT") || die "Re
 export NCT_RECOVERY_PYTHON
 NCT_UPGRADE_PYTHON="$NCT_RECOVERY_PYTHON"
 export NCT_UPGRADE_PYTHON
+for NCT_LOCATION in "$NCT_RECOVERY_STATE_DIR" "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}"; do
+    [ ! -e "$NCT_LOCATION" ] || [ -d "$NCT_LOCATION" ] || die "Recovery location is occupied by a file. Preserve it and review the installation paths."
+done
+NCT_HELPER_UNIT=$(systemctl show --property=LoadState --value nct-recovery-host.service) || die "The recovery service state could not be checked. Preserve the application and review systemd."
+[ "$NCT_HELPER_UNIT" = not-found ] && [ ! -e /etc/systemd/system/nct-recovery-host.service ] || die "The recovery service already exists. Preserve it and use the reviewed helper-upgrade procedure."
+if [ -d "$NCT_RECOVERY_STATE_DIR" ] && [ -n "$(find "$NCT_RECOVERY_STATE_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    die "Recovery state already exists. Preserve its configuration and receipts; this package does not overwrite an installed helper."
+fi
+if [ -f "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}/config.json" ] || docker inspect "${NCT_RECOVERY_CONTAINER:-$NCT_TARGET_CONTAINER-recovery-console}" >/dev/null 2>&1; then
+    die "A recovery helper is already installed. Preserve it and use the reviewed helper-upgrade procedure before changing NCT."
+fi
 "$NCT_RECOVERY_PYTHON" -c 'import sys,ipaddress; [ipaddress.ip_address(value) for value in sys.argv[1:]]' "$NCT_RANGE_IP" "$NCT_RECOVERY_BIND_ADDRESS" || die "Host address check failed."
 docker run --help | grep -q -- '--pull' || die "The host Docker CLI must support --pull=never for the independent recovery helper."
 docker info >/dev/null 2>&1 || die "Docker is unavailable."
