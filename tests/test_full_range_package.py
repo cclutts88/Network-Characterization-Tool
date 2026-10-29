@@ -74,7 +74,8 @@ def test_schema_adapter_refuses_unknown_source_without_touching_data(tmp_path):
 
 def test_bootstrap_checks_before_loading_or_replacing_application():
     script = (SCRIPTS / "nct-install-range.sh").read_text()
-    assert script.index("sys.version_info >= (3,9)") < script.index("docker load")
+    assert script.index("nct_select_recovery_python") < script.index("docker load")
+    assert "sys.version_info >= (3, 9)" in (SCRIPTS / "nct-recovery-python.sh").read_text()
     assert script.index("sha256sum -c PACKAGE-MANIFEST.sha256") < script.index("docker load")
     assert script.index("openssl verify -CAfile") < script.index("docker load")
     assert "certs/nct-lab-root.crt" in script
@@ -90,6 +91,8 @@ def test_missing_container_cannot_adopt_nonempty_retained_data(tmp_path):
     (persistent / "data").mkdir(parents=True)
     (persistent / "data/analyzer.db").write_bytes(b"preserve")
     shutil.copyfile(SCRIPTS / "nct-install-range.sh", root / "scripts/nct-install-range.sh")
+    for helper in ("nct-recovery-python.sh", "nct_update_host.py", "nct_update_work.py"):
+        shutil.copyfile(SCRIPTS / helper, root / "scripts" / helper)
     for name, body in {"docker": 'case "$1" in run) echo --pull;; info) exit 0;; inspect) exit 1;; load) echo UNEXPECTED_LOAD; exit 99;; esac', "systemctl": "exit 0", "ss": "echo State", "curl": "exit 99"}.items():
         path = tools / name
         path.write_text("#!/bin/sh\n" + body + "\n")
@@ -123,7 +126,7 @@ def test_full_upgrade_extracts_backup_before_candidate_can_start(tmp_path, corru
     body = script[start:script.index("backup_ready=yes", start)]
     harness = 'set -eu\nNCT_PACKAGE_RUNTIME_CLONE=qualified\nsnapshot() { cat "$DATA_DIR/evidence" > "$1"; }\ndie() { echo "$*" >&2; exit 1; }\n' + body + '\nprintf CANDIDATE_WOULD_START\n'
     result = subprocess.run(["sh", "-c", harness], capture_output=True, text=True, env={**os.environ,
-        "DATA_DIR": str(data), "BACKUP_DIR": str(backups), "backup": str(archive), "before": str(before), "timestamp": "fixture"})
+        "DATA_DIR": str(data), "BACKUP_DIR": str(backups), "backup": str(archive), "before": str(before), "timestamp": "fixture", "NCT_UPGRADE_PYTHON": sys.executable})
     assert ("CANDIDATE_WOULD_START" in result.stdout) is not corrupt
     assert (result.returncode == 0) is not corrupt
     assert (data / "evidence").read_text() == "original evidence"

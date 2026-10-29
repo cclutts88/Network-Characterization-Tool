@@ -16,10 +16,15 @@ die() { printf '%s\n' "[NCT package] $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "Run as root."
 [ -n "$NCT_RANGE_IP" ] || die "Usage: sh scripts/nct-install-range.sh NCT_HOST_IP [all|check|enable-console]"
 case "$NCT_SETUP_MODE" in all|check|enable-console) ;; *) die "Mode must be all, check or enable-console." ;; esac
-for tool in docker python3 systemctl sha256sum openssl curl ss flock; do
+for tool in docker systemctl sha256sum openssl curl ss flock; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required on the offline host. Nothing was installed or downloaded."
 done
-python3 -c 'import sys,ipaddress,fcntl,sqlite3,ssl; assert sys.version_info >= (3,9), "Python 3.9 or newer is required"; [ipaddress.ip_address(value) for value in sys.argv[1:]]' "$NCT_RANGE_IP" "$NCT_RECOVERY_BIND_ADDRESS" || die "Host Python or address check failed."
+. "$NCT_PACKAGE_ROOT/scripts/nct-recovery-python.sh"
+NCT_RECOVERY_PYTHON=$(nct_select_recovery_python "$NCT_PACKAGE_ROOT") || die "Recovery interpreter check failed before changing NCT."
+export NCT_RECOVERY_PYTHON
+NCT_UPGRADE_PYTHON="$NCT_RECOVERY_PYTHON"
+export NCT_UPGRADE_PYTHON
+"$NCT_RECOVERY_PYTHON" -c 'import sys,ipaddress; [ipaddress.ip_address(value) for value in sys.argv[1:]]' "$NCT_RANGE_IP" "$NCT_RECOVERY_BIND_ADDRESS" || die "Host address check failed."
 docker run --help | grep -q -- '--pull' || die "The host Docker CLI must support --pull=never for the independent recovery helper."
 docker info >/dev/null 2>&1 || die "Docker is unavailable."
 systemctl show-environment >/dev/null 2>&1 || die "A working systemd host service is required."
@@ -29,7 +34,7 @@ case "$NCT_PERSIST_ROOT" in /|/var|/var/lib|/etc|/root) die "Choose a dedicated 
 NCT_APP_PORT=${NCT_HTTPS_PORT:-8445}
 NCT_CONSOLE_PORT=${NCT_RECOVERY_PORT:-8446}
 export NCT_HTTPS_PORT="$NCT_APP_PORT"
-python3 -c 'import sys; p=list(map(int,sys.argv[1:])); assert all(1<=v<=65535 for v in p) and len(set(p))==2' "$NCT_APP_PORT" "$NCT_CONSOLE_PORT" || die "Choose two different valid application and recovery ports."
+"$NCT_RECOVERY_PYTHON" -c 'import sys; p=list(map(int,sys.argv[1:])); assert all(1<=v<=65535 for v in p) and len(set(p))==2' "$NCT_APP_PORT" "$NCT_CONSOLE_PORT" || die "Choose two different valid application and recovery ports."
 if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
     NCT_DATA_TYPE=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}{{end}}{{end}}' "$NCT_TARGET_CONTAINER" )
     NCT_DATA_SOURCE=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$NCT_TARGET_CONTAINER" )
@@ -58,11 +63,11 @@ if ss -ltn | awk -v p="$NCT_CONSOLE_PORT" 'NR>1 && $4 ~ (":" p "$") {f=1} END {e
     die "Recovery port is already in use; inspect the existing console or choose NCT_RECOVERY_PORT."
 fi
 printf '%s\n' "Offline prerequisites and package checks passed. Existing evidence and accounts have not been changed."
-python3 -c 'import sys; from pathlib import Path; root=Path(sys.argv[1]); assert root.is_absolute() and all(len(str(root/"sockets"/kind/name).encode())<108 for kind,name in (("launch","launch.sock"),("control","control.sock"))), "Recovery state path is too long; choose a shorter dedicated NCT_RECOVERY_STATE_DIR"' "$NCT_RECOVERY_STATE_DIR" || die "Recovery socket path check failed before changing NCT."
+"$NCT_RECOVERY_PYTHON" -c 'import sys; from pathlib import Path; root=Path(sys.argv[1]); assert root.is_absolute() and all(len(str(root/"sockets"/kind/name).encode())<108 for kind,name in (("launch","launch.sock"),("control","control.sock"))), "Recovery state path is too long; choose a shorter dedicated NCT_RECOVERY_STATE_DIR"' "$NCT_RECOVERY_STATE_DIR" || die "Recovery socket path check failed before changing NCT."
 [ "$NCT_SETUP_MODE" != check ] || exit 0
 docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"
-NCT_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_image"])' "$NCT_PACKAGE_ROOT/release.json")
-NCT_CONSOLE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["console_image"])' "$NCT_PACKAGE_ROOT/release.json")
+NCT_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_image"])' "$NCT_PACKAGE_ROOT/release.json")
+NCT_CONSOLE_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["console_image"])' "$NCT_PACKAGE_ROOT/release.json")
 if [ "$NCT_SETUP_MODE" = all ]; then
     if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
         NCT_PACKAGE_RUNTIME_CLONE="$NCT_PACKAGE_ROOT/scripts/nct-clone-release-runtime.py" sh "$NCT_PACKAGE_ROOT/scripts/nct-upgrade.sh" "$NCT_RANGE_IP" docker
@@ -71,11 +76,11 @@ if [ "$NCT_SETUP_MODE" = all ]; then
         sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
     fi
 fi
-NCT_EXPECTED_COMMIT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$NCT_PACKAGE_ROOT/release.json")
+NCT_EXPECTED_COMMIT=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$NCT_PACKAGE_ROOT/release.json")
 NCT_ACTUAL_COMMIT=$(docker exec "$NCT_TARGET_CONTAINER" python -c 'from app.build_info import BUILD_COMMIT; print(BUILD_COMMIT)')
 [ "$NCT_ACTUAL_COMMIT" = "$NCT_EXPECTED_COMMIT" ] || die "The running application is not this exact release; recovery setup did not run."
 NCT_CONSOLE_ID=$(docker image inspect --format '{{.Id}}' "$NCT_CONSOLE_IMAGE")
-python3 "$NCT_PACKAGE_ROOT/scripts/install_nct_recovery.py" --container "$NCT_TARGET_CONTAINER" --console-container "${NCT_RECOVERY_CONTAINER:-$NCT_TARGET_CONTAINER-recovery-console}" \
+"$NCT_RECOVERY_PYTHON" "$NCT_PACKAGE_ROOT/scripts/install_nct_recovery.py" --container "$NCT_TARGET_CONTAINER" --console-container "${NCT_RECOVERY_CONTAINER:-$NCT_TARGET_CONTAINER-recovery-console}" \
     --console-image "$NCT_CONSOLE_ID" --application-url "https://$NCT_RANGE_IP:$NCT_APP_PORT" \
     --console-url "https://$NCT_RANGE_IP:$NCT_CONSOLE_PORT" --bind-address "$NCT_RECOVERY_BIND_ADDRESS" \
     --data-dir "$NCT_PERSIST_ROOT/data" --state-dir "$NCT_RECOVERY_STATE_DIR" \

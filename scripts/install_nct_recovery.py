@@ -7,14 +7,39 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shlex
 import shutil
 import subprocess
+import sys
 import urllib.parse
 
 from nct_update_host import Docker, Host, canonical, restart_policy, save
 
 
+def recovery_python():
+    path = Path(sys.executable).resolve()
+    if sys.version_info < (3, 9) or not path.is_absolute() or not os.access(path, os.X_OK):
+        raise ValueError("Recovery requires an executable Python 3.9 or newer")
+    if any(char.isspace() or char in '%\\"' for char in str(path)) or str(path).startswith(("/root/", "/home/", "/run/user/")):
+        raise ValueError("Recovery Python must be accessible to the protected host service")
+    return str(path)
+
+
+def service_command(interpreter, trusted, config_path):
+    def quote(value):
+        text = str(value)
+        if any(ord(char) < 32 for char in text):
+            raise ValueError("Service paths may not contain control characters")
+        return '"' + text.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$') + '"'
+    return "ExecStart=" + " ".join(quote(value) for value in (interpreter, trusted / "nct_update_host.py", "--config", config_path))
+
+
+def access_command(interpreter, trusted, config_path):
+    return shlex.join([interpreter, str(trusted / "nct_update_host.py"), "--config", str(config_path), "--access-code"])
+
+
 def install(args):
+    interpreter = recovery_python()
     if os.geteuid() != 0:
         raise ValueError("Run the one-time recovery installer as root on the NCT host")
     if not args.enable_container:
@@ -32,6 +57,7 @@ def install(args):
     ipaddress.ip_address(args.bind_address)
     state = args.state_dir.resolve()
     trusted = args.install_dir.resolve()
+    service_exec = service_command(interpreter, trusted, trusted / "config.json")
     if state.exists() and any(state.iterdir()):
         raise ValueError("Recovery state already exists. Preserve its receipts; do not overwrite an installed helper")
     if engine.exists(args.console_container):
@@ -75,7 +101,7 @@ def install(args):
             "PortBindings": {"8446/tcp": [{"HostIp": args.bind_address, "HostPort": str(console.port)}]}}}
     engine.create(args.console_container, console_config)
     unit = "\n".join(["[Unit]", "Description=NCT on-demand update and recovery host helper", "After=docker.service", "Requires=docker.service", "[Service]", "Type=simple",
-        f"ExecStart=/usr/bin/python3 {trusted}/nct_update_host.py --config {config_path}", "Restart=on-failure", "UMask=0077", "NoNewPrivileges=true", "ProtectHome=true", "[Install]", "WantedBy=multi-user.target", ""])
+        service_exec, "Restart=on-failure", "UMask=0077", "NoNewPrivileges=true", "ProtectHome=true", "[Install]", "WantedBy=multi-user.target", ""])
     unit_path = Path("/etc/systemd/system/nct-recovery-host.service")
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     unit_path.write_text(unit)
@@ -139,7 +165,7 @@ def install(args):
                 os.close(writer)
     print("Recovery helper installed. Collection stays paused until existing-account verification.")
     print("Open NCT → Account and settings → Updates & Recovery.")
-    print(f"If NCT is unavailable: python3 {trusted}/nct_update_host.py --config {config_path} --access-code")
+    print("If NCT is unavailable: " + access_command(interpreter, trusted, config_path))
     print("The previous application container remains stopped: " + retained)
 
 

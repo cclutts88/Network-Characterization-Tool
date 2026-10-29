@@ -118,6 +118,15 @@ do not run the manual example again after successful bootstrap. The example belo
 is only for an administrator completing a separately reviewed manual installation.
 The host needs Python 3.9 or newer, a Docker CLI supporting `--pull=never`, systemd,
 and working local POSIX file locks. Helpers use only locally retained images.
+The system's default Python may stay at an older version. Bootstrap searches for
+versioned Python 3.13 through 3.9, then `python3`, and validates the required host
+modules. To select a separately installed runtime explicitly, set an absolute path,
+for example `export NCT_RECOVERY_PYTHON=/usr/bin/python3.9`. An invalid explicit
+choice stops setup rather than falling back. The resolved executable is pinned in
+the host service and emergency access instructions. Keep it installed at that path;
+interpreters under home directories are refused because the protected service cannot
+access them. Missing Python must be supplied from approved offline vendor media;
+the NCT package does not replace system Python or download an operating-system update.
 Use a dedicated, locally attached evidence bind mount with proven SQLite WAL,
 atomic rename and filesystem synchronization behavior. Named volumes and shared
 application workloads require a separately qualified deployment adapter.

@@ -16,6 +16,12 @@ trusted release source. No software is downloaded during installation.
   **3.9 or newer**, systemd, OpenSSL, curl, ss, flock, tar and standard shell tools.
   These are host prerequisites, not operating-system upgrades supplied by this ZIP.
   Check mode stops before changing NCT if a prerequisite is missing.
+  Python may be a separate versioned installation: set `NCT_RECOVERY_PYTHON` to its
+  absolute executable path, such as `/usr/bin/python3.9`. Setup validates and pins that
+  interpreter for the host service and emergency access. An invalid explicit choice
+  does not fall back to another interpreter. System Python is never replaced. Runtime
+  paths under home directories are refused because the protected service cannot read
+  them. The package does not provide the offline vendor Python installation.
 - The retained-data upgrade is qualified from the exact Phase 5 R1 build
   `0.16.0-range-test-20261025-phase5-r1` at
   `be92fb78e938adc3fced581629d4609ac0a43f6a`, with its schema-7 data and a dedicated

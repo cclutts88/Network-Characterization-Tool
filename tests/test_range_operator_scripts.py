@@ -438,7 +438,7 @@ def test_upgrade_script_backs_up_verifies_and_retains_the_previous_container():
     assert 'schema_preflight_sha256=%s' in content
     assert 'preflight_binding_code' in content
     assert 'schema_preflight=%s' in content
-    assert 'python3 "$RUNTIME_CLONE" --original-id "$original_container_id"' in content
+    assert '"$NCT_UPGRADE_PYTHON" "$RUNTIME_CLONE" --original-id "$original_container_id"' in content
     assert 'docker exec "$CONTAINER" python -c "$snapshot_code"' in content
     assert 'snapshot "$before"' in content
     assert content.index('docker stop "$CONTAINER"') < content.index('snapshot "$before"')

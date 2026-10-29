@@ -18,6 +18,7 @@ STATE_DIR="$PERSIST_ROOT/deployment"
 BACKUP_DIR="$STATE_DIR/backups"
 SCHEMA_PREFLIGHT="$WORKDIR/scripts/nct-schema-preflight.py"
 RUNTIME_CLONE="$WORKDIR/scripts/nct-clone-release-runtime.py"
+NCT_UPGRADE_PYTHON=${NCT_UPGRADE_PYTHON:-python3}
 
 say() { printf '%s\n' "[NCT upgrade] $*"; }
 die() { printf '%s\n' "[NCT upgrade] ERROR: $*" >&2; exit 1; }
@@ -37,7 +38,7 @@ api_at_least() {
 [ "$(id -u)" -eq 0 ] || die "Run this script as root."
 [ -n "$RANGE_IP" ] || die "Usage: sh $WORKDIR/scripts/nct-upgrade.sh RANGE_IP [auto|compose|docker|legacy]"
 case "$MODE" in auto|compose|docker|legacy) ;; *) die "Mode must be auto, compose, docker, or legacy." ;; esac
-for command_name in docker python3 sha256sum tar cmp curl grep; do
+for command_name in docker "$NCT_UPGRADE_PYTHON" sha256sum tar cmp curl grep; do
     command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required."
 done
 docker info >/dev/null 2>&1 || die "Docker is not reachable."
@@ -46,7 +47,7 @@ docker info >/dev/null 2>&1 || die "Docker is not reachable."
 [ -f "$SCHEMA_PREFLIGHT" ] || die "Missing $SCHEMA_PREFLIGHT"
 [ -f "$RUNTIME_CLONE" ] || die "Missing the trusted runtime-preservation helper."
 [ "${NCT_PACKAGE_RUNTIME_CLONE:-$RUNTIME_CLONE}" = "$RUNTIME_CLONE" ] || die "Unrecognized package runtime adapter."
-python3 -c 'import sys; assert sys.version_info >= (3,6)' || die "Python 3.6 or newer is required for application-only upgrades."
+"$NCT_UPGRADE_PYTHON" -c 'import sys; assert sys.version_info >= (3,6)' || die "Python 3.6 or newer is required for application-only upgrades."
 verify_archive_checksum || die "The offline image archive checksum does not match."
 docker inspect "$CONTAINER" >/dev/null 2>&1 ||
     die "Container $CONTAINER was not found. Use a start script for a new installation."
@@ -71,7 +72,7 @@ case "$original_host_port" in ''|*[!0-9]*) die "The current NCT HTTPS host port 
 [ "$original_host_port" -ge 1 ] && [ "$original_host_port" -le 65535 ] || die "The current NCT HTTPS host port is invalid."
 server_api=$(docker version --format '{{.Server.APIVersion}}')
 api_at_least "$server_api" 1.39 || die "Docker API $server_api is older than the supported Range floor of 1.39."
-python3 "$RUNTIME_CLONE" --check --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" \
+"$NCT_UPGRADE_PYTHON" "$RUNTIME_CLONE" --check --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" \
     --url "https://$RANGE_IP:$original_host_port" --ca-file "${NCT_CA_FILE:-$PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}" ||
     die "The installed runtime cannot be preserved safely. NCT has not been stopped."
 
@@ -400,7 +401,7 @@ chmod 600 "$backup.sha256"
     snapshot "$BACKUP_DIR/backup-verification-$timestamp.json" || die "Extracted backup inventory failed; replacement was not started."
     DATA_DIR=$original_data_directory
     cmp -s "$before" "$BACKUP_DIR/backup-verification-$timestamp.json" || die "Extracted backup differs from stopped evidence; replacement was not started."
-    case "$verification_root" in "$BACKUP_DIR"/verify-"$timestamp"-*) python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$verification_root" ;; *) die "Unexpected verification folder; preserve it for review." ;; esac
+    case "$verification_root" in "$BACKUP_DIR"/verify-"$timestamp"-*) "$NCT_UPGRADE_PYTHON" -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$verification_root" ;; *) die "Unexpected verification folder; preserve it for review." ;; esac
 }
 backup_ready=yes
 
@@ -410,7 +411,7 @@ docker rename "$CONTAINER" "$rollback"
 # Historical mode arguments remain accepted; existing runtimes are always preserved.
 say "Starting the release with the exact saved runtime..."
 candidate_may_have_written=yes
-python3 "$RUNTIME_CLONE" --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" \
+"$NCT_UPGRADE_PYTHON" "$RUNTIME_CLONE" --original-id "$original_container_id" --image "$IMAGE" --name "$CONTAINER" \
     --url "https://$RANGE_IP:$original_host_port" --ca-file "${NCT_CA_FILE:-$PERSIST_ROOT/tls-material/certs/nct-lab-root.crt}"
 snapshot "$after" container
 candidate_port_lines=$(docker inspect --format '{{range $port,$items := .HostConfig.PortBindings}}{{if or (eq $port "8080/tcp") (eq $port "8445/tcp")}}{{range $items}}{{printf "%s|%s\n" $port .HostPort}}{{end}}{{end}}{{end}}' "$CONTAINER" | tr -d '\r' | sed '/^$/d' | sort -u)
