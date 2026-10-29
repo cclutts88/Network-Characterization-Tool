@@ -9483,3 +9483,14 @@ sign-in, retained evidence and independent-console recovery. Local fixtures subs
 systemctl with the actual copied host service running as a process and explicitly
 record actual Range/systemd acceptance as false. No target data, security settings,
 host runtime or running application changed during package preparation.
+
+Transfer checkpoint: the VM console's full-file transfer immediately returned an
+undefined error for the 121,479,037-byte ZIP, while its tiny checksum transferred
+successfully. Two smaller binary parts transferred successfully and were joined
+using exclusive creation, preserving existing packages. The target-side combined
+ZIP has the exact sealed size/SHA256 above and passes ZIP content verification.
+This supports a size-related transfer limitation; the service's exact limit was
+not established. The workaround changes transport only, not the release payload.
+Package transfer is complete; no extraction, installation, host prerequisite change
+or application restart occurred. Actual Range/recovery-service acceptance remains
+open. Private operational evidence retains the terminal verification screenshot.
