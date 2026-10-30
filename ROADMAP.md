@@ -9660,3 +9660,19 @@ to miss theme overrides; that cosmetic issue is the next separate correction.
 Gate: CLEAR — DOCUMENTED DEVIATION. Foundation-only; no Range code, evidence, sealed
 package or stable main changed. Actual Range browser saving remains to be verified
 after a separately transferred update containing this fix.
+
+### 2026-10-29 — Responsive Scan History theme correction started
+
+Novice and independent browser review found fixed navy responsive history-card
+backgrounds and dividers under the Sage palette. Replace those local fixed colors
+with the established shared surface/line tokens and legacy fallbacks. Verify the
+same retained history at narrow width in Graphite/Sage with the guide open/closed;
+preserve grouping, evidence actions and table-label order. Local development only.
+
+Complete on foundation: responsive row surfaces and cell dividers now use the
+existing NCT surface/line tokens with legacy fallbacks. The responsive presentation
+contract rejects the old fixed colors. Focused UI/README tests: 90 passed; independent
+reviewer UI checks: 85 passed. At 980px, browser-computed row and group backgrounds
+matched exactly in Sage and Graphite, as did cell and row dividers. Guide-open and
+guide-closed views retained readable labels in their original order. Novice and
+independent gates: CLEAR. No backend, data, layout, Range or sealed-package change.

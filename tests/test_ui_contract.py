@@ -780,6 +780,11 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Your draft was not applied. Select Edit selected again" in html
     assert 'id="scan-history-responsive-rows"' in html
     assert "@container (max-width:900px)" in html
+    responsive_history = html.split('id="scan-history-responsive-rows"', 1)[1].split("</style>", 1)[0]
+    assert "var(--nct-surface-muted,var(--panel))" in responsive_history
+    assert "var(--nct-line,var(--line))" in responsive_history
+    assert "#091720" not in responsive_history
+    assert "#263f49" not in responsive_history
     assert "Executed target / recorded context'" in html
     assert 'class="history-group"' in html
     assert "localeCompare(NCTScanReference.humanize(b.name||'')" not in html
