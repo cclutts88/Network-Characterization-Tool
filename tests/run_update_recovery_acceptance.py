@@ -49,8 +49,8 @@ def main():
         def inventory(self):
             own_prefix = Path("/etc/hostname").read_text().strip()
             return [item for item in super().inventory() if not item['Id'].startswith(own_prefix)]
-        def command(self, *args):
-            result = super().command(*args)
+        def command(self, *args, **kwargs):
+            result = super().command(*args, **kwargs)
             if args[:2] == ("ps", "-aq"):
                 own_prefix = Path("/etc/hostname").read_text().strip()
                 return "\n".join(value for value in result.split() if not value.startswith(own_prefix))

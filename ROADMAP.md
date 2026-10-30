@@ -9676,3 +9676,19 @@ reviewer UI checks: 85 passed. At 980px, browser-computed row and group backgrou
 matched exactly in Sage and Graphite, as did cell and row dividers. Guide-open and
 guide-closed views retained readable labels in their original order. Novice and
 independent gates: CLEAR. No backend, data, layout, Range or sealed-package change.
+
+### 2026-10-29 — Exact-source GUI update qualification started
+
+Prepare a new application-only GUI update containing the Scan History download and
+theme corrections. Qualify only the exact installed Recovery-r2 source, preserving
+the independently pinned console and trusted host helper. Use disposable retained
+evidence for actual upload/apply/sign-in/restart and isolated failed-update/restore
+checks before target transfer. Keep the original full ZIP unchanged. Novice review
+also found console action errors disappearing during polling; fix and test that
+source separately. Application-only updates cannot replace the installed console,
+so those console presentation improvements require a later explicit console update.
+Local acceptance does not close the outstanding Range browser-download check.
+
+Console feedback source correction complete: action errors now survive status polling; rejected uploads explicitly stop reporting validation-in-progress; failed operations have an explicit label. Sign-in guidance explains the pause and final restart, and failed-restore guidance names diagnostic export and administrator escalation. Four Node runtime suites passed; focused Docker tests passed 88 with four Node wrappers skipped and executed separately. An actual rejected fixture upload retained its explanation across polling. Novice independently reviewed screenshot/source; independent reviewer cleared the source diff. This is source-only console work, not delivered to the pinned console by the application update. Some host background rejections still require private receipt inspection; no general failure-feedback completion is claimed.
+
+Qualification fixture: exact-source synthetic retained evidence, app-only replacement, unchanged pinned helper/console and receipt checks. Browser leg uses loopback HTTP with the explicit fixture-only insecure setting; a separate CA-verified HTTPS API update/restore leg must use the same package. Actual Range HTTPS browser acceptance remains separate. No external collection or real evidence is used.

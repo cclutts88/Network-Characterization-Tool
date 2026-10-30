@@ -65,7 +65,7 @@ After a host-service interruption, the saved operation changes to **Needs recove
 review**. Choose Restore to reconcile the actual saved container identities and
 verified backup. An unverified backup, changed target, additional writer, missing
 original image, or failed data check leaves the previous image stopped. Preserve
-the result and use the existing terminal diagnostic/recovery procedures.
+the result, choose **Export diagnostic summary**, and give that summary to the NCT host administrator. Keep the backup and preserved-data paths. Do not manually start an older image against the changed data.
 
 **Investigate NCT** reads the exact configured container, state, image, capacity
 and current recovery result. **Verify saved backup** extracts a fresh copy and

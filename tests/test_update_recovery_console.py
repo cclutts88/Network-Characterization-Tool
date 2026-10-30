@@ -558,3 +558,13 @@ def test_update_pages_explain_offline_intake_and_backup_time():
     assert "independently" in html
     assert "Operator Guide" in html
     assert "var(--panel)" in html
+
+
+def test_recovery_feedback_survives_status_polling():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable; run recovery_feedback_runtime.mjs separately")
+    result = subprocess.run([node, str(Path(__file__).with_name("recovery_feedback_runtime.mjs"))], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
