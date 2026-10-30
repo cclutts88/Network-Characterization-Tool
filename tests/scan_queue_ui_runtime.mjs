@@ -210,6 +210,7 @@ await eval(`(async () => {
   const scanRef=()=>({primary:'Retained scan',detail:'Retained scan details'});
   const scanTime=value=>value;
   const scanArtifactMarkup=()=>'';
+  const bindScanArtifactDownloads=()=>{};
   ${handler("selectRun")}
   await selectRun('retained-run',button);
   assert.equal(currentId,'live-run','opening history must not replace the active scan identity');

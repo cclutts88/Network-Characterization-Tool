@@ -9625,3 +9625,38 @@ its 210,344 bytes and SHA256 match the pre-update snapshot. This confirms the fi
 binding and preserved bytes, not authenticated HTTP transfer or browser saving.
 Independent installation/core-recovery gate: CLEAR — DOCUMENTED DEVIATION, with
 the browser-download qualification and later live update/restore/repair tests open.
+
+### 2026-10-29 — Scan History evidence-download correction started
+
+The history-details renderer creates artifact links but does not bind the existing
+authenticated fetch/Blob download handler. Active-scan and finalized-discovery
+renderers do bind it. Correct the history binding and exercise the actual
+open-details/click/reopen flow, response filename, download preparation and failures.
+Novice review also found that the shared download handler reports through the hidden
+scan-builder status. Keep preparation/errors beside the selected evidence links,
+using existing theme/status styling and ordinary body typography. Explain the save
+path in operator guidance without claiming the browser saved a file. Completion
+requires focused runtime tests, isolated browser download/checksum verification and
+independent review. Preserve the installed Range and sealed packages; a local fix
+does not close the separate Range browser-download qualification.
+
+Development completion: history details now bind each new evidence link to the
+existing authenticated fetch/Blob path, including reopening details. Preparation,
+HTTP failures and connection/body failures appear in a nearby themed live-status
+message instead of the hidden builder. The guide and built-in README explain saving
+without claiming disk-save success. The new runtime reproduction failed on the
+missing binding, then passed for server filenames, delayed Blob cleanup, 401/404,
+network/body errors and reopening. Node artifact and queue suites passed; focused
+Docker checks passed (85 primary checks; independent reviewer ran 90 including README
+coverage). Two Node wrappers skipped in Docker were executed separately on Windows.
+
+An isolated authenticated browser saved the XML with its server-provided filename;
+downloaded SHA256 matched the fixture. Reload/reopen downloaded again. Temporarily
+withholding only that fixture file produced visible inline `Artifact not found`,
+then the fixture was restored. Graphite and Sage at 980px with guide open/closed
+passed feedback/guide readability checks. The novice and independent reviewer cleared
+the download workflow. Existing navy responsive history cards under Sage were found
+to miss theme overrides; that cosmetic issue is the next separate correction.
+Gate: CLEAR — DOCUMENTED DEVIATION. Foundation-only; no Range code, evidence, sealed
+package or stable main changed. Actual Range browser saving remains to be verified
+after a separately transferred update containing this fix.
