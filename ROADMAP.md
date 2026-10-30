@@ -9591,3 +9591,37 @@ historical-evidence browser inspection, host-service restart/emergency-access ch
 and on-demand console closure remain open. Do not treat this checkpoint as completed
 Range installation or as an exercised GUI update/restore. Private target receipts
 and screenshots retain the exact operation, backup and verification details.
+
+Target setup completion checks: NCT's own Updates & Recovery button opened the
+independent console. The operator verified the existing account; the durable setup
+operation reached `complete`, performed its final activation restart, removed its
+update-specific collection pause and restored the original `unless-stopped` policy.
+CA-verified build/readiness checks passed. With no unfinished work present, an
+ordinary NCT restart passed and counts remained 1 account, 13 scans and 176 artifacts.
+All 48,205 retained non-database files were rehashed against the cold snapshot with
+zero changes. Original runtime settings match apart from the reviewed launch socket,
+its environment variable and container identity/operation metadata.
+
+The real host service restarted successfully using the separately installed vendor
+Python 3.9. A fresh host-issued access code reopened the independent console and the
+same completed receipt without relying on NCT's launch button. Returning to NCT
+stopped the console again. Retained Scan History groups and a completed scan's
+details, source context and evidence links remained visible after restart.
+
+Browser acceptance limitation: the representative XML download failed in the Range
+Chrome browser with `Failed - Network error`, including one Resume attempt. Bounded
+NCT logs showed successful history/detail requests but no corresponding artifact
+request or application error. The bounded logs do not establish whether the artifact
+request reached NCT or where the download failed. Evidence is intact,
+but a successful browser download is **not verified**. Keep this follow-up open and
+do not claim unrestricted Range readiness. A later GUI package apply, backup restore
+and unfinished-work repair also remain separate live-Range tests; this installation
+does not claim to have exercised those actions against retained Range evidence.
+
+Download follow-up isolation: the exact installed image's artifact resolver was
+executed with the retained manifest, without initializing application storage or
+performing a network request. It resolved the selected XML as `application/xml`;
+its 210,344 bytes and SHA256 match the pre-update snapshot. This confirms the file
+binding and preserved bytes, not authenticated HTTP transfer or browser saving.
+Independent installation/core-recovery gate: CLEAR — DOCUMENTED DEVIATION, with
+the browser-download qualification and later live update/restore/repair tests open.
