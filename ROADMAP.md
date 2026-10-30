@@ -9692,3 +9692,57 @@ Local acceptance does not close the outstanding Range browser-download check.
 Console feedback source correction complete: action errors now survive status polling; rejected uploads explicitly stop reporting validation-in-progress; failed operations have an explicit label. Sign-in guidance explains the pause and final restart, and failed-restore guidance names diagnostic export and administrator escalation. Four Node runtime suites passed; focused Docker tests passed 88 with four Node wrappers skipped and executed separately. An actual rejected fixture upload retained its explanation across polling. Novice independently reviewed screenshot/source; independent reviewer cleared the source diff. This is source-only console work, not delivered to the pinned console by the application update. Some host background rejections still require private receipt inspection; no general failure-feedback completion is claimed.
 
 Qualification fixture: exact-source synthetic retained evidence, app-only replacement, unchanged pinned helper/console and receipt checks. Browser leg uses loopback HTTP with the explicit fixture-only insecure setting; a separate CA-verified HTTPS API update/restore leg must use the same package. Actual Range HTTPS browser acceptance remains separate. No external collection or real evidence is used.
+
+### 2026-10-29 — Recovery-r3 application-only update locally qualified
+
+Built `nct-update-20261029-recovery-r3.tar.gz` (74,095,190 bytes), SHA256
+`f0261ea6d55af134aebc951406db75bc87653847b6688d409a0a2d30d42cf625`.
+Application build `0.16.0-range-test-20261029-recovery-r3` binds full source
+`03da1516face51403035e4292ac68cac9279dd65`; the sole qualified source is exact
+Recovery-r2 at `54aa0df9cbc7dd30cb68adbaf21a055761776b5c`. The bounded package
+contains only release.json and a tagless image.tar. Archive configuration identity
+`sha256:c018115367a341af15f67a6129ea5fadac75066d928e1fbea90d4f50a789bc9b`
+and image archive SHA256
+`cff44eb250337ca1acffe64bb5cf29780f1b37d2b826048027ee2dc2bca89ac5`
+were independently verified. The original full Recovery-r2 ZIP retains its original
+SHA256. No host-helper or pinned-console replacement is included.
+
+Full regression: 2,308 passed, 22 skipped, one existing dependency warning. The
+candidate-derived test overlay also passed 88 focused checks with four Node wrappers
+skipped; feedback, artifact, queue and history Node suites passed separately on Windows.
+These test tools are absent from the delivered image.
+
+An isolated CA-verified HTTPS exercise used the exact R2 application, independently
+pinned R2 console and unchanged trusted host helper. Update, existing-account check,
+final activation restart, explicit restore and a deliberately failing candidate all
+passed. Assertions covered full runtime and nonrelease settings, the legacy security
+setting, restart policy, original account/scan/registry/observation row digests,
+retained file hashes and exact image/build identities. The failing candidate actually
+started and exited unsuccessfully; the verified original backup restored. Evidence
+created after the update was absent from the restored live data and preserved with
+its exact hash in the separate quarantine. Authenticated XML downloads after update
+and both restore paths passed media type, filename and body-hash checks. All automated
+fixture application, console and preserved containers were stopped; receipts remain.
+
+The actual GUI uploaded and validated the same unchanged package, applied it after
+operator confirmation, verified the retained account, finished the normal restart
+and stopped the console. Scan History then expanded the retained subnet and run and
+saved XML with the server filename. Downloaded SHA256
+`661beb26136203f52ef7c9465c9a0655186e850b208f9e385aa56191a665a591`
+matched the retained fixture. Guide, table and nearby download feedback passed novice
+image review. Browser confirmation automation was unavailable, so the operator clicked
+OK; the saved update continued without resetting it. An earlier synthetic fixture used
+an invalid run identifier; it was corrected and the HTTPS and browser download checks
+repeated before qualification. The fixture-only corrections do not change delivered
+application code or package bytes.
+
+Local deviation remains explicit: the browser leg uses disposable loopback HTTP;
+the same package separately passed CA-verified HTTPS update/restore/API acceptance.
+This does not prove actual Range browser saving. Actual Range transfer/installation
+and retained XML saving remain pending. The application-only package delivers the
+Scan History fixes; the pinned console retains its earlier presentation limitations.
+No claim of unrestricted mission readiness, Kubernetes update qualification or stable
+main promotion is made. Stop here at user direction; preserve receipts and package for
+Range transfer and shut down the local test environments and workstation.
+
+Final local gate: CLEAR - DOCUMENTED DEVIATION. Independent reviewer verified the package, corrected HTTPS receipts, GUI completion, retained XML file checksum and preserved runtime/evidence. Novice image review: CLEAR. Target acceptance remains open.
