@@ -9565,3 +9565,11 @@ Reviewer gate: CLEAR — DOCUMENTED DEVIATION, conditional on actual prior-accou
 verification before target continuation. Target R2 is running with retained evidence
 verified; collection is paused pending that check. Do not claim console setup or
 target acceptance complete yet.
+
+Target continuation compatibility correction: the exact under-lock guard refused
+before journaling or stopping NCT. Twelve read-only Docker inspections proved that
+only the outer Mounts array order varied; all full mount records and other guarded
+runtime sections were identical. Compare sorted complete mount records for this
+stale-preflight check only, retaining duplicates, every field and all strict console
+mount checks. Do not normalize environment, command or permission ordering. Add
+permutation acceptance and changed-source/type/RW/extra/duplicate refusal tests.

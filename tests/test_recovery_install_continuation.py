@@ -88,3 +88,32 @@ def test_unverified_previous_operation_never_launches(setup):
     with pytest.raises(ValueError, match="verify"):
         continuation.finish(host, *args)
     host.launch.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["order", "source", "rw", "type", "extra", "duplicate"])
+def test_mount_order_is_not_a_change_but_full_records_are_checked(setup, monkeypatch, change):
+    host, original, _, _, args = setup
+    original["Mounts"] = [
+        {"Destination": "/data", "Source": str(host.data), "Type": "bind", "RW": True},
+        {"Destination": "/run/tls/server.crt", "Source": str(args[-2]), "Type": "bind", "RW": False},
+    ]
+    replacement = copy.deepcopy(original)
+    replacement["Mounts"].reverse()
+    if change == "source": replacement["Mounts"][0]["Source"] = "/other"
+    if change == "rw": replacement["Mounts"][0]["RW"] = True
+    if change == "type": replacement["Mounts"][0]["Type"] = "volume"
+    if change == "extra": replacement["Mounts"].append({"Destination": "/extra", "Source": "/extra", "Type": "bind", "RW": False})
+    if change == "duplicate": replacement["Mounts"].append(copy.deepcopy(replacement["Mounts"][0]))
+    def transaction(h, initial, container, **kw):
+        with h.exclusive():
+            h.target.return_value = replacement
+            kw["locked_guard"]()
+        return "retained"
+    monkeypatch.setattr(continuation, "enable_console", transaction)
+    if change == "order":
+        assert continuation.finish(host, *args) == "retained"
+    else:
+        with pytest.raises(ValueError, match="changed"):
+            continuation.finish(host, *args)
+    host.phase.assert_not_called()
+    host.stop_exact.assert_not_called()

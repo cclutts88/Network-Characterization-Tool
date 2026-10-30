@@ -61,7 +61,8 @@ def finish(host, application_image, console_image, build_id, build_commit, cert_
     host.launch("host-installer")
     def locked_guard():
         current_previous, current = preflight(host, *arguments)
-        if canonical(previous) != canonical(current_previous) or any(current[k] != original[k] for k in ("Id", "Image", "Config", "HostConfig", "Mounts")):
+        mounts_equal = sorted(canonical(m) for m in current["Mounts"]) == sorted(canonical(m) for m in original["Mounts"])
+        if canonical(previous) != canonical(current_previous) or not mounts_equal or any(current[k] != original[k] for k in ("Id", "Image", "Config", "HostConfig")):
             raise ValueError("The reviewed installation changed before continuation")
     return enable_console(host, original, host.config["container"], require_reconciled=True, locked_guard=locked_guard)
 
