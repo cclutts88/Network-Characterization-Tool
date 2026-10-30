@@ -9573,3 +9573,21 @@ runtime sections were identical. Compare sorted complete mount records for this
 stale-preflight check only, retaining duplicates, every field and all strict console
 mount checks. Do not normalize environment, command or permission ordering. Add
 permutation acceptance and changed-source/type/RW/extra/duplicate refusal tests.
+
+Target continuation checkpoint: the corrected guard passed and the new independent
+operation reached `awaiting_sign_in`. Its new cold backup and retained-evidence
+verification both passed. The running application reports exact Recovery-r2/source
+54aa0df over CA-verified HTTPS; `/health/readiness` returns `ready`. Read-only database
+counts still match the pre-install baseline: 1 account, 13 scan records and 176
+registered artifacts. All 48 operational-manifest entries verify. Both retained
+application containers are stopped with restart disabled. The independent console
+retains its read-only root, dropped capabilities, no-new-privileges setting and
+restricted mounts; the real host service is enabled and active.
+
+Acceptance remains in progress: the analyst workstation locked before the NCT GUI
+launch and fresh final account-verification check. Collection remains deliberately
+paused pending that check. Final activation restart, ordinary restart persistence,
+historical-evidence browser inspection, host-service restart/emergency-access check
+and on-demand console closure remain open. Do not treat this checkpoint as completed
+Range installation or as an exercised GUI update/restore. Private target receipts
+and screenshots retain the exact operation, backup and verification details.
