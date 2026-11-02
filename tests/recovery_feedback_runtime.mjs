@@ -106,4 +106,68 @@ assert.equal(element('access').hidden, true);
 assert.equal(element('retryStatus').hidden, false);
 poll(); await new Promise(resolve=>setImmediate(resolve));
 assert.equal(handoffCalls.filter(([url])=>url==='/api/exchange').length,1, 'status retry must not replay a one-use handoff');
-console.log('Recovery feedback persists across polling; upload, restore and failed-state checks passed.');
+// A delayed account check must explain the cleared field and reject duplicates.
+state.operation={phase:'awaiting_sign_in'};
+context.fetch=async()=>({ok:true,json:async()=>state});
+await vm.runInContext('refresh()',context);
+let finishVerification;
+const verifyCalls=[];
+let destination;
+context.location.assign=url=>{destination=url;};
+context.fetch=async(url)=>{
+  verifyCalls.push(url);
+  if(url==='/api/verify-sign-in') return new Promise(resolve=>{finishVerification=resolve;});
+  return {ok:true,json:async()=>({})};
+};
+element('password').value='synthetic-only';
+const pending=element('verifyForm').onsubmit({preventDefault(){}});
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(element('password').value,'');
+assert.match(element('verifyFeedback').textContent,/Checking sign-in and finishing/);
+assert.match(element('verifyFeedback').textContent,/cleared after submission/);
+assert.equal(element('verifyProgress').hidden,false);
+assert.equal(element('verifyButton').disabled,true);
+assert.equal(destination,undefined);
+await element('verifyForm').onsubmit({preventDefault(){}});
+poll();await new Promise(resolve=>setImmediate(resolve));
+assert.deepEqual(verifyCalls,['/api/verify-sign-in']);
+finishVerification({ok:true,json:async()=>({url:'/nct',operation:{phase:'complete',controller_sign_in_verified:true}})});
+await pending;
+assert.equal(destination,'/nct');
+assert.match(element('verifyFeedback').textContent,/Sign-in and final restart verified/);
+assert.equal(element('verifyProgress').hidden,true);
+assert.deepEqual(verifyCalls,['/api/verify-sign-in','/api/close']);
+
+for(const problem of ['refused','connection','close']){
+  destination=undefined;const calls=[];
+  context.fetch=async(url)=>{
+    calls.push(url);
+    if(url==='/api/status') return {ok:true,json:async()=>state};
+    if(problem==='connection') throw Error('Connection lost');
+    if(problem==='refused') return {ok:false,json:async()=>({detail:'Account check refused'})};
+    if(url==='/api/verify-sign-in') return {ok:true,json:async()=>({url:'/nct',operation:{phase:'complete',controller_sign_in_verified:true}})};
+    throw Error('Close failed');
+  };
+  element('password').value='synthetic-only';
+  await element('verifyForm').onsubmit({preventDefault(){}});
+  assert.equal(destination,undefined);
+  assert.equal(element('password').value,'');
+  assert.equal(element('verifyProgress').hidden,true);
+  assert.equal(element('verifyButton').disabled,false);
+  assert.match(element('verifyFeedback').textContent,problem==='close'?/Sign-in and final restart passed/:/could not be confirmed/);
+  const feedback=element('verifyFeedback').textContent;
+  await vm.runInContext('refresh()',context);
+  assert.equal(element('verifyFeedback').textContent,feedback,'polling must not erase nearby sign-in feedback');
+  assert.equal(element('actionError').hidden,false);
+  assert.equal(calls.filter(x=>x==='/api/verify-sign-in').length,1);
+}
+for(const response of [null,{}, {url:'/nct',operation:{phase:'release_intent',controller_sign_in_verified:true}}, {url:'/nct',operation:{phase:'complete',controller_sign_in_verified:false}}]){
+  const calls=[];destination=undefined;
+  context.fetch=async(url)=>{calls.push(url);return {ok:true,json:async()=>response};};
+  await element('verifyForm').onsubmit({preventDefault(){}});
+  assert.equal(destination,undefined);
+  assert.deepEqual(calls,['/api/verify-sign-in']);
+  assert.match(element('verifyFeedback').textContent,/could not be confirmed/);
+}
+assert.ok(!element('verifyFeedback').textContent.includes('synthetic-only'));
+console.log('Recovery feedback persists across polling; upload, restore, connection and account verification checks passed.');

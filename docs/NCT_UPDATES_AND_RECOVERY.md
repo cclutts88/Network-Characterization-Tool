@@ -82,6 +82,16 @@ Delivery boundary: an application-only update does not replace the independent
 console. These connection messages require a separately qualified console update;
 the currently pinned Recovery-r2 console retains its earlier connection behavior.
 
+The newer console source also explains the account-check wait beside **Verify
+sign-in**. Submitting intentionally clears the password field, disables repeat
+submission and shows **Checking sign-in and finishing NCT's restart** with an
+activity indicator. The field clearing alone does not mean success or failure.
+Only a confirmed completed response says the account and final restart passed.
+An error remains beside the form; a connection failure may leave the outcome
+unconfirmed, so inspect current status before another attempt. If verification
+passed but returning to NCT failed, reopen NCT rather than applying the update
+again. This feedback also requires the separate console delivery.
+
 **Restore saved backup** verifies the original container and image identity,
 stops the replacement, verifies and independently restores the cold backup, and
 then starts the previous image against that restored data. It never opens the

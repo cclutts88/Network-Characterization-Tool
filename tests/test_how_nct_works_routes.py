@@ -4,6 +4,15 @@ from app.how_nct_works_ui import how_nct_works_page
 from app.shell_ui import SHELL_SCRIPT
 
 
+def test_update_sign_in_guide_explains_wait_and_uncertain_result():
+    html = how_nct_works_page().body.decode()
+    assert "password field clears after submission; this alone does not mean success or failure" in html
+    assert "activity bar remain visible while the account check and final restart run" in html
+    assert "check the current saved status before trying again" in html
+    assert "reopen NCT rather than applying the update again" in html
+    assert "These messages require the separately installed console update" in html
+
+
 def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     html = how_nct_works_page().body.decode()
 

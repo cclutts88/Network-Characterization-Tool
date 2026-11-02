@@ -9872,3 +9872,41 @@ Live R3 update has now reached awaiting_sign_in: exact R3 build/readiness,
 independently restored cold backup and retained evidence checks passed. Operator
 existing-account verification/final restart and historical XML download acceptance
 remain pending; temporary update pause remains until verification finishes.
+
+### 2026-11-02 — Sign-in verification feedback started
+
+Operator observed password clearing, a silent wait, then NCT opening. Live receipt
+confirmed R3 completed existing-account verification/final restart, backup/evidence
+checks passed, original restart policy returned and the update pause was absent.
+Historical XML browser saving remains pending. Add local sign-in feedback and an
+activity indicator beside the submit button, prevent duplicate submission during
+verification, explain intentional password clearing, distinguish confirmed success
+from an unconfirmed/failed response and preserve visible errors. Do not change
+credentials, auth policy, host transactions, sealed package or installed console.
+This source-only console correction needs focused runtime and browser/novice review
+before commit; separate console delivery is still required for Range availability.
+
+### 2026-11-02 — Sign-in verification feedback completed on foundation
+
+Added normal-size feedback and an indeterminate activity bar immediately beside
+Verify sign-in. Submission explains intentional password clearing, renames/disables
+the button and describes the account-check/final-restart wait. Success requires a
+completed/restored response with confirmed account verification; malformed or
+unconfirmed results never announce success or close/navigate. A failed return after
+confirmed verification has distinct guidance. Errors remain beside the form and
+survive polling; retries never automatically replay credentials or mutation requests.
+
+Windows Node checks passed for delayed success, duplicate submits, failed account
+checks, lost connections, failed return and malformed success responses. Focused
+Docker suite: 63 passed, one Node wrapper skipped; built-in README contracts: six
+passed. Browser read-only fixture checked real five-second waiting/refusal behavior;
+dark/default and narrow light surfaces checked, guide open/closed; viewport reset.
+Independent reviewer and novice visual gates CLEAR - DOCUMENTED DEVIATION. Updated
+operator documentation and built-in How NCT Works in the same change.
+
+Source-only: separate console release still required. No change to Range credentials,
+authentication policy, host transaction or installed R3/pinned console. Full guided
+recovery journey and host-measured progress remain subsequent work. Actual Range
+receipt now confirms R3 complete, account/backup/evidence verified, final restart
+complete, update-specific pause absent and normal restart policy restored. Historical
+XML browser saving remains a separate unfinished acceptance check.
