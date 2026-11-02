@@ -9910,3 +9910,32 @@ recovery journey and host-measured progress remain subsequent work. Actual Range
 receipt now confirms R3 complete, account/backup/evidence verified, final restart
 complete, update-specific pause absent and normal restart policy restored. Historical
 XML browser saving remains a separate unfinished acceptance check.
+
+### 2026-11-02 — Actual Range R2 → R3 update acceptance completed
+
+Normal GUI upload/validation/apply installed the exact sealed R3 application release.
+The saved host result is complete: account verification, final restart, independently
+restored cold backup and retained-evidence checks passed; the update-specific pause
+is absent and the normal restart policy returned. Existing Scan History groups and
+retained scan details remain available. A real analyst-browser XML download from a
+pre-update scan saved successfully: 210,344 bytes, exact SHA256 matched the previously
+retained source. Private VM receipt and screenshots preserve identifiers/checksums;
+no specific Range layout is published here.
+
+Console-input limitation resolved using the VM's explicit Reconnect menu control.
+Reloading the browser page alone had not reliably restored VM input; the displayed
+Save dialog was stale. After Reconnect, workstation inspection found the saved XML
+and verified its exact checksum. The Save prompt alone was never treated as success.
+
+Documented target deviation remains the separately reviewed mount-order host fix;
+sealed app package and pinned independent-console image were unchanged. Browser
+showed an existing Not secure indicator; successful navigation/download does not
+prove browser certificate trust. Host CA-verified checks remain separate. This
+acceptance covers this actual Docker/Compose installation and preserved-evidence
+update/download workflow, not general mission readiness, Kubernetes qualification,
+or promotion to main. New source-only console connection/sign-in feedback and the
+planned guided journey/measured progress still require separate console delivery.
+
+Final independent target gate: CLEAR - DOCUMENTED DEVIATION for this actual
+preserved-evidence R2-to-R3 update and historical browser XML-save acceptance.
+No full live backup-restore or unfinished-work repair acceptance is inferred.
