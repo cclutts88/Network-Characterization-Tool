@@ -9992,3 +9992,15 @@ controlled real helper process instead of systemd in the disposable fixture; act
 host service and browser trust acceptance remain separate Range gates. No Range
 change: only a read-only installed-helper hash/guard check reproduced the exact
 baseline locally. main remains untouched.
+
+### 2026-11-02 - Exact package rehearsal compatibility deviation
+
+The first staged helper-upgrade rehearsal refused the candidate before any helper
+replacement: Docker's newer image store reports a loaded runtime manifest ID,
+which differs from the archive's configuration digest. The strict check correctly
+halted but assumed these identifiers were identical. Resolve the pinned runtime
+through a bounded configuration export/hash and compare those exact bytes to the
+verified release archive; retain its engine runtime ID for subsequent container
+guards. Repeat exact-package qualification after this source correction. No Range
+change or ready-for-transfer claim. Initial broad regression suite: 2362 passed,
+22 platform-dependent skips; exact newly built-runtime suite remains in progress.

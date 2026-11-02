@@ -1,8 +1,11 @@
 import copy
 import importlib.util
+import hashlib
+import io
 import json
 from pathlib import Path
 import sys
+import tarfile
 
 import pytest
 pytest.importorskip('fcntl')
@@ -82,6 +85,7 @@ def fixture(tmp_path, monkeypatch):
     upgrade = upgrade_module.Upgrade(path,source,'new-console',engine=engine,service=calls.append,unit=unit)
     monkeypatch.setattr(upgrade,'check_service',lambda:None)
     monkeypatch.setattr(upgrade,'ready',lambda cfg:None)
+    monkeypatch.setattr(upgrade,'image_config_digest',lambda image:engine.image['Id'])
     return upgrade,engine,calls
 
 
@@ -189,3 +193,23 @@ def test_missing_backup_hash_refuses_rollback_without_replacing_files(tmp_path,m
     before={n:(upgrade.path.parent/n).read_bytes() for n in ('config.json',*upgrade_module.FILES)}
     with pytest.raises(ValueError,match='hashes are incomplete'):upgrade.rollback()
     assert {n:(upgrade.path.parent/n).read_bytes() for n in before}==before
+
+
+@pytest.mark.parametrize('damage',[None,'multiple','oversized'])
+def test_new_image_store_runtime_id_is_bound_to_exported_config_bytes(tmp_path,monkeypatch,damage):
+    upgrade,engine,_=fixture(tmp_path,monkeypatch)
+    payload=b'{"config":{"Env":["NCT_BUILD_ID=bound"]}}'
+    def export(verb,*args):
+        assert verb=='save' and args[-1]=='sha256:runtime-manifest'
+        with tarfile.open(args[1],'w') as archive:
+            manifests=[{'Config':'config.json'}]*(2 if damage=='multiple' else 1)
+            body=json.dumps(manifests).encode();info=tarfile.TarInfo('manifest.json');info.size=len(body)
+            archive.addfile(info,io.BytesIO(body))
+            info=tarfile.TarInfo('config.json');data=payload if damage!='oversized' else b'x'*(1024**2+1);info.size=len(data)
+            archive.addfile(info,io.BytesIO(data))
+    monkeypatch.setattr(engine,'command',export)
+    method=upgrade_module.Upgrade.image_config_digest
+    if damage:
+        with pytest.raises(ValueError):method(upgrade,'sha256:runtime-manifest')
+    else:
+        assert method(upgrade,'sha256:runtime-manifest')=='sha256:'+hashlib.sha256(payload).hexdigest()

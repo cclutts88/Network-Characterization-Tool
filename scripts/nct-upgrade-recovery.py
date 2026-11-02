@@ -17,6 +17,8 @@ import shlex
 import socket
 import stat
 import subprocess
+import tarfile
+import tempfile
 import time
 
 from nct_update_host import Docker, Host, canonical, digest_file, save, sync_directory
@@ -113,6 +115,22 @@ class Upgrade:
         if Path("/proc", pid, "status").stat().st_uid != 0 or Path("/proc", pid, "cmdline").read_bytes().rstrip(b"\0").split(b"\0") != [v.encode() for v in command]:
             raise ValueError("The running service is not the exact reviewed helper")
 
+    def image_config_digest(self, image):
+        # New image stores report a manifest digest as .Id; older stores report
+        # the configuration digest. Export the pinned immutable runtime to prove
+        # its configuration bytes against the transfer archive on either engine.
+        with tempfile.TemporaryDirectory(prefix="nct-console-image-check-") as folder:
+            archive = Path(folder) / "image.tar"
+            self.engine.command("save", "-o", str(archive), image)
+            with tarfile.open(archive) as stream:
+                manifests = json.load(stream.extractfile("manifest.json"))
+                if len(manifests) != 1:
+                    raise ValueError("Expected one exact console image")
+                member = stream.getmember(manifests[0]["Config"])
+                if not member.isfile() or member.size > 1024**2:
+                    raise ValueError("Invalid console image configuration")
+                return "sha256:" + hashlib.sha256(stream.extractfile(member).read()).hexdigest()
+
     def preflight(self):
         protected(self.path)
         protected(self.path.parent, True)
@@ -135,7 +153,7 @@ class Upgrade:
         image = json.loads(self.engine.command("image", "inspect", self.image))[0]
         env = dict(v.split("=", 1) for v in image["Config"].get("Env", []) if "=" in v)
         expected = release["images"][release["console_image"]]["archive_config_digest"]
-        if image["Id"] != expected or env.get("NCT_BUILD_COMMIT") != release["commit"] or env.get("NCT_BUILD_ID") != release["build_id"]:
+        if self.image_config_digest(image["Id"]) != expected or env.get("NCT_BUILD_COMMIT") != release["commit"] or env.get("NCT_BUILD_ID") != release["build_id"]:
             raise ValueError("Use the pinned console from the new full release")
         bindings = {v["package"]:v["sha256"] for v in release["source_bindings"]}
         for name in (*FILES, "nct-upgrade-recovery.py", "build_nct_range_package.py"):
