@@ -45,6 +45,7 @@ class Engine:
     def create(self, name, config):
         runtime = copy.deepcopy(config)
         host = runtime.pop('HostConfig')
+        if host.get('OomKillDisable') is None:host['OomKillDisable']=False
         self.items[name] = {'Id':'new-console','Image':runtime['Image'], 'Config':runtime, 'HostConfig':host,
                            'Mounts':copy.deepcopy(self.items[next(k for k in self.items if '-before-' in k)]['Mounts']),
                            'State':{'Running':False}}
@@ -57,7 +58,9 @@ def fixture(tmp_path, monkeypatch):
     (state/'operation.json').write_text(json.dumps({'phase':'complete','id':'retained-operation','controller_sign_in_verified':True}))
     (state/'retained-receipt.json').write_bytes(b'retained receipt')
     config = {'contract':'nct-update-v1','console_image_id':upgrade_module.OLD_CONSOLE,'console_container':'console',
-              'container':'nct','state_dir':str(state),'maintenance_lock':str(tmp_path/'deployment/maintenance.lock')}
+              'container':'nct','state_dir':str(state),'data_dir':str(tmp_path/'data'),
+              'launch_socket':str(state/'sockets/launch/launch.sock'),'control_socket':str(state/'sockets/control/control.sock'),
+              'maintenance_lock':str(tmp_path/'deployment/maintenance.lock')}
     path = installed/'config.json'
     host_module.save(path, config)
     bindings = []
@@ -75,11 +78,12 @@ def fixture(tmp_path, monkeypatch):
     (source.parent/'release.json').write_text(json.dumps(release));write_manifest(source.parent)
     app = {'Id':'app-id','Image':'app-image','State':{'Running':True},'Config':{'Env':['NCT_BUILD_ID='+upgrade_module.R3,'NCT_BUILD_COMMIT='+upgrade_module.R3_COMMIT]},'HostConfig':{},
            'Mounts':[{'Type':'bind','Source':str(tmp_path/('server.'+ext)),'Destination':'/run/tls/nct-server.'+ext,'RW':False} for ext in ('crt','key')]}
+    app['Mounts'].append({'Type':'bind','Source':config['data_dir'],'Destination':'/data','RW':True})
     mounts = [{'Type':'bind','Source':str(src),'Destination':dst,'RW':rw} for src,dst,rw in (
         (state/'sockets/control','/run/nct-recovery',False),(state/'spool','/staging',True),
         (tmp_path/'server.crt','/run/tls/server.crt',False),(tmp_path/'server.key','/run/tls/server.key',False))]
     console = {'Id':'old-console','Image':upgrade_module.OLD_CONSOLE,'Config':{'Image':upgrade_module.OLD_CONSOLE,'Env':['NCT_BUILD_ID=old-console','NCT_BUILD_COMMIT=old-source','KEEP=retained']},
-               'State':{'Running':False},'Mounts':mounts,'HostConfig':{'ReadonlyRootfs':True,'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true']}}
+               'State':{'Running':False},'Mounts':mounts,'HostConfig':{'ReadonlyRootfs':True,'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true'],'OomKillDisable':None}}
     engine = Engine({'nct':app,'console':console},image)
     calls = []
     upgrade = upgrade_module.Upgrade(path,source,'new-console',engine=engine,service=calls.append,unit=unit)
@@ -100,7 +104,7 @@ def test_helper_upgrade_preserves_app_evidence_receipts_and_runtime(tmp_path,mon
     assert upgrade.config['console_image_id'] == upgrade_module.OLD_CONSOLE
     assert json.loads(upgrade.path.read_text())['console_image_id'] == engine.image['Id']
     assert json.loads(upgrade.journal_path.read_text())['phase'] == 'complete'
-    assert engine.items['console']['HostConfig'] == next(v['HostConfig'] for k,v in engine.items.items() if '-before-' in k)
+    assert upgrade_module.host_configuration(engine.items['console']['HostConfig']) == upgrade_module.host_configuration(next(v['HostConfig'] for k,v in engine.items.items() if '-before-' in k))
     assert not engine.items['console']['State']['Running']
     assert set(engine.items['console']['Config']['Env']) == {'KEEP=retained','NCT_BUILD_ID=new-release','NCT_BUILD_COMMIT='+'c'*40}
     assert not any(command[1] == 'app-id' for command in engine.commands if len(command)>1)
@@ -213,3 +217,10 @@ def test_new_image_store_runtime_id_is_bound_to_exported_config_bytes(tmp_path,m
         with pytest.raises(ValueError):method(upgrade,'sha256:runtime-manifest')
     else:
         assert method(upgrade,'sha256:runtime-manifest')=='sha256:'+hashlib.sha256(payload).hexdigest()
+
+
+def test_only_equivalent_oom_default_is_normalized():
+    normalize=upgrade_module.host_configuration
+    assert normalize({'OomKillDisable':None})==normalize({'OomKillDisable':False})
+    assert normalize({'OomKillDisable':True})!=normalize({'OomKillDisable':False})
+    assert normalize({'ReadonlyRootfs':None})!=normalize({'ReadonlyRootfs':False})

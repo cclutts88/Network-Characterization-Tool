@@ -49,10 +49,19 @@ def protected(path, directory=False):
     return path
 
 
+def host_configuration(value):
+    value = copy.deepcopy(value)
+    # Docker may materialize the unset default as False after create. Both mean
+    # the OOM killer remains enabled; True is deliberately never normalized away.
+    if value.get("OomKillDisable") is None:
+        value["OomKillDisable"] = False
+    return value
+
+
 def fingerprint(item):
     # Docker inspection order is not an identity. Runtime counters are not config.
     return hashlib.sha256(canonical({"Id": item["Id"], "Image": item["Image"],
-        "Config": item["Config"], "HostConfig": item["HostConfig"],
+        "Config": item["Config"], "HostConfig": host_configuration(item["HostConfig"]),
         "Mounts": sorted(item["Mounts"], key=lambda m: canonical(m))})).hexdigest()
 
 
@@ -136,6 +145,11 @@ class Upgrade:
         protected(self.path.parent, True)
         protected(self.state, True)
         protected(self.unit)
+        for kind in ("launch", "control"):
+            protected(self.state / ("sockets/" + kind), True)
+            if self.config.get(kind + "_socket") != str(self.state / ("sockets/" + kind) / (kind + ".sock")):
+                raise ValueError("Management socket configuration changed")
+        protected(self.state / "spool", True)
         if json.loads(self.path.read_text()) != self.config:
             raise ValueError("Installed helper configuration changed")
         protected(Path(self.config["maintenance_lock"]).parent, True)
@@ -160,6 +174,12 @@ class Upgrade:
             if digest_file(self.source / name) != bindings.get("scripts/" + name):
                 raise ValueError("Release helper sources do not match the checked full package")
         app = self.engine.inspect(self.config["container"])
+        data_mounts = [m for m in app["Mounts"] if m["Destination"] == "/data"]
+        if (len(data_mounts) != 1 or data_mounts[0]["Type"] != "bind"
+            or data_mounts[0]["Source"] != self.config.get("data_dir") or not data_mounts[0]["RW"]
+            or app["HostConfig"].get("Privileged")
+            or any(m["Destination"].startswith("/data/") or m["Destination"] in {"/", "/run/docker.sock", "/var/run/docker.sock"} for m in app["Mounts"])):
+            raise ValueError("The application no longer has the supported evidence and host-access configuration")
         env = dict(v.split("=", 1) for v in app["Config"].get("Env", []) if "=" in v)
         if (env.get("NCT_BUILD_ID"), env.get("NCT_BUILD_COMMIT")) != (R3, R3_COMMIT) or app["State"].get("Running") is not True:
             raise ValueError("This helper upgrade requires the running supported Recovery-r3 application")
@@ -321,7 +341,7 @@ class Upgrade:
             config.pop("Hostname", None)
             compare = copy.deepcopy(expected)
             compare.pop("HostConfig", None)
-            if config != compare or orphan["HostConfig"] != expected.get("HostConfig"):
+            if config != compare or host_configuration(orphan["HostConfig"]) != host_configuration(expected.get("HostConfig", {})):
                 raise ValueError("Interrupted candidate identity changed; administrator review required")
             journal["new_console_id"] = orphan["Id"]
             self.phase(journal, "rollback_intent")

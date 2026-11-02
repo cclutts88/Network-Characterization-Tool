@@ -10004,3 +10004,11 @@ verified release archive; retain its engine runtime ID for subsequent container
 guards. Repeat exact-package qualification after this source correction. No Range
 change or ready-for-transfer claim. Initial broad regression suite: 2362 passed,
 22 platform-dependent skips; exact newly built-runtime suite remains in progress.
+
+The deliberately injected real-Docker interruption immediately after console
+creation exposed another conservative halt: Docker materializes the unset
+OomKillDisable default from null to false. Both preserve enabled OOM protection.
+Normalize only that equivalent default when comparing host configuration, retaining
+all other fields and explicitly rejecting true or unrelated drift. Unit fixtures
+now reproduce this actual engine behavior. Preserve the failed rehearsal journal;
+repeat crash recovery and exact-package acceptance from the corrected commit.

@@ -168,7 +168,7 @@ def seal(root, acceptance, output):
         proof = result.get("helper_upgrade_result", {})
         source = release["helper_upgrade_source"]
         required = ("ca_verified", "app_unchanged_by_helper_upgrade", "existing_receipt_preserved",
-                    "existing_account_preserved", "app_update_and_backup_restore", "later_evidence_preserved")
+                    "existing_account_preserved", "app_update_and_backup_restore", "later_evidence_preserved", "crash_after_create_recovered")
         if (proof.get("result") != "pass" or proof.get("tested_manifest_sha256") != tested
             or proof.get("commit") != release["commit"] or proof.get("images") != release["images"]
             or proof.get("source_build") != source["build_id"] or proof.get("source_commit") != source["build_commit"]

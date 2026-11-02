@@ -25,6 +25,7 @@ def main():
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--package',type=Path,required=True)
     parser.add_argument('--baseline-tools',type=Path,required=True)
+    parser.add_argument('--exercise-crash-after-create',action='store_true')
     args = parser.parse_args()
     root = args.root
     if root.name != '_data' or not root.parent.name.startswith('nct-helper-upgrade-') or root.parent.parent != Path('/var/lib/docker/volumes') or any(root.iterdir()):
@@ -117,6 +118,28 @@ def main():
         engine.command('start',console)
         upgrade.ready(config)
         engine.command('stop',console)
+        if args.exercise_crash_after_create:
+            class InjectedPowerLoss(BaseException):pass
+            create=engine.create
+            def crash(name,runtime):
+                result=create(name,runtime)
+                engine.create=create
+                raise InjectedPowerLoss()
+            engine.create=crash
+            try:
+                upgrade.apply()
+            except InjectedPowerLoss:
+                assert 'new_console_id' not in json.loads(upgrade.journal_path.read_text())
+            else:
+                raise AssertionError('The injected interruption did not occur')
+            upgrade.rollback()
+            assert engine.inspect(config['console_container'])['Id']==console
+            assert module.fingerprint(engine.inspect(name))==before
+            assert (state/'operation.json').read_bytes()==receipt
+            assert json.loads(upgrade.journal_path.read_text())['phase']=='rolled_back'
+            # Preserve the finished private rehearsal journal before the fresh attempt.
+            upgrade.journal_path.rename(root/'crash-after-create-rollback.json')
+            print('PASS: immediate-after-create power loss recovered against real Docker defaults.',flush=True)
         upgrade.apply()
         assert module.fingerprint(engine.inspect(name))==before
         assert (state/'operation.json').read_bytes()==receipt
@@ -158,6 +181,7 @@ def main():
                 'old_helper_sha256':next(iter(module.BASE_HASHES['nct_update_host.py'])),'ca_verified':True,
                 'systemd_substitution':'controlled exact helper process','app_unchanged_by_helper_upgrade':True,
                 'existing_receipt_preserved':True,'existing_account_preserved':True,'app_update_and_backup_restore':True,'later_evidence_preserved':True}
+        result['crash_after_create_recovered']=args.exercise_crash_after_create
         host_module.save(root/'acceptance.json',result)
         print('PASS: existing R3 helper/console upgrade, real TLS/account/evidence checks, GUI app update and backup restore.',flush=True)
     finally:

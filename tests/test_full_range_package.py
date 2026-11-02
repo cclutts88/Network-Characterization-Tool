@@ -56,7 +56,7 @@ def test_helper_delivery_requires_its_own_exact_package_acceptance(tmp_path,dama
     result=evidence(root)
     proof={'result':'pass','tested_manifest_sha256':result['tested_manifest_sha256'],'commit':release['commit'],
            'images':release['images'],'source_build':'r3','source_commit':'b'*40,'old_helper_sha256':'c'*64,'old_console':'old-console',
-           **{k:True for k in ('ca_verified','app_unchanged_by_helper_upgrade','existing_receipt_preserved','existing_account_preserved','app_update_and_backup_restore','later_evidence_preserved')}}
+           **{k:True for k in ('ca_verified','app_unchanged_by_helper_upgrade','existing_receipt_preserved','existing_account_preserved','app_update_and_backup_restore','later_evidence_preserved','crash_after_create_recovered')}}
     if damage=='wrong_source':proof['source_commit']='unknown'
     elif damage=='wrong_image':proof['images']={}
     elif damage=='missing_restore':del proof['app_update_and_backup_restore']
