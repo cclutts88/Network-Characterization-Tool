@@ -479,6 +479,67 @@ def test_configuration_change_invalidates_apply_without_stopping_original(tmp_pa
     assert host.read()["phase"] == "validated"
 
 
+def mount_plan(tmp_path):
+    host, engine = planned_host(tmp_path)
+    engine.items["old"]["Mounts"].append({"Destination": "/reference", "Type": "bind",
+        "Source": "/reference-source", "RW": False, "Mode": "ro", "Propagation": "rprivate"})
+    state = host.read()
+    state["original"] = engine.inspect("old")
+    host_module.save(host.root / "operation.json", state)
+    return host, engine
+
+
+def test_reordered_mounts_allow_full_backup_and_apply(tmp_path):
+    host, engine = mount_plan(tmp_path)
+    original = host.read()["original"]
+    engine.items["old"]["Mounts"].reverse()
+    host.apply("d" * 64, "analyst")
+    state = host.read()
+    assert state["phase"] == "awaiting_sign_in"
+    assert state["backup_verified"] and state["evidence_verified"]
+    assert state["original"] == original
+    assert state["plan_digest"] == "d" * 64
+
+
+@pytest.mark.parametrize("field,value", [
+    ("Source", "/different"), ("Destination", "/different"), ("Type", "volume"),
+    ("RW", True), ("Mode", "rw"), ("Propagation", "shared"),
+    ("Options", {"changed": True}), ("Unexpected", "new-value"),
+])
+def test_actual_mount_drift_refused_before_any_stop(tmp_path, field, value):
+    host, engine = mount_plan(tmp_path)
+    engine.items["old"]["Mounts"][1][field] = value
+    before = host.read()
+    with pytest.raises(ValueError, match="configuration changed"):
+        host.apply("d" * 64, "analyst")
+    assert host.read() == before
+    assert not any(call[0] in {"stop", "rename", "start"} for call in engine.calls)
+    assert not (host.root / before["id"] / "backup.tar.gz").exists()
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate", "image", "config", "hostconfig"])
+def test_runtime_drift_refused_before_fence(tmp_path, change):
+    host, engine = mount_plan(tmp_path)
+    current = engine.items["old"]
+    if change == "missing":
+        current["Mounts"].pop()
+    elif change == "duplicate":
+        current["Mounts"].append(copy.deepcopy(current["Mounts"][1]))
+    elif change == "image":
+        current["Image"] = "sha256:" + "f" * 64
+    elif change == "config":
+        current["Config"]["Env"].reverse()
+        current["Config"]["Env"].append("CHANGED=1")
+    else:
+        current["HostConfig"]["RestartPolicy"]["MaximumRetryCount"] = 9
+    before = host.read()
+    with pytest.raises(ValueError, match="configuration changed"):
+        host.apply("d" * 64, "analyst")
+    assert host.read() == before
+    assert engine.inspect("old")["State"]["Running"]
+    assert not any(call[0] in {"stop", "rename", "start"} for call in engine.calls)
+
+
 @pytest.mark.parametrize("crash_at", ["unlink", "normal_start"])
 def test_final_restart_replays_without_losing_new_normal_outputs(tmp_path, monkeypatch, crash_at):
     class Crash(BaseException):

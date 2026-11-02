@@ -9746,3 +9746,61 @@ main promotion is made. Stop here at user direction; preserve receipts and packa
 Range transfer and shut down the local test environments and workstation.
 
 Final local gate: CLEAR - DOCUMENTED DEVIATION. Independent reviewer verified the package, corrected HTTPS receipts, GUI completion, retained XML file checksum and preserved runtime/evidence. Novice image review: CLEAR. Target acceptance remains open.
+
+### 2026-11-02 — Range R3 preflight and recovery-console usability resumed
+
+Rechecked clean foundation HEAD 3a8bba1 and the sealed R3 application-only package;
+its size and SHA256 still match the locally qualified release. Range acceptance
+remains pending live access: no work Range browser/controller is currently open.
+Requested the operator open the logged-in work Range. No target changes made.
+
+In parallel, review a bounded console-only reliability correction: temporary status
+connection failures currently expose the emergency access-code form. Preserve the
+helper's explicit authorization rejection separately from transport/validation errors,
+retain the last reviewed operation during connection loss, disable action controls
+until current status returns, and offer retry without replaying a mutation. Clarify
+emergency-code versus NCT-account purpose and the normal sign-in after verification.
+Do not change session lifetime, authentication, permissions, host update transactions,
+TLS checks or sealed package bytes. A future separately qualified console delivery
+is required; app-only R3 cannot deliver these source changes to the pinned console.
+Completion requires real transport/API checks, UI reconnect/auth tests, two-palette
+browser/novice checks and independent review. This is not a general simplification
+of update safeguards or a claim that the existing console has been upgraded.
+
+### 2026-11-02 — Live Range validation; mount-order compatibility correction started
+
+The sealed R3 package reached the analyst workstation by SCP and its exact checksum
+matched the qualified source. Live preflight found the supported R2 build, no active
+unfinished work, and captured private runtime/evidence baselines. GUI upload and
+package validation passed. Apply was refused before stopping NCT: the older Docker
+engine returned the same complete mount records in a different list order. Image,
+application configuration and host configuration remained identical; NCT stayed up.
+
+Documented deployment deviation: correct the trusted host helper's stale-plan check
+to compare sorted canonical complete mount records, preserving duplicates and every
+field, while keeping all other runtime checks exact. Do not edit the saved plan or
+package. Preserve the installed helper and patch receipt, verify its known base hash,
+then qualify the bounded correction independently before normal GUI retry. This is
+a separate host compatibility correction, not content delivered by app-only R3.
+Focused transaction tests: 55 passed, one Node wrapper skipped; reordered mounts
+complete backup/apply, actual mount and runtime changes fail before stopping NCT.
+Target update/evidence/account/XML acceptance remains pending.
+
+The live verified-base helper correction was independently cleared (76 tests passed,
+one Node wrapper skipped), compiled/imported under the selected host Python and
+installed atomically with the original, operation and before/after hashes preserved
+in private receipts. Restarting the helper invalidated the prior validation through
+the existing restart fence. Normal GUI recovery is being used to reconcile that
+pre-write operation before fresh package validation. No candidate had been created,
+no candidate writes occurred and no backup existed: this path checks/restarts the
+unchanged original installation without a data swap or backup restoration. Account
+verification remains required. No operation journal or package was edited.
+
+Live reconciliation reached existing-account verification on the original R2 build;
+retained evidence verification passed, with no candidate write flag, backup or
+quarantine/data swap. The operator must complete the existing-account sign-in check
+before the fresh R3 upload can proceed. The pinned console's generic restore wording
+is misleading for this pre-write path; record a future copy correction rather than
+claiming a backup restore occurred. Latest combined focused run: 84 passed, one
+Node wrapper skipped. Independent host correction gate: CLEAR - DOCUMENTED DEVIATION.
+R3 target installation and historical XML download are still not complete.

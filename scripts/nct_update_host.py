@@ -825,7 +825,10 @@ class Host:
             if state["phase"] != "validated" or not secrets.compare_digest(state["plan_digest"], plan_digest):
                 raise ValueError("Apply requires the current validated plan")
             current = self.target(expected_id=state["original"]["Id"])
-            if any(current.get(key) != state["original"].get(key) for key in ("Image", "Config", "HostConfig", "Mounts")):
+            # Docker may return inspect mounts in a different order. Compare every
+            # full record, preserving duplicates, while retaining exact config checks.
+            if (any(current.get(key) != state["original"].get(key) for key in ("Image", "Config", "HostConfig"))
+                    or sorted(map(canonical, current["Mounts"])) != sorted(map(canonical, state["original"]["Mounts"]))):
                 raise ValueError("NCT configuration changed after validation; review a fresh plan")
             if not current["State"]["Running"]:
                 raise ValueError("NCT stopped after validation; investigate before applying this update")
