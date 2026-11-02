@@ -74,6 +74,7 @@ def enable_console(host, original, container, *, require_reconciled=False, locke
         env = dict(value.split("=", 1) for value in original["Config"]["Env"] if "=" in value)
         build = {"build_id": env.get("NCT_BUILD_ID"), "build_commit": env.get("NCT_BUILD_COMMIT")}
         operation = {"id": operation_id, "kind": "enable_console", "actor": "host-installer",
+            "candidate_may_have_written": False,
             "original": original, "original_build": build, "manifest": build,
             "candidate_image_id": original["Image"], "prior_operation_id": prior_id, **build}
         host.phase(operation, "fence_intent", detail="Enabling the independent console on the exact existing NCT image.")

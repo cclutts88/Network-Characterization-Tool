@@ -89,7 +89,7 @@ def stage(source, output, image, console, commit, build_id):
     (output / "offline-images").mkdir()
     tracked = command("git", "-C", str(source), "ls-tree", "-r", "--name-only", commit).splitlines()
     selected = [name for name in tracked if name.startswith("scripts/nct-") and Path(name).suffix in {".py", ".sh"}]
-    selected += ["scripts/nct-package-sources.json", "scripts/install_nct_recovery.py", "scripts/nct_update_host.py", "scripts/nct_update_work.py", "scripts/build_nct_update.py", "scripts/setup-lab-https.sh",
+    selected += ["scripts/nct-package-sources.json", "scripts/install_nct_recovery.py", "scripts/nct_update_host.py", "scripts/nct_update_work.py", "scripts/build_nct_update.py", "scripts/build_nct_range_package.py", "scripts/setup-lab-https.sh",
         "compose.range.yaml", "compose.arkime.yaml", "Caddyfile", "docs/NCT_UPDATES_AND_RECOVERY.md", "docs/ARKIME_CONNECTOR_RANGE_SETUP.md", "docs/RANGE_UPDATER_PACKAGE.md"]
     bindings = []
     for name in selected:
@@ -130,6 +130,15 @@ def stage(source, output, image, console, commit, build_id):
         "images": images, "source_bindings": bindings, "schema_gate": "exact-supported-v7-or-v8-to-v8-disposable-image-gate",
         "supported_sources": json.loads((output / "scripts/nct-package-sources.json").read_text()),
         "range_accepted": False, "kubernetes_updater_available": False}
+    from build_nct_update import build
+    r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
+    # Terminal installer acceptance is not GUI-update acceptance.
+    sources = [r3]
+    update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
+    release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
+    release["helper_upgrade_source"] = {**r3,
+        "host_sha256":"00204d190fc8802d334f7c93834a3aa439792317f631db96ef01ebceeb4b00bc",
+        "console_image_id":"sha256:4c1f8e8d5178710ee4f08ca891b356831ff631e30cccf4e8ef955c53731c94fd"}
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     write_manifest(output)
     return release
@@ -155,6 +164,17 @@ def seal(root, acceptance, output):
             seen.add(identity)
         if seen != expected:
             raise ValueError("Every supported source needs its own exact-package acceptance")
+    if release.get("helper_upgrade_source"):
+        proof = result.get("helper_upgrade_result", {})
+        source = release["helper_upgrade_source"]
+        required = ("ca_verified", "app_unchanged_by_helper_upgrade", "existing_receipt_preserved",
+                    "existing_account_preserved", "app_update_and_backup_restore", "later_evidence_preserved")
+        if (proof.get("result") != "pass" or proof.get("tested_manifest_sha256") != tested
+            or proof.get("commit") != release["commit"] or proof.get("images") != release["images"]
+            or proof.get("source_build") != source["build_id"] or proof.get("source_commit") != source["build_commit"]
+            or proof.get("old_helper_sha256") != source["host_sha256"] or proof.get("old_console") != source["console_image_id"]
+            or not all(proof.get(k) is True for k in required)):
+            raise ValueError("The exact installed-helper upgrade needs its own qualified acceptance")
     (root / "VALIDATION.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     write_manifest(root)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:

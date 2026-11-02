@@ -47,6 +47,28 @@ def test_seal_binds_tested_files_and_includes_checksums_in_one_transfer(tmp_path
     package.verify_manifest(root)
 
 
+@pytest.mark.parametrize('damage',[None,'missing','wrong_source','wrong_image','missing_restore','wrong_manifest'])
+def test_helper_delivery_requires_its_own_exact_package_acceptance(tmp_path,damage):
+    root=staged(tmp_path)
+    release=json.loads((root/'release.json').read_text())
+    release['helper_upgrade_source']={'build_id':'r3','build_commit':'b'*40,'host_sha256':'c'*64,'console_image_id':'old-console'}
+    (root/'release.json').write_text(json.dumps(release));package.write_manifest(root)
+    result=evidence(root)
+    proof={'result':'pass','tested_manifest_sha256':result['tested_manifest_sha256'],'commit':release['commit'],
+           'images':release['images'],'source_build':'r3','source_commit':'b'*40,'old_helper_sha256':'c'*64,'old_console':'old-console',
+           **{k:True for k in ('ca_verified','app_unchanged_by_helper_upgrade','existing_receipt_preserved','existing_account_preserved','app_update_and_backup_restore','later_evidence_preserved')}}
+    if damage=='wrong_source':proof['source_commit']='unknown'
+    elif damage=='wrong_image':proof['images']={}
+    elif damage=='missing_restore':del proof['app_update_and_backup_restore']
+    elif damage=='wrong_manifest':proof['tested_manifest_sha256']='0'*64
+    if damage!='missing':result['helper_upgrade_result']=proof
+    receipt=tmp_path/'acceptance.json';receipt.write_text(json.dumps(result))
+    if damage:
+        with pytest.raises(ValueError,match='installed-helper upgrade'):package.seal(root,receipt,tmp_path/'release.zip')
+    else:
+        package.seal(root,receipt,tmp_path/'release.zip')
+
+
 @pytest.mark.parametrize("change", ["tamper", "extra", "wrong_commit", "wrong_manifest", "failed"])
 def test_seal_rejects_changed_or_unaccepted_payload(tmp_path, change):
     root = staged(tmp_path)

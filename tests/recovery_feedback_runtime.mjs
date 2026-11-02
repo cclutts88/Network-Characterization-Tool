@@ -9,7 +9,7 @@ const elements = new Map();
 function element(id) {
   if (!elements.has(id)) elements.set(id, {
     hidden: false, textContent: '', value: '', files: [{}], children: [],
-    replaceChildren() { this.children = []; }, append(child) { this.children.push(child); },
+    removeAttribute(name) {delete this[name];}, replaceChildren() { this.children = []; }, append(child) { this.children.push(child); },
   });
   return elements.get(id);
 }
@@ -117,6 +117,7 @@ context.location.assign=url=>{destination=url;};
 context.fetch=async(url)=>{
   verifyCalls.push(url);
   if(url==='/api/verify-sign-in') return new Promise(resolve=>{finishVerification=resolve;});
+  if(url==='/api/status') return {ok:true,json:async()=>({...state,operation:{...state.operation,phase:'release_intent',activity:{active:true,label:'Finishing restart'}}})};
   return {ok:true,json:async()=>({})};
 };
 element('password').value='synthetic-only';
@@ -130,13 +131,15 @@ assert.equal(element('verifyButton').disabled,true);
 assert.equal(destination,undefined);
 await element('verifyForm').onsubmit({preventDefault(){}});
 poll();await new Promise(resolve=>setImmediate(resolve));
-assert.deepEqual(verifyCalls,['/api/verify-sign-in']);
+assert.deepEqual(verifyCalls,['/api/verify-sign-in','/api/status']);
+assert.equal(element('verifySection').hidden,false);
+assert.match(element('currentStep').textContent,/Finishing restart/);
 finishVerification({ok:true,json:async()=>({url:'/nct',operation:{phase:'complete',controller_sign_in_verified:true}})});
 await pending;
 assert.equal(destination,'/nct');
 assert.match(element('verifyFeedback').textContent,/Sign-in and final restart verified/);
 assert.equal(element('verifyProgress').hidden,true);
-assert.deepEqual(verifyCalls,['/api/verify-sign-in','/api/close']);
+assert.deepEqual(verifyCalls,['/api/verify-sign-in','/api/status','/api/close']);
 
 for(const problem of ['refused','connection','close']){
   destination=undefined;const calls=[];
@@ -171,3 +174,20 @@ for(const response of [null,{}, {url:'/nct',operation:{phase:'release_intent',co
 }
 assert.ok(!element('verifyFeedback').textContent.includes('synthetic-only'));
 console.log('Recovery feedback persists across polling; upload, restore, connection and account verification checks passed.');
+
+// Progress reports measured work only, and legacy recovery never implies a backup swap.
+for(const [activity,expected] of [[{active:true,label:'Saving backup',completed:5,total:10,unit:'bytes'},/5 of 10 bytes/],[{active:true,label:'Checking data'},/no measurable total/],[{active:true,completed:20,total:10,unit:'bytes'},/no measurable total/]]){
+  state.operation={phase:'fence_intent',activity};
+  context.fetch=async()=>({ok:true,json:async()=>state});await vm.runInContext('refresh()',context);
+  assert.match(element('activityMeasurement').textContent,expected);
+  assert.match(element('nctObservation').textContent,/unavailable/);
+}
+state.operation={phase:'interrupted'};await vm.runInContext('refresh()',context);assert.match(element('nextAction').textContent,/administrator/);
+state.operation.recovery_guidance='original_reconciliation';await vm.runInContext('refresh()',context);assert.equal(element('rollback').textContent,'Resume original NCT');
+state.runtime={available:true,running:false};await vm.runInContext('refresh()',context);assert.match(element('nctObservation').textContent,/stopped/);
+
+const NativeDate=Date;let clock=0;context.Date=class extends NativeDate{static now(){return clock;}};
+state.observed_at=100;state.operation={phase:'fence_intent',activity:{active:true,started_at:90,updated_at:95,label:'Slow backup'}};
+await vm.runInContext('refresh()',context);clock=60000;await vm.runInContext('updateActivityTimes()',context);
+assert.match(element('activityAge').textContent,/Time in this step: 70 seconds/);assert.match(element('activityAge').textContent,/65 seconds ago/);assert.match(element('activityAge').textContent,/not reported a new checkpoint/);
+state.operation.activity.active=false;state.operation.phase='complete';await vm.runInContext('refresh()',context);clock+=60000;await vm.runInContext('updateActivityTimes()',context);assert.ok(!element('activityAge').textContent.includes('not reported a new checkpoint'));

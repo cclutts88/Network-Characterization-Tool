@@ -131,10 +131,13 @@ class Docker:
     def inventory(self):
         return self.api("GET", "/containers/json?all=true")
 
-    def api(self, method, path, body=None):
-        connection = http.client.HTTPConnection("localhost", timeout=60)
+    def observe(self, name):
+        return self.api("GET", "/containers/" + urllib.parse.quote(name, safe="") + "/json", timeout=3)
+
+    def api(self, method, path, body=None, *, timeout=60):
+        connection = http.client.HTTPConnection("localhost", timeout=timeout)
         connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.sock.settimeout(60)
+        connection.sock.settimeout(timeout)
         connection.sock.connect("/var/run/docker.sock")
         try:
             connection.request(method, path, None if body is None else canonical(body),
@@ -338,7 +341,7 @@ class Host:
                 except Exception as exc:
                     self.phase(state, "interrupted", detail="Final verification requires review: " + str(exc)[:300])
             elif state.get("phase") not in TERMINAL and state.get("phase") not in {"awaiting_sign_in", "awaiting_restore_sign_in", "awaiting_repair_sign_in"}:
-                self.phase(state, "interrupted", detail="Host service restarted. Inspect and restore the verified backup before continuing.")
+                self.phase(state, "interrupted", detail="Host service restarted. Review the saved operation and recovery diagnostics before continuing.")
         if reconcile:
             for receipt in self.root.glob("nct-maintenance-helper-*.json"):
                 item = json.loads(receipt.read_text())
@@ -387,6 +390,8 @@ class Host:
         return json.loads(self.current.read_text()) if self.current.exists() else {"phase": "idle"}
 
     def phase(self, state, phase, **values):
+        if state.get("activity"):
+            state["activity"] = {**state["activity"], "active": False}
         state.update(values, phase=phase, updated_at=time.time())
         event = {"phase": phase, "at": state["updated_at"], "actor": state.get("actor"),
                  "plan_digest": state.get("plan_digest"), "original_id": state.get("original", {}).get("Id"),
@@ -398,6 +403,52 @@ class Host:
         save(self.current, state)
         receipt = self.root / (state["id"] + ".json")
         save(receipt, state)
+
+    def activity(self, state, step, label, *, completed=None, total=None, unit=None, force=False):
+        """Bounded display checkpoint under the operation lock, never a work authority."""
+        now = time.time()
+        previous = state.get("activity", {})
+        fresh = previous.get("step") != step or not previous.get("active")
+        value = {"step": step, "label": label, "started_at": now if fresh else previous["started_at"],
+                 "updated_at": now, "active": True}
+        if completed is not None:
+            if type(completed) is not int or completed < 0 or type(total) is not int or total < completed or unit not in {"bytes", "files"}:
+                raise ValueError("Invalid measured activity")
+            value.update(completed=completed, total=total, unit=unit)
+        # A single writer owns these calls; do not let an obsolete checkpoint
+        # overwrite a newer operation/phase after interruption or finalization.
+        if not fresh and not force and 0 <= now - previous["updated_at"] < 2:
+            return
+        saved = self.read()
+        if (saved.get("id"), saved.get("phase")) != (state.get("id"), state.get("phase")):
+            raise ValueError("Activity no longer belongs to the current operation")
+        state["activity"] = value
+        save(self.current, state)
+        # No event per file and no growing per-artifact progress history.
+
+    @contextlib.contextmanager
+    def activity_scope(self):
+        """End display activity on return/error while still holding the work lock."""
+        operation = self.read().get("id")
+        try:
+            yield
+        finally:
+            state = self.read()
+            if state.get("id") == operation and state.get("activity", {}).get("active"):
+                state["activity"]["active"] = False
+                save(self.current, state)
+
+    def measured_digest(self, path, state, step, label):
+        total, completed = path.stat().st_size, 0
+        digest = hashlib.sha256()
+        self.activity(state, step, label, completed=0, total=total, unit="bytes", force=True)
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024**2), b""):
+                digest.update(block)
+                completed += len(block)
+                self.activity(state, step, label, completed=completed, total=total, unit="bytes")
+        self.activity(state, step, label, completed=completed, total=total, unit="bytes", force=True)
+        return digest.hexdigest()
 
     def target(self, *, expected_id=None, name=None):
         target = self.engine.inspect(name or self.config["container"])
@@ -504,8 +555,28 @@ class Host:
 
     def public(self):
         state = self.read()
-        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind"}
-        return {k: v for k, v in state.items() if k in allowed}
+        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome"}
+        value = {k: v for k, v in state.items() if k in allowed}
+        marker = state.get("candidate_may_have_written")
+        value["recovery_guidance"] = "backup_restore" if marker is True else "original_reconciliation" if marker is False else "unknown"
+        value["installed_build_id"] = state.get("original_build", {}).get("build_id")
+        return value
+
+    def runtime_status(self):
+        observed = time.time()
+        try:
+            inspect = getattr(self.engine, "observe", self.engine.inspect)
+            target = inspect(self.config["container"])
+            operation = self.read()
+            known = {operation.get("original", {}).get("Id"), operation.get("candidate_id")}
+            if operation.get("original") and target.get("Id") not in known:
+                raise ValueError("Configured runtime identity changed")
+            state = target["State"]
+            if type(state.get("Running")) is not bool or not isinstance(state.get("Status"), str):
+                raise ValueError("Incomplete runtime observation")
+            return {"available": True, "observed_at": observed, "running": state["Running"], "status": state["Status"]}
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            return {"available": False, "observed_at": observed}
 
     def launch(self, actor):
         console = self.engine.inspect(self.config["console_container"])
@@ -593,6 +664,7 @@ class Host:
             if shutil.disk_usage(self.data).free < 3 * used + 1024**3:
                 raise ValueError("Insufficient space for a verified backup, restore and failed-data preservation")
             state = {"id": operation_id, "actor": actor, "manifest": manifest, "original": target,
+                     "candidate_may_have_written": False,
                      "candidate_image_id": candidate["Id"],
                      "package_sha256": digest_file(archive), "build_id": manifest["build_id"],
                      "build_commit": manifest["build_commit"], "original_build": original_build}
@@ -613,6 +685,7 @@ class Host:
         save(path, {"contract": "nct-update-pause-v1", "operation": state["id"], "actor": state["actor"]})
 
     def finalize(self, state):
+        self.activity(state, "final_restart", "Account verified — finishing NCT's restart and checking readiness", force=True)
         target = self.target(expected_id=state["verified_runtime_id"])
         expected_image = state["original"]["Image"] if state["verified_result_phase"] == "restored" else state["candidate_image_id"]
         if target["Image"] != expected_image:
@@ -637,6 +710,7 @@ class Host:
                     sync_directory(path.parent)
                 finally:
                     os.close(lock)
+            self.activity(state, "final_restart", "Account verified — finishing NCT's restart and checking readiness", force=True)
             target = self.target(expected_id=state["verified_runtime_id"])
             if not target["State"]["Running"]:
                 self.engine.command("start", target["Id"])
@@ -676,24 +750,44 @@ class Host:
         required = 3 * footprint + 1024**3
         if min(shutil.disk_usage(self.root).free, shutil.disk_usage(self.data.parent).free) < required:
             raise ValueError("Insufficient space for cold backup, independent verification and a later restore")
+        self.activity(state, "inventory", "Checking retained accounts and evidence before backup", force=True)
         inventory = self.helper(state["original"]["Image"], "snapshot")
         save(folder / "before.json", inventory)
         archive = folder / "backup.tar.gz"
         metadata = self.data.stat()
         state["data_metadata"] = {"uid": metadata.st_uid, "gid": metadata.st_gid, "mode": stat.S_IMODE(metadata.st_mode)}
+        completed = 0
+        self.activity(state, "backup_create", "Creating backup — source bytes processed", completed=0, total=footprint, unit="bytes", force=True)
+        host = self
+        class Reader:
+            def __init__(self, stream):
+                self.stream = stream
+            def read(self, size):
+                nonlocal completed
+                block = self.stream.read(size)
+                completed += len(block)
+                host.activity(state, "backup_create", "Creating backup — source bytes processed", completed=completed, total=footprint, unit="bytes")
+                return block
         with tarfile.open(archive, "w:gz", dereference=True) as output:
             # Reject links and special files before adding anything.
             for path in sorted(self.data.rglob("*")):
                 mode = path.lstat().st_mode
                 if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                     raise ValueError("Evidence contains a link or special file; backup refused")
-                output.add(path, arcname=path.relative_to(self.data).as_posix(), recursive=False)
+                info = output.gettarinfo(str(path), arcname=path.relative_to(self.data).as_posix())
+                if info.isfile():
+                    with path.open("rb") as source:
+                        output.addfile(info, Reader(source))
+                else:
+                    output.addfile(info)
+        self.activity(state, "backup_create", "Creating backup — source bytes processed", completed=completed, total=footprint, unit="bytes", force=True)
         with archive.open("rb") as stream:
             os.fsync(stream.fileno())
-        checksum = digest_file(archive)
+        checksum = self.measured_digest(archive, state, "backup_hash", "Checking the backup checksum")
         state["backup_sha256"] = checksum
         state["backup_unpacked_bytes"] = sum(p.stat().st_size for p in self.data.rglob("*") if p.is_file())
         restored = self.extract_backup(state, "backup-verification")
+        self.activity(state, "backup_compare", "Comparing independently restored backup with retained evidence", force=True)
         if self.helper(state["original"]["Image"], "snapshot", root=restored) != inventory:
             raise ValueError("Independently restored backup does not match retained evidence")
         self.remove_verification_copy(restored)
@@ -712,7 +806,7 @@ class Host:
     def extract_backup(self, state, name):
         folder = self.root / state["id"]
         archive = folder / "backup.tar.gz"
-        if digest_file(archive) != state["backup_sha256"]:
+        if self.measured_digest(archive, state, "restore_hash", "Checking backup integrity before extracting a separate copy") != state["backup_sha256"]:
             raise ValueError("Cold backup checksum failed; original data will not be replaced")
         destination = self.data.parent / ("nct-" + name + "-" + state["id"])
         if destination.exists():
@@ -728,6 +822,10 @@ class Host:
         if name == "restored":
             self.phase(state, "restore_extract_intent", restore_extraction_path=str(destination))
         destination.mkdir(mode=0o700)
+        total = state.get("backup_unpacked_bytes")
+        completed = 0
+        label = "Preparing the verified backup copy for installation recovery" if name == "restored" else "Extracting a separate backup verification copy — live evidence is unchanged"
+        self.activity(state, "backup_extract", label, completed=0 if type(total) is int else None, total=total, unit="bytes", force=True)
         with tarfile.open(archive, "r:gz") as source:
             for member in source:
                 path = Path(member.name)
@@ -741,7 +839,11 @@ class Host:
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                     with target.open("xb") as output:
-                        shutil.copyfileobj(source.extractfile(member), output)
+                        incoming = source.extractfile(member)
+                        for block in iter(lambda: incoming.read(1024**2), b""):
+                            output.write(block)
+                            completed += len(block)
+                            self.activity(state, "backup_extract", label, completed=completed if type(total) is int else None, total=total, unit="bytes")
                         output.flush()
                         os.fsync(output.fileno())
                     os.chmod(target, member.mode & 0o777)
@@ -751,6 +853,7 @@ class Host:
         os.chown(destination, metadata["uid"], metadata["gid"])
         sync_directory(destination)
         sync_directory(destination.parent)
+        self.activity(state, "backup_extract", label, completed=completed if type(total) is int else None, total=total, unit="bytes", force=True)
         return destination
 
     def compatibility(self, state, preview=False):
@@ -837,25 +940,30 @@ class Host:
             self.replacement(state)  # Refuse unsupported deployments before stopping.
             state["actor"] = actor
             self.phase(state, "fence_intent", detail="Stopping the original writer before checking and backing up evidence.")
+            self.activity(state, "stop", "Stopping NCT for the update", force=True)
             lock = None
             try:
                 self.stop_exact(state["original"])
                 lock = self.writer_lock()
+                self.activity(state, "saved_data", "Checking saved data and unfinished work — NCT is stopped", force=True)
                 self.checkpoint(state["original"]["Image"])
                 self.helper(state["original"]["Image"], "active")
                 self.compatibility(state)
                 self.backup(state)
                 self.phase(state, "backup_verified", detail="Cold backup was independently restored and matched. Replacing NCT.")
                 self.phase(state, "replace_intent", candidate_may_have_written=True)
+                self.activity(state, "install", "Installing the checked release — collection remains paused", force=True)
                 self.hold_collection(state)
                 rollback_name = "nct-rollback-" + state["id"]
                 self.engine.command("rename", state["original"]["Id"], rollback_name)
                 candidate = self.engine.create(self.config["container"], self.replacement(state))
                 self.phase(state, "candidate_created", candidate_id=candidate)
+                self.activity(state, "start", "Starting and checking the installed release", force=True)
                 os.close(lock)
                 lock = None
                 self.engine.command("start", candidate)
                 self.verify_health(state)
+                self.activity(state, "evidence", "Checking retained evidence in the installed release", force=True)
                 self.stop_exact(self.engine.inspect(candidate))
                 lock = self.writer_lock()
                 self.checkpoint(state["candidate_image_id"])
@@ -897,8 +1005,11 @@ class Host:
                 os.close(lock[0])
 
     def restore_locked(self, state, actor, original, current, lock):
-        self.phase(state, "restore_intent", actor=actor, controller_sign_in_verified=False, evidence_verified=False, completion_kind="backup_restore",
-            detail="Preserving candidate data and restoring the verified pre-update backup.")
+        restoring = bool(state.get("candidate_may_have_written"))
+        outcome = "backup_restore" if restoring else "original_reconciliation" if state.get("candidate_may_have_written") is False else "original_restart_unknown_history"
+        self.phase(state, "restore_intent", actor=actor, controller_sign_in_verified=False, evidence_verified=False, completion_kind=outcome,
+            detail="Restoring the verified backup and preserving later evidence separately." if restoring else "Checking and restarting the original installation. No backup data swap is being performed.")
+        self.activity(state, "recovery", state["detail"], force=True)
         if state.get("candidate_may_have_written"):
             if not state.get("backup_verified"):
                 raise ValueError("No verified pre-update backup; old image will remain stopped")
@@ -917,8 +1028,10 @@ class Host:
                 state.setdefault("preserved_paths", []).append(str(quarantine))
                 self.phase(state, "restore_swap_intent", swap=swap, quarantine_path=str(quarantine))
             self.reconcile_swap(state, before)
+            state["recovery_outcome"] = {"backup_swapped": True, "later_evidence_preserved": True}
         else:
             self.helper(original["Image"], "snapshot")
+            state["recovery_outcome"] = {"backup_swapped": False, "later_evidence_preserved": False}
         if current and current["Id"] != original["Id"]:
             self.engine.command("rename", current["Id"], "nct-preserved-container-" + state["id"] + "-" + secrets.token_hex(4))
         if self.engine.inspect(original["Id"])["Name"].lstrip("/") != self.config["container"]:
@@ -938,7 +1051,7 @@ class Host:
             raise ValueError("Restored NCT did not pass readiness; it remains stopped for review")
         self.engine.command("update", "--restart=" + restart_policy(state["original"]), original["Id"])
         self.phase(state, "awaiting_restore_sign_in", evidence_verified=True,
-            detail="Original NCT is running at the backup time. Preserved post-backup data remains separate. Verify an existing account against this restored version before finishing.")
+            detail=("NCT is running from the verified backup. Later evidence remains preserved separately. " if restoring else "The original installation restarted without a backup data swap. " + ("Earlier replacement-write history is unknown; retain administrator review. " if outcome == "original_restart_unknown_history" else "")) + "Verify an existing NCT account before finishing.")
 
     def reconcile_swap(self, state, before):
         swap = state["swap"]
@@ -979,13 +1092,14 @@ class Host:
                 raise
 
     def confirm(self, username, password, actor):
-        with self.exclusive():
+        with self.exclusive(), self.activity_scope():
             state = self.read()
             phase = state["phase"]
             if phase not in {"awaiting_sign_in", "awaiting_restore_sign_in", "awaiting_repair_sign_in"}:
                 raise ValueError("This update is not awaiting sign-in verification")
             original = phase != "awaiting_sign_in"
             runtime_id = state["original"]["Id"] if original else state["candidate_id"]
+            self.activity(state, "account", "Checking the existing NCT account — password is not saved", force=True)
             self.target(expected_id=runtime_id)
             self.verify_health(state, original=original)
             # Authenticate against the actual replacement HTTP service. Password is
@@ -1028,7 +1142,7 @@ class Host:
             return receipt
 
     def verify_backup(self):
-        with self.exclusive():
+        with self.exclusive(), self.activity_scope():
             state = self.read()
             if not state.get("backup_verified"):
                 raise ValueError("No completed cold backup has been recorded")
@@ -1060,7 +1174,7 @@ class Host:
             env = dict(item.split("=", 1) for item in original["Config"].get("Env", []) if "=" in item)
             operation_id = secrets.token_hex(16)
             (self.root / operation_id).mkdir(mode=0o700)
-            state = {"id": operation_id, "kind": "repair", "actor": actor, "original": original,
+            state = {"id": operation_id, "kind": "repair", "actor": actor, "original": original, "candidate_may_have_written": False,
                 "candidate_image_id": original["Image"], "original_build": {"build_id": env.get("NCT_BUILD_ID"), "build_commit": env.get("NCT_BUILD_COMMIT")}}
             self.phase(state, "fence_intent", detail="Stopping NCT and creating a verified backup before reviewing unfinished work.")
             lock = None
@@ -1190,6 +1304,7 @@ class Handler(BaseHTTPRequestHandler):
         host.last_access = time.monotonic()
         if self.command == "GET" and self.path == "/status":
             return {"operation": host.public(), "application_url": host.config["application_url"], "actor": actor,
+                "runtime": host.runtime_status(), "observed_at": time.time(),
                 "upload_available_bytes": max(0, min(MAX_UPLOAD, shutil.disk_usage(host.root).free - 2 * 1024**3))}
         if self.command == "GET" and self.path == "/diagnose":
             return host.diagnose()

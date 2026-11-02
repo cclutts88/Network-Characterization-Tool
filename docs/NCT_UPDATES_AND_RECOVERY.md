@@ -6,6 +6,32 @@ set of update and recovery operations. The console normally remains stopped.
 
 ## Normal operator workflow
 
+### Guided progress in the newer helper and console
+
+The compact summary shows the current saved step, a separate observation of the
+NCT container, and the next operator action. The detailed activity beside Review
+shows elapsed step time and the age of the last work checkpoint. The latest helper
+response is separate: a responsive connection does not prove work is advancing.
+After a prolonged unchanged checkpoint, keep the workspace open and review
+diagnostics; do not repeat Apply. Closing or reloading the browser does not cancel
+the saved operation.
+
+Backup creation, checksum checking and extraction of a **separate verification
+copy** have their own steps. Measured bytes refer to that step only. Unknown totals
+show an indeterminate bar rather than an estimated overall percentage. Completion
+still requires the existing build, backup, evidence, account and restart checks.
+
+Recovery reports whether a backup was actually swapped. If the replacement never
+wrote data, the helper reconciles the original installation without replacing its
+data. An actual backup restore returns to the shown backup time and preserves
+later evidence separately. Missing write history in an older receipt means unknown
+and requires administrator review; it is not proof that the data was unchanged.
+
+These features require the separately upgraded **host helper and console**.
+Uploading an application archive does not update them. Existing helper upgrades
+must use the trusted full package's separately qualified administrator procedure;
+do not rerun the one-time installer over saved recovery state.
+
 ### Quick steps and expected results
 
 Keep the update file compressed. Put it on the computer whose browser opens NCT;

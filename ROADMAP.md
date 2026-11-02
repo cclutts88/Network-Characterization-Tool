@@ -9939,3 +9939,56 @@ planned guided journey/measured progress still require separate console delivery
 Final independent target gate: CLEAR - DOCUMENTED DEVIATION for this actual
 preserved-evidence R2-to-R3 update and historical browser XML-save acceptance.
 No full live backup-restore or unfinished-work repair acceptance is inferred.
+
+### 2026-11-02 — Guided updater/recovery and next full package started
+
+Authorized next milestone: deliver the completed connection/sign-in feedback plus
+an end-to-end guide, truthful recovery choices and durable measured activity in a
+new full host-helper/console package. Keep existing phase/fencing/backup/rollback
+semantics; progress is additive metadata, never permission to recover. Persist
+bounded throttled step/count/total timestamps, distinguish connection freshness
+from work advancement and show indeterminate activity without a known denominator.
+Recovery wording comes from explicit host facts: new operations record False before
+replacement writes and True before possible writes; legacy missing markers remain
+unknown. Distinguish actual backup swap from original-installation reconciliation
+in labels, confirmation, progress, account check and completion. No Range mutation.
+
+Architecture/delivery deviation: app-only updates cannot deliver this milestone.
+The full installer currently refuses an already-installed helper, including the
+newly accepted R3 target. Build and qualify a separate trusted helper/console upgrade
+path preserving configuration, receipts, accounts, evidence and service protections;
+do not silently overwrite the old installation or remove its recovery history.
+Prepare the next package from exact committed sources with immutable image and
+manifest checks, isolated HTTPS update/interruption/restore acceptance, novice
+whole-journey and theme checks. Package preparation is separate from target deployment.
+Independent design gate CLEAR - DOCUMENTED DEVIATION; implementation gates remain open.
+
+### 2026-11-02 - Guided updater implementation source gate
+
+Implemented durable throttled activity for stopped-data checks, real backup source
+bytes, backup hashing/extraction/verification, replacement, account check and final
+restart. Existing phase guards remain authoritative. Public status reports only a
+bounded configured-container observation; unavailable never means healthy or zero.
+Console adds compact step/state/next-action guidance, measured or indeterminate
+step activity beside Review, elapsed/stale-work ages separate from connection time,
+normal-size collapsible guide and persistent nearby sign-in feedback. Recovery
+labels distinguish a confirmed data swap, original reconciliation and unknown legacy
+history. How NCT Works and operator instructions updated in the same change.
+
+Separate trusted nct-upgrade-recovery.py supports only the byte-identified patched
+R3 helper/console baseline. It preserves application/evidence/operation identity,
+service configuration, private file backups and stopped original console; a bounded
+write-ahead journal supports explicit interruption rollback. It refuses mixed
+release sources, unsafe mounts/security, incomplete operations or changed identities.
+The GUI application archive admits R3 only; existing terminal-source qualification
+is a separate path. Full-package sealing now requires its own exact helper-upgrade
+acceptance receipt as well as every declared terminal-source receipt.
+
+Independent source gate CLEAR - DOCUMENTED DEVIATION permits commit/build/stage
+only. Targeted 72 tests and JS runtime checks passed; broader 108 focused checks
+also independently passed. Full suite, exact staged Docker/TLS rehearsal and final
+novice browser/guide gates remain pending before sealing. Qualification uses a
+controlled real helper process instead of systemd in the disposable fixture; actual
+host service and browser trust acceptance remain separate Range gates. No Range
+change: only a read-only installed-helper hash/guard check reproduced the exact
+baseline locally. main remains untouched.

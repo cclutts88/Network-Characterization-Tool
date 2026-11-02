@@ -10,6 +10,52 @@ trusted release source. No software is downloaded during installation.
 
 ## Before starting
 
+### Choose the installation path
+
+- If Updates & Recovery is **already installed** on the supported Recovery-r3
+  application, use the separate helper/console upgrade below. Do not rerun the
+  first-time installer over its saved state.
+- If there is no independent helper installed, use the first-time instructions
+  below for the explicitly supported sources. Other builds need a reviewed bridge.
+
+### Existing Recovery-r3 helper and console
+
+This path is limited to the accepted Recovery-r3 application and its patched host
+helper (SHA256 `00204d190fc8802d334f7c93834a3aa439792317f631db96ef01ebceeb4b00bc`),
+with the separately pinned Recovery-r2 console. It refuses other helper versions,
+unfinished update/recovery operations, changed mounts or weakened console settings.
+Keep the current application, evidence, accounts and recovery receipts in place.
+
+An administrator runs these steps on the Linux NCT host from the newly extracted
+package folder. Use the same protected Python 3.9-or-newer interpreter already
+selected for the recovery service. These are host steps, not a browser upload.
+
+1. Check the package: `sha256sum -c PACKAGE-MANIFEST.sha256`. Stop if any file fails.
+2. Load its local images: `docker load -i offline-images/nct-range-images.tar`.
+   This imports images without stopping or replacing NCT.
+3. Read `console_image` in `release.json`. Use that exact tag in place of
+   `CONSOLE_IMAGE` below; do not use an older console or a floating `latest` tag.
+4. Preview: `python3 scripts/nct-upgrade-recovery.py --console-image CONSOLE_IMAGE`.
+   Use the protected service interpreter's full path instead of `python3` where
+   necessary. The preview checks compatibility without stopping the installation.
+5. During the maintenance window, repeat with `--apply`. Progress is printed for
+   each saved stage. The helper and console stop briefly; the NCT application is
+   not replaced by this operation. The new console is checked over verified HTTPS
+   and returned to its normal stopped state.
+6. Open NCT → Updates & Recovery. Transfer the included `nct-update-….tar.gz` to the
+   computer running that browser and follow Upload → Review → Apply → Verify.
+   That separate application update uses the existing-account and backup checks.
+
+If the helper upgrade is interrupted, **do not reinstall or delete its state**.
+Keep the new full package and the private `helper-upgrade.json` beside the installed
+helper config. An administrator can repeat the same command with `--rollback` to
+restore the proven original helper/console. Changed or ambiguous identities stop
+recovery for review. The retained originals and private journal are not evidence
+compaction candidates. A completed journal is not replayed as a new transaction.
+
+Local qualification uses a controlled service process in place of systemd; actual
+host service and browser trust acceptance remain separate Range checks.
+
 - This is the standalone Docker/Compose package. It does not install a Kubernetes
   updater, change a cluster or enable multiple NCT application replicas.
 - The offline Linux host needs working Docker with its local Engine interface, Python
