@@ -5,6 +5,8 @@ import io
 import json
 from pathlib import Path
 import sys
+import shlex
+import subprocess
 import tarfile
 
 import pytest
@@ -224,3 +226,24 @@ def test_only_equivalent_oom_default_is_normalized():
     assert normalize({'OomKillDisable':None})==normalize({'OomKillDisable':False})
     assert normalize({'OomKillDisable':True})!=normalize({'OomKillDisable':False})
     assert normalize({'ReadonlyRootfs':None})!=normalize({'ReadonlyRootfs':False})
+
+
+def test_service_check_proves_actual_process_command_and_rejects_wrong_owner(tmp_path,monkeypatch):
+    upgrade,_,_=fixture(tmp_path,monkeypatch)
+    script=upgrade.path.parent/'nct_update_host.py'
+    script.write_text('import time;time.sleep(30)')
+    command=[sys.executable,str(script),'--config',str(upgrade.path)]
+    upgrade.unit.write_text('ExecStart='+shlex.join(command)+'\n')
+    process=subprocess.Popen(command)
+    try:
+        monkeypatch.setattr(upgrade_module.subprocess,'check_output',lambda *a,**k:str(process.pid).encode())
+        upgrade_module.Upgrade.check_service(upgrade)
+        upgrade.unit.write_text('ExecStart='+shlex.join([sys.executable,str(script)+'-other','--config',str(upgrade.path)])+'\n')
+        with pytest.raises(ValueError,match='reviewed installation paths'):
+            upgrade_module.Upgrade.check_service(upgrade)
+        upgrade.unit.write_text('ExecStart='+shlex.join(command)+'\n')
+        monkeypatch.setattr(upgrade_module.subprocess,'check_output',lambda *a,**k:b'0')
+        with pytest.raises(ValueError,match='no running owner'):
+            upgrade_module.Upgrade.check_service(upgrade)
+    finally:
+        process.terminate();process.wait(timeout=5)

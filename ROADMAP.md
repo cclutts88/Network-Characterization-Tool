@@ -6,8 +6,9 @@ by trusted personnel in an isolated environment. Favor a short GUI workflow and
 avoid repeated access-code/sign-in friction where an already authenticated
 operator session can safely provide the handoff. Preserve evidence verification,
 tested backups, rollback, and clear completion/failure results. Simplification is
-planned work; the currently shipped Recovery-r2 account checks remain in force.
+planned work; the currently deployed Recovery-r2 console account checks remain in force until its separately qualified helper/console upgrade is installed.
 
+- Latest transfer milestone: Recovery-r4 locally qualified and packaged (2026-11-02); actual Range installation remains pending. See the final dated record below.
 - Roadmap status: Approved governing direction
 - Working product expansion: NCT = Network Correlation & Triage
 - Foundation branch: `foundation/evidence-engine-v2`
@@ -10012,3 +10013,54 @@ Normalize only that equivalent default when comparing host configuration, retain
 all other fields and explicitly rejecting true or unrelated drift. Unit fixtures
 now reproduce this actual engine behavior. Preserve the failed rehearsal journal;
 repeat crash recovery and exact-package acceptance from the corrected commit.
+
+### 2026-11-02 - Guided updater and Recovery-r4 transfer package complete locally
+
+[x] Guided updater/recovery source, independent review, novice presentation checks
+and exact full-package qualification completed on foundation/evidence-engine-v2.
+Payload commit937954bc03e4b21c3e93d7430321a918d8bc59a0. The full ZIP includes both
+pinned images, the trusted existing-helper upgrade command, the R3-only GUI app
+archive, internal checksums, START-HERE instructions and manifest-bound validation.
+
+Sealed NCT-Full-Range-20261102-Recovery-r4.zip: 195,669,782 bytes; SHA256
+db8937a70b966132e4c9f4693dc083f71ee2c7f359a4882d5a85a0cf98290c1b.
+Independent final archive gate CLEAR - DOCUMENTED DEVIATION: ZIP CRC passes,
+all49 internal manifest files rehashed and44 source bindings verified. Pre-seal
+manifest1bd499e4f17c05995641fc046d625966c20aa0587f9f19981e19e23ebb49dd19
+binds both terminal-source proofs and the installed R3 helper-upgrade proof.
+
+Actual disposable Docker/CA-verified HTTPS checks passed for terminal schema7
+Phase5R1 and migrated schema8 RecoveryR1 sources, preserving accounts/evidence,
+settings/mounts/ports/restart policies, console handoff and original-backup boot.
+The exact patched R3 helper/old-console path passed immediate-after-create power
+loss, explicit rollback of the original helper/console, a fresh successful upgrade,
+GUI application update, existing-account verification, authenticated original XML
+download and actual backup restore with later evidence preserved separately.
+The host upgrade itself left application configuration, evidence and its operation
+receipt unchanged. Full-package sealing requires that crash-recovery proof.
+
+Validation: broad2372 tests passed,22 platform/tool-dependent skips, one existing
+dependency warning. Final focused153 passed,1 Node-wrapper skip; direct JavaScript
+runtime checks passed separately. Independent final upgrader subset27 passed.
+Broad runtime was1efe522: final937954 application Python bytes hash
+cea5c83e28033d31c6cf451b630127af9d91fa40ce79bdaf904c5de3e64619e5 and all
+delivered application dependency versions independently match that tested runtime;
+only release identity differs. Final host compatibility corrections have separate
+focused and real-package coverage. Novice/source/presentation gate CLEAR across
+dark/light,760px and Guide open/closed: normal15px/400 explanation text, aligned
+headings and no page-width overflow. Final dark proof also uses the actual packaged
+console image with no source override.
+
+Documented qualification limits: controlled service processes substitute for
+systemd/ss in the isolated fixtures; actual host boot and browser CA-trust acceptance
+remain target checks. Older terminal source proofs do not imply GUI qualification.
+Existing-helper admission is the exact patched R3 helper and pinned old console;
+other versions are refused. Application uploads never upgrade host scripts.
+R4 has not been deployed to Range, Kubernetes updater qualification is unchanged,
+and stable main remains clean and untouched. Failed rehearsals, older packages
+and private receipts are preserved.
+
+Next: transfer this single full ZIP, follow its existing-helper route on the
+supported R3 host, then install the enclosed GUI application archive and verify
+normal account access, retained historical XML and actual service/browser trust.
+No further roadmap feature work is included in this package milestone.

@@ -85,7 +85,7 @@ def main():
         '-v',str(state/'sockets/control')+':/run/nct-recovery:ro','-v',str(state/'spool')+':/staging',
         '-v',str(cert)+':/run/tls/server.crt:ro','-v',str(key)+':/run/tls/server.key:ro',
         '-e','NCT_RECOVERY_SOCKET=/run/nct-recovery/control.sock','-e','NCT_RECOVERY_SPOOL=/staging',module.OLD_CONSOLE,
-        'uvicorn','app.recovery_console:app','--host','0.0.0.0','--port','8446','--ssl-certfile','/run/tls/server.crt','--ssl-keyfile','/run/tls/server.key')
+        'uvicorn','app.recovery_console:app','--host','0.0.0.0','--port','8446','--ssl-certfile','/run/tls/server.crt','--ssl-keyfile','/run/tls/server.key').strip()
     probe=host_module.Host(config,engine)
     context=ssl.create_default_context(cafile=str(cert))
     browser=urllib.request.build_opener(urllib.request.HTTPSHandler(context=context),urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),urllib.request.ProxyHandler({}))
