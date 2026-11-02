@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.update_transport import local_request
+from app.update_transport import LocalRequestError, local_request
 from app.update_ui import console_page
 
 app = FastAPI(title="NCT Recovery Console", docs_url=None, redoc_url=None, openapi_url=None)
@@ -90,7 +90,13 @@ async def proxy(action: str, request: Request):
             response = JSONResponse(value)
             response.set_cookie(COOKIE, session, httponly=True, secure=os.environ.get("NCT_RECOVERY_INSECURE_TEST") != "1", samesite="strict", max_age=3600)
         return response
-    except (ValueError, OSError) as exc:
+    except LocalRequestError as exc:
+        access_required = action == "status" and exc.status_code == 403
+        return JSONResponse({"detail": str(exc)[:400], "access_required": access_required},
+                            status_code=403 if access_required else 409)
+    except OSError:
+        return JSONResponse({"detail": "Cannot reach the recovery helper. Retry the connection; the saved operation is not cancelled."}, status_code=503)
+    except ValueError as exc:
         return JSONResponse({"detail": str(exc)[:400]}, status_code=409)
 
 

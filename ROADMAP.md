@@ -9843,3 +9843,32 @@ use an indeterminate indicator. Separate live connection/heartbeat from actual w
 advancement so a responsive page cannot falsely imply progressing work. Explain slow
 or stale progress and next safe action. Cover this in novice acceptance and the same
 separately qualified host/console guidance milestone; sealed R3 stays unchanged.
+
+### 2026-11-02 — Bounded console connection feedback completed on foundation
+
+Implemented typed helper HTTP failures so only an explicit status-authorization
+rejection requests recovery access. Connection loss, invalid responses and ordinary
+operation errors retain the reviewed operation, disable all actions and offer status
+retry without replaying a mutation. Fresh successful status re-enables controls;
+malformed repair summaries are rejected before replacing displayed information.
+Clarified validation versus installation and emergency code versus account checking.
+
+Verification: 84 focused tests passed, one Node wrapper skipped; Windows Node runtime
+passed separately. Real isolated read-only Unix-helper browser fixture proved socket
+loss retains disabled prior results without an access prompt, socket return recovers
+through status polling, and actual helper 403 exposes emergency access. Dark/default
+and materially different light palette checked, including narrow layout and guide
+open/closed; screenshots retained privately. Independent source gate and novice
+visual gate CLEAR - DOCUMENTED DEVIATION. A hash-only theme navigation initially did
+not reload the preview; repeated with a full reload and saved genuine light proofs.
+
+This completes the bounded source correction, not delivery to the pinned Range
+console. It does not complete the subsequently requested full guided journey,
+truthful host-driven recovery wording or measured progress milestone. Those remain
+separate requirements recorded above. No active Range helper was changed by this
+source work. Sealed R3 package unchanged.
+
+Live R3 update has now reached awaiting_sign_in: exact R3 build/readiness,
+independently restored cold backup and retained evidence checks passed. Operator
+existing-account verification/final restart and historical XML download acceptance
+remain pending; temporary update pause remains until verification finishes.

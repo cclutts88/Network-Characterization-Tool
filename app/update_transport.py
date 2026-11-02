@@ -6,6 +6,14 @@ import json
 import socket
 
 
+class LocalRequestError(ValueError):
+    """An explicit HTTP rejection from the trusted local helper."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class LocalConnection(http.client.HTTPConnection):
     def __init__(self, path: str, timeout: float = 30):
         super().__init__("localhost", timeout=timeout)
@@ -31,8 +39,10 @@ def local_request(path: str, method: str, route: str, body=None, *, token="", st
         if len(raw) > 2 * 1024**2:
             raise ValueError("Recovery helper response exceeds its limit")
         result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise ValueError("Recovery helper returned an invalid response")
         if response.status >= 400:
-            raise ValueError(result.get("detail", "Recovery helper refused this action"))
+            raise LocalRequestError(result.get("detail", "Recovery helper refused this action"), response.status)
         return result
     finally:
         connection.close()
