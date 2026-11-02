@@ -9804,3 +9804,42 @@ is misleading for this pre-write path; record a future copy correction rather th
 claiming a backup restore occurred. Latest combined focused run: 84 passed, one
 Node wrapper skipped. Independent host correction gate: CLEAR - DOCUMENTED DEVIATION.
 R3 target installation and historical XML download are still not complete.
+
+Operator-requested update guidance requirement (2026-11-02): provide an end-to-end
+numbered guide and contextual prompts for package transfer/selection, validation,
+review/apply, connection loss, interrupted-operation recovery, existing-account
+verification, return to normal NCT sign-in, and final historical-evidence/download
+checks. State the expected result and next action at each step, whether NCT is
+running or paused, and when an operator must wait. Distinguish emergency recovery
+code from NCT credentials, app-only update archive from full deployment ZIP, and
+pre-write reconciliation from actual backup restoration. Never describe a backup as
+restored when none existed. Preserve the normal GUI path and make errors visible
+beside the relevant control; do not require the analyst to infer progress from a
+terminal. Include this in the separate console delivery and novice acceptance gate.
+
+The operator completed the original-account check; normal R2 readiness returned,
+the update-specific pause was absent and the original restart policy was restored.
+Reopened recovery through signed-in NCT, uploaded the same R3 archive, and fresh
+validation passed. Normal GUI Apply now advanced past the corrected guard into
+fence_intent (stopping/checking/backing up original evidence). Target acceptance
+remains in progress; do not interpret validation or this phase as installation.
+
+Novice review accepted the quick-step table after clarifying that interrupted
+recovery reviews the saved operation/installation, not necessarily a backup.
+The next console delivery must use verified host facts for recovery path, possible
+replacement writes, backup time/verification, actual folder swap/preservation,
+running release, account-check target, NCT state/remaining pauses and allowed next
+actions. Unknown facts require administrator review, not an inferred safe route.
+Live update observation also exposed coarse progress: fence_intent still says
+Stopping NCT while a large backup is already being created. Add explicit saved
+backup/check phases and useful wait guidance in the future host/console milestone;
+do not patch the helper during an active update or imply a frozen operation.
+
+Operator explicitly requested visible activity/progress during update waits
+(2026-11-02): current UI looks hung. Require current saved step, running activity
+indicator, elapsed step time and last host progress update; backup byte/file progress
+where measurable. Percentage may only come from a real known denominator; otherwise
+use an indeterminate indicator. Separate live connection/heartbeat from actual work
+advancement so a responsive page cannot falsely imply progressing work. Explain slow
+or stale progress and next safe action. Cover this in novice acceptance and the same
+separately qualified host/console guidance milestone; sealed R3 stays unchanged.

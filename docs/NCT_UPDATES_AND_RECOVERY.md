@@ -6,6 +6,28 @@ set of update and recovery operations. The console normally remains stopped.
 
 ## Normal operator workflow
 
+### Quick steps and expected results
+
+Keep the update file compressed. Put it on the computer whose browser opens NCT;
+a file uploaded only to the controller will not appear in that browser's file picker.
+A trusted administrator can transfer it to the workstation with SCP. Check the
+transferred file against the supplied release checksum before selecting it.
+
+| Step | What you do | What you should see / what happens next |
+| --- | --- | --- |
+| 1. Prepare | Finish scans and device collection. Obtain the trusted `nct-update-….tar.gz` file. | One compressed update file on the browser computer. A full deployment ZIP uses the terminal installer instead. |
+| 2. Open | Sign in to NCT, open **Updates & Recovery**, then **Open update and recovery workspace**. | Recovery opens automatically. A code is normally unnecessary; it is an emergency entry method, separate from your NCT password. |
+| 3. Check package | Choose the file and select **Upload and validate package** once. | NCT continues running. Upload reaching 100% is followed by validation; wait for **Ready to apply**. Nothing has been installed yet. |
+| 4. Review | Check the proposed release and compatibility result, then select **Apply validated update**. | NCT stops temporarily. Recovery checks the saved data, creates and verifies a backup, installs the release and checks retained evidence. Wait on this page. |
+| 5. Verify account | At **Verify sign-in and finish**, enter your existing NCT account and select **Verify sign-in** once. | This checks the installed account; it does not change the password or sign your browser into NCT. Wait for the final restart and return to NCT. |
+| 6. Check normal use | Sign in normally if prompted. Open Scan History, an older scan, and download its XML. | The installed release is correct, scan details load and a real XML file saves. These checks are separate from the updater's automatic checks. Review any remaining unfinished-work pause before scanning. |
+
+If the connection drops, the update may still be running. Do not upload or apply
+again until the saved status is available. Reopen from signed-in NCT, or ask the
+host administrator for emergency recovery access if NCT cannot start. The pinned
+older console can show a misleading access-code prompt after a connection failure;
+the separately delivered console correction described below addresses that behavior.
+
 1. Sign in to NCT and open **Account and settings → Updates & Recovery**.
 2. Select **Open update and recovery workspace**. NCT starts the independent
    console, proves its HTTPS endpoint is ready, and sends a two-minute, one-use
@@ -27,7 +49,7 @@ set of update and recovery operations. The console normally remains stopped.
    does not cancel the operation. Reopen the console through NCT or the host launcher.
 7. After exact build, readiness and evidence checks pass, enter an existing NCT
    username and password. The helper tests sign-in against the actual replacement.
-   The password is used only for that request and is never saved in receipts.
+   The password is used only for that request and is never saved in receipts. This verifies the account on the installed version; normal browser sign-in to NCT may still be required after returning.
    New collection, local processing and storage maintenance stay paused until
    this verification completes. The temporary update pause never clears a
    separate unfinished-work recovery gate.
@@ -47,6 +69,19 @@ Guide uses normal body text.
 
 ## If something fails
 
+In the updated console source, a temporary network/helper failure keeps the last
+checked operation visible with all operation controls disabled. Wait for automatic
+status retry or select **Retry connection**. This reads status only; it never repeats
+Apply, Restore, or another action. Initial connection failure shows the retry message
+without displaying an emergency-code request. Only an explicit access rejection from
+the trusted helper opens the access-code form. Normally reopen from signed-in NCT;
+when NCT cannot start, ask the host administrator for a fresh emergency code. An
+emergency code and the existing NCT account password serve different purposes.
+
+Delivery boundary: an application-only update does not replace the independent
+console. These connection messages require a separately qualified console update;
+the currently pinned Recovery-r2 console retains its earlier connection behavior.
+
 **Restore saved backup** verifies the original container and image identity,
 stops the replacement, verifies and independently restores the cold backup, and
 then starts the previous image against that restored data. It never opens the
@@ -62,10 +97,21 @@ preserved container for investigation or a deliberate evidence import. The origi
 backup path and receipts also appear in the result. Recovery does not delete them.
 
 After a host-service interruption, the saved operation changes to **Needs recovery
-review**. Choose Restore to reconcile the actual saved container identities and
-verified backup. An unverified backup, changed target, additional writer, missing
+review**. Have the administrator review the saved operation and actual installation
+before choosing Restore. The two recovery outcomes below explain whether a backup
+is involved. An unverified required backup, changed target, additional writer, missing
 original image, or failed data check leaves the previous image stopped. Preserve
 the result, choose **Export diagnostic summary**, and give that summary to the NCT host administrator. Keep the backup and preserved-data paths. Do not manually start an older image against the changed data.
+
+There are two different recovery outcomes. If replacement could have written data,
+recovery must verify and restore the saved backup, keeping later evidence separate.
+If the operation stopped before replacement or any possible replacement writes,
+the existing recovery path checks and restarts the unchanged original installation;
+it does not restore a backup or swap evidence folders. Existing-account verification
+is required in either case. The pinned older console uses generic backup-restore
+wording for both paths, so an administrator must review the saved operation before
+choosing recovery. Updated prompts must use verified host facts to distinguish
+these paths; absence of a backup alone is not proof that recovery is safe.
 
 **Investigate NCT** reads the exact configured container, state, image, capacity
 and current recovery result. **Verify saved backup** extracts a fresh copy and
