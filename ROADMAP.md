@@ -1,6 +1,17 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Fresh Range handoff (2026-11-03): the user completed administrator setup,
+signed in on the actual analyst workstation, opened the independent recovery
+workspace and returned to authenticated NCT Mission Environment. The user
+confirmed the interface is up. Exact Fresh-r2 health and the active/enabled
+real host recovery service were verified before that handoff. The final
+controller recheck was interrupted when browser control detached; do not claim
+an independently inspected final collection-mode value or a completed live
+scan/config-pull test. Preserve the working instance. Stop further setup
+changes tonight; review the installation usability and the need for the fresh
+setup collection pause first next session, as explicitly requested.
+
 Next-session priority from actual fresh setup (2026-11-03): restore a simple,
 predictable installation experience before further feature work. The target's
 Docker version was already in use; the newly delivered application runtime
