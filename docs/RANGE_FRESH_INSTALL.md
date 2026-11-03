@@ -40,8 +40,12 @@ sha256sum -c PACKAGE-MANIFEST.sha256
 sh scripts/nct-install-range.sh NCT_HOST_IP check-fresh
 ```
 
-Every checksum should say **OK**. The second command reports prerequisites and
-package checks passed without installing NCT. Fresh setup refuses an existing
+Every checksum should say **OK**. The second command checks prerequisites, loads
+the exact packaged images when they are not already present, and tests both
+application runtimes under the host's normal container security. It does not
+create NCT storage, a container, an account, a certificate or a service. A later
+install reuses those exact verified images instead of loading the large archive
+again. Fresh setup refuses an existing
 NCT container, nonempty NCT storage or an existing recovery service/state. It
 does not delete or adopt them. Stop and review a refusal; do not wipe host files.
 The default dedicated storage location is `/var/lib/nct`.
@@ -62,7 +66,20 @@ The terminal loads the included images, creates HTTPS material, starts NCT and
 sets up the independent recovery helper and console. Wait for the final address
 and completion instructions. Initial loading and database setup can take time.
 If setup stops, preserve its output and NCT files for recovery; do not rerun it
-after deleting arbitrary state.
+after deleting arbitrary state. If it stops while confirming the Administrator
+password and reports that the protected bootstrap state was preserved, continue
+that exact empty installation with:
+
+```sh
+sh scripts/nct-install-range.sh NCT_HOST_IP resume-fresh
+```
+
+The continuation verifies the exact release image, dedicated data path,
+temporary bootstrap mount, one expected Administrator identity and zero
+operator evidence. If the password had already been saved before the
+interruption, NCT keeps it and continues without asking for it again. Otherwise,
+it asks for the password again. It refuses unknown, nonempty, changed or older
+installations; it is not an upgrade or reset path.
 
 Before creating NCT storage or services, setup tests both loaded images under
 normal container security, including thread creation and required collection

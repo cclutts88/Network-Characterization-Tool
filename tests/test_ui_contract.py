@@ -1131,7 +1131,9 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "Apply profile" in html
     assert "Save as new profile" in html
     assert "Save new version" in html
-    assert "Archive profile" in html
+    assert "Delete profile" in html
+    assert "Confirm delete" in html
+    assert "Completed collections and their exact profile versions will remain available" in html
     assert "Copy collection settings" in html
     assert "The copy is not a named profile" in html
     assert "collection_profile_id:collectionProfileExact" in html

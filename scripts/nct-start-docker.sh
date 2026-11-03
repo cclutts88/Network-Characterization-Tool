@@ -18,6 +18,7 @@ CHECKSUM="$WORKDIR/offline-images/nct-range-images.tar.sha256"
 STATE_DIR="$PERSIST_ROOT/deployment"
 TLS_ROOT="$PERSIST_ROOT/tls-material"
 BOOTSTRAP_PASSWORD="$STATE_DIR/bootstrap/initial-password.txt"
+FRESH_RESUME_RECEIPT="$STATE_DIR/bootstrap/fresh-resume.json"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 verify_archive_checksum() {
@@ -46,15 +47,30 @@ docker info >/dev/null 2>&1 || die "Docker is not reachable."
 [ -f "$CHECKSUM" ] || die "Missing $CHECKSUM"
 [ -f "$WORKDIR/scripts/setup-lab-https.sh" ] || die "Missing the TLS setup helper."
 [ -f "$WORKDIR/scripts/nct-set-admin.sh" ] || die "Missing the Administrator setup helper."
+[ -f "$WORKDIR/scripts/nct-fresh-bootstrap-state.py" ] || die "Missing the fresh-install resume verifier."
+[ -f "$WORKDIR/scripts/nct-verify-empty-fresh-resume.py" ] || die "Missing the fresh-install empty-state verifier."
+. "$WORKDIR/scripts/nct-recovery-python.sh"
+NCT_STATE_PYTHON=$(nct_select_recovery_python "$WORKDIR") ||
+    die "A supported Python interpreter is required for fresh-install ownership receipts."
 verify_archive_checksum || die "The offline image archive checksum does not match."
-docker inspect "$CONTAINER" >/dev/null 2>&1 &&
-    die "A container named $CONTAINER already exists. This script will not replace it."
-if ss -ltn | awk -v p="$HOST_PORT" 'NR > 1 && $4 ~ (":" p "$") { found=1 } END { exit(found ? 0 : 1) }'; then
+resume_bootstrap=${NCT_RESUME_BOOTSTRAP:-0}
+if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+    [ "$resume_bootstrap" = 1 ] || die "A container named $CONTAINER already exists. This script will not replace it."
+elif [ "$resume_bootstrap" = 1 ]; then
+    die "The interrupted fresh container is missing. No state was changed."
+fi
+if [ "$resume_bootstrap" != 1 ] && ss -ltn | awk -v p="$HOST_PORT" 'NR > 1 && $4 ~ (":" p "$") { found=1 } END { exit(found ? 0 : 1) }'; then
     die "TCP port $HOST_PORT is in use. Set NCT_HTTPS_PORT to an approved free port."
 fi
 
-docker load -i "$ARCHIVE"
+if [ "${NCT_SKIP_IMAGE_LOAD:-0}" = 1 ]; then
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || die "The parent installer did not leave the exact NCT image loaded."
+    printf '%s\n' "Using the exact release image already admitted by the parent installer."
+else
+    docker load -i "$ARCHIVE"
+fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "The expected NCT image was not loaded."
+IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE")
 mkdir -p "$DATA_DIR" "$STATE_DIR/bootstrap"
 chmod 700 "$PERSIST_ROOT" "$DATA_DIR" "$STATE_DIR" "$STATE_DIR/bootstrap"
 if [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] && [ ! -f "$TLS_ROOT/tls/nct-server.key" ]; then
@@ -63,7 +79,48 @@ elif [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] || [ ! -f "$TLS_ROOT/tls/nct-server
     die "TLS material is incomplete under $TLS_ROOT; restore the missing file before continuing."
 fi
 
+fresh_state() {
+    "$NCT_STATE_PYTHON" "$WORKDIR/scripts/nct-fresh-bootstrap-state.py" "$@" \
+        --receipt "$FRESH_RESUME_RECEIPT" --container "$CONTAINER" \
+        --image-reference "$IMAGE" --image-id "$IMAGE_ID" --admin-user "$ADMIN_USER" \
+        --range-ip "$RANGE_IP" --bind-address "$APP_BIND_ADDRESS" \
+        --host-port "$HOST_PORT" --container-port "$CONTAINER_PORT" \
+        --data-dir "$DATA_DIR" --cert-file "$TLS_ROOT/tls/nct-server.crt" \
+        --key-file "$TLS_ROOT/tls/nct-server.key" --secret-file "$BOOTSTRAP_PASSWORD" \
+        --archive "$ARCHIVE"
+}
+
 account_count="${NCT_UPGRADE_ACCOUNT_COUNT:-}"
+if [ "$resume_bootstrap" = 1 ]; then
+    [ -f "$BOOTSTRAP_PASSWORD" ] || die "The protected bootstrap secret is missing. Refusing to guess or reset this installation."
+    fresh_state verify || die "The interrupted container does not match its root-owned fresh-install receipt. Nothing was changed."
+    account_state=$(docker exec -i "$CONTAINER" python - /data/analyzer.db /data "$ADMIN_USER" \
+        < "$WORKDIR/scripts/nct-verify-empty-fresh-resume.py") ||
+        die "The interrupted installation contains operator data or an unexpected account. Refusing fresh resume."
+    receipt_phase=$("$NCT_STATE_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["phase"])' "$FRESH_RESUME_RECEIPT") || die "The fresh-install resume phase could not be read."
+    case "$account_state:$receipt_phase" in
+        PASSWORD_RESET_COUNT=0:awaiting_password)
+            printf '%s\n' "Verified the exact empty installation. Re-enter the intended Administrator password; existing operator data will not be adopted or erased."
+            NCT_FRESH_BOOTSTRAP_RECEIPT="$FRESH_RESUME_RECEIPT" NCT_FRESH_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$CONTAINER") \
+                sh "$WORKDIR/scripts/nct-set-admin.sh" "$ADMIN_USER" || die "Administrator setup remains incomplete. The verified bootstrap state is preserved; run resume-fresh again."
+            ;;
+        PASSWORD_RESET_COUNT=1:awaiting_password)
+            "$NCT_STATE_PYTHON" "$WORKDIR/scripts/nct-fresh-bootstrap-state.py" mark-password-committed \
+                --receipt "$FRESH_RESUME_RECEIPT" --container-id "$(docker inspect --format '{{.Id}}' "$CONTAINER")" --admin-user "$ADMIN_USER" ||
+                die "The committed Administrator state could not be bound to this fresh-install receipt."
+            printf '%s\n' "The Administrator password had already committed before interruption. Continuing without asking for it again."
+            ;;
+        PASSWORD_RESET_COUNT=1:password_committed)
+            printf '%s\n' "Verified the previously committed Administrator password step. Continuing without asking for it again."
+            ;;
+        *) die "The Administrator database state and fresh-install resume receipt disagree. Nothing was changed." ;;
+    esac
+    docker stop "$CONTAINER" >/dev/null
+    docker rm "$CONTAINER" >/dev/null
+    rm -f "$BOOTSTRAP_PASSWORD" "$FRESH_RESUME_RECEIPT"
+    account_count=1
+fi
+
 if [ -z "$account_count" ]; then
     if [ ! -f "$DATA_DIR/analyzer.db" ]; then
         account_count=0
@@ -113,12 +170,14 @@ if [ "$account_count" -eq 0 ]; then
     openssl rand -base64 36 | tr -d '\r\n' > "$BOOTSTRAP_PASSWORD"
     start_container yes
     wait_for_health || die "NCT did not become healthy. Review: docker logs $CONTAINER"
-    if ! sh "$WORKDIR/scripts/nct-set-admin.sh" "$ADMIN_USER"; then
-        die "Administrator setup did not finish. NCT is still running; the recovery secret remains at $BOOTSTRAP_PASSWORD."
+    fresh_state create || die "The bootstrap container started but its exact resume ownership receipt could not be written. Preserve it and stop for review."
+    if ! NCT_FRESH_BOOTSTRAP_RECEIPT="$FRESH_RESUME_RECEIPT" NCT_FRESH_CONTAINER_ID=$(docker inspect --format '{{.Id}}' "$CONTAINER") \
+        sh "$WORKDIR/scripts/nct-set-admin.sh" "$ADMIN_USER"; then
+        die "Administrator setup did not finish. The empty bootstrap container and protected secret were preserved. Rerun nct-install-range.sh with resume-fresh; it will verify this exact empty installation before asking again."
     fi
     docker stop "$CONTAINER" >/dev/null
     docker rm "$CONTAINER" >/dev/null
-    rm -f "$BOOTSTRAP_PASSWORD"
+    rm -f "$BOOTSTRAP_PASSWORD" "$FRESH_RESUME_RECEIPT"
     start_container no
     wait_for_health || die "NCT did not become healthy after removing the bootstrap secret. Review: docker logs $CONTAINER"
 else

@@ -1,6 +1,71 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Fresh-install reliability correction started (2026-11-03): the unchanged Range
+Docker host exposed a compatibility regression in the newly delivered Fresh-r1
+application runtime; it was not caused by an operator change to Docker. The
+resulting Fresh-r2 recovery also exposed independent installer weaknesses: the
+documented check stopped before exact loaded-image admission, the same large
+archive could be loaded again during installation, pasted terminal input could
+be consumed as a blank password, a partially completed administrator step had
+no supported fresh-resume route, and installing recovery support sent a new,
+empty instance through an existing-installation pause and second sign-in flow.
+Correct these as separate contracts. Detect host prerequisites and exact-image
+runtime compatibility before application/storage/service mutation; reuse only
+byte-exact already-loaded release images; provide measured progress and an
+exact-state resumable fresh route; make password entry resistant to queued
+terminal newlines without logging secrets; and simplify recovery enablement
+only when a new empty installation is independently proven. Preserve all
+existing-installation backup, rollback, evidence, Scope and No-Strike safety
+gates. This work is development-only; sealed Fresh-r1/Fresh-r2 packages and the
+actual Range remain unchanged.
+
+Fresh-install reliability correction completed in development (2026-11-03):
+`check-fresh` now loads the sealed images once, accepts both modern and classic
+Docker representations of the same package-owned image identity, and exercises
+both runtimes before creating NCT files, certificates, accounts, containers or
+services. Installation reuses those exact images and reports six visible
+progress stages. Administrator entry discards queued terminal input, supports
+three matching attempts, restores terminal echo on interruption and never
+places the selected password in a shell variable. `resume-fresh` is deliberately
+narrow: a root-owned receipt binds the exact container, image, command, mounts,
+ports, environment, TLS/bootstrap inputs and offline archive, while a separate
+fail-closed check requires one expected Administrator, only the expected
+fresh-install authentication history, empty retained-evidence tables and no
+evidence files, including orphaned `scan-runs` files. A password that committed
+before interruption is retained instead of requested again. The existing
+recovery-console installation still requires its final account verification;
+the proposed fresh-only simplification remains open because it needs its own
+independent empty-install and rollback acceptance gate. Full regression result:
+2,450 passed and 24 skipped; focused correction result: 164 passed; shell,
+Python, Node runtime, real Docker standard-input and browser checks passed.
+The independent quality gate returned `CLEAR — DOCUMENTED DEVIATION`: this
+bounded development correction is clear, while general crash resumption,
+fresh-only recovery-pause simplification, a newly sealed package and target
+qualification remain separate work. No package was built and no Range system
+was changed.
+
+Device collection profile removal requirement added (2026-11-03): provide a
+clear analyst action to remove an unwanted reusable network-device collection
+profile from active selection. Preserve immutable profile versions and every
+historical collection reference; therefore the user-facing "delete" action is
+an archive/removal from future use, not physical deletion of provenance. Require
+explicit confirmation, reject stale concurrent versions, and explain that
+completed collections remain unchanged. Add API, browser and novice checks.
+
+Device collection profile removal completed in development (2026-11-03): the
+Device Collections profile manager now presents `Delete profile`, requires a
+second explicit confirmation and offers `Cancel delete`. Changing the visible
+selection cancels any armed deletion and disables change/delete actions until
+the newly selected profile is applied, preventing a previously applied profile
+from being removed behind a different visible selection. Confirmed removal
+uses the existing immutable archive contract: the profile disappears from
+future choices while completed collections and exact profile versions remain.
+The Operator Guide and How NCT Works explain that boundary. Browser checks
+covered cancellation, selection changes, confirmation, active-list removal and
+retained archived history; Node and API/UI regression checks passed. No Range
+system was changed.
+
 Guided first-run setup requirement added (2026-11-03): provide a resumable,
 tutorial-style walkthrough so required collection setup is not missed. Explain
 the distinction between evidence scope on each scan and the currently required

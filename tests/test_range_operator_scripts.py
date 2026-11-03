@@ -79,6 +79,193 @@ def test_admin_helper_changes_nct_accounts_without_a_fixed_username():
     assert "set_user_disabled" in content
     assert 'docker exec -i "$container"' in content
     assert "All previous sessions" in content
+    assert "nct-read-admin-secret.py" in content
+    assert "first_password" not in content
+    reader = (SCRIPTS / "nct-read-admin-secret.py").read_text(encoding="utf-8")
+    assert "termios.tcflush" in reader
+    assert "getpass.getpass" in reader
+    assert "os.O_EXCL" in reader
+    assert "os.fsync" in reader
+
+
+def test_fresh_package_admits_exact_images_early_without_loading_them_twice():
+    installer = (SCRIPTS / "nct-install-range.sh").read_text(encoding="utf-8")
+    starter = (SCRIPTS / "nct-start-docker.sh").read_text(encoding="utf-8")
+    assert "exact_images_loaded" in installer
+    assert "Fresh-install preflight passed" in installer
+    assert installer.index('docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"') < installer.index("nct-runtime-admission.py")
+    assert installer.index("nct-runtime-admission.py") < installer.index("check-fresh)")
+    assert "NCT_SKIP_IMAGE_LOAD=1" in installer
+    assert 'if [ "${NCT_SKIP_IMAGE_LOAD:-0}" = 1 ]' in starter
+    assert "Using the exact release image already admitted" in starter
+    assert "resume-fresh" in installer
+    assert "NCT_RESUME_BOOTSTRAP=1" in installer
+    assert 'docker exec -i "$CONTAINER" python -' in starter
+    assert "nct-fresh-bootstrap-state.py" in starter
+    assert "nct-verify-empty-fresh-resume.py" in starter
+    assert "fresh_state verify" in starter
+    assert "password_committed" in starter
+    assert "contains operator data or an unexpected account" in starter
+    image_verifier = (SCRIPTS / "nct-verify-loaded-images.py").read_text(encoding="utf-8")
+    assert "archive_config_digest" in image_verifier
+    assert "export_runtime_id" in image_verifier
+    empty_verifier = (SCRIPTS / "nct-verify-empty-fresh-resume.py").read_text(encoding="utf-8")
+    for retained_source in ("imports", "artifact_registry", "device_collection_authority", "scan-runs"):
+        assert retained_source in empty_verifier
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PTY input-queue behavior is POSIX-only")
+def test_admin_secret_reader_discards_stale_enter_before_first_prompt(tmp_path):
+    import pty
+    import select
+    import time
+
+    output = tmp_path / "secret"
+    child, terminal = pty.fork()
+    if child == 0:
+        os.execv(
+            sys.executable,
+            [
+                sys.executable,
+                str(SCRIPTS / "nct-read-admin-secret.py"),
+                "--output",
+                str(output),
+            ],
+        )
+    password = b"safe password with symbols !@#"
+    captured = bytearray()
+    status = None
+    try:
+        os.write(terminal, b"\n")  # Enter left behind by a pasted launch command.
+        deadline = time.monotonic() + 10
+        sent_first = sent_second = False
+        while time.monotonic() < deadline:
+            if select.select([terminal], [], [], 0.1)[0]:
+                try:
+                    captured.extend(os.read(terminal, 65536))
+                except OSError:
+                    pass
+            if b"New password" in captured and not sent_first:
+                assert not output.exists()
+                os.write(terminal, password + b"\n")
+                sent_first = True
+            if b"Confirm password" in captured and sent_first and not sent_second:
+                os.write(terminal, password + b"\n")
+                sent_second = True
+            ended, raw = os.waitpid(child, os.WNOHANG)
+            if ended:
+                status = raw
+                break
+        assert status is not None, captured.decode(errors="replace")
+        assert os.waitstatus_to_exitcode(status) == 0, captured.decode(errors="replace")
+        assert sent_first and sent_second
+        assert output.read_bytes() == password
+        assert password not in captured
+    finally:
+        os.close(terminal)
+        if status is None:
+            try:
+                os.kill(child, 15)
+                os.waitpid(child, 0)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PTY signal behavior is POSIX-only")
+def test_admin_secret_reader_restores_echo_when_interrupted(tmp_path):
+    import pty
+    import select
+    import termios
+    import time
+
+    output = tmp_path / "secret"
+    child, terminal = pty.fork()
+    if child == 0:
+        os.execv(
+            sys.executable,
+            [sys.executable, str(SCRIPTS / "nct-read-admin-secret.py"), "--output", str(output)],
+        )
+    captured = bytearray()
+    status = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and b"New password" not in captured:
+            if select.select([terminal], [], [], 0.1)[0]:
+                captured.extend(os.read(terminal, 65536))
+        assert b"New password" in captured
+        assert not (termios.tcgetattr(terminal)[3] & termios.ECHO)
+        os.kill(child, 15)
+        ended, raw = os.waitpid(child, 0)
+        assert ended == child
+        status = raw
+        assert os.waitstatus_to_exitcode(status) != 0
+        assert termios.tcgetattr(terminal)[3] & termios.ECHO
+        assert not output.exists()
+    finally:
+        os.close(terminal)
+        if status is None:
+            try:
+                os.kill(child, 15)
+                os.waitpid(child, 0)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PTY retry behavior is POSIX-only")
+def test_admin_secret_reader_keeps_secret_absent_after_mismatch_then_retries(tmp_path):
+    import pty
+    import select
+    import time
+
+    output = tmp_path / "secret"
+    child, terminal = pty.fork()
+    if child == 0:
+        os.execv(
+            sys.executable,
+            [sys.executable, str(SCRIPTS / "nct-read-admin-secret.py"), "--output", str(output)],
+        )
+    captured = bytearray()
+    status = None
+    good = b"correct password 123!"
+    sent = 0
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if select.select([terminal], [], [], 0.1)[0]:
+                try:
+                    captured.extend(os.read(terminal, 65536))
+                except OSError:
+                    pass
+            prompt_count = captured.count(b"New password") + captured.count(b"Confirm password")
+            if sent == 0 and prompt_count >= 1:
+                os.write(terminal, b"first mismatch 123!\n")
+                sent = 1
+            elif sent == 1 and prompt_count >= 2:
+                os.write(terminal, b"second mismatch 123!\n")
+                sent = 2
+            elif sent == 2 and captured.count(b"New password") >= 2:
+                assert not output.exists()
+                os.write(terminal, good + b"\n")
+                sent = 3
+            elif sent == 3 and captured.count(b"Confirm password") >= 2:
+                os.write(terminal, good + b"\n")
+                sent = 4
+            ended, raw = os.waitpid(child, os.WNOHANG)
+            if ended:
+                status = raw
+                break
+        assert status is not None, captured.decode(errors="replace")
+        assert os.waitstatus_to_exitcode(status) == 0, captured.decode(errors="replace")
+        assert sent == 4 and output.read_bytes() == good
+        assert good not in captured
+    finally:
+        os.close(terminal)
+        if status is None:
+            try:
+                os.kill(child, 15)
+                os.waitpid(child, 0)
+            except ProcessLookupError:
+                pass
 
 
 def test_quick_start_selects_one_of_the_three_launch_paths():

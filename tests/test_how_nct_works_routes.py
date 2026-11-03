@@ -80,7 +80,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Copy collection settings from history also creates only a draft" in html
     assert "still requires a reason and confirmation" in html
     assert "retains its historical label but selects nothing" in html
-    assert "Analysts and administrators can create, version, and archive" in html
+    assert "Delete profile action removes a profile from future selection" in html
+    assert "preserves its immutable versions" in html
     assert "Uploading existing Nmap XML" in html
     assert "Saved Network" in html and "Network Scope" in html
     assert "an optional Network Scope association supplies stable reusable context" in html

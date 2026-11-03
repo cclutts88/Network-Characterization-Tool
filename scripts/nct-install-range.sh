@@ -14,18 +14,23 @@ NCT_PERSIST_ROOT=${NCT_PERSIST_ROOT:-/var/lib/nct}
 NCT_RECOVERY_STATE_DIR=${NCT_RECOVERY_STATE_DIR:-$NCT_PERSIST_ROOT/deployment/recovery-console}
 export NCT_PERSIST_ROOT
 die() { printf '%s\n' "[NCT package] $*" >&2; exit 1; }
+progress() { printf '%s\n' "[NCT setup $1] $2"; }
 [ "$(id -u)" -eq 0 ] || die "Run as root."
-[ -n "$NCT_RANGE_IP" ] || die "Usage: sh scripts/nct-install-range.sh NCT_HOST_IP [fresh|check-fresh|all|check|enable-console]"
-case "$NCT_SETUP_MODE" in fresh|check-fresh|all|check|enable-console) ;; *) die "Choose fresh, check-fresh, all, check or enable-console." ;; esac
+[ -n "$NCT_RANGE_IP" ] || die "Usage: sh scripts/nct-install-range.sh NCT_HOST_IP [fresh|resume-fresh|check-fresh|all|check|enable-console]"
+case "$NCT_SETUP_MODE" in fresh|resume-fresh|check-fresh|all|check|enable-console) ;; *) die "Choose fresh, resume-fresh, check-fresh, all, check or enable-console." ;; esac
 for tool in docker systemctl sha256sum openssl curl ss flock; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required on the offline host. Nothing was installed or downloaded."
 done
 fresh_admission() {
-    command -v realpath >/dev/null 2>&1 || die "realpath is required for fresh path checks."
     for location in "$NCT_PERSIST_ROOT" "$NCT_RECOVERY_STATE_DIR" "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}"; do
         case "$location" in /*) ;; *) die "Fresh storage and recovery paths must be absolute." ;; esac
-        resolved_location=$(realpath -m -- "$location") || die "Fresh storage path could not be resolved."
-        [ "$resolved_location" = "$location" ] || die "Fresh storage paths must be normalized and must not use symbolic links."
+        case "/${location#/}/" in *//*|*/./*|*/../*) die "Fresh storage paths must be normalized and must not use symbolic links." ;; esac
+        path_part=$location
+        while [ "$path_part" != / ]; do
+            [ ! -L "$path_part" ] || die "Fresh storage paths must be normalized and must not use symbolic links."
+            path_part=${path_part%/*}
+            [ -n "$path_part" ] || path_part=/
+        done
         if [ -e "$location" ]; then
             [ -d "$location" ] || die "A dedicated fresh storage or recovery path is occupied."
             first_entry=$(find "$location" -mindepth 1 -maxdepth 1 -print -quit) || die "Fresh storage could not be inspected; emptiness was not proven."
@@ -36,8 +41,14 @@ fresh_admission() {
     return 0
 }
 if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = check-fresh ]; then
+    progress "1/6" "Checking the host, empty NCT locations and Docker access."
     docker info >/dev/null 2>&1 || die "Docker is not reachable; no installation changes were made."
     fresh_admission
+fi
+if [ "$NCT_SETUP_MODE" = resume-fresh ]; then
+    progress "1/6" "Checking the exact interrupted fresh installation."
+    docker info >/dev/null 2>&1 || die "Docker is not reachable; the interrupted installation was not changed."
+    docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1 || die "No interrupted NCT container exists. Use fresh for a new empty host."
 fi
 . "$NCT_PACKAGE_ROOT/scripts/nct-recovery-python.sh"
 NCT_RECOVERY_PYTHON=$(nct_select_recovery_python "$NCT_PACKAGE_ROOT") || die "Recovery interpreter check failed before changing NCT."
@@ -59,6 +70,9 @@ fi
 docker info >/dev/null 2>&1 || die "Docker is unavailable."
 systemctl show-environment >/dev/null 2>&1 || die "A working systemd host service is required."
 (cd "$NCT_PACKAGE_ROOT" && sha256sum -c PACKAGE-MANIFEST.sha256) || die "Package integrity check failed; preserve the installed NCT."
+if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = check-fresh ]; then
+    progress "2/6" "Package and host prerequisites passed."
+fi
 case "$NCT_PERSIST_ROOT" in /*) ;; *) die "NCT_PERSIST_ROOT must be an absolute dedicated NCT directory." ;; esac
 case "$NCT_PERSIST_ROOT" in /|/var|/var/lib|/etc|/root) die "Choose a dedicated NCT persistent directory." ;; esac
 NCT_APP_PORT=${NCT_HTTPS_PORT:-8445}
@@ -71,7 +85,7 @@ if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
     [ "$NCT_DATA_TYPE" = bind ] && [ "$NCT_DATA_SOURCE" = "$NCT_PERSIST_ROOT/data" ] || die "Existing NCT evidence is not the qualified bind folder. Preserve it and use the documented migration procedure; this package does not reset it."
     NCT_PORT=$(docker inspect --format '{{range $p,$items := .HostConfig.PortBindings}}{{if eq $p "8445/tcp"}}{{range $items}}{{println .HostPort}}{{end}}{{end}}{{end}}' "$NCT_TARGET_CONTAINER" | sed '/^$/d')
     [ "$NCT_PORT" = "$NCT_APP_PORT" ] || die "Existing NCT port differs. Set NCT_HTTPS_PORT to its actual single HTTPS port before retrying."
-    if [ "$NCT_SETUP_MODE" != enable-console ]; then
+    if [ "$NCT_SETUP_MODE" != enable-console ] && [ "$NCT_SETUP_MODE" != resume-fresh ]; then
         NCT_SOURCE=$(docker exec "$NCT_TARGET_CONTAINER" python -c 'from app.build_info import BUILD_ID,BUILD_COMMIT; print(BUILD_ID+"@"+BUILD_COMMIT)')
         NCT_REQUIRED_SOURCE_VERSION=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; sources=json.load(open(sys.argv[1])); matches=[s for s in sources if s["build_id"]+"@"+s["commit"]==sys.argv[2]]; assert len(matches)==1, "Unqualified source build"; print(matches[0]["schema_version"])' "$NCT_PACKAGE_ROOT/scripts/nct-package-sources.json" "$NCT_SOURCE") || die "This full-package upgrade refuses an unqualified source build. Preserve the current installation."
         export NCT_REQUIRED_SOURCE_VERSION
@@ -95,10 +109,18 @@ if ss -ltn | awk -v p="$NCT_CONSOLE_PORT" 'NR>1 && $4 ~ (":" p "$") {f=1} END {e
 fi
 printf '%s\n' "Offline prerequisites and package checks passed. Existing evidence and accounts have not been changed."
 "$NCT_RECOVERY_PYTHON" -c 'import sys; from pathlib import Path; root=Path(sys.argv[1]); assert root.is_absolute() and all(len(str(root/"sockets"/kind/name).encode())<108 for kind,name in (("launch","launch.sock"),("control","control.sock"))), "Recovery state path is too long; choose a shorter dedicated NCT_RECOVERY_STATE_DIR"' "$NCT_RECOVERY_STATE_DIR" || die "Recovery socket path check failed before changing NCT."
-case "$NCT_SETUP_MODE" in check|check-fresh) exit 0 ;; esac
-docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"
 NCT_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_image"])' "$NCT_PACKAGE_ROOT/release.json")
 NCT_CONSOLE_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["console_image"])' "$NCT_PACKAGE_ROOT/release.json")
+exact_images_loaded() {
+    "$NCT_RECOVERY_PYTHON" "$NCT_PACKAGE_ROOT/scripts/nct-verify-loaded-images.py" "$NCT_PACKAGE_ROOT/release.json"
+}
+if exact_images_loaded; then
+    progress "3/6" "The exact release images are already loaded; the large archive will not be loaded again."
+else
+    progress "3/6" "Loading the verified offline images. This is usually the longest step."
+    docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"
+    exact_images_loaded || die "Loaded images do not match this release manifest. NCT storage and services were not created."
+fi
 printf '%s\n' "Checking the loaded application and recovery runtime under normal container security..."
 for NCT_RUNTIME_KIND in app console; do
     if [ "$NCT_RUNTIME_KIND" = app ]; then NCT_RUNTIME_IMAGE="$NCT_IMAGE"; else NCT_RUNTIME_IMAGE="$NCT_CONSOLE_IMAGE"; fi
@@ -108,17 +130,29 @@ for NCT_RUNTIME_KIND in app console; do
     if [ "$NCT_RUNTIME_KIND" = app ]; then set -- "$@" --cap-add NET_RAW; fi
     "$@" --entrypoint python "$NCT_RUNTIME_IMAGE" - "$NCT_RUNTIME_KIND" < "$NCT_PACKAGE_ROOT/scripts/nct-runtime-admission.py" || die "The exact loaded runtime is incompatible with this Docker host. NCT storage and services were not created; no security settings were relaxed."
 done
-if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ]; then
+progress "4/6" "Exact application and recovery runtimes passed normal-security admission."
+case "$NCT_SETUP_MODE" in
+    check-fresh)
+        printf '%s\n' "Fresh-install preflight passed. No NCT storage, container, account, certificate or service was created."
+        exit 0
+        ;;
+    check) exit 0 ;;
+esac
+if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
     if [ "$NCT_SETUP_MODE" = fresh ]; then
         # Image loading is lengthy: refuse newly occupied state rather than ever
         # treating a fresh request as an upgrade/adoption request.
         fresh_admission
     fi
-    if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
+    if [ "$NCT_SETUP_MODE" = resume-fresh ]; then
+        progress "5/6" "Resuming only the verified empty installation at Administrator password setup."
+        NCT_SKIP_IMAGE_LOAD=1 NCT_RESUME_BOOTSTRAP=1 sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
+    elif docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
         [ "$NCT_SETUP_MODE" != fresh ] || die "An NCT container appeared during fresh setup; no upgrade was attempted."
         NCT_PACKAGE_RUNTIME_CLONE="$NCT_PACKAGE_ROOT/scripts/nct-clone-release-runtime.py" sh "$NCT_PACKAGE_ROOT/scripts/nct-upgrade.sh" "$NCT_RANGE_IP" docker
     else
-        sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
+        progress "5/6" "Creating the new HTTPS application and Administrator account."
+        NCT_SKIP_IMAGE_LOAD=1 sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
     fi
 fi
 NCT_EXPECTED_COMMIT=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$NCT_PACKAGE_ROOT/release.json")
@@ -131,5 +165,6 @@ NCT_CONSOLE_ID=$(docker image inspect --format '{{.Id}}' "$NCT_CONSOLE_IMAGE")
     --data-dir "$NCT_PERSIST_ROOT/data" --state-dir "$NCT_RECOVERY_STATE_DIR" \
     --install-dir "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}" \
     --cert-file "$NCT_CERT" --key-file "$NCT_KEY" --ca-file "$NCT_CA" --enable-container
+progress "6/6" "NCT and its independent recovery service are installed."
 printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates and verify an existing account to finish."
 printf '%s\n' "The recovery management port is $NCT_CONSOLE_PORT. Apply your existing approved source-address firewall policy to that port; this installer does not open a broad firewall rule."

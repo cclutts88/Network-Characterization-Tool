@@ -76,7 +76,7 @@ await eval(`(() => {
     ['deviceName',{value:''}],['address',{value:''}],['username',{value:''}],['port',{value:''}],
     ['additionalCommands',{value:''}],['preferredScope',{value:''}],['startSsh',{disabled:false}],
     ['collectionProfile',{value:''}],['collectionProfileName',{value:''}],['collectionProfileDescription',{value:''}],
-    ['saveCollectionProfileVersion',{disabled:false}],['archiveCollectionProfile',{disabled:false}],['collectionProfileStatus',{textContent:'',className:''}],
+    ['saveCollectionProfileVersion',{disabled:false}],['archiveCollectionProfile',{disabled:false,textContent:'Delete profile'}],['cancelCollectionProfileDelete',{classList:{add:()=>{}}}],['collectionProfileStatus',{textContent:'',className:''}],
     ['previewBox',{classList:{add:()=>{}}}],['empty',{classList:{remove:()=>{}}}]
   ]);
   const $=id=>controls.get(id);
@@ -86,7 +86,8 @@ await eval(`(() => {
   const notice=value=>{message=value};
   const profileStatus=()=>{};
   const document={querySelector:()=>({scrollIntoView:()=>{}})};
-  let activeCollectionProfile={profile_id:'old'},collectionProfileExact=true,current={run_id:'old'};
+  let activeCollectionProfile={profile_id:'old'},collectionProfileExact=true,pendingCollectionProfileArchive='',current={run_id:'old'};
+  ${handler("resetCollectionProfileDelete")}
   controls.get('vendor').focus=()=>{};
   const copyCollectionSettings=eval('('+copySettingsSource.replace(/^function copyCollectionSettings/,'function')+')');
   copyCollectionSettings({vendor:'cisco',device_types:['router','firewall'],device_name:'Edge',device_address:'10.0.0.1',username:'analyst',ssh_port:2222,additional_commands:['show arp','show lldp neighbors'],device_scope_assignment:{scope_id:'scope:edge'}});
@@ -106,16 +107,22 @@ await eval(`(async () => {
     ['startSsh',{disabled:false}],
     ['previewBox',{classList:{add:value=>{states.previewHidden=value==='hidden'}}}],
     ['empty',{classList:{remove:value=>{states.emptyShown=value==='hidden'}}}],
-    ['saveCollectionProfileVersion',{disabled:false}],['archiveCollectionProfile',{disabled:false}],
+    ['saveCollectionProfileVersion',{disabled:false}],['archiveCollectionProfile',{disabled:false,textContent:'Delete profile'}],
+    ['cancelCollectionProfileDelete',{classList:{add:()=>{},remove:()=>{}}}],
     ['collectionProfileName',{value:'Profile'}],['collectionProfileDescription',{value:'Description'}]
   ]);
   const $=id=>controls.get(id);
-  let activeCollectionProfile={profile_id:'device_profile_0123456789abcdef0123456789abcdef',version:2,name:'QA profile'},collectionProfileExact=true,current={collection_profile:{version:2}},status='';
+  let activeCollectionProfile={profile_id:'device_profile_0123456789abcdef0123456789abcdef',version:2,name:'QA profile'},collectionProfileExact=true,pendingCollectionProfileArchive='',current={collection_profile:{version:2}},status='';
   const fetch=async()=>({ok:true,json:async()=>({active:false})});
   const apiError=()=>'';
   const loadCollectionProfiles=async()=>{};
   const profileStatus=message=>{status=message};
+  ${handler("resetCollectionProfileDelete")}
   const archiveCollectionProfile=eval('('+archiveSource.replace(/^async function archiveCollectionProfile/,'async function')+')');
+  await archiveCollectionProfile();
+  assert.match(status,/Select Confirm delete/);
+  assert.equal(controls.get('archiveCollectionProfile').textContent,'Confirm delete');
+  assert.notEqual(activeCollectionProfile,null);
   await archiveCollectionProfile();
   assert.equal(activeCollectionProfile,null);
   assert.equal(collectionProfileExact,false);
@@ -123,7 +130,30 @@ await eval(`(async () => {
   assert.equal(controls.get('startSsh').disabled,true);
   assert.equal(states.previewHidden,true);
   assert.equal(states.emptyShown,true);
-  assert.match(status,/Generate a new preview before collecting/);
+  assert.match(status,/removed from future use/);
+})()`);
+
+await eval(`(() => {
+  const hidden=new Set();
+  const controls=new Map([
+    ['collectionProfile',{value:'profile-b'}],
+    ['archiveCollectionProfile',{disabled:false,textContent:'Confirm delete'}],
+    ['cancelCollectionProfileDelete',{classList:{add:value=>hidden.add(value),remove:value=>hidden.delete(value)}}],
+    ['saveCollectionProfileVersion',{disabled:false}],
+  ]);
+  const $=id=>controls.get(id);
+  let activeCollectionProfile={profile_id:'profile-a',version:1,name:'Profile A'};
+  let pendingCollectionProfileArchive='profile-a:1',status='';
+  const profileStatus=message=>{status=message};
+  ${handler("resetCollectionProfileDelete")}
+  ${handler("collectionProfileSelectionChanged")}
+  collectionProfileSelectionChanged();
+  assert.equal(pendingCollectionProfileArchive,'');
+  assert.equal(controls.get('archiveCollectionProfile').textContent,'Delete profile');
+  assert.equal(controls.get('archiveCollectionProfile').disabled,true);
+  assert.equal(controls.get('saveCollectionProfileVersion').disabled,true);
+  assert.ok(hidden.has('hidden'));
+  assert.match(status,/Apply profile before changing or deleting/);
 })()`);
 
 await eval(`(async () => {

@@ -3,6 +3,7 @@ set -eu
 
 container="${NCT_CONTAINER:-nct}"
 requested_user="${1:-}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 die() {
     printf '%s\n' "$*" >&2
@@ -11,7 +12,12 @@ die() {
 
 [ -t 0 ] || die "Run this command from an interactive terminal."
 command -v docker >/dev/null 2>&1 || die "Docker is required."
+command -v mktemp >/dev/null 2>&1 || die "mktemp is required for protected password entry."
 docker inspect "$container" >/dev/null 2>&1 || die "Container $container was not found. Start NCT first."
+[ -r "$SCRIPT_DIR/nct-read-admin-secret.py" ] || die "The protected Administrator password reader is missing."
+. "$SCRIPT_DIR/nct-recovery-python.sh"
+NCT_SECRET_PYTHON=$(nct_select_recovery_python "${NCT_WORKDIR:-$SCRIPT_DIR/..}") ||
+    die "A supported Python interpreter is required for protected password entry."
 
 admin_rows=$(docker exec "$container" python -c '
 from pathlib import Path
@@ -58,32 +64,15 @@ if [ -n "$current_admin" ] && [ "$current_admin" != "$new_admin" ]; then
     esac
 fi
 
-terminal_state=$(stty -g)
-first_password=""
-second_password=""
-restore_terminal() {
-    stty "$terminal_state" 2>/dev/null || true
-    first_password=""
-    second_password=""
-}
-trap restore_terminal EXIT HUP INT TERM
+secret_dir=${TMPDIR:-/tmp}
+secret_file=$(mktemp "$secret_dir/nct-admin-secret.XXXXXX") || die "A protected temporary password file could not be created."
+rm -f "$secret_file"
+cleanup_secret() { rm -f "$secret_file"; }
+trap cleanup_secret EXIT HUP INT TERM
+"$NCT_SECRET_PYTHON" "$SCRIPT_DIR/nct-read-admin-secret.py" --output "$secret_file" ||
+    die "Administrator password setup was not completed. No selected password was saved."
 
-printf 'New password (12-256 characters; spaces and symbols are accepted): ' >&2
-stty -echo
-IFS= read -r first_password
-stty "$terminal_state"
-printf '\nConfirm password: ' >&2
-stty -echo
-IFS= read -r second_password
-stty "$terminal_state"
-printf '\n' >&2
-
-[ "$first_password" = "$second_password" ] || die "Passwords do not match."
-password_length=$(printf %s "$first_password" | wc -c | tr -d ' ')
-[ "$password_length" -ge 12 ] && [ "$password_length" -le 256 ] ||
-    die "Password must be 12-256 characters; received $password_length."
-
-printf %s "$first_password" | docker exec -i "$container" python -c '
+docker exec -i "$container" python -c '
 import sys
 from pathlib import Path
 from app.auth import create_user, list_users, reset_user_password, set_user_disabled
@@ -129,7 +118,17 @@ if disable_previous and previous and previous != target:
 print("NCT Administrator {}: {}".format(action, target))
 if disable_previous and previous and previous != target:
     print("Previous Administrator disabled: {}".format(previous))
-' "$new_admin" "$current_admin" "$disable_previous"
+' "$new_admin" "$current_admin" "$disable_previous" < "$secret_file"
+
+if [ -n "${NCT_FRESH_BOOTSTRAP_RECEIPT:-}" ]; then
+    case "$NCT_FRESH_BOOTSTRAP_RECEIPT" in /*) ;; *) die "Fresh-install receipt path must be absolute." ;; esac
+    [ -n "${NCT_FRESH_CONTAINER_ID:-}" ] || die "Fresh-install container identity is missing after the password commit."
+    actual_container_id=$(docker inspect --format '{{.Id}}' "$container") || die "Fresh-install container identity could not be reread."
+    [ "$actual_container_id" = "$NCT_FRESH_CONTAINER_ID" ] || die "Fresh-install container identity changed after the password commit."
+    "$NCT_SECRET_PYTHON" "$SCRIPT_DIR/nct-fresh-bootstrap-state.py" mark-password-committed \
+        --receipt "$NCT_FRESH_BOOTSTRAP_RECEIPT" --container-id "$NCT_FRESH_CONTAINER_ID" \
+        --admin-user "$new_admin" || die "The password committed, but its fresh-install completion receipt could not be recorded. Preserve the installation and use resume-fresh."
+fi
 
 printf '%s\n' "All previous sessions for $new_admin were signed out."
 
