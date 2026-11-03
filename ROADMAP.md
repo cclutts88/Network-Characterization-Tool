@@ -15,6 +15,13 @@ Library titles now retain both fields so either is searchable; no retained evide
 or authority data is changed. Add a focused regression and repeat exact-package
 qualification before sealing.
 
+Packaged novice correction (2026-11-02): a legitimate saved scan without prepared
+analysis returned an explanatory 409, but its status panel stayed hidden. Reveal
+the loading/error panel, clear stale results and show a Scan History preparation
+link without queuing or parsing. Add actual JavaScript error/success regression;
+repeat final image/package gates. Missing prepared results remain distinct from
+missing original evidence.
+
 Operator usability requirement (2026-10-29): deployment and recovery are operated
 by trusted personnel in an isolated environment. Favor a short GUI workflow and
 avoid repeated access-code/sign-in friction where an already authenticated
