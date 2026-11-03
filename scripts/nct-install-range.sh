@@ -33,6 +33,7 @@ fresh_admission() {
         fi
     done
     docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1 && die "An NCT container already exists. Fresh setup will not replace it."
+    return 0
 }
 if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = check-fresh ]; then
     docker info >/dev/null 2>&1 || die "Docker is not reachable; no installation changes were made."

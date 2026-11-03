@@ -200,6 +200,18 @@ def test_fresh_admission_requires_proven_empty_real_directory(tmp_path,problem):
     else:assert marker.read_text()=='retained data'
 
 
+def test_fresh_admission_returns_success_for_empty_host(tmp_path):
+    if os.name!='posix':pytest.skip('POSIX installer')
+    body=(SCRIPTS/'nct-install-range.sh').read_text().split('fresh_admission() {\n',1)[1].split('\n}\n',1)[0]
+    tools=tmp_path/'bin';tools.mkdir()
+    p=tools/'docker';p.write_text('#!/bin/sh\nexit 1\n');p.chmod(0o700)
+    script='set -eu\ndie() { exit 13; }\nfresh_admission() {\n'+body+'\n}\nfresh_admission\nprintf admitted\n'
+    result=subprocess.run(['sh','-c',script],env={**os.environ,'PATH':str(tools)+':'+os.environ['PATH'],
+        'NCT_PERSIST_ROOT':str(tmp_path/'data'),'NCT_RECOVERY_STATE_DIR':str(tmp_path/'state'),
+        'NCT_RECOVERY_INSTALL_DIR':str(tmp_path/'installed'),'NCT_TARGET_CONTAINER':'isolated-fresh'},capture_output=True,text=True)
+    assert result.returncode==0 and result.stdout=='admitted',result.stderr
+
+
 @pytest.mark.parametrize("damage", [None, "origin", "ledger", "drift", "version", "wal"])
 def test_schema8_gate_checks_migrated_ledger_without_changing_source(tmp_path, monkeypatch, damage):
     from test_schema_history_v8 import source_v7
