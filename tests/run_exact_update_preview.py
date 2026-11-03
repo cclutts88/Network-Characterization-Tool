@@ -253,6 +253,9 @@ def main():
             raise AssertionError(host.public())
 
         def verify_xml():
+            # A restored backup cannot contain browser sessions created after
+            # that backup. Verify the preserved account with a normal app login.
+            request('/api/auth/login', {'username': 'preview-operator', 'password': password})
             with browser.open(config['application_url'] + '/api/scan-runs/' + run_id + '/artifacts/xml', timeout=30) as response:
                 assert 'application/xml' in response.headers['Content-Type']
                 assert 'scan.xml' in response.headers['Content-Disposition']
