@@ -10064,3 +10064,121 @@ Next: transfer this single full ZIP, follow its existing-helper route on the
 supported R3 host, then install the enclosed GUI application archive and verify
 normal account access, retained historical XML and actual service/browser trust.
 No further roadmap feature work is included in this package milestone.
+
+### 2026-11-02 - Unified Evidence Library started
+
+Authorized next bounded addition: a read-only Evidence Library entry in Account and
+settings (hamburger), with Nmap scans/importedXML and device-pull/upload evidence
+together; saved network/CIDR, exact scope, saved date, analyst and type filters;
+deterministic bounded pagination; original source access and contextual analysis
+links. Preserve source-qualified records and every retained observation; SHA256
+sharing never merges encounter history. No configuration/source administrator
+browser, new collection, contact, repair, compaction or source-content parsing.
+
+Completion criteria: allsupported retained source classes and older/unregistered
+records remain findable; filters precede paging; explicit unknown/missing/conflict
+meaning; existing download guards preserved; library GET makes no evidence/schema
+writes and does not walk/reparse the entire filesystem; guide+How NCT Works updated;
+meaningful source/filter/pagination/read-only/auth/download tests, theme/narrow
+browser acceptance, independent reviewer and novice gates. Work on foundation only;
+main, sealed RecoveryR4 package and actual Range remain unchanged.
+
+Independent initial design gate CLEAR - DOCUMENTED DEVIATION for source-qualified
+read-only SQL catalog. Existing device current-selector catalog omits legacy and
+unprocessed records: evaluating a separate disposable metadata-only cache with
+startup backfill and source-publication updates before downstream implementation.
+
+### 2026-11-02 - Recovery-r4 VM transfer workaround started
+
+Operator reports the full195,669,782-byte ZIP fails Range Send File To VM. Observed
+immediate Errorundefined in the current authenticated browser, matching the earlier
+size-related transfer issue; the service's exact limit is still unknown. Evidence
+Library work is temporarily deferred while resolving this transfer, not cancelled.
+Prepared four binary pieces of at most48MiB and a transport-only join script under
+Downloads/NCT-Recovery-r4-Transfer-Parts; the original sealed ZIP is unchanged.
+Every piece and the recombined ZIP have embedded SHA256 checks, exclusive publication
+preserves a different existing output, and no installation runs. Local and independent
+Docker join/repeat/occupied-output checks passed (reviewerCLEAR). First actual small
+piece is in progress; no target transfer/installation success is inferred yet.
+### 2026-11-02 - Recovery-r4 controller transfer verified; workstation SCP pending
+
+All four transport pieces reached the controller through Send File To VM. The
+uploaded join script matched its local SHA256 before execution. Every piece passed
+its embedded checksum and the controller rebuilt the complete original ZIP with
+SHA256 db8937a70b966132e4c9f4693dc083f71ee2c7f359a4882d5a85a0cf98290c1b.
+Visible PASS proof: artifacts/nct-r4-range-transfer-verified-20261102.png.
+No NCT installation, service change or evidence change was performed.
+
+At the operator's request, copying this full ZIP onward to the analyst Windows VM
+using SCP. Controller sign-in was reached, but the initial destination lost its
+path separator and the console did not pass the cancel shortcut through. Handed
+off cancellation, corrected SCP command and existing-password entry to the user;
+workstation transfer and checksum remain pending. Do not treat the verified
+controller package as installed or as a verified workstation copy.
+### 2026-11-02 - Recovery-r4 analyst workstation SCP verified
+
+Operator completed corrected SCP from the controller to the analyst workstation.
+Visible terminal reports 100 percent transfer. Independent workstation PowerShell
+check passed exact195,669,782-byte size and full SHA256
+DB8937A70B966132E4C9F4693DC083F71EE2C7F359A4882D5A85A0CF98290C1B.
+Destination: analyst account Downloads/NCT-Full-Range-20261102-Recovery-r4.zip.
+Proof: artifacts/nct-r4-workstation-scp-verified-20261102.png. The transfer hurdle
+is resolved; NCT installation/update and target acceptance remain separate/pending.
+### 2026-11-02 - Actual Recovery-r4 Range upgrade started
+
+User explicitly authorized updating the verified work Range installation. Following
+sealed START-HERE existing Recovery-r3 helper/old R2 console route: fresh extraction,
+internal manifest verification, offline image load, unmodified helper preview then
+apply, followed by separate GUI application update. Independent procedure reviewer
+CLEAR - DOCUMENTED DEVIATION conditional on fresh preview success; real systemd and
+CA/browser acceptance remain target checks. Preserve original helper/console,
+private journal, accounts, backups and evidence. Completion requires actual R4 build,
+account verification/final restart and representative retained XML access. No change
+to sealed packages, stable main or Evidence Library implementation in this operation.
+### 2026-11-02 - Recovery-r4 target console identity deviation
+
+Unmodified target preview halted before service/application changes: old console
+runtime identity differed from the development engine identity hardcoded by the
+sealed upgrader. Read-only independent local export and actual target export prove
+identical trusted R2 image configuration content
+cf8d3141abfcb66450b435cd351e4a7824f70b3d0a67b8ca62fecc465d139548,
+R2 source54aa0df9cbc7dd30cb68adbaf21a055761776b5c. Classic Docker uses this
+configuration digest as runtime ID; local Docker uses4c1f8e8d... for that same image.
+
+Separate narrowly pinned operational bridge started; original ZIP/package remains
+unchanged. It verifies exact qualified full manifest and every file before importing,
+sealed upgrader hash, root-owned paths, exact R2 build/source/exported content and
+configured-vs-actual console identity, then invokes unchanged sealed upgrade/rollback
+with the proven classic identity. No generic accept-any-image or skip-check option.
+35 focused Linux tests passed (8 bridge guards/classic lifecycle plus27 existing
+upgrade preservation/interruption tests). Independent review and fresh target
+preview remain required before apply. Actual Range upgrade is not yet complete.
+Bridge qualification completed: corrected the bridge's manifest binding from the
+pre-seal qualification receipt to final sealed manifest289f788dee3324600bf43324d1487d51426ab11f066caab4aad7a6741af825b6.
+38 independent Linux tests pass with zero skips, including real final package
+admission, exact-content rejection cases and interrupted new-console/config rollback.
+Reviewer CLEAR - DOCUMENTED DEVIATION. Representative lifecycle engine and Windows
+bind-mode permission substitutions are documented test limits; target protected
+paths, actual systemd service and fresh complete preview must pass before apply.
+Bridge SHA2565b7834a2e99c6c2f545002d54559ac1680f1cfdbf551f5186e1526393b0bfe3d.
+### 2026-11-02 - Range recovery helper/console upgraded; GUI application pending
+
+Fresh actual controller bridge preview passed all protected-path, exact-content,
+service and compatibility checks. Apply completed every journaled stage and printed
+Helper and console upgraded; NCT application and evidence were not replaced.
+Target proof: artifacts/nct-r4-helper-upgraded-range-20261102.png; preview proof:
+artifacts/nct-r4-classic-preflight-pass-20261102.png. Installed journal/backups and
+old console are retained. Application remains R3 until the separate browser update.
+Analyst workstation locked during preparation; requested user unlock to continue.
+
+Novice documentation review found no blocking unsafe instruction. Future package
+wording must distinguish existing-helper versus first-install paths before the
+first terminal command, explicitly name the enclosed GUI tar.gz, condition old-R2
+warnings on whether helper upgrade has completed, and require normal browser login
+and actual older XML saving in final acceptance. Sealed package remains unchanged.
+Additional target verification: actual systemd nct-recovery-host.service is active;
+helper-upgrade.json phase complete; original backup retained under protected helper
+folder. Config pins exact R4 console configuration0606260094f4a81e4227c9809fa8e5c633ad99b88bfe2b3a18c7f3e9febfff7c.
+CA-verified application health still reports unchanged Recovery-r3 source03da1516.
+Application update remains pending analyst VM unlock. Operational bridge and its
+qualified steps are retained in docs/RECOVERY_R4_CLASSIC_DOCKER_BRIDGE.md.
