@@ -21,6 +21,7 @@ import tarfile
 import threading
 import time
 import urllib.request
+import urllib.parse
 
 
 def main():
@@ -33,6 +34,8 @@ def main():
     parser.add_argument('--https', action='store_true', help='CA-verified HTTPS API acceptance; browser leg uses loopback HTTP')
     parser.add_argument('--exercise-package', type=Path)
     parser.add_argument('--failure-package', type=Path)
+    parser.add_argument('--full-package', type=Path, help='Bind existing-R4 qualification to this staged full kit')
+    parser.add_argument('--baseline-tools', type=Path)
     args = parser.parse_args()
     if args.exercise_package and not args.https:
         raise ValueError('Automated exact-package acceptance requires CA-verified HTTPS')
@@ -44,7 +47,7 @@ def main():
     tools = root / 'tools'
     tools.mkdir()
     for name in ('nct_update_host.py', 'nct-range-data-check.py', 'nct_update_work.py'):
-        shutil.copyfile(Path('/workspace/scripts') / name, tools / name)
+        shutil.copyfile((args.baseline_tools or Path('/workspace/scripts')) / name, tools / name)
     sys.path.insert(0, str(tools))
     import nct_update_host as module
     own_id = Path('/etc/hostname').read_text().strip()
@@ -71,6 +74,25 @@ def main():
     engine = FixtureDocker()
     app_id = json.loads(engine.command('image', 'inspect', args.application_image))[0]['Id']
     console_id = json.loads(engine.command('image', 'inspect', args.console_image))[0]['Id']
+    full_release = None
+    if args.full_package:
+        sys.path.insert(0, '/workspace/scripts')
+        from build_nct_range_package import verify_manifest
+        tested_manifest = verify_manifest(args.full_package)
+        full_release = json.loads((args.full_package / 'release.json').read_text())
+        assert args.exercise_package == args.full_package / full_release['gui_update']['file']
+        reuse = full_release['existing_helper_reuse']
+        for filename, digest in reuse['files'].items():
+            assert module.digest_file(tools / filename) == digest
+        env = dict(x.split('=', 1) for x in json.loads(engine.command('image', 'inspect', app_id))[0]['Config']['Env'] if '=' in x)
+        assert env['NCT_BUILD_ID'] == reuse['build_id'] and env['NCT_BUILD_COMMIT'] == reuse['build_commit']
+        # Docker archive config digest is stable across classic and containerd engines.
+        exported = root / 'console-identity.tar'
+        engine.command('save', '-o', str(exported), console_id)
+        with tarfile.open(exported) as archive:
+            entry = json.load(archive.extractfile('manifest.json'))[0]
+            assert 'sha256:' + hashlib.sha256(archive.extractfile(entry['Config']).read()).hexdigest() == reuse['console_config_digest']
+        exported.unlink()
     name = 'nct-exact-update-' + secrets.token_hex(6)
     data, launch, control, spool = (root / p for p in ('data', 'launch', 'control', 'spool'))
     for path in (data, launch, control, spool):
@@ -145,6 +167,14 @@ def main():
                 'display_name': 'Exact release retained evidence', 'profile': 'Common ports', 'scheduled': False,
                 'artifacts': [{'name': 'xml', 'filename': 'scan.xml', 'download_url': '/api/scan-runs/' + run_id + '/artifacts/xml'}]}
     (folder / 'manifest.json').write_text(json.dumps(manifest))
+    device_id = 'a' * 32
+    device_folder = data / 'device-configs' / device_id
+    device_folder.mkdir(parents=True)
+    device_bytes = b'hostname retained-router\ninterface eth0\n ip address 192.0.2.1/24\n'
+    (device_folder / 'stdout.txt').write_bytes(device_bytes)
+    (device_folder / 'manifest.json').write_text(json.dumps({'run_id':device_id,'operation':'configuration_pull','status':'completed',
+        'device_name':'Retained acceptance router','device_address':'192.0.2.1','operator':'preview-operator',
+        'created_at':'2026-10-29T00:00:00Z','vendor':'cisco','commands':[],'output_complete':True}))
     seed = "from app.poc import insert_scan_run_manifest; import json; insert_scan_run_manifest(json.loads(" + repr(json.dumps(manifest)) + "))"
     host.run_helper(app_id, ['--mount', f'type=bind,src={data},dst=/data'], ['-c', seed])
     engine.command('update', '--restart=on-failure:3', name)
@@ -169,7 +199,7 @@ def main():
                     for table in ('analyst_users', 'scan_runs', 'artifact_registry', 'artifact_observations')}
 
     baseline = {str(p.relative_to(data)): module.digest_file(p) for p in data.rglob('*')
-                if p.is_file() and (p.is_relative_to(folder) or 'artifacts' in p.parts)}
+                if p.is_file() and (p.is_relative_to(folder) or p.is_relative_to(device_folder) or 'artifacts' in p.parts)}
     initial_counts = counts()
     initial_rows = private_row_digest()
     original_runtime = module.canonical(runtime(original))
@@ -249,6 +279,30 @@ def main():
         release = install(args.exercise_package, 'awaiting_sign_in')
         running = request('/health')
         assert running['build_id'] == release['build_id'] and running['build_commit'] == release['build_commit']
+        if full_release:
+            page = browser.open(config['application_url'] + '/evidence-library').read().decode()
+            assert 'Evidence Library' in page
+            catalog = request('/api/evidence-library?limit=1')
+            assert catalog['total'] >= 3 and catalog['next_cursor']
+            next_page = request('/api/evidence-library?limit=1&after=' + urllib.parse.quote(catalog['next_cursor']))
+            assert next_page['items'][0]['id'] != catalog['items'][0]['id']
+            devices = request('/api/evidence-library?kind=device&q=Retained%20acceptance')
+            assert devices['total'] == 1 and devices['items'][0]['source_id'] == device_id
+            device = devices['items'][0]
+            assert device['analysis_url'] == '/device-analysis?run=' + device_id + '#deviceEvidencePicker'
+            detail = request(device['detail_url'])
+            link = next(x['url'] for x in detail['artifacts'] if x['name'] == 'stdout.txt')
+            assert browser.open(config['application_url'] + link).read() == device_bytes
+            scans = request('/api/evidence-library?kind=scan')
+            assert any(x['source_id'] == run_id and x['analysis_url'] == '/analysis?run=' + run_id for x in scans['items'])
+            assert request('/api/evidence-library?kind=import')['total'] >= 1
+            engine.command('stop', name)
+            engine.command('start', name)
+            host.wait_url(config['application_url'] + '/health/readiness', lambda x: x.get('healthy') is True)
+            request('/api/auth/login', {'username':'preview-operator', 'password':password})
+            assert request('/api/evidence-library?kind=device')['total'] == 1
+            assert all(module.digest_file(data / p) == digest for p, digest in baseline.items())
+            assert not list(data.rglob('*library*.sqlite3'))
         later = data / 'post-update-evidence.txt'
         later.write_bytes(b'Isolated evidence created after the verified update backup')
         later_sha = module.digest_file(later)
@@ -266,6 +320,19 @@ def main():
                     'helper_sha256': helper_hash, 'package_sha256': module.digest_file(args.exercise_package), 'controlled_failure': bool(args.failure_package),
                     'post_update_evidence_preserved_sha256': later_sha, 'legacy_security_runtime_exercised': args.https,
                     'authenticated_xml_download_after_update_and_restore': True, 'xml_sha256': hashlib.sha256(xml).hexdigest()})
+        if full_release:
+            assert args.failure_package
+            proof = {'source':full_release['existing_helper_reuse'], 'tested_manifest_sha256':tested_manifest,
+                'commit':full_release['commit'], 'images':full_release['images'], 'gui_update_sha256':module.digest_file(args.exercise_package),
+                **{key:True for key in ('ca_verified','update_verified','restore_verified','controlled_failure','existing_account_preserved',
+                    'evidence_unchanged','library_verified','helper_unchanged','console_unchanged','update_pause_absent')}}
+            module.save(root / 'full-kit-acceptance.json', {'result':'pass','commit':full_release['commit'],
+                'tested_manifest_sha256':tested_manifest,'existing_helper_reuse':proof,
+                'source_results':[{'result':'pass','commit':full_release['commit'],'tested_manifest_sha256':tested_manifest,
+                    'images':full_release['images'],'source_build':full_release['existing_helper_reuse']['build_id'],
+                    'source_commit':full_release['existing_helper_reuse']['build_commit'],'source_schema_version':8}],
+                'range_accepted':False,'systemd_substitution':'controlled exact baseline helper process',
+                'terminal_install_qualified':False})
         for item in engine.command('ps', '-aq', '--filter', 'label=org.nct.acceptance=' + root.parent.name).split():
             engine.command('update', '--restart=no', item)
             engine.command('stop', item)

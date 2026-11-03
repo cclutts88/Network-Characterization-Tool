@@ -12,6 +12,7 @@ import zipfile
 
 LAUNCHERS = ("nct-start-docker.sh", "nct-start-compose.sh", "nct-start-legacy.sh", "nct-upgrade.sh", "nct-rollback-upgrade.sh", "nct-recover-unhealthy-upgrade.sh", "nct-range-direct-deploy.sh")
 SOURCE_TAG = "0.16.0-range-test-20261013-phase3-r3"
+R4_SOURCE = {"build_id": "0.16.0-range-test-20261102-recovery-r4", "build_commit": "937954bc03e4b21c3e93d7430321a918d8bc59a0"}
 
 
 def digest(path):
@@ -70,7 +71,7 @@ def normalize_export(raw, output):
         return identities
 
 
-def stage(source, output, image, console, commit, build_id):
+def stage(source, output, image, console, commit, build_id, existing_r4=False):
     if image != "network-characterization-tool:" + build_id or console != "nct-recovery-console:" + build_id:
         raise ValueError("Image tags must match the full package's bound launcher names")
     if command("git", "-C", str(source), "rev-parse", "HEAD") != commit or command("git", "-C", str(source), "status", "--porcelain"):
@@ -133,12 +134,35 @@ def stage(source, output, image, console, commit, build_id):
     from build_nct_update import build
     r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
     # Terminal installer acceptance is not GUI-update acceptance.
-    sources = [r3]
+    sources = [R4_SOURCE] if existing_r4 else [r3]
     update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
     release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
     release["helper_upgrade_source"] = {**r3,
         "host_sha256":"00204d190fc8802d334f7c93834a3aa439792317f631db96ef01ebceeb4b00bc",
         "console_image_id":"sha256:4c1f8e8d5178710ee4f08ca891b356831ff631e30cccf4e8ef955c53731c94fd"}
+    if existing_r4:
+        # This kit deliberately qualifies one existing-installation path only.
+        # Bundled emergency/terminal tools are not newly qualified install paths.
+        del release["helper_upgrade_source"]
+        for name in ("nct_update_host.py", "nct_update_work.py", "nct-range-data-check.py"):
+            baseline = subprocess.check_output(["git", "-C", str(source), "show", R4_SOURCE["build_commit"] + ":scripts/" + name])
+            if hashlib.sha256(baseline.replace(b'\r\n', b'\n')).hexdigest() != digest(output / "scripts" / name):
+                raise ValueError("Existing-R4 mode requires unchanged recovery helper files")
+        release["supported_sources"] = [{"build_id": R4_SOURCE["build_id"], "commit": R4_SOURCE["build_commit"], "schema_version": 8}]
+        registry = output / "scripts/nct-package-sources.json"
+        registry.write_text(json.dumps(release["supported_sources"], indent=2) + "\n", encoding="utf-8")
+        for binding in bindings:
+            if binding["package"] == "scripts/nct-package-sources.json":
+                binding["sha256"] = digest(registry)
+        release["schema_gate"] = "existing-r4-gui-update-with-unchanged-helper-and-console"
+        release["existing_helper_reuse"] = {**R4_SOURCE,
+            "files": {name: digest(output / "scripts" / name) for name in ("nct_update_host.py", "nct_update_work.py", "nct-range-data-check.py")},
+            "console_config_digest": "sha256:0606260094f4a81e4227c9809fa8e5c633ad99b88bfe2b3a18c7f3e9febfff7c"}
+        release["terminal_install_qualified"] = False
+        instructions = subprocess.check_output(["git", "-C", str(source), "show", commit + ":docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md"])
+        (output / "START-HERE.md").write_bytes(instructions)
+        release["source_bindings"] = [b for b in bindings if b["package"] != "START-HERE.md"]
+        release["source_bindings"].append({"source": "docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md", "source_sha256": hashlib.sha256(instructions).hexdigest(), "package": "START-HERE.md", "sha256": digest(output / "START-HERE.md")})
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     write_manifest(output)
     return release
@@ -175,6 +199,13 @@ def seal(root, acceptance, output):
             or proof.get("old_helper_sha256") != source["host_sha256"] or proof.get("old_console") != source["console_image_id"]
             or not all(proof.get(k) is True for k in required)):
             raise ValueError("The exact installed-helper upgrade needs its own qualified acceptance")
+    if release.get("existing_helper_reuse"):
+        proof = result.get("existing_helper_reuse", {})
+        required = ("ca_verified", "update_verified", "restore_verified", "controlled_failure", "existing_account_preserved", "evidence_unchanged", "library_verified", "helper_unchanged", "console_unchanged", "update_pause_absent")
+        if (proof.get("source") != release["existing_helper_reuse"] or proof.get("tested_manifest_sha256") != tested
+            or proof.get("commit") != release["commit"] or proof.get("gui_update_sha256") != release["gui_update"]["sha256"]
+            or proof.get("images") != release["images"] or not all(proof.get(k) is True for k in required)):
+            raise ValueError("The exact existing-R4 GUI update needs its own qualified acceptance")
     (root / "VALIDATION.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     write_manifest(root)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -197,9 +228,10 @@ if __name__ == "__main__":
         staging.add_argument("--" + name, type=Path, required=True)
     for name in ("image", "console", "commit", "build-id"):
         staging.add_argument("--" + name, required=True)
+    staging.add_argument("--existing-r4", action="store_true")
     sealing = sub.add_parser("seal")
     for name in ("root", "acceptance", "output"):
         sealing.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
-    value = stage(args.source, args.output, args.image, args.console, args.commit, args.build_id) if args.action == "stage" else seal(args.root, args.acceptance, args.output)
+    value = stage(args.source, args.output, args.image, args.console, args.commit, args.build_id, args.existing_r4) if args.action == "stage" else seal(args.root, args.acceptance, args.output)
     print(json.dumps(value, indent=2))

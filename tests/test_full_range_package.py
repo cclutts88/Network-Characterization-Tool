@@ -47,6 +47,32 @@ def test_seal_binds_tested_files_and_includes_checksums_in_one_transfer(tmp_path
     package.verify_manifest(root)
 
 
+@pytest.mark.parametrize('damage', [None, 'missing', 'source', 'archive', 'images', 'restore', 'manifest'])
+def test_existing_r4_kit_requires_exact_reuse_acceptance(tmp_path, damage):
+    root = staged(tmp_path)
+    release = json.loads((root / 'release.json').read_text())
+    release['existing_helper_reuse'] = {'build_id':'r4', 'files':{'helper':'exact-hash'}}
+    release['gui_update'] = {'sha256':'package-hash'}
+    (root / 'release.json').write_text(json.dumps(release))
+    package.write_manifest(root)
+    result = evidence(root)
+    proof = {'source':release['existing_helper_reuse'], 'tested_manifest_sha256':result['tested_manifest_sha256'],
+        'commit':release['commit'], 'gui_update_sha256':'package-hash', 'images':release['images'],
+        **{key:True for key in ('ca_verified','update_verified','restore_verified','controlled_failure','existing_account_preserved',
+            'evidence_unchanged','library_verified','helper_unchanged','console_unchanged','update_pause_absent')}}
+    if damage == 'source': proof['source'] = {}
+    elif damage == 'archive': proof['gui_update_sha256'] = 'wrong'
+    elif damage == 'images': proof['images'] = {}
+    elif damage == 'restore': proof['restore_verified'] = False
+    elif damage == 'manifest': proof['tested_manifest_sha256'] = 'wrong'
+    if damage != 'missing': result['existing_helper_reuse'] = proof
+    receipt = tmp_path / 'reuse.json'; receipt.write_text(json.dumps(result))
+    if damage:
+        with pytest.raises(ValueError, match='existing-R4'): package.seal(root, receipt, tmp_path / 'release.zip')
+    else:
+        package.seal(root, receipt, tmp_path / 'release.zip')
+
+
 @pytest.mark.parametrize('damage',[None,'missing','wrong_source','wrong_image','missing_restore','wrong_manifest'])
 def test_helper_delivery_requires_its_own_exact_package_acceptance(tmp_path,damage):
     root=staged(tmp_path)

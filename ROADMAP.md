@@ -1,6 +1,14 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Release preparation started (2026-11-02): Evidence Library offline Range kit.
+Qualify the exact accepted Recovery-r4 GUI application-update path with unchanged
+installed helper/console, retained accounts/evidence, backup restore and a controlled
+failed update. Include full offline assets and internal checksums; do not imply
+new qualification of older terminal installs or Kubernetes updates. Range and main
+remain unchanged during preparation. Authority-initializer hardening remains a
+separate open follow-up.
+
 Operator usability requirement (2026-10-29): deployment and recovery are operated
 by trusted personnel in an isolated environment. Favor a short GUI workflow and
 avoid repeated access-code/sign-in friction where an already authenticated
