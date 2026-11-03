@@ -10482,3 +10482,23 @@ qualification/transfer; not deployed to Range or promoted to main by this milest
   Quality gate: CLEAR. The operating rules and fresh-install guide now require
   this delivery method. Actual transfer and fresh installation on the Range are
   still pending; no sealed package or Range evidence was modified.
+
+### 2026-11-02 — Architecture deviation: compatible application runtime for older Docker
+
+The real fresh host's default-security container test rejected ordinary Python
+thread creation in the Debian/glibc application image; the invalid clone3 probe
+returned EPERM. The pinned musl recovery-console base passed thread creation on
+that same host with network disabled, read-only filesystem and all capabilities
+dropped. This supports the older engine/runtime compatibility diagnosis; the
+thread error alone was not treated as proof of its precise root cause.
+
+Use the same pinned Python 3.12 Alpine/musl base for the application, while
+preserving application code, data contracts, mount/capability/security policies and
+independent helper architecture. Requalify the full application suite, external
+collection tools, exact fresh installation and optional supported update/restore
+paths on the new image. Do not carry the prior Debian runtime dependency or tool
+inventory claims forward. The new installer must reject a failed loaded-image
+runtime test before creating NCT storage/services. Fresh-r1 remains sealed and
+its actual installation is halted; Fresh-r2 must be separately sealed, split,
+transferred and admitted on the real host before installation. This deviation
+changes the runtime packaging, not evidence identity, scope or ingestion semantics.
