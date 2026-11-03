@@ -124,8 +124,12 @@ def main():
     request('/api/exchange',{'code':handoff['url'].split('#handoff=')[1]},True)
     assert request('/api/status',console_request=True)['operation']['phase']=='awaiting_sign_in'
     request('/api/verify-sign-in',{'username':'admin','password':password},True)
-    operation=request('/api/status',console_request=True)['operation']
-    assert operation['phase']=='complete' and all(operation.get(k) for k in ['backup_verified','evidence_verified','controller_sign_in_verified','release_restart_started'])
+    for _ in range(60):
+        operation=request('/api/status',console_request=True)['operation']
+        if operation['phase']=='complete':break
+        time.sleep(1)
+    assert operation['phase']=='complete' and all(operation.get(k) for k in ['backup_verified','evidence_verified','controller_sign_in_verified'])
+    assert host.read()['release_restart_started'] is True  # Internal journal field, not exposed by the public status API.
     assert not (persist/'data/recovery/update-maintenance.json').exists()
     assert engine.inspect(console)['Image']==json.loads(engine.command('image','inspect',release['console_image']))[0]['Id']
     assert engine.inspect(name)['Image']==json.loads(engine.command('image','inspect',release['application_image']))[0]['Id']

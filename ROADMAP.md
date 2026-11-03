@@ -36,7 +36,7 @@ avoid repeated access-code/sign-in friction where an already authenticated
 operator session can safely provide the handoff. Preserve evidence verification,
 tested backups, rollback, and clear completion/failure results. Simplification remains planned work; the deployed Recovery-r4 helper and console retain existing-account verification before finalizing updates.
 
-- Latest transfer milestone: Recovery-r4 work Range update accepted: backup, retained evidence, account verification/final restart and historical browser XML save/hash passed. See the final dated record below.
+- Latest transfer milestone: Fresh-r1 full offline ZIP prepared and locally qualified for a genuinely new standalone Docker Range installation, with Evidence Library and independent Updates & Recovery included. Actual fresh Range installation remains pending. Earlier Recovery-r4 Range acceptance remains recorded below.
 - Roadmap status: Approved governing direction
 - Working product expansion: NCT = Network Correlation & Triage
 - Foundation branch: `foundation/evidence-engine-v2`
@@ -10389,3 +10389,52 @@ Development preview: http://127.0.0.1:18165/evidence-library using isolated samp
 metadata/evidence, active collection disabled. Newest proof in parent artifacts:
 evidence-library-final-development-preview-20261102.png. Ready for next package
 qualification/transfer; not deployed to Range or promoted to main by this milestone.
+
+### 2026-11-02 — Fresh-r1 full offline kit completed; target installation pending
+
+- User corrected the release target to a fresh Range. The earlier existing-R4-only
+  candidate was never sealed or delivered as a fresh installation package.
+- Delivered file: `NCT-Full-Range-20261102-Fresh-r1.zip`, 195,698,694 bytes.
+  SHA-256: `038f661fa5241960caf226e0b86984027fce0d0264867146e9f9053e7932cac1`.
+- Exact packaged source: `58a30e8548c86f6a83a1e530e5dd8ba4d7f3562c`;
+  build `0.16.0-range-test-20261102-fresh-r1`. Later validation-record/test-only
+  commits do not replace the sealed image source. Final internal manifest SHA-256:
+  `c0b708d9be35abcd46f4183aefccfc0055f06f16069a67251ce33c7ab992b05b`.
+- Fresh-first START-HERE instructions cover prerequisites, internal checksums,
+  check-fresh/fresh admission, interactive admin password selection, CA/firewall
+  preparation, browser sign-in and independent console verification. The exact
+  R4 GUI update is a separate optional route. Older terminal upgrades, Compose
+  installation and Kubernetes updater installation are not newly qualified.
+- Exact-package clean-storage full-shell qualification passed: refusals preserve
+  existing/symlinked/uninspectable storage and helper locations; a container
+  appearing during image loading is refused rather than upgraded. New setup
+  created exactly one admin and zero scan/import/artifact/device-authority rows,
+  removed the temporary bootstrap secret, and kept the extracted manifest intact
+  without Python bytecode files. CA-verified HTTPS, exact app/console identities,
+  handoff, account verification/final restart, app stop/start, helper restart,
+  emergency access, on-demand console closure and real original XML/configuration
+  downloads after new uploads passed. Local systemd/ss/coordinator substitutions
+  remain explicit in VALIDATION.json; real host boot/trust/network acceptance is pending.
+- The same exact package passed the optional R4 GUI update, explicit verified
+  backup restore and a compatible deliberately failing application/automatic
+  recovery test. Existing accounts, retained rows/files, runtime settings, recovery
+  helper and old pinned console were preserved. Failure fixtures are excluded
+  from the ZIP.
+- Independent reviewer: CLEAR — DOCUMENTED DEVIATION. Novice: fresh instructions
+  CLEAR and packaged Evidence Library/browser checks CLEAR, including uploaded
+  device filename/name filters, retained downloads, prepared analysis and visible
+  unprepared-source guidance, Graphite/Sage, narrow layouts and shared Guide type.
+- Verification: 59 package tests, earlier 91 retained-analysis/library/API/package
+  tests and 22 guide/retained follow-up tests passed; Node actual UI regressions
+  passed. The final image's 128 application files match source and application
+  dependency versions match the previously qualified runtime. All 52 ZIP entries,
+  internal hashes, 46 source bindings, archive identities, CRC and outer SHA-256
+  were verified after sealing.
+- Qualification harness correction only: restart completion is checked in its
+  internal journal; the public API intentionally omits that internal flag. Initial
+  fresh rehearsals completed setup but their assertion incorrectly expected that
+  private field in public status. The corrected full rerun passed; no package
+  payload or authentication behavior was changed to satisfy the test.
+- Range deployment/evidence and stable main were not changed. The earlier
+  authority-initializer interruption-hardening follow-up remains open; this kit
+  does not bypass schema checks or claim that separate reliability repair is done.
