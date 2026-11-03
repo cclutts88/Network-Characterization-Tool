@@ -1761,6 +1761,8 @@ async def lifespan(_: FastAPI):
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
+        from app.evidence_library import rebuild_device_index
+        rebuild_device_index(DB_PATH, CONFIG_DIR)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
         scan_recovery = recovery_pause(DATA_DIR)
         if scan_recovery is None:
@@ -1946,6 +1948,30 @@ def system_health_page(request: Request) -> HTMLResponse:
 def updates_workspace(request: Request):
     from app.update_ui import updates_page
     return updates_page()
+
+
+@app.get("/evidence-library", response_class=HTMLResponse)
+def evidence_library_workspace():
+    from app.evidence_library_ui import evidence_library_page
+    return evidence_library_page()
+
+
+@app.get("/api/evidence-library")
+def evidence_library_catalog(
+    q: str = Query(default="", max_length=200), kind: str = "",
+    scope: str = Query(default="", max_length=100),
+    analyst: str = Query(default="", max_length=100), start: str = "", end: str = "",
+    limit: int = Query(default=25, ge=1, le=100),
+    after: str = Query(default="", max_length=1500),
+):
+    from app.evidence_library import list_evidence
+    try:
+        return list_evidence(DB_PATH, CONFIG_DIR, q=q, kind=kind, scope=scope,
+                             analyst=analyst, start=start, end=end, limit=limit, after=after)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except (sqlite3.Error, OSError):
+        raise HTTPException(status_code=503, detail="Evidence catalog unavailable. Review System Health and retry; no evidence was changed.") from None
 
 
 @app.post("/api/updates/launch")

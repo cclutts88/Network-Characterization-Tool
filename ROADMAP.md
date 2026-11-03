@@ -7026,10 +7026,10 @@ completed work, work in progress, validation, deviations and deployment limitati
   plan STIG, reviewed neighbor collection and image-integrity capabilities as separately
   gated milestones. No handoff item is accepted as fixed without current-code reproduction
   or evidence that an existing implementation already satisfies it.
-- [ ] Later operator library navigation. Add a hamburger Evidence Library that
-  puts retained Nmap scans and device-pull evidence in one searchable, filterable catalog
-  while preserving each record's provenance and read-only source access. Add a separate
-  administrator NCT Configuration & Source area (the clarified form of the requested
+- [x] Evidence Library navigation completed on foundation (2026-11-02): hamburger
+  catalog combines retained Nmap scans, individual import encounters and device-pull
+  evidence with filters, original-file access and explicit provenance/availability.
+- [ ] Separate administrator NCT Configuration & Source area (the clarified form of the requested
   “Configurations & Code” entry) for read-only inspection of NCT's own approved
   configuration examples and application source. Bind displayed files to the installed
   build with a packaged hash manifest and use an explicit file allowlist; exclude secrets,
@@ -8695,6 +8695,34 @@ completed work, work in progress, validation, deviations and deployment limitati
 
 ### Deviation history
 
+#### 2026-11-02 · Unified Evidence Library navigation index
+
+Planned: combine retained Nmap/import and device evidence in a read-only, filterable
+catalog, reusing existing storage metadata without request-time filesystem parsing.
+
+Revised / Implemented: retain direct SQL reads for scan runs and individual import
+observations (plus legacy and incomplete import records); add a disposable bounded
+metadata-only device index in a protected temporary runtime directory outside the
+retained evidence mount. Startup backfill and dirty-before-source-publication hooks
+maintain a complete baseline; cache failure reports incomplete coverage and never
+fails collection. No authoritative schema, evidence source, existing recovery
+inventory or sealed package changes are needed. Import encounter analysis is
+withheld when existing shared-byte analysis cannot preserve exact encounter context.
+
+Reason: the current-device selector omits legacy and unprocessed records. Reusing
+filesystem history on each page would violate the hybrid lazy-loading requirement.
+Placing a cache under retained data would break exact recovery inventories after a
+rebuild; the temporary runtime boundary avoids that incompatibility.
+
+Impact / Follow-up: source-qualified encounter IDs, explicit missing/unknown states,
+protected downloads and current authority checks remain. Direct file edits outside
+supported publication paths require restart/reindex and are not silently discovered
+by every filtered GET. Oversized/special/unsafe manifests remain visible unavailable.
+Cache identity binds database instance and device root. The administrator source/code
+viewer is separate planned work. Independent model/storage gate CLEAR - DOCUMENTED
+DEVIATION; final usability/implementation gate recorded in dated completion history.
+
+
 #### 2026-10-21 · Phase 6.1 Tier A summary export
 
 Planned: Ingest the lowest-cost native Arkime summary export before higher-volume session correlation
@@ -10242,3 +10270,93 @@ review of corrected pause/account proof, R4 runtime, console closure and actual
 historical XML save/hash. No remaining blocker for recording update acceptance.
 Classic-console bridge qualification remains the documented deployment deviation;
 browser certificate trust appearance and history details layout are retained limits.
+### 2026-11-02 - Evidence Library metadata catalog implementation resumed
+
+After actual R4 Range acceptance, resumed the bounded unified read-only library on
+foundation. Existing current-device selector cannot cover legacy/unprocessed sources;
+separate disposable SQLite navigation sidecar is the documented deviation. Startup
+backfills bounded allowlisted manifest metadata; central manifest publication marks
+dirty before authoritative replacement. Only a complete baseline can restore ready;
+index failure preserves collection and reports incomplete device coverage. No GET
+schema/evidence writes, global directory walks or source-content parsing. Each import
+observation remains separate despite shared bytes; legacy unregistered imports remain.
+Filters precede deterministic keyset paging within a read transaction. Explicit scope
+assignments, not device preferences, label scope; shared-content import analysis is
+withheld where the analyzer cannot retain exact encounter identity. External file
+edits outside supported publication require restart/reindex; visible drift blocks
+source actions. Initial24 focused checks pass. Independent model re-review is pending
+before downstream UI after initial review found and corrected schema, baseline,
+authority-status and encounter-context issues. Range/main/sealed packages unchanged.
+### 2026-11-02 - Evidence Library interface and acceptance gates
+
+Added hamburger Evidence Library, authenticated read-only catalog/page, type/literal
+network-CIDR-device-filename/source/analyst/date/exact-scope filters, deterministic
+keyset Next/Previous, per-encounter original files and exact retained scan/device
+analysis. Unknown/unavailable and incomplete import/device records remain explicit.
+Filters precede paging. Loading/error/empty/draft-filter states are visible; a stale
+in-flight filter response cannot re-enable paging using an old cursor. Shared import
+bytes retain separate encounters and do not imply encounter-specific analysis.
+
+Built-in Operator Guide includes page overview and focused filter/coverage/paging/
+source chunks with normal shared typography. How NCT Works and
+[Evidence Library reference](docs/EVIDENCE_LIBRARY.md) describe data use, source
+context, literal CIDR and runtime cache limits. Common theme tokens and static table
+contract keep headers aligned and use page-level vertical scrolling.
+
+Novice actual browser gate CLEAR: hamburger discovery,31 original fixture encounters
+(then32 after one representative completed scan), combined filters, Next/Previous,
+UTC date, literal wildcard and unknown scope, original imported XML/device output,
+exact retained device/scan analysis, Graphite/Sage at760px with Guide open/closed,
+horizontal header/cell alignment, no nested vertical catalog scrolling. Final copy
+fixes rechecked: human-readable targets and explicit manifest-only missing output.
+Downloaded scan495bytes SHA256 d7fbde1a473ad52398cd6cde45f975a95a9df48d93651995b1da81cfe190d4a5
+matches source; imported445byte XML also hash-verified. Proofs in parent artifacts:
+evidence-library-novice-final-target-20261102.jpg,
+evidence-library-novice-final-manifest-only-20261102.jpg and Graphite/Sage narrow
+Guide open/closed images. No Range, main or sealed package changes.
+
+Isolated preview restart deviation: schema comparison found exactly one missing
+existing immutable-authority trigger after out-of-band fixture initialization.
+Independent reviewer reproduced that exact signature by interrupting the existing
+initializer's non-atomic DROP/CREATE sequence. Specific initiating fixture failure
+is unproven; no library GET or sidecar write runs that schema initializer. Preserved
+comparison script/proof, restored only the exact isolated-fixture trigger from a
+fresh baseline and asserted the unchanged saved fingerprint matches again. Preview
+startup passed. Do not infer this was a production repair or relax schema guards.
+Track atomic device-authority initializer hardening as separate existing reliability
+follow-up; avoid calling pytest setup helpers against a running NCT database outside
+the test runner. Final independent implementation gate and exact-source regression
+results follow below.
+Independent final implementation gate CLEAR - DOCUMENTED DEVIATION, novice final
+CLEAR, with final screenshots and exact-source downloads reviewed. Focused46 passed,
+1 Node-unavailable wrapper skipped; the same actual-inline-script deferred-response
+regression executed directly with host Node and passed. A broad run before the final
+edge fixes passed2410 with23 environment/optional skips. Final broad rerun is running;
+completion commit follows its result. Main remains clean. The separate administrator
+Configuration & Source viewer stays unchecked/planned.
+
+- [ ] Reliability follow-up: make existing device collection authority schema
+  initializer DROP/CREATE replacement atomic, add an interrupted-DDL regression,
+  qualify restart/upgrade compatibility separately, and keep setup helpers out of
+  live-instance fixture admission. The exact initiating preview interruption is
+  not proven; current library acceptance does not claim to fix this older initializer.
+### 2026-11-02 - Unified Evidence Library completed on foundation
+
+Final broad regression:2412 passed,24 environment/optional skips,1 existing Starlette
+BlockingPortal deprecation warning in373s. Final incremental incomplete-import LEFT
+JOIN/source-link guard and its regression were then included in the46-passed focused
+library/API/guide/device-catalog set (1 Node-unavailable wrapper skip). Actual inline
+JavaScript deferred-response regression passed directly using host Node. This delta
+qualification is explicit rather than claiming the long broad run included a test
+added after its collection. Independent implementation gate CLEAR - DOCUMENTED
+DEVIATION and novice final CLEAR. Actual preview startup/restart passed after isolated
+fixture correction; backend count/filter/read-only/auth/download and5000-row bounded
+catalog checks passed. Old and new source encounters remain separate; no automatic
+source repair or analysis admission was added.
+
+Completed governing Evidence Library item; separate administrator Configuration &
+Source viewer and atomic-authority-initializer reliability follow-up remain planned.
+Development preview: http://127.0.0.1:18165/evidence-library using isolated sample
+metadata/evidence, active collection disabled. Newest proof in parent artifacts:
+evidence-library-final-development-preview-20261102.png. Ready for next package
+qualification/transfer; not deployed to Range or promoted to main by this milestone.

@@ -155,6 +155,12 @@ READ_ONLY_FILTER_PREFIXES = {
 
 
 def _write_json_atomic(path: Path, value: dict) -> None:
+    from app.evidence_library import device_metadata_publication
+    with device_metadata_publication(DB_PATH, CONFIG_DIR, path):
+        _write_json_atomic_source(path, value)
+
+
+def _write_json_atomic_source(path: Path, value: dict) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
