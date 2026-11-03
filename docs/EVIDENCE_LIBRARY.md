@@ -12,6 +12,9 @@ compacts or parses original evidence content. **Files and context** opens one
 encounter and reuses existing protected source downloads. **Open analysis** opens
 the exact retained Nmap run or device collection; unavailable analysis remains
 unavailable until its separate normal workflow is deliberately used.
+For an unprepared scan, the destination shows the reason and an **Open Scan
+History** link for preparation or conversion. Opening the link does not compute
+analysis or launch a scan. Original evidence remains available separately.
 
 Imported identical bytes retain separate encounter IDs, analysts, times and exact
 scope assignments. The shared-byte download may use the first stored filename.
