@@ -4,6 +4,20 @@ The reviewer must remain separate from the primary implementation role and shoul
 
 # Project Authorization and Execution Authority
 
+## Range release transfer requirement (2026-11-02)
+
+Large full Range ZIPs must also be delivered as transfer pieces no larger than
+48 MiB, with JOIN-NCT.sh and a short READ-ME-FIRST.txt. This is the standard
+release workflow, not a workaround the user must request each time. Preserve the
+sealed original ZIP. Verify every part, byte-exact reconstruction, the original
+ZIP checksum, repeat behavior and refusal to overwrite another output. The join
+script must contain the expected checksums, require no extra checksum upload,
+publish only after successful verification and never install or update NCT.
+Treat the platform's generic immediate upload error as an observed transfer
+failure; its exact configured size limit is not established. Use the proven
+48 MiB transfer size unless a smaller limit is demonstrated. Record the transfer
+set in ROADMAP.md; do not modify already sealed packages to add it.
+
 For work pertaining directly to the NCT project, you have my authorization to continue working autonomously using the project resources, repository access, connected tools, and available project capabilities needed to execute the roadmap.
 
 Do **not** repeatedly ask me for approval before normal project actions.

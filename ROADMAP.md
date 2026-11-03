@@ -1,6 +1,14 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Transfer workflow requirement started (2026-11-02): after another immediate
+platform upload error, the user requested transfer pieces as the normal release
+method. Produce at most 48 MiB pieces automatically for sealed full ZIPs larger
+than that size, with a checksum-verifying no-overwrite join script and short
+operator instructions. Preserve the sealed Fresh-r1 ZIP; the smaller transfer
+set is external to its immutable contents. The configured platform size limit
+is not independently known; the prior four-piece R4 transfer succeeded.
+
 Release scope correction (2026-11-02): user needs a genuinely fresh Range, not
 only an upgrade of the accepted R4 installation. Add a fresh-first offline kit
 route, explicit non-destructive fresh admission and exact clean-storage shell
@@ -10438,3 +10446,28 @@ qualification/transfer; not deployed to Range or promoted to main by this milest
 - Range deployment/evidence and stable main were not changed. The earlier
   authority-initializer interruption-hardening follow-up remains open; this kit
   does not bypass schema checks or claim that separate reliability repair is done.
+
+### 2026-11-02 — Transfer pieces are the standard large-release delivery
+
+- User reported another immediate generic `undefined` error from Send File To VM
+  and requested that the previously successful smaller-piece route become normal.
+  Historical evidence confirms the prior R4 package transferred as four 48 MiB
+  pieces. This establishes a practical transfer size, not the platform's exact
+  configured upload limit.
+- Added `scripts/split_nct_range_package.py`. Future full-package sealing creates
+  checksum-pinned transfer pieces automatically for ZIPs larger than 48 MiB, plus
+  JOIN-NCT.sh and short instructions. Source checksum is required; existing transfer
+  folders are not overwritten. The join script checks all pieces and the complete
+  ZIP, preserves conflicting files/links, publishes atomically and never installs.
+- Current external set: `Downloads/NCT-Fresh-r1-Transfer-Parts`, four pieces of
+  50,331,648 / 50,331,648 / 50,331,648 / 44,703,750 bytes plus JOIN-NCT.sh.
+  Join-script SHA-256:
+  `b3e57602fa329d957b6a4108b280cc4aeb9cbf206f3b2bc47c2d5cfcc8ce7d27`.
+- Original sealed Fresh-r1 ZIP remains unchanged at 195,698,694 bytes, SHA-256
+  `038f661fa5241960caf226e0b86984027fce0d0264867146e9f9053e7932cac1`.
+  Both primary and independent reviewer rebuilt the full ZIP, verified all part
+  hashes and final SHA/CRC, repeated joining safely, and confirmed another output
+  is preserved. 63 package/transfer tests passed including damaged/missing pieces.
+  Quality gate: CLEAR. The operating rules and fresh-install guide now require
+  this delivery method. Actual transfer and fresh installation on the Range are
+  still pending; no sealed package or Range evidence was modified.

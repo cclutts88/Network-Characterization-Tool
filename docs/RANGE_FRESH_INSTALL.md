@@ -7,7 +7,14 @@ or claim a separately tested Docker Compose deployment.
 
 ## 1. Put the package on the controller
 
-Transfer this one ZIP and extract it into a new folder. Keep the ZIP. Open a root
+Range releases larger than 48 MiB are supplied with smaller transfer pieces.
+Upload every `.part` file and `JOIN-NCT.sh` into the same controller folder, then
+run `sh JOIN-NCT.sh` there. Wait for **PASS**: this checks each piece and rebuilds
+the original verified ZIP. It does not install NCT. Do not extract individual
+pieces or try to upload the large ZIP again when the transfer tool rejects it.
+
+Once the complete ZIP is on the controller, extract it into a new folder. Keep
+the ZIP. Open a root
 terminal inside its `NCT-Air-Gapped-Range-Deployment` folder. All image files,
 checksums and setup scripts are included; installation downloads nothing.
 

@@ -9,6 +9,7 @@ import re
 import subprocess
 import tarfile
 import zipfile
+import importlib.util
 
 LAUNCHERS = ("nct-start-docker.sh", "nct-start-compose.sh", "nct-start-legacy.sh", "nct-upgrade.sh", "nct-rollback-upgrade.sh", "nct-recover-unhealthy-upgrade.sh", "nct-range-direct-deploy.sh")
 SOURCE_TAG = "0.16.0-range-test-20261013-phase3-r3"
@@ -91,7 +92,7 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
     tracked = command("git", "-C", str(source), "ls-tree", "-r", "--name-only", commit).splitlines()
     selected = [name for name in tracked if name.startswith("scripts/nct-") and Path(name).suffix in {".py", ".sh"}]
     selected += ["scripts/nct-package-sources.json", "scripts/install_nct_recovery.py", "scripts/nct_update_host.py", "scripts/nct_update_work.py", "scripts/build_nct_update.py", "scripts/build_nct_range_package.py", "scripts/setup-lab-https.sh",
-        "compose.range.yaml", "compose.arkime.yaml", "Caddyfile", "docs/NCT_UPDATES_AND_RECOVERY.md", "docs/ARKIME_CONNECTOR_RANGE_SETUP.md", "docs/RANGE_UPDATER_PACKAGE.md"]
+        "compose.range.yaml", "compose.arkime.yaml", "Caddyfile", "docs/NCT_UPDATES_AND_RECOVERY.md", "docs/ARKIME_CONNECTOR_RANGE_SETUP.md", "docs/RANGE_UPDATER_PACKAGE.md", "scripts/split_nct_range_package.py"]
     bindings = []
     for name in selected:
         data = subprocess.check_output(["git", "-C", str(source), "show", commit + ":" + name])
@@ -236,7 +237,13 @@ def seal(root, acceptance, output):
             raise ValueError("Final transfer ZIP failed verification")
     identity = digest(output)
     output.with_suffix(output.suffix + ".sha256").write_text(identity + "  " + output.name + "\n", encoding="utf-8")
-    return {"path": str(output.resolve()), "bytes": output.stat().st_size, "sha256": identity, "commit": release["commit"]}
+    result = {"path": str(output.resolve()), "bytes": output.stat().st_size, "sha256": identity, "commit": release["commit"]}
+    spec = importlib.util.spec_from_file_location("nct_transfer_parts", Path(__file__).with_name("split_nct_range_package.py"))
+    transfer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transfer)
+    if output.stat().st_size > transfer.PART_BYTES:
+        result["transfer"] = transfer.split_package(output)
+    return result
 
 
 if __name__ == "__main__":
