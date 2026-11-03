@@ -5,10 +5,9 @@ Operator usability requirement (2026-10-29): deployment and recovery are operate
 by trusted personnel in an isolated environment. Favor a short GUI workflow and
 avoid repeated access-code/sign-in friction where an already authenticated
 operator session can safely provide the handoff. Preserve evidence verification,
-tested backups, rollback, and clear completion/failure results. Simplification is
-planned work; the currently deployed Recovery-r2 console account checks remain in force until its separately qualified helper/console upgrade is installed.
+tested backups, rollback, and clear completion/failure results. Simplification remains planned work; the deployed Recovery-r4 helper and console retain existing-account verification before finalizing updates.
 
-- Latest transfer milestone: Recovery-r4 now running on the work Range; backup and retained-evidence checks passed. Final account verification, restart and browser evidence acceptance remain pending. See the final dated record below.
+- Latest transfer milestone: Recovery-r4 work Range update accepted: backup, retained evidence, account verification/final restart and historical browser XML save/hash passed. See the final dated record below.
 - Roadmap status: Approved governing direction
 - Working product expansion: NCT = Network Correlation & Triage
 - Foundation branch: `foundation/evidence-engine-v2`
@@ -10205,3 +10204,41 @@ save/hash, normal browser login, restart-policy/update-pause and console-closure
 checks remain open. Proof: artifacts/nct-r4-range-signin-needed-20261102.png.
 Independent reviewer confirmed CLEAR - DOCUMENTED DEVIATION for accurate in-progress
 reporting, with these final acceptance checks explicitly outstanding.
+### 2026-11-02 - Actual Recovery-r4 Range update acceptance passed
+
+Operator completed existing-account verification and NCT returned to its signed-in
+browser. Read-only controller verification confirms operation phase complete,
+exact running Recovery-r4 source937954bc03e4b21c3e93d7430321a918d8bc59a0 through
+CA-verified health, collection-pause file absent, NCT running with unless-stopped
+restart policy, and on-demand recovery console stopped with restart policy no.
+Helper reports exact build/readiness, retained evidence and existing-account check
+verified. Backup and original helper/console remain retained; no live-data restore.
+Proof: artifacts/nct-r4-range-completed-runtime-20261102.png.
+
+Actual signed-in Scan History loaded all six retained subnet/target groups and
+three A51-ADM historical rows. Opened original October26 A51-ADM CVE Enriched run,
+used Analysis-ready scan evidence XML, completed Windows Save As to a new copy,
+and compared against the pre-update desktop download: both210344 bytes, identical
+SHA256; newly saved document parses with nmaprun root. Proof:
+artifacts/nct-r4-historical-xml-match-20261102.png. This closes representative
+historical browser evidence acceptance; it does not claim new live scans, all
+product flows, Kubernetes updater or main promotion were tested here.
+
+Usability observation for a later targeted pass: opening scan details adds a long
+single-line artifact action list, greatly widening the history table and making
+horizontal navigation cumbersome on the analyst VM. Download itself passes; this
+layout concern is recorded, not silently considered resolved by update acceptance.
+Final reviewer proof correction: independently checked the exact update-specific
+recovery/update-maintenance.json marker as well as the separate unfinished-work
+recovery/scan-work-paused.json marker: both absent. Exact journal key
+controller_sign_in_verified is True. Original application runtime retained stopped
+with restart no; replacement runtime policy verified above. Proof:
+artifacts/nct-r4-range-final-account-pause-20261102.png. Initial screenshot's
+PAUSE_EXISTS checked only the unfinished-work marker; this additional check closes
+that distinction without modifying either marker. Top summary updated for deployed
+R4 rather than stale R2 wording.
+Independent final actual Range quality gate: CLEAR - DOCUMENTED DEVIATION after
+review of corrected pause/account proof, R4 runtime, console closure and actual
+historical XML save/hash. No remaining blocker for recording update acceptance.
+Classic-console bridge qualification remains the documented deployment deviation;
+browser certificate trust appearance and history details layout are retained limits.
