@@ -1,6 +1,26 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Guided first-run setup requirement added (2026-11-03): provide a resumable,
+tutorial-style walkthrough so required collection setup is not missed. Explain
+the distinction between evidence scope on each scan and the currently required
+installation-wide active collection scope; reassess unnecessary duplication
+without silently changing the established collection contract. Walk through
+scope, Global No-Strike (including explicit review of an empty list), combined
+review and a clear readiness summary. Explain how each choice is used downstream,
+show progress and missing items, link disabled collection controls directly to
+their unfinished prerequisite, and retain normal access to existing evidence.
+Include optional tools/access guidance and a novice walkthrough before release.
+This is recorded work, not an implemented or deployed tutorial.
+
+Collection setup incident resolved (2026-11-03): after explicit operator
+confirmation, recorded the chosen existing scope and retained the existing
+Global No-Strike exclusions unchanged. Actual Mission Environment reported
+"Ready for collection planning" and "Mission Environment review recorded".
+The reloaded scan builder reported its Saved Network matches the reviewed
+active scope, replacing the missing-review blocker. No scan or device contact
+was launched; end-to-end network/SSH execution remains a separate test.
+
 Actual Range collection admission diagnosis (2026-11-03): the operator reported
 disabled scan controls after setting up a Saved Network. Live UI inspection
 confirmed a registered Network Scope but no active collection scope or saved
