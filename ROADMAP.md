@@ -8,7 +8,7 @@ operator session can safely provide the handoff. Preserve evidence verification,
 tested backups, rollback, and clear completion/failure results. Simplification is
 planned work; the currently deployed Recovery-r2 console account checks remain in force until its separately qualified helper/console upgrade is installed.
 
-- Latest transfer milestone: Recovery-r4 locally qualified and packaged (2026-11-02); actual Range installation remains pending. See the final dated record below.
+- Latest transfer milestone: Recovery-r4 now running on the work Range; backup and retained-evidence checks passed. Final account verification, restart and browser evidence acceptance remain pending. See the final dated record below.
 - Roadmap status: Approved governing direction
 - Working product expansion: NCT = Network Correlation & Triage
 - Foundation branch: `foundation/evidence-engine-v2`
@@ -10182,3 +10182,26 @@ folder. Config pins exact R4 console configuration0606260094f4a81e4227c9809fa8e5
 CA-verified application health still reports unchanged Recovery-r3 source03da1516.
 Application update remains pending analyst VM unlock. Operational bridge and its
 qualified steps are retained in docs/RECOVERY_R4_CLASSIC_DOCKER_BRIDGE.md.
+### 2026-11-02 - Range GUI R3 to R4 application update in progress
+
+Analyst VM unlocked. Verified enclosed GUI archive extracted on the workstation;
+exact 74,119,366-byte archive SHA256 af64f1d46ec44c60d001db8af512e238a1c331a3ff00cae75912c3387477c4ab
+passed. Reconnected VM console after input stopped reaching the native file picker;
+selected archive by visible folder navigation. R4 console upload/validation passed,
+showing installed R3 to proposed R4 source937954bc. User-authorized Apply accepted;
+actual GUI now reports retained-account/evidence checks followed by measured backup
+progress. Final application readiness, account verification/restart and authenticated
+older XML download remain pending. Do not describe this in-progress step as complete.
+### 2026-11-02 - Actual R4 running; final account acceptance pending
+
+Actual GUI Apply completed cold-backup creation and independent restored-copy
+verification, installed exact Recovery-r4 source937954bc03e4b21c3e93d7430321a918d8bc59a0,
+and reported health/build and retained evidence Verified. No live-data restore was
+performed. GUI is now at Verify sign-in and finish; collection/processing remains
+paused until successful existing-account verification and final restart. Visible
+form reports HTTP401 for a sign-in attempt; no password was entered by the agent.
+Requested operator enter the existing account in the form. Actual older XML browser
+save/hash, normal browser login, restart-policy/update-pause and console-closure
+checks remain open. Proof: artifacts/nct-r4-range-signin-needed-20261102.png.
+Independent reviewer confirmed CLEAR - DOCUMENTED DEVIATION for accurate in-progress
+reporting, with these final acceptance checks explicitly outstanding.
