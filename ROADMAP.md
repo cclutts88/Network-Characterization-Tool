@@ -1,6 +1,20 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Next-session priority from actual fresh setup (2026-11-03): restore a simple,
+predictable installation experience before further feature work. The target's
+Docker version was already in use; the newly delivered application runtime
+introduced the incompatibility. Maintain that supported baseline and test it
+before delivery. Address prerequisite discovery, avoid repeated image/package
+transfers and loads, provide clear progress and a safe resumable setup path,
+and prevent pasted console newlines being consumed as blank password entries.
+The actual password mismatch was recovered by flushing queued terminal input
+before invoking the unchanged password helper; the user then completed both
+entries successfully. Do not redesign setup tonight. Exact Fresh-r2 is now
+running, its certificate-verified health check passes, and the real host recovery
+service is active/enabled. Browser sign-in and the final account-verification
+collection release remain the current installation checks, not completed claims.
+
 Fresh-r2 package qualification completed (2026-11-03): exact source
 `ba2124aad40dc9f4f718c2799db35d9703a5f89d` passed 2,437 tests (24 skipped),
 the clean-install/admin/HTTPS/recovery/restart/evidence-download rehearsal,
