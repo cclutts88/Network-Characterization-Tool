@@ -1,6 +1,14 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Final collection-release check completed (2026-11-03): after the user reopened
+the controller, a read-only check inside the actual Fresh-r2 container confirmed
+normal collection mode, no recovery/update pause record, and false scan,
+passive, device and local-processing pause flags. This resolves the final
+controller recheck limitation in the earlier handoff below. NCT is running
+and authenticated browser access is confirmed; actual mission scans/config
+pulls and host reboot acceptance remain separate tests. Stop here tonight.
+
 Fresh Range handoff (2026-11-03): the user completed administrator setup,
 signed in on the actual analyst workstation, opened the independent recovery
 workspace and returned to authenticated NCT Mission Environment. The user
