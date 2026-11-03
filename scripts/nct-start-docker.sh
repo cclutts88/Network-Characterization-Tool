@@ -7,7 +7,8 @@ HOST_PORT="${NCT_HTTPS_PORT:-8445}"
 WORKDIR="${NCT_WORKDIR:-/root/NCT-Air-Gapped-Range-Deployment}"
 PERSIST_ROOT="${NCT_PERSIST_ROOT:-/var/lib/nct}"
 IMAGE="network-characterization-tool:0.16.0-range-test-20261013-phase3-r3"
-CONTAINER="nct"
+CONTAINER="${NCT_CONTAINER:-nct}"
+APP_BIND_ADDRESS="${NCT_APP_BIND_ADDRESS:-${1:-}}"
 CONTAINER_PORT=8445
 DATA_DIR="$PERSIST_ROOT/data"
 RANGE_IP="${1:-}"
@@ -35,6 +36,7 @@ wait_for_health() {
 
 [ "$(id -u)" -eq 0 ] || die "Run this script as root."
 [ -n "$RANGE_IP" ] || die "Usage: sh $WORKDIR/scripts/nct-start-docker.sh RANGE_IP [ADMIN_USERNAME]"
+case "$CONTAINER" in ''|*[!A-Za-z0-9_.-]*) die "Choose a valid dedicated NCT container name." ;; esac
 
 for command_name in docker openssl curl sha256sum ss; do
     command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required."
@@ -88,7 +90,7 @@ start_container() {
     bootstrap=${1:-no}
     set -- docker run -d --name "$CONTAINER" --restart unless-stopped \
         --cap-add NET_RAW \
-        -p "$RANGE_IP:$HOST_PORT:$CONTAINER_PORT" \
+        -p "$APP_BIND_ADDRESS:$HOST_PORT:$CONTAINER_PORT" \
         -v "$DATA_DIR:/data:Z" \
         -v "$TLS_ROOT/tls/nct-server.crt:/run/tls/nct-server.crt:ro" \
         -v "$TLS_ROOT/tls/nct-server.key:/run/tls/nct-server.key:ro" \

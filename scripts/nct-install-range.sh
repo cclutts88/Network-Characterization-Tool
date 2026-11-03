@@ -2,6 +2,7 @@
 # Trusted full-package bootstrap; never accepted as a browser update payload.
 set -eu
 umask 077
+export PYTHONDONTWRITEBYTECODE=1
 NCT_PACKAGE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 export NCT_WORKDIR="$NCT_PACKAGE_ROOT"
 NCT_RANGE_IP=${1:-}
@@ -14,11 +15,29 @@ NCT_RECOVERY_STATE_DIR=${NCT_RECOVERY_STATE_DIR:-$NCT_PERSIST_ROOT/deployment/re
 export NCT_PERSIST_ROOT
 die() { printf '%s\n' "[NCT package] $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "Run as root."
-[ -n "$NCT_RANGE_IP" ] || die "Usage: sh scripts/nct-install-range.sh NCT_HOST_IP [all|check|enable-console]"
-case "$NCT_SETUP_MODE" in all|check|enable-console) ;; *) die "Mode must be all, check or enable-console." ;; esac
+[ -n "$NCT_RANGE_IP" ] || die "Usage: sh scripts/nct-install-range.sh NCT_HOST_IP [fresh|check-fresh|all|check|enable-console]"
+case "$NCT_SETUP_MODE" in fresh|check-fresh|all|check|enable-console) ;; *) die "Choose fresh, check-fresh, all, check or enable-console." ;; esac
 for tool in docker systemctl sha256sum openssl curl ss flock; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required on the offline host. Nothing was installed or downloaded."
 done
+fresh_admission() {
+    command -v realpath >/dev/null 2>&1 || die "realpath is required for fresh path checks."
+    for location in "$NCT_PERSIST_ROOT" "$NCT_RECOVERY_STATE_DIR" "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}"; do
+        case "$location" in /*) ;; *) die "Fresh storage and recovery paths must be absolute." ;; esac
+        resolved_location=$(realpath -m -- "$location") || die "Fresh storage path could not be resolved."
+        [ "$resolved_location" = "$location" ] || die "Fresh storage paths must be normalized and must not use symbolic links."
+    done
+    docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1 && die "An NCT container already exists. Fresh setup will not replace it."
+    if [ -e "$NCT_PERSIST_ROOT" ]; then
+        [ -d "$NCT_PERSIST_ROOT" ] || die "The dedicated NCT storage path is occupied."
+        first_entry=$(find "$NCT_PERSIST_ROOT" -mindepth 1 -maxdepth 1 -print -quit) || die "Fresh storage could not be inspected; emptiness was not proven."
+        [ -z "$first_entry" ] || die "The dedicated NCT storage folder is not empty. Fresh setup will not adopt or erase it."
+    fi
+}
+if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = check-fresh ]; then
+    docker info >/dev/null 2>&1 || die "Docker is not reachable; no installation changes were made."
+    fresh_admission
+fi
 . "$NCT_PACKAGE_ROOT/scripts/nct-recovery-python.sh"
 NCT_RECOVERY_PYTHON=$(nct_select_recovery_python "$NCT_PACKAGE_ROOT") || die "Recovery interpreter check failed before changing NCT."
 export NCT_RECOVERY_PYTHON
@@ -75,15 +94,20 @@ if ss -ltn | awk -v p="$NCT_CONSOLE_PORT" 'NR>1 && $4 ~ (":" p "$") {f=1} END {e
 fi
 printf '%s\n' "Offline prerequisites and package checks passed. Existing evidence and accounts have not been changed."
 "$NCT_RECOVERY_PYTHON" -c 'import sys; from pathlib import Path; root=Path(sys.argv[1]); assert root.is_absolute() and all(len(str(root/"sockets"/kind/name).encode())<108 for kind,name in (("launch","launch.sock"),("control","control.sock"))), "Recovery state path is too long; choose a shorter dedicated NCT_RECOVERY_STATE_DIR"' "$NCT_RECOVERY_STATE_DIR" || die "Recovery socket path check failed before changing NCT."
-[ "$NCT_SETUP_MODE" != check ] || exit 0
+case "$NCT_SETUP_MODE" in check|check-fresh) exit 0 ;; esac
 docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"
 NCT_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_image"])' "$NCT_PACKAGE_ROOT/release.json")
 NCT_CONSOLE_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["console_image"])' "$NCT_PACKAGE_ROOT/release.json")
-if [ "$NCT_SETUP_MODE" = all ]; then
+if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ]; then
+    if [ "$NCT_SETUP_MODE" = fresh ]; then
+        # Image loading is lengthy: refuse newly occupied state rather than ever
+        # treating a fresh request as an upgrade/adoption request.
+        fresh_admission
+    fi
     if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
+        [ "$NCT_SETUP_MODE" != fresh ] || die "An NCT container appeared during fresh setup; no upgrade was attempted."
         NCT_PACKAGE_RUNTIME_CLONE="$NCT_PACKAGE_ROOT/scripts/nct-clone-release-runtime.py" sh "$NCT_PACKAGE_ROOT/scripts/nct-upgrade.sh" "$NCT_RANGE_IP" docker
     else
-        [ "$NCT_TARGET_CONTAINER" = nct ] || die "Fresh installation uses the default nct container name."
         sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
     fi
 fi

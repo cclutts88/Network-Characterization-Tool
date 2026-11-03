@@ -71,7 +71,7 @@ def normalize_export(raw, output):
         return identities
 
 
-def stage(source, output, image, console, commit, build_id, existing_r4=False):
+def stage(source, output, image, console, commit, build_id, existing_r4=False, fresh_install=False):
     if image != "network-characterization-tool:" + build_id or console != "nct-recovery-console:" + build_id:
         raise ValueError("Image tags must match the full package's bound launcher names")
     if command("git", "-C", str(source), "rev-parse", "HEAD") != commit or command("git", "-C", str(source), "status", "--porcelain"):
@@ -163,6 +163,18 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False):
         (output / "START-HERE.md").write_bytes(instructions)
         release["source_bindings"] = [b for b in bindings if b["package"] != "START-HERE.md"]
         release["source_bindings"].append({"source": "docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md", "source_sha256": hashlib.sha256(instructions).hexdigest(), "package": "START-HERE.md", "sha256": digest(output / "START-HERE.md")})
+    if fresh_install:
+        release["terminal_upgrade_qualified"] = release.pop("terminal_install_qualified", False)
+        release["fresh_install"] = {"route":"standalone-docker-empty-host-v1", "launcher":"scripts/nct-install-range.sh", "mode":"fresh", "check_mode":"check-fresh"}
+        instructions = subprocess.check_output(["git", "-C", str(source), "show", commit + ":docs/RANGE_FRESH_INSTALL.md"])
+        (output / "START-HERE.md").write_bytes(instructions)
+        # Keep the optional exact-R4 update instructions separately.
+        if existing_r4:
+            update_instructions = subprocess.check_output(["git", "-C", str(source), "show", commit + ":docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md"])
+            (output / "docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md").write_bytes(update_instructions)
+            release["source_bindings"].append({"source":"docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md", "source_sha256":hashlib.sha256(update_instructions).hexdigest(), "package":"docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md", "sha256":digest(output / "docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md")})
+        release["source_bindings"] = [b for b in release["source_bindings"] if b["package"] != "START-HERE.md"]
+        release["source_bindings"].append({"source":"docs/RANGE_FRESH_INSTALL.md", "source_sha256":hashlib.sha256(instructions).hexdigest(), "package":"START-HERE.md", "sha256":digest(output / "START-HERE.md")})
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     write_manifest(output)
     return release
@@ -206,6 +218,13 @@ def seal(root, acceptance, output):
             or proof.get("commit") != release["commit"] or proof.get("gui_update_sha256") != release["gui_update"]["sha256"]
             or proof.get("images") != release["images"] or not all(proof.get(k) is True for k in required)):
             raise ValueError("The exact existing-R4 GUI update needs its own qualified acceptance")
+    if release.get("fresh_install"):
+        proof = result.get("fresh_install", {})
+        required = ("empty_storage_verified", "fresh_admission_refusals", "interactive_admin_setup", "ca_verified", "exact_application", "exact_console", "recovery_handoff", "sign_in_final_restart", "stop_start_persistence", "helper_service_restart", "console_stops_after_return", "library_import_and_device_downloads")
+        if (proof.get("route") != release["fresh_install"] or proof.get("tested_manifest_sha256") != tested
+            or proof.get("commit") != release["commit"] or proof.get("images") != release["images"]
+            or proof.get("result") != "pass" or not all(proof.get(k) is True for k in required)):
+            raise ValueError("Fresh installation needs its own exact-package qualification")
     (root / "VALIDATION.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     write_manifest(root)
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -229,9 +248,10 @@ if __name__ == "__main__":
     for name in ("image", "console", "commit", "build-id"):
         staging.add_argument("--" + name, required=True)
     staging.add_argument("--existing-r4", action="store_true")
+    staging.add_argument("--fresh-install", action="store_true")
     sealing = sub.add_parser("seal")
     for name in ("root", "acceptance", "output"):
         sealing.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
-    value = stage(args.source, args.output, args.image, args.console, args.commit, args.build_id, args.existing_r4) if args.action == "stage" else seal(args.root, args.acceptance, args.output)
+    value = stage(args.source, args.output, args.image, args.console, args.commit, args.build_id, args.existing_r4, args.fresh_install) if args.action == "stage" else seal(args.root, args.acceptance, args.output)
     print(json.dumps(value, indent=2))

@@ -1,6 +1,14 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Release scope correction (2026-11-02): user needs a genuinely fresh Range, not
+only an upgrade of the accepted R4 installation. Add a fresh-first offline kit
+route, explicit non-destructive fresh admission and exact clean-storage shell
+bootstrap/admin/HTTPS/recovery-console/restart/Evidence Library qualification.
+The previous R4-only kit was not sealed or delivered. Preserve its valid update
+test evidence separately; repeat exact new package gates. Standalone Docker is
+the qualified install route; no Compose/Kubernetes installation claim is added.
+
 Release preparation started (2026-11-02): Evidence Library offline Range kit.
 Qualify the exact accepted Recovery-r4 GUI application-update path with unchanged
 installed helper/console, retained accounts/evidence, backup restore and a controlled

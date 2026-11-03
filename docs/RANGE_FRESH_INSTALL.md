@@ -1,0 +1,100 @@
+# Start here — fresh offline NCT Range installation
+
+Use this full ZIP to install NCT and its independent Updates & Recovery console
+on a **new Linux Docker host with empty NCT storage**. No older NCT installation
+is required. This is the standalone Docker route; it does not set up Kubernetes
+or claim a separately tested Docker Compose deployment.
+
+## 1. Put the package on the controller
+
+Transfer this one ZIP and extract it into a new folder. Keep the ZIP. Open a root
+terminal inside its `NCT-Air-Gapped-Range-Deployment` folder. All image files,
+checksums and setup scripts are included; installation downloads nothing.
+
+The host must already have Docker running, systemd, Python **3.9 or newer**,
+OpenSSL, curl, ss, flock, tar and standard shell tools. The package does not
+install or replace the operating system or its Python. If necessary select an
+existing compatible interpreter, for example:
+
+```sh
+export NCT_RECOVERY_PYTHON=/usr/bin/python3.9
+```
+
+Use its actual installed path. Omit that line when automatic discovery already
+finds a supported interpreter. Do not put the interpreter under a home folder.
+
+## 2. Check before installing
+
+Replace `NCT_HOST_IP` below with the controller's actual IPv4 address, reachable
+from the analyst workstation. Do not type the words `NCT_HOST_IP` literally.
+
+```sh
+sha256sum -c PACKAGE-MANIFEST.sha256
+sh scripts/nct-install-range.sh NCT_HOST_IP check-fresh
+```
+
+Every checksum should say **OK**. The second command reports prerequisites and
+package checks passed without installing NCT. Fresh setup refuses an existing
+NCT container, nonempty NCT storage or an existing recovery service/state. It
+does not delete or adopt them. Stop and review a refusal; do not wipe host files.
+The default dedicated storage location is `/var/lib/nct`.
+
+## 3. Install and choose your administrator password
+
+```sh
+sh scripts/nct-install-range.sh NCT_HOST_IP fresh
+```
+
+The default NCT account name is **admin**. Enter a new password when prompted,
+then enter it again. It must be 12–256 characters; spaces and symbols are allowed.
+Nothing is displayed while typing the password. This is a new NCT account,
+separate from the controller login. The temporary startup password file is
+removed after the selected password is saved.
+
+The terminal loads the included images, creates HTTPS material, starts NCT and
+sets up the independent recovery helper and console. Wait for the final address
+and completion instructions. Initial loading and database setup can take time.
+If setup stops, preserve its output and NCT files for recovery; do not rerun it
+after deleting arbitrary state.
+
+## 4. Finish setup in the browser
+
+Before opening the browser, have the administrator allow only approved analyst
+addresses to reach HTTPS ports 8445 and 8446 using the Range's firewall policy.
+This package does not make a broad firewall change. Have that administrator
+install the generated root CA on the workstation according to local policy; its
+   controller path is `/var/lib/nct/tls-material/certs/nct-lab-root.crt`. Check the
+host address and certificate rather than silently bypassing a browser warning.
+
+1. Open `https://NCT_HOST_IP:8445` on the analyst workstation.
+2. Sign in as **admin** with the password you just chose. Open **hamburger → Updates &
+   Recovery**, then open its recovery workspace. The console is normally on
+   `https://NCT_HOST_IP:8446` and starts on demand through NCT.
+3. At **Verify sign-in and finish**, enter that same new NCT account and click
+   **Verify sign-in**. Wait for verification, the final restart and the completion
+   result. A cleared password field alone does not mean setup is finished.
+   Collection remains paused until this recovery verification finishes.
+4. Return to NCT and sign in normally if asked. The recovery console stops when
+   you return. Confirm the build matches `release.json` in this package.
+5. Begin in **Mission Environment**: establish Scope and No-Strike controls before
+   network collection. Then create Saved Networks and use the normal collection
+   workflow. **Evidence Library** starts empty and fills as evidence is retained.
+
+The administrator must allow only the approved analyst addresses to reach HTTPS
+ports 8445 and 8446 using the Range's existing firewall policy. This package does
+not make a broad firewall change. Data persists under `/var/lib/nct/data`; the
+host recovery helper lives under `/opt/nct-recovery` and its service is
+`nct-recovery-host.service`. The web containers do not receive Docker control.
+
+## Existing installations and qualification limits
+
+For the exact supported Recovery-r4 installation only, the separate
+`docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md` describes the GUI update route. Do not use
+fresh setup as an upgrade or reset. Older terminal-upgrade instructions included
+with the administrator tools are not newly qualified paths for this kit.
+
+`VALIDATION.json` records the exact local fresh-install and update rehearsals.
+A real host's service boot, browser trust and authorized network collection still
+need acceptance on that Range. The package includes a separate recovery-console
+image; the console remains available independently when an application update
+fails. No credentials, analyst evidence or local preview data are bundled.

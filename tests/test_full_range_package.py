@@ -73,6 +73,27 @@ def test_existing_r4_kit_requires_exact_reuse_acceptance(tmp_path, damage):
         package.seal(root, receipt, tmp_path / 'release.zip')
 
 
+@pytest.mark.parametrize('damage',[None,'missing','manifest','images','empty','admin','restart'])
+def test_fresh_install_kit_requires_its_own_acceptance(tmp_path,damage):
+    root=staged(tmp_path); release=json.loads((root/'release.json').read_text())
+    release['fresh_install']={'route':'standalone-docker-empty-host-v1'}
+    (root/'release.json').write_text(json.dumps(release));package.write_manifest(root)
+    result=evidence(root)
+    proof={'result':'pass','route':release['fresh_install'],'tested_manifest_sha256':result['tested_manifest_sha256'],
+        'commit':release['commit'],'images':release['images'],
+        **{k:True for k in ['empty_storage_verified','fresh_admission_refusals','interactive_admin_setup','ca_verified','exact_application','exact_console','recovery_handoff','sign_in_final_restart','stop_start_persistence','helper_service_restart','console_stops_after_return','library_import_and_device_downloads']}}
+    if damage=='manifest': proof['tested_manifest_sha256']='wrong'
+    elif damage=='images': proof['images']={}
+    elif damage=='empty': proof['empty_storage_verified']=False
+    elif damage=='admin': proof['interactive_admin_setup']=False
+    elif damage=='restart': proof['helper_service_restart']=False
+    if damage!='missing':result['fresh_install']=proof
+    receipt=tmp_path/'fresh.json';receipt.write_text(json.dumps(result))
+    if damage:
+        with pytest.raises(ValueError,match='Fresh installation'):package.seal(root,receipt,tmp_path/'no.zip')
+    else:package.seal(root,receipt,tmp_path/'fresh.zip')
+
+
 @pytest.mark.parametrize('damage',[None,'missing','wrong_source','wrong_image','missing_restore','wrong_manifest'])
 def test_helper_delivery_requires_its_own_exact_package_acceptance(tmp_path,damage):
     root=staged(tmp_path)
@@ -150,6 +171,28 @@ def test_standalone_gate_registry_matches_bootstrap_registry():
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     assert gate.SOURCES == {(s["build_id"], s["commit"]): s["schema_version"] for s in json.loads((SCRIPTS / "nct-package-sources.json").read_text())}
+
+
+@pytest.mark.parametrize('problem',['symlink','ancestor','find_error'])
+def test_fresh_admission_requires_proven_empty_real_directory(tmp_path,problem):
+    if os.name!='posix': pytest.skip('POSIX installer')
+    tools=tmp_path/'bin';tools.mkdir();persist=tmp_path/'data';persist.mkdir()
+    marker=persist/'preserve';marker.write_text('retained data')
+    if problem=='symlink':
+        linked=tmp_path/'link';linked.symlink_to(persist,target_is_directory=True);chosen=linked
+    elif problem=='ancestor':
+        linked=tmp_path/'parent';linked.symlink_to(tmp_path,target_is_directory=True);chosen=linked/'data'
+    else:chosen=persist
+    docker=tools/'docker';docker.write_text('#!/bin/sh\n[ "$1" = info ]\n');docker.chmod(0o700)
+    for name in ('systemctl','openssl','curl','ss'):
+        p=tools/name;p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o700)
+    if problem=='find_error':
+        p=tools/'find';p.write_text('#!/bin/sh\nexit 7\n');p.chmod(0o700)
+    result=subprocess.run(['sh',str(SCRIPTS/'nct-install-range.sh'),'127.0.0.1','check-fresh'],
+        env={**os.environ,'PATH':str(tools)+':'+os.environ['PATH'],'NCT_PERSIST_ROOT':str(chosen),
+            'NCT_RECOVERY_STATE_DIR':str(tmp_path/'state'),'NCT_RECOVERY_INSTALL_DIR':str(tmp_path/'installed')},capture_output=True,text=True)
+    assert result.returncode and ('symbolic links' in result.stderr or 'emptiness was not proven' in result.stderr)
+    assert marker.read_text()=='retained data'
 
 
 @pytest.mark.parametrize("damage", [None, "origin", "ledger", "drift", "version", "wal"])
