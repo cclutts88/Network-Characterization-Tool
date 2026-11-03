@@ -156,6 +156,15 @@ def main():
     with browser.open(urllib.request.Request(config['application_url'] + '/api/import', data=body,
                       headers={'Content-Type': 'multipart/form-data; boundary=fixture'}), timeout=60) as response:
         imported = json.load(response)
+    upload_bytes = b'===== show running-config =====\nhostname uploaded-router\ninterface GigabitEthernet0/1\n ip address 192.0.2.2 255.255.255.0\n'
+    fields = {'operator':'preview-operator','originating_host':'offline-fixture','vendor':'cisco',
+        'device_type':'router','device_address':'192.0.2.2','device_name':'Uploaded acceptance router'}
+    upload_body = b''.join(b'--device-fixture\r\nContent-Disposition: form-data; name="' + key.encode() + b'"\r\n\r\n' + value.encode() + b'\r\n' for key,value in fields.items())
+    upload_body += b'--device-fixture\r\nContent-Disposition: form-data; name="result_file"; filename="retained-upload.txt"\r\nContent-Type: text/plain\r\n\r\n' + upload_bytes + b'\r\n--device-fixture--\r\n'
+    with browser.open(urllib.request.Request(config['application_url'] + '/api/device-configs/upload', data=upload_body,
+                      headers={'Content-Type':'multipart/form-data; boundary=device-fixture'}), timeout=60) as response:
+        uploaded = json.load(response)
+    uploaded_id = uploaded['run_id']
     host.stop_exact(engine.inspect(name))
     run_id = 'e7f6a1b2c3d44e5f8091029384756abc'
     folder = data / 'scan-runs' / run_id
@@ -199,7 +208,7 @@ def main():
                     for table in ('analyst_users', 'scan_runs', 'artifact_registry', 'artifact_observations')}
 
     baseline = {str(p.relative_to(data)): module.digest_file(p) for p in data.rglob('*')
-                if p.is_file() and (p.is_relative_to(folder) or p.is_relative_to(device_folder) or 'artifacts' in p.parts)}
+                if p.is_file() and (p.is_relative_to(folder) or 'device-configs' in p.parts or 'artifacts' in p.parts)}
     initial_counts = counts()
     initial_rows = private_row_digest()
     original_runtime = module.canonical(runtime(original))
@@ -296,11 +305,16 @@ def main():
             scans = request('/api/evidence-library?kind=scan')
             assert any(x['source_id'] == run_id and x['analysis_url'] == '/analysis?run=' + run_id for x in scans['items'])
             assert request('/api/evidence-library?kind=import')['total'] >= 1
+            uploaded_records = request('/api/evidence-library?kind=device&q=Uploaded%20acceptance')
+            assert uploaded_records['total'] == 1 and uploaded_records['items'][0]['source_id'] == uploaded_id
+            uploaded_detail = request(uploaded_records['items'][0]['detail_url'])
+            uploaded_link = next(x['url'] for x in uploaded_detail['artifacts'] if x['name'].startswith('uploaded-'))
+            assert browser.open(config['application_url'] + uploaded_link).read() == upload_bytes
             engine.command('stop', name)
             engine.command('start', name)
             host.wait_url(config['application_url'] + '/health/readiness', lambda x: x.get('healthy') is True)
             request('/api/auth/login', {'username':'preview-operator', 'password':password})
-            assert request('/api/evidence-library?kind=device')['total'] == 1
+            assert request('/api/evidence-library?kind=device')['total'] == 2
             assert all(module.digest_file(data / p) == digest for p, digest in baseline.items())
             assert not list(data.rglob('*library*.sqlite3'))
         later = data / 'post-update-evidence.txt'
