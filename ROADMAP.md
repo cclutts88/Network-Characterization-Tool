@@ -1,6 +1,24 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Fresh-r2 package qualification completed (2026-11-03): exact source
+`ba2124aad40dc9f4f718c2799db35d9703a5f89d` passed 2,437 tests (24 skipped),
+the clean-install/admin/HTTPS/recovery/restart/evidence-download rehearsal,
+and the exact R4 GUI update, restore and controlled-failure route. The test
+image adds GNU host utilities, OpenSSL and Bash only for host-wrapper tests;
+the production musl image separately passed actual isolated loopback Nmap,
+fping, tcpdump and script execution. Both exact new images passed default-
+security thread checks on the older target Docker engine. Novice browser
+checks passed prepared/unprepared evidence, original device download, themes
+and Guide typography. Independent reviewer: CLEAR — DOCUMENTED DEVIATION.
+Sealed Fresh-r2 ZIP: 123,687,730 bytes, SHA-256
+`1ed47bd4ce9dc46610be3a848d352c178ea64cd536ace6443235e2ac7c3058ea`.
+All 53 internal checksums, 48 source bindings and three transfer pieces passed;
+independent exact rejoin, repeat and collision/refusal checks passed. Preserve
+Fresh-r1 unchanged. Actual fresh Range installation, account/final restart and
+browser acceptance are in progress; local systemd substitution is not a host
+boot qualification. Main remains unchanged.
+
 Fresh-r2 compatibility work started (2026-11-02): actual fresh target preflight
 passed package checks and received the four signed offline Python 3.9 prerequisite
 packages without changing system Python. Before app/storage/service creation,
