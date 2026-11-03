@@ -99,6 +99,11 @@ case "$NCT_SETUP_MODE" in check|check-fresh) exit 0 ;; esac
 docker load -i "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar"
 NCT_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_image"])' "$NCT_PACKAGE_ROOT/release.json")
 NCT_CONSOLE_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["console_image"])' "$NCT_PACKAGE_ROOT/release.json")
+printf '%s\n' "Checking the loaded application and recovery runtime under normal container security..."
+for NCT_RUNTIME_KIND in app console; do
+    if [ "$NCT_RUNTIME_KIND" = app ]; then NCT_RUNTIME_IMAGE="$NCT_IMAGE"; else NCT_RUNTIME_IMAGE="$NCT_CONSOLE_IMAGE"; fi
+    docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint python "$NCT_RUNTIME_IMAGE" - "$NCT_RUNTIME_KIND" < "$NCT_PACKAGE_ROOT/scripts/nct-runtime-admission.py" || die "The exact loaded runtime is incompatible with this Docker host. NCT storage and services were not created; no security settings were relaxed."
+done
 if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ]; then
     if [ "$NCT_SETUP_MODE" = fresh ]; then
         # Image loading is lengthy: refuse newly occupied state rather than ever

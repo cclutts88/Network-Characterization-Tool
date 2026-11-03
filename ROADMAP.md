@@ -1,6 +1,17 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Fresh-r2 compatibility work started (2026-11-02): actual fresh target preflight
+passed package checks and received the four signed offline Python 3.9 prerequisite
+packages without changing system Python. Before app/storage/service creation,
+the exact Debian-based Fresh-r1 image failed ordinary thread creation on the
+older Docker engine; an invalid clone3 call returned EPERM. The existing pinned
+musl recovery-console runtime passed the same normal-security thread test. Halt
+Fresh-r1 installation and qualify a new musl application runtime, keeping the
+sealed R1 package intact. Add nonmutating loaded-image admission before installer
+state creation. No host security relaxation or Docker upgrade is authorized by
+this implementation choice. Actual application installation remains pending.
+
 Transfer workflow requirement started (2026-11-02): after another immediate
 platform upload error, the user requested transfer pieces as the normal release
 method. Produce at most 48 MiB pieces automatically for sealed full ZIPs larger

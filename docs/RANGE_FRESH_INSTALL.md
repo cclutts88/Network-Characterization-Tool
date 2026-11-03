@@ -64,6 +64,11 @@ and completion instructions. Initial loading and database setup can take time.
 If setup stops, preserve its output and NCT files for recovery; do not rerun it
 after deleting arbitrary state.
 
+Before creating NCT storage or services, setup tests both loaded images under
+normal container security, including thread creation and required collection
+tools. A failed runtime check stops installation with an explanation. It does
+not disable the host's security protections to force the application to start.
+
 ## 4. Finish setup in the browser
 
 Before opening the browser, have the administrator allow only approved analyst

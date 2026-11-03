@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# musl uses the older kernel thread interface supported by classic Range engines.
+# Keep the same pinned Python base as the independent recovery console.
+FROM python:3.12-alpine@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
 
 ARG NCT_APP_VERSION=0.14.0-dev
 ARG NCT_BUILD_COMMIT=uncommitted
@@ -13,9 +15,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends nmap fping tcpdump openssh-client util-linux \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache nmap nmap-scripts fping tcpdump openssh-client util-linux
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
