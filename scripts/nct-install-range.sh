@@ -26,13 +26,13 @@ fresh_admission() {
         case "$location" in /*) ;; *) die "Fresh storage and recovery paths must be absolute." ;; esac
         resolved_location=$(realpath -m -- "$location") || die "Fresh storage path could not be resolved."
         [ "$resolved_location" = "$location" ] || die "Fresh storage paths must be normalized and must not use symbolic links."
+        if [ -e "$location" ]; then
+            [ -d "$location" ] || die "A dedicated fresh storage or recovery path is occupied."
+            first_entry=$(find "$location" -mindepth 1 -maxdepth 1 -print -quit) || die "Fresh storage could not be inspected; emptiness was not proven."
+            [ -z "$first_entry" ] || die "A dedicated NCT storage or recovery folder is not empty. Fresh setup will not adopt or erase it."
+        fi
     done
     docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1 && die "An NCT container already exists. Fresh setup will not replace it."
-    if [ -e "$NCT_PERSIST_ROOT" ]; then
-        [ -d "$NCT_PERSIST_ROOT" ] || die "The dedicated NCT storage path is occupied."
-        first_entry=$(find "$NCT_PERSIST_ROOT" -mindepth 1 -maxdepth 1 -print -quit) || die "Fresh storage could not be inspected; emptiness was not proven."
-        [ -z "$first_entry" ] || die "The dedicated NCT storage folder is not empty. Fresh setup will not adopt or erase it."
-    fi
 }
 if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = check-fresh ]; then
     docker info >/dev/null 2>&1 || die "Docker is not reachable; no installation changes were made."

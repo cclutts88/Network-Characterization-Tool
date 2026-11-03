@@ -79,6 +79,8 @@ def main():
     check(False); engine.command('rm',name)
     state.mkdir(); marker=state/'prior-state';marker.write_bytes(b'preserve recovery')
     check(False);assert marker.read_bytes()==b'preserve recovery';marker.unlink();state.rmdir()
+    installed.mkdir();marker=installed/'nct_update_host.py';marker.write_bytes(b'preserve installed helper')
+    check(False);assert marker.read_bytes()==b'preserve installed helper';marker.unlink();installed.rmdir()
     check(True); assert not any(persist.iterdir()) and not installed.exists()
     late.write_text('Inject a container during image loading')
     refused=subprocess.run(launcher+['fresh'],env=env,capture_output=True,text=True,timeout=180)

@@ -173,7 +173,7 @@ def test_standalone_gate_registry_matches_bootstrap_registry():
     assert gate.SOURCES == {(s["build_id"], s["commit"]): s["schema_version"] for s in json.loads((SCRIPTS / "nct-package-sources.json").read_text())}
 
 
-@pytest.mark.parametrize('problem',['symlink','ancestor','find_error'])
+@pytest.mark.parametrize('problem',['symlink','ancestor','find_error','installed_files'])
 def test_fresh_admission_requires_proven_empty_real_directory(tmp_path,problem):
     if os.name!='posix': pytest.skip('POSIX installer')
     tools=tmp_path/'bin';tools.mkdir();persist=tmp_path/'data';persist.mkdir()
@@ -183,6 +183,10 @@ def test_fresh_admission_requires_proven_empty_real_directory(tmp_path,problem):
     elif problem=='ancestor':
         linked=tmp_path/'parent';linked.symlink_to(tmp_path,target_is_directory=True);chosen=linked/'data'
     else:chosen=persist
+    if problem=='installed_files':
+        installed=tmp_path/'installed';installed.mkdir()
+        (installed/'nct_update_host.py').write_text('preserve prior helper')
+        marker.unlink()
     docker=tools/'docker';docker.write_text('#!/bin/sh\n[ "$1" = info ]\n');docker.chmod(0o700)
     for name in ('systemctl','openssl','curl','ss'):
         p=tools/name;p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o700)
@@ -191,8 +195,9 @@ def test_fresh_admission_requires_proven_empty_real_directory(tmp_path,problem):
     result=subprocess.run(['sh',str(SCRIPTS/'nct-install-range.sh'),'127.0.0.1','check-fresh'],
         env={**os.environ,'PATH':str(tools)+':'+os.environ['PATH'],'NCT_PERSIST_ROOT':str(chosen),
             'NCT_RECOVERY_STATE_DIR':str(tmp_path/'state'),'NCT_RECOVERY_INSTALL_DIR':str(tmp_path/'installed')},capture_output=True,text=True)
-    assert result.returncode and ('symbolic links' in result.stderr or 'emptiness was not proven' in result.stderr)
-    assert marker.read_text()=='retained data'
+    assert result.returncode and ('symbolic links' in result.stderr or 'emptiness was not proven' in result.stderr or 'will not adopt or erase' in result.stderr)
+    if problem=='installed_files':assert (installed/'nct_update_host.py').read_text()=='preserve prior helper'
+    else:assert marker.read_text()=='retained data'
 
 
 @pytest.mark.parametrize("damage", [None, "origin", "ledger", "drift", "version", "wal"])
