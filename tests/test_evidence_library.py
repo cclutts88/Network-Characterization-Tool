@@ -38,6 +38,17 @@ def scan(p, run, **changes):
         db.execute('INSERT INTO scan_runs VALUES (?,?,?,?,?)',(run,'2026-11-02T12:00:00+00:00','completed','Bob',json.dumps(manifest)))
 
 
+def test_uploaded_device_search_retains_filename_and_device_name(store):
+    p,root=store
+    device(root,source_filename='uploaded-config.txt')
+    lib.rebuild_device_index(p,root)
+    for term in ('uploaded-config.txt','Router'):
+        result=lib.list_evidence(p,root,kind='device',q=term)
+        assert result['total']==1
+        assert result['items'][0]['source_id']=='a'*32
+        assert result['items'][0]['title']=='uploaded-config.txt — Router'
+
+
 def test_all_sources_encounters_filters_and_legacy(store):
     p,root=store; device(root); scan(p,'s')
     with sqlite3.connect(p) as db:

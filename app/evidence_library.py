@@ -63,7 +63,10 @@ def metadata(path):
         def field(k):
             v = value.get(k)
             return v[:500] if isinstance(v, str) else ""
-        result.update(saved_at=field("created_at"), title=field("source_filename") or field("device_name") or run,
+        title = field("source_filename") or field("device_name") or run
+        if field("source_filename") and field("device_name"):
+            title += ' — ' + field("device_name")
+        result.update(saved_at=field("created_at"), title=title,
                       actor=field("operator"), target=field("device_address"),
                       status=field("status") or "Unknown", observation_id=field("artifact_observation_id"),
                       operation=field("operation"))

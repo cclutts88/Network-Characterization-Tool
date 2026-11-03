@@ -9,6 +9,12 @@ new qualification of older terminal installs or Kubernetes updates. Range and ma
 remain unchanged during preparation. Authority-initializer hardening remains a
 separate open follow-up.
 
+Release rehearsal correction (2026-11-02): actual pre-update manual device upload
+exposed a navigation search gap when both source filename and device name existed.
+Library titles now retain both fields so either is searchable; no retained evidence
+or authority data is changed. Add a focused regression and repeat exact-package
+qualification before sealing.
+
 Operator usability requirement (2026-10-29): deployment and recovery are operated
 by trusted personnel in an isolated environment. Favor a short GUI workflow and
 avoid repeated access-code/sign-in friction where an already authenticated
