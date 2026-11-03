@@ -1,6 +1,18 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Actual Range collection admission diagnosis (2026-11-03): the operator reported
+disabled scan controls after setting up a Saved Network. Live UI inspection
+confirmed a registered Network Scope but no active collection scope or saved
+combined scope/Global No-Strike review. The scan builder explicitly reported
+the missing review; the independent reviewer confirmed both scan and device
+collection admission require it. This is separate from the cleared update pause
+and does not establish a Docker, Nmap or SSH execution failure. Await operator
+confirmation before selecting the active scope and recording that review;
+preserve existing exclusions and do not launch network activity as diagnosis.
+Follow up on the unclear distinction between creating a scope and completing
+collection setup as part of the installation/usability priority below.
+
 Final collection-release check completed (2026-11-03): after the user reopened
 the controller, a read-only check inside the actual Fresh-r2 container confirmed
 normal collection mode, no recovery/update pause record, and false scan,
