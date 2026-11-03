@@ -102,7 +102,11 @@ NCT_CONSOLE_IMAGE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(
 printf '%s\n' "Checking the loaded application and recovery runtime under normal container security..."
 for NCT_RUNTIME_KIND in app console; do
     if [ "$NCT_RUNTIME_KIND" = app ]; then NCT_RUNTIME_IMAGE="$NCT_IMAGE"; else NCT_RUNTIME_IMAGE="$NCT_CONSOLE_IMAGE"; fi
-    docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint python "$NCT_RUNTIME_IMAGE" - "$NCT_RUNTIME_KIND" < "$NCT_PACKAGE_ROOT/scripts/nct-runtime-admission.py" || die "The exact loaded runtime is incompatible with this Docker host. NCT storage and services were not created; no security settings were relaxed."
+    set -- docker run --rm -i --network none --read-only --cap-drop ALL
+    # The app already requires NET_RAW for its collection tools. Alpine fping
+    # carries that file capability, even when invoked only for its version.
+    if [ "$NCT_RUNTIME_KIND" = app ]; then set -- "$@" --cap-add NET_RAW; fi
+    "$@" --entrypoint python "$NCT_RUNTIME_IMAGE" - "$NCT_RUNTIME_KIND" < "$NCT_PACKAGE_ROOT/scripts/nct-runtime-admission.py" || die "The exact loaded runtime is incompatible with this Docker host. NCT storage and services were not created; no security settings were relaxed."
 done
 if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ]; then
     if [ "$NCT_SETUP_MODE" = fresh ]; then
