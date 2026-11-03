@@ -4,8 +4,6 @@ import json
 import hashlib
 import os
 from pathlib import Path
-import threading
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
 import pytest
@@ -30,10 +28,7 @@ from app.derived_jobs import (
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.poc import (
     ScanRunRequest,
-    delete_all_scan_data,
-    delete_scan_data,
     init_poc_storage,
-    issue_delete_challenge,
     prepare_scan_run,
 )
 from app.saved_networks import SavedNetworkCreate, create_saved_network
@@ -689,82 +684,15 @@ def test_legacy_attempt_history_is_interrupted_at_cutover_then_frozen(tmp_path):
     assert recover_interrupted_automated_scan_foundation(db_path) == 0
 
 
-@pytest.mark.parametrize("attempt_status", ["complete", "error", "running"])
-@pytest.mark.parametrize("delete_mode", ["single", "all"])
-def test_protected_scan_deletion_preserves_database_and_files(
-    tmp_path, attempt_status, delete_mode,
-):
-    db_path, run, _, _ = scoped_run(tmp_path)
-    process_automated_scan_foundation(db_path, run["run_id"], "analyst")
-    with connect_database(db_path) as db:
-        mapped = {"complete": "completed", "error": "failed", "running": "running"}[attempt_status]
-        db.execute(
-            """UPDATE pipeline_job_attempts SET state = ?,
-                   error = CASE WHEN ? = 'failed' THEN 'test failure' END,
-                   finished_at = CASE WHEN ? = 'running' THEN NULL ELSE started_at END
-               WHERE job_id = (
-                   SELECT job_id FROM pipeline_jobs WHERE source_run_id = ?
-                   ORDER BY requested_at DESC LIMIT 1
-               )""",
-            (mapped, mapped, mapped, run["run_id"]),
-        )
-    data_dir = tmp_path / "data"
-    retained = data_dir / "scan-runs" / run["run_id"] / "scan.xml"
-    retained.parent.mkdir(parents=True)
-    retained.write_bytes(XML)
-    imported = data_dir / "imports" / "manual.xml"
-    imported.parent.mkdir(parents=True)
-    imported.write_bytes(XML)
+def test_scan_deletion_api_is_not_registered():
+    import app.main as main
 
-    if delete_mode == "single":
-        challenge = issue_delete_challenge("scan", run["run_id"])["challenge"]
-        action = lambda: delete_scan_data(
-            run["run_id"], challenge, db_path=db_path, data_dir=data_dir,
-        )
-    else:
-        challenge = issue_delete_challenge("all", None)["challenge"]
-        action = lambda: delete_all_scan_data(
-            challenge, db_path=db_path, data_dir=data_dir,
-        )
-    with pytest.raises(RuntimeError, match="retained"):
-        action()
-
-    assert retained.read_bytes() == XML
-    assert imported.read_bytes() == XML
-    with connect_database(db_path, read_only=True) as db:
-        assert db.execute(
-            "SELECT COUNT(*) FROM scan_runs WHERE run_id = ?", (run["run_id"],)
-        ).fetchone()[0] == 1
-
-
-def test_delete_racing_active_processing_fails_closed(tmp_path, monkeypatch):
-    import app.derived_jobs as jobs
-
-    db_path, run, _, _ = scoped_run(tmp_path)
-    data_dir = tmp_path / "data"
-    retained = data_dir / "scan-runs" / run["run_id"] / "scan.xml"
-    retained.parent.mkdir(parents=True)
-    retained.write_bytes(XML)
-    entered = threading.Event()
-    release = threading.Event()
-    original = jobs.ingest_assigned_nmap_observation
-
-    def paused(*args, **kwargs):
-        entered.set()
-        assert release.wait(timeout=5)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(jobs, "ingest_assigned_nmap_observation", paused)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(
-            process_automated_scan_foundation, db_path, run["run_id"], "analyst"
-        )
-        assert entered.wait(timeout=5)
-        challenge = issue_delete_challenge("scan", run["run_id"])["challenge"]
-        with pytest.raises(RuntimeError, match="retained"):
-            delete_scan_data(
-                run["run_id"], challenge, db_path=db_path, data_dir=data_dir,
-            )
-        assert retained.read_bytes() == XML
-        release.set()
-        assert future.result(timeout=5)["status"]["state"] == "foundation_complete"
+    removed_paths = {
+        "/api/scan-runs/delete-challenge",
+        "/api/scan-runs/{run_id}/delete",
+        "/api/scan-runs/delete-all",
+    }
+    assert not [
+        route.path for route in main.app.routes
+        if route.path in removed_paths and "POST" in (route.methods or set())
+    ]

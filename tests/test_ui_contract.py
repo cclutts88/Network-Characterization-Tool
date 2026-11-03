@@ -20,6 +20,19 @@ from app.storage_ui import storage_page
 from app.ui import operator_page
 
 
+def test_scan_history_retains_evidence_without_delete_controls():
+    html = operator_page().body.decode()
+
+    assert "Retained scans remain available as source evidence" in html
+    assert 'id="deleteAll"' not in html
+    assert 'data-delete="${esc(run.run_id)}"' not in html
+    assert "beginDelete('scan'" not in html
+    assert "beginDelete('all'" not in html
+    assert "/api/scan-runs/delete-challenge" not in html
+    assert "/api/scan-runs/delete-all" not in html
+    assert "does not offer individual or bulk scan deletion" in SHELL_SCRIPT
+
+
 def test_historical_network_context_explains_authority_conflicts_and_recovery():
     html = operator_page().body.decode()
 

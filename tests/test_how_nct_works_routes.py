@@ -162,6 +162,7 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "Queued work resumes automatically after an application restart" in html
     assert "does not silently continue a half-finished calculation" in html
     assert "every retained scan remains inside the dropdown for its exact recorded subnet" in html
+    assert "Scan History does not offer individual or bulk scan deletion" in html
     assert "Host lists or unusable legacy target metadata" in html
     assert "System Health provides the larger request history, source scan status, requester, attempts, outcome" in html
     assert "Every file encounter keeps its own source" in html

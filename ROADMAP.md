@@ -1,6 +1,35 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Retained Nmap scan deletion removal started (2026-11-03): the current Scan
+History still presented individual `Delete` and bulk `Clear stored scan data`
+actions even though scoped and processed scans are deliberately protected as
+source evidence. Remove those misleading controls and the corresponding
+scan-deletion API surface instead of offering an action that fails after the
+ingestion pipeline has retained provenance. Preserve profile and schedule
+removal as separate setup-management actions. Update the Operator Guide and
+How NCT Works to explain that retained scans continue to support Analyze, Hunt,
+Reach, Map, comparison and later correlation.
+
+Retained Nmap scan deletion removal completed in development (2026-11-03):
+Scan History no longer renders either individual or bulk scan deletion, and
+the server no longer registers the scan delete-challenge, single-delete or
+delete-all routes. The shared confirmation flow now accepts only profile and
+schedule removal. Retained files, observations, scope context and processed
+receipts are unchanged; this is removal of an obsolete destructive interface,
+not deletion, migration or compaction. The page and both built-in guide layers
+explain why history remains retained. Focused API, storage, guide and interface
+checks passed (139 tests), Python compilation passed, and an isolated Docker
+browser preview with one representative retained scan showed the normal row
+actions without any Delete or clear-all control. The complete host-capable run
+reached 2,443 passed and 24 skipped with one unrelated intermittent Arkime
+history failure; that exact test passed in the earlier application run and in
+two immediate isolated reruns. All 13 host-utility-sensitive checks that failed
+under the application-only image passed under the correct host-test image. The
+independent quality gate returned `CLEAR — DOCUMENTED DEVIATION` for that
+explicit intermittent-test limitation, while novice review returned `CLEAR`.
+The actual Range remains on its previously installed build and was not modified.
+
 Fresh-install reliability correction started (2026-11-03): the unchanged Range
 Docker host exposed a compatibility regression in the newly delivered Fresh-r1
 application runtime; it was not caused by an operator change to Docker. The

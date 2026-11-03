@@ -4968,73 +4968,6 @@ def scan_data_root(data_dir: Path = DATA_DIR) -> Path:
     return root
 
 
-@guarded_evidence_mutation(
-    lambda *args, **kwargs: kwargs.get("db_path", args[2] if len(args) > 2 else DB_PATH)
-)
-def delete_scan_data(run_id: str, confirmation: str, db_path: Path = DB_PATH,
-                     data_dir: Path = DATA_DIR) -> dict:
-    if get_scan_run_plan(run_id, db_path) is None:
-        raise KeyError("Scan run not found")
-    with ACTIVE_RUNS_LOCK:
-        if run_id in ACTIVE_RUNS:
-            raise RuntimeError("Active scans must be cancelled before they can be deleted")
-    if not consume_delete_challenge("scan", run_id, confirmation):
-        raise PermissionError("The confirmation string is invalid or expired")
-    try:
-        with connect_database(db_path) as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("DELETE FROM scan_run_control WHERE run_id = ?", (run_id,))
-            db.execute("DELETE FROM scan_runs WHERE run_id = ?", (run_id,))
-    except sqlite3.IntegrityError as exc:
-        raise RuntimeError(
-            "This scan is retained by scope or processed evidence records and cannot be deleted"
-        ) from exc
-    run_dir = run_directory(run_id, data_dir)
-    if run_dir.exists():
-        shutil.rmtree(run_dir)
-    return {"deleted": True, "run_id": run_id}
-
-
-@guarded_evidence_mutation(
-    lambda *args, **kwargs: kwargs.get("db_path", args[1] if len(args) > 1 else DB_PATH)
-)
-def delete_all_scan_data(confirmation: str, db_path: Path = DB_PATH,
-                         data_dir: Path = DATA_DIR) -> dict:
-    with ACTIVE_RUNS_LOCK:
-        if ACTIVE_RUNS:
-            raise RuntimeError("Active scans must be cancelled before all scan data can be deleted")
-    if not consume_delete_challenge("all", None, confirmation):
-        raise PermissionError("The confirmation string is invalid or expired")
-    try:
-        with connect_database(db_path) as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("DELETE FROM scan_run_control")
-            db.execute("DELETE FROM scan_runs")
-            try:
-                db.execute("DELETE FROM imports")
-            except sqlite3.OperationalError:
-                pass
-    except sqlite3.IntegrityError as exc:
-        raise RuntimeError(
-            "Some scans are retained by scope or processed evidence records; no scan data was deleted"
-        ) from exc
-    root = scan_data_root(data_dir)
-    removed_runs = 0
-    if root.exists():
-        for child in root.iterdir():
-            if child.is_dir() and RUN_ID_RE.fullmatch(child.name):
-                shutil.rmtree(child)
-                removed_runs += 1
-    removed_imports = 0
-    imports_root = (data_dir / "imports").resolve()
-    if imports_root.parent == data_dir.resolve() and imports_root.exists():
-        for child in imports_root.iterdir():
-            if child.is_file():
-                child.unlink()
-                removed_imports += 1
-    return {"deleted": True, "removed_runs": removed_runs, "removed_imports": removed_imports}
-
-
 def _stored_file_record(path: Path, url: str | None = None) -> dict:
     value = {"name": path.name, "size_bytes": path.stat().st_size,
              "modified_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()}
@@ -8238,35 +8171,6 @@ def scan_run_audit(run_id: str, limit: int = Query(default=200, ge=1, le=1000)) 
     if get_scan_run_plan(run_id, DB_PATH) is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
     return scan_audit_history(DB_PATH, run_id, limit)
-
-
-@router.post("/scan-runs/delete-challenge")
-def scan_delete_challenge(run_id: str | None = None) -> dict:
-    if run_id is not None and get_scan_run_plan(run_id) is None:
-        raise HTTPException(status_code=404, detail="Scan run not found")
-    return issue_delete_challenge("scan" if run_id else "all", run_id)
-
-
-@router.post("/scan-runs/{run_id}/delete")
-def delete_scan_run(run_id: str, confirmation: DeleteConfirmation) -> dict:
-    try:
-        return delete_scan_data(run_id, confirmation.confirmation)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Scan run not found") from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-
-@router.post("/scan-runs/delete-all")
-def delete_all_scan_runs(confirmation: DeleteConfirmation) -> dict:
-    try:
-        return delete_all_scan_data(confirmation.confirmation)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/stored-files")

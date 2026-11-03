@@ -27,8 +27,6 @@ from app.poc import (
     create_scan_profile,
     create_scan_profile_version,
     create_scan_schedule,
-    delete_all_scan_data,
-    delete_scan_data,
     delete_scan_profile,
     delete_scan_schedule,
     decide_scan_fallback,
@@ -159,9 +157,8 @@ def test_built_in_profile_cannot_be_deleted(tmp_path):
         delete_scan_profile("builtin-standard", challenge, db_path)
 
 
-def test_scan_and_schedule_deletion_accept_visible_confirmation_challenges(tmp_path):
+def test_schedule_deletion_accepts_visible_confirmation_challenge(tmp_path):
     db_path = tmp_path / "analyzer.db"
-    data_dir = tmp_path / "data"
     schedule = create_scan_schedule(
         ScanScheduleCreate(
             name="Disposable Schedule",
@@ -182,61 +179,6 @@ def test_scan_and_schedule_deletion_accept_visible_confirmation_challenges(tmp_p
         schedule["schedule_id"], schedule_confirmation, db_path
     )["deleted"] is True
     assert poc.get_scan_schedule(schedule["schedule_id"], db_path) is None
-
-    run_id = "f" * 32
-    manifest = {
-        "run_id": run_id,
-        "created_at": "2026-09-09T12:00:00+00:00",
-        "status": "completed",
-        "operator": "analyst01",
-        "reason": "Deletion test",
-        "originating_host": "test-host",
-        "interface": "eth0",
-        "profile": "Standard",
-    }
-    insert_scan_run_manifest(manifest, db_path)
-    run_dir = data_dir / "scan-runs" / run_id
-    run_dir.mkdir(parents=True)
-    (run_dir / "scan.xml").write_text("evidence", encoding="utf-8")
-    scan_confirmation = issue_delete_challenge("scan", run_id)["challenge"]
-    assert delete_scan_data(
-        run_id, scan_confirmation, db_path=db_path, data_dir=data_dir
-    )["deleted"] is True
-    assert not run_dir.exists()
-    assert poc.get_scan_run_plan(run_id, db_path) is None
-
-
-def test_bulk_scan_deletion_removes_database_rows_before_files(tmp_path):
-    db_path = tmp_path / "analyzer.db"
-    data_dir = tmp_path / "data"
-    run_ids = ["d" * 32, "e" * 32]
-    for run_id in run_ids:
-        insert_scan_run_manifest(
-            {
-                "run_id": run_id,
-                "created_at": "2026-09-09T12:00:00+00:00",
-                "status": "completed",
-                "operator": "analyst01",
-                "reason": "Bulk deletion test",
-                "originating_host": "test-host",
-                "interface": "eth0",
-                "profile": "Standard",
-            },
-            db_path,
-        )
-        run_dir = data_dir / "scan-runs" / run_id
-        run_dir.mkdir(parents=True)
-        (run_dir / "scan.xml").write_text("evidence", encoding="utf-8")
-    imported = data_dir / "imports" / "manual.xml"
-    imported.parent.mkdir(parents=True)
-    imported.write_text("evidence", encoding="utf-8")
-
-    challenge = issue_delete_challenge("all", None)["challenge"]
-    result = delete_all_scan_data(challenge, db_path=db_path, data_dir=data_dir)
-
-    assert result == {"deleted": True, "removed_runs": 2, "removed_imports": 1}
-    assert not imported.exists()
-    assert all(poc.get_scan_run_plan(run_id, db_path) is None for run_id in run_ids)
 
 
 def test_scheduler_splits_a_slash_24_into_six_sequential_chunks(tmp_path):
