@@ -122,6 +122,7 @@ from app.evidence_maintenance import (
     recovery_required as evidence_recovery_required,
 )
 from app.storage_ui import storage_page
+from app.exploit_references_ui import exploit_references_page
 from app.runtime_health import runtime_health_snapshot
 from app.shared_storage_contract import shared_storage_status
 from app.runtime_trends import (
@@ -1942,6 +1943,12 @@ def require_saved_analysis_operator(request: Request) -> str:
 def system_health_page(request: Request) -> HTMLResponse:
     require_storage_admin(request)
     return storage_page()
+
+
+@app.get("/hunting/offline-references", response_class=HTMLResponse)
+def offline_exploit_references_page(request: Request) -> HTMLResponse:
+    require_storage_admin(request)
+    return exploit_references_page()
 
 
 @app.get("/settings/updates", response_class=HTMLResponse)
@@ -3952,9 +3959,14 @@ def analyst_view_workspace(request: Request, page: Literal["hunt", "analyze"]) -
 @app.get("/api/workspaces/shell-preferences")
 def analyst_shell_preference(request: Request) -> dict:
     if not auth_enabled() or request.state.analyst is None:
-        return {"server_persistence": False, "preference": None}
+        return {
+            "server_persistence": False,
+            "preference_owner": None,
+            "preference": None,
+        }
     return {
         "server_persistence": True,
+        "preference_owner": request.state.analyst["username"],
         "preference": get_shell_preference(
             DB_PATH, owner=request.state.analyst["username"]
         ),
@@ -6060,7 +6072,8 @@ def get_searchsploit_status() -> dict:
 
 
 @app.post("/api/searchsploit/database/update-online")
-def update_searchsploit_database_online() -> dict:
+def update_searchsploit_database_online(request: Request) -> dict:
+    require_storage_admin(request)
     try:
         return update_searchsploit_from_internet()
     except (OSError, ValueError) as exc:
@@ -6068,7 +6081,10 @@ def update_searchsploit_database_online() -> dict:
 
 
 @app.post("/api/searchsploit/database/upload")
-async def upload_searchsploit_database(file: UploadFile = File(...)) -> dict:
+async def upload_searchsploit_database(
+    request: Request, file: UploadFile = File(...)
+) -> dict:
+    require_storage_admin(request)
     incoming = DATA_DIR / "searchsploit" / ".incoming"
     incoming.mkdir(parents=True, exist_ok=True)
     archive_path = incoming / f"upload-{uuid.uuid4().hex}.archive"
@@ -6096,7 +6112,8 @@ async def upload_searchsploit_database(file: UploadFile = File(...)) -> dict:
 
 
 @app.post("/api/searchsploit/database/rollback/{version_id}")
-def rollback_searchsploit_database_version(version_id: str) -> dict:
+def rollback_searchsploit_database_version(request: Request, version_id: str) -> dict:
+    require_storage_admin(request)
     try:
         return rollback_searchsploit_database(version_id)
     except ValueError as exc:

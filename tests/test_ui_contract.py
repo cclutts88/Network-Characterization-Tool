@@ -7,6 +7,7 @@ from app.analysis_ui import analysis_page
 from app.arkime_ui import arkime_page
 from app.device_analysis_ui import device_analysis_page
 from app.device_ui import device_config_page
+from app.exploit_references_ui import exploit_references_page
 from app.hunting_ui import hunting_page
 from app.hostname_ui import hostname_page
 from app.how_nct_works_ui import how_nct_works_page
@@ -18,6 +19,54 @@ from app.session_ui import SESSION_SCRIPT
 from app.shell_ui import SHELL_SCRIPT
 from app.storage_ui import storage_page
 from app.ui import operator_page
+
+
+def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
+    assert '<div class="nct-menu-section">Helper</div>' in SHELL_SCRIPT
+    assert 'id="nct-guide-menu"' in SHELL_SCRIPT
+    assert 'id="nct-tutorial-menu"' in SHELL_SCRIPT
+    assert "const TUTORIAL_VERSION=1" in SHELL_SCRIPT
+    assert "mission_environment:{title:'Prepare the Mission Environment'" in SHELL_SCRIPT
+    assert "nmap_scan:{title:'Run an Authorized Nmap Scan'" in SHELL_SCRIPT
+    assert "Requires a ready Mission Environment" in SHELL_SCRIPT
+    for selector in (
+        "#identityScopeLabel",
+        "#safetyEntries",
+        "#safetyReadiness",
+        "#savedNetworkName",
+        "#savedNetworkSelect",
+        "#preview",
+        "#runNow",
+        "#currentRunPanel",
+        "#scanHistory",
+    ):
+        assert f"selector:'{selector}'" in SHELL_SCRIPT
+    assert "Turn off tutorials" in SHELL_SCRIPT
+    assert "Progress is preserved" in SHELL_SCRIPT
+    assert "Resume tutorial" in SHELL_SCRIPT
+    assert "Confirm restart" in SHELL_SCRIPT
+    assert "The highlighted field or control is the only item for this step" in SHELL_SCRIPT
+    assert "keepTutorialTargetVisible(target)" in SHELL_SCRIPT
+    assert "body.nct-tutorial-active #nct-operator-guide{display:none!important}" in SHELL_SCRIPT
+    assert "start.disabled=!tutorialState.enabled" in SHELL_SCRIPT
+    assert "restart.disabled=!tutorialState.enabled" in SHELL_SCRIPT
+    assert "They never fill a field, save shared data, authorize contact, or start work for you" in SHELL_SCRIPT
+    assert "guided_tutorials:tutorialState" in SHELL_SCRIPT
+    assert "localStorage.setItem(TUTORIAL_LOCAL_KEY" in SHELL_SCRIPT
+    assert "This step was not opened because your tutorial progress could not be saved" in SHELL_SCRIPT
+    assert "shellPreferencePersistenceMode='unknown'" in SHELL_SCRIPT
+    assert "shellPreferencePersistenceMode=profilePreferencesEnabled?'server':'local'" in SHELL_SCRIPT
+    assert "if(profilePreferencesEnabled){saved=valid(snapshot.appearance||null)" in SHELL_SCRIPT
+    assert "transitionRevision!==tutorialTransitionRevision" in SHELL_SCRIPT
+    assert "tutorialTransitionRevision+=1;tutorialState.panel_open=false" in SHELL_SCRIPT
+    assert "sidebar_closed:tutorialSidebarRestore===null?closed:tutorialSidebarRestore" in SHELL_SCRIPT
+    assert "TUTORIAL_SIDEBAR_RESTORE_KEY}:server:${encodeURIComponent(owner)" in SHELL_SCRIPT
+    assert "TUTORIAL_SIDEBAR_RESTORE_KEY}:local" in SHELL_SCRIPT
+    assert "configureTutorialSidebarRestore(shellPreferencePersistenceMode,String(data.preference_owner||''))" in SHELL_SCRIPT
+    assert "localStorage.removeItem(TUTORIAL_SIDEBAR_RESTORE_KEY)" in SHELL_SCRIPT
+    assert "location.assign(`${step.path}${step.hash}`)" in SHELL_SCRIPT
+    assert "target.click()" not in SHELL_SCRIPT
+    assert "target.value=" not in SHELL_SCRIPT
 
 
 def test_scan_history_retains_evidence_without_delete_controls():
@@ -1428,6 +1477,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     device_html = device_analysis_page().body.decode()
     html = hunting_page().body.decode()
     storage_html = storage_page().body.decode()
+    reference_html = exploit_references_page().body.decode()
     assert '<a href="/hunting">Hunt</a>' not in analysis_html
     assert '<a href="/hunting">Hunt</a>' not in device_html
     assert "title:'Hunt',icon:'hunt'" in SHELL_SCRIPT
@@ -1635,24 +1685,31 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "returned an unreadable server response" in html
     assert "Historical evidence is not recalculated when Hunt opens" in html
     assert 'id="manageExploitReferences"' in html
-    assert 'href="/settings/system-health#offlineExploitDb"' in html
+    assert 'href="/hunting/offline-references"' in html
+    assert "{href:'/hunting/offline-references',title:'Offline exploit references'" in SHELL_SCRIPT
     assert "manageExploitReferences:['Manage offline exploit references'" in SHELL_SCRIPT
     assert "Refresh Hunt evidence" in SHELL_SCRIPT
     assert "Only one network-wide Hunt load remains active in this browser" in SHELL_SCRIPT
     assert "'/hunt':{" not in SHELL_SCRIPT
     assert "'/hunting':{" in SHELL_SCRIPT
-    assert "This shortcut only opens settings" in SHELL_SCRIPT
+    assert "Opens the local Exploit-DB reference workspace" in SHELL_SCRIPT
     assert 'id="searchsploitOnline"' not in html
     assert 'id="searchsploitUpload"' not in html
     assert 'id="searchsploitRollback"' not in html
-    assert 'id="offlineExploitDb"' in storage_html
-    assert 'id="searchsploitOnline"' in storage_html
-    assert 'id="searchsploitUpload"' in storage_html
-    assert 'id="searchsploitRollback"' in storage_html
-    assert "/api/searchsploit/database/update-online" in storage_html
-    assert "/api/searchsploit/database/upload" in storage_html
-    assert "/api/searchsploit/database/rollback/" in storage_html
-    assert "No rescan or device contact occurs" in storage_html
+    assert 'id="offlineExploitDb"' not in storage_html
+    assert 'id="searchsploitOnline"' not in storage_html
+    assert 'id="searchsploitUpload"' not in storage_html
+    assert 'id="searchsploitRollback"' not in storage_html
+    assert "Manage offline reference data" not in storage_html
+    assert 'id="offlineExploitDb"' in reference_html
+    assert 'id="searchsploitOnline"' in reference_html
+    assert 'id="searchsploitUpload"' in reference_html
+    assert 'id="searchsploitRollback"' in reference_html
+    assert "/api/searchsploit/database/update-online" in reference_html
+    assert "/api/searchsploit/database/upload" in reference_html
+    assert "/api/searchsploit/database/rollback/" in reference_html
+    assert "then activates the validated version automatically" in reference_html
+    assert "moved from" not in reference_html.lower()
     assert "searchsploitUploadFile:['Choose an offline Exploit-DB archive'" in SHELL_SCRIPT
     assert "Choosing a file alone does not upload or activate it" in SHELL_SCRIPT
     assert "searchsploitVersions:['Choose an earlier reference version'" in SHELL_SCRIPT

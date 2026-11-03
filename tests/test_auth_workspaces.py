@@ -326,13 +326,29 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
                     "guide_enabled": True,
                     "guide_dock": "bottom",
                     "sidebar_closed": False,
+                    "guided_tutorials": {
+                        "version": 1,
+                        "enabled": True,
+                        "panel_open": False,
+                        "active_track": "nmap_scan",
+                        "tracks": {
+                            "nmap_scan": {
+                                "step_id": "choose-network",
+                                "completed": False,
+                            }
+                        },
+                    },
                 }
             },
         )
         assert shell_preference.status_code == 200
-        assert admin.get("/api/workspaces/shell-preferences").json()["preference"][
-            "snapshot"
-        ]["guide_dock"] == "bottom"
+        stored_shell_preference = admin.get("/api/workspaces/shell-preferences").json()
+        assert stored_shell_preference["preference_owner"] == "nctadmin"
+        assert stored_shell_preference["preference"]["snapshot"]["guide_dock"] == "bottom"
+        assert stored_shell_preference["preference"]["snapshot"]["guided_tutorials"][
+            "tracks"
+        ]["nmap_scan"]["step_id"] == "choose-network"
+        assert admin.get("/hunting/offline-references").status_code == 200
         achievements = admin.get("/api/workspaces/achievements")
         assert achievements.status_code == 200
         assert achievements.json()["server_persistence"] is True
@@ -358,6 +374,15 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
                 "display_name": "Range Observer",
                 "role": "viewer",
                 "password": "observer password 123",
+            },
+        ).status_code == 200
+        assert admin.post(
+            "/api/auth/users",
+            json={
+                "username": "reference.analyst",
+                "display_name": "Reference Analyst",
+                "role": "analyst",
+                "password": "reference analyst password 123",
             },
         ).status_code == 200
         assert admin.post(
@@ -525,6 +550,10 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
         ).status_code == 200
         assert viewer.get("/api/workspaces/layouts").json()["layouts"][0]["is_default"] is True
         assert viewer.get("/api/workspaces/notes?page=hunt").json()["notes"] == []
+        viewer_shell_preference = viewer.get("/api/workspaces/shell-preferences").json()
+        assert viewer_shell_preference["preference_owner"] == "observer"
+        assert viewer_shell_preference["preference"] is None
+        assert viewer.get("/hunting/offline-references").status_code == 403
         shared_notes = viewer.get("/api/workspaces/notes?page=map").json()["notes"]
         assert {item["title"] for item in shared_notes} == {"Investigation", "Gateway lead"}
         assert all(item["writable"] is False for item in shared_notes)
@@ -537,6 +566,26 @@ def test_optional_authentication_roles_personal_layouts_and_explicit_sharing(
             json={"name": "Viewer edit", "snapshot": {}},
         ).status_code == 403
         assert viewer.get("/admin/users").status_code == 403
+
+    with TestClient(app) as analyst:
+        assert analyst.post(
+            "/api/auth/login",
+            json={
+                "username": "reference.analyst",
+                "password": "reference analyst password 123",
+            },
+        ).status_code == 200
+        assert analyst.get("/hunting/offline-references").status_code == 403
+        assert analyst.post(
+            "/api/searchsploit/database/update-online"
+        ).status_code == 403
+        assert analyst.post(
+            "/api/searchsploit/database/upload",
+            files={"file": ("exploitdb.tar", b"not-used", "application/x-tar")},
+        ).status_code == 403
+        assert analyst.post(
+            "/api/searchsploit/database/rollback/not-used"
+        ).status_code == 403
 
 
 def test_local_operator_notes_are_persistent_without_account_sign_in(

@@ -95,7 +95,7 @@ covered cancellation, selection changes, confirmation, active-list removal and
 retained archived history; Node and API/UI regression checks passed. No Range
 system was changed.
 
-Guided first-run setup requirement added (2026-11-03): provide a resumable,
+Guided setup and training implementation started (2026-11-03): provide a resumable,
 tutorial-style walkthrough so required collection setup is not missed. Explain
 the distinction between evidence scope on each scan and the currently required
 installation-wide active collection scope; reassess unnecessary duplication
@@ -105,7 +105,48 @@ review and a clear readiness summary. Explain how each choice is used downstream
 show progress and missing items, link disabled collection controls directly to
 their unfinished prerequisite, and retain normal access to existing evidence.
 Include optional tools/access guidance and a novice walkthrough before release.
-This is recorded work, not an implemented or deployed tutorial.
+The first implementation is now in progress as two selectable tracks: Prepare the
+Mission Environment and Run an authorized Nmap scan. It must remain optional,
+preserve the exact step when exited or disabled, resume from that step, highlight
+only the specified field or control, and never perform a collection or shared-data
+change on the analyst's behalf. This is development work and is not yet qualified,
+packaged, deployed, or available on `main`.
+
+Guided setup and training implementation completed in development (2026-11-03):
+the hamburger now groups the existing Operator Guide and the new Guided Setup &
+Tutorials control under Helper. The first two selectable tracks cover Mission
+Environment readiness and an authorized Nmap workflow. They explain one step at a
+time, highlight only the current field or control, retain the exact step when the
+operator exits or disables tutorials, and resume without filling fields, saving
+shared data, granting authorization, or starting collection. The Nmap track states
+its Mission Environment prerequisite before it starts. An active tutorial reserves
+the screen for its highlighted control instead of competing with the Operator Guide,
+and automatically keeps that control above the tutorial panel on narrow screens.
+Offline Exploit-DB reference maintenance now has one administrator workspace under
+Hunt; System Health remains focused on storage, processing, recovery readiness and
+resource use. The upload explanation states that a validated archive is activated
+automatically, and earlier versions remain available for rollback. The dedicated
+page explains its current purpose directly instead of spending operator space on a
+relocation notice. Independent review found and corrected four initial reliability and
+authorization defects before completion: unknown preference persistence no longer
+falls back to untrusted local writes, empty server preference snapshots no longer
+erase local-browser settings, delayed tutorial saves cannot reopen an exited flow,
+and reference-database mutations explicitly require an administrator when account
+authentication is enabled. A later account-isolation review also found and corrected
+an unscoped temporary sidebar marker; cross-page restoration is now separated by the
+confirmed analyst account or the distinct no-sign-in browser mode. Exact
+production-function JavaScript regressions pass on the host. Focused interface and
+account-isolation checks passed (96 tests with one
+container-only Node check skipped and separately passed on the host). The complete
+host-capable suite passed 2,445 tests with 25 expected skips. Isolated browser checks
+confirmed discovery, start, exact highlighting, exit, resume, direct Hunt navigation,
+and the simplified System Health page without performing scans or reference
+maintenance. A novice-operator pass is CLEAR after confirming that narrow-screen
+cross-page resume keeps the highlighted control and label above the tutorial panel,
+temporarily closes the sidebar, restores its prior state on exit, follows an alternate
+theme, retains normal guide typography and leaves a clean browser console. The final
+independent quality gate is CLEAR. This remains development-only: no package was built,
+no Range was changed, and `main` is unchanged.
 
 Collection setup incident resolved (2026-11-03): after explicit operator
 confirmation, recorded the chosen existing scope and retained the existing
