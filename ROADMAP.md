@@ -71,6 +71,16 @@ restart remains delayed and host-owned, so the sign-in response can finish
 before the application container is restarted. No Range or sealed package was
 changed; the rebuilt exact rehearsal remains open.
 
+The fifth exact rehearsal made that sign-in result visible and exposed a real
+proof-timing defect: the candidate runtime fingerprint was captured before the
+installer's own stop, restart and restart-policy normalization. The fresh proof
+now records the exact candidate only after all installer-owned runtime
+transitions and final readiness have completed. The sign-in verifier still
+refuses any change after that boundary. The disposable acceptance harness now
+retains the interrupted-setup transcript when its expected root-owned resume
+receipt is missing, so a future failure reports its actual setup boundary. No
+Range or sealed package was changed; exact rehearsal remains open.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

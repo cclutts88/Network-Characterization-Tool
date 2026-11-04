@@ -114,8 +114,11 @@ def main():
         return status,sent,bytes(captured).replace(password.encode(),b'[redacted]')
 
     interrupted_status,interrupted_sent,interrupted_log=interactive(launcher+['fresh'],True)
+    (root/'fresh-interrupted.log').write_bytes(interrupted_log)
     assert interrupted_status is not None and os.waitstatus_to_exitcode(interrupted_status)!=0 and interrupted_sent==0,interrupted_log[-2500:]
-    receipt=json.loads((persist/'deployment/bootstrap/fresh-resume.json').read_text())
+    receipt_path=persist/'deployment/bootstrap/fresh-resume.json'
+    assert receipt_path.is_file(),interrupted_log[-4000:]
+    receipt=json.loads(receipt_path.read_text())
     assert receipt['phase']=='awaiting_password' and engine.inspect(name)['State']['Running'] is True
     status,sent,captured=interactive(launcher+['resume-fresh'])
     (root/'fresh-setup.log').write_bytes(interrupted_log+b'\n--- RESUME ---\n'+captured)

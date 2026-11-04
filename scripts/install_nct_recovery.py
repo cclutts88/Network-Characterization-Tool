@@ -256,12 +256,7 @@ def enable_console(host, original, container, *, require_reconciled=False, locke
             engine.command("rename", original["Id"], retained)
             candidate["Labels"] = {**(candidate.get("Labels") or {}), "org.nct.update-operation": operation_id}
             replacement_id = engine.create(container, candidate)
-            replacement = engine.inspect(replacement_id)
-            candidate_runtime_sha256 = hashlib.sha256(canonical(_runtime_snapshot(replacement))).hexdigest()
-            with (state / operation_id / "candidate-runtime.json").open("xb") as record:
-                record.write(canonical({"container_id": replacement_id, "sha256": candidate_runtime_sha256}))
-            host.phase(operation, "candidate_created", candidate_id=replacement_id,
-                       candidate_runtime_sha256=candidate_runtime_sha256)
+            host.phase(operation, "candidate_created", candidate_id=replacement_id)
             os.close(writer)
             writer = None
             engine.command("start", replacement_id)
@@ -274,12 +269,20 @@ def enable_console(host, original, container, *, require_reconciled=False, locke
             writer = None
             engine.command("start", replacement_id)
             host.verify_health(operation)
+            # Docker may normalize mutable HostConfig values when a container is
+            # updated, stopped and restarted. Bind the proof only after the exact
+            # candidate has completed those installer-owned transitions.
+            replacement = engine.inspect(replacement_id)
+            candidate_runtime_sha256 = hashlib.sha256(canonical(_runtime_snapshot(replacement))).hexdigest()
+            with (state / operation_id / "candidate-runtime.json").open("xb") as record:
+                record.write(canonical({"container_id": replacement_id, "sha256": candidate_runtime_sha256}))
             detail = (
                 "Recovery console enabled. Sign in once through the normal NCT page to finish this proven fresh installation."
                 if fresh_proof is not None else
                 "Recovery console enabled. Open Updates & Recovery and verify an existing NCT account before resuming collection."
             )
-            host.phase(operation, "awaiting_sign_in", completion_kind="console_enable", detail=detail)
+            host.phase(operation, "awaiting_sign_in", completion_kind="console_enable", detail=detail,
+                       candidate_runtime_sha256=candidate_runtime_sha256)
         except Exception as exc:
             if writer is not None:
                 os.close(writer)
