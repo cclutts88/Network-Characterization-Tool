@@ -512,7 +512,6 @@ from defusedxml import ElementTree as ET
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -3732,23 +3731,21 @@ def login(request: LoginRequest) -> Response:
         raise HTTPException(status_code=401, detail="Username or password is incorrect")
     token, expires_at = create_session(DB_PATH, analyst["username"])
     fresh_operation = os.environ.get("NCT_FRESH_HANDOFF_OPERATION", "")
-    response = JSONResponse({"authenticated": True, "analyst": analyst, "expires_at": expires_at})
+    result = {"authenticated": True, "analyst": analyst, "expires_at": expires_at}
     if re.fullmatch(r"[0-9a-f]{32}", fresh_operation) and analyst.get("role") == "admin":
-        def notify_fresh_handoff():
-            try:
-                from app.update_transport import local_request
-                local_request(
-                    os.environ.get("NCT_UPDATE_LAUNCH_SOCKET", "/run/nct-update/launch.sock"),
-                    "POST", "/fresh-sign-in",
-                    {"operation_id": fresh_operation, "username": analyst["username"], "session_token": token},
-                )
-            except (OSError, ValueError):
-                # Normal sign-in remains complete. The independent console keeps
-                # the paused operation available when fresh proof is not accepted.
-                pass
-        # Run only after the signed-in response and secure cookie have been sent.
-        # The host helper may then perform the protected final restart.
-        response.background = BackgroundTask(notify_fresh_handoff)
+        try:
+            from app.update_transport import local_request
+            local_request(
+                os.environ.get("NCT_UPDATE_LAUNCH_SOCKET", "/run/nct-update/launch.sock"),
+                "POST", "/fresh-sign-in",
+                {"operation_id": fresh_operation, "username": analyst["username"], "session_token": token},
+            )
+            result["fresh_handoff"] = "accepted"
+        except (OSError, ValueError):
+            # Authentication remains successful. The independent console keeps
+            # the paused operation available when exact fresh proof is refused.
+            result["fresh_handoff"] = "recovery_required"
+    response = JSONResponse(result)
     response.set_cookie(
         SESSION_COOKIE,
         token,

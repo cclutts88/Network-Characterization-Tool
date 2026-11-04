@@ -61,6 +61,16 @@ image inspection path, matching the already-qualified package builder and
 runtime checks. Ninety focused installer/host checks pass with one expected
 skip. No Range or sealed package changed; exact rehearsal remains open.
 
+The fourth exact rehearsal reached the first normal Administrator sign-in and
+showed that its after-response notification could fail without giving the
+acceptance test or operator a result. The same protected host verification now
+runs as part of that sign-in request before NCT redirects: a valid fresh proof
+is explicitly accepted, while any refusal preserves the successful login and
+leaves the independent recovery-console path available. The protected final
+restart remains delayed and host-owned, so the sign-in response can finish
+before the application container is restarted. No Range or sealed package was
+changed; the rebuilt exact rehearsal remains open.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

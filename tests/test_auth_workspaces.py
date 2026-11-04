@@ -72,6 +72,7 @@ def test_first_normal_admin_sign_in_notifies_only_the_bound_fresh_handoff(
             json={"username": "freshadmin", "password": "fresh bootstrap password 123"},
         )
     assert response.status_code == 200
+    assert response.json()["fresh_handoff"] == "accepted"
     assert len(calls) == 1
     path, method, route, body = calls[0]
     assert path == str(tmp_path / "launch.sock")
@@ -80,6 +81,30 @@ def test_first_normal_admin_sign_in_notifies_only_the_bound_fresh_handoff(
     assert body["username"] == "freshadmin"
     assert body["session_token"] != "fresh bootstrap password 123"
     assert len(body["session_token"]) >= 40
+
+
+def test_fresh_handoff_refusal_preserves_login_and_requires_recovery(
+    monkeypatch, tmp_path
+):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setenv("NCT_AUTH_MODE", "local")
+    monkeypatch.setenv("NCT_BOOTSTRAP_ADMIN", "freshadmin")
+    monkeypatch.setenv("NCT_BOOTSTRAP_PASSWORD", "fresh bootstrap password 123")
+    monkeypatch.setenv("NCT_FRESH_HANDOFF_OPERATION", "b" * 32)
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("isolated unavailable helper")
+
+    monkeypatch.setattr("app.update_transport.local_request", refuse)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "freshadmin", "password": "fresh bootstrap password 123"},
+        )
+        assert response.status_code == 200
+        assert response.cookies.get("nct_session")
+        assert response.json()["fresh_handoff"] == "recovery_required"
 
 
 def test_personal_layouts_enforce_owner_and_version_conflicts(tmp_path):
