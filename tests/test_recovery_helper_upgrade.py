@@ -59,7 +59,7 @@ def fixture(tmp_path, monkeypatch):
         p.mkdir(parents=True)
     (state/'operation.json').write_text(json.dumps({'phase':'complete','id':'retained-operation','controller_sign_in_verified':True}))
     (state/'retained-receipt.json').write_bytes(b'retained receipt')
-    config = {'contract':'nct-update-v1','console_image_id':upgrade_module.OLD_CONSOLE,'console_container':'console',
+    config = {'contract':'nct-update-v1','console_image_id':'old-console-image','console_container':'console',
               'container':'nct','state_dir':str(state),'data_dir':str(tmp_path/'data'),
               'launch_socket':str(state/'sockets/launch/launch.sock'),'control_socket':str(state/'sockets/control/control.sock'),
               'maintenance_lock':str(tmp_path/'deployment/maintenance.lock')}
@@ -71,20 +71,27 @@ def fixture(tmp_path, monkeypatch):
         bindings.append({'package':'scripts/'+name,'sha256':host_module.digest_file(source/name)})
         if name in upgrade_module.FILES:
             (installed/name).write_bytes(('old '+name).encode())
-    monkeypatch.setattr(upgrade_module,'BASE_HASHES',{name:{host_module.digest_file(installed/name)} for name in upgrade_module.FILES})
+    hashes={name:{host_module.digest_file(installed/name)} for name in upgrade_module.FILES}
+    monkeypatch.setattr(upgrade_module,'BASE_HASHES',hashes)
     monkeypatch.setattr(upgrade_module,'protected',lambda path,directory=False:Path(path))
     unit = tmp_path/'unit';unit.write_text('unchanged service unit')
     image = {'Id':'sha256:'+'b'*64,'Config':{'Env':['NCT_BUILD_COMMIT='+'c'*40,'NCT_BUILD_ID=new-release']}}
+    old_key=(upgrade_module.FRESH_R2,upgrade_module.FRESH_R2_COMMIT)
+    monkeypatch.setattr(upgrade_module,'BASELINES',{old_key:{
+        'files':hashes,'app_config_digest':image['Id'],'console_config_digest':image['Id']}})
     release = {'contract':'nct-full-range-package-v1','commit':'c'*40,'build_id':'new-release','console_image':'new-console',
+               'helper_upgrade_source':{'build_id':old_key[0],'build_commit':old_key[1],
+                   'host_sha256':host_module.digest_file(installed/'nct_update_host.py'),
+                   'app_image_id':image['Id'],'console_image_id':image['Id']},
                'images':{'new-console':{'archive_config_digest':image['Id']}},'source_bindings':bindings}
     (source.parent/'release.json').write_text(json.dumps(release));write_manifest(source.parent)
-    app = {'Id':'app-id','Image':'app-image','State':{'Running':True},'Config':{'Env':['NCT_BUILD_ID='+upgrade_module.R3,'NCT_BUILD_COMMIT='+upgrade_module.R3_COMMIT]},'HostConfig':{},
+    app = {'Id':'app-id','Image':'app-image','State':{'Running':True},'Config':{'Env':['NCT_BUILD_ID='+old_key[0],'NCT_BUILD_COMMIT='+old_key[1]]},'HostConfig':{},
            'Mounts':[{'Type':'bind','Source':str(tmp_path/('server.'+ext)),'Destination':'/run/tls/nct-server.'+ext,'RW':False} for ext in ('crt','key')]}
     app['Mounts'].append({'Type':'bind','Source':config['data_dir'],'Destination':'/data','RW':True})
     mounts = [{'Type':'bind','Source':str(src),'Destination':dst,'RW':rw} for src,dst,rw in (
         (state/'sockets/control','/run/nct-recovery',False),(state/'spool','/staging',True),
         (tmp_path/'server.crt','/run/tls/server.crt',False),(tmp_path/'server.key','/run/tls/server.key',False))]
-    console = {'Id':'old-console','Image':upgrade_module.OLD_CONSOLE,'Config':{'Image':upgrade_module.OLD_CONSOLE,'Env':['NCT_BUILD_ID=old-console','NCT_BUILD_COMMIT=old-source','KEEP=retained']},
+    console = {'Id':'old-console','Image':'old-console-image','Config':{'Image':'old-console-image','Env':['NCT_BUILD_ID=old-console','NCT_BUILD_COMMIT=old-source','KEEP=retained']},
                'State':{'Running':False},'Mounts':mounts,'HostConfig':{'ReadonlyRootfs':True,'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true'],'OomKillDisable':None}}
     engine = Engine({'nct':app,'console':console},image)
     calls = []
@@ -103,7 +110,7 @@ def test_helper_upgrade_preserves_app_evidence_receipts_and_runtime(tmp_path,mon
     assert engine.items['nct'] == app
     assert (upgrade.state/'operation.json').read_bytes() == receipt
     assert (upgrade.state/'retained-receipt.json').read_bytes() == b'retained receipt'
-    assert upgrade.config['console_image_id'] == upgrade_module.OLD_CONSOLE
+    assert upgrade.config['console_image_id'] == 'old-console-image'
     assert json.loads(upgrade.path.read_text())['console_image_id'] == engine.image['Id']
     assert json.loads(upgrade.journal_path.read_text())['phase'] == 'complete'
     assert upgrade_module.host_configuration(engine.items['console']['HostConfig']) == upgrade_module.host_configuration(next(v['HostConfig'] for k,v in engine.items.items() if '-before-' in k))

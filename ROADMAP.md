@@ -1,6 +1,18 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Fresh-r3 combined deployment package qualification started (2026-11-04): build one
+sealed air-gapped package from the exact current foundation commit, including the
+device-selector finalization correction and every previously completed development
+addition. Qualify both an empty-host installation and an exact retained-data update
+from the currently deployed Fresh-r2 build so the application and independent
+recovery console move together. Preserve older sealed packages and all Range data;
+this work prepares and tests a package locally and does not deploy it. Require exact
+image/source identities, cold-backup and retained-account/evidence checks, browser
+smoke coverage, the standard 48 MiB transfer pieces, independent reviewer and novice
+operator gates, and explicit separation between locally Range-ready and installed on
+a Range.
+
 Range device-selector finalization incident started (2026-11-04): the installed
 Fresh-r2 Range visibly refuses Hunt Network Evidence because completed device
 collection `d11c79ce1a3f494b84e6b4289164a9a1` no longer matches the disposable

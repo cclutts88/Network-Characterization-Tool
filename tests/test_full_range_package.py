@@ -293,7 +293,7 @@ def test_schema_adapter_refuses_unknown_source_without_touching_data(tmp_path):
     spec.loader.exec_module(gate)
     db = tmp_path / "analyzer.db"
     db.write_bytes(b"preserve exact bytes")
-    with pytest.raises(ValueError, match="exact tested Phase 5"):
+    with pytest.raises(ValueError, match="exact source listed in its tested source registry"):
         gate.audit(db, "unknown", "b" * 40)
     assert db.read_bytes() == b"preserve exact bytes"
 

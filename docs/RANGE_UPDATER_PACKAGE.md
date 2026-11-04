@@ -12,18 +12,18 @@ trusted release source. No software is downloaded during installation.
 
 ### Choose the installation path
 
-- If Updates & Recovery is **already installed** on the supported Recovery-r3
-  application, use the separate helper/console upgrade below. Do not rerun the
-  first-time installer over its saved state.
+- If Updates & Recovery is **already installed** on the exact Fresh-r2 build named
+  in `release.json` under `helper_upgrade_source`, use the separate helper/console
+  upgrade below. Do not rerun the first-time installer over its saved state.
 - If there is no independent helper installed, use the first-time instructions
   below for the explicitly supported sources. Other builds need a reviewed bridge.
 
-### Existing Recovery-r3 helper and console
+### Existing Fresh-r2 helper and console
 
-This path is limited to the accepted Recovery-r3 application and its patched host
-helper (SHA256 `00204d190fc8802d334f7c93834a3aa439792317f631db96ef01ebceeb4b00bc`),
-with the separately pinned Recovery-r2 console. It refuses other helper versions,
-unfinished update/recovery operations, changed mounts or weakened console settings.
+This path is limited to the accepted Fresh-r2 application, its exact installed host
+helper and its exact independently pinned Fresh-r2 console, all named in
+`helper_upgrade_source`. It refuses other builds or helper versions, unfinished
+update/recovery operations, changed mounts or weakened console settings.
 Keep the current application, evidence, accounts and recovery receipts in place.
 
 An administrator runs these steps on the Linux NCT host from the newly extracted
@@ -85,12 +85,20 @@ host service and browser trust acceptance remain separate Range checks.
   disposable copy, with no additional schema migration or fingerprint reset.
   Version-6 sources need a separately qualified Phase 5 staging path;
   this package does not perform that bridge.
-- Both supported upgrade paths assume the independent recovery helper has not
-  already been installed. If it is installed, preserve its configuration and
-  receipts and obtain a reviewed helper-upgrade procedure. This installer refuses
-  that case before loading images or changing the application.
+- The ordinary full-package installer assumes the independent recovery helper is not
+  already installed. An exact Fresh-r2 installation instead uses the reviewed
+  helper/console upgrade at the start of this guide, followed by the included GUI
+  application update. Preserve its configuration and receipts; the ordinary installer
+  correctly refuses that case before loading images or changing the application.
 - Finish scans and device pulls and disable schedules/automatic pulls during the
   maintenance window. Keep the current password: existing accounts are preserved.
+- This Fresh-r3 full package also qualifies the exact Fresh-r2 build
+  `0.16.0-range-test-20261102-fresh-r2` at commit
+  `ba2124aad40dc9f4f718c2799db35d9703a5f89d`. Use the full ZIP to update the host
+  helper and independent console first, then upload its included application update
+  in the browser so the complete installed stack reaches this release.
+  The operator keeps the existing account and retained evidence; no new password is
+  selected during an update.
 - Use the same host IP and HTTPS port as the working NCT. The issuing root CA must
   validate its certificate and that IP must appear in the certificate's SAN.
 
@@ -225,10 +233,12 @@ the queue merely to make an update pass.
 
 ## Later updates
 
-This ZIP is the one-time **full-package bootstrap**. Later GUI updates use a separately
-prepared `nct-update-RELEASE.tar.gz`, containing the image and versioned release
-manifest. Do not upload this full ZIP to the GUI. GUI packages never install new
-host scripts. The pinned independent console remains available while NCT restarts.
+Do not upload this full ZIP to the GUI. For the exact Fresh-r2 path above, the ZIP first
+upgrades the protected host helper and pinned console, then its included
+`nct-update-RELEASE.tar.gz` updates the application. After that full transition, later
+application-only updates may use a separately prepared GUI package when its manifest
+names the exact installed source. GUI packages never install host scripts or a console.
+The pinned independent console remains available while NCT restarts.
 See [Updates and Recovery](docs/NCT_UPDATES_AND_RECOVERY.md) and
 [Arkime connector setup](docs/ARKIME_CONNECTOR_RANGE_SETUP.md).
 

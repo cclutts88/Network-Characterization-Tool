@@ -15,6 +15,7 @@ PHASE5 = ("0.16.0-range-test-20261025-phase5-r1", "be92fb78e938adc3fced581629d46
 SOURCES = {
     PHASE5: 7,
     ("0.16.0-range-test-20261027-recovery-r1", "0bd11969ffd81aad7cbc8335af755b80c9af0639"): 8,
+    ("0.16.0-range-test-20261102-fresh-r2", "ba2124aad40dc9f4f718c2799db35d9703a5f89d"): 8,
 }
 
 
@@ -28,7 +29,7 @@ def digest(path):
 
 def audit(db_path, build_id, commit, required=7):
     if SOURCES.get((build_id, commit)) != required:
-        raise ValueError("This full package accepts only exact tested Phase 5 R1 or Recovery R1 sources with their recorded schema versions. Preserve the installation.")
+        raise ValueError("This full package accepts only an exact source listed in its tested source registry. Preserve the installation.")
     wal = db_path.with_name(db_path.name + "-wal")
     if not db_path.is_file() or wal.exists() and wal.stat().st_size:
         raise ValueError("The stopped database is missing or still has uncheckpointed WAL")

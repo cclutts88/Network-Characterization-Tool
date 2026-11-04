@@ -26,13 +26,19 @@ from build_nct_range_package import verify_manifest
 
 FILES = ("nct_update_host.py", "nct_update_work.py", "nct-range-data-check.py")
 BASE_HASHES = {
-    "nct_update_host.py": {"00204d190fc8802d334f7c93834a3aa439792317f631db96ef01ebceeb4b00bc"},
+    "nct_update_host.py": {"49252e8761c94167470154f945d39355443145a046e6f924db6a031d9804ffee"},
     "nct_update_work.py": {"c89c7b61d547d7a643d11af26bf4163ea55a014a9fc377ee3a1c85c113481135"},
     "nct-range-data-check.py": {"8ed5b3e4f7fd4d517df823e78613be5617eb2051db8475edc443757594c27a38"},
 }
-OLD_CONSOLE = "sha256:4c1f8e8d5178710ee4f08ca891b356831ff631e30cccf4e8ef955c53731c94fd"
-R3 = "0.16.0-range-test-20261029-recovery-r3"
-R3_COMMIT = "03da1516face51403035e4292ac68cac9279dd65"
+FRESH_R2 = "0.16.0-range-test-20261102-fresh-r2"
+FRESH_R2_COMMIT = "ba2124aad40dc9f4f718c2799db35d9703a5f89d"
+BASELINES = {
+    (FRESH_R2, FRESH_R2_COMMIT): {
+        "files": {name: values for name, values in BASE_HASHES.items()},
+        "app_config_digest": "sha256:015d686a5ccd182a8037db34b756ad89223ff4ebfd65b5e0f55244cc128454a5",
+        "console_config_digest": "sha256:d6f0b78a5a5513c1840a6fe609872ba4b9aa66d3fffb6a3302b39b6911fdc5e2",
+    },
+}
 SERVICE = "nct-recovery-host.service"
 
 
@@ -154,16 +160,29 @@ class Upgrade:
             raise ValueError("Installed helper configuration changed")
         protected(Path(self.config["maintenance_lock"]).parent, True)
         self.check_service()
+        app = self.engine.inspect(self.config["container"])
+        env = dict(v.split("=", 1) for v in app["Config"].get("Env", []) if "=" in v)
+        baseline_key = (env.get("NCT_BUILD_ID"), env.get("NCT_BUILD_COMMIT"))
+        baseline = BASELINES.get(baseline_key)
+        if baseline is None or app["State"].get("Running") is not True:
+            raise ValueError("This helper upgrade requires one exact running supported application baseline")
         for name in FILES:
             protected(self.path.parent / name)
-            if digest_file(self.path.parent / name) not in BASE_HASHES[name]:
-                raise ValueError("Installed helper is not the supported Recovery-r3 baseline: " + name)
-        if self.config.get("contract") != "nct-update-v1" or self.config.get("console_image_id") != OLD_CONSOLE:
+            if digest_file(self.path.parent / name) not in baseline["files"][name]:
+                raise ValueError("Installed helper does not match the exact application baseline: " + name)
+        if self.config.get("contract") != "nct-update-v1":
             raise ValueError("Installed console baseline is unsupported")
         verify_manifest(self.source.parent)
         release = json.loads((self.source.parent / "release.json").read_text())
         if release.get("contract") != "nct-full-range-package-v1":
             raise ValueError("A complete verified full release package is required")
+        declared = release.get("helper_upgrade_source")
+        if (not isinstance(declared, dict)
+            or (declared.get("build_id"), declared.get("build_commit")) != baseline_key
+            or declared.get("host_sha256") != digest_file(self.path.parent / "nct_update_host.py")
+            or declared.get("app_image_id") != baseline["app_config_digest"]
+            or declared.get("console_image_id") != baseline["console_config_digest"]):
+            raise ValueError("The full package does not declare this exact installed helper stack")
         image = json.loads(self.engine.command("image", "inspect", self.image))[0]
         env = dict(v.split("=", 1) for v in image["Config"].get("Env", []) if "=" in v)
         expected = release["images"][release["console_image"]]["archive_config_digest"]
@@ -173,19 +192,18 @@ class Upgrade:
         for name in (*FILES, "nct-upgrade-recovery.py", "build_nct_range_package.py"):
             if digest_file(self.source / name) != bindings.get("scripts/" + name):
                 raise ValueError("Release helper sources do not match the checked full package")
-        app = self.engine.inspect(self.config["container"])
         data_mounts = [m for m in app["Mounts"] if m["Destination"] == "/data"]
-        if (len(data_mounts) != 1 or data_mounts[0]["Type"] != "bind"
+        if (self.image_config_digest(app["Image"]) != baseline["app_config_digest"]
+            or len(data_mounts) != 1 or data_mounts[0]["Type"] != "bind"
             or data_mounts[0]["Source"] != self.config.get("data_dir") or not data_mounts[0]["RW"]
             or app["HostConfig"].get("Privileged")
             or any(m["Destination"].startswith("/data/") or m["Destination"] in {"/", "/run/docker.sock", "/var/run/docker.sock"} for m in app["Mounts"])):
             raise ValueError("The application no longer has the supported evidence and host-access configuration")
-        env = dict(v.split("=", 1) for v in app["Config"].get("Env", []) if "=" in v)
-        if (env.get("NCT_BUILD_ID"), env.get("NCT_BUILD_COMMIT")) != (R3, R3_COMMIT) or app["State"].get("Running") is not True:
-            raise ValueError("This helper upgrade requires the running supported Recovery-r3 application")
         console = self.engine.inspect(self.config["console_container"])
         runtime = console["HostConfig"]
-        if console["Image"] != OLD_CONSOLE or runtime.get("Privileged") or not runtime.get("ReadonlyRootfs"):
+        if (self.config.get("console_image_id") != console["Image"]
+            or self.image_config_digest(console["Image"]) != baseline["console_config_digest"]
+            or runtime.get("Privileged") or not runtime.get("ReadonlyRootfs")):
             raise ValueError("Existing console image or security configuration changed")
         if runtime.get("CapDrop") != ["ALL"] or runtime.get("CapAdd") or runtime.get("SecurityOpt") not in (["no-new-privileges"], ["no-new-privileges:true"]):
             raise ValueError("Console restrictions changed")
@@ -210,6 +228,9 @@ class Upgrade:
         return {"app": app, "console": console, "image": image["Id"], "release_env":{
                     k:v for k,v in dict(v.split("=",1) for v in image["Config"].get("Env",[]) if "=" in v).items() if k in {"NCT_BUILD_ID","NCT_BUILD_COMMIT"}},
                 "operation": self.operation(), "config_sha256":digest_file(self.path),
+                "baseline": {"build_id": baseline_key[0], "build_commit": baseline_key[1],
+                    "app_config_digest": baseline["app_config_digest"],
+                    "console_config_digest": baseline["console_config_digest"]},
                 "source_hashes": {name:digest_file(self.source / name) for name in FILES}}
 
     def unchanged_app(self, journal):

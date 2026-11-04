@@ -14,6 +14,15 @@ import importlib.util
 LAUNCHERS = ("nct-start-docker.sh", "nct-start-compose.sh", "nct-start-legacy.sh", "nct-upgrade.sh", "nct-rollback-upgrade.sh", "nct-recover-unhealthy-upgrade.sh", "nct-range-direct-deploy.sh")
 SOURCE_TAG = "0.16.0-range-test-20261013-phase3-r3"
 R4_SOURCE = {"build_id": "0.16.0-range-test-20261102-recovery-r4", "build_commit": "937954bc03e4b21c3e93d7430321a918d8bc59a0"}
+FRESH_R2_SOURCE = {
+    "build_id": "0.16.0-range-test-20261102-fresh-r2",
+    "build_commit": "ba2124aad40dc9f4f718c2799db35d9703a5f89d",
+    "schema_version": 8,
+    "host_sha256": "49252e8761c94167470154f945d39355443145a046e6f924db6a031d9804ffee",
+    "app_image_id": "sha256:015d686a5ccd182a8037db34b756ad89223ff4ebfd65b5e0f55244cc128454a5",
+    "console_image": "nct-recovery-console:0.16.0-range-test-20261102-fresh-r2",
+    "console_image_id": "sha256:d6f0b78a5a5513c1840a6fe609872ba4b9aa66d3fffb6a3302b39b6911fdc5e2",
+}
 
 
 def digest(path):
@@ -163,12 +172,10 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
     from build_nct_update import build
     r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
     # Terminal installer acceptance is not GUI-update acceptance.
-    sources = [R4_SOURCE] if existing_r4 else [r3]
+    sources = [R4_SOURCE] if existing_r4 else [{k: FRESH_R2_SOURCE[k] for k in ("build_id", "build_commit")}]
     update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
     release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
-    release["helper_upgrade_source"] = {**r3,
-        "host_sha256":"00204d190fc8802d334f7c93834a3aa439792317f631db96ef01ebceeb4b00bc",
-        "console_image_id":"sha256:4c1f8e8d5178710ee4f08ca891b356831ff631e30cccf4e8ef955c53731c94fd"}
+    release["helper_upgrade_source"] = dict(FRESH_R2_SOURCE)
     if existing_r4:
         # This kit deliberately qualifies one existing-installation path only.
         # Bundled emergency/terminal tools are not newly qualified install paths.

@@ -1,4 +1,4 @@
-"""Isolated real Docker/TLS helper upgrade from the accepted patched R3 baseline.
+"""Isolated real Docker/TLS helper upgrade from the package-declared baseline.
 
 systemd is represented by a controlled host process; no real host unit is changed.
 Only this administrative fixture is excluded from peer-data mount checks.
@@ -38,11 +38,15 @@ def main():
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     manifest=verify_manifest(args.package)
     release=json.loads((args.package/'release.json').read_text())
+    source=release['helper_upgrade_source']
+    old_app='network-characterization-tool:'+source['build_id']
+    old_console=source['console_image']
     own=Path('/etc/hostname').read_text().strip()
     class Engine(host_module.Docker):
         def inventory(self):
             return [v for v in super().inventory() if not v['Id'].startswith(own)]
     engine=Engine()
+    old_console_id=json.loads(engine.command('image','inspect',old_console))[0]['Id']
     name='nct-helper-acceptance-'+secrets.token_hex(6)
     installed,state,data,tls=(root/v for v in ('installed','state','data','tls'))
     for path in (installed,state,data,tls,state/'sockets',state/'sockets/launch',state/'sockets/control',state/'spool',root/'deployment'):
@@ -51,13 +55,13 @@ def main():
     subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','2','-subj','/CN=host.docker.internal',
                     '-addext','subjectAltName=DNS:host.docker.internal,IP:127.0.0.1','-keyout',str(key),'-out',str(cert)],check=True,capture_output=True)
     config={'contract':'nct-update-v1','state_dir':str(state),'data_dir':str(data),'container':name,'console_container':name+'-console',
-            'console_image_id':module.OLD_CONSOLE,'application_url':'https://host.docker.internal:18171','console_url':'https://host.docker.internal:18172',
+            'console_image_id':old_console_id,'application_url':'https://host.docker.internal:18171','console_url':'https://host.docker.internal:18172',
             'ca_file':str(cert),'launch_socket':str(state/'sockets/launch/launch.sock'),'control_socket':str(state/'sockets/control/control.sock'),
             'maintenance_lock':str(root/'deployment/maintenance.lock'),'allowed_operators':'all'}
     host_module.save(installed/'config.json',config)
     for file in module.FILES:
         payload=(args.baseline_tools/file).read_bytes()
-        assert hashlib.sha256(payload).hexdigest() in module.BASE_HASHES[file]
+        assert hashlib.sha256(payload).hexdigest() in module.BASELINES[(source['build_id'],source['build_commit'])]['files'][file]
         (installed/file).write_bytes(payload)
     password=secrets.token_urlsafe(24)
     service=None
@@ -79,12 +83,12 @@ def main():
         '-v',str(data)+':/data','-v',str(state/'sockets/launch')+':/run/nct-update:ro',
         '-v',str(cert)+':/run/tls/server.crt:ro','-v',str(key)+':/run/tls/server.key:ro',
         '-e','NCT_AUTH_MODE=local','-e','NCT_COOKIE_SECURE=1','-e','NCT_BOOTSTRAP_ADMIN=fixture-operator','-e','NCT_BOOTSTRAP_PASSWORD='+password,
-        'network-characterization-tool:'+module.R3,'uvicorn','app.main:app','--host','0.0.0.0','--port','8080','--ssl-certfile','/run/tls/server.crt','--ssl-keyfile','/run/tls/server.key')
+        old_app,'uvicorn','app.main:app','--host','0.0.0.0','--port','8080','--ssl-certfile','/run/tls/server.crt','--ssl-keyfile','/run/tls/server.key')
     console=engine.command('create','--name',config['console_container'],'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
         '--tmpfs','/tmp:rw,noexec,nosuid,size=16m','-p','127.0.0.1:18172:8446',
         '-v',str(state/'sockets/control')+':/run/nct-recovery:ro','-v',str(state/'spool')+':/staging',
         '-v',str(cert)+':/run/tls/server.crt:ro','-v',str(key)+':/run/tls/server.key:ro',
-        '-e','NCT_RECOVERY_SOCKET=/run/nct-recovery/control.sock','-e','NCT_RECOVERY_SPOOL=/staging',module.OLD_CONSOLE,
+        '-e','NCT_RECOVERY_SOCKET=/run/nct-recovery/control.sock','-e','NCT_RECOVERY_SPOOL=/staging',old_console,
         'uvicorn','app.recovery_console:app','--host','0.0.0.0','--port','8446','--ssl-certfile','/run/tls/server.crt','--ssl-keyfile','/run/tls/server.key').strip()
     probe=host_module.Host(config,engine)
     context=ssl.create_default_context(cafile=str(cert))
@@ -173,17 +177,17 @@ def main():
             time.sleep(1)
         else:raise AssertionError(host.public())
         request('/api/verify-sign-in',{'username':'fixture-operator','password':password},console=True)
-        assert request('/health')['build_commit']==module.R3_COMMIT
+        assert request('/health')['build_commit']==source['build_commit']
         verify_xml()
         assert (Path(host.read()['quarantine_path'])/'later-evidence.txt').read_bytes()==b'preserve after helper upgrade'
         result={'result':'pass','tested_manifest_sha256':manifest,'commit':release['commit'],'images':release['images'],
-                'source_build':module.R3,'source_commit':module.R3_COMMIT,'old_console':module.OLD_CONSOLE,
-                'old_helper_sha256':next(iter(module.BASE_HASHES['nct_update_host.py'])),'ca_verified':True,
+                'source_build':source['build_id'],'source_commit':source['build_commit'],'old_console':source['console_image_id'],
+                'old_helper_sha256':source['host_sha256'],'ca_verified':True,
                 'systemd_substitution':'controlled exact helper process','app_unchanged_by_helper_upgrade':True,
                 'existing_receipt_preserved':True,'existing_account_preserved':True,'app_update_and_backup_restore':True,'later_evidence_preserved':True}
         result['crash_after_create_recovered']=args.exercise_crash_after_create
         host_module.save(root/'acceptance.json',result)
-        print('PASS: existing R3 helper/console upgrade, real TLS/account/evidence checks, GUI app update and backup restore.',flush=True)
+        print('PASS: package-declared helper/console upgrade, real TLS/account/evidence checks, GUI app update and backup restore.',flush=True)
     finally:
         service_command('stop')
         # Stop only this fixture's app and retained originals identified by its prefix.

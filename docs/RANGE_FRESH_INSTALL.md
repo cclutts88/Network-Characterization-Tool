@@ -124,10 +124,18 @@ host recovery helper lives under `/opt/nct-recovery` and its service is
 
 ## Existing installations and qualification limits
 
-For the exact supported Recovery-r4 installation only, the separate
-`docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md` describes the GUI update route. Do not use
-fresh setup as an upgrade or reset. Older terminal-upgrade instructions included
-with the administrator tools are not newly qualified paths for this kit.
+For an existing NCT installation, do not use fresh setup as an upgrade or reset.
+Open `release.json` and find the exact installed build and commit in
+`supported_sources`, then use the full ZIP's checked helper/console update route in
+`docs/RANGE_UPDATER_PACKAGE.md`. The Fresh-r3 package explicitly qualifies the
+installed Fresh-r2 build in addition to its fresh-install route. An unlisted build
+must be preserved and reviewed rather than guessed or forced through the updater.
+
+The smaller `nct-update-*.tar.gz` file inside the ZIP is the separately qualified
+application-only route for its own declared source. Use the full ZIP when replacing
+both the independent recovery components and the NCT application: update the host
+helper and console first, then upload that included application update in the browser.
+That is the current Fresh-r2-to-Fresh-r3 Range route.
 
 `VALIDATION.json` records the exact local fresh-install and update rehearsals.
 A real host's service boot, browser trust and authorized network collection still
