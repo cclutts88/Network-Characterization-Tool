@@ -2,3 +2,4 @@ fastapi==0.116.1
 uvicorn[standard]==0.35.0
 python-multipart==0.0.20
 defusedxml==0.7.1
+typing-inspection==0.4.4

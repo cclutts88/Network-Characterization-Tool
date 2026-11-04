@@ -11,7 +11,10 @@ this work prepares and tests a package locally and does not deploy it. Require e
 image/source identities, cold-backup and retained-account/evidence checks, browser
 smoke coverage, the standard 48 MiB transfer pieces, independent reviewer and novice
 operator gates, and explicit separation between locally Range-ready and installed on
-a Range.
+a Range. During image comparison, the application image was found to have resolved
+`typing-inspection` 0.4.5 instead of the 0.4.4 version in the qualified Fresh-r2
+runtime. Pin 0.4.4 and rebuild before acceptance so this release does not introduce
+unrequested dependency drift.
 
 Range device-selector finalization incident started (2026-11-04): the installed
 Fresh-r2 Range visibly refuses Hunt Network Evidence because completed device
