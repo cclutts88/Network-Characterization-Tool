@@ -68,7 +68,35 @@ def normalize_export(raw, output):
             if not member.isfile():
                 raise ValueError("Docker export contains a non-file image member")
             target.addfile(member, source.extractfile(member))
-        identities = {tag: "sha256:" + hashlib.sha256(source.extractfile(item["Config"]).read()).hexdigest() for item in entries for tag in item["RepoTags"]}
+        identities = {}
+        for item in entries:
+            def descriptor(name, media_type):
+                return {
+                    "mediaType": media_type,
+                    "digest": "sha256:" + Path(name).name,
+                    "size": source.getmember(name).size,
+                }
+
+            # Classic Docker reports the image configuration digest as the image
+            # identity. The containerd image store reports the distribution
+            # manifest digest that it creates while loading this legacy archive.
+            # Record both exact identities; neither is inferred from mutable tags.
+            manifest = {
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+                "config": descriptor(item["Config"], "application/vnd.docker.container.image.v1+json"),
+                "layers": [
+                    descriptor(name, "application/vnd.docker.image.rootfs.diff.tar.gzip")
+                    for name in item["Layers"]
+                ],
+            }
+            manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode()
+            values = {
+                "archive_config_digest": "sha256:" + hashlib.sha256(source.extractfile(item["Config"]).read()).hexdigest(),
+                "archive_runtime_id": "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(),
+            }
+            for tag in item["RepoTags"]:
+                identities[tag] = values
         return identities
 
 
@@ -122,8 +150,8 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
     archive = output / "offline-images/nct-range-images.tar"
     try:
         subprocess.run(["docker", "save", "-o", str(raw), image, console, "caddy:2-alpine"], check=True)
-        for name, identity in normalize_export(raw, archive).items():
-            images[name]["archive_config_digest"] = identity
+        for name, identities in normalize_export(raw, archive).items():
+            images[name].update(identities)
     finally:
         raw.unlink(missing_ok=True)
     (archive.with_suffix(".tar.sha256")).write_text(digest(archive) + "  nct-range-images.tar\n", encoding="utf-8")

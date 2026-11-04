@@ -107,6 +107,18 @@ same-operation refusals still lead to Recovery verification.
 This is foundation-only development acceptance: the package remains unsealed,
 no Range was changed, and `main` remains unchanged.
 
+Fresh-host archive identity compatibility follow-up started (2026-11-03): the
+first r10 empty-host rehearsal deliberately ran after the exact release tags had
+been removed and exposed a newer Docker/containerd identity boundary that the r9
+rehearsal did not exercise. Loading the normalized offline archive produces the
+same immutable configuration and layers under a distribution-manifest identity,
+while the release recorded only the build-time runtime identity and classic
+configuration identity. Keep exact-image refusal intact, add the deterministic
+archive manifest identity to the signed release record, and repeat focused,
+fresh-host, preserved-install and full regression acceptance. This is an
+isolated package-qualification finding; no sealed package, Range, retained
+evidence or `main` checkout was changed.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

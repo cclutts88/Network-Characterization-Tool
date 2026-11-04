@@ -17,6 +17,7 @@ def main() -> int:
         admitted_ids = {
             metadata.get("export_runtime_id"),
             metadata.get("archive_config_digest"),
+            metadata.get("archive_runtime_id"),
         } - {None, ""}
         if not admitted_ids:
             raise ValueError(f"release has no immutable image identity for {name}")

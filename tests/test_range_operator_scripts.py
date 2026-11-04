@@ -108,6 +108,7 @@ def test_fresh_package_admits_exact_images_early_without_loading_them_twice():
     assert "contains operator data or an unexpected account" in starter
     image_verifier = (SCRIPTS / "nct-verify-loaded-images.py").read_text(encoding="utf-8")
     assert "archive_config_digest" in image_verifier
+    assert "archive_runtime_id" in image_verifier
     assert "export_runtime_id" in image_verifier
     empty_verifier = (
         (SCRIPTS / "nct-verify-empty-fresh-resume.py").read_text(encoding="utf-8")

@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -14,6 +16,45 @@ SCRIPTS = Path(__file__).parents[1] / "scripts"
 spec = importlib.util.spec_from_file_location("range_package", SCRIPTS / "build_nct_range_package.py")
 package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
+
+
+def test_normalized_export_records_classic_and_containerd_load_identities(tmp_path):
+    raw = tmp_path / "raw.tar"
+    normalized = tmp_path / "normalized.tar"
+    config = b'{"architecture":"amd64","os":"linux"}'
+    layer = b"compressed-layer-fixture"
+    config_name = "blobs/sha256/" + hashlib.sha256(config).hexdigest()
+    layer_name = "blobs/sha256/" + hashlib.sha256(layer).hexdigest()
+    entry = {"Config": config_name, "Layers": [layer_name], "RepoTags": ["fixture:exact"]}
+    with tarfile.open(raw, "w") as stream:
+        for name, value in (("manifest.json", json.dumps([entry]).encode()), (config_name, config), (layer_name, layer)):
+            info = tarfile.TarInfo(name)
+            info.size = len(value)
+            stream.addfile(info, io.BytesIO(value))
+
+    identities = package.normalize_export(raw, normalized)["fixture:exact"]
+
+    def descriptor(name, value, media_type):
+        return {
+            "mediaType": media_type,
+            "digest": "sha256:" + Path(name).name,
+            "size": len(value),
+        }
+    manifest = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+        "config": descriptor(config_name, config, "application/vnd.docker.container.image.v1+json"),
+        "layers": [descriptor(layer_name, layer, "application/vnd.docker.image.rootfs.diff.tar.gzip")],
+    }
+    expected_runtime = "sha256:" + hashlib.sha256(
+        json.dumps(manifest, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert identities == {
+        "archive_config_digest": "sha256:" + Path(config_name).name,
+        "archive_runtime_id": expected_runtime,
+    }
+    with tarfile.open(normalized) as stream:
+        assert json.load(stream.extractfile("manifest.json"))[0] == entry
 
 
 def staged(tmp_path):
