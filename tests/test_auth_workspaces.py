@@ -48,6 +48,40 @@ def test_passwords_are_hashed_and_credentials_are_verified(tmp_path):
     assert "correct horse" not in stored
 
 
+def test_first_normal_admin_sign_in_notifies_only_the_bound_fresh_handoff(
+    monkeypatch, tmp_path
+):
+    db_path = tmp_path / "analyzer.db"
+    operation_id = "a" * 32
+    monkeypatch.setenv("NCT_AUTH_MODE", "local")
+    monkeypatch.setenv("NCT_BOOTSTRAP_ADMIN", "freshadmin")
+    monkeypatch.setenv("NCT_BOOTSTRAP_PASSWORD", "fresh bootstrap password 123")
+    monkeypatch.setenv("NCT_FRESH_HANDOFF_OPERATION", operation_id)
+    monkeypatch.setenv("NCT_UPDATE_LAUNCH_SOCKET", str(tmp_path / "launch.sock"))
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    calls = []
+
+    def record(path, method, route, body):
+        calls.append((path, method, route, body))
+        return {"accepted": True}
+
+    monkeypatch.setattr("app.update_transport.local_request", record)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "freshadmin", "password": "fresh bootstrap password 123"},
+        )
+    assert response.status_code == 200
+    assert len(calls) == 1
+    path, method, route, body = calls[0]
+    assert path == str(tmp_path / "launch.sock")
+    assert (method, route) == ("POST", "/fresh-sign-in")
+    assert body["operation_id"] == operation_id
+    assert body["username"] == "freshadmin"
+    assert body["session_token"] != "fresh bootstrap password 123"
+    assert len(body["session_token"]) >= 40
+
+
 def test_personal_layouts_enforce_owner_and_version_conflicts(tmp_path):
     db_path = tmp_path / "analyzer.db"
     first = save_layout(

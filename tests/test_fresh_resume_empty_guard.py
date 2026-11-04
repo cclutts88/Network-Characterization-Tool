@@ -1,4 +1,6 @@
 import sqlite3
+from datetime import datetime, timedelta, timezone
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +10,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts" / "nct-verify-empty-fresh-resume.py"
+sys.path.insert(0, str(ROOT / "scripts"))
+from nct_fresh_handoff import verify_empty
 EVIDENCE_TABLES = (
     "scan_runs",
     "scan_schedules",
@@ -33,6 +37,10 @@ def fresh_data(root: Path) -> tuple[Path, Path]:
             CREATE TABLE analyst_auth_audit (
                 audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL
+            );
+            CREATE TABLE analyst_sessions (
+                token_hash TEXT PRIMARY KEY, username TEXT NOT NULL,
+                created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             );
             INSERT INTO analyst_users VALUES ('admin', 'admin', 0);
             INSERT INTO analyst_auth_audit (username, action, actor)
@@ -92,3 +100,43 @@ def test_fresh_resume_accepts_only_the_single_expected_password_reset(tmp_path):
     result = run_guard(data, db_path)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "PASSWORD_RESET_COUNT=1"
+
+
+def test_exact_first_authenticated_session_is_accepted_for_handoff(tmp_path):
+    data, db_path = fresh_data(tmp_path)
+    token = "first-normal-session-token-with-enough-random-looking-characters"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "INSERT INTO analyst_sessions VALUES (?, ?, ?, ?)",
+            (
+                hashlib.sha256(token.encode()).hexdigest(), "admin",
+                datetime.now(timezone.utc).isoformat(),
+                (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            ),
+        )
+    assert verify_empty(db_path, data, "admin", expected_session_token=token) == 0
+
+
+@pytest.mark.parametrize("change", ["wrong_token", "second_session", "expired"])
+def test_fresh_handoff_rejects_any_session_other_than_the_exact_first_one(tmp_path, change):
+    data, db_path = fresh_data(tmp_path)
+    token = "first-normal-session-token-with-enough-random-looking-characters"
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    if change == "expired":
+        expires = datetime.now(timezone.utc) - timedelta(seconds=1)
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "INSERT INTO analyst_sessions VALUES (?, ?, ?, ?)",
+            (
+                hashlib.sha256(token.encode()).hexdigest(), "admin",
+                datetime.now(timezone.utc).isoformat(), expires.isoformat(),
+            ),
+        )
+        if change == "second_session":
+            db.execute(
+                "INSERT INTO analyst_sessions VALUES (?, ?, ?, ?)",
+                ("f" * 64, "admin", datetime.now(timezone.utc).isoformat(), expires.isoformat()),
+            )
+    supplied = "another-session-token-with-enough-random-looking-characters" if change == "wrong_token" else token
+    with pytest.raises(ValueError):
+        verify_empty(db_path, data, "admin", expected_session_token=supplied)

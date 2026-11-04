@@ -145,8 +145,18 @@ if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP
         fresh_admission
     fi
     if [ "$NCT_SETUP_MODE" = resume-fresh ]; then
-        progress "5/6" "Resuming only the verified empty installation at Administrator password setup."
-        NCT_SKIP_IMAGE_LOAD=1 NCT_RESUME_BOOTSTRAP=1 sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
+        NCT_FRESH_RECEIPT="$NCT_PERSIST_ROOT/deployment/bootstrap/fresh-resume.json"
+        NCT_FRESH_PHASE=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["phase"])' "$NCT_FRESH_RECEIPT" 2>/dev/null || true)
+        if [ "$NCT_FRESH_PHASE" = runtime_ready ]; then
+            progress "5/6" "Resuming the exact completed empty runtime at recovery-console setup."
+            "$NCT_RECOVERY_PYTHON" "$NCT_PACKAGE_ROOT/scripts/nct-fresh-bootstrap-state.py" verify-runtime-ready \
+                --receipt "$NCT_FRESH_RECEIPT" --admin-user "${NCT_ADMIN_USER:-admin}" \
+                --release "$NCT_PACKAGE_ROOT/release.json" --manifest "$NCT_PACKAGE_ROOT/PACKAGE-MANIFEST.sha256" \
+                --archive "$NCT_PACKAGE_ROOT/offline-images/nct-range-images.tar" || die "The completed fresh runtime changed; preserve it for review."
+        else
+            progress "5/6" "Resuming only the verified empty installation at Administrator password setup."
+            NCT_SKIP_IMAGE_LOAD=1 NCT_RESUME_BOOTSTRAP=1 sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
+        fi
     elif docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
         [ "$NCT_SETUP_MODE" != fresh ] || die "An NCT container appeared during fresh setup; no upgrade was attempted."
         NCT_PACKAGE_RUNTIME_CLONE="$NCT_PACKAGE_ROOT/scripts/nct-clone-release-runtime.py" sh "$NCT_PACKAGE_ROOT/scripts/nct-upgrade.sh" "$NCT_RANGE_IP" docker
@@ -159,12 +169,23 @@ NCT_EXPECTED_COMMIT=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.loa
 NCT_ACTUAL_COMMIT=$(docker exec "$NCT_TARGET_CONTAINER" python -c 'from app.build_info import BUILD_COMMIT; print(BUILD_COMMIT)')
 [ "$NCT_ACTUAL_COMMIT" = "$NCT_EXPECTED_COMMIT" ] || die "The running application is not this exact release; recovery setup did not run."
 NCT_CONSOLE_ID=$(docker image inspect --format '{{.Id}}' "$NCT_CONSOLE_IMAGE")
+set --
+if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
+    set -- --fresh-expected-admin "${NCT_ADMIN_USER:-admin}" \
+        --fresh-release-file "$NCT_PACKAGE_ROOT/release.json" \
+        --fresh-bootstrap-receipt "$NCT_PERSIST_ROOT/deployment/bootstrap/fresh-resume.json" \
+        --fresh-package-manifest "$NCT_PACKAGE_ROOT/PACKAGE-MANIFEST.sha256"
+fi
 "$NCT_RECOVERY_PYTHON" "$NCT_PACKAGE_ROOT/scripts/install_nct_recovery.py" --container "$NCT_TARGET_CONTAINER" --console-container "${NCT_RECOVERY_CONTAINER:-$NCT_TARGET_CONTAINER-recovery-console}" \
     --console-image "$NCT_CONSOLE_ID" --application-url "https://$NCT_RANGE_IP:$NCT_APP_PORT" \
     --console-url "https://$NCT_RANGE_IP:$NCT_CONSOLE_PORT" --bind-address "$NCT_RECOVERY_BIND_ADDRESS" \
     --data-dir "$NCT_PERSIST_ROOT/data" --state-dir "$NCT_RECOVERY_STATE_DIR" \
     --install-dir "${NCT_RECOVERY_INSTALL_DIR:-/opt/nct-recovery}" \
-    --cert-file "$NCT_CERT" --key-file "$NCT_KEY" --ca-file "$NCT_CA" --enable-container
+    --cert-file "$NCT_CERT" --key-file "$NCT_KEY" --ca-file "$NCT_CA" --enable-container "$@"
 progress "6/6" "NCT and its independent recovery service are installed."
-printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates and verify an existing account to finish."
+if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
+    printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT and sign in once with the new Administrator account to finish."
+else
+    printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates and verify an existing account to finish."
+fi
 printf '%s\n' "The recovery management port is $NCT_CONSOLE_PORT. Apply your existing approved source-address firewall policy to that port; this installer does not open a broad firewall rule."

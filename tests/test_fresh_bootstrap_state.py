@@ -55,7 +55,7 @@ def runtime(container: str, image: str, image_id: str, root: Path) -> dict:
 def helper_args(root: Path, action: str) -> list[str]:
     return [
         sys.executable, str(HELPER), action,
-        "--receipt", str(root / "fresh-resume.json"),
+        "--receipt", str(root / "deployment" / "bootstrap" / "fresh-resume.json"),
         "--container", "nct-fresh-fixture",
         "--image-reference", "network-characterization-tool:fixture",
         "--image-id", "sha256:fixture-image",
@@ -81,6 +81,7 @@ def test_fresh_resume_receipt_binds_exact_container_runtime_and_password_phase(t
     docker.write_text('#!/bin/sh\n[ "$1" = inspect ] || exit 91\ncat "$FAKE_INSPECT"\n')
     docker.chmod(0o700)
     (tmp_path / "data").mkdir()
+    (tmp_path / "deployment" / "bootstrap").mkdir(parents=True, mode=0o700)
     for name, value in (
         ("server.crt", b"certificate"), ("server.key", b"key"),
         ("secret", b"temporary bootstrap secret"), ("images.tar", b"archive"),
@@ -98,7 +99,7 @@ def test_fresh_resume_receipt_binds_exact_container_runtime_and_password_phase(t
     }
 
     subprocess.run(helper_args(tmp_path, "create"), env=env, check=True)
-    receipt_path = tmp_path / "fresh-resume.json"
+    receipt_path = tmp_path / "deployment" / "bootstrap" / "fresh-resume.json"
     receipt = json.loads(receipt_path.read_text())
     assert receipt["phase"] == "awaiting_password"
     assert receipt["runtime"]["container_id"] == "container-owned-by-fresh-install"
@@ -118,14 +119,40 @@ def test_fresh_resume_receipt_binds_exact_container_runtime_and_password_phase(t
     assert json.loads(receipt_path.read_text())["phase"] == "password_committed"
     subprocess.run(helper_args(tmp_path, "verify"), env=env, check=True)
 
+    value["Config"]["Env"] = [
+        item for item in value["Config"]["Env"] if not item.startswith("NCT_BOOTSTRAP_")
+    ]
+    value["Mounts"] = [
+        item for item in value["Mounts"]
+        if item["Destination"] != "/run/secrets/nct_bootstrap_password"
+    ]
+    inspect_path.write_text(json.dumps([value]))
+    release, manifest = tmp_path / "release.json", tmp_path / "PACKAGE-MANIFEST.sha256"
+    release.write_text('{"release":"exact"}')
+    manifest.write_text("manifest")
+    ready_args = [
+        sys.executable, str(HELPER), "mark-runtime-ready",
+        "--receipt", str(receipt_path), "--admin-user", "admin",
+        "--release", str(release), "--manifest", str(manifest),
+        "--archive", str(tmp_path / "images.tar"),
+    ]
+    subprocess.run(ready_args, env=env, check=True)
+    assert json.loads(receipt_path.read_text())["phase"] == "runtime_ready"
+    ready_args[2] = "verify-runtime-ready"
+    subprocess.run(ready_args, env=env, check=True)
+
+    value["Mounts"].reverse()
+    inspect_path.write_text(json.dumps([value]))
+    subprocess.run(ready_args, env=env, check=True)
+
     value["Mounts"].append(
         {"Destination": "/unexpected", "Source": str(tmp_path / "other"), "RW": True}
     )
     inspect_path.write_text(json.dumps([value]))
-    rejected = subprocess.run(helper_args(tmp_path, "verify"), env=env, capture_output=True, text=True)
+    rejected = subprocess.run(ready_args, env=env, capture_output=True, text=True)
     assert rejected.returncode != 0
     assert "mount contract changed" in rejected.stderr
-    assert json.loads(receipt_path.read_text())["phase"] == "password_committed"
+    assert json.loads(receipt_path.read_text())["phase"] == "runtime_ready"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="fake Docker executable is POSIX-only")

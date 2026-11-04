@@ -7,12 +7,21 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 
 
 CONTRACT = "nct-fresh-bootstrap-resume:1"
+
+
+def normalized_mounts(value) -> list[dict]:
+    """Keep every Docker mount field while ignoring inspect-list order."""
+    return sorted(
+        list(value or []),
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+    )
 
 
 def sha256_file(path: Path) -> str:
@@ -181,12 +190,29 @@ def expected_receipt(args: argparse.Namespace, runtime: dict) -> dict:
 
 
 def read_receipt(path: Path) -> dict:
-    if path.is_symlink() or not path.is_file():
+    path = path.absolute()
+    if (path.name != "fresh-resume.json" or path.parent.name != "bootstrap"
+            or path.parent.parent.name != "deployment"):
+        raise ValueError("the fresh-install resume receipt is outside its protected location")
+    trusted_root = path.parent.parent.parent
+    current = trusted_root
+    for part in (Path("."), "deployment", "bootstrap", "fresh-resume.json"):
+        if part != Path("."):
+            current = current / part
+        details = current.lstat()
+        if stat.S_ISLNK(details.st_mode) or details.st_uid != 0 or details.st_mode & 0o022:
+            raise ValueError("the fresh-install resume receipt is not root-owned and protected")
+        if current == path:
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError("the fresh-install resume receipt is missing or unsafe")
+        elif not stat.S_ISDIR(details.st_mode):
+            raise ValueError("the fresh-install resume receipt has an unsafe parent path")
+    if not path.is_file():
         raise ValueError("the fresh-install resume receipt is missing or unsafe")
     value = json.loads(path.read_text(encoding="utf-8"))
     if value.get("contract") != CONTRACT:
         raise ValueError("the fresh-install resume receipt contract is unsupported")
-    if value.get("phase") not in {"awaiting_password", "password_committed"}:
+    if value.get("phase") not in {"awaiting_password", "password_committed", "runtime_ready"}:
         raise ValueError("the fresh-install resume phase is unsupported")
     return value
 
@@ -204,6 +230,64 @@ def validate(args: argparse.Namespace) -> dict:
         if receipt.get(key) != current[key]:
             raise ValueError(f"fresh-install resume receipt mismatch: {key}")
     return receipt
+
+
+def final_runtime(receipt: dict) -> dict:
+    value = inspect_container(receipt["container"])
+    host = value.get("HostConfig") or {}
+    config = value.get("Config") or {}
+    state = value.get("State") or {}
+    if not state.get("Running") or value.get("Image") != receipt["runtime"]["image_id"]:
+        raise ValueError("the final fresh-install runtime or image identity changed")
+    if value.get("Path") != "uvicorn" or list(value.get("Args") or []) != expected_command(receipt["container_port"]):
+        raise ValueError("the final fresh-install command changed")
+    if host.get("Privileged") is not False or sorted(host.get("CapAdd") or []) != ["NET_RAW"] or (host.get("CapDrop") or []):
+        raise ValueError("the final fresh-install capability contract changed")
+    restart = host.get("RestartPolicy") or {}
+    if restart.get("Name") != "unless-stopped" or int(restart.get("MaximumRetryCount") or 0) != 0:
+        raise ValueError("the final fresh-install restart policy changed")
+    if host.get("NetworkMode") not in {"default", "bridge"}:
+        raise ValueError("the final fresh-install network mode changed")
+    expected_port = {
+        f'{receipt["container_port"]}/tcp': [{
+            "HostIp": receipt["bind_address"], "HostPort": str(receipt["host_port"])
+        }]
+    }
+    if (host.get("PortBindings") or {}) != expected_port:
+        raise ValueError("the final fresh-install port binding changed")
+    expected_mounts = {
+        "/data": (Path(receipt["data_dir"]).resolve(), True),
+        "/run/tls/nct-server.crt": (Path(receipt["cert_file"]).resolve(), False),
+        "/run/tls/nct-server.key": (Path(receipt["key_file"]).resolve(), False),
+    }
+    observed_mounts = {}
+    for mount in value.get("Mounts") or []:
+        destination = mount.get("Destination")
+        if destination in observed_mounts:
+            raise ValueError("the final fresh-install runtime has a duplicate mount")
+        observed_mounts[destination] = (
+            Path(str(mount.get("Source", ""))).resolve(), bool(mount.get("RW"))
+        )
+    if observed_mounts != expected_mounts:
+        raise ValueError("the final fresh-install mount contract changed")
+    env = {}
+    for item in config.get("Env") or []:
+        key, separator, value_text = item.partition("=")
+        if separator:
+            env[key] = value_text
+    expected_env = {
+        "NCT_AUTH_MODE": "local", "NCT_SESSION_HOURS": "12", "NCT_COOKIE_SECURE": "1"
+    }
+    if any(env.get(key) != expected for key, expected in expected_env.items()) or any(
+        key.startswith("NCT_BOOTSTRAP_") for key in env
+    ):
+        raise ValueError("the final fresh-install authentication environment changed")
+    return {
+        "container_id": value["Id"], "image_id": value["Image"],
+        "path": value["Path"], "args": list(value.get("Args") or []),
+        "config": config, "host_config": host,
+        "mounts": normalized_mounts(value.get("Mounts")),
+    }
 
 
 def common(parser: argparse.ArgumentParser) -> None:
@@ -234,6 +318,18 @@ def main() -> int:
     mark.add_argument("--receipt", type=Path, required=True)
     mark.add_argument("--container-id", required=True)
     mark.add_argument("--admin-user", required=True)
+    ready = subparsers.add_parser("mark-runtime-ready")
+    ready.add_argument("--receipt", type=Path, required=True)
+    ready.add_argument("--admin-user", required=True)
+    ready.add_argument("--release", type=Path, required=True)
+    ready.add_argument("--manifest", type=Path, required=True)
+    ready.add_argument("--archive", type=Path, required=True)
+    verify_ready = subparsers.add_parser("verify-runtime-ready")
+    verify_ready.add_argument("--receipt", type=Path, required=True)
+    verify_ready.add_argument("--admin-user", required=True)
+    verify_ready.add_argument("--release", type=Path, required=True)
+    verify_ready.add_argument("--manifest", type=Path, required=True)
+    verify_ready.add_argument("--archive", type=Path, required=True)
     args = parser.parse_args()
     if args.action == "mark-password-committed":
         receipt = read_receipt(args.receipt)
@@ -241,6 +337,34 @@ def main() -> int:
             raise ValueError("the password completion does not belong to this fresh installation")
         receipt["phase"] = "password_committed"
         receipt["password_committed_at"] = datetime.now(timezone.utc).isoformat()
+        write_atomic(args.receipt, receipt)
+        return 0
+    if args.action in {"mark-runtime-ready", "verify-runtime-ready"}:
+        receipt = read_receipt(args.receipt)
+        expected_phase = "password_committed" if args.action == "mark-runtime-ready" else "runtime_ready"
+        if receipt["phase"] != expected_phase or receipt["admin_user"] != args.admin_user:
+            raise ValueError("the final runtime does not follow the committed fresh Administrator step")
+        for path, label in ((args.release, "release"), (args.manifest, "manifest"), (args.archive, "archive")):
+            if not path.is_file() or path.is_symlink():
+                raise ValueError(f"the fresh-install {label} record is missing or unsafe")
+        if sha256_file(args.archive) != receipt["archive_sha256"]:
+            raise ValueError("the fresh-install image archive changed")
+        if sha256_file(Path(receipt["cert_file"])) != receipt["cert_sha256"] or sha256_file(Path(receipt["key_file"])) != receipt["key_sha256"]:
+            raise ValueError("the fresh-install TLS material changed")
+        observed_runtime = final_runtime(receipt)
+        if args.action == "verify-runtime-ready":
+            if (receipt.get("release_sha256") != sha256_file(args.release)
+                    or receipt.get("package_manifest_sha256") != sha256_file(args.manifest)
+                    or receipt.get("final_runtime") != observed_runtime):
+                raise ValueError("the completed fresh-install ownership receipt no longer matches")
+            return 0
+        receipt.update({
+            "phase": "runtime_ready",
+            "runtime_ready_at": datetime.now(timezone.utc).isoformat(),
+            "release_sha256": sha256_file(args.release),
+            "package_manifest_sha256": sha256_file(args.manifest),
+            "final_runtime": observed_runtime,
+        })
         write_atomic(args.receipt, receipt)
         return 0
     runtime = runtime_snapshot(args)

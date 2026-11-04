@@ -96,15 +96,19 @@ install the generated root CA on the workstation according to local policy; its
 host address and certificate rather than silently bypassing a browser warning.
 
 1. Open `https://NCT_HOST_IP:8445` on the analyst workstation.
-2. Sign in as **admin** with the password you just chose. Open **hamburger → Updates &
-   Recovery**, then open its recovery workspace. The console is normally on
+2. Sign in as **admin** with the password you just chose. For an exact new empty
+   installation, this one normal sign-in verifies the Administrator and completes
+   the protected recovery handoff automatically. NCT may restart once; wait for
+   the page to reconnect, then sign in again only if the restart cleared the
+   browser session.
+3. Open **hamburger → Updates & Recovery** and confirm the saved operation says
+   **complete**. The independent console is normally on
    `https://NCT_HOST_IP:8446` and starts on demand through NCT.
-3. At **Verify sign-in and finish**, enter that same new NCT account and click
-   **Verify sign-in**. Wait for verification, the final restart and the completion
-   result. A cleared password field alone does not mean setup is finished.
-   Collection remains paused until this recovery verification finishes.
-4. Return to NCT and sign in normally if asked. The recovery console stops when
-   you return. Confirm the build matches `release.json` in this package.
+4. If the fresh proof expired, changed, or the installation was no longer empty,
+   NCT deliberately keeps the previous **Verify sign-in and finish** step in the
+   recovery workspace. Complete that step instead; no evidence or safety check is
+   bypassed.
+5. Confirm the build matches `release.json` in this package.
 5. Begin in **Mission Environment**: establish Scope and No-Strike controls before
    network collection. Then create Saved Networks and use the normal collection
    workflow. **Evidence Library** starts empty and fills as evidence is retained.

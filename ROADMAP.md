@@ -1,6 +1,38 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Fresh-install recovery handoff simplification started (2026-11-03): remove
+only the redundant second account entry after an exact new empty installation.
+The first successful normal NCT Administrator sign-in may complete the existing
+recovery-console enablement transaction only when a short-lived, root-owned
+fresh-install proof still matches the exact application, console, release,
+storage, TLS and expected Administrator identities and a second empty-state
+check permits only that new authenticated session. Preserve the current cold
+backup, evidence verification, collection pause ownership, durable release
+intent, final restart, rollback and independent console checks. Missing,
+legacy, expired, changed or non-empty proof must retain the existing recovery
+console sign-in requirement; do not add a general skip-verification flag or
+weaken update, restore, repair, Scope or No-Strike gates. Add focused failure,
+restart and existing-install regressions plus exact empty-install and browser
+acceptance. This is development-only: no sealed package, Range or `main` change.
+Independent design gate: `CLEAR`.
+
+Fresh-install recovery handoff source gate cleared (2026-11-03): the final
+fresh runtime now has one root-owned, protected proof chain from bootstrap
+through an interrupted-password resume, immutable release images, full Docker
+runtime settings, TLS material and the first normal Administrator session.
+Docker mount-list order is treated as non-semantic while every mount object and
+duplicate remains covered. A missing, writable, linked, relocated, expired or
+changed proof fails closed to the existing recovery-console verification path.
+The exact-package acceptance now deliberately interrupts the first password
+prompt, uses `resume-fresh`, requires the final runtime-ready receipt and then
+requires the first normal sign-in to complete the durable recovery transaction.
+Focused validation passed 229 tests with one expected skip; independent source
+review passed 113 tests with one expected skip and returned `CLEAR`. Exact
+committed-image package rehearsal, existing-install regression, browser/novice
+acceptance and the final full-suite rerun remain open. No package or Range was
+changed.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

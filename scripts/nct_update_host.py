@@ -45,6 +45,51 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def verify_fresh_empty(*args, **kwargs):
+    path = Path(__file__).with_name("nct_fresh_handoff.py")
+    spec = importlib.util.spec_from_file_location("nct_fresh_handoff", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("The installed fresh-handoff verifier is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.verify_empty(*args, **kwargs)
+
+
+def runtime_snapshot(value):
+    return {
+        "container_id": value["Id"], "image_id": value["Image"],
+        "path": value.get("Path"), "args": list(value.get("Args") or []),
+        "config": value.get("Config") or {},
+        "host_config": value.get("HostConfig") or {},
+        "mounts": sorted(
+            list(value.get("Mounts") or []),
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        ),
+    }
+
+
+def protected_root_file(path, trusted_root, label):
+    path = Path(path).absolute()
+    trusted_root = Path(trusted_root).absolute()
+    try:
+        relative = path.relative_to(trusted_root)
+    except ValueError as exc:
+        raise ValueError(label + " is outside its protected root") from exc
+    current = trusted_root
+    for part in (Path("."), *relative.parts):
+        if part != Path("."):
+            current = current / part
+        details = current.lstat()
+        if stat.S_ISLNK(details.st_mode) or details.st_uid != 0 or details.st_mode & 0o022:
+            raise ValueError(label + " is not root-owned and protected")
+        if current == path:
+            if not stat.S_ISREG(details.st_mode):
+                raise ValueError(label + " is not a regular file")
+        elif not stat.S_ISDIR(details.st_mode):
+            raise ValueError(label + " has an unsafe parent path")
+    return path
+
+
 def restart_policy(target):
     policy = target["HostConfig"]["RestartPolicy"]
     name = policy["Name"] or "no"
@@ -555,7 +600,7 @@ class Host:
 
     def public(self):
         state = self.read()
-        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome"}
+        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome", "verification_mode"}
         value = {k: v for k, v in state.items() if k in allowed}
         marker = state.get("candidate_may_have_written")
         value["recovery_guidance"] = "backup_restore" if marker is True else "original_reconciliation" if marker is False else "unknown"
@@ -1123,6 +1168,93 @@ class Host:
             self.finalize(state)
             return {"url": self.config["application_url"], "operation": self.public()}
 
+    def confirm_fresh_session(self, operation_id, username, session_token):
+        """Accept only the first normal sign-in bound to an exact fresh receipt."""
+        with self.exclusive(), self.activity_scope():
+            state = self.read()
+            proof = state.get("fresh_handoff")
+            if state.get("phase") != "awaiting_sign_in" or state.get("kind") != "enable_console":
+                raise PermissionError("No proven fresh installation is awaiting its first sign-in")
+            if not isinstance(proof, dict) or proof.get("contract") != "nct-fresh-handoff-v1":
+                raise PermissionError("Fresh-install proof is unavailable; use recovery sign-in verification")
+            if operation_id != state.get("id") or proof.get("operation_id") != state.get("id"):
+                raise PermissionError("Fresh-install operation identity differs")
+            receipt = self.root / state["id"] / "fresh-handoff.json"
+            try:
+                protected_root_file(receipt, self.root, "Fresh-install proof")
+            except (OSError, ValueError) as exc:
+                raise PermissionError("Fresh-install proof changed; use recovery sign-in verification") from exc
+            if receipt.read_bytes() != canonical(proof):
+                raise PermissionError("Fresh-install proof changed; use recovery sign-in verification")
+            if time.time() > float(proof.get("expires_at", 0)):
+                raise PermissionError("Fresh-install proof expired; use recovery sign-in verification")
+            if username != proof.get("expected_admin") or not isinstance(session_token, str) or len(session_token) < 40:
+                raise PermissionError("The first signed-in Administrator does not match the fresh installation")
+            binding = {
+                "application_url": self.config["application_url"],
+                "console_url": self.config["console_url"],
+                "data_dir": str(self.data),
+                "container": self.config["container"],
+                "console_container": self.config["console_container"],
+                "console_image_id": self.config["console_image_id"],
+                "ca_file": self.config.get("ca_file"),
+            }
+            if hashlib.sha256(canonical(binding)).hexdigest() != proof.get("runtime_config_sha256"):
+                raise PermissionError("Fresh-install recovery configuration changed")
+            runtime_id = state.get("candidate_id")
+            target = self.target(expected_id=runtime_id)
+            if target["Image"] != proof.get("application_image_id") or state["original"]["Id"] != proof.get("original_container_id"):
+                raise PermissionError("Fresh-install runtime identity changed")
+            if hashlib.sha256(canonical(runtime_snapshot(state["original"]))).hexdigest() != proof.get("original_runtime_sha256"):
+                raise PermissionError("Fresh-install original runtime record changed")
+            candidate_receipt = self.root / state["id"] / "candidate-runtime.json"
+            expected_candidate = {
+                "container_id": runtime_id,
+                "sha256": state.get("candidate_runtime_sha256"),
+            }
+            current_candidate_sha256 = hashlib.sha256(canonical(runtime_snapshot(target))).hexdigest()
+            try:
+                protected_root_file(candidate_receipt, self.root, "Fresh-install runtime proof")
+            except (OSError, ValueError) as exc:
+                raise PermissionError("Fresh-install replacement runtime changed") from exc
+            if (candidate_receipt.read_bytes() != canonical(expected_candidate)
+                    or current_candidate_sha256 != state.get("candidate_runtime_sha256")):
+                raise PermissionError("Fresh-install replacement runtime changed")
+            console = self.engine.inspect(self.config["console_container"])
+            if console["Image"] != proof.get("console_image_id"):
+                raise PermissionError("Fresh-install recovery console identity changed")
+            for path_key, hash_key in (("ca_file", "ca_sha256"), ("cert_file", "cert_sha256"), ("key_file", "key_sha256")):
+                path = Path(proof.get(path_key, ""))
+                try:
+                    protected_root_file(path, self.data.parent, "Fresh-install TLS material")
+                except (OSError, ValueError) as exc:
+                    raise PermissionError("Fresh-install TLS material changed") from exc
+                if digest_file(path) != proof.get(hash_key):
+                    raise PermissionError("Fresh-install TLS material changed")
+            self.verify_health(state)
+            verify_fresh_empty(
+                self.data / "analyzer.db", self.data, username,
+                expected_session_token=session_token,
+            )
+            context = ssl.create_default_context(cafile=self.config.get("ca_file"))
+            request = urllib.request.Request(
+                self.config["application_url"] + "/api/auth/me",
+                headers={"Cookie": "nct_session=" + session_token},
+            )
+            with urllib.request.urlopen(request, timeout=15, context=context) as response:
+                identity = json.load(response)
+            analyst = identity.get("analyst") or {}
+            if analyst.get("username") != username or analyst.get("role") != "admin":
+                raise PermissionError("The normal NCT session did not identify the expected Administrator")
+            self.engine.command("update", "--restart=" + restart_policy(state["original"]), runtime_id)
+            self.phase(
+                state, "release_intent", controller_sign_in_verified=True,
+                actor=username, verified_runtime_id=runtime_id,
+                verified_result_phase="complete", verification_mode="fresh_normal_sign_in",
+                detail="First normal Administrator sign-in verified. Finishing the protected restart.",
+            )
+            return {"accepted": True}
+
     def lifecycle(self, action, actor):
         with self.exclusive():
             if self.read()["phase"] not in {"idle", "validated", "complete", "restored", "failed"}:
@@ -1285,9 +1417,35 @@ class Handler(BaseHTTPRequestHandler):
     def handle_request(self):
         host = self.server.host
         if self.server.launch_only:
-            if self.command != "POST" or self.path != "/launch":
-                raise PermissionError("Application socket supports only console launch")
+            if self.command != "POST" or self.path not in {"/launch", "/fresh-sign-in"}:
+                raise PermissionError("Application socket supports only recovery launch or the proven fresh sign-in handoff")
             body = self.json_body()
+            if self.path == "/fresh-sign-in":
+                if not host.worker_guard.acquire(blocking=False):
+                    return {"accepted": True}
+                try:
+                    result = host.confirm_fresh_session(
+                        body.get("operation_id", ""), body.get("username", ""),
+                        body.get("session_token", ""),
+                    )
+                except Exception:
+                    host.worker_guard.release()
+                    raise
+                def finish_fresh():
+                    try:
+                        time.sleep(1)
+                        with host.exclusive():
+                            state = host.read()
+                            if state.get("phase") == "release_intent":
+                                host.finalize(state)
+                    except Exception as exc:
+                        with host.exclusive():
+                            state = host.read()
+                            host.phase(state, "interrupted", detail="Fresh-install final restart requires review: " + str(exc)[:300])
+                    finally:
+                        host.worker_guard.release()
+                threading.Thread(target=finish_fresh, daemon=True).start()
+                return result
             actor = body.get("actor", "")
             if not re.fullmatch("[a-z0-9][a-z0-9._-]{1,63}", actor):
                 raise ValueError("Signed-in operator identity is required")

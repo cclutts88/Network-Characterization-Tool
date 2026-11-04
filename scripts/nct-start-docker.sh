@@ -91,6 +91,7 @@ fresh_state() {
 }
 
 account_count="${NCT_UPGRADE_ACCOUNT_COUNT:-}"
+owned_fresh_runtime=0
 if [ "$resume_bootstrap" = 1 ]; then
     [ -f "$BOOTSTRAP_PASSWORD" ] || die "The protected bootstrap secret is missing. Refusing to guess or reset this installation."
     fresh_state verify || die "The interrupted container does not match its root-owned fresh-install receipt. Nothing was changed."
@@ -117,8 +118,9 @@ if [ "$resume_bootstrap" = 1 ]; then
     esac
     docker stop "$CONTAINER" >/dev/null
     docker rm "$CONTAINER" >/dev/null
-    rm -f "$BOOTSTRAP_PASSWORD" "$FRESH_RESUME_RECEIPT"
+    rm -f "$BOOTSTRAP_PASSWORD"
     account_count=1
+    owned_fresh_runtime=1
 fi
 
 if [ -z "$account_count" ]; then
@@ -134,6 +136,7 @@ print(sqlite3.connect(f"file:{p}?mode=ro&immutable=1", uri=True).execute("SELECT
 fi
 case "$account_count" in ''|*[!0-9]*) die "The NCT account count is invalid." ;; esac
 if [ "$account_count" -eq 0 ]; then
+    owned_fresh_runtime=1
     if [ -z "$ADMIN_USER" ]; then
         [ -t 0 ] || die "A new installation requires ADMIN_USERNAME when running non-interactively."
         printf 'Administrator username: ' >&2
@@ -177,13 +180,19 @@ if [ "$account_count" -eq 0 ]; then
     fi
     docker stop "$CONTAINER" >/dev/null
     docker rm "$CONTAINER" >/dev/null
-    rm -f "$BOOTSTRAP_PASSWORD" "$FRESH_RESUME_RECEIPT"
+    rm -f "$BOOTSTRAP_PASSWORD"
     start_container no
     wait_for_health || die "NCT did not become healthy after removing the bootstrap secret. Review: docker logs $CONTAINER"
 else
     printf '%s\n' "Preserving $account_count existing NCT account(s); no password or username will be changed."
     start_container no
     wait_for_health || die "NCT did not become healthy. Review: docker logs $CONTAINER"
+fi
+if [ "$owned_fresh_runtime" -eq 1 ]; then
+    "$NCT_STATE_PYTHON" "$WORKDIR/scripts/nct-fresh-bootstrap-state.py" mark-runtime-ready \
+        --receipt "$FRESH_RESUME_RECEIPT" --admin-user "$ADMIN_USER" \
+        --release "$WORKDIR/release.json" --manifest "$WORKDIR/PACKAGE-MANIFEST.sha256" \
+        --archive "$ARCHIVE" || die "The final empty runtime could not be bound to its fresh-install ownership receipt. Preserve it for review."
 fi
 
 printf '%s\n' "NCT is ready at https://$RANGE_IP:$HOST_PORT"

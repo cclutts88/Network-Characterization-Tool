@@ -233,6 +233,102 @@ def test_success_waits_for_real_sign_in_and_does_not_start_old_image(tmp_path):
     assert engine.inspect("nct")["Id"] == "new"
 
 
+def test_proven_fresh_first_session_creates_durable_release_intent(tmp_path, monkeypatch):
+    config = configuration(tmp_path)
+    for name in ("ca.pem", "cert.pem", "key.pem"):
+        (tmp_path / name).write_text(name)
+    config["ca_file"] = str(tmp_path / "ca.pem")
+    engine = Engine(config)
+    original = engine.items["old"]
+    original["Name"] = "/retained"
+    original["State"] = {"Running": False, "Status": "exited"}
+    original["HostConfig"]["RestartPolicy"] = {"Name": "no", "MaximumRetryCount": 0}
+    candidate = copy.deepcopy(original)
+    candidate.update(Id="new", Name="/nct", Image=original["Image"])
+    candidate["State"] = {"Running": True, "Status": "running"}
+    engine.items["new"] = candidate
+    engine.items["console"] = {
+        "Id": "console", "Image": config["console_image_id"], "Name": "/console",
+        "Config": {"Env": []}, "HostConfig": {"RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}},
+        "State": {"Running": False, "Status": "exited"}, "Mounts": [],
+    }
+    host = StorageHost(config, engine)
+    operation_id = "e" * 32
+    proof = {
+        "contract": "nct-fresh-handoff-v1", "operation_id": operation_id,
+        "expected_admin": "admin", "expires_at": time.time() + 600,
+        "application_image_id": candidate["Image"],
+        "console_image_id": config["console_image_id"],
+        "original_container_id": original["Id"],
+        "original_runtime_sha256": hashlib.sha256(host_module.canonical(host_module.runtime_snapshot(original))).hexdigest(),
+        "ca_file": str(tmp_path / "ca.pem"), "ca_sha256": host_module.digest_file(tmp_path / "ca.pem"),
+        "cert_file": str(tmp_path / "cert.pem"), "cert_sha256": host_module.digest_file(tmp_path / "cert.pem"),
+        "key_file": str(tmp_path / "key.pem"), "key_sha256": host_module.digest_file(tmp_path / "key.pem"),
+    }
+    binding = {
+        "application_url": config["application_url"], "console_url": config["console_url"],
+        "data_dir": str(host.data), "container": config["container"],
+        "console_container": config["console_container"],
+        "console_image_id": config["console_image_id"], "ca_file": config.get("ca_file"),
+    }
+    proof["runtime_config_sha256"] = hashlib.sha256(host_module.canonical(binding)).hexdigest()
+    operation_dir = host.root / operation_id
+    operation_dir.mkdir()
+    (operation_dir / "fresh-handoff.json").write_bytes(host_module.canonical(proof))
+    state = {
+        "id": operation_id, "kind": "enable_console", "phase": "awaiting_sign_in",
+        "actor": "host-installer", "original": copy.deepcopy(original),
+        "candidate_id": "new", "candidate_image_id": candidate["Image"],
+        "fresh_handoff": proof,
+    }
+    candidate_sha256 = hashlib.sha256(host_module.canonical(host_module.runtime_snapshot(candidate))).hexdigest()
+    state["candidate_runtime_sha256"] = candidate_sha256
+    (operation_dir / "candidate-runtime.json").write_bytes(host_module.canonical({
+        "container_id": "new", "sha256": candidate_sha256,
+    }))
+    host_module.save(host.root / "operation.json", state)
+    checked = []
+    monkeypatch.setattr(host_module, "verify_fresh_empty", lambda *a, **kw: checked.append((a, kw)))
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+    monkeypatch.setattr(host_module.ssl, "create_default_context", lambda **kwargs: object())
+    monkeypatch.setattr(host_module.urllib.request, "urlopen", lambda *a, **kw: Response())
+    monkeypatch.setattr(host_module.json, "load", lambda response: {"analyst": {"username": "admin", "role": "admin"}})
+    result = host.confirm_fresh_session(operation_id, "admin", "s" * 64)
+    saved = host.read()
+    assert result == {"accepted": True}
+    assert checked and checked[0][1]["expected_session_token"] == "s" * 64
+    assert saved["phase"] == "release_intent"
+    assert saved["controller_sign_in_verified"] is True
+    assert saved["verification_mode"] == "fresh_normal_sign_in"
+
+
+@pytest.mark.parametrize("change", ["missing", "expired", "operation", "receipt"])
+def test_fresh_session_never_bypasses_missing_or_changed_proof(tmp_path, change):
+    config = configuration(tmp_path)
+    engine = Engine(config)
+    host = StorageHost(config, engine)
+    operation_id = "e" * 32
+    proof = {"contract": "nct-fresh-handoff-v1", "operation_id": operation_id,
+        "expected_admin": "admin", "expires_at": time.time() + 600}
+    operation_dir = host.root / operation_id
+    operation_dir.mkdir()
+    (operation_dir / "fresh-handoff.json").write_bytes(host_module.canonical(proof))
+    state = {"id": operation_id, "kind": "enable_console", "phase": "awaiting_sign_in",
+        "original": engine.inspect("old"), "fresh_handoff": proof}
+    if change == "missing": state.pop("fresh_handoff")
+    elif change == "expired": proof["expires_at"] = time.time() - 1
+    elif change == "operation": proof["operation_id"] = "f" * 32
+    else: (operation_dir / "fresh-handoff.json").write_text("{}")
+    host_module.save(host.root / "operation.json", state)
+    before = host.read()
+    with pytest.raises(PermissionError):
+        host.confirm_fresh_session(operation_id, "admin", "s" * 64)
+    assert host.read() == before
+
+
 def test_corrupt_backup_keeps_old_image_stopped_and_preserves_candidate_data(tmp_path):
     host, engine = planned_host(tmp_path)
     host.apply("d" * 64, "analyst")

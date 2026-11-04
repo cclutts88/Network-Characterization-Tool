@@ -30,7 +30,7 @@ def main():
     root.mkdir(exist_ok=True)
     bootstrap = root / "bootstrap"
     bootstrap.mkdir()
-    for name in ("install_nct_recovery.py", "finish_nct_recovery.py", "nct_update_host.py", "nct-range-data-check.py", "nct_update_work.py"):
+    for name in ("install_nct_recovery.py", "finish_nct_recovery.py", "nct_update_host.py", "nct-range-data-check.py", "nct_update_work.py", "nct_fresh_handoff.py"):
         shutil.copyfile(Path("/workspace/scripts") / name, bootstrap / name)
     sys.path.insert(0, str(bootstrap))
     import nct_update_host as module

@@ -88,25 +88,39 @@ def main():
     assert not engine.inspect(name)['State']['Running'] and not any(persist.iterdir()) and not installed.exists()
     engine.command('rm',name)
     password=secrets.token_urlsafe(24)
-    child,master=pty.fork()
-    if child==0: os.execvpe('sh',launcher+['fresh'],env)
-    CLEANUP['child']=child
-    captured=bytearray();sent=0;deadline=time.monotonic()+600;status=None
-    while time.monotonic()<deadline:
-        if select.select([master],[],[],0.2)[0]:
-            try: block=os.read(master,65536)
-            except OSError: block=b''
-            captured.extend(block)
-        expected=b'New password (' if sent==0 else b'Confirm password:'
-        if sent<2 and expected in captured and not termios.tcgetattr(master)[3]&termios.ECHO:
-            os.write(master,password.encode()+b'\n');sent+=1
-        ended,exit_status=os.waitpid(child,os.WNOHANG)
-        if ended: status=exit_status;break
-    os.close(master)
-    if status is not None: CLEANUP.pop('child',None)
-    (root/'fresh-setup.log').write_bytes(bytes(captured).replace(password.encode(),b'[redacted]'))
-    assert status is not None and os.waitstatus_to_exitcode(status)==0 and sent==2,bytes(captured[-2500:]).replace(password.encode(),b'[redacted]')
+    def interactive(command, interrupt_at_first_prompt=False):
+        child,master=pty.fork()
+        if child==0: os.execvpe('sh',command,env)
+        CLEANUP['child']=child
+        captured=bytearray();sent=0;deadline=time.monotonic()+600;status=None
+        while time.monotonic()<deadline:
+            if select.select([master],[],[],0.2)[0]:
+                try: block=os.read(master,65536)
+                except OSError: block=b''
+                captured.extend(block)
+            if interrupt_at_first_prompt and b'New password (' in captured:
+                os.killpg(child,signal.SIGTERM)
+                _,status=os.waitpid(child,0)
+                break
+            expected=b'New password (' if sent==0 else b'Confirm password:'
+            if sent<2 and expected in captured and not termios.tcgetattr(master)[3]&termios.ECHO:
+                os.write(master,password.encode()+b'\n');sent+=1
+            ended,exit_status=os.waitpid(child,os.WNOHANG)
+            if ended: status=exit_status;break
+        os.close(master)
+        if status is not None: CLEANUP.pop('child',None)
+        return status,sent,bytes(captured).replace(password.encode(),b'[redacted]')
+
+    interrupted_status,interrupted_sent,interrupted_log=interactive(launcher+['fresh'],True)
+    assert interrupted_status is not None and os.waitstatus_to_exitcode(interrupted_status)!=0 and interrupted_sent==0,interrupted_log[-2500:]
+    receipt=json.loads((persist/'deployment/bootstrap/fresh-resume.json').read_text())
+    assert receipt['phase']=='awaiting_password' and engine.inspect(name)['State']['Running'] is True
+    status,sent,captured=interactive(launcher+['resume-fresh'])
+    (root/'fresh-setup.log').write_bytes(interrupted_log+b'\n--- RESUME ---\n'+captured)
+    assert status is not None and os.waitstatus_to_exitcode(status)==0 and sent==2,captured[-2500:]
     assert not (persist/'deployment/bootstrap/initial-password.txt').exists()
+    receipt=json.loads((persist/'deployment/bootstrap/fresh-resume.json').read_text())
+    assert receipt['phase']=='runtime_ready'
     assert not list(package.rglob('__pycache__'))
     assert verify_manifest(package)==tested
     config=json.loads((installed/'config.json').read_text());host=module.Host(config,engine)
@@ -117,20 +131,21 @@ def main():
         with browser.open(urllib.request.Request(base+path,data=None if body is None else json.dumps(body).encode(),headers={'Content-Type':'application/json','X-NCT-Recovery':'1'}),timeout=120) as r:return json.load(r)
     assert request('/health')['build_commit']==release['commit']
     request('/api/auth/login',{'username':'admin','password':password})
+    for _ in range(60):
+        operation=host.read()
+        if operation['phase']=='complete':break
+        time.sleep(1)
+    assert operation['phase']=='complete',operation
+    assert operation.get('verification_mode')=='fresh_normal_sign_in'
+    assert all(operation.get(k) for k in ['backup_verified','evidence_verified','controller_sign_in_verified'])
+    assert host.read()['release_restart_started'] is True
+    assert not (persist/'data/recovery/update-maintenance.json').exists()
     empty=json.loads(engine.command('exec',name,'python','-c',"import sqlite3,json;d=sqlite3.connect('file:/data/analyzer.db?mode=ro',uri=True);print(json.dumps({'users':d.execute('select username,role,disabled from analyst_users').fetchall(),'counts':{t:d.execute('select count(*) from '+t).fetchone()[0] for t in ['scan_runs','imports','artifact_registry','artifact_observations','device_collection_authority']}}))"))
     assert empty['users']==[['admin','admin',0]] and not any(empty['counts'].values()),empty
     assert request('/api/evidence-library')['total']==0
     handoff=request('/api/updates/launch',{})
     request('/api/exchange',{'code':handoff['url'].split('#handoff=')[1]},True)
-    assert request('/api/status',console_request=True)['operation']['phase']=='awaiting_sign_in'
-    request('/api/verify-sign-in',{'username':'admin','password':password},True)
-    for _ in range(60):
-        operation=request('/api/status',console_request=True)['operation']
-        if operation['phase']=='complete':break
-        time.sleep(1)
-    assert operation['phase']=='complete' and all(operation.get(k) for k in ['backup_verified','evidence_verified','controller_sign_in_verified'])
-    assert host.read()['release_restart_started'] is True  # Internal journal field, not exposed by the public status API.
-    assert not (persist/'data/recovery/update-maintenance.json').exists()
+    assert request('/api/status',console_request=True)['operation']['phase']=='complete'
     assert engine.inspect(console)['Image']==json.loads(engine.command('image','inspect',release['console_image']))[0]['Id']
     assert engine.inspect(name)['Image']==json.loads(engine.command('image','inspect',release['application_image']))[0]['Id']
     request('/api/close',{},True);time.sleep(4);assert not engine.inspect(console)['State']['Running']
@@ -166,7 +181,7 @@ def main():
     assert all(m['Destination']!='/var/run/docker.sock' for m in engine.inspect(name)['Mounts'])
     assert all(m['Destination'] not in {'/data','/var/run/docker.sock'} for m in engine.inspect(console)['Mounts'])
     proof={'result':'pass','route':release['fresh_install'],'tested_manifest_sha256':tested,'commit':release['commit'],'images':release['images'],
-        **{k:True for k in ['empty_storage_verified','fresh_admission_refusals','interactive_admin_setup','ca_verified','exact_application','exact_console','recovery_handoff','sign_in_final_restart','stop_start_persistence','helper_service_restart','console_stops_after_return','library_import_and_device_downloads']},
+        **{k:True for k in ['empty_storage_verified','fresh_admission_refusals','interrupted_password_resume','interactive_admin_setup','ca_verified','exact_application','exact_console','recovery_handoff','sign_in_final_restart','stop_start_persistence','helper_service_restart','console_stops_after_return','library_import_and_device_downloads']},
         'systemd_boot_tested':False,'substitutions':['systemctl runs exact installed helper process','ss fixture uses actual Docker port admission','administrative coordinator excluded from evidence peer checks'],
         'initial_empty_counts':empty['counts'],'range_accepted':False}
     (root/'fresh-acceptance.json').write_text(json.dumps(proof,indent=2))
