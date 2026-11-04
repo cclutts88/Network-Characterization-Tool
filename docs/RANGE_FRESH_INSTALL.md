@@ -98,18 +98,21 @@ host address and certificate rather than silently bypassing a browser warning.
 1. Open `https://NCT_HOST_IP:8445` on the analyst workstation.
 2. Sign in as **admin** with the password you just chose. For an exact new empty
    installation, this one normal sign-in verifies the Administrator and completes
-   the protected recovery handoff automatically. NCT may restart once; wait for
-   the page to reconnect, then sign in again only if the restart cleared the
-   browser session.
-3. Open **hamburger → Updates & Recovery** and confirm the saved operation says
-   **complete**. The independent console is normally on
+   the protected recovery handoff automatically. Keep the sign-in page open while
+   it reports that setup is finishing. NCT may restart once; the page reconnects
+   automatically. If it takes longer than expected, reload the page once. Sign in
+   again only if the restart cleared the browser session.
+3. Open **hamburger → Updates & Recovery**, then select **Open update and recovery
+   workspace**. Confirm the workspace reports **Update complete**. The independent
+   console is normally on
    `https://NCT_HOST_IP:8446` and starts on demand through NCT.
 4. If the fresh proof expired, changed, or the installation was no longer empty,
-   NCT deliberately keeps the previous **Verify sign-in and finish** step in the
-   recovery workspace. Complete that step instead; no evidence or safety check is
+   the sign-in page explains that automatic setup could not finish and offers
+   **Open Updates & Recovery**. Select **Open update and recovery workspace**, then
+   complete **Verify sign-in and finish** there. No evidence or safety check is
    bypassed.
 5. Confirm the build matches `release.json` in this package.
-5. Begin in **Mission Environment**: establish Scope and No-Strike controls before
+6. Begin in **Mission Environment**: establish Scope and No-Strike controls before
    network collection. Then create Saved Networks and use the normal collection
    workflow. **Evidence Library** starts empty and fills as evidence is retained.
 

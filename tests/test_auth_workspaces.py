@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.auth import create_user, init_auth_storage, verify_credentials
 from app.achievements import list_achievements, unlock_achievement
-from app.main import app
+from app.main import app, login_page
 from app.shell_preferences import (
     delete_shared_theme,
     get_shell_preference,
@@ -105,6 +105,20 @@ def test_fresh_handoff_refusal_preserves_login_and_requires_recovery(
         assert response.status_code == 200
         assert response.cookies.get("nct_session")
         assert response.json()["fresh_handoff"] == "recovery_required"
+
+
+def test_sign_in_page_explains_fresh_restart_and_recovery_fallback(monkeypatch):
+    monkeypatch.setenv("NCT_AUTH_MODE", "local")
+    response = login_page()
+    assert response.status_code == 200
+    html = response.body.decode()
+    assert "Keep this page open; it will reconnect automatically." in html
+    assert "NCT is restarting. This page will reconnect automatically" in html
+    assert "Open Updates &amp; Recovery" in html
+    assert "Open update and recovery workspace" in html
+    assert "Verify sign-in and finish" in html
+    assert "data.fresh_handoff==='accepted'" in html
+    assert "data.fresh_handoff==='recovery_required'" in html
 
 
 def test_personal_layouts_enforce_owner_and_version_conflicts(tmp_path):
