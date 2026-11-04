@@ -45,6 +45,14 @@ Fifty-five focused checks pass. A new exact commit/image/package rehearsal is
 required; the failed disposable attempt did not change a Range or sealed
 package.
 
+The second exact rehearsal then proved that the resumed container could not
+import the shared empty-state verifier when the guard was streamed through
+standard input. The application image now carries that same verifier in its
+read-only tools directory and the streamed guard explicitly uses it, keeping
+one verification implementation for resume and first-sign-in handoff. Fifty-
+eight focused checks pass. This was caught before any sealed package or Range
+change; a rebuilt exact image/package rehearsal remains required.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

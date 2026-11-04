@@ -67,6 +67,13 @@ def test_empty_fresh_resume_state_is_accepted(tmp_path):
     assert result.stdout.strip() == "PASSWORD_RESET_COUNT=0"
 
 
+def test_container_image_carries_the_shared_empty_state_verifier():
+    recipe = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    guard = HELPER.read_text(encoding="utf-8")
+    assert "COPY scripts/nct_fresh_handoff.py /opt/nct/tools/nct_fresh_handoff.py" in recipe
+    assert 'sys.path.insert(0, "/opt/nct/tools")' in guard
+
+
 @pytest.mark.parametrize(
     "table",
     ("imports", "artifact_registry", "device_collection_authority", "device_collection_authority_inputs"),

@@ -6,6 +6,7 @@ import sys
 import sqlite3
 from pathlib import Path
 
+sys.path.insert(0, "/opt/nct/tools")
 from nct_fresh_handoff import verify_empty
 
 
