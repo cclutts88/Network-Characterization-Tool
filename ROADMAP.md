@@ -53,6 +53,14 @@ one verification implementation for resume and first-sign-in handoff. Fifty-
 eight focused checks pass. This was caught before any sealed package or Range
 change; a rebuilt exact image/package rehearsal remains required.
 
+The third exact rehearsal completed interrupted Administrator resume and the
+final runtime proof, then exposed an installer-only image lookup error before
+the recovery helper could modify the application: the code used a container
+lookup for release image references. Fresh proof now uses Docker's explicit
+image inspection path, matching the already-qualified package builder and
+runtime checks. Ninety focused installer/host checks pass with one expected
+skip. No Range or sealed package changed; exact rehearsal remains open.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

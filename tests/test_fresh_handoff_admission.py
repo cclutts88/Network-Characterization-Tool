@@ -20,6 +20,10 @@ class Engine:
     def inspect(self, name):
         return copy.deepcopy(self.items[name])
 
+    def command(self, *args):
+        assert args[:2] == ("image", "inspect")
+        return json.dumps([copy.deepcopy(self.items[args[2]])])
+
 
 class Host:
     pass

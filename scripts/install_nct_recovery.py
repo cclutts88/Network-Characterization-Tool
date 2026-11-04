@@ -118,8 +118,12 @@ def _fresh_release_proof(host, original, expected_admin, release_file,
     application_reference = release.get("application_image", "")
     console_reference = release.get("console_image", "")
     images = release.get("images") or {}
-    application_image = host.engine.inspect(application_reference)
-    console_image = host.engine.inspect(console_reference)
+    application_image = json.loads(
+        host.engine.command("image", "inspect", application_reference)
+    )[0]
+    console_image = json.loads(
+        host.engine.command("image", "inspect", console_reference)
+    )[0]
     if application_image["Id"] != original["Image"] or console_image["Id"] != host.config["console_image_id"]:
         raise ValueError("The loaded application or recovery image differs from the fresh-install release")
     application_ids = {value for value in (images.get(application_reference) or {}).values() if isinstance(value, str) and value.startswith("sha256:")}
