@@ -107,6 +107,64 @@ def test_fresh_handoff_refusal_preserves_login_and_requires_recovery(
         assert response.json()["fresh_handoff"] == "recovery_required"
 
 
+def test_completed_or_obsolete_fresh_marker_does_not_block_later_login(
+    monkeypatch, tmp_path
+):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setenv("NCT_AUTH_MODE", "local")
+    monkeypatch.setenv("NCT_BOOTSTRAP_ADMIN", "freshadmin")
+    monkeypatch.setenv("NCT_BOOTSTRAP_PASSWORD", "fresh bootstrap password 123")
+    monkeypatch.setenv("NCT_FRESH_HANDOFF_OPERATION", "c" * 32)
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    monkeypatch.setattr(
+        "app.update_transport.local_request",
+        lambda *_args, **_kwargs: {
+            "accepted": False,
+            "disposition": "not_applicable",
+        },
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "freshadmin", "password": "fresh bootstrap password 123"},
+        )
+    assert response.status_code == 200
+    assert response.json()["fresh_handoff"] == "not_applicable"
+
+
+def test_completed_fresh_receipt_allows_login_when_helper_is_unavailable(
+    monkeypatch, tmp_path
+):
+    db_path = tmp_path / "analyzer.db"
+    data_dir = tmp_path / "data"
+    completion = data_dir / "recovery" / "fresh-handoff-complete.json"
+    completion.parent.mkdir(parents=True)
+    completion.write_text(
+        '{"contract":"nct-fresh-handoff-complete-v1","operation_id":"'
+        + "d" * 32
+        + '"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NCT_AUTH_MODE", "local")
+    monkeypatch.setenv("NCT_BOOTSTRAP_ADMIN", "freshadmin")
+    monkeypatch.setenv("NCT_BOOTSTRAP_PASSWORD", "fresh bootstrap password 123")
+    monkeypatch.setenv("NCT_FRESH_HANDOFF_OPERATION", "d" * 32)
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    monkeypatch.setattr("app.main.DATA_DIR", data_dir)
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("helper stopped")
+
+    monkeypatch.setattr("app.update_transport.local_request", unavailable)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "freshadmin", "password": "fresh bootstrap password 123"},
+        )
+    assert response.status_code == 200
+    assert response.json()["fresh_handoff"] == "not_applicable"
+
+
 def test_sign_in_page_explains_fresh_restart_and_recovery_fallback(monkeypatch):
     monkeypatch.setenv("NCT_AUTH_MODE", "local")
     response = login_page()

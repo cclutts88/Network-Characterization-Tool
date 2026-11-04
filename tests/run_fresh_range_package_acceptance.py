@@ -156,8 +156,11 @@ def main():
     request('/api/close',{},True);time.sleep(4);assert not engine.inspect(console)['State']['Running']
     engine.command('stop',name);engine.command('start',name)
     host.wait_url(config['application_url']+'/health/readiness',lambda x:x.get('healthy') is True)
-    request('/api/auth/login',{'username':'admin','password':password})
+    repeated_login=request('/api/auth/login',{'username':'admin','password':password})
+    assert repeated_login.get('fresh_handoff')=='not_applicable',repeated_login
     oldpid=int((root/'service.pid').read_text());os.kill(oldpid,signal.SIGTERM);time.sleep(1)
+    helper_down_login=request('/api/auth/login',{'username':'admin','password':password})
+    assert helper_down_login.get('fresh_handoff')=='not_applicable',helper_down_login
     log=(root/'service.log').open('ab')
     cleanenv={**env};cleanenv.pop('PYTHONPATH',None)
     service_process=subprocess.Popen([sys.executable,str(service),'--config',str(installed/'config.json')],env=cleanenv,stdout=log,stderr=log)
@@ -186,7 +189,7 @@ def main():
     assert all(m['Destination']!='/var/run/docker.sock' for m in engine.inspect(name)['Mounts'])
     assert all(m['Destination'] not in {'/data','/var/run/docker.sock'} for m in engine.inspect(console)['Mounts'])
     proof={'result':'pass','route':release['fresh_install'],'tested_manifest_sha256':tested,'commit':release['commit'],'images':release['images'],
-        **{k:True for k in ['empty_storage_verified','fresh_admission_refusals','interrupted_password_resume','interactive_admin_setup','ca_verified','exact_application','exact_console','recovery_handoff','sign_in_final_restart','stop_start_persistence','helper_service_restart','console_stops_after_return','library_import_and_device_downloads']},
+        **{k:True for k in ['empty_storage_verified','fresh_admission_refusals','interrupted_password_resume','interactive_admin_setup','ca_verified','exact_application','exact_console','recovery_handoff','sign_in_final_restart','repeat_login_passthrough','helper_unavailable_login_passthrough','stop_start_persistence','helper_service_restart','console_stops_after_return','library_import_and_device_downloads']},
         'systemd_boot_tested':False,'substitutions':['systemctl runs exact installed helper process','ss fixture uses actual Docker port admission','administrative coordinator excluded from evidence peer checks'],
         'initial_empty_counts':empty['counts'],'range_accepted':False}
     (root/'fresh-acceptance.json').write_text(json.dumps(proof,indent=2))

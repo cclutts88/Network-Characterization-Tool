@@ -305,6 +305,35 @@ def test_proven_fresh_first_session_creates_durable_release_intent(tmp_path, mon
     assert saved["verification_mode"] == "fresh_normal_sign_in"
 
 
+def test_completed_and_obsolete_fresh_markers_are_not_applicable(tmp_path):
+    config = configuration(tmp_path)
+    engine = Engine(config)
+    host = StorageHost(config, engine)
+    operation_id = "a" * 32
+    host_module.save(host.root / "operation.json", {
+        "id": operation_id,
+        "kind": "enable_console",
+        "phase": "complete",
+        "controller_sign_in_verified": True,
+        "verification_mode": "fresh_normal_sign_in",
+    })
+    assert host.confirm_fresh_session(operation_id, "admin", "s" * 64) == {
+        "accepted": False,
+        "disposition": "not_applicable",
+    }
+    host_module.save(host.root / "operation.json", {
+        "id": "b" * 32,
+        "kind": "update",
+        "phase": "validated",
+        "activity": {"active": True, "step": "review", "label": "Review"},
+    })
+    assert host.confirm_fresh_session(operation_id, "admin", "s" * 64) == {
+        "accepted": False,
+        "disposition": "not_applicable",
+    }
+    assert host.read()["activity"]["active"] is True
+
+
 @pytest.mark.parametrize("change", ["missing", "expired", "operation", "receipt"])
 def test_fresh_session_never_bypasses_missing_or_changed_proof(tmp_path, change):
     config = configuration(tmp_path)

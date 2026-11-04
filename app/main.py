@@ -3735,13 +3735,32 @@ def login(request: LoginRequest) -> Response:
     if re.fullmatch(r"[0-9a-f]{32}", fresh_operation) and analyst.get("role") == "admin":
         try:
             from app.update_transport import local_request
-            local_request(
+            handoff = local_request(
                 os.environ.get("NCT_UPDATE_LAUNCH_SOCKET", "/run/nct-update/launch.sock"),
                 "POST", "/fresh-sign-in",
                 {"operation_id": fresh_operation, "username": analyst["username"], "session_token": token},
             )
-            result["fresh_handoff"] = "accepted"
-        except (OSError, ValueError):
+            if handoff.get("accepted") is True and handoff.get("disposition") in {None, "finishing"}:
+                result["fresh_handoff"] = "accepted"
+            elif handoff == {"accepted": False, "disposition": "not_applicable"}:
+                result["fresh_handoff"] = "not_applicable"
+            else:
+                result["fresh_handoff"] = "recovery_required"
+        except OSError:
+            completion = DATA_DIR / "recovery" / "fresh-handoff-complete.json"
+            try:
+                saved = json.loads(completion.read_text(encoding="utf-8"))
+                completed = (
+                    not completion.is_symlink()
+                    and saved == {
+                        "contract": "nct-fresh-handoff-complete-v1",
+                        "operation_id": fresh_operation,
+                    }
+                )
+            except (OSError, ValueError, TypeError):
+                completed = False
+            result["fresh_handoff"] = "not_applicable" if completed else "recovery_required"
+        except ValueError:
             # Authentication remains successful. The independent console keeps
             # the paused operation available when exact fresh proof is refused.
             result["fresh_handoff"] = "recovery_required"

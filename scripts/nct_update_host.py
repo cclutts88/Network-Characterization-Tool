@@ -772,7 +772,14 @@ class Host:
                 raise
             self.phase(state, "interrupted", detail="Final restart halted with NCT stopped and collection paused: " + str(exc)[:250])
             raise
-        self.phase(state, state["verified_result_phase"], detail="Exact build, readiness, existing-account sign-in and retained evidence verified. Review any remaining unfinished-work recovery gates in NCT.")
+        terminal_phase = state["verified_result_phase"]
+        self.phase(state, terminal_phase, detail="Exact build, readiness, existing-account sign-in and retained evidence verified. Review any remaining unfinished-work recovery gates in NCT.")
+        if (terminal_phase == "complete" and state.get("kind") == "enable_console"
+                and state.get("verification_mode") == "fresh_normal_sign_in"):
+            save(self.data / "recovery" / "fresh-handoff-complete.json", {
+                "contract": "nct-fresh-handoff-complete-v1",
+                "operation_id": state["id"],
+            })
 
     def stop_exact(self, target):
         self.engine.command("update", "--restart=no", target["Id"])
@@ -1170,6 +1177,18 @@ class Host:
 
     def confirm_fresh_session(self, operation_id, username, session_token):
         """Accept only the first normal sign-in bound to an exact fresh receipt."""
+        with self.exclusive():
+            state = self.read()
+            if operation_id != state.get("id"):
+                return {"accepted": False, "disposition": "not_applicable"}
+            if (state.get("phase") == "complete" and state.get("kind") == "enable_console"
+                    and state.get("controller_sign_in_verified") is True
+                    and state.get("verification_mode") == "fresh_normal_sign_in"):
+                return {"accepted": False, "disposition": "not_applicable"}
+            if (state.get("phase") == "release_intent" and state.get("kind") == "enable_console"
+                    and state.get("controller_sign_in_verified") is True
+                    and state.get("verification_mode") == "fresh_normal_sign_in"):
+                return {"accepted": True, "disposition": "finishing"}
         with self.exclusive(), self.activity_scope():
             state = self.read()
             proof = state.get("fresh_handoff")
@@ -1431,6 +1450,9 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     host.worker_guard.release()
                     raise
+                if result.get("accepted") is not True:
+                    host.worker_guard.release()
+                    return result
                 def finish_fresh():
                     try:
                         time.sleep(1)
