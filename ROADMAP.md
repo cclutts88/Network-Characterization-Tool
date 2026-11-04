@@ -1,6 +1,37 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Range device-selector finalization incident started (2026-11-04): the installed
+Fresh-r2 Range visibly refuses Hunt Network Evidence because completed device
+collection `d11c79ce1a3f494b84e6b4289164a9a1` no longer matches the disposable
+current-device selector recorded during collection finalization. Preserve the
+fail-closed evidence check and retained source. Determine whether the collection
+terminal path indexes a manifest before its final contact/ownership presentation
+fields are set, correct the publication order without adding a GET repair, and add
+a live-style completed-collection regression proving Hunt/current selection works
+without restart while an independently edited manifest is still rejected. Treat
+the visible Range message as incident evidence, not proof of the precise source
+mechanism until the stored selector and final manifest are compared. Do not restart
+or modify the Range as part of diagnosis.
+
+Range device-selector finalization correction completed in development
+(2026-11-04): device-contact completion now freezes its final ownership receipt
+before authority activation records the canonical manifest in the disposable
+current-device selector. Previously, that receipt was refreshed immediately after
+selector indexing and before the same manifest was saved to the durable terminal
+record and disk, so a changed claim summary could make newly completed evidence
+refuse itself until startup reconciliation. The regression drives an interactive
+collection through terminal publication, pipeline admission and reusable analysis;
+the selector, durable terminal record and retained manifest are identical, current
+device selection succeeds without restart, and a later out-of-band manifest edit is
+still rejected. Focused collection/catalog checks passed (34), the widened device,
+Hunt, cache and authority set passed (198), and the complete application suite passed
+2,492 tests with 25 expected skips and one existing dependency warning. Independent
+reviewer gate: `CLEAR`, including an independent 11-test authority rerun. This proves
+the development source mechanism and prevention, not the exact history or recovery
+state of the live Range collection; no Range restart, evidence mutation, package,
+`main` or sealed-release change was made.
+
 Fresh-install recovery handoff simplification started (2026-11-03): remove
 only the redundant second account entry after an exact new empty installation.
 The first successful normal NCT Administrator sign-in may complete the existing

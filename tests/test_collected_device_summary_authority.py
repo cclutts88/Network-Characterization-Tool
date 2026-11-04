@@ -12,6 +12,11 @@ from app.device_collection_authority import (
     get_device_collection_authority,
 )
 from app import device_configs
+from app import derived_jobs as jobs
+from app.device_evidence_catalog import (
+    DeviceEvidenceCatalogError,
+    select_latest_device_evidence,
+)
 from app.device_summary_result import analyze_collected_device_summary
 from app.derived_contracts import (
     DEVICE_SUMMARY_VERSION,
@@ -174,6 +179,7 @@ def test_interactive_finalization_uses_same_verified_authority(tmp_path, monkeyp
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
     monkeypatch.setattr(device_configs, "_close_interactive_resources", lambda session: None)
     monkeypatch.setattr(device_configs, "capture_is_valid", lambda run_dir: True)
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
     plan = device_configs.DeviceConfigPlan(
         vendor="cisco", device_type="router", device_address="10.88.0.1",
         username="analyst", authentication_mode="password_prompt",
@@ -223,6 +229,30 @@ def test_interactive_finalization_uses_same_verified_authority(tmp_path, monkeyp
     authority = get_device_collection_authority(db_path, preview["run_id"])
     assert authority["state"] == "active"
     assert authority["selection_contract"] == COLLECTED_DEVICE_SELECTION_CONTRACT
+
+    retained_manifest = json.loads((run_dir / "manifest.json").read_text())
+    with connect_database(db_path, read_only=True) as db:
+        catalog_manifest, terminal_manifest = db.execute(
+            """SELECT catalog.manifest_json, contact.terminal_manifest_json
+                 FROM device_evidence_catalog catalog
+                 JOIN device_contact_runs contact ON contact.run_id = catalog.run_id
+                WHERE catalog.run_id = ?""",
+            (preview["run_id"],),
+        ).fetchone()
+    assert json.loads(catalog_manifest) == retained_manifest
+    assert json.loads(terminal_manifest) == retained_manifest
+    assert retained_manifest["contact_phase"] == "complete"
+
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    selected, descriptor = select_latest_device_evidence(db_path, config_dir)
+    assert [item["run_id"] for item in selected] == [preview["run_id"]]
+    assert descriptor["selected_run_ids"] == [preview["run_id"]]
+
+    retained_manifest["operator_note"] = "out-of-band edit"
+    (run_dir / "manifest.json").write_text(json.dumps(retained_manifest))
+    with pytest.raises(DeviceEvidenceCatalogError, match="changed after selector indexing"):
+        select_latest_device_evidence(db_path, config_dir)
 
 
 def test_empty_history_file_wins_over_embedded_history(tmp_path, monkeypatch):

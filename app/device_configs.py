@@ -455,6 +455,12 @@ def finalize_device_contact(
 
         def publish(connection: sqlite3.Connection) -> None:
             nonlocal verified
+            # Freeze the final ownership receipt before authority activation records
+            # the canonical manifest in the disposable current-device selector.
+            # Updating it after activation makes the retained manifest differ from
+            # the selector immediately and forces Hunt to refuse otherwise valid
+            # evidence until a restart rebuilds the selector.
+            manifest["work_claim"] = fence.claim_summary()
             verified = _finalize_device_collection(
                 run_dir,
                 manifest,
@@ -465,7 +471,6 @@ def finalize_device_contact(
                 start_worker=False,
                 write_manifest=False,
             )
-            manifest["work_claim"] = fence.claim_summary()
             if publication_id is not None:
                 commit_device_contact_publication_on_connection(
                     connection, fence.claim, publication_id
