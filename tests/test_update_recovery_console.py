@@ -316,6 +316,10 @@ def test_completed_and_obsolete_fresh_markers_are_not_applicable(tmp_path):
         "phase": "complete",
         "controller_sign_in_verified": True,
         "verification_mode": "fresh_normal_sign_in",
+        "fresh_handoff": {
+            "contract": "nct-fresh-handoff-v1",
+            "operation_id": operation_id,
+        },
     })
     assert host.confirm_fresh_session(operation_id, "admin", "s" * 64) == {
         "accepted": False,
@@ -331,7 +335,89 @@ def test_completed_and_obsolete_fresh_markers_are_not_applicable(tmp_path):
         "accepted": False,
         "disposition": "not_applicable",
     }
+    assert host.fresh_session_disposition(operation_id, busy=True) == {
+        "accepted": False,
+        "disposition": "not_applicable",
+    }
     assert host.read()["activity"]["active"] is True
+    host_module.save(host.root / "operation.json", {
+        "id": operation_id,
+        "kind": "enable_console",
+        "phase": "awaiting_sign_in",
+    })
+    assert host.fresh_session_disposition(operation_id, busy=True) == {
+        "accepted": True,
+        "disposition": "finishing",
+    }
+
+
+def test_console_sign_in_fallback_completes_fresh_marker_for_later_login(
+    tmp_path, monkeypatch
+):
+    config = configuration(tmp_path)
+    engine = Engine(config)
+    host = StorageHost(config, engine)
+    operation_id = "c" * 32
+    original = engine.inspect("old")
+    host_module.save(host.root / "operation.json", {
+        "id": operation_id,
+        "kind": "enable_console",
+        "phase": "awaiting_sign_in",
+        "actor": "host-installer",
+        "original": original,
+        "candidate_id": original["Id"],
+        "candidate_image_id": original["Image"],
+        "release_restart_started": True,
+        "fresh_handoff": {
+            "contract": "nct-fresh-handoff-v1",
+            "operation_id": operation_id,
+        },
+    })
+
+    class Cookie:
+        name = "nct_session"
+
+    class Response:
+        def __init__(self, value):
+            self.status = 200
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Opener:
+        def __init__(self):
+            self.responses = iter((
+                {"authenticated": True},
+                {"analyst": {"username": "admin", "role": "admin"}},
+            ))
+
+        def open(self, *_args, **_kwargs):
+            return Response(next(self.responses))
+
+    monkeypatch.setattr(host_module.ssl, "create_default_context", lambda **_kwargs: object())
+    monkeypatch.setattr(host_module.http.cookiejar, "CookieJar", lambda: [Cookie()])
+    monkeypatch.setattr(host_module.urllib.request, "build_opener", lambda *_args: Opener())
+    monkeypatch.setattr(host_module.json, "load", lambda response: response.value)
+
+    host.confirm("admin", "temporary local value", "recovery-console")
+    saved = host.read()
+    assert saved["phase"] == "complete"
+    assert saved["controller_sign_in_verified"] is True
+    assert "verification_mode" not in saved
+    assert json.loads(
+        (host.data / "recovery" / "fresh-handoff-complete.json").read_text()
+    ) == {
+        "contract": "nct-fresh-handoff-complete-v1",
+        "operation_id": operation_id,
+    }
+    assert host.confirm_fresh_session(operation_id, "admin", "s" * 64) == {
+        "accepted": False,
+        "disposition": "not_applicable",
+    }
 
 
 @pytest.mark.parametrize("change", ["missing", "expired", "operation", "receipt"])

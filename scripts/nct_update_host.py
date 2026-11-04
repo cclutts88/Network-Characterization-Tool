@@ -774,9 +774,12 @@ class Host:
             raise
         terminal_phase = state["verified_result_phase"]
         self.phase(state, terminal_phase, detail="Exact build, readiness, existing-account sign-in and retained evidence verified. Review any remaining unfinished-work recovery gates in NCT.")
-        if (terminal_phase == "complete" and state.get("kind") == "enable_console"
-                and state.get("verification_mode") == "fresh_normal_sign_in"):
-            save(self.data / "recovery" / "fresh-handoff-complete.json", {
+        if self.completed_fresh_enablement(state):
+            recovery = self.data / "recovery"
+            recovery.mkdir(mode=0o700, exist_ok=True)
+            if recovery.is_symlink():
+                raise ValueError("Fresh-install completion receipt directory is linked")
+            save(recovery / "fresh-handoff-complete.json", {
                 "contract": "nct-fresh-handoff-complete-v1",
                 "operation_id": state["id"],
             })
@@ -1175,20 +1178,38 @@ class Host:
             self.finalize(state)
             return {"url": self.config["application_url"], "operation": self.public()}
 
+    @staticmethod
+    def completed_fresh_enablement(state):
+        proof = state.get("fresh_handoff")
+        return (
+            state.get("phase") == "complete"
+            and state.get("kind") == "enable_console"
+            and state.get("controller_sign_in_verified") is True
+            and isinstance(proof, dict)
+            and proof.get("contract") == "nct-fresh-handoff-v1"
+            and proof.get("operation_id") == state.get("id")
+        )
+
+    def fresh_session_disposition(self, operation_id, *, busy=False):
+        """Classify stale or already-finished immutable fresh markers."""
+        state = self.read()
+        if operation_id != state.get("id") or self.completed_fresh_enablement(state):
+            return {"accepted": False, "disposition": "not_applicable"}
+        if (state.get("phase") == "release_intent" and state.get("kind") == "enable_console"
+                and state.get("controller_sign_in_verified") is True):
+            return {"accepted": True, "disposition": "finishing"}
+        if busy and state.get("phase") == "awaiting_sign_in" and state.get("kind") == "enable_console":
+            return {"accepted": True, "disposition": "finishing"}
+        if busy:
+            return {"accepted": False, "disposition": "recovery_required"}
+        return None
+
     def confirm_fresh_session(self, operation_id, username, session_token):
         """Accept only the first normal sign-in bound to an exact fresh receipt."""
         with self.exclusive():
-            state = self.read()
-            if operation_id != state.get("id"):
-                return {"accepted": False, "disposition": "not_applicable"}
-            if (state.get("phase") == "complete" and state.get("kind") == "enable_console"
-                    and state.get("controller_sign_in_verified") is True
-                    and state.get("verification_mode") == "fresh_normal_sign_in"):
-                return {"accepted": False, "disposition": "not_applicable"}
-            if (state.get("phase") == "release_intent" and state.get("kind") == "enable_console"
-                    and state.get("controller_sign_in_verified") is True
-                    and state.get("verification_mode") == "fresh_normal_sign_in"):
-                return {"accepted": True, "disposition": "finishing"}
+            disposition = self.fresh_session_disposition(operation_id)
+            if disposition is not None:
+                return disposition
         with self.exclusive(), self.activity_scope():
             state = self.read()
             proof = state.get("fresh_handoff")
@@ -1441,7 +1462,9 @@ class Handler(BaseHTTPRequestHandler):
             body = self.json_body()
             if self.path == "/fresh-sign-in":
                 if not host.worker_guard.acquire(blocking=False):
-                    return {"accepted": True}
+                    return host.fresh_session_disposition(
+                        body.get("operation_id", ""), busy=True,
+                    )
                 try:
                     result = host.confirm_fresh_session(
                         body.get("operation_id", ""), body.get("username", ""),
