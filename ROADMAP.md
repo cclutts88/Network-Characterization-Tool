@@ -33,6 +33,18 @@ committed-image package rehearsal, existing-install regression, browser/novice
 acceptance and the final full-suite rerun remain open. No package or Range was
 changed.
 
+Exact fresh-package rehearsal follow-up (2026-11-03): the first committed
+rehearsal reached the real Docker bootstrap and exposed a host-reporting
+compatibility difference: this engine reports the requested `NET_RAW`
+capability as `CAP_NET_RAW`. The ownership check now treats those two standard
+Docker spellings as the same capability while continuing to reject every
+additional or missing capability. The fresh-admission race fixture was also
+updated to inject a newly appearing target container during the current
+already-loaded-image path rather than relying on a redundant image reload.
+Fifty-five focused checks pass. A new exact commit/image/package rehearsal is
+required; the failed disposable attempt did not change a Range or sealed
+package.
+
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
 device-evidence catalog trigger refresh with one all-or-nothing initialization

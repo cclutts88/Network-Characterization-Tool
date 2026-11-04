@@ -24,6 +24,12 @@ def normalized_mounts(value) -> list[dict]:
     )
 
 
+def normalized_capabilities(value) -> list[str]:
+    return sorted(
+        str(item).upper().removeprefix("CAP_") for item in (value or [])
+    )
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -68,7 +74,7 @@ def runtime_snapshot(args: argparse.Namespace) -> dict:
         raise ValueError("the bootstrap application command changed")
     if host.get("Privileged") is not False:
         raise ValueError("the bootstrap container became privileged")
-    if sorted(host.get("CapAdd") or []) != ["NET_RAW"] or (host.get("CapDrop") or []):
+    if normalized_capabilities(host.get("CapAdd")) != ["NET_RAW"] or normalized_capabilities(host.get("CapDrop")):
         raise ValueError("the bootstrap capability contract changed")
     if host.get("SecurityOpt") not in (None, []):
         raise ValueError("the bootstrap security options changed")
@@ -135,7 +141,7 @@ def runtime_snapshot(args: argparse.Namespace) -> dict:
         "port_binding": expected_port,
         "restart_policy": restart,
         "network_mode": network_mode,
-        "cap_add": sorted(host.get("CapAdd") or []),
+        "cap_add": normalized_capabilities(host.get("CapAdd")),
         "environment": expected_env,
     }
 
@@ -241,7 +247,9 @@ def final_runtime(receipt: dict) -> dict:
         raise ValueError("the final fresh-install runtime or image identity changed")
     if value.get("Path") != "uvicorn" or list(value.get("Args") or []) != expected_command(receipt["container_port"]):
         raise ValueError("the final fresh-install command changed")
-    if host.get("Privileged") is not False or sorted(host.get("CapAdd") or []) != ["NET_RAW"] or (host.get("CapDrop") or []):
+    if (host.get("Privileged") is not False
+            or normalized_capabilities(host.get("CapAdd")) != ["NET_RAW"]
+            or normalized_capabilities(host.get("CapDrop"))):
         raise ValueError("the final fresh-install capability contract changed")
     restart = host.get("RestartPolicy") or {}
     if restart.get("Name") != "unless-stopped" or int(restart.get("MaximumRetryCount") or 0) != 0:

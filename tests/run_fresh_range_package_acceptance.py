@@ -61,7 +61,7 @@ def main():
     env.pop('PYTHONDONTWRITEBYTECODE',None)  # The trusted launcher must set this itself.
     late=root/'inject-late-container'
     docker_wrapper=bin_dir/'docker'
-    docker_wrapper.write_text("#!/usr/local/bin/python\nimport os,sys,subprocess\nfrom pathlib import Path\nactual='/usr/local/bin/docker'\nif sys.argv[1:2]==['load'] and Path("+repr(str(late))+").exists():\n subprocess.run([actual]+sys.argv[1:],check=True)\n subprocess.run([actual,'create','--name',"+repr(name)+","+repr(release['application_image'])+"],check=True,stdout=subprocess.DEVNULL)\n Path("+repr(str(late))+").unlink()\nelse: os.execv(actual,[actual]+sys.argv[1:])\n")
+    docker_wrapper.write_text("#!/usr/local/bin/python\nimport os,sys,subprocess\nfrom pathlib import Path\nactual='/usr/local/bin/docker'\nmarker=Path("+repr(str(late))+")\ncount=marker.with_suffix('.count')\nif marker.exists() and len(sys.argv)>2 and sys.argv[1]=='inspect' and sys.argv[-1]=="+repr(name)+":\n n=int(count.read_text())+1 if count.exists() else 1\n count.write_text(str(n))\n if n==4:\n  subprocess.run([actual,'create','--name',"+repr(name)+","+repr(release['application_image'])+"],check=True,stdout=subprocess.DEVNULL)\n  marker.unlink();count.unlink()\nos.execv(actual,[actual]+sys.argv[1:])\n")
     docker_wrapper.chmod(0o700)
     launcher=['sh',str(package/'scripts/nct-install-range.sh'),address]
     def check(expected):
@@ -84,7 +84,9 @@ def main():
     check(True); assert not any(persist.iterdir()) and not installed.exists()
     late.write_text('Inject a container during image loading')
     refused=subprocess.run(launcher+['fresh'],env=env,capture_output=True,text=True,timeout=180)
-    assert refused.returncode and 'Fresh setup will not replace it' in refused.stderr
+    assert refused.returncode and 'Fresh setup will not replace it' in refused.stderr, (
+        refused.stdout[-2000:] + refused.stderr[-2000:]
+    )
     assert not engine.inspect(name)['State']['Running'] and not any(persist.iterdir()) and not installed.exists()
     engine.command('rm',name)
     password=secrets.token_urlsafe(24)

@@ -36,7 +36,7 @@ def runtime(container: str, image: str, image_id: str, root: Path) -> dict:
         },
         "HostConfig": {
             "Privileged": False,
-            "CapAdd": ["NET_RAW"],
+            "CapAdd": ["CAP_NET_RAW"],
             "CapDrop": None,
             "SecurityOpt": None,
             "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
