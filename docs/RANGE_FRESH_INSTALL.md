@@ -1,9 +1,28 @@
-# Start here — fresh offline NCT Range installation
+# Start here — choose the NCT Range installation path
 
-Use this full ZIP to install NCT and its independent Updates & Recovery console
-on a **new Linux Docker host with empty NCT storage**. No older NCT installation
-is required. This is the standalone Docker route; it does not set up Kubernetes
-or claim a separately tested Docker Compose deployment.
+This full ZIP supports two different operations. Choose one before running any
+command, and run only the commands listed for that path. You do not need to open
+or choose files from the `scripts` folder yourself.
+
+## Choose one path
+
+### A. New host with empty NCT storage
+
+Use **steps 1–4 below** to install NCT and its independent Updates & Recovery
+console on a new Linux Docker host with empty NCT storage. No older NCT
+installation is required.
+
+### B. Existing exact Fresh-r2 installation
+
+Do **not** run the fresh-install commands below. Go directly to
+`docs/RANGE_UPDATER_PACKAGE.md`, section **Existing Fresh-r2 helper and console**.
+That route first updates the host helper and independent console, then tells you
+to upload the included `nct-update-*.tar.gz` through Updates & Recovery. It keeps
+the existing NCT account and retained evidence. The package refuses any different
+or ambiguous source instead of guessing.
+
+This is the standalone Docker route; it does not set up Kubernetes or claim a
+separately tested Docker Compose deployment.
 
 ## 1. Put the package on the controller
 
