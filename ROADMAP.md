@@ -82,7 +82,7 @@ receipt is missing, so a future failure reports its actual setup boundary. No
 Range or sealed package was changed; exact rehearsal remains open.
 
 Fresh-install recovery handoff simplification completed in development
-(2026-11-03): exact r8 images and an unsealed package bound to commit `a8c3391`
+(2026-11-03): exact r9 images and an unsealed package bound to commit `f8ff58d`
 passed the full disposable fresh-host rehearsal: preflight, deliberate
 Administrator-password interruption, exact-state `resume-fresh`, first normal
 Administrator sign-in, protected final restart, retained state, independent
@@ -94,9 +94,16 @@ and reconnects automatically. If protected completion is refused or takes too
 long, it reveals a direct Updates & Recovery action and names the exact recovery
 workspace controls; the normal screen stays uncluttered until that fallback is
 needed. START-HERE matches those steps. Browser inspection confirmed the clean
-default sign-in view. The final host-capable regression run passed 2,487 tests
+default sign-in view. The final host-capable regression run passed 2,490 tests
 with 25 expected skips; shell validation also passed. The novice operator
 returned `CLEAR` after the earlier instructions/visibility halt was corrected.
+The independent reviewer then reproduced a repeat-login defect caused by the
+immutable fresh-operation marker and halted the gate. Completed and obsolete
+markers now receive an explicit not-applicable result, and a small completion
+receipt preserves ordinary sign-in if the helper is temporarily unavailable.
+The r9 exact-package rehearsal signs in again after the protected restart and
+once while the helper is stopped; both continue normally. Genuine paused
+same-operation refusals still lead to Recovery verification.
 This is foundation-only development acceptance: the package remains unsealed,
 no Range was changed, and `main` remains unchanged.
 
