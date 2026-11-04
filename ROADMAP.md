@@ -82,7 +82,7 @@ receipt is missing, so a future failure reports its actual setup boundary. No
 Range or sealed package was changed; exact rehearsal remains open.
 
 Fresh-install recovery handoff simplification completed in development
-(2026-11-03): exact r9 images and an unsealed package bound to commit `f8ff58d`
+(2026-11-03): exact r11 images and an unsealed package bound to commit `562152d`
 passed the full disposable fresh-host rehearsal: preflight, deliberate
 Administrator-password interruption, exact-state `resume-fresh`, first normal
 Administrator sign-in, protected final restart, retained state, independent
@@ -94,30 +94,40 @@ and reconnects automatically. If protected completion is refused or takes too
 long, it reveals a direct Updates & Recovery action and names the exact recovery
 workspace controls; the normal screen stays uncluttered until that fallback is
 needed. START-HERE matches those steps. Browser inspection confirmed the clean
-default sign-in view. The final host-capable regression run passed 2,490 tests
+default sign-in view. The final host-capable regression run passed 2,492 tests
 with 25 expected skips; shell validation also passed. The novice operator
 returned `CLEAR` after the earlier instructions/visibility halt was corrected.
 The independent reviewer then reproduced a repeat-login defect caused by the
 immutable fresh-operation marker and halted the gate. Completed and obsolete
 markers now receive an explicit not-applicable result, and a small completion
 receipt preserves ordinary sign-in if the helper is temporarily unavailable.
-The r9 exact-package rehearsal signs in again after the protected restart and
-once while the helper is stopped; both continue normally. Genuine paused
-same-operation refusals still lead to Recovery verification.
+The exact-package rehearsal signs in again after the protected restart and once
+while the helper is stopped; both continue normally. Completing the same bound
+fresh operation through the independent Recovery console now records the same
+terminal enablement, so later sign-ins also continue normally with the helper
+online or offline. Genuine paused same-operation refusals still lead to Recovery
+verification. The independent reviewer reran 133 affected tests with one
+expected skip and returned `CLEAR`.
 This is foundation-only development acceptance: the package remains unsealed,
 no Range was changed, and `main` remains unchanged.
 
-Fresh-host archive identity compatibility follow-up started (2026-11-03): the
+Fresh-host archive identity compatibility follow-up completed (2026-11-03): the
 first r10 empty-host rehearsal deliberately ran after the exact release tags had
 been removed and exposed a newer Docker/containerd identity boundary that the r9
 rehearsal did not exercise. Loading the normalized offline archive produces the
 same immutable configuration and layers under a distribution-manifest identity,
 while the release recorded only the build-time runtime identity and classic
-configuration identity. Keep exact-image refusal intact, add the deterministic
-archive manifest identity to the signed release record, and repeat focused,
-fresh-host, preserved-install and full regression acceptance. This is an
-isolated package-qualification finding; no sealed package, Range, retained
-evidence or `main` checkout was changed.
+configuration identity. The release record now includes the deterministic
+distribution-manifest identity calculated from the exact archived configuration,
+layer digests, media types and sizes; mutable tags and unknown representations
+remain refused. The r11 rehearsal first replaced the build-time tags with the
+images loaded from the normalized archive, then passed the full empty-host flow.
+A separate r11 preserved-install rehearsal retained accounts, evidence, runtime
+settings and independent Recovery behavior. Focused package checks passed 115
+tests; the final full regression passed 2,492 tests with 25 expected skips. The
+independent reviewer returned `CLEAR`. This is an isolated qualification fix for
+the tested classic and containerd representations, not a universal Docker-store
+claim. No sealed package, Range, retained evidence or `main` checkout was changed.
 
 Device-authority initializer reliability hardening started (2026-11-03):
 replace the existing non-atomic device collection authority and disposable
