@@ -40,6 +40,11 @@ BASELINES = {
     },
 }
 SERVICE = "nct-recovery-host.service"
+# The sealed Recovery-r4 bridge injects this compatibility identity before it
+# calls the earlier lifecycle contract. Current Fresh-r2 admission is governed
+# by BASELINES; this hook remains only so the sealed bridge can still be tested
+# and recovered without changing that already-issued package.
+OLD_CONSOLE = None
 
 
 def protected(path, directory=False):

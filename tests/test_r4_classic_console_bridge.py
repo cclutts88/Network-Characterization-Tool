@@ -17,6 +17,17 @@ spec.loader.exec_module(bridge)
 def classic_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle.upgrade_module, 'OLD_CONSOLE', bridge.CLASSIC)
     upgrade, engine, calls = lifecycle.fixture(tmp_path, monkeypatch)
+    upgrade.config['console_image_id'] = bridge.CLASSIC
+    lifecycle.host_module.save(upgrade.path, upgrade.config)
+    engine.items['console']['Image'] = bridge.CLASSIC
+    engine.items['console']['Config']['Image'] = bridge.CLASSIC
+    baseline = next(iter(lifecycle.upgrade_module.BASELINES.values()))
+    baseline['console_config_digest'] = bridge.CLASSIC
+    release_path = upgrade.source.parent / 'release.json'
+    release = json.loads(release_path.read_text())
+    release['helper_upgrade_source']['console_image_id'] = bridge.CLASSIC
+    release_path.write_text(json.dumps(release))
+    lifecycle.write_manifest(upgrade.source.parent)
     old = {'Id': bridge.CLASSIC, 'Config': {'Env': ['NCT_BUILD_ID='+bridge.OLD_BUILD, 'NCT_BUILD_COMMIT='+bridge.OLD_COMMIT]}}
     command = engine.command
     monkeypatch.setattr(engine, 'command', lambda verb,*args: json.dumps([old]) if (verb,*args)==('image','inspect',bridge.CLASSIC) else command(verb,*args))
