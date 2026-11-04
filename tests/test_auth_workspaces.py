@@ -115,6 +115,7 @@ def test_sign_in_page_explains_fresh_restart_and_recovery_fallback(monkeypatch):
     assert "Keep this page open; it will reconnect automatically." in html
     assert "NCT is restarting. This page will reconnect automatically" in html
     assert "Open Updates &amp; Recovery" in html
+    assert "[hidden]{display:none!important}" in html
     assert "Open update and recovery workspace" in html
     assert "Verify sign-in and finish" in html
     assert "data.fresh_handoff==='accepted'" in html
