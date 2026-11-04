@@ -11,7 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from app.database import connect_database
+from app.database import connect_database, execute_sql_script_statements
 from app.derived_contracts import (
     DEVICE_SUMMARY_FAMILY,
     DEVICE_SUMMARY_PARAMETERS,
@@ -50,8 +50,13 @@ def _table_exists(db: sqlite3.Connection, name: str) -> bool:
 
 def ensure_device_evidence_catalog_schema(db: sqlite3.Connection) -> None:
     """Create the rebuildable selector and pure-SQL rollback dirty markers."""
-    db.executescript(
-        """
+    owns_transaction = not db.in_transaction
+    if owns_transaction:
+        db.execute("BEGIN IMMEDIATE")
+    try:
+        execute_sql_script_statements(
+            db,
+            """
         CREATE TABLE IF NOT EXISTS device_evidence_catalog (
             run_id TEXT PRIMARY KEY,
             device_key TEXT NOT NULL,
@@ -101,8 +106,15 @@ def ensure_device_evidence_catalog_schema(db: sqlite3.Connection) -> None:
                     reason = excluded.reason,
                     marked_at = CURRENT_TIMESTAMP;
             END;
-        """
-    )
+            """,
+        )
+    except BaseException:
+        if owns_transaction:
+            db.rollback()
+        raise
+    else:
+        if owns_transaction:
+            db.commit()
 
 
 def _device_key(manifest: dict) -> str:

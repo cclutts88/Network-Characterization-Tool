@@ -1,6 +1,46 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Device-authority initializer reliability hardening started (2026-11-03):
+replace the existing non-atomic device collection authority and disposable
+device-evidence catalog trigger refresh with one all-or-nothing initialization
+boundary. Preserve the exact reviewed tables, indexes, triggers, authority rows,
+catalog rows, evidence and saved schema fingerprint; this is not a schema change
+or a repair path for an already damaged database. Add deterministic statement-
+failure and real-process interruption regressions across both trigger sets,
+including populated authority/catalog state, retry after failure, concurrent
+visibility, restart and current/older-schema compatibility. Existing fingerprint
+damage must continue to fail closed. Keep test setup helpers confined to disposable
+fixtures and use normal startup paths for live-instance checks. The earlier isolated
+preview trigger loss remains a reproduced mechanism with an unproven initiating
+cause, not a retrospective production incident claim. Independent design gate:
+`CLEAR`.
+
+Device-authority initializer reliability hardening completed in development
+(2026-11-03): device collection authority and the disposable current-device
+catalog now refresh all six related protection/dirty-marker triggers inside one
+explicit database transaction. A shared statement runner preserves that caller-
+owned transaction instead of allowing the database library's multi-statement
+helper to commit between drops and replacements; the catalog also owns an
+all-or-nothing transaction when initialized independently. Table, index, trigger,
+authority, catalog, retained-evidence and saved-fingerprint meanings are unchanged.
+Twenty new reliability checks pass, covering refusal at all twelve drop/create
+boundaries, populated preparing/active/deleted records and inputs, retry after a
+failed cached initialization, standalone catalog rollback, concurrent reader
+visibility, real child-process termination within both trigger sets, new-process
+restart, enforcement guards, dirty markers, exact Phase 5 version-7 fingerprint
+preservation and fail-closed refusal of a damaged saved fingerprint. The combined
+schema/device gate passed 133 tests. A fresh isolated application started and
+restarted over the same database with schema version 8 and a matching saved/live
+fingerprint. The complete host-capable regression suite passed 2,465 tests with
+25 expected skips and one existing dependency warning; all 13 host-utility tests
+that fail in the application-only image passed in the correct host-test image.
+Independent reviewer gate: `CLEAR`; novice read-only startup/navigation/theme/
+Guide smoke gate: `CLEAR`. The earlier preview's initiating interruption remains
+unproven, and this work does not silently repair a database already rejected by
+its saved fingerprint. This is foundation-only development work: no package was
+built, no Range was changed and `main` remains unchanged.
+
 Retained Nmap scan deletion removal started (2026-11-03): the current Scan
 History still presented individual `Delete` and bulk `Clear stored scan data`
 actions even though scoped and processed scans are deliberately protected as
@@ -10601,11 +10641,13 @@ edge fixes passed2410 with23 environment/optional skips. Final broad rerun is ru
 completion commit follows its result. Main remains clean. The separate administrator
 Configuration & Source viewer stays unchecked/planned.
 
-- [ ] Reliability follow-up: make existing device collection authority schema
-  initializer DROP/CREATE replacement atomic, add an interrupted-DDL regression,
-  qualify restart/upgrade compatibility separately, and keep setup helpers out of
-  live-instance fixture admission. The exact initiating preview interruption is
-  not proven; current library acceptance does not claim to fix this older initializer.
+- [x] Device collection authority initializer reliability follow-up completed
+  2026-11-03: authority and selector-catalog trigger replacement is atomic, with
+  deterministic statement-failure, real-process interruption, concurrent-reader,
+  restart, saved-fingerprint and prior Phase 5 schema regressions. Disposable setup
+  remains test-owned; the normal isolated application startup/restart path passed.
+  The exact initiating preview interruption remains unproven; see the completion
+  record at the top of this roadmap.
 ### 2026-11-02 - Unified Evidence Library completed on foundation
 
 Final broad regression:2412 passed,24 environment/optional skips,1 existing Starlette

@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Callable
 
 from app.artifacts import init_artifact_storage, utc_now
-from app.database import connect_database, initialize_once_per_database
+from app.database import (
+    connect_database,
+    execute_sql_script_statements,
+    initialize_once_per_database,
+)
 from app.device_command_receipt_contract import command_receipt_is_valid
 
 
@@ -80,8 +84,11 @@ def manifest_requires_authority(manifest: dict | None) -> bool:
 def init_device_collection_authority_storage(db_path: Path) -> None:
     init_artifact_storage(db_path)
     with connect_database(db_path) as db:
-        db.executescript(
-            """
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            execute_sql_script_statements(
+                db,
+                """
             CREATE TABLE IF NOT EXISTS device_collection_authority (
                 run_id TEXT PRIMARY KEY,
                 state TEXT NOT NULL CHECK(state IN ('preparing', 'active', 'deleted')),
@@ -172,11 +179,16 @@ def init_device_collection_authority_storage(db_path: Path) -> None:
             CREATE TRIGGER device_collection_authority_inputs_no_delete
                 BEFORE DELETE ON device_collection_authority_inputs
                 BEGIN SELECT RAISE(ABORT, 'device collection authority inputs are permanent'); END;
-            """
-        )
-        from app.device_evidence_catalog import ensure_device_evidence_catalog_schema
+                """,
+            )
+            from app.device_evidence_catalog import ensure_device_evidence_catalog_schema
 
-        ensure_device_evidence_catalog_schema(db)
+            ensure_device_evidence_catalog_schema(db)
+        except BaseException:
+            db.rollback()
+            raise
+        else:
+            db.commit()
 
 
 def begin_manual_upload_authority(

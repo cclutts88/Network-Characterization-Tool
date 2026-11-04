@@ -86,6 +86,31 @@ def connect_database(
     return connection
 
 
+def execute_sql_script_statements(
+    connection: sqlite3.Connection, script: str,
+) -> None:
+    """Execute one complete SQL statement at a time without implicit commits.
+
+    ``sqlite3.Connection.executescript`` commits an existing transaction before
+    it starts.  Schema refreshes that must remain inside a caller-owned
+    transaction therefore need to prepare and execute each complete statement
+    separately.  ``sqlite3.complete_statement`` understands trigger bodies, so
+    their internal semicolons do not split a statement early.
+    """
+    pending: list[str] = []
+    for line in str(script).splitlines(keepends=True):
+        pending.append(line)
+        candidate = "".join(pending)
+        if sqlite3.complete_statement(candidate):
+            statement = candidate.strip()
+            if statement:
+                connection.execute(statement)
+            pending = []
+    remainder = "".join(pending).strip()
+    if remainder:
+        raise ValueError("SQL script ended with an incomplete statement")
+
+
 def _normalize_ipv4_network_list_json(value: str) -> str | None:
     """Return canonical JSON for a valid IPv4 network list, or NULL when invalid."""
     try:
