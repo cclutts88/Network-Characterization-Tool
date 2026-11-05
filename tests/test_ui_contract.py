@@ -823,7 +823,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert ".builder.draft-loading{pointer-events:none;opacity:.72}" in html
     assert "finally{$('scanBuilder').classList.remove('draft-loading');$('scanBuilder').removeAttribute('aria-busy');$('scanBuilder').removeAttribute('inert')}" in html
     assert "async function poll(runId=currentId,revision=activeViewRevision){if(!activeScanWorkspace()||!runId||revision!==activeViewRevision)return;const detailRevision=++activeDetailRequestRevision;try" in html
-    assert "detailRevision!==activeDetailRequestRevision" in html
+    assert "ownsView=detailRevision===activeDetailRequestRevision" in html
+    assert "Previous scan ${run.status}. Its retained outcome is available in Scan History while the next scan continues." in html
     assert "data-history-detail" in html
     assert "loadActiveRun()" in html
     assert "exact_execution_command" in html
@@ -2013,6 +2014,12 @@ def test_every_analysis_stage_has_a_local_export_path_including_map():
     assert "function exportReachResult()" in reach
     assert 'id="exportMapSvg"' in map_html
     assert 'id="exportMapJson"' in map_html
+    assert 'id="mapFilesStatus"' in map_html
+    assert 'id="retryMapLoad"' in map_html
+    assert "$('retryMapLoad').onclick=loadMap" in map_html
+    assert "Promise.all([loadStoredFiles(),mapSnapshotReady?Promise.resolve(true):loadMap()])" in map_html
+    assert "if(mapLoadPromise)return mapLoadPromise" in map_html
+    assert "mapSnapshotReady=true" in map_html
     assert "function exportMapImage()" in map_html
     assert "function exportMapData()" in map_html
     assert "topology,presentation:" in map_html

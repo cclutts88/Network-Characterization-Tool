@@ -76,6 +76,52 @@ await eval([
 
 await eval([
   "(async () => {",
+  "let comparisonRequest=0;const nodes={comparisonBaseline:{value:'earlier'},comparisonCurrent:{value:'later'},comparisonResult:{innerHTML:''},compareRuns:{disabled:false}},$=id=>nodes[id];",
+  "const statuses=[],setStatus=(id,message,kind='')=>statuses.push({id,message,kind}),esc=value=>String(value),responseError=()=>'',renderComparisonDetails=()=>{};",
+  "const syncComparisonButton=()=>{nodes.compareRuns.disabled=false};",
+  "const fetch=async()=>({ok:true,json:async()=>({status:'comparison_complete'})});",
+  sourceFunction("compareRuns", true),
+  "await compareRuns();",
+  "assert.match(statuses.at(-1).message,/Comparison complete/);assert.equal(statuses.at(-1).kind,'good');",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "let comparisonRequest=0;const comparisonResult={innerHTML:'',replaceChildren(){this.innerHTML=''}};const nodes={comparisonBaseline:{value:'first'},comparisonCurrent:{value:'second'},comparisonResult,compareRuns:{disabled:false}},$=id=>nodes[id];",
+  "const statuses=[],renders=[],setStatus=(id,message,kind='')=>statuses.push({id,message,kind}),esc=value=>String(value),responseError=()=>'',renderComparisonDetails=result=>renders.push(result.name);",
+  "const syncComparisonButton=()=>{nodes.compareRuns.disabled=false};let resolveFirst;",
+  "const fetch=()=>new Promise(resolve=>{resolveFirst=()=>resolve({ok:true,json:async()=>({name:'old result'})})});",
+  sourceFunction("comparisonSelectionChanged"),
+  sourceFunction("compareRuns", true),
+  "const pending=compareRuns();assert.equal(nodes.compareRuns.disabled,true,'duplicate compare is disabled while pending');",
+  "nodes.comparisonCurrent.value='third';comparisonSelectionChanged();",
+  "assert.equal(nodes.comparisonResult.innerHTML,'','changing a selection clears the stale Comparing result');",
+  "assert.match(statuses.at(-1).message,/Selections changed/);",
+  "resolveFirst();await pending;",
+  "assert.deepEqual(renders,[],'an older comparison cannot replace a newer selection');",
+  "assert.equal(statuses.some(item=>/Comparison complete/.test(item.message)),false);",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "let analysisWorkspaceReady=true,analysisActivationRevision=0,preparedComparisonDeepLink='',location={hash:'#networkOutliersPanel',search:''};",
+  "const analysisLoadedTasks=new Set(),automatedItems=[],$=()=>({});",
+  "let overviewLoads=0,outlierLoads=0;",
+  "const loadNetworkOverview=async()=>{overviewLoads+=1;outlierLoads+=1;return true},loadNetworkOutliers=async()=>{outlierLoads+=1;return true};",
+  "const loadComparisonCandidates=async()=>true,loadProcessedEvidenceScopes=async()=>true,loadNmapAssignments=async()=>true,openRun=async()=>true;",
+  "const focusRequestedEvidence=()=>{},stopHiddenAnalysisWork=()=>{},prepareRunComparison=()=>false;",
+  sourceFunction("currentAnalysisTask"),
+  sourceFunction("activateAnalysisTask", true),
+  "await activateAnalysisTask();",
+  "assert.equal(overviewLoads,1);assert.equal(outlierLoads,1,'initial LFA activation must not issue a second outlier read after overview loading');",
+  "assert.equal(analysisLoadedTasks.has('networkOverview'),true);",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
   "let location={hash:'#xmlImport'},nmapAssignmentRequest=0,nmapAssignmentPoll=null,activeAssignmentScopes=[],rendered=0,cleared=0;",
   "const nodes={nmapAssignmentList:{innerHTML:''}},$=id=>nodes[id],setStatus=()=>{},clearTimeout=()=>{cleared+=1};",
   "let pending=[];let fetch=url=>new Promise(resolve=>pending.push(()=>resolve({ok:true,json:async()=>url.includes('assignment-scopes')?[]:[]})));",

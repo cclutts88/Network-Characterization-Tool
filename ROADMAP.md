@@ -1,6 +1,75 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Functionality-first stabilization freeze started (2026-11-05): pause new feature
+development. The only active priority is making every capability already present in
+NCT dependable, understandable and usable through its complete operator workflow.
+Exercise existing functions with realistic populated data, invalid and unreachable
+inputs, cancellations, fallback decisions, queued work, repeated navigation, restarts
+and retained-data upgrades. Correct crashes, stuck work, silent failures, misleading
+guidance, unnecessary duplicate work, layout defects and preventable operator traps.
+Use the novice operator to complete each supported workflow using the visible guidance,
+the read-only backend observer to detect errors, locks, resource pressure and redundant
+processing, and the independent reviewer to halt unsafe or incomplete corrections.
+Do not resume new capabilities until the resulting package passes fresh-install and
+retained-data Range acceptance and is approved as a stable demonstration candidate.
+This is also a permanent rule after the freeze: every later feature or background-
+process change must repeat the complete applicable functional regression gate, including
+the full automated suite, cross-workspace operator journey, relevant failure/restart
+paths, novice browser review, backend observation and independent quality clearance.
+An addition is not complete if any previously supported workflow becomes unreliable,
+confusing or unusable.
+
+Cross-evidence retirement contract added to the stabilization gate (2026-11-05):
+Nmap scans, device-configuration collections, Arkime captures and imported evidence
+must use one understandable lifecycle. An operator must be able to retire incorrect
+evidence from active use even after Network Scope assignment. Retirement must remove
+that source from ordinary selectors and all future Inventory, Analyze, Hunt, Reach,
+Map, comparison and derived-result calculations, while retaining only the minimum
+immutable audit receipt needed to explain who retired it, when and why. The review
+must show impact before confirmation, refuse active in-progress work, invalidate
+dependent caches atomically, survive restart and never leave stale derived results.
+Physical byte deletion and audit-receipt retention must be described separately.
+Apply the same browser, backend, restart and regression checks to every evidence type;
+a scoped source must not become an unexplained undeletable record.
+
+Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
+backend observer found that direct Map > Files & Export navigation loaded retained file
+locations but not the topology required by its enabled export buttons. The buttons did
+nothing and wrote their warning into the hidden Map canvas. Direct entry now loads the
+topology and stored-file inventory together, exposes loading/readiness on the visible
+Files & Export page, keeps export disabled until ready and reuses that topology when the
+canvas opens. Delayed-load and direct-entry browser checks produced valid 20,752-byte
+JSON and 22,609-byte SVG files in Graphite and Sage at desktop and narrow widths. Map
+Files and Canvas now share one in-flight topology read, export readiness is published
+only after a successful render, a failed refresh restores the last successful snapshot,
+and a failed first load exposes an in-place Retry map data action. Nine-second delayed
+rapid switching and an injected first-load failure both passed in the browser.
+
+The same pass found two redundant full-network LFA requests on initial navigation and
+confusing terminal copy. Current Network page loading now owns one open-panel LFA
+refresh, while task activation and toggle handling no longer request the same result a
+second time. Scan History uses the actual retained terminal state beside its timestamp
+instead of describing cancelled evidence as completed, and completed scan comparisons
+replace the initial selection prompt with a visible completion message. Comparison
+requests now belong to the exact two selected sources; changing either selection clears
+the pending display, and a late success or failure cannot overwrite the new choice. LFA
+revision-conflict recovery is bounded to one refresh and one retry. A terminal response
+from a cancelled or completed scan remains available in history even when the next
+queued scan becomes active first, without replacing that next scan's live panel.
+
+Five focused browser-runtime suites and the 87-check UI contract passed. The complete
+application suite passed twice after final source changes; the final run was 2,512
+passed, 25 intentionally skipped and one dependency deprecation warning in 457.93
+seconds. The novice operator cleared delayed, failed and narrow-layout browser checks.
+The backend observer found one request per expected data path, no lock, timeout,
+traceback or resource-pressure event, and exact byte/hash preservation for retained
+device configuration downloads. Chrome automation left a completed 149-byte file with
+an unfinished browser suffix, but the server filename, attachment headers, length, body
+and SHA-256 were exact; this remains a manual ordinary-browser environment check rather
+than a product-response defect. The independent reviewer returned CLEAR. This is
+development qualification, not Range acceptance.
+
 Integrated novice workflow and backend-observation pass started (2026-11-05):
 run one fresh, disposable NCT instance through the complete operator journey while
 the novice operator evaluates discoverability, guidance, layout, failure recovery

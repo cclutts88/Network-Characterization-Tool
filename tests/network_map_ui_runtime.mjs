@@ -320,6 +320,58 @@ await eval(`(() => {
 })()`);
 
 await eval(`(async () => {
+  let mapWorkspaceReady=true,mapActivationRevision=4,task='mapFilesPanel',topology=null,mapSnapshotReady=false,storedLoads=0,mapLoads=0;
+  const mapLoadedTasks=new Set();
+  const currentMapTask=()=>task;
+  const loadStoredFiles=async()=>{storedLoads+=1;return true};
+  const loadMap=async()=>{mapLoads+=1;topology={summary:{}};return true};
+  ${handler("activateMapTask", true, true)}
+  await activateMapTask(4);
+  assert.equal(storedLoads,1,'direct Files & Export navigation loads retained file locations');
+  assert.equal(mapLoads,1,'direct Files & Export navigation also loads the topology required by exports');
+  assert.equal(mapLoadedTasks.has('mapFilesPanel'),true);
+  assert.equal(mapLoadedTasks.has('mapWorkspace'),true,'the shared topology load is reused when Map opens afterward');
+})()`);
+
+await eval(`(async () => {
+  let mapWorkspaceReady=true,mapActivationRevision=1,task='mapFilesPanel',topology=null,mapSnapshotReady=false,mapLoadPromise=null,mapLoads=0,releaseMap;
+  const mapLoadedTasks=new Set();
+  const currentMapTask=()=>task;
+  const loadStoredFiles=async()=>true;
+  const performMapLoad=()=>{mapLoads+=1;return new Promise(resolve=>{releaseMap=()=>{mapSnapshotReady=true;topology={summary:{}};resolve(true)}})};
+  ${handler("loadMap", true, true)}
+  ${handler("activateMapTask", true, true)}
+  const files=activateMapTask(1);
+  task='mapWorkspace';mapActivationRevision=2;
+  const canvas=activateMapTask(2);
+  await Promise.resolve();
+  assert.equal(mapLoads,1,'Files and Canvas share one delayed topology request');
+  releaseMap();
+  await Promise.all([files,canvas]);
+  assert.equal(mapLoadedTasks.has('mapWorkspace'),true,'the successful shared snapshot is ready for Canvas');
+})()`);
+
+await eval(`(async () => {
+  let topology=null,mapSnapshotReady=false,lastSuccessfulMapSnapshot=null;
+  const controls={refresh:{disabled:false},notice:{hidden:true,textContent:'',className:''}};
+  const $=id=>controls[id]||{};
+  const readiness=[];
+  const setMapExportReady=(ready,message,kind)=>readiness.push({ready,message,kind});
+  const fetch=async url=>url==='/api/network-map'
+    ?{ok:false,json:async()=>({detail:'map failed'})}
+    :{ok:true,json:async()=>({gateways:[]})};
+  const applyExternalGatewaySemantics=()=>{},protectLockedLayoutFromNewObjects=()=>0,esc=value=>String(value),renderMap=()=>{},updateSelectionVisuals=()=>{},establishLayoutBaseline=()=>{},syncLayoutDirtyState=()=>{};
+  const selectedNodeIds=new Set(),viewNodes=new Map();let selectedId=null;
+  const emptyDetails=()=>{};
+  ${handler("performMapLoad", true, true)}
+  assert.equal(await performMapLoad(),false);
+  assert.equal(topology,null,'a failed first load publishes no topology snapshot');
+  assert.equal(mapSnapshotReady,false,'a failed first render cannot enable export');
+  assert.equal(readiness.at(-1).ready,false);
+  assert.match(readiness.at(-1).message,/map failed/);
+})()`);
+
+await eval(`(async () => {
   let mapActivationRevision=0,mapActivationTask='',mapActivationPromise=null,task='mapWorkspace',activationCount=0,releaseActivation;
   const currentMapTask=()=>task;
   const activateMapTask=async()=>{activationCount+=1;await new Promise(resolve=>{releaseActivation=resolve})};

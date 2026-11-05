@@ -324,6 +324,36 @@ Where applicable, look for:
 - User-facing behavior.
 - Regression tests for previously observed failures.
 
+## Permanent functional regression gate
+
+Functional stability and operator usability take priority over adding capability.
+Every new feature and every change to a worker, queue, scheduler, cache, database,
+artifact path, updater, recovery process or other background behavior must pass the
+existing NCT functional gate again before that change can be called complete.
+
+The gate requires, as applicable:
+
+- Focused regression tests for the exact change and every failure it corrects.
+- The complete automated application suite, not only the changed module's tests.
+- A representative end-to-end journey through Mission Environment, Nmap collection,
+  device configuration evidence, retained evidence, Analyze, Hunt, Reach and Map so a
+  shared change cannot silently break another workspace.
+- Failure-path checks for invalid or unreachable input, fallback, refusal,
+  cancellation, queued work, restart/resume and partial retained evidence whenever the
+  change can affect those states.
+- Novice-operator browser validation for any user-visible workflow, including visible
+  guidance, selected themes, narrow layouts and the Operator Guide where relevant.
+- Read-only backend observation for stateful or background changes, checking request
+  duplication, queue ownership, database locks, transaction length, errors, resource
+  pressure, restart behavior and evidence integrity.
+- Independent reviewer clearance using the exact diff, tests, roadmap entry and
+  functional evidence.
+
+A failure in an existing supported workflow is a release blocker even when the newly
+added capability itself works. Correct the regression and repeat the affected gate; do
+not defer it merely to keep feature momentum. Packaging, Range acceptance, promotion
+to `main` and mission-readiness claims remain separate later gates.
+
 # Completion Language
 
 Clearly distinguish:

@@ -38,6 +38,14 @@ await eval(`(() => {
   assert.ok(!ready.includes('disabled'));
 })()`);
 
+await eval(`(() => {
+  const esc=value=>String(value??''),historySavedNetworks=()=>[],historicalTargetDisplay=()=>({label:'127.0.0.1'}),scanRunStateLabel=run=>run.status==='cancelled'?'Cancelled':'Completed',scanRunStateClass=()=> 'warn',scanRef=()=>({mode:'Manual',primary:'Cancelled example',detail:'saved run'}),scanTime=value=>String(value),coverageLabel=()=> 'TCP',foundationStatusMarkup=()=>'',analysisJobStatusMarkup=()=>'',scanAnalyzeAction=()=>'',NCTScanReference={humanize:value=>value};
+  ${syncHandler("historyRunRow")}
+  const row=historyRunRow({run_id:'cancelled-run',status:'cancelled',created_at:'start',completed_at:'finish',profile:'Quick',profile_version:1,host_count:1,interface:'eth0'});
+  assert.match(row,/Cancelled finish/,'the terminal timestamp uses the retained outcome label');
+  assert.doesNotMatch(row,/Completed finish/,'cancelled evidence must not be described as completed');
+})()`);
+
 await eval(`(async () => {
   let historyGroups=[{group_id:'g',runs:[{
     run_id:'scoped',

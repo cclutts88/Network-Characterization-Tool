@@ -110,6 +110,29 @@ await eval(`(async () => {
 })()`);
 
 await eval(`(async () => {
+  let currentId='finishing-run',currentLive=true,pollTimer=null,activeViewRevision=5,activeDetailRequestRevision=0,lastFinishedRun=null;
+  const scanDataLoaded=new Set(['history']),messages=[],prompts=[],renders=[],empty=[],queueLoads=[];
+  let resolveDetail;
+  const fetch=()=>new Promise(resolve=>{resolveDetail=resolve});
+  const status=(message,kind)=>messages.push({message,kind}),maybePromptManualAttribution=run=>prompts.push(run.run_id),renderLiveDiscoveryFinal=run=>renders.push(run.run_id),showActiveEmpty=()=>empty.push(true),loadQueue=async()=>queueLoads.push(true);
+  const setCurrent=()=>{},loadLiveDiscoveries=()=>{},clearTimeout=()=>{},setTimeout=()=>1;
+  ${handler("poll")}
+  const finishing=poll('finishing-run',5);
+  currentId='next-run';currentLive=true;activeViewRevision=6;activeDetailRequestRevision+=1;
+  resolveDetail({ok:true,json:async()=>({run_id:'finishing-run',status:'cancelled',partial_results:true,artifacts:[{name:'xml'}]})});
+  await finishing;
+  assert.equal(currentId,'next-run','a late terminal response cannot replace the next active scan');
+  assert.equal(currentLive,true);
+  assert.equal(lastFinishedRun.run_id,'finishing-run','the prior terminal outcome remains retained for history and follow-up');
+  assert.equal(scanDataLoaded.has('history'),false,'Scan History is invalidated for the finished run');
+  assert.deepEqual(prompts,['finishing-run']);
+  assert.deepEqual(renders,[],'the prior run does not overwrite the next scan live-discovery panel');
+  assert.deepEqual(empty,[]);
+  assert.deepEqual(queueLoads,[]);
+  assert.match(messages[0].message,/Previous scan cancelled/);
+})()`);
+
+await eval(`(async () => {
   let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
   const requests=[];

@@ -79,19 +79,35 @@ await eval([
 
 await eval([
   "(async () => {",
+  `let currentNetwork=null,networkPage=1,networkRequest=0;`,
+  "const controls={networkPageSize:{value:'25'},networkSearch:{value:''},networkSubnet:{value:''},networkFocus:{value:'ip'},networkOverview:{classList:{remove:()=>{}}},networkStatus:{},networkOutliersPanel:{open:true}};",
+  "const $=id=>controls[id];",
+  "const setStatus=()=>{},renderNetworkOverview=data=>{currentNetwork=data};",
+  "let lfaLoads=0;const loadNetworkOutliers=async()=>{lfaLoads+=1};",
+  `const fetch=async()=>({status:200,ok:true,json:async()=>({pagination:{limit:25,offset:0},source_revision:${JSON.stringify(revisionA)}})});`,
+  handler("loadNetworkPage"),
+  "assert.equal(await loadNetworkPage(1),true);",
+  "assert.equal(lfaLoads,1,'one Current Network page load owns exactly one open LFA refresh');",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
   `let currentNetwork={source_revision:${JSON.stringify(revisionA)}},networkLfaRequest=0;`,
   "const controls={networkOutliersPanel:{open:true},lfaThreshold:{value:'20',setAttribute:()=>{}},networkSubnet:{value:''},networkOutliersResult:{innerHTML:''}};",
   "const $=id=>controls[id];",
   "const esc=value=>String(value);",
-  "let revisionSeenByRefresh='not called',refreshes=0;",
+  "let revisionSeenByRefresh='not called',refreshes=0,requests=0;",
   `const loadNetworkPage=async()=>{revisionSeenByRefresh=currentNetwork;refreshes+=1;currentNetwork={source_revision:${JSON.stringify(revisionB)}};};`,
-  "const renderNetworkOutliers=()=>{throw new Error('stale LFA response must not render');};",
-  "const fetch=async()=>({status:409,ok:false,json:async()=>({detail:'changed'})});",
+  "const renderNetworkOutliers=()=>{throw new Error('repeated stale LFA response must not render');};",
+  "const fetch=async()=>{requests+=1;return {status:409,ok:false,json:async()=>({detail:'changed again'})}};",
   handler("loadNetworkOutliers"),
   "await loadNetworkOutliers();",
   "assert.equal(revisionSeenByRefresh,null,'LFA stale recovery must clear the old revision before refreshing page one');",
   "assert.equal(refreshes,1);",
+  "assert.equal(requests,2,'LFA retries at most once after refreshing the inventory');",
   `assert.equal(currentNetwork.source_revision,${JSON.stringify(revisionB)});`,
+  "assert.match(controls.networkOutliersResult.innerHTML,/changed again/,'a repeated conflict becomes a visible error');",
   "})()",
 ].join("\n"));
 
