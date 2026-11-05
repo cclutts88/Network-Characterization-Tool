@@ -158,6 +158,7 @@ from app.schema_compatibility import (
     complete_schema_migration,
     fail_schema_migration,
 )
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.active_collection import (
     active_collection_enabled,
     active_collection_status,
@@ -1769,6 +1770,7 @@ async def lifespan(_: FastAPI):
         init_arkime_history_storage(DB_PATH)
         init_searchsploit_storage(DB_PATH)
         init_storage_health_storage(DB_PATH)
+        init_evidence_retirement_storage(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
         from app.evidence_library import rebuild_device_index
         rebuild_device_index(DB_PATH, CONFIG_DIR)

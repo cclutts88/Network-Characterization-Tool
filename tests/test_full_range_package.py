@@ -254,17 +254,29 @@ def test_fresh_admission_returns_success_for_empty_host(tmp_path):
 
 
 @pytest.mark.parametrize("damage", [None, "origin", "ledger", "drift", "version", "wal"])
-def test_schema8_gate_checks_migrated_ledger_without_changing_source(tmp_path, monkeypatch, damage):
+def test_schema9_gate_checks_migrated_ledger_without_changing_source(tmp_path, monkeypatch, damage):
     from test_schema_history_v8 import source_v7
     import app.schema_compatibility as schema
     from app.scan_history_index import init_scan_history_index_storage
-    source = json.loads((SCRIPTS / "nct-package-sources.json").read_text())[1]
+    source = json.loads((SCRIPTS / "nct-package-sources.json").read_text())[0]
+    current_plan = schema.MIGRATION_PLAN
+    historical_plan = current_plan[:8]
+    monkeypatch.setattr(schema, "SCHEMA_CONTRACT_VERSION", 8)
+    monkeypatch.setattr(schema, "WRITABLE_SCHEMA_VERSION", 8)
+    monkeypatch.setattr(schema, "READABLE_SCHEMA_VERSIONS", tuple(range(1, 9)))
+    monkeypatch.setattr(schema, "MIGRATION_PLAN", historical_plan)
+    monkeypatch.setattr(schema, "MIGRATION_ID", schema.HISTORY_RULES_MIGRATION_ID)
     monkeypatch.setattr(schema, "BUILD_ID", source["build_id"])
     monkeypatch.setattr(schema, "BUILD_COMMIT", source["commit"])
     db = source_v7(tmp_path)
     attempt = schema.begin_schema_migration(db)
     init_scan_history_index_storage(db)
     schema.complete_schema_migration(db, attempt)
+    monkeypatch.setattr(schema, "SCHEMA_CONTRACT_VERSION", 9)
+    monkeypatch.setattr(schema, "WRITABLE_SCHEMA_VERSION", 9)
+    monkeypatch.setattr(schema, "READABLE_SCHEMA_VERSIONS", tuple(range(1, 10)))
+    monkeypatch.setattr(schema, "MIGRATION_PLAN", current_plan)
+    monkeypatch.setattr(schema, "MIGRATION_ID", schema.EVIDENCE_RETIREMENT_MIGRATION_ID)
     if damage in ("origin", "ledger", "drift"):
         with __import__("sqlite3").connect(db) as connection:
             if damage == "origin":

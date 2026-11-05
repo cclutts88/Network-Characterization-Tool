@@ -144,13 +144,13 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
         if name == "scripts/nct-upgrade.sh":
             if text.count('--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}"') != 1:
                 raise ValueError("Upgrade template changed; review its source-version binding")
-            text = text.replace('--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}"', '--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-7}"')
+            text = text.replace('--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-6}"', '--required-source-version "${NCT_REQUIRED_SOURCE_VERSION:-8}"')
         package_name = "scripts/nct-schema-preflight-legacy.py" if name == "scripts/nct-schema-preflight.py" else name
         destination = output / package_name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(text, encoding="utf-8", newline="\n")
         bindings.append({"source": name, "source_sha256": hashlib.sha256(data).hexdigest(), "package": package_name, "sha256": digest(destination)})
-    # This full release accepts only its explicitly tested schema-7/8 sources. Keep
+    # This full release accepts only its explicitly tested schema-8 sources. Keep
     # the legacy public preflight beside the adapter for traceability/fallback.
     (output / "scripts/nct-schema-preflight.py").write_bytes((output / "scripts/nct-package-schema-preflight.py").read_bytes())
     (output / "START-HERE.md").write_bytes((output / "docs/RANGE_UPDATER_PACKAGE.md").read_bytes())
@@ -168,7 +168,7 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
     (archive.with_suffix(".tar.sha256")).write_text(digest(archive) + "  nct-range-images.tar\n", encoding="utf-8")
     release = {"contract": "nct-full-range-package-v1", "build_id": build_id, "commit": commit,
         "branch": "foundation/evidence-engine-v2", "application_image": image, "console_image": console,
-        "images": images, "source_bindings": bindings, "schema_gate": "exact-supported-v7-or-v8-to-v8-disposable-image-gate",
+        "images": images, "source_bindings": bindings, "schema_gate": "exact-supported-v8-to-v9-disposable-image-gate",
         "supported_sources": json.loads((output / "scripts/nct-package-sources.json").read_text()),
         "range_accepted": False, "kubernetes_updater_available": False}
     from build_nct_update import build

@@ -195,8 +195,8 @@ def main():
         "environment_mount_port_and_restart_policy_preserved": True, "protected_empty_bootstrap_mount_preserved": True,
         "independent_console_handoff_and_sign_in": True, "console_stops_after_return": True,
         "stop_start_sign_in": True, "range_accepted": False, "real_systemd_boot_tested": False,
-        "schema_version": 8, "old_image_refuses_schema8": True, "original_backup_booted": True,
-        "original_backup_schema_version": source_version, "fresh_schema8_stop_start": True,
+        "schema_version": 9, "old_image_refuses_schema9": True, "original_backup_booted": True,
+        "original_backup_schema_version": source_version, "fresh_schema9_stop_start": True,
         "test_substitutions": ["administrative fixture peer exclusion", "systemctl launches exact copied service process", "ss replaced; Docker performs actual port admission"]}
     (root / "acceptance.json").write_text(json.dumps(receipt, indent=2))
     print("PASS: full package upgraded exact previous release with retained evidence/accounts/config, enabled independent console using issuing CA, verified sign-in/stop/start and closed console.", flush=True)

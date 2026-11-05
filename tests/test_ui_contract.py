@@ -3315,3 +3315,12 @@ def test_operator_readme_explains_scope_continuity_and_scoped_vlan_limits():
     assert "Scoped VLAN evidence appears in Network Devices, Current Network" in html
     assert "do not turn them into host identity, routing, Reach, CVE, or Map-link claims" in html
     assert "<summary>Scoped VLAN evidence</summary>" in html
+
+
+def test_operator_readme_keeps_retirement_foundation_distinct_from_current_controls():
+    html = how_nct_works_page().body.decode()
+
+    assert "Retirement foundation, not an operator control" in html
+    assert "one exact evidence encounter rather than shared file bytes" in html
+    assert "No page uses this storage yet, current delete behavior is unchanged" in html
+    assert "no evidence is physically removed" in html

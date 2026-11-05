@@ -9,11 +9,9 @@ import sqlite3
 import tempfile
 
 from app.schema_compatibility import begin_schema_migration, complete_schema_migration
-from app.scan_history_index import init_scan_history_index_storage
+from app.schema_compatibility import WRITABLE_SCHEMA_VERSION
 
-PHASE5 = ("0.16.0-range-test-20261025-phase5-r1", "be92fb78e938adc3fced581629d4609ac0a43f6a")
 SOURCES = {
-    PHASE5: 7,
     ("0.16.0-range-test-20261027-recovery-r1", "0bd11969ffd81aad7cbc8335af755b80c9af0639"): 8,
     ("0.16.0-range-test-20261102-fresh-r2", "ba2124aad40dc9f4f718c2799db35d9703a5f89d"): 8,
 }
@@ -27,7 +25,7 @@ def digest(path):
     return result.hexdigest()
 
 
-def audit(db_path, build_id, commit, required=7):
+def audit(db_path, build_id, commit, required=8):
     if SOURCES.get((build_id, commit)) != required:
         raise ValueError("This full package accepts only an exact source listed in its tested source registry. Preserve the installation.")
     wal = db_path.with_name(db_path.name + "-wal")
@@ -45,18 +43,16 @@ def audit(db_path, build_id, commit, required=7):
         shutil.copyfile(db_path, copied)
         # Exact current ledger/fingerprint validation, on a disposable copy only.
         attempt = begin_schema_migration(copied)
-        if required == 7:
-            if attempt is None or attempt.target_schema_version != 8:
-                raise ValueError("Expected the reviewed version-7 to version-8 history migration")
-            init_scan_history_index_storage(copied)
-            complete_schema_migration(copied, attempt)
-        elif attempt is not None:
-            raise ValueError("Schema-8 source unexpectedly requires a migration")
+        if attempt is None or attempt.target_schema_version != WRITABLE_SCHEMA_VERSION:
+            raise ValueError(
+                "Expected the reviewed version-8 to version-9 retirement migration"
+            )
+        complete_schema_migration(copied, attempt)
         if begin_schema_migration(copied) is not None:
             raise ValueError("Replacement schema did not remain verified after migration")
     if digest(db_path) != original_hash:
         raise ValueError("Stopped source changed during compatibility checking")
-    return {"status": "pass", "compatibility": "exact-source-v%d-to-v8-disposable-image-gate" % required,
+    return {"status": "pass", "compatibility": "exact-source-v%d-to-v9-disposable-image-gate" % required,
         "schema_version": required, "database_sha256": original_hash,
         "retained_running_build_id": build_id, "retained_running_build_commit": commit}
 
@@ -66,6 +62,6 @@ if __name__ == "__main__":
     parser.add_argument("--db", type=Path, default=Path("/data/analyzer.db"))
     parser.add_argument("--expected-build-id", required=True)
     parser.add_argument("--expected-build-commit", required=True)
-    parser.add_argument("--required-source-version", type=int, default=7)
+    parser.add_argument("--required-source-version", type=int, default=8)
     args = parser.parse_args()
     print(json.dumps(audit(args.db, args.expected_build_id, args.expected_build_commit, args.required_source_version), sort_keys=True))

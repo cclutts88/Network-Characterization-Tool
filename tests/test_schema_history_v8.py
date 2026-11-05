@@ -9,6 +9,17 @@ from app.database import connect_database
 from app.scan_history_index import init_scan_history_index_storage
 
 
+@pytest.fixture(autouse=True)
+def exact_historical_v8_image_contract(monkeypatch):
+    """Keep qualifying the sealed v7-to-v8 bridge after the current image moves on."""
+    plan = schema.MIGRATION_PLAN[:8]
+    monkeypatch.setattr(schema, "SCHEMA_CONTRACT_VERSION", 8)
+    monkeypatch.setattr(schema, "WRITABLE_SCHEMA_VERSION", 8)
+    monkeypatch.setattr(schema, "READABLE_SCHEMA_VERSIONS", tuple(range(1, 9)))
+    monkeypatch.setattr(schema, "MIGRATION_PLAN", plan)
+    monkeypatch.setattr(schema, "MIGRATION_ID", schema.HISTORY_RULES_MIGRATION_ID)
+
+
 def source_v7(tmp_path):
     path = tmp_path / "analyzer.db"
     with sqlite3.connect(path) as db:
@@ -126,14 +137,19 @@ def test_atomic_rule_replacement_rolls_back_all_drops_on_failure(tmp_path, monke
     assert schema.begin_schema_migration(path) is None
 
 
-def test_full_package_preflight_completes_eight_on_copy_only(tmp_path):
+def test_current_package_preflight_requires_version_eight_bridge(tmp_path):
     path = source_v7(tmp_path)
     spec = importlib.util.spec_from_file_location("package_history_gate", Path(__file__).parents[1] / "scripts/nct-package-schema-preflight.py")
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     before = gate.digest(path)
-    result = gate.audit(path, *gate.PHASE5)
-    assert result["status"] == "pass"
+    with pytest.raises(ValueError, match="exact source"):
+        gate.audit(
+            path,
+            "0.16.0-range-test-20261025-phase5-r1",
+            "be92fb78e938adc3fced581629d4609ac0a43f6a",
+            7,
+        )
     assert gate.digest(path) == before
     assert schema.schema_state(path)["schema_version"] == 7
 

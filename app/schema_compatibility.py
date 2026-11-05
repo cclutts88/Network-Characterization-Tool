@@ -15,9 +15,9 @@ from app.build_info import APP_VERSION, BUILD_COMMIT, BUILD_ID
 from app.database import connect_database
 
 
-SCHEMA_CONTRACT_VERSION = 8
-WRITABLE_SCHEMA_VERSION = 8
-READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8)
+SCHEMA_CONTRACT_VERSION = 9
+WRITABLE_SCHEMA_VERSION = 9
+READABLE_SCHEMA_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 DATA_LAYOUT_CONTRACT = "nct-data-layout-v1"
 LEGACY_MIGRATION_ID = "nct-foundation-data-contract-v1"
 WORK_COORDINATION_MIGRATION_ID = "nct-work-coordination-v2"
@@ -27,7 +27,8 @@ MISSION_ENVIRONMENT_MIGRATION_ID = "nct-mission-environment-v5"
 VLAN_EVIDENCE_MIGRATION_ID = "nct-scoped-vlan-evidence-v6"
 ARKIME_RUNTIME_MIGRATION_ID = "nct-arkime-and-runtime-schema-v7"
 HISTORY_RULES_MIGRATION_ID = "nct-scan-history-rules-v8"
-MIGRATION_ID = HISTORY_RULES_MIGRATION_ID
+EVIDENCE_RETIREMENT_MIGRATION_ID = "nct-evidence-retirement-v9"
+MIGRATION_ID = EVIDENCE_RETIREMENT_MIGRATION_ID
 MIGRATION_PLAN = (
     LEGACY_MIGRATION_ID,
     WORK_COORDINATION_MIGRATION_ID,
@@ -37,6 +38,7 @@ MIGRATION_PLAN = (
     VLAN_EVIDENCE_MIGRATION_ID,
     ARKIME_RUNTIME_MIGRATION_ID,
     HISTORY_RULES_MIGRATION_ID,
+    EVIDENCE_RETIREMENT_MIGRATION_ID,
 )
 
 # Exact version-4 Range images that may have created or subsequently opened the
@@ -285,6 +287,42 @@ def _matches_exact_v7_runtime_schema(
         actual[name][:3] == expected[name][:3]
         and _normalized_sql(actual[name][3]) == _normalized_sql(expected[name][3])
         for name in expected_names
+    )
+
+
+def _matches_exact_v9_retirement_schema(
+    connection: sqlite3.Connection, *, base_fingerprint: str | None,
+) -> bool:
+    """Recognize only the image-owned retirement ledger above a sealed base."""
+    from app.evidence_retirement import (
+        EVIDENCE_RETIREMENT_SCHEMA_OBJECTS,
+        init_evidence_retirement_storage,
+    )
+
+    if base_fingerprint is not None and schema_fingerprint(
+        connection, excluded_names=EVIDENCE_RETIREMENT_SCHEMA_OBJECTS,
+    ) != base_fingerprint:
+        return False
+    actual = {
+        row[1]: row for row in _schema_rows(connection)
+        if row[1] in EVIDENCE_RETIREMENT_SCHEMA_OBJECTS
+    }
+    if set(actual) != set(EVIDENCE_RETIREMENT_SCHEMA_OBJECTS):
+        return False
+    with tempfile.TemporaryDirectory(prefix="nct-v9-schema-") as directory:
+        expected_path = Path(directory) / "expected.db"
+        init_evidence_retirement_storage(expected_path)
+        with connect_database(expected_path, read_only=True) as expected_db:
+            expected = {
+                row[1]: row for row in _schema_rows(expected_db)
+                if row[1] in EVIDENCE_RETIREMENT_SCHEMA_OBJECTS
+            }
+    if set(expected) != set(EVIDENCE_RETIREMENT_SCHEMA_OBJECTS):
+        raise RuntimeError("The image-owned v9 retirement schema is incomplete")
+    return all(
+        actual[name][:3] == expected[name][:3]
+        and _normalized_sql(actual[name][3]) == _normalized_sql(expected[name][3])
+        for name in EVIDENCE_RETIREMENT_SCHEMA_OBJECTS
     )
 
 
@@ -660,9 +698,100 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                     )
                 return None
             elif int(schema_version) == 7:
-                recorded = connection.execute("SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1").fetchone()[0]
+                recorded = connection.execute(
+                    "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1"
+                ).fetchone()[0]
+                existing_intent = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='nct_schema_migration_intents'"
+                ).fetchone()
+                if (
+                    not recorded
+                    or (
+                        existing_intent is None
+                        and schema_fingerprint(connection) != recorded
+                    )
+                ):
+                    raise SchemaCompatibilityError(
+                        "The saved schema fingerprint does not match the live database."
+                    )
+                if SCHEMA_CONTRACT_VERSION >= 9:
+                    raise SchemaCompatibilityError(
+                        "Use the exact version 8 bridge before starting version 9."
+                    )
                 connection.execute("BEGIN IMMEDIATE")
                 _begin_history_rules(connection, int(contract_version), plan_digest, recorded)
+            elif int(schema_version) == 8:
+                if int(contract_version) != 8:
+                    raise SchemaCompatibilityError(
+                        "The saved version 8 schema contract is inconsistent."
+                    )
+                if plan_digest != migration_plan_digest(MIGRATION_PLAN[:8]):
+                    raise SchemaCompatibilityError(
+                        "The saved version 8 migration plan does not match this image."
+                    )
+                recorded = connection.execute(
+                    "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1"
+                ).fetchone()[0]
+                live_fingerprint = schema_fingerprint(connection)
+                rows = connection.execute(
+                    """SELECT migration_id,target_schema_version,status,attempts,
+                              before_schema_fingerprint,after_schema_fingerprint,
+                              completed_at,error_summary
+                         FROM nct_schema_migrations"""
+                ).fetchall()
+                by_id = {row[0]: row for row in rows}
+                if any(row[0] not in MIGRATION_PLAN for row in rows):
+                    raise SchemaCompatibilityError(
+                        "The saved migration ledger is incomplete or inconsistent."
+                    )
+                for target, migration_id in enumerate(MIGRATION_PLAN[:8], start=1):
+                    row = by_id.get(migration_id)
+                    if (
+                        row is None or int(row[1]) != target or row[2] != "completed"
+                        or not row[5] or (target == 8 and row[5] != recorded)
+                    ):
+                        raise SchemaCompatibilityError(
+                            "The saved migration ledger is incomplete or inconsistent."
+                        )
+                pending = by_id.get(EVIDENCE_RETIREMENT_MIGRATION_ID)
+                if len(by_id) != 8 + (1 if pending else 0):
+                    raise SchemaCompatibilityError(
+                        "The saved migration ledger is incomplete or inconsistent."
+                    )
+                if pending is None:
+                    if not recorded or live_fingerprint != recorded:
+                        raise SchemaCompatibilityError(
+                            "The saved schema fingerprint does not match the live database."
+                        )
+                else:
+                    status_shape_valid = (
+                        pending[2] == "started"
+                        and pending[5] is None
+                        and pending[6] is None
+                        and pending[7] is None
+                    ) or (
+                        pending[2] == "failed"
+                        and pending[5] == live_fingerprint
+                        and pending[6] is None
+                        and bool(str(pending[7] or "").strip())
+                    )
+                    if (
+                        int(pending[1]) != 9
+                        or pending[2] not in {"started", "failed"}
+                        or int(pending[3]) < 1
+                        or pending[4] != recorded
+                        or not status_shape_valid
+                        or not (
+                            live_fingerprint == recorded
+                            or _matches_exact_v9_retirement_schema(
+                                connection, base_fingerprint=recorded,
+                            )
+                        )
+                    ):
+                        raise SchemaCompatibilityError(
+                            "The version 9 retirement migration is not exactly resumable."
+                        )
             elif int(schema_version) == 5:
                 if SCHEMA_CONTRACT_VERSION >= 7:
                     raise SchemaCompatibilityError(
@@ -861,7 +990,13 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
         else:
             current_version = 0
 
-        before = connection.execute("SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1").fetchone()[0] if current_version == 7 else schema_fingerprint(connection)
+        before = (
+            connection.execute(
+                "SELECT schema_fingerprint FROM nct_schema_state WHERE singleton=1"
+            ).fetchone()[0]
+            if current_version in {7, 8}
+            else schema_fingerprint(connection)
+        )
         if current_version == 0:
             connection.execute(
                 """INSERT INTO nct_schema_migrations(
@@ -1007,6 +1142,16 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
             elif _normalized_sql(existing_intent[0]) != _normalized_sql(HISTORY_INTENT_DDL):
                 raise SchemaCompatibilityError("Bootstrap migration intent storage changed")
             connection.execute("""INSERT INTO nct_schema_migrations VALUES (?,7,?,?,'completed',1,?,?,?,?,?,NULL) ON CONFLICT(migration_id) DO NOTHING""", (ARKIME_RUNTIME_MIGRATION_ID, BUILD_ID, BUILD_COMMIT, now, now, now, before, before))
+            if WRITABLE_SCHEMA_VERSION >= 9:
+                connection.execute(
+                    """INSERT INTO nct_schema_migrations VALUES (
+                           ?,8,?,?,'completed',1,?,?,?,?,?,NULL
+                       ) ON CONFLICT(migration_id) DO NOTHING""",
+                    (
+                        HISTORY_RULES_MIGRATION_ID, BUILD_ID, BUILD_COMMIT,
+                        now, now, now, before, before,
+                    ),
+                )
         target_migration_id = (
             VLAN_EVIDENCE_MIGRATION_ID if current_version == 5 else MIGRATION_ID
         )
@@ -1056,12 +1201,12 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
                    originating_build_commit = excluded.originating_build_commit,
                    updated_at = excluded.updated_at""",
             (
-                current_version if current_version in {5, 6, 7} else SCHEMA_CONTRACT_VERSION,
+                current_version if current_version in {5, 6, 7, 8} else SCHEMA_CONTRACT_VERSION,
                 current_version,
                 DATA_LAYOUT_CONTRACT,
                 (
                     migration_plan_digest(MIGRATION_PLAN[:current_version])
-                    if current_version in {5, 6, 7} else migration_plan_digest()
+                    if current_version in {5, 6, 7, 8} else migration_plan_digest()
                 ),
                 BUILD_ID,
                 BUILD_COMMIT,
@@ -1075,7 +1220,7 @@ def begin_schema_migration(db_path: Path) -> MigrationAttempt | None:
 def complete_schema_migration(db_path: Path, attempt: MigrationAttempt | None) -> None:
     if attempt is None:
         return
-    if attempt.target_schema_version in {7, 8}:
+    if attempt.target_schema_version in {7, 8, 9}:
         from app.arkime_connector import init_arkime_connector_storage
         from app.arkime_evidence import init_arkime_evidence_storage
         from app.arkime_history import init_arkime_history_storage
@@ -1085,6 +1230,10 @@ def complete_schema_migration(db_path: Path, attempt: MigrationAttempt | None) -
         init_arkime_summary_storage(db_path)
         init_arkime_connector_storage(db_path)
         init_arkime_history_storage(db_path)
+    if attempt.target_schema_version == 9:
+        from app.evidence_retirement import init_evidence_retirement_storage
+
+        init_evidence_retirement_storage(db_path)
     now = _utc_now()
     with connect_database(db_path) as connection:
         after = schema_fingerprint(connection)
@@ -1132,6 +1281,35 @@ def complete_schema_migration(db_path: Path, attempt: MigrationAttempt | None) -
                 raise SchemaCompatibilityError("Version 8 bootstrap runtime schema is incomplete")
             if _history_pair(connection) != _history_target():
                 raise SchemaCompatibilityError("Version 8 bootstrap history rules are inconsistent")
+        elif attempt.target_schema_version == 9:
+            if current_version == 8:
+                if not _matches_exact_v9_retirement_schema(
+                    connection, base_fingerprint=base_fingerprint,
+                ):
+                    raise SchemaCompatibilityError(
+                        "The exact version 9 retirement schema was not applied cleanly."
+                    )
+            elif current_version == 0:
+                if not _matches_exact_v7_runtime_schema(
+                    connection, base_fingerprint=None,
+                ):
+                    raise SchemaCompatibilityError(
+                        "Version 9 bootstrap runtime schema is incomplete."
+                    )
+                if _history_pair(connection) != _history_target():
+                    raise SchemaCompatibilityError(
+                        "Version 9 bootstrap history rules are inconsistent."
+                    )
+                if not _matches_exact_v9_retirement_schema(
+                    connection, base_fingerprint=None,
+                ):
+                    raise SchemaCompatibilityError(
+                        "Version 9 bootstrap retirement schema is incomplete."
+                    )
+            else:
+                raise SchemaCompatibilityError(
+                    "Version 9 requires an exact version 8 source or fresh database."
+                )
         else:
             raise SchemaCompatibilityError("The active migration target is unsupported.")
         updated = connection.execute(

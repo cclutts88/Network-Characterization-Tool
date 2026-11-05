@@ -33,6 +33,34 @@ Physical byte deletion and audit-receipt retention must be described separately.
 Apply the same browser, backend, restart and regression checks to every evidence type;
 a scoped source must not become an unexplained undeletable record.
 
+Cross-evidence retirement storage foundation completed (2026-11-05): schema version 9
+adds one append-only, encounter-specific retirement ledger for the future common Nmap,
+device-configuration, Arkime and hostname-evidence lifecycle. Source-owned adapters must
+derive exact namespaced identities while the retirement write lock is held; content
+hashes and bare identifiers cannot retire evidence. The same transaction refuses active
+work and records the decision, exact dependency guards prevent later publication from a
+retired source, and the branch-safe cache token binds lineage, revision and event digest
+so an older restored backup cannot silently collide with another history branch. The
+version 8 to 9 migration is exact, resumable and fail-closed, and fresh version 9 data
+receives the same protected storage. Independent architecture review cleared this
+bounded foundation before implementation. Focused qualification passed 85 checks and
+the complete Docker application suite passed 2,524 checks with 25 skipped. That focused
+gate includes interrupted mid-schema creation and direct replacement, mismatch and
+post-event identity-extension attempts; initialization rolls back completely and sealed
+identity indexes refuse those mutations. The independent reviewer reproduced sealed-
+event replacement and cross-event identity takeover against the final staged source;
+all 11 retirement checks passed independently. QUALITY GATE: CLEAR.
+
+This is storage foundation only: no operator page uses the ledger yet, no current delete
+behavior changed and no evidence bytes are physically removed. Before controls become
+available, the next integration gate must inventory every source family and ordinary or
+derived consumer, add real source adapters, apply one active-evidence selector to every
+Inventory, Analyze, Hunt, Reach, Map, comparison, export and background path, invalidate
+dependent calculations atomically, and prove restart and restore reconciliation. An
+older backup must hold affected projections until the retirement lineage is audited.
+Preserve the existing device destructive-delete behavior until it is migrated explicitly;
+do not silently redefine physical cleanup as retirement.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
