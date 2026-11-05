@@ -319,4 +319,19 @@ await eval(`(() => {
   assert.equal(routerEndpointResolved.nodes.has('subnet:10.2.0.0/24'),false,'another subnet on the same multi-interface router stays unrelated');
 })()`);
 
+await eval(`(async () => {
+  let mapActivationRevision=0,mapActivationTask='',mapActivationPromise=null,task='mapWorkspace',activationCount=0,releaseActivation;
+  const currentMapTask=()=>task;
+  const activateMapTask=async()=>{activationCount+=1;await new Promise(resolve=>{releaseActivation=resolve})};
+  const $=()=>({hidden:true,textContent:'',className:''});
+  ${handler("requestMapTaskActivation", true, true)}
+  const first=requestMapTaskActivation(),duplicate=requestMapTaskActivation();
+  await Promise.resolve();
+  assert.equal(activationCount,1,'the shell event and direct startup must share one Map activation');
+  releaseActivation();
+  await Promise.all([first,duplicate]);
+  assert.equal(mapActivationPromise,null);
+  assert.equal(mapActivationTask,'');
+})()`);
+
 console.log("Network Map expanded spacing runtime regression passed");

@@ -382,4 +382,64 @@ await eval(`(async () => {
   assert.match(controls.fallbackDecisionStatus.textContent,/safely recorded/i);
 })()`);
 
+await eval(`(async () => {
+  let scanActivationRevision=0,scanActivationTask='',scanActivationPromise=null,task='queuePanel',activationCount=0,releaseActivation;
+  const currentScanTask=()=>task;
+  const status=message=>{throw new Error(message)};
+  const activateScanTask=async()=>{activationCount+=1;await new Promise(resolve=>{releaseActivation=resolve})};
+  ${handler("requestScanTaskActivation")}
+  const first=requestScanTaskActivation(),duplicate=requestScanTaskActivation();
+  await Promise.resolve();
+  assert.equal(activationCount,1,'the shell event and direct startup must share one task activation');
+  releaseActivation();
+  await Promise.all([first,duplicate]);
+  assert.equal(scanActivationPromise,null);
+  assert.equal(scanActivationTask,'');
+})()`);
+
+await eval(`(async () => {
+  let scanWorkspaceInitialized=true,queueLoads=0,recoveryLoads=0,activeLookups=0;
+  const activeScanWorkspace=()=>true;
+  const stopActiveScanMonitoring=()=>{};
+  const loadQueue=async()=>{queueLoads+=1};
+  const loadScanRecovery=async()=>{recoveryLoads+=1};
+  const loadActiveRun=async()=>{activeLookups+=1};
+  ${handler("syncActiveScanWorkspace")}
+  await syncActiveScanWorkspace();
+  assert.equal(queueLoads,1,'Active Scan uses one queue snapshot owner');
+  assert.equal(recoveryLoads,1,'recovery review remains part of activation');
+  assert.equal(activeLookups,0,'activation must not issue a second queue/status request');
+})()`);
+
+await eval(`(async () => {
+  let queueTimer=1,pollTimer=2,queueLoadRevision=0,activeViewRevision=4,activeStatusRequestRevision=2,activeDetailRequestRevision=3,currentLive=true,currentId='same-run',liveDiscoveryController={abort(){this.aborted=true}},liveDiscoveryInFlight={};
+  const clearTimeout=()=>{};
+  ${functionBlock("stopActiveScanMonitoring", "stopHiddenScanWork")}
+  stopActiveScanMonitoring();
+  assert.equal(currentLive,false,'leaving Active Scans releases detailed-monitor ownership');
+  assert.equal(currentId,null,'leaving Active Scans clears the stale run identity');
+  assert.equal(liveDiscoveryController,null,'leaving Active Scans releases the live-discovery controller');
+
+  let queueAssignmentConflictHold=false,activeStatusAppliedRevision=0,activeCollectionEnabled=true,started=[];
+  const esc=value=>String(value??'');
+  const controls=new Map();
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:'',innerHTML:''});return controls.get(id)};
+  const document={querySelectorAll(){return[]}};
+  const fetch=async()=>({ok:true,status:200,json:async()=>({runs:[{run_id:'same-run',status:'running'}]})});
+  const setTimeout=()=>9;
+  const queueItem=()=>'';
+  const startActiveView=run=>{started.push(run.run_id);currentLive=true;currentId=run.run_id};
+  const showActiveEmpty=()=>{};
+  const cancelQueuedRun=()=>{};
+  const reassignQueuedRun=()=>{};
+  const claimActiveStatus=revision=>{if(revision<activeStatusAppliedRevision)return false;activeStatusAppliedRevision=revision;return true};
+  ${handler("loadQueue")}
+  await loadQueue();
+  assert.deepEqual(started,['same-run'],'returning to Active Scans must restart detail and live monitoring for the same run');
+})()`);
+
+const activeViewBlock=source.match(/^function startActiveView\(.*$/m)[0];
+assert.equal(activeViewBlock.includes('loadLiveDiscoveries('),false,'the first detail poll owns the initial live-discovery read');
+assert.equal(handler("poll").includes('setTimeout(loadActiveRun'),false,'the queue refresh owns terminal active-run discovery');
+
 console.log("Scan queue UI runtime regressions passed");

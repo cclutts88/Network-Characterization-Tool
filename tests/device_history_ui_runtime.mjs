@@ -192,4 +192,20 @@ await eval(`(async () => {
   ]);
 })()`);
 
+await eval(`(async () => {
+  let deviceActivationRevision=0,deviceActivationTask='',deviceActivationPromise=null,task='collectionPlan',activationCount=0,releaseActivation;
+  const currentDeviceTask=()=>task;
+  const activateDeviceTask=async()=>{activationCount+=1;await new Promise(resolve=>{releaseActivation=resolve})};
+  const notice=message=>{throw new Error(message)};
+  const $=()=>({textContent:''});
+  ${handler("requestDeviceTaskActivation")}
+  const first=requestDeviceTaskActivation(),duplicate=requestDeviceTaskActivation();
+  await Promise.resolve();
+  assert.equal(activationCount,1,'the shell event and direct startup must share one device activation');
+  releaseActivation();
+  await Promise.all([first,duplicate]);
+  assert.equal(deviceActivationPromise,null);
+  assert.equal(deviceActivationTask,'');
+})()`);
+
 console.log("Device History UI runtime regressions passed");

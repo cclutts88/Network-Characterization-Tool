@@ -34,6 +34,8 @@ def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
         "#safetyEntries",
         "#safetyReadiness",
         "#savedNetworkName",
+        "#savedNetworkScopeReason",
+        "#scopeMode",
         "#savedNetworkSelect",
         "#preview",
         "#runNow",
@@ -767,6 +769,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "currentLive=['queued','running','awaiting_fallback_approval'].includes(state)" not in html
     assert 'role="progressbar"' in html
     assert 'id="currentHostsLabel">confirmed responsive hosts' in html
+    assert "hostCount===1?'confirmed responsive host':'confirmed responsive hosts'" in html
+    assert "hosts===1?'latest host':'latest hosts'" in html
     assert "addresses in scope" in html
     assert "scan targets completed" in html
     assert "targets currently being scanned" in html
@@ -855,7 +859,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "editingSavedNetworkRevision={updated_at:item.updated_at" in html
     assert "const editorRevision=editingSavedNetworkRevision" in html
     assert "expected_updated_at:existing?.updated_at" not in html
-    assert "Your draft was not applied. Select Edit selected again" in html
+    assert "const retry=editing?'Select Edit selected again" in html
+    assert "Review the highlighted fields and try Save network again" in html
     assert 'id="scan-history-responsive-rows"' in html
     assert "@container (max-width:900px)" in html
     responsive_history = html.split('id="scan-history-responsive-rows"', 1)[1].split("</style>", 1)[0]
@@ -987,6 +992,7 @@ def test_mission_environment_unifies_safety_tools_and_network_level_visibility()
 
     html = mission_environment_page().body.decode()
     assert html.index('id="missionScopePanel"') < html.index('id="noStrikePanel"') < html.index('id="toolPanel"')
+    assert html.index('id="scopeIdentityForm"') < html.index('id="safetyScope"')
     assert 'id="scopeIdentityForm"' in html
     assert 'id="scopeIdentityList"' in html
     assert 'id="noStrikeScopeContext"' in html

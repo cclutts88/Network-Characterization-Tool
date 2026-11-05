@@ -1,6 +1,84 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Integrated novice workflow and backend-observation pass started (2026-11-05):
+run one fresh, disposable NCT instance through the complete operator journey while
+the novice operator evaluates discoverability, guidance, layout, failure recovery
+and evidence meaning and a separate read-only backend reviewer records cache work,
+database access, locking, queue behavior and redundant processing from the same
+journey. Cover initial Mission Environment setup; Scope and No-Strike readiness;
+Saved Networks and device profiles; successful, unreachable, fallback, refused,
+cancelled and queued scans; supported, unsupported, duplicate and removable device
+evidence; retained source review; and the resulting Hunt, Reach and Map views. Then
+perform a separate focused reliability/performance replay with populated data,
+restarts, overlapping requests and repeated navigation. Keep findings and fixes
+traceable by pass so backend optimization cannot displace the full front-end journey.
+This is isolated development qualification only and does not contact or modify the
+Range.
+
+Adaptive tutorial expansion planned after the stability/demo gate (2026-11-05):
+retain the existing Mission Environment and Nmap tutorials, correct any missing or
+misleading steps found during the current novice pass, and add only the highest-risk
+state-aware warnings needed for a reliable demo. A later dedicated milestone will
+provide a focused tutorial for each operator workflow except Map, make guidance react
+to the current form and retained context, identify likely mistakes without silently
+changing analyst input, and explain the next safe correction. Reach hardening will
+also offer clearly labelled suggestions for address, port, service and evidence fields
+from the analyst's current entries and retained evidence. Suggestions must remain
+distinct from observed facts, authorization and recommendations. Inventory tutorial
+coverage and context-aware opportunities during the current full workflow, but do not
+let this broader addition displace the active stability gate.
+
+Integrated novice/backend correction pass completed (2026-11-05): the current-source
+isolated journey completed the core Mission Environment, Nmap, device-evidence, Hunt,
+Reach and Map workflow without an HTTP 5xx response, traceback, SQLite lock, timeout,
+out-of-memory event or evidence loss. The pass did identify misleading Nmap tutorial
+gaps around the required scope-association reason, target-mode selection, held fallback
+choices and partial evidence retained after cancellation. It also found that Scan
+History described only completed scans even though distinguishable cancelled and
+finished-without-Nmap records are retained. Correct those operator-contract gaps and
+make new-record save errors distinct from stale edit errors. Reorder the Network Scope
+setup cards so operators create a scope on the left before selecting the active scope
+on the right; the tutorial selectors remain bound to the same controls.
+
+The same pass measured duplicate initial work without a backend failure: Active Scans
+requested the same queue status four times during activation, Device Collections loaded
+its initial sources twice, and Map requested its initial topology twice. The cause is
+the shared task-change event racing each page's direct initial activation before its
+loaded marker is set; Active Scans additionally used two separate queue-status readers.
+Coalesce only concurrent activation of the same task, keep the existing queue, detail,
+live-discovery and recovery polling semantics, make the queue snapshot the single owner
+of initial active-run discovery, and regression-test first load and terminal handoff.
+Do not generalize this repair into broader backend optimization until the novice,
+backend observer and independent reviewer clear the focused correction.
+
+Completion evidence: the novice operator cleared the revised Mission Environment
+layout in Graphite and Sage at desktop and narrow widths with the Guide open and
+closed, verified the corrected Nmap tutorial and new-record guidance, and completed
+a disposable saved-target Quick Discovery run through fallback approval, live
+discoveries, finalized retained evidence and return to idle. The read-only backend
+observer measured one initial data load for Active Scans, Device Collections and Map,
+normal polling cadence, clean terminal handoff and no HTTP errors, tracebacks, SQLite
+locks or timeouts. The pass also corrected the one-host singular label found by the
+novice. Direct tutorial, scan-queue, device-history and Map runtime regressions passed;
+the focused UI contract suite passed 87 tests; the previously environment-blocked
+installer/recovery group passed 106 tests after the disposable Alpine test container
+received its required OpenSSL and GNU path utilities; and the complete isolated suite
+passed 2,512 tests with 25 intentional skips and one dependency deprecation warning.
+
+Independent review found and halted one carried-forward Active Scan navigation defect:
+leaving Active Scans stopped detailed monitoring but retained the prior run identity,
+so returning while that same run still owned the analyzer could leave progress, live
+discoveries and fallback controls stale. Release monitor ownership and the stale run
+identity when the page becomes inactive, then let the single queue snapshot restart
+detail and live monitoring on return. A production-function regression now covers the
+same-run away-and-back path. A live disposable replay left Active Scans while the run
+waited for fallback approval, returned to the same run with Live Discoveries and the
+decision controls restored, approved the fallback, retained its XML and returned the
+analyzer to idle. Independent re-review returned CLEAR. The novice's final plural-copy
+finding was also corrected and covered by the focused UI contract test. This correction
+pass is development-cleared for commit; it is not Range-ready or available on main.
+
 Core analyst workflow stability restoration gate started (2026-11-05): the
 current Range build is not accepted for further feature qualification after a
 full-target Nmap fallback could acknowledge an analyst decision without advancing,
