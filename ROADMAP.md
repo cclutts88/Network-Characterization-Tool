@@ -72,6 +72,27 @@ guides, state the exact Fresh-r2-application plus Fresh-r3-helper/console identi
 rebuild as a distinct Fresh-r5 commit and package, repeat exact-package acceptance,
 and require both reviewer and novice clearance before transfer.
 
+Fresh-r5 corrected package qualified locally (2026-11-04): documentation commit
+`71716ee` produced the distinct build
+`0.16.0-range-test-20261104-fresh-r5`. Its sealed ZIP is 123,880,910 bytes with
+SHA-256 `c282fc045cb60db546d2b6d630e2d953313bf34466d24ca111dc122f991449fa`.
+All exact-package Docker/TLS routes were rerun rather than inherited: three
+retained-data sources, empty-host installation, the exact Fresh-r2-application plus
+Fresh-r3-helper/console continuation, forced interruption recovery, GUI application
+apply, cold backup, account/evidence verification, explicit restore and later-
+evidence preservation passed. The package again refused the untouched Fresh-r2
+helper before mutation. The three transfer pieces rebuilt the byte-identical ZIP;
+archive, internal manifest, release identity, embedded acceptance and corrected
+`START-HERE.md` checks passed. The focused documentation/release group passed 141
+tests; exact Fresh-r5 Updates and Recovery browser smoke passed. Novice operator
+gate: `CLEAR` after direct inspection of the sealed ZIP. Independent final technical
+gate: `CLEAR — DOCUMENTED DEVIATION` after verifying all 57 package checksums, 52
+source bindings, five acceptance receipts and exact three-part reconstruction. The
+documented deviation is the controlled-process substitute for systemd in local
+rehearsal. Fresh-r5 is locally qualified and controller-transfer-ready, but is not
+uploaded, installed or Range-accepted; real-host systemd boot, certificate trust and
+authorized Range operation remain separate acceptance gates.
+
 Fresh-r3 Range helper-upgrade incident started (2026-11-04): the exact full
 package joined, verified and loaded on the retained Fresh-r2 Range, but the
 helper/independent-console preflight stopped before mutation. The host's default
