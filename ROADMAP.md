@@ -41,6 +41,37 @@ Package staging, exact mixed-stack Docker/TLS acceptance, explicit untouched-sta
 refusal, fresh-host proof, sealing, push and Range installation remain separate and
 pending; no prior archive qualification carries forward.
 
+Fresh-r4 full package qualified locally (2026-11-04): exact commit `1ae6695`
+produced distinct application and independent recovery-console images under build
+`0.16.0-range-test-20261104-fresh-r4`. The sealed
+`NCT-Full-Range-20261104-Fresh-r4.zip` is 123,880,946 bytes with SHA-256
+`78ae524c9d5772c1b1d17ebb07ad213538a5c7648af902df80d2fb913b0a1bc9`.
+Its three transfer pieces were individually verified, rebuilt the byte-identical
+ZIP, and the reconstructed archive passed ZIP and internal release/validation
+checks. Real isolated Docker/TLS acceptance passed for all three declared retained
+sources, a new empty-host installation, and the exact controller continuation from
+the Fresh-r2 application plus Fresh-r3 helper/console. The continuation exercised
+an immediate-after-create interruption, helper recovery, GUI application update,
+cold backup, existing-account and evidence checks, explicit restore, and preservation
+of evidence created after the update. A separate real preflight refused the
+untouched Fresh-r2 helper checksum before helper mutation. Browser smoke confirmed
+the Fresh-r4 System Health and Updates and Recovery pages render with the normal
+theme, operator guidance, progress explanation and no visible error. This is a
+locally qualified, controller-transfer-ready package only; it has not been uploaded,
+installed or accepted on a Range. Final independent reviewer and novice transfer
+review remain required before handoff, and actual controller/Range application is a
+separate operational gate.
+
+Fresh-r4 handoff halted by novice review (2026-11-04): the sealed payload and
+technical acceptance were clear, but `START-HERE.md` still called the release
+Fresh-r3, described the controller route as an exact Fresh-r2 installation, and
+linked to a heading that no longer existed. Those words could send an operator with
+an untouched Fresh-r2 helper/console down a route that is intentionally refused.
+Fresh-r4 is withdrawn from handoff without controller upload. Correct the source
+guides, state the exact Fresh-r2-application plus Fresh-r3-helper/console identity,
+rebuild as a distinct Fresh-r5 commit and package, repeat exact-package acceptance,
+and require both reviewer and novice clearance before transfer.
+
 Fresh-r3 Range helper-upgrade incident started (2026-11-04): the exact full
 package joined, verified and loaded on the retained Fresh-r2 Range, but the
 helper/independent-console preflight stopped before mutation. The host's default

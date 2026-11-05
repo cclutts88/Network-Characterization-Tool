@@ -12,14 +12,16 @@ Use **steps 1–4 below** to install NCT and its independent Updates & Recovery
 console on a new Linux Docker host with empty NCT storage. No older NCT
 installation is required.
 
-### B. Existing exact Fresh-r2 installation
+### B. Existing Fresh-r2 application with the exact Fresh-r3 helper and console
 
 Do **not** run the fresh-install commands below. Go directly to
-`docs/RANGE_UPDATER_PACKAGE.md`, section **Existing Fresh-r2 helper and console**.
+`docs/RANGE_UPDATER_PACKAGE.md`, section **Existing Fresh-r2 application with
+Fresh-r3 helper and console**.
 That route first updates the host helper and independent console, then tells you
 to upload the included `nct-update-*.tar.gz` through Updates & Recovery. It keeps
 the existing NCT account and retained evidence. The package refuses any different
-or ambiguous source instead of guessing.
+or ambiguous source instead of guessing. In particular, an untouched Fresh-r2
+helper/console stack is not this route and is refused before changes begin.
 
 This is the standalone Docker route; it does not set up Kubernetes or claim a
 separately tested Docker Compose deployment.
@@ -146,15 +148,17 @@ host recovery helper lives under `/opt/nct-recovery` and its service is
 For an existing NCT installation, do not use fresh setup as an upgrade or reset.
 Open `release.json` and find the exact installed build and commit in
 `supported_sources`, then use the full ZIP's checked helper/console update route in
-`docs/RANGE_UPDATER_PACKAGE.md`. The Fresh-r3 package explicitly qualifies the
-installed Fresh-r2 build in addition to its fresh-install route. An unlisted build
-must be preserved and reviewed rather than guessed or forced through the updater.
+`docs/RANGE_UPDATER_PACKAGE.md`. This package explicitly qualifies the mixed
+controller state named in `helper_upgrade_source`: the Fresh-r2 application with
+the exact Fresh-r3 helper and console. An untouched Fresh-r2 helper/console stack,
+an unlisted build, or any other state must be preserved and reviewed rather than
+guessed or forced through the updater.
 
 The smaller `nct-update-*.tar.gz` file inside the ZIP is the separately qualified
 application-only route for its own declared source. Use the full ZIP when replacing
 both the independent recovery components and the NCT application: update the host
 helper and console first, then upload that included application update in the browser.
-That is the current Fresh-r2-to-Fresh-r3 Range route.
+That is the current mixed-stack-to-this-release Range route.
 
 `VALIDATION.json` records the exact local fresh-install and update rehearsals.
 A real host's service boot, browser trust and authorized network collection still

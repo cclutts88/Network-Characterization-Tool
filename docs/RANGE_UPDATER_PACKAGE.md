@@ -103,17 +103,20 @@ host service and browser trust acceptance remain separate Range checks.
   Version-6 sources need a separately qualified Phase 5 staging path;
   this package does not perform that bridge.
 - The ordinary full-package installer assumes the independent recovery helper is not
-  already installed. An exact Fresh-r2 installation instead uses the reviewed
-  helper/console upgrade at the start of this guide, followed by the included GUI
-  application update. Preserve its configuration and receipts; the ordinary installer
-  correctly refuses that case before loading images or changing the application.
+  already installed. The exact mixed controller state named at the start of this
+  guide instead uses the reviewed helper/console upgrade, followed by the included
+  GUI application update. Preserve its configuration and receipts; the ordinary
+  installer correctly refuses that case before loading images or changing the
+  application. An untouched Fresh-r2 helper/console stack is not an accepted source.
 - Finish scans and device pulls and disable schedules/automatic pulls during the
   maintenance window. Keep the current password: existing accounts are preserved.
-- This Fresh-r3 full package also qualifies the exact Fresh-r2 build
+- This full package qualifies the Fresh-r2 application
   `0.16.0-range-test-20261102-fresh-r2` at commit
-  `ba2124aad40dc9f4f718c2799db35d9703a5f89d`. Use the full ZIP to update the host
-  helper and independent console first, then upload its included application update
-  in the browser so the complete installed stack reaches this release.
+  `ba2124aad40dc9f4f718c2799db35d9703a5f89d` only when it is paired with the exact
+  Fresh-r3 helper and console declared in `release.json` under
+  `helper_upgrade_source`. Use the full ZIP to update those recovery components
+  first, then upload its included application update in the browser so the complete
+  installed stack reaches this release.
   The operator keeps the existing account and retained evidence; no new password is
   selected during an update.
 - Use the same host IP and HTTPS port as the working NCT. The issuing root CA must
