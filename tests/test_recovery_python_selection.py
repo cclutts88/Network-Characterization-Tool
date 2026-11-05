@@ -42,6 +42,31 @@ def test_minimal_host_tree_without_app_or_pythonpath_selects_runtime(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Host POSIX installer")
+def test_upgrade_entrypoint_does_not_dirty_sealed_package_with_bytecode(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in ("nct-upgrade-recovery.py", "nct_update_host.py", "build_nct_range_package.py"):
+        shutil.copyfile(SCRIPTS / name, scripts / name)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    environment = dict(os.environ)
+    environment.pop("PYTHONDONTWRITEBYTECODE", None)
+    environment.pop("PYTHONPYCACHEPREFIX", None)
+
+    result = subprocess.run(
+        [sys.executable, str(scripts / "nct-upgrade-recovery.py"), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--console-image" in result.stdout
+    assert not list(tmp_path.rglob("__pycache__"))
+    assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Host POSIX installer")
 @pytest.mark.parametrize("value", ["python3", "/missing/python", "/bin/false"])
 def test_invalid_explicit_choice_never_falls_back(value):
     result = select({"NCT_RECOVERY_PYTHON": value})

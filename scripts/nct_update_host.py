@@ -600,7 +600,7 @@ class Host:
 
     def public(self):
         state = self.read()
-        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome", "verification_mode"}
+        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome", "verification_mode", "apply_failure"}
         value = {k: v for k, v in state.items() if k in allowed}
         marker = state.get("candidate_may_have_written")
         value["recovery_guidance"] = "backup_restore" if marker is True else "original_reconciliation" if marker is False else "unknown"
@@ -1032,7 +1032,12 @@ class Host:
                 if lock is not None:
                     os.close(lock)
                     lock = None
-                self.phase(state, "interrupted", detail=str(exc)[:400])
+                failure = {
+                    "phase": state.get("phase", "unknown"),
+                    "detail": str(exc)[:400],
+                    "recorded_at": time.time(),
+                }
+                self.phase(state, "interrupted", apply_failure=failure, detail=failure["detail"])
                 try:
                     self.restore(state, actor)
                 except Exception as restore_error:

@@ -41,8 +41,8 @@ transferred file against the supplied release checksum before selecting it.
 
 | Step | What you do | What you should see / what happens next |
 | --- | --- | --- |
-| 1. Prepare | Finish scans and device collection. Obtain the trusted `nct-update-….tar.gz` file. | One compressed update file on the browser computer. A full deployment ZIP uses the terminal installer instead. |
-| 2. Open | Sign in to NCT, open **Updates & Recovery**, then **Open update and recovery workspace**. | Recovery opens automatically. A code is normally unnecessary; it is an emergency entry method, separate from your NCT password. |
+| 1. Prepare | Finish scans and device collection. Obtain the trusted `nct-update-….tar.gz` file. | One compressed GUI-update file on the browser computer. A full deployment ZIP first prepares or upgrades the host helper and console, then supplies this separate GUI-update file. |
+| 2. Open | Sign in to NCT, open **Account and settings → Updates & Recovery → Open update and recovery workspace**. | Recovery opens automatically. A code is normally unnecessary; it is an emergency entry method, separate from your NCT password. |
 | 3. Check package | Choose the file and select **Upload and validate package** once. | NCT continues running. Upload reaching 100% is followed by validation; wait for **Ready to apply**. Nothing has been installed yet. |
 | 4. Review | Check the proposed release and compatibility result, then select **Apply validated update**. | NCT stops temporarily. Recovery checks the saved data, creates and verifies a backup, installs the release and checks retained evidence. Wait on this page. |
 | 5. Verify account | At **Verify sign-in and finish**, enter your existing NCT account and select **Verify sign-in** once. | This checks the installed account; it does not change the password or sign your browser into NCT. Wait for the final restart and return to NCT. |
@@ -50,9 +50,10 @@ transferred file against the supplied release checksum before selecting it.
 
 If the connection drops, the update may still be running. Do not upload or apply
 again until the saved status is available. Reopen from signed-in NCT, or ask the
-host administrator for emergency recovery access if NCT cannot start. The pinned
-older console can show a misleading access-code prompt after a connection failure;
-the separately delivered console correction described below addresses that behavior.
+host administrator for emergency recovery access if NCT cannot start. An older
+pinned console can show a misleading access-code prompt after a connection failure.
+That is historical behavior, not the expected flow in the current console; reopen
+it from signed-in NCT before using emergency host access.
 
 1. Sign in to NCT and open **Account and settings → Updates & Recovery**.
 2. Select **Open update and recovery workspace**. NCT starts the independent
@@ -106,7 +107,7 @@ emergency code and the existing NCT account password serve different purposes.
 
 Delivery boundary: an application-only update does not replace the independent
 console. These connection messages require a separately qualified console update;
-the currently pinned Recovery-r2 console retains its earlier connection behavior.
+an older Recovery-r2 console retains its earlier connection behavior.
 
 The newer console source also explains the account-check wait beside **Verify
 sign-in**. Submitting intentionally clears the password field, disables repeat

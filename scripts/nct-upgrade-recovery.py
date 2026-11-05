@@ -4,6 +4,13 @@
 Application identity, evidence and application operation receipts are not replaced.
 An interrupted transaction requires explicit rollback before another upgrade.
 """
+import sys
+
+# This entry point executes from the sealed release directory.  Importing its
+# package-local helpers must not create __pycache__ files that would make the
+# subsequent complete-package manifest check reject its own trusted input.
+sys.dont_write_bytecode = True
+
 import argparse
 import copy
 import fcntl
@@ -26,7 +33,9 @@ from build_nct_range_package import verify_manifest
 
 FILES = ("nct_update_host.py", "nct_update_work.py", "nct-range-data-check.py")
 BASE_HASHES = {
-    "nct_update_host.py": {"49252e8761c94167470154f945d39355443145a046e6f924db6a031d9804ffee"},
+    # Exact helper currently installed beside the retained Fresh-r2 application
+    # after the accepted Fresh-r3 helper/console-only transaction.
+    "nct_update_host.py": {"46a18c59057625df97822b10e347b7cf1bdaccbf99ac67b212ad38fc23626140"},
     "nct_update_work.py": {"c89c7b61d547d7a643d11af26bf4163ea55a014a9fc377ee3a1c85c113481135"},
     "nct-range-data-check.py": {"8ed5b3e4f7fd4d517df823e78613be5617eb2051db8475edc443757594c27a38"},
 }
@@ -36,7 +45,7 @@ BASELINES = {
     (FRESH_R2, FRESH_R2_COMMIT): {
         "files": {name: values for name, values in BASE_HASHES.items()},
         "app_config_digest": "sha256:015d686a5ccd182a8037db34b756ad89223ff4ebfd65b5e0f55244cc128454a5",
-        "console_config_digest": "sha256:d6f0b78a5a5513c1840a6fe609872ba4b9aa66d3fffb6a3302b39b6911fdc5e2",
+        "console_config_digest": "sha256:ce67db8397fa994d52a18eba2e64d89d43d40aa41c03a588e3907deaca3baed9",
     },
 }
 SERVICE = "nct-recovery-host.service"

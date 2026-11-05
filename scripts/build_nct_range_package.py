@@ -14,14 +14,16 @@ import importlib.util
 LAUNCHERS = ("nct-start-docker.sh", "nct-start-compose.sh", "nct-start-legacy.sh", "nct-upgrade.sh", "nct-rollback-upgrade.sh", "nct-recover-unhealthy-upgrade.sh", "nct-range-direct-deploy.sh")
 SOURCE_TAG = "0.16.0-range-test-20261013-phase3-r3"
 R4_SOURCE = {"build_id": "0.16.0-range-test-20261102-recovery-r4", "build_commit": "937954bc03e4b21c3e93d7430321a918d8bc59a0"}
-FRESH_R2_SOURCE = {
+MIXED_FRESH_R2_R3_SOURCE = {
     "build_id": "0.16.0-range-test-20261102-fresh-r2",
     "build_commit": "ba2124aad40dc9f4f718c2799db35d9703a5f89d",
     "schema_version": 8,
-    "host_sha256": "49252e8761c94167470154f945d39355443145a046e6f924db6a031d9804ffee",
+    "helper_build_id": "0.16.0-range-test-20261104-fresh-r3",
+    "helper_build_commit": "d6c4178709982dc6f84c71f6bd97f2dc84f1a680",
+    "host_sha256": "46a18c59057625df97822b10e347b7cf1bdaccbf99ac67b212ad38fc23626140",
     "app_image_id": "sha256:015d686a5ccd182a8037db34b756ad89223ff4ebfd65b5e0f55244cc128454a5",
-    "console_image": "nct-recovery-console:0.16.0-range-test-20261102-fresh-r2",
-    "console_image_id": "sha256:d6f0b78a5a5513c1840a6fe609872ba4b9aa66d3fffb6a3302b39b6911fdc5e2",
+    "console_image": "nct-recovery-console:0.16.0-range-test-20261104-fresh-r3",
+    "console_image_id": "sha256:ce67db8397fa994d52a18eba2e64d89d43d40aa41c03a588e3907deaca3baed9",
 }
 
 
@@ -172,10 +174,10 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
     from build_nct_update import build
     r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
     # Terminal installer acceptance is not GUI-update acceptance.
-    sources = [R4_SOURCE] if existing_r4 else [{k: FRESH_R2_SOURCE[k] for k in ("build_id", "build_commit")}]
+    sources = [R4_SOURCE] if existing_r4 else [{k: MIXED_FRESH_R2_R3_SOURCE[k] for k in ("build_id", "build_commit")}]
     update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
     release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
-    release["helper_upgrade_source"] = dict(FRESH_R2_SOURCE)
+    release["helper_upgrade_source"] = dict(MIXED_FRESH_R2_R3_SOURCE)
     if existing_r4:
         # This kit deliberately qualifies one existing-installation path only.
         # Bundled emergency/terminal tools are not newly qualified install paths.

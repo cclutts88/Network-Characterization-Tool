@@ -1,7 +1,12 @@
 # Full offline NCT package with Updates and Recovery
 
-Transfer this one ZIP. Extract it into a **new directory**, then open a terminal
-inside its `NCT-Air-Gapped-Range-Deployment` folder. Keep the previous package.
+Transfer this one ZIP when the Range transfer service accepts it. If it rejects the
+ZIP for size, transfer every numbered piece and use the included join instructions
+to reconstruct and verify the identical complete ZIP before extracting it. This
+works for both fresh and retained-data routes. Never upload a split piece or the full
+ZIP into the GUI updater; that page accepts only the included `nct-update-….tar.gz`.
+Extract the complete ZIP into a **new directory**, then open a terminal inside its
+`NCT-Air-Gapped-Range-Deployment` folder. Keep the previous package.
 The ZIP contains both application and independently pinned recovery-console images,
 the optional HTTPS companion image, host setup, recovery tools and internal checksums.
 No separate checksum download is required: the setup verifies the included manifest
@@ -12,38 +17,50 @@ trusted release source. No software is downloaded during installation.
 
 ### Choose the installation path
 
-- If Updates & Recovery is **already installed** on the exact Fresh-r2 build named
-  in `release.json` under `helper_upgrade_source`, use the separate helper/console
-  upgrade below. Do not rerun the first-time installer over its saved state.
+- If the application is the exact Fresh-r2 build and Updates & Recovery is already
+  the exact Fresh-r3 helper/console stack named in `release.json` under
+  `helper_upgrade_source`, use the separate helper/console upgrade below. Do not
+  rerun the first-time installer over its saved state.
 - If there is no independent helper installed, use the first-time instructions
   below for the explicitly supported sources. Other builds need a reviewed bridge.
 
-### Existing Fresh-r2 helper and console
+### Existing Fresh-r2 application with Fresh-r3 helper and console
 
-This path is limited to the accepted Fresh-r2 application, its exact installed host
-helper and its exact independently pinned Fresh-r2 console, all named in
-`helper_upgrade_source`. It refuses other builds or helper versions, unfinished
-update/recovery operations, changed mounts or weakened console settings.
+This path is limited to the accepted Fresh-r2 application and the exact installed
+Fresh-r3 host helper and independently pinned Fresh-r3 console, all named in
+`helper_upgrade_source`. It refuses other builds or helper versions, including an
+untouched Fresh-r2 helper stack, as well as unfinished update/recovery operations,
+changed mounts or weakened console settings.
 Keep the current application, evidence, accounts and recovery receipts in place.
 
 An administrator runs these steps on the Linux NCT host from the newly extracted
-package folder. Use the same protected Python 3.9-or-newer interpreter already
-selected for the recovery service. These are host steps, not a browser upload.
+package folder. These are host steps, not a browser upload. Read the protected
+interpreter from the installed service before previewing:
+
+```sh
+systemctl cat nct-recovery-host.service | grep '^ExecStart='
+```
+
+The first path after `ExecStart=` is the pinned Python 3.9-or-newer executable.
+Use that full path in both commands below. Stop if the service is missing, more than
+one `ExecStart` is shown, or that executable does not report Python 3.9 or newer.
 
 1. Check the package: `sha256sum -c PACKAGE-MANIFEST.sha256`. Stop if any file fails.
 2. Load its local images: `docker load -i offline-images/nct-range-images.tar`.
    This imports images without stopping or replacing NCT.
 3. Read `console_image` in `release.json`. Use that exact tag in place of
    `CONSOLE_IMAGE` below; do not use an older console or a floating `latest` tag.
-4. Preview: `python3 scripts/nct-upgrade-recovery.py --console-image CONSOLE_IMAGE`.
-   Use the protected service interpreter's full path instead of `python3` where
-   necessary. The preview checks compatibility without stopping the installation.
+4. Preview: `/full/path/from/ExecStart scripts/nct-upgrade-recovery.py --console-image CONSOLE_IMAGE`.
+   Success says: **Checks passed. NCT is unchanged. Use --apply during the
+   maintenance window.** It leaves the application, helper and console unchanged.
+   Any other result means stop; do not add `--apply`.
 5. During the maintenance window, repeat with `--apply`. Progress is printed for
    each saved stage. The helper and console stop briefly; the NCT application is
    not replaced by this operation. The new console is checked over verified HTTPS
    and returned to its normal stopped state.
-6. Open NCT → Updates & Recovery. Transfer the included `nct-update-….tar.gz` to the
-   computer running that browser and follow Upload → Review → Apply → Verify.
+6. Open NCT → **Account and settings → Updates & Recovery → Open update and recovery
+   workspace**. Transfer the included `nct-update-….tar.gz` to the computer running
+   that browser and follow Upload → Review → Apply → Verify.
    That separate application update uses the existing-account and backup checks.
 
 If the helper upgrade is interrupted, **do not reinstall or delete its state**.

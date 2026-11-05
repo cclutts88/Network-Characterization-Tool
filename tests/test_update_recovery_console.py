@@ -455,6 +455,65 @@ def test_corrupt_backup_keeps_old_image_stopped_and_preserves_candidate_data(tmp
     assert (host.data / "evidence.xml").read_text() == "original exact bytes"
 
 
+def test_apply_failure_survives_successful_original_recovery(tmp_path, monkeypatch):
+    host, engine = planned_host(tmp_path)
+    planned = host.read()
+    planned["candidate_may_have_written"] = False
+    host_module.save(host.root / "operation.json", planned)
+    monkeypatch.setattr(host, "compatibility", lambda state: (_ for _ in ()).throw(ValueError("exact compatibility failure")))
+
+    host.apply("d" * 64, "analyst")
+
+    saved = host.read()
+    assert saved["phase"] == "awaiting_restore_sign_in"
+    assert saved["detail"].startswith("The original installation restarted")
+    assert saved["apply_failure"]["phase"] == "fence_intent"
+    assert saved["apply_failure"]["detail"] == "exact compatibility failure"
+    assert saved["apply_failure"]["recorded_at"] <= saved["updated_at"]
+    assert host.public()["apply_failure"] == saved["apply_failure"]
+    assert engine.inspect("old")["State"]["Running"] is True
+
+    class Cookie:
+        name = "nct_session"
+
+    class Response:
+        status = 200
+
+        def __init__(self, value):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Opener:
+        def __init__(self):
+            self.responses = iter((
+                {"authenticated": True},
+                {"analyst": {"username": "admin", "role": "admin"}},
+            ))
+
+        def open(self, *_args, **_kwargs):
+            return Response(next(self.responses))
+
+    monkeypatch.setattr(host_module.ssl, "create_default_context", lambda **_kwargs: object())
+    monkeypatch.setattr(host_module.http.cookiejar, "CookieJar", lambda: [Cookie()])
+    monkeypatch.setattr(host_module.urllib.request, "build_opener", lambda *_args: Opener())
+    monkeypatch.setattr(host_module.json, "load", lambda response: response.value)
+
+    result = host.confirm("admin", "temporary local value", "recovery-console")
+    terminal = host.read()
+    assert terminal["phase"] == "restored"
+    assert terminal["recovery_outcome"] == {"backup_swapped": False, "later_evidence_preserved": False}
+    assert terminal["apply_failure"] == saved["apply_failure"]
+    assert result["operation"]["apply_failure"] == saved["apply_failure"]
+    diagnostic = host.diagnose()
+    assert diagnostic["operation"]["apply_failure"] == saved["apply_failure"]
+    assert diagnostic["operation"]["completion_kind"] == "original_reconciliation"
+
+
 def test_wrong_target_and_shared_writer_are_refused(tmp_path):
     host, engine = planned_host(tmp_path)
     with pytest.raises(ValueError, match="identity changed"):
@@ -830,6 +889,7 @@ def test_update_pages_explain_offline_intake_and_backup_time():
     assert "independently" in html
     assert "Operator Guide" in html
     assert "var(--panel)" in html
+    assert "Update failure that started recovery" in html
 
 
 def test_recovery_feedback_survives_status_polling():

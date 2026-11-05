@@ -81,6 +81,15 @@ for (const badSummary of [true, 'bad', [], {categories:[{actions:[]}],blockers:[
   assert.equal(JSON.stringify(element('checks').children), reviewed, 'malformed summary must not replace the last reviewed display');
   assert.equal(element('workspaceControls').disabled, true);
 }
+context.fetch = async () => ({ok: true, json: async () => state});
+await vm.runInContext('refresh()', context);
+const failureReviewed = JSON.stringify(element('checks').children);
+for (const badFailure of [null, true, [], {}, {phase:'fence_intent',detail:'saved',recorded_at:'now'}]) {
+  context.fetch = async () => ({ok: true, json: async () => ({...state, operation:{phase:'restored',apply_failure:badFailure}})});
+  await vm.runInContext('refresh()', context);
+  assert.equal(JSON.stringify(element('checks').children), failureReviewed, 'malformed saved failure must not replace the last reviewed display');
+  assert.equal(element('workspaceControls').disabled, true);
+}
 context.fetch = async () => ({ok: false, status: 409, json: async () => ({detail: 'Ordinary refusal'})});
 await vm.runInContext('refresh()', context);
 assert.equal(element('access').hidden, true);
