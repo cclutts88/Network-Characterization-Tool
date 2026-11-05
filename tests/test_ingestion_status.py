@@ -86,6 +86,7 @@ def test_manual_and_automated_nmap_reach_verified_ready_outputs(tmp_path):
     assert jobs.dispatch_next_pipeline_intake(automated_db) is True
     assert jobs.run_next_derived_job(automated_db, automated_dir) is True
     automated = _item(list_ingestion_status(automated_db), "nmap_scan_run")
+    assert automated["source_label"] == "Nmap scan"
     assert automated["source_id"] == run["run_id"]
     assert automated["status"] == "ready"
     assert automated["stages"][-1]["output"]["kind"] == "entity_assessment"

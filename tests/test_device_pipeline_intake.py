@@ -64,7 +64,7 @@ def _prepared_collected(tmp_path, monkeypatch, *, run_id="d" * 32):
     return db_path, run_dir, manifest
 
 
-def _upload(client: TestClient):
+def _upload(client: TestClient, content: str = CONFIG):
     return client.post(
         "/api/device-configs/upload",
         data={
@@ -75,7 +75,7 @@ def _upload(client: TestClient):
             "device_address": "192.0.2.90",
             "device_name": "Pipeline Router",
         },
-        files={"result_file": ("router.txt", CONFIG, "text/plain")},
+        files={"result_file": ("router.txt", content, "text/plain")},
     )
 
 
@@ -118,6 +118,34 @@ def test_new_manual_upload_uses_worker_and_never_calculates_on_summary_request(
     assert ready.status_code == 200
     assert ready.json()["counts"]["routes"] == 1
     assert history[0]["summary_processing_state"] == "completed"
+    assert history[0]["summary_evidence_quality"]["status"] == "supported"
+
+
+def test_wrong_manual_upload_is_visibly_classified_before_deletion(
+    tmp_path, monkeypatch,
+):
+    db_path = tmp_path / "analyzer.db"
+    monkeypatch.setattr(device_configs, "DB_PATH", db_path)
+    monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+
+    with TestClient(app) as client:
+        response = _upload(client, "this is a mistaken analyst note, not a device configuration\n")
+        assert response.status_code == 200
+        run_id = response.json()["run_id"]
+
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+
+    with TestClient(app) as client:
+        history = client.get("/api/device-configs").json()
+        summary = client.get(f"/api/device-configs/{run_id}/summary").json()
+    quality = history[0]["summary_evidence_quality"]
+    assert quality["status"] == "no_supported_facts"
+    assert quality["supported_fact_count"] == 0
+    assert quality["recognized_categories"] == []
+    assert "no supported network facts" in quality["detail"]
+    assert summary["evidence_quality"] == quality
 
 
 def _create_old_intake_schema(db_path, *, row_id="legacy-intent"):

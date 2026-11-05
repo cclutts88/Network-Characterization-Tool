@@ -669,6 +669,10 @@ class FallbackDecision(BaseModel):
         return cleaned
 
 
+class FallbackDecisionConflict(RuntimeError):
+    """The saved fallback decision or cancellation state changed concurrently."""
+
+
 class ScanRunOwnerChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -713,6 +717,7 @@ class RunControl:
     fallback_decision: Literal["approve", "decline"] | None = None
     fallback_decided_by: str | None = None
     fallback_authorization_note: str | None = None
+    fallback_decided_at: str | None = None
 
 
 ACTIVE_RUNS: dict[str, RunControl] = {}
@@ -1064,6 +1069,146 @@ def scan_cancellation_requested(run_id: str, db_path: Path = DB_PATH) -> bool:
             (run_id,),
         ).fetchone()
     return bool(row and row[0])
+
+
+def spawn_scan_process_unless_cancelled(
+    run_id: str,
+    control: RunControl,
+    argv: list[str],
+    *,
+    db_path: Path,
+    popen_factory: Callable,
+    **popen_kwargs,
+) -> object | None:
+    """Serialize durable cancellation with the final network-process launch gate."""
+    if control.cancel_event.is_set():
+        return None
+    init_poc_storage(db_path)
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        cancellation = db.execute(
+            """SELECT cancellation_requested_at FROM scan_run_control
+                 WHERE run_id = ? AND cancellation_requested_at IS NOT NULL
+                   AND cancellation_acknowledged_at IS NULL""",
+            (run_id,),
+        ).fetchone()
+        if cancellation is not None or control.cancel_event.is_set():
+            control.cancel_event.set()
+            return None
+        return popen_factory(argv, **popen_kwargs)
+
+
+def record_scan_fallback_decision(
+    run_id: str,
+    *,
+    decision: Literal["approve", "decline"],
+    decided_by: str,
+    authorization_note: str,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Durably publish one fallback decision before waking the scan worker."""
+    init_poc_storage(db_path)
+    if not RUN_ID_RE.fullmatch(run_id):
+        raise KeyError(run_id)
+    decided_at = utc_now()
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT status, manifest_json FROM scan_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        manifest = json.loads(row[1])
+        if row[0] != "awaiting_fallback_approval":
+            raise FallbackDecisionConflict("Fallback approval is not pending")
+        cancellation = db.execute(
+            """SELECT cancellation_requested_at FROM scan_run_control
+                 WHERE run_id = ? AND cancellation_requested_at IS NOT NULL
+                   AND cancellation_acknowledged_at IS NULL""",
+            (run_id,),
+        ).fetchone()
+        if cancellation is not None:
+            raise FallbackDecisionConflict(
+                "Cancellation is already saved; a fallback decision cannot start more network contact"
+            )
+        existing = manifest.get("fallback_decision")
+        if existing is not None:
+            if (
+                existing == decision
+                and manifest.get("fallback_decided_by") == decided_by
+                and manifest.get("fallback_authorization_note") == authorization_note
+            ):
+                return manifest
+            raise FallbackDecisionConflict("A different fallback decision is already saved")
+        manifest.update({
+            "fallback_decision": decision,
+            "fallback_decided_by": decided_by,
+            "fallback_authorization_note": authorization_note,
+            "fallback_decided_at": decided_at,
+        })
+        changed = db.execute(
+            """UPDATE scan_runs SET manifest_json = ?
+                 WHERE run_id = ? AND status = 'awaiting_fallback_approval'
+                   AND json_extract(manifest_json, '$.fallback_decision') IS NULL""",
+            (json.dumps(manifest, sort_keys=True), run_id),
+        ).rowcount
+        if changed != 1:
+            raise FallbackDecisionConflict(
+                "The fallback decision changed while it was being saved"
+            )
+        append_scan_audit_on_connection(
+            db,
+            run_id=run_id,
+            event=f"fallback_{decision}",
+            actor=decided_by,
+            details=authorization_note,
+            changed_at=decided_at,
+        )
+    return manifest
+
+
+def saved_scan_fallback_decision(
+    run_id: str, db_path: Path = DB_PATH
+) -> dict | None:
+    """Read a saved decision so a waiting worker never depends on process memory."""
+    init_poc_storage(db_path)
+    with connect_database(db_path, read_only=True) as db:
+        row = db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    manifest = json.loads(row[0])
+    if manifest.get("fallback_decision") not in {"approve", "decline"}:
+        return None
+    return {
+        "decision": manifest["fallback_decision"],
+        "decided_by": manifest.get("fallback_decided_by"),
+        "authorization_note": manifest.get("fallback_authorization_note"),
+        "decided_at": manifest.get("fallback_decided_at"),
+    }
+
+
+def _merge_saved_fallback_decision_on_connection(db, manifest: dict) -> None:
+    """Keep the durable operator decision when a worker publishes older state."""
+    row = db.execute(
+        "SELECT manifest_json FROM scan_runs WHERE run_id = ?",
+        (manifest["run_id"],),
+    ).fetchone()
+    if row is None:
+        return
+    saved = json.loads(row[0])
+    if saved.get("fallback_decision") not in {"approve", "decline"}:
+        return
+    for key in (
+        "fallback_decision",
+        "fallback_decided_by",
+        "fallback_authorization_note",
+        "fallback_decided_at",
+    ):
+        manifest[key] = saved.get(key)
 
 
 def effective_no_strike(
@@ -2958,6 +3103,7 @@ def update_scan_run_manifest(manifest: dict, db_path: Path = DB_PATH) -> None:
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         _assert_manifest_fences_on_connection(db, manifest)
+        _merge_saved_fallback_decision_on_connection(db, manifest)
         execution_claim = manifest.get("execution_claim")
         if isinstance(execution_claim, dict):
             changed = db.execute(
@@ -3009,6 +3155,7 @@ def update_scan_progress_manifest(manifest: dict, db_path: Path = DB_PATH) -> No
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         _assert_manifest_fences_on_connection(db, manifest)
+        _merge_saved_fallback_decision_on_connection(db, manifest)
         changed = db.execute(
             """UPDATE scan_runs SET status = ?, manifest_json = ?
                  WHERE run_id = ?
@@ -3447,6 +3594,7 @@ def publish_scheduled_scan_terminal(
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         _assert_manifest_fences_on_connection(db, manifest)
+        _merge_saved_fallback_decision_on_connection(db, manifest)
         execution_claim = manifest.get("execution_claim")
         if not isinstance(execution_claim, dict):
             raise WorkLeaseConflict("The scheduled scan has no execution fence")
@@ -3512,6 +3660,7 @@ def publish_scan_terminal(manifest: dict, *, db_path: Path = DB_PATH) -> None:
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
         _assert_manifest_fences_on_connection(db, manifest)
+        _merge_saved_fallback_decision_on_connection(db, manifest)
         changed = db.execute(
             """UPDATE scan_runs SET status = ?, manifest_json = ?
                  WHERE run_id = ?
@@ -5239,14 +5388,25 @@ def execute_scan_run(
     ) -> tuple[str, int | None]:
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
             renew_execution_fences(force=True)
-            process = popen_factory(
+            if control.cancel_event.is_set() or scan_cancellation_requested(
+                run_id, db_path
+            ):
+                control.cancel_event.set()
+                return "cancelled", None
+            process = spawn_scan_process_unless_cancelled(
+                run_id,
+                control,
                 argv,
+                db_path=db_path,
+                popen_factory=popen_factory,
                 cwd=run_dir,
                 stdin=subprocess.DEVNULL,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
                 start_new_session=True,
             )
+            if process is None:
+                return "cancelled", None
             setattr(control, process_attr, process)
             last_progress_check = 0.0
             last_progress_publish = time.monotonic()
@@ -5396,11 +5556,21 @@ def execute_scan_run(
                 if not manifest["capture_requested"]:
                     return
                 renew_execution_fences(force=True)
-                control.capture_process = popen_factory(
+                if control.cancel_event.is_set() or scan_cancellation_requested(
+                    run_id, db_path
+                ):
+                    control.cancel_event.set()
+                    return
+                control.capture_process = spawn_scan_process_unless_cancelled(
+                    run_id,
+                    control,
                     manifest["capture_command_argv"], cwd=run_dir,
+                    db_path=db_path, popen_factory=popen_factory,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=capture_error_handle, start_new_session=True,
                 )
+                if control.capture_process is None:
+                    return
                 sleep_fn(0.25)
                 capture_exit = control.capture_process.poll()
                 if capture_exit is not None:
@@ -5512,20 +5682,50 @@ def execute_scan_run(
                             manifest, phase="awaiting_approval",
                             db_path=db_path, data_dir=data_dir,
                         )
-                        while not control.fallback_decision_event.is_set():
+                        while True:
+                            renew_execution_fences()
+                            saved_decision = saved_scan_fallback_decision(run_id, db_path)
+                            if saved_decision is not None:
+                                control.fallback_decision = saved_decision["decision"]
+                                control.fallback_decided_by = saved_decision["decided_by"]
+                                control.fallback_authorization_note = saved_decision[
+                                    "authorization_note"
+                                ]
+                                control.fallback_decided_at = saved_decision["decided_at"]
+                                manifest.update({
+                                    "fallback_decision": control.fallback_decision,
+                                    "fallback_decided_by": control.fallback_decided_by,
+                                    "fallback_authorization_note": (
+                                        control.fallback_authorization_note
+                                    ),
+                                    "fallback_decided_at": control.fallback_decided_at,
+                                })
+                                control.fallback_decision_event.set()
                             if control.cancel_event.is_set() or scan_cancellation_requested(
                                 run_id, db_path
                             ):
                                 control.cancel_event.set()
                                 manifest["status"], run_phases = "cancelled", False
                                 break
+                            if control.fallback_decision_event.is_set():
+                                break
                             sleep_fn(0.2)
+                        if run_phases:
+                            if control.cancel_event.is_set() or scan_cancellation_requested(
+                                run_id, db_path
+                            ):
+                                control.cancel_event.set()
+                                manifest["status"], run_phases = "cancelled", False
+                            elif control.fallback_decision not in {"approve", "decline"}:
+                                raise RuntimeError(
+                                    "Fallback decision signal had no valid saved decision"
+                                )
                         if run_phases:
                             manifest.update({
                                 "fallback_decision": control.fallback_decision,
                                 "fallback_decided_by": control.fallback_decided_by,
                                 "fallback_authorization_note": control.fallback_authorization_note,
-                                "fallback_decided_at": utc_now(),
+                                "fallback_decided_at": control.fallback_decided_at or utc_now(),
                             })
                             if control.fallback_decision == "approve":
                                 certify_scan_contact_phase(
@@ -5620,6 +5820,16 @@ def execute_scan_run(
                     if phase_status == "completed" and xml_path.is_file():
                         successful_xml.append(xml_path)
                         continue
+                    if phase_status == "cancelled":
+                        manifest["partial_results"] = bool(successful_xml)
+                        manifest["execution_note"] = (
+                            "Cancellation was honored before more network contact. "
+                            "Already completed protocol evidence was preserved for review."
+                            if successful_xml
+                            else "Cancellation was honored before protocol evidence completed."
+                        )
+                        manifest["status"] = "cancelled"
+                        break
                     tcp_succeeded = any(
                         item.get("name") == "tcp" and item.get("status") == "completed"
                         for item in manifest.get("execution_phases") or []
@@ -5862,6 +6072,7 @@ def _scan_worker_entry(
         dispatch_next_queued_run(db_path=db_path, data_dir=data_dir)
     finally:
         with ACTIVE_RUNS_LOCK:
+            ACTIVE_RUNS.pop(run_id, None)
             ACTIVE_RUN_THREADS.pop(run_id, None)
 
 
@@ -7171,6 +7382,16 @@ def resume_scan_workers() -> None:
         _SCAN_WORKER_SHUTDOWN.clear()
 
 
+def active_scan_worker_ids() -> list[str]:
+    """Return scans that this process is still actively responsible for."""
+    with ACTIVE_RUNS_LOCK:
+        return sorted(
+            run_id
+            for run_id, thread in ACTIVE_RUN_THREADS.items()
+            if run_id in ACTIVE_RUNS and thread.is_alive()
+        )
+
+
 def stop_scan_workers(timeout: float = 2.0) -> bool:
     """Request active scans to stop and prove their writer threads exited."""
     deadline = time.monotonic() + max(0.0, timeout)
@@ -7879,19 +8100,21 @@ def decide_scan_fallback(
         control = ACTIVE_RUNS.get(run_id)
         if control is None or manifest["status"] != "awaiting_fallback_approval":
             raise HTTPException(status_code=409, detail="Fallback approval is not pending")
-        if control.fallback_decision is not None:
-            raise HTTPException(status_code=409, detail="Fallback decision already recorded")
-        control.fallback_decision = request.decision
-        control.fallback_decided_by = request.decided_by
-        control.fallback_authorization_note = request.authorization_note
+        try:
+            saved = record_scan_fallback_decision(
+                run_id,
+                decision=request.decision,
+                decided_by=request.decided_by,
+                authorization_note=request.authorization_note,
+                db_path=DB_PATH,
+            )
+        except FallbackDecisionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        control.fallback_decision = saved["fallback_decision"]
+        control.fallback_decided_by = saved["fallback_decided_by"]
+        control.fallback_authorization_note = saved["fallback_authorization_note"]
+        control.fallback_decided_at = saved["fallback_decided_at"]
         control.fallback_decision_event.set()
-    append_scan_audit(
-        DB_PATH,
-        run_id=run_id,
-        event=f"fallback_{request.decision}",
-        actor=request.decided_by,
-        details=request.authorization_note,
-    )
     return {"run_id": run_id, "decision": request.decision, "status": "decision_recorded"}
 
 

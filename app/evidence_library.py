@@ -21,6 +21,18 @@ LOCK = threading.RLock()
 FAILED = set()
 RUN = re.compile(r"[0-9a-f]{32}\Z")
 MAX_MANIFEST = 2 * 1024 * 1024
+SCAN_STATUS_LABELS = {
+    "queued": "Waiting",
+    "dispatching": "Getting ready",
+    "running": "Running",
+    "awaiting_fallback_approval": "Waiting for fallback approval",
+    "completed": "Completed",
+    "completed_without_nmap": "Finished without Nmap",
+    "cancelled": "Cancelled",
+    "failed": "Failed",
+    "timed_out": "Timed out",
+    "interrupted": "Interrupted — needs attention",
+}
 
 
 def read_manifest_bytes(path):
@@ -287,6 +299,10 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             row['analysis_url'] = f'/device-analysis?run={sid}#deviceEvidencePicker'
             row['download_url'] = ''  # Detail lists protected, allowlisted original files.
         elif row['kind']=='scan':
+            if row['status'] != 'Unreadable scan metadata':
+                row['status'] = SCAN_STATUS_LABELS.get(
+                    row['status'], row['status'].replace('_', ' ').strip().title()
+                )
             row['detail_url'] = f'/api/scan-runs/{sid}'
             row['analysis_url'] = f'/analysis?run={sid}'
             row['download_url'] = f'/api/scan-runs/{sid}/artifacts/xml'

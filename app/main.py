@@ -201,6 +201,7 @@ from app.mission_environment import (
 )
 from app.runtime_tool_inventory import apply_bundled_tool_inventory
 from app.collection_safety_setup import (
+    bind_collection_scope_context_on_connection,
     CollectionSafetySetupIncomplete,
     get_collection_safety_status,
     record_collection_safety_review,
@@ -214,6 +215,7 @@ from app.network_scopes import (
     update_network_scope,
 )
 from app.poc import (
+    active_scan_worker_ids,
     LEGACY_PROFILE_IDS,
     ScanOptions,
     ReviewedScopeAssociation,
@@ -1122,17 +1124,23 @@ def _certify_campaign_mission_on_connection(spec: CampaignSpec, db) -> dict:
             raise MissionEnvironmentConflict(
                 "Package targets changed after review; review the Saved Networks again"
             )
-    resolve_reviewed_scope_context(
+    context = resolve_reviewed_scope_context(
         db,
         saved_network_ids=list(spec.saved_network_ids),
         manual_targets=manual_targets,
         reviewed_associations=reviewed_associations,
+    )
+    _setup, context = bind_collection_scope_context_on_connection(
+        db,
+        context=context,
+        saved_network_ids=list(spec.saved_network_ids),
     )
     return resolve_collection_mission_review(
         db,
         saved_network_ids=list(spec.saved_network_ids),
         manual_targets=manual_targets,
         reviewed_scopes=reviewed_mission,
+        collection_scope_id=(context or {}).get("scope_id"),
     )
 
 
@@ -2027,6 +2035,7 @@ def scan_work_recovery_status(request: Request) -> dict:
     return {
         "pause": recovery_pause(DATA_DIR),
         "plan": diagnose_scan_work(DB_PATH),
+        "live_scan_run_ids": active_scan_worker_ids(),
         "resume_confirmation": "RESUME PRESERVED SCANS",
         "passive_resume_confirmation": "RESUME PASSIVE PULLS",
         "device_resume_confirmation": "RESUME DEVICE CONTACT",
@@ -4410,7 +4419,11 @@ def create_package(http_request: Request, spec: CampaignSpec) -> StreamingRespon
             db.execute("BEGIN IMMEDIATE")
             _certify_campaign_mission_on_connection(spec, db)
             (PACKAGE_DIR / stored_name).write_bytes(content)
-    except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
+    except (
+        CollectionSafetySetupIncomplete,
+        MissionEnvironmentConflict,
+        SavedNetworkScopeConflict,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -4430,7 +4443,11 @@ def preview_commands(spec: CampaignSpec) -> dict:
         mission_review = certify_campaign_mission(spec)
         _, flags, chunks = build_scan_plan(spec)
         profile = resolve_campaign_profile(spec)
-    except (MissionEnvironmentConflict, SavedNetworkScopeConflict) as exc:
+    except (
+        CollectionSafetySetupIncomplete,
+        MissionEnvironmentConflict,
+        SavedNetworkScopeConflict,
+    ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

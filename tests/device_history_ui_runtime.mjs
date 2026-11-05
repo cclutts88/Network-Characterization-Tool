@@ -55,12 +55,15 @@ assert.ok(source.includes("card.dataset.runId=run.run_id"));
 assert.ok(source.includes("data-device-scope-assignment") || source.includes("dataset.deviceScopeAssignment"));
 assert.ok(source.includes("dataset.deviceScopeReceipts"));
 assert.ok(source.includes("Retained by scoped receipts"));
+assert.ok(source.includes("delete this unscoped result below"));
+assert.ok(source.includes("deletion is unavailable. Review its scope assignment"));
 assert.ok(source.includes("blank.selected=!preferredScope"));
 assert.ok(source.includes("The former suggestion"));
 assert.ok(source.includes("is archived or unavailable, so NCT selected nothing"));
 assert.ok(source.includes("Collection-plan scope suggestion"));
 assert.ok(source.includes("label not retained"));
 assert.ok(!source.includes("run.preferred_scope_label||run.device_scope_assignment?.scope_label"));
+assert.ok(source.includes("if(task==='deviceHistory'){const loaded=await Promise.all([loadActiveCollectionMode(),loadDeviceScopeOptions(),loadHistory(true)])"));
 
 await eval(`(() => {
   ${handler("collectionPlanScopeSuggestion")}

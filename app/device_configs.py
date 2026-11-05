@@ -3521,12 +3521,40 @@ def calculate_device_collection_summary(
         }
         for route in routes
     ]
+    fact_counts = {
+        "interfaces": len(interfaces),
+        "routes": len(routes),
+        "neighbors": len(neighbors),
+        "topology_neighbors": len(topology_neighbors),
+        "vlans": max(len(vlans), len(switch_detail.get("vlans") or [])),
+        "firewall_acl": max(len(firewall_acl), int(iptables_policy["counts"]["rules"])),
+        "nat": len(nat),
+        "network_objects": network_objects_total,
+        "applied_policy": int((vendor_policy.get("counts") or {}).get("rules", 0)),
+        "learned_macs": len(switch_detail["mac_table"]),
+        "switch_ports": len(switch_detail["ports"]),
+        "port_channels": len(switch_detail["port_channels"]),
+        "spanning_tree": len(switch_detail["spanning_tree"]),
+    }
+    supported_fact_count = sum(fact_counts.values())
     result = {
         "run_id": run_id,
         "source_filename": source_filename,
         "raw_filename": raw_filename,
         "configuration_truncated": configuration_truncated,
         "raw_truncated": raw_truncated,
+        "evidence_quality": {
+            "status": "supported" if supported_fact_count else "no_supported_facts",
+            "supported_fact_count": supported_fact_count,
+            "recognized_categories": [
+                name for name, count in fact_counts.items() if count
+            ],
+            "detail": (
+                "Supported network facts were recognized in the retained configuration."
+                if supported_fact_count
+                else "Processing completed and the original file was retained, but no supported network facts were recognized. Verify the selected vendor, device role, and file before using this result."
+            ),
+        },
         "counts": {
             "interfaces": len(interfaces),
             "routes": len(routes),
@@ -3578,6 +3606,36 @@ def calculate_device_collection_summary(
         "raw_output": raw_output,
     }
     return result
+
+
+def _completed_summary_evidence_quality(job: dict | None) -> dict | None:
+    """Return a small verified quality summary without recalculating evidence."""
+    attempt = job.get("latest_attempt") if job else None
+    if (
+        not attempt
+        or attempt.get("state") != "completed"
+        or attempt.get("output_kind") != "derived_result"
+        or not attempt.get("output_id")
+    ):
+        return None
+    try:
+        with connect_database(DB_PATH, read_only=True) as db:
+            row = db.execute(
+                "SELECT result_json, result_sha256 FROM derived_results WHERE result_id = ?",
+                (attempt["output_id"],),
+            ).fetchone()
+        if row is None or hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
+            return None
+        payload = json.loads(row[0])
+        canonical = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        )
+        if canonical != row[0]:
+            return None
+        quality = payload.get("evidence_quality")
+        return quality if isinstance(quality, dict) else None
+    except (OSError, sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 @guarded_evidence_mutation(
@@ -4913,6 +4971,7 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
             record["summary_processing_state"] = processing_state
             record["summary_processing_detail"] = processing_detail
             record["summary_job_id"] = job.get("job_id") if job else None
+            record["summary_evidence_quality"] = _completed_summary_evidence_quality(job)
             from app.device_observations import get_device_observation_status
 
             observation_status = get_device_observation_status(DB_PATH, record["run_id"])

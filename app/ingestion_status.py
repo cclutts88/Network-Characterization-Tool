@@ -25,7 +25,7 @@ from app.pipeline_intake import (
 
 _SOURCE_LABELS = {
     MANUAL_NMAP_SOURCE: "Imported Nmap evidence",
-    AUTOMATED_NMAP_SOURCE: "Completed Nmap scan",
+    AUTOMATED_NMAP_SOURCE: "Nmap scan",
     MANUAL_DEVICE_SOURCE: "Uploaded device configuration",
     COLLECTED_DEVICE_SOURCE: "Collected device configuration",
 }

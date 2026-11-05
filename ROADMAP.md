@@ -1,6 +1,101 @@
 # NCT — Network Correlation & Triage
 Foundational Redesign and Governing Roadmap
 
+Core analyst workflow stability restoration gate started (2026-11-05): the
+current Range build is not accepted for further feature qualification after a
+full-target Nmap fallback could acknowledge an analyst decision without advancing,
+then remain indefinitely in Cancelling and block the shared scan queue. Source
+review found that the scan worker did not renew its execution ownership while
+waiting for the decision, the decision was acknowledged from process memory before
+durable publication, cancellation could race the accepted decision before another
+network process was launched, and one failed browser status request could stop the
+detailed progress refresh. Freeze downstream feature work. Repair the approval,
+cancellation, ownership and progress-refresh contract; preserve any already-created
+source evidence; and add delayed decisions beyond one lease interval, manual and
+scheduled runs, simultaneous approval/cancellation, cancellation between TCP and
+UDP, restart/recovery and transient browser-request coverage. Then repeat an
+isolated, operator-visible core journey from Mission Environment setup through Nmap
+scan and device-configuration collection into retained evidence, Hunt, Reach and
+Map. The device path must prove that a valid active Network Scope is selectable,
+visibly frozen from the saved collection profile into the queued attempt, and still
+present on completed evidence; a missing scope choice or silent loss is a release
+blocker. Require independent reviewer and novice-operator clearance before preparing
+another Range package. This gate does
+not authorize clearing the currently stuck Range run or changing its retained
+evidence, and it does not claim the live incident's exact lease timestamps or logs
+have yet been recovered.
+
+Adversarial operator qualification expanded (2026-11-05): the stability gate now
+includes safe failure rehearsal, not only a successful scan. A novice operator must
+use isolated disposable data to exercise unreachable and documentation-only target
+ranges, fallback approval and refusal, cancellation before and after a decision,
+pending-work cancellation, worker interruption and restart, a transient status
+request failure, malformed Nmap XML, duplicate evidence, an unsupported device file,
+and deletion of that deliberately incorrect device collection. The rehearsal must
+confirm that one bad run does not strand later work, accepted decisions are visible,
+cancelled work cannot launch another network process, retained source evidence is
+not silently lost, and the Operator Guide explains the next safe action. Live SSH,
+remote Arkime, the independent recovery console and destructive deletion of
+non-disposable evidence remain outside this local gate unless separately available.
+
+Core stability corrections completed in development (2026-11-05): fallback
+decisions and scan-worker ownership are now durable while an analyst decides;
+cancellation wins decision races and is checked again before every later process;
+the browser continues checking after a temporary status failure; and the detailed
+Active Scan view is no longer displaced by a newer summary response for the same
+run. The scan builder is inert until its saved draft has either been restored or
+reported unavailable, preventing an analyst's first edits from being silently
+overwritten. Device History now labels a completed upload that contains no supported
+configuration facts before an analyst decides whether to keep or delete it. System
+Health and the Evidence Library use operator-facing terminal-state wording instead
+of presenting a cancelled or declined run as a completed scan. Focused automated,
+browser and independent review results are recorded with the final gate below; this
+is development qualification on `foundation/evidence-engine-v2`, not a Range or
+mission-readiness claim.
+
+Core stability development acceptance pending independent re-clearance
+(2026-11-05): the novice operator used disposable loopback evidence to prove delayed
+draft restoration, an unreachable FPING target, fallback decline, a waiting scan
+continuing afterward, pending and active cancellation, transient status recovery,
+wrong-configuration warning and coded deletion, duplicate/malformed imports,
+evidence downloads, neutral outcome labels, two themes, table alignment and the
+Operator Guide. A first-click decision race found during that rehearsal was repaired:
+the approval panel is now bound to the exact displayed run, refuses stale panels,
+keeps both choices disabled across a delayed save and polling, and publishes exactly
+one receipt. The novice re-test is `CLEAR`. The independent reviewer then halted the
+gate on six narrower findings: a final cancellation-to-process-launch race, terminal
+publication overwriting a newer fallback decision, overlapping detailed polls
+restoring an older decision state, cancelled partial evidence being described as
+completed, misleading cancelled-partial live-discovery wording, and deletion advice
+shown for scoped device evidence that cannot be deleted from that view.
+
+Core stability reviewer findings corrected and re-tested (2026-11-05): process
+launch admission now makes the final durable cancellation decision and process
+creation one protected operation; terminal publication preserves any newer saved
+fallback decision; and only the newest detailed Active Scan response may update the
+approval state. Cancelled partial runs now say that completed-protocol evidence was
+retained without calling the scan completed, and unsupported device guidance changes
+according to whether the evidence is unscoped and deletable or scoped and retained.
+Focused reliability and browser-runtime checks passed, the affected visual pages
+were inspected in the isolated preview, and the complete application suite passed
+2,512 tests with 25 expected skips and one dependency deprecation warning. Live SSH
+collection, an external Arkime connector, the independent recovery console, actual
+Range network contact and non-disposable deletion were not exercised and are not
+implied. Independent re-review and the resulting commit remain required before this
+gate is development-ready; no deployment package is authorized by this entry.
+
+Backend efficiency and redundancy gate recorded (2026-11-05): a dedicated read-only
+backend reviewer found avoidable repeated work in Hunt cache validation, Device
+History, Scan History and active-queue refreshes, plus long writer-held file and hash
+operations. Address these only after the current stability gate is independently
+cleared. First add measurements and regression contracts; then replace repeated Hunt
+cache validation with a cheaper exact invalidation contract, batch page reads, batch
+active-queue status reads and shorten writer transactions. Remove only private
+helpers proven to have no callers; public-looking paths require a compatibility and
+deprecation inventory before removal. Re-run the complete suite, browser workflows,
+novice workflow and independent quality gate after each meaningful optimization so
+streamlining cannot silently remove evidence, compatibility or operator behavior.
+
 Fresh-r3 exact continuation and failure-reporting gate started (2026-11-04):
 the Range is an explicit mixed intermediate state after the protected helper
 transaction completed: the application remains Fresh-r2 while the host helper and

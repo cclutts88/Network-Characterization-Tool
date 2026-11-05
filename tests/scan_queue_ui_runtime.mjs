@@ -18,6 +18,18 @@ function functionBlock(name, nextName) {
   return source.slice(start, end);
 }
 
+await eval(`(() => {
+  ${functionBlock("recoveryIssues", "pausedRecoveryLabels")}
+  const plan={
+    scans:[{run_id:'live-run',action:'interrupt_for_review'},{run_id:'stale-run',action:'interrupt_for_review'}],
+    schedule_chunks:[{occurrence_id:'live-occ',chunk_number:1,scan_run_id:'live-run',action:'hold_for_review'},{occurrence_id:'live-occ',chunk_number:2,scan_run_id:null,action:'hold_for_review'}],
+    schedule_occurrences:[{occurrence_id:'live-occ',schedule_id:'live-schedule',action:'hold_for_review'}],
+    schedules:[{schedule_id:'live-schedule',action:'disable_for_review'}],
+  };
+  const issues=recoveryIssues(plan,['live-run']);
+  assert.deepEqual(issues.map(entry=>entry.label),['Nmap scan stale-ru']);
+})()`);
+
 await eval(`(async () => {
   let queueLoadRevision=0,queueTimer=null,queueAssignmentConflictHold=false,currentLive=false,currentId=null,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeCollectionEnabled=true;
   const esc=value=>String(value??'');
@@ -44,6 +56,57 @@ await eval(`(async () => {
   resolveFetch({ok:true,status:200,json:async()=>({runs:[{run_id:'pending',status:'queued',queue_position:1}]})});
   await pending;
   assert.equal(renderedItem.open,true,'opening a row while fetch is pending must survive render');
+})()`);
+
+await eval(`(async () => {
+  let currentId='active-retry',currentLive=true,pollTimer=null,activeViewRevision=4,activeStatusRequestRevision=0,activeStatusAppliedRevision=0,activeDetailRequestRevision=0;
+  const fetch=async()=>{throw new Error('temporary status failure')};
+  const messages=[];
+  const status=(message,kind)=>messages.push({message,kind});
+  const clearTimeout=()=>{};
+  let retry=null;
+  const setTimeout=callback=>{retry=callback;return 17};
+  ${handler("poll")}
+  await poll('active-retry',4);
+  assert.equal(typeof retry,'function','a transient status failure must schedule another detailed check');
+  assert.equal(pollTimer,17);
+  assert.match(messages[0].message,/keep checking this scan/i);
+})()`);
+
+await eval(`(async () => {
+  let currentId='active-held',currentLive=true,pollTimer=null,activeViewRevision=7,activeStatusRequestRevision=3,activeStatusAppliedRevision=99,activeDetailRequestRevision=0;
+  const fetch=async()=>({ok:true,json:async()=>({run_id:'active-held',status:'awaiting_fallback_approval',progress:{phase:'awaiting_approval'}})});
+  const applied=[];
+  const setCurrent=run=>applied.push(run.status);
+  const loadLiveDiscoveries=()=>{};
+  const clearTimeout=()=>{};
+  const setTimeout=()=>23;
+  const status=message=>{throw new Error(message)};
+  ${handler("poll")}
+  await poll('active-held',7);
+  assert.deepEqual(applied,['awaiting_fallback_approval'],'a detailed response for the current run must not be starved by newer queue-summary polling');
+  assert.equal(pollTimer,23,'the held run must keep its detailed polling loop');
+})()`);
+
+await eval(`(async () => {
+  let currentId='active-race',currentLive=true,pollTimer=null,activeViewRevision=9,activeDetailRequestRevision=0;
+  const requests=[];
+  const fetch=()=>new Promise(resolve=>requests.push(resolve));
+  const applied=[];
+  const setCurrent=run=>applied.push(run.fallback_decision||'none');
+  const loadLiveDiscoveries=()=>{};
+  const clearTimeout=()=>{};
+  let timers=0;
+  const setTimeout=()=>{timers+=1;return timers};
+  const status=message=>{throw new Error(message)};
+  ${handler("poll")}
+  const older=poll('active-race',9),newer=poll('active-race',9);
+  requests[1]({ok:true,json:async()=>({run_id:'active-race',status:'awaiting_fallback_approval',fallback_decision:'approve',progress:{phase:'awaiting_approval'}})});
+  await newer;
+  requests[0]({ok:true,json:async()=>({run_id:'active-race',status:'awaiting_fallback_approval',fallback_decision:null,progress:{phase:'awaiting_approval'}})});
+  await older;
+  assert.deepEqual(applied,['approve'],'an older detailed response must not restore an undecided approval panel');
+  assert.equal(timers,1,'only the newest detailed response may schedule the next poll');
 })()`);
 
 await eval(`(async () => {
@@ -260,6 +323,63 @@ await eval(`(async () => {
   assert.equal(scanDataLoaded.has('retryable'),true,'the successful retry must be cached');
   await ensureScanData('retryable',loader);
   assert.equal(attempts,2,'a successful task read should be reused on return');
+})()`);
+
+await eval(`(async () => {
+  let currentId='current-run',fallbackDecisionInFlight=false,activeViewRevision=3,pollTimer=11,activeReloads=0;
+  const controls={
+    fallbackApproval:{dataset:{runId:'stale-run'}},
+    fallbackNote:{value:'Reviewed decline',setAttribute(){},removeAttribute(){},focus(){},reportValidity(){}},
+    fallbackDecisionStatus:{textContent:'',className:''},
+    approveFallback:{disabled:false},declineFallback:{disabled:false},
+  };
+  const $=id=>controls[id];
+  const auditActor=()=> 'analyst';
+  const messages=[];
+  const status=(message,kind)=>messages.push({message,kind});
+  const loadActiveRun=()=>{activeReloads+=1};
+  const fetch=()=>{throw new Error('a stale decision must not contact the server')};
+  const clearTimeout=()=>{};
+  const poll=()=>{};
+  const setFallbackDecisionStatus=(message,kind='')=>{const node=$('fallbackDecisionStatus');node.textContent=message;node.className='status '+kind};
+  ${handler("submitFallbackDecision")}
+  await submitFallbackDecision('decline');
+  assert.equal(activeReloads,1);
+  assert.match(controls.fallbackDecisionStatus.textContent,/did not apply/i);
+  assert.match(messages[0].message,/not applied/i);
+})()`);
+
+await eval(`(async () => {
+  let currentId='exact-run',fallbackDecisionInFlight=false,activeViewRevision=8,pollTimer=22;
+  const controls={
+    fallbackApproval:{dataset:{runId:'exact-run'}},
+    fallbackNote:{value:'Mission partner approved',setAttribute(){},removeAttribute(){},focus(){},reportValidity(){}},
+    fallbackDecisionStatus:{textContent:'',className:''},
+    approveFallback:{disabled:false},declineFallback:{disabled:false},
+  };
+  const $=id=>controls[id];
+  const auditActor=()=> 'analyst';
+  const messages=[];
+  const status=(message,kind)=>messages.push({message,kind});
+  const loadActiveRun=()=>{};
+  const requests=[];
+  const fetch=(url,options)=>new Promise(resolve=>requests.push({url,options,resolve}));
+  const clearTimeout=()=>{};
+  const polls=[];
+  const poll=(run,revision)=>polls.push({run,revision});
+  const setFallbackDecisionStatus=(message,kind='')=>{const node=$('fallbackDecisionStatus');node.textContent=message;node.className='status '+kind};
+  ${handler("submitFallbackDecision")}
+  const first=submitFallbackDecision('approve');
+  const duplicate=submitFallbackDecision('approve');
+  assert.equal(requests.length,1,'one decision in flight must suppress duplicate submission');
+  assert.equal(requests[0].url,'/api/scan-runs/exact-run/fallback-decision');
+  assert.equal(controls.approveFallback.disabled,true);
+  assert.equal(controls.declineFallback.disabled,true);
+  requests[0].resolve({ok:true,json:async()=>({status:'recorded'})});
+  await Promise.all([first,duplicate]);
+  assert.equal(fallbackDecisionInFlight,false);
+  assert.deepEqual(polls,[{run:'exact-run',revision:8}]);
+  assert.match(controls.fallbackDecisionStatus.textContent,/safely recorded/i);
 })()`);
 
 console.log("Scan queue UI runtime regressions passed");

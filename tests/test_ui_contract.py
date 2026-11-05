@@ -154,6 +154,9 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     assert "No terminal command or record change is required" in html
     assert "const hostRecoveryNeeded=" in html
     assert "loadScanRecovery(keepOpen=false)" in html
+    assert "recoveryIssues(plan,liveScanRunIds=[])" in html
+    assert "live_scan_run_ids" in html
+    assert "stopped-container recovery is not needed" in html
     assert "Boolean(keepOpen||pause||blockers.length||issues.length)" in html
     assert "$('checkScanRecovery').onclick=event=>{event.preventDefault();event.stopPropagation();return loadScanRecovery(true)}" in html
     assert "Resume preserved scans" in html
@@ -682,6 +685,11 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "Enter the required approval or mission-constraint note before choosing either action." in html
     assert "note.focus();note.reportValidity()" in html
     assert "Recording approval and preparing the full Nmap fallback" in html
+    assert "$('fallbackApproval').dataset.runId=run.run_id" in html
+    assert "const decisionRunId=$('fallbackApproval').dataset.runId" in html
+    assert "decisionRunId!==currentId" in html
+    assert "NCT did not apply it" in html
+    assert "fallbackDecisionInFlight||decisionSaved||!canControl" in html
     assert "Delete custom profile" in html
     assert 'id="profileStatus" class="status" role="status" aria-live="polite"' in html
     assert "request_token:receipt.token" in html
@@ -769,7 +777,10 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "UDP scan" in html
     assert "Merging results" in html
     assert "Preparing analysis" in html
-    assert "completed · partial" in html
+    assert "Cancelled · retained partial evidence" in html
+    assert "Evidence from completed protocol phases was retained for review" in html
+    assert "Evidence from a completed protocol phase can be retained even when the remaining scan is stopped." in html
+    assert "activeDetailRequestRevision" in html
     assert "batch_hosts_completed" in html
     assert 'class="delete-modal hidden"' in html
     assert 'role="dialog"' in html
@@ -804,6 +815,11 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "function claimActiveStatus(revision)" in html
     assert "ownsActiveStatus=claimActiveStatus(statusRevision)" in html
     assert "function startActiveView(run)" in html
+    assert 'id="scanBuilder" class="panel builder draft-loading" aria-busy="true" inert' in html
+    assert ".builder.draft-loading{pointer-events:none;opacity:.72}" in html
+    assert "finally{$('scanBuilder').classList.remove('draft-loading');$('scanBuilder').removeAttribute('aria-busy');$('scanBuilder').removeAttribute('inert')}" in html
+    assert "async function poll(runId=currentId,revision=activeViewRevision){if(!activeScanWorkspace()||!runId||revision!==activeViewRevision)return;const detailRevision=++activeDetailRequestRevision;try" in html
+    assert "detailRevision!==activeDetailRequestRevision" in html
     assert "data-history-detail" in html
     assert "loadActiveRun()" in html
     assert "exact_execution_command" in html
@@ -1174,7 +1190,10 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     html = device_config_page().body.decode()
     assert "Collection note (optional)" in html
     assert "Reason / authorization note" not in html
-    assert "Device address is required before uploading" in html
+    assert 'id="uploadAddress" required' in html
+    assert 'id="uploadVendor"' in html
+    assert 'id="uploadPreferredScope"' in html
+    assert "Enter the device address shown on this upload page before uploading" in html
     assert 'id="operator"' not in html
     assert "operator:auditActor()" in html
     assert "Collection execution preview" in html
@@ -3257,6 +3276,7 @@ def test_shared_shell_loads_only_the_selected_task_and_stops_hidden_polling():
     assert "function activateDeviceTask" in devices
     assert "function stopHiddenDeviceWork" in devices
     assert "currentDeviceTask()!=='deviceHistory'" in devices
+    assert "if(task==='deviceHistory'){const loaded=await Promise.all([loadActiveCollectionMode(),loadDeviceScopeOptions(),loadHistory(true)])" in devices
     assert "window.addEventListener('nct:taskchange',requestDeviceTaskActivation)" in devices
     assert "function activateArkimeTask" in arkime
     assert "window.addEventListener('nct:taskchange',requestArkimeTaskActivation)" in arkime
@@ -3276,6 +3296,8 @@ def test_operator_readme_explains_scope_continuity_and_scoped_vlan_limits():
     ).body.decode()
 
     assert "A scope carried by a profile remains a suggestion" in html
+    assert "The held scan remains owned while an analyst reviews it" in html
+    assert "a saved cancellation prevents later fallback contact" in html
     assert "It separately records supported VLAN statements" in html
     assert "Scoped VLAN evidence appears in Network Devices, Current Network" in html
     assert "do not turn them into host identity, routing, Reach, CVE, or Map-link claims" in html

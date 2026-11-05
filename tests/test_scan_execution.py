@@ -29,11 +29,15 @@ UDP_XML = b'''<?xml version="1.0"?><nmaprun scanner="nmap"><scaninfo type="udp" 
 
 
 class FakeProcess:
-    def __init__(self, code: int | None):
+    def __init__(self, code: int | None, after_start=None):
         self.code = code
         self.terminated = False
+        self.after_start = after_start
 
     def poll(self):
+        if self.after_start is not None:
+            callback, self.after_start = self.after_start, None
+            callback()
         return 0 if self.terminated else self.code
 
     def terminate(self):
@@ -108,9 +112,14 @@ def test_new_global_exclusion_is_rechecked_between_protocol_phases(tmp_path):
             (cwd / "discovery.xml").write_bytes(DISCOVERY_XML)
         elif "tcp-scan.xml" in command:
             (cwd / "tcp-scan.xml").write_bytes(TCP_XML)
-            add_global_no_strike(
-                NoStrikeUpdate(entries=["192.0.2.10"], changed_by="safety-officer"),
-                db_path,
+            return FakeProcess(
+                0,
+                after_start=lambda: add_global_no_strike(
+                    NoStrikeUpdate(
+                        entries=["192.0.2.10"], changed_by="safety-officer"
+                    ),
+                    db_path,
+                ),
             )
         return FakeProcess(0)
 

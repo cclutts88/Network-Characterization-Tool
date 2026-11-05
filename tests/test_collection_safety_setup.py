@@ -37,6 +37,39 @@ def reviewed_setup(client, *, label="Home lab"):
     return scope
 
 
+def test_manual_scan_preview_uses_the_reviewed_active_collection_scope(
+    tmp_path, monkeypatch
+):
+    with client_for(tmp_path, monkeypatch) as client:
+        scope = reviewed_setup(client, label="Isolated demo")
+        preview = client.post(
+            "/api/preview",
+            json={
+                "name": "Manual localhost preview",
+                "created_by": "local-operator",
+                "profile": "Custom",
+                "scan_options": {
+                    "protocol": "tcp",
+                    "tcp_scope": "common",
+                    "discovery_mode": "fping",
+                },
+                "terrain": [{"name": "Manual", "targets": ["127.0.0.1/32"]}],
+                "manual_targets": ["127.0.0.1/32"],
+                "reviewed_mission_scopes": [
+                    {"scope_id": scope["scope_id"], "version": 0}
+                ],
+                "no_strike_mode": "none",
+                "no_strike": [],
+            },
+        )
+
+    assert preview.status_code == 200, preview.text
+    mission_review = preview.json()["mission_environment_review"]
+    assert mission_review["decision"] == "unknown"
+    assert mission_review["manual_targets_unknown"] is False
+    assert mission_review["scopes"][0]["scope_id"] == scope["scope_id"]
+
+
 def test_scope_and_safety_review_is_bound_to_exact_revisions(tmp_path, monkeypatch):
     with client_for(tmp_path, monkeypatch) as client:
         page = client.get("/settings/scope-safety")

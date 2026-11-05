@@ -111,6 +111,8 @@ def test_frozen_calculation_matches_file_wrapper_and_preserves_history_lines(tmp
     )
 
     assert calculated == expected
+    assert calculated["evidence_quality"]["status"] == "supported"
+    assert calculated["evidence_quality"]["supported_fact_count"] > 0
     assert calculated["command_history"]["entries"][1]["line_number"] == 2
     verified = device_result.analyze_manual_upload_summary(db_path, run_id, run_dir)
     assert {**verified["payload"], **verified["source_content"]} == expected
@@ -262,3 +264,9 @@ def test_existing_empty_higher_priority_file_wins_and_missing_history_is_distinc
         output_complete=True,
     )
     assert attempted_empty["command_history"]["status"] == "unavailable"
+    assert attempted_empty["evidence_quality"] == {
+        "status": "no_supported_facts",
+        "supported_fact_count": 0,
+        "recognized_categories": [],
+        "detail": "Processing completed and the original file was retained, but no supported network facts were recognized. Verify the selected vendor, device role, and file before using this result.",
+    }

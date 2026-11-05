@@ -31,11 +31,28 @@ def device(root, run='a'*32, **fields):
     return path
 
 
-def scan(p, run, **changes):
+def scan(p, run, status='completed', **changes):
     manifest=dict(name='Office scan',saved_networks=[dict(name='Office Servers',cidr='10.2.0.0/24')],targets=['10.2.0.0/24'])
     manifest.update(changes)
     with sqlite3.connect(p) as db:
-        db.execute('INSERT INTO scan_runs VALUES (?,?,?,?,?)',(run,'2026-11-02T12:00:00+00:00','completed','Bob',json.dumps(manifest)))
+        db.execute('INSERT INTO scan_runs VALUES (?,?,?,?,?)',(run,'2026-11-02T12:00:00+00:00',status,'Bob',json.dumps(manifest)))
+
+
+@pytest.mark.parametrize(
+    ('stored', 'shown'),
+    [
+        ('completed', 'Completed'),
+        ('completed_without_nmap', 'Finished without Nmap'),
+        ('cancelled', 'Cancelled'),
+        ('awaiting_fallback_approval', 'Waiting for fallback approval'),
+    ],
+)
+def test_scan_statuses_use_operator_language(store, stored, shown):
+    p, root = store
+    scan(p, 's', status=stored)
+    row = lib.list_evidence(p, root, kind='scan')['items'][0]
+    assert row['status'] == shown
+    assert stored not in row['status']
 
 
 def test_uploaded_device_search_retains_filename_and_device_name(store):
