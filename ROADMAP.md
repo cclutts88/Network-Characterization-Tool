@@ -32,6 +32,11 @@ The first novice narrow-screen check correctly halted release because the tutori
 badge overlapped Vendor and its panel covered part of the role explanation. Include
 the explanation in the highlighted area, place the badge beside a target whenever
 screen space permits, and repeat the same narrow-screen check before qualification.
+The repeat check found that a full-width target at 950 by 760 pixels still left no
+safe side position, so the redundant floating badge is now hidden in that case while
+the outline and tutorial panel continue to identify the field. Tutorial scrolling now
+also keeps the highlighted control below the fixed header. Focused UI validation is
+green; final novice and independent review remain required before resealing R12.
 
 Range package transfer hardening completed in development (2026-11-05): the standard
 48 MiB transfer-set builder now gives each sealed package a visible checksum-derived
