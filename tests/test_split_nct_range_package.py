@@ -27,13 +27,18 @@ def test_parts_join_to_exact_original_and_preserve_existing_output(tmp_path):
         *(part['file'] for part in result['parts']),
         'JOIN-NCT.sh',
         'READ-ME-FIRST.txt',
+        'TRANSFER-CHECKSUMS.json',
     ]
     record=json.loads((parts/'TRANSFER-CHECKSUMS.json').read_text())
     assert record['zip_sha256']==transfer.digest(source)
-    assert record['readme_sha256']==transfer.digest(parts/'READ-ME-FIRST.txt')
+    assert result['transfer_record_sha256']==transfer.digest(parts/'TRANSFER-CHECKSUMS.json')
+    assert result['readme_sha256']==transfer.digest(parts/'READ-ME-FIRST.txt')
+    assert result['join_script_sha256']==transfer.digest(parts/'JOIN-NCT.sh')
     readme=(parts/'READ-ME-FIRST.txt').read_text()
     assert 'All pieces belong' in readme and 'in that one folder' in readme
-    assert 'No separate .sha256 upload is required' in readme
+    assert 'Upload every file in the transfer folder' in readme
+    assert 'Do not leave TRANSFER-CHECKSUMS.json behind' in readme
+    assert 'No separate\n  checksum upload is required' in readme
     assert all(p['bytes']<=24 and transfer.digest(parts/p['file'])==p['sha256'] for p in result['parts'])
     def join():return subprocess.run(['sh',str(parts/'JOIN-NCT.sh'),str(out)],capture_output=True,text=True)
     first=join();assert first.returncode==0 and '[4/4] PASS' in first.stdout
@@ -44,6 +49,53 @@ def test_parts_join_to_exact_original_and_preserve_existing_output(tmp_path):
     restored.write_bytes(b'preserve different ZIP')
     assert join().returncode and restored.read_bytes()==b'preserve different ZIP'
     assert not list(out.glob('.nct-transfer-join.*'))
+
+
+@pytest.mark.parametrize('problem',['missing','linked','wrong-transfer','contradictory'])
+def test_join_requires_the_matching_transfer_identity_record(tmp_path,problem):
+    source=original(tmp_path);result=transfer.split_package(source,part_bytes=24)
+    parts=Path(result['directory']);record=parts/'TRANSFER-CHECKSUMS.json'
+    if problem=='missing':record.unlink()
+    elif problem=='linked':
+        record.unlink()
+        try:record.symlink_to(source)
+        except OSError:pytest.skip('host does not permit test symlinks')
+    elif problem=='wrong-transfer':
+        content=record.read_text().replace(result['transfer_id'],'0'*12,1)
+        record.write_text(content)
+    else:
+        with record.open('a') as stream:
+            stream.write('\n{"transfer_id":"wrong","zip_sha256":"wrong"}\n')
+    out=tmp_path/'out';out.mkdir()
+
+    joined=subprocess.run(
+        ['sh',str(parts/'JOIN-NCT.sh'),str(out)],capture_output=True,text=True,
+    )
+
+    assert joined.returncode!=0
+    assert 'TRANSFER-CHECKSUMS.json' in joined.stderr
+    assert not list(out.iterdir())
+
+
+@pytest.mark.parametrize('problem',['missing','linked','changed'])
+def test_join_requires_the_exact_generated_operator_readme(tmp_path,problem):
+    source=original(tmp_path);result=transfer.split_package(source,part_bytes=24)
+    parts=Path(result['directory']);readme=parts/'READ-ME-FIRST.txt'
+    if problem=='missing':readme.unlink()
+    elif problem=='linked':
+        readme.unlink()
+        try:readme.symlink_to(source)
+        except OSError:pytest.skip('host does not permit test symlinks')
+    else:readme.write_text('instructions from another transfer')
+    out=tmp_path/'out';out.mkdir()
+
+    joined=subprocess.run(
+        ['sh',str(parts/'JOIN-NCT.sh'),str(out)],capture_output=True,text=True,
+    )
+
+    assert joined.returncode!=0
+    assert 'READ-ME-FIRST.txt' in joined.stderr
+    assert not list(out.iterdir())
 
 
 @pytest.mark.parametrize('problem',['missing','corrupt','linked'])

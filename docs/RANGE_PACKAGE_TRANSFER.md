@@ -13,7 +13,7 @@ checksum and contains:
 - numbered `.part` files, each no larger than 48 MiB;
 - `JOIN-NCT.sh`, which contains every part checksum and the complete ZIP checksum;
 - `READ-ME-FIRST.txt`, with the exact filenames and controller commands; and
-- `TRANSFER-CHECKSUMS.json`, the local build record.
+- `TRANSFER-CHECKSUMS.json`, the visible identity record for that exact set.
 
 The release builder rereads every generated piece and proves that the persisted
 pieces reconstruct the exact sealed ZIP before it reports the transfer set as
@@ -23,9 +23,10 @@ ready. Do not manually split or rename the package.
 
 1. Create one new empty controller folder for this release. All pieces go
    together in that folder; individual pieces do not get separate folders.
-2. Upload every `.part` file, `JOIN-NCT.sh`, and `READ-ME-FIRST.txt` named in the
-   readme. `TRANSFER-CHECKSUMS.json` may remain with the build records. No
-   separate `.sha256` upload is needed.
+2. Upload **every file in that transfer folder**. There is no file-selection
+   decision: the numbered pieces, `JOIN-NCT.sh`, `READ-ME-FIRST.txt`, and
+   `TRANSFER-CHECKSUMS.json` all go together. No separate `.sha256` upload is
+   needed.
 3. Open a controller terminal in that folder and run:
 
    ```sh
@@ -33,8 +34,9 @@ ready. Do not manually split or rename the package.
    ```
 
 4. Wait for the four numbered stages and the final `PASS`. The joiner refuses a
-   missing, corrupt, linked, extra, or mixed-release piece. It also preserves a
-   different ZIP already using the destination name. Repeating it after a
+   missing, corrupt, linked, extra, or mixed-release piece, and verifies the
+   exact generated transfer identity record and operator readme. It also preserves
+   a different ZIP already using the destination name. Repeating it after a
    successful join verifies the existing ZIP without replacing it.
 5. Keep the pieces and rebuilt ZIP until Range acceptance is complete. Extract
    the ZIP into a new folder and follow its `START-HERE.md` from the beginning.

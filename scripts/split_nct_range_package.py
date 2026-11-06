@@ -64,6 +64,8 @@ def _join_script(
     expected: str,
     transfer_id: str,
     source_size: int,
+    transfer_record_sha256: str,
+    readme_sha256: str,
 ) -> str:
     checksums = "\n".join(f"{part['sha256']}  {part['file']}" for part in parts)
     expected_names = " ".join(str(part["file"]) for part in parts)
@@ -83,9 +85,25 @@ FINAL="$OUT/{source.name}"
 EXPECTED={expected}
 EXPECTED_BYTES={source_size}
 EXPECTED_PARTS="{expected_names}"
+TRANSFER_RECORD="$PARTS/TRANSFER-CHECKSUMS.json"
+README="$PARTS/READ-ME-FIRST.txt"
 
 printf '%s\n' 'NCT Range transfer {transfer_id}'
 printf '%s\n' '[1/4] Checking that this folder contains the exact transfer set...'
+for identity_file in "$TRANSFER_RECORD" "$README"; do
+  if [ ! -f "$identity_file" ] || [ -L "$identity_file" ]; then
+    printf '%s\n' "HALT: $(basename -- "$identity_file") is missing or is not a regular file." >&2
+    exit 1
+  fi
+done
+if [ "$(sha256sum "$TRANSFER_RECORD" | cut -d " " -f 1)" != "{transfer_record_sha256}" ]; then
+  printf '%s\n' 'HALT: TRANSFER-CHECKSUMS.json belongs to a different or damaged transfer set.' >&2
+  exit 1
+fi
+if [ "$(sha256sum "$README" | cut -d " " -f 1)" != "{readme_sha256}" ]; then
+  printf '%s\n' 'HALT: READ-ME-FIRST.txt belongs to a different or damaged transfer set.' >&2
+  exit 1
+fi
 actual_count=0
 for candidate in "$PARTS"/*.zip.part*; do
   [ -e "$candidate" ] || [ -L "$candidate" ] || continue
@@ -153,7 +171,11 @@ def _instructions(
     transfer_id: str,
     source_size: int,
 ) -> str:
-    upload_names = [str(part["file"]) for part in parts] + ["JOIN-NCT.sh", "READ-ME-FIRST.txt"]
+    upload_names = [str(part["file"]) for part in parts] + [
+        "JOIN-NCT.sh",
+        "READ-ME-FIRST.txt",
+        "TRANSFER-CHECKSUMS.json",
+    ]
     upload_list = "\n".join(f"  - {name}" for name in upload_names)
     extracted = source.stem + "-extracted"
     return f'''NCT Range transfer {transfer_id}
@@ -167,12 +189,14 @@ Folder rule
   together in that one folder; do not put each piece in its own folder and do
   not mix pieces from an older release into it.
 
-1. Upload exactly these {len(upload_names)} files to that controller folder:
+1. Upload every file in the transfer folder to that controller folder. The
+   transfer folder contains exactly these {len(upload_names)} files:
 {upload_list}
 
-  TRANSFER-CHECKSUMS.json is a local build record. It is not required on the
-  controller. No separate .sha256 upload is required; JOIN-NCT.sh contains the
-  expected checksum for every piece and for the complete ZIP.
+  Do not leave TRANSFER-CHECKSUMS.json behind: it lets the controller joiner
+  confirm that the visible transfer identity matches the pieces. No separate
+  checksum upload is required; JOIN-NCT.sh contains the expected checksum for
+  every piece and for the complete ZIP.
 
 2. In that controller folder, run:
      sh JOIN-NCT.sh
@@ -244,20 +268,13 @@ def split_package(source, output=None, *, part_bytes=PART_BYTES):
         raise ValueError("The source ZIP changed during splitting; transfer set is not qualified")
     _verify_local_reconstruction(output, parts, expected, source_size)
 
-    join_path = output / "JOIN-NCT.sh"
-    join_path.write_text(
-        _join_script(source, parts, expected, transfer_id, source_size),
-        encoding="utf-8",
-        newline="\n",
-    )
-    readme_path = output / "READ-ME-FIRST.txt"
-    readme_path.write_text(
-        _instructions(source, parts, expected, transfer_id, source_size),
-        encoding="utf-8",
-        newline="\n",
-    )
-
-    result = {
+    required_uploads = [
+        *(part["file"] for part in parts),
+        "JOIN-NCT.sh",
+        "READ-ME-FIRST.txt",
+        "TRANSFER-CHECKSUMS.json",
+    ]
+    controller_record = {
         "contract": "nct-transfer-parts-v1",
         "transfer_id": transfer_id,
         "zip": source.name,
@@ -266,19 +283,41 @@ def split_package(source, output=None, *, part_bytes=PART_BYTES):
         "max_piece_bytes": part_bytes,
         "part_count": len(parts),
         "parts": parts,
-        "required_controller_uploads": [
-            *(part["file"] for part in parts),
-            "JOIN-NCT.sh",
-            "READ-ME-FIRST.txt",
-        ],
+        "required_controller_uploads": required_uploads,
         "local_reconstruction_verified": True,
         "join_script": "JOIN-NCT.sh",
+    }
+    record_path = output / "TRANSFER-CHECKSUMS.json"
+    record_path.write_text(
+        json.dumps(controller_record, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    readme_path = output / "READ-ME-FIRST.txt"
+    readme_path.write_text(
+        _instructions(source, parts, expected, transfer_id, source_size),
+        encoding="utf-8",
+        newline="\n",
+    )
+    join_path = output / "JOIN-NCT.sh"
+    join_path.write_text(
+        _join_script(
+            source,
+            parts,
+            expected,
+            transfer_id,
+            source_size,
+            digest(record_path),
+            digest(readme_path),
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    result = {
+        **controller_record,
+        "transfer_record_sha256": digest(record_path),
         "join_script_sha256": digest(join_path),
         "readme_sha256": digest(readme_path),
     }
-    (output / "TRANSFER-CHECKSUMS.json").write_text(
-        json.dumps(result, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
     return {"directory": str(output.resolve()), **result}
 
 

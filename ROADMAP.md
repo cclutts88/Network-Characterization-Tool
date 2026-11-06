@@ -37,6 +37,25 @@ initially halted the joiner for three race and mixed-set gaps; after exact regre
 and corrections it independently reproduced the 117-check Docker gate and returned
 CLEAR. The primary agent may integrate and commit this bounded process slice.
 
+Range transfer file-selection cleanup implemented in development (2026-11-05):
+the generated `-Transfer-Parts` folder now has one unambiguous operator rule:
+upload every file in that folder. `TRANSFER-CHECKSUMS.json` is no longer described
+as a local-only exception; the controller joiner binds the exact generated identity
+record and operator readme by SHA-256 and refuses missing, linked, changed or
+contradictory copies before combining any bytes.
+This removes the prior choice about which small files belong on the controller while
+preserving the 48 MiB pieces, sealed ZIP and non-installing join behavior. Twenty
+focused transfer checks pass, including missing, linked, wrong-transfer and
+contradictory identity records plus missing, linked and changed readmes. The broader
+package selection excluding the known schema regression passed another 118 checks.
+Independent review initially halted the substring-based identity check; after the
+controller record and readme were bound byte-for-byte, it independently reproduced
+all 20 focused checks and returned CLEAR for this bounded transfer cleanup. The broader
+package gate still has six existing schema-9 historical migration test failures outside
+this transfer diff; therefore this refinement remains
+development-only and must not be used to claim a new qualified or Range-ready package
+until that gate is repaired and repeated. No package or Range was changed.
+
 Cross-evidence retirement contract added to the stabilization gate (2026-11-05):
 Nmap scans, device-configuration collections, Arkime captures and imported evidence
 must use one understandable lifecycle. An operator must be able to retire incorrect
