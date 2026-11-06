@@ -779,6 +779,18 @@ independent quality gate: CLEAR. This remains development-ready on the foundatio
 branch and is not part of the sealed R10 package; a later package and Range gate are
 required before deployment.
 
+Retirement R11 local release qualification started (2026-11-06): package the completed
+Scan History read-efficiency work and context-aware Device Collection tutorial without
+altering the sealed R10 release. The candidate must be built from one exact clean commit,
+pass the complete application suite, and repeat R10's four isolated package routes: clean
+install; installed helper/recovery-console upgrade with deliberate interruption after
+replacement-container creation; Recovery-r1 upgrade; and Fresh-r2 upgrade. The exact
+packaged image must also pass browser checks for the new tutorial and existing analyst
+journey. Sealing requires package-bound receipts for every advertised route, an independent
+quality gate, and the standard verified transfer set of pieces no larger than 48 MiB.
+Until those checks complete, this work is qualification in progress and is not Range-ready,
+installed, mission-ready or available on stable `main`.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
