@@ -160,8 +160,11 @@ from app.schema_compatibility import (
 )
 from app.evidence_retirement import (
     EvidenceRetirementError,
+    RetiredEvidenceDependency,
     init_evidence_retirement_storage,
+    require_active_registered_content,
 )
+from app.evidence_retirement_sources import NMAP_IMPORT
 from app.active_collection import (
     active_collection_enabled,
     active_collection_status,
@@ -6328,13 +6331,27 @@ def compare_scan_run_to_previous_scope(run_id: str) -> dict:
 
 @app.get("/api/imports/{sha256}/raw")
 def download_imported_xml(sha256: str) -> FileResponse:
-    with connect_database(DB_PATH) as db:
-        row = db.execute(
-            "SELECT filename, stored_path FROM imports WHERE sha256 = ?", (sha256,)
-        ).fetchone()
+    try:
+        item = get_import_history_item(sha256, DB_PATH)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Import not found")
+        with connect_database(DB_PATH, read_only=True) as db:
+            db.execute("BEGIN")
+            row = db.execute(
+                "SELECT stored_path FROM imports WHERE sha256 = ?", (sha256,)
+            ).fetchone()
+            if row is not None:
+                require_active_registered_content(
+                    db, source_family=NMAP_IMPORT,
+                    source_kind=NMAP_IMPORT, sha256=sha256,
+                )
+    except RetiredEvidenceDependency:
+        raise HTTPException(status_code=404, detail="Import not found") from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     if row is None:
         raise HTTPException(status_code=404, detail="Import not found")
-    path = Path(row[1]).resolve()
+    path = Path(row[0]).resolve()
     import_root = IMPORT_DIR.resolve()
     artifact = get_artifact(DB_PATH, sha256)
     registered_path = (
@@ -6346,7 +6363,15 @@ def download_imported_xml(sha256: str) -> FileResponse:
     registered_import = registered_path is not None and path == registered_path
     if not path.is_file() or not (legacy_import or registered_import):
         raise HTTPException(status_code=404, detail="Imported XML is not available")
-    return FileResponse(path, media_type="application/xml", filename=row[0])
+    try:
+        final_item = get_import_history_item(sha256, DB_PATH)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    if final_item is None:
+        raise HTTPException(status_code=404, detail="Import not found")
+    return FileResponse(
+        path, media_type="application/xml", filename=final_item["filename"],
+    )
 
 
 def csv_download(content: bytes, filename: str) -> StreamingResponse:
@@ -6366,30 +6391,52 @@ def compact_export_filename(label: str, identifier: str, suffix: str) -> str:
 
 @app.get("/api/imports/{sha256}/exports/hosts.csv")
 def export_import_host_summary(sha256: str) -> StreamingResponse:
-    item = get_import_history_item(sha256)
+    try:
+        item = get_import_history_item(sha256, DB_PATH)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
     apply_analysis_os_overrides(item["analysis"], DB_PATH)
     apply_analysis_host_identities(item["analysis"], DB_PATH)
+    content = rows_to_csv(host_summary_rows(item["analysis"]), HOST_SUMMARY_FIELDS)
+    try:
+        final_item = get_import_history_item(sha256, DB_PATH)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    if final_item is None:
+        raise HTTPException(status_code=404, detail="Import not found")
     return csv_download(
-        rows_to_csv(host_summary_rows(item["analysis"]), HOST_SUMMARY_FIELDS),
+        content,
         compact_export_filename(
-            item.get("display_name") or item["filename"], sha256, "hosts"
+            final_item.get("display_name") or final_item["filename"],
+            sha256, "hosts",
         ),
     )
 
 
 @app.get("/api/imports/{sha256}/exports/ports.csv")
 def export_import_ports(sha256: str) -> StreamingResponse:
-    item = get_import_history_item(sha256)
+    try:
+        item = get_import_history_item(sha256, DB_PATH)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
     apply_analysis_os_overrides(item["analysis"], DB_PATH)
     apply_analysis_host_identities(item["analysis"], DB_PATH)
+    content = rows_to_csv(port_level_rows(item["analysis"]), PORT_LEVEL_FIELDS)
+    try:
+        final_item = get_import_history_item(sha256, DB_PATH)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    if final_item is None:
+        raise HTTPException(status_code=404, detail="Import not found")
     return csv_download(
-        rows_to_csv(port_level_rows(item["analysis"]), PORT_LEVEL_FIELDS),
+        content,
         compact_export_filename(
-            item.get("display_name") or item["filename"], sha256, "ports"
+            final_item.get("display_name") or final_item["filename"],
+            sha256, "ports",
         ),
     )
 

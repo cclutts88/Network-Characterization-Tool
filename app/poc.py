@@ -37,6 +37,13 @@ from app.evidence_maintenance import (
     evidence_mutations_blocked,
     guarded_evidence_mutation,
 )
+from app.evidence_retirement import (
+    EvidenceRetirementError,
+    RetiredEvidenceDependency,
+    require_artifact_observation_authority,
+    require_retirement_authority,
+)
+from app.evidence_retirement_sources import NMAP_IMPORT
 from app.artifacts import init_artifact_storage, register_finalized_files
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
@@ -7421,28 +7428,113 @@ def stop_schedule_batch_workers(timeout: float = 2.0) -> bool:
         )
 
 
+def _import_content_rows(
+    db: sqlite3.Connection, *, metadata_expression: str,
+    sha256: str | None = None, limit: int | None = None,
+) -> list[sqlite3.Row | tuple]:
+    conditions = (
+        "WHERE i.sha256=? AND (registered_content.sha256 IS NULL "
+        "OR active.observation_id IS NOT NULL)"
+        if sha256 is not None else
+        "WHERE registered_content.sha256 IS NULL "
+        "OR active.observation_id IS NOT NULL"
+    )
+    tail = "LIMIT ?" if limit is not None else ""
+    values: list[object] = [NMAP_IMPORT, NMAP_IMPORT]
+    if sha256 is not None:
+        values.append(sha256)
+    if limit is not None:
+        values.append(limit)
+    return db.execute(
+        f"""WITH registered AS (
+                SELECT observation.*,
+                       EXISTS (
+                           SELECT 1 FROM evidence_retirement_events retired
+                            WHERE retired.source_family=?
+                              AND retired.encounter_id=observation.observation_id
+                              AND retired.sealed=1
+                       ) retired
+                  FROM artifact_observations observation
+                 WHERE observation.source_kind=?
+            ), active_ranked AS (
+                SELECT registered.*,
+                       row_number() OVER (
+                           PARTITION BY registered.sha256
+                           ORDER BY registered.observed_at DESC,
+                                    registered.observation_id
+                       ) active_rank
+                  FROM registered WHERE retired=0
+            ), registered_content AS (
+                SELECT sha256,count(*) encounter_count
+                  FROM registered GROUP BY sha256
+            )
+            SELECT i.sha256,
+                   COALESCE(active.original_filename,i.filename) filename,
+                   COALESCE(active.observed_at,i.imported_at) imported_at,
+                   i.analysis_json,{metadata_expression},
+                   active.observation_id,
+                   COALESCE(registered_content.encounter_count,0) encounter_count,
+                   active.actor
+              FROM imports i
+              LEFT JOIN active_ranked active
+                ON active.sha256=i.sha256 AND active.active_rank=1
+              LEFT JOIN registered_content
+                ON registered_content.sha256=i.sha256
+              {conditions}
+             ORDER BY COALESCE(active.observed_at,i.imported_at) DESC,i.sha256
+             {tail}""",
+        tuple(values),
+    ).fetchall()
+
+
+def _import_history_item_from_row(row) -> dict:
+    analysis = json.loads(row[3])
+    if row[5] is not None:
+        display_name = row[1]
+        metadata = {
+            "display_name": display_name,
+            "created_at": row[2],
+            "created_by": row[7] or "unknown",
+            "scheduled": False,
+            "scheduled_by": None,
+            "executed_by": None,
+            "execution_method": "imported",
+            "source_filename": row[1],
+            "coverage": analysis.get("coverage", {}),
+        }
+    else:
+        metadata = json.loads(row[4] or "{}")
+        display_name = metadata.get("display_name") or row[1]
+        metadata["display_name"] = display_name
+    return {
+        "sha256": row[0],
+        "filename": row[1],
+        "display_name": display_name,
+        "imported_at": row[2],
+        "metadata": metadata,
+        "analysis": analysis,
+        "active_observation_id": row[5],
+        "shared_content": int(row[6] or 0) > 1,
+    }
+
+
 def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
-    with connect_database(db_path) as db:
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        require_retirement_authority(db)
+        require_artifact_observation_authority(db)
         columns = {row[1] for row in db.execute("PRAGMA table_info(imports)").fetchall()}
-        metadata_expression = "metadata_json" if "metadata_json" in columns else "'{}'"
-        rows = db.execute(
-            f"""
-            SELECT sha256, filename, imported_at, analysis_json, {metadata_expression}
-            FROM imports ORDER BY imported_at DESC LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        metadata_expression = "i.metadata_json" if "metadata_json" in columns else "'{}'"
+        rows = _import_content_rows(
+            db, metadata_expression=metadata_expression, limit=limit,
+        )
     history = []
-    for sha256, filename, imported_at, analysis_json, metadata_json in rows:
-        analysis = json.loads(analysis_json)
-        metadata = json.loads(metadata_json or "{}")
+    for row in rows:
+        item = _import_history_item_from_row(row)
+        analysis = item.pop("analysis")
         history.append(
             {
-                "sha256": sha256,
-                "filename": filename,
-                "display_name": metadata.get("display_name") or filename,
-                "imported_at": imported_at,
-                "metadata": metadata,
+                **item,
                 "summary": {
                     "host_count": len(analysis.get("hosts", [])),
                     "up_count": analysis.get("up_count", 0),
@@ -7460,36 +7552,41 @@ def list_import_history(db_path: Path = DB_PATH, limit: int = 50) -> list[dict]:
     return history
 
 
+def _get_import_history_item_on_connection(
+    db: sqlite3.Connection, sha256: str,
+) -> dict | None:
+    columns = {item[1] for item in db.execute("PRAGMA table_info(imports)").fetchall()}
+    metadata_expression = "i.metadata_json" if "metadata_json" in columns else "'{}'"
+    rows = _import_content_rows(
+        db, metadata_expression=metadata_expression, sha256=sha256,
+    )
+    row = rows[0] if rows else None
+    if not row:
+        return None
+    return _import_history_item_from_row(row)
+
+
 def get_import_history_item(sha256: str, db_path: Path = DB_PATH) -> dict | None:
     if not IMPORT_KEY_RE.fullmatch(sha256):
         return None
-    with connect_database(db_path) as db:
-        columns = {item[1] for item in db.execute("PRAGMA table_info(imports)").fetchall()}
-        metadata_expression = "metadata_json" if "metadata_json" in columns else "'{}'"
-        row = db.execute(
-            f"""
-            SELECT filename, imported_at, analysis_json, {metadata_expression}
-            FROM imports WHERE sha256 = ?
-            """,
-            (sha256,),
-        ).fetchone()
-    if not row:
-        return None
-    return {
-        "sha256": sha256,
-        "filename": row[0],
-        "display_name": (json.loads(row[3] or "{}").get("display_name") or row[0]),
-        "imported_at": row[1],
-        "metadata": json.loads(row[3] or "{}"),
-        "analysis": json.loads(row[2]),
-    }
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        require_retirement_authority(db)
+        require_artifact_observation_authority(db)
+        return _get_import_history_item_on_connection(db, sha256)
 
 
 def compare_import_results(first_sha256: str, second_sha256: str,
                            db_path: Path = DB_PATH) -> dict:
     """Compare two retained Nmap analyses without reparsing their XML files."""
-    first = get_import_history_item(first_sha256, db_path)
-    second = get_import_history_item(second_sha256, db_path)
+    if not IMPORT_KEY_RE.fullmatch(first_sha256) or not IMPORT_KEY_RE.fullmatch(second_sha256):
+        raise KeyError("One or both Nmap imports were not found")
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        require_retirement_authority(db)
+        require_artifact_observation_authority(db)
+        first = _get_import_history_item_on_connection(db, first_sha256)
+        second = _get_import_history_item_on_connection(db, second_sha256)
     if first is None or second is None:
         raise KeyError("One or both Nmap imports were not found")
 
@@ -8539,20 +8636,32 @@ def download_scan_artifact(run_id: str, artifact_name: str) -> FileResponse:
 
 @router.get("/imports")
 def import_history(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
-    return list_import_history(limit=limit)
+    try:
+        return list_import_history(limit=limit)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 @router.get("/imports/compare")
 def import_compare(first: str, second: str) -> dict:
     try:
         return compare_import_results(first, second)
+    except RetiredEvidenceDependency:
+        raise HTTPException(status_code=404, detail="Import not found") from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/imports/{sha256}")
 def import_history_detail(sha256: str) -> dict:
-    item = get_import_history_item(sha256)
+    try:
+        item = get_import_history_item(sha256)
+    except RetiredEvidenceDependency:
+        raise HTTPException(status_code=404, detail="Import not found") from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
     if item is None:
         raise HTTPException(status_code=404, detail="Import not found")
     from app.identity import enrich_analysis_macs

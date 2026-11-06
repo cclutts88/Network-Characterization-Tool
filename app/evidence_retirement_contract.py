@@ -82,7 +82,10 @@ ROUTE_COVERAGE: dict[str, frozenset[str]] = {
 }
 ROUTE_COVERAGE.update({
     "nmap_scan_run": frozenset({"evidence-library"}),
-    "nmap_import": frozenset({"evidence-library"}),
+    "nmap_import": frozenset({
+        "evidence-library", "source-history", "raw-evidence-download",
+        "operator-exports",
+    }),
     "device_collection": frozenset({"evidence-library"}),
 })
 

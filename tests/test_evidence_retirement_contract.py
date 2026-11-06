@@ -45,3 +45,11 @@ def test_evidence_library_route_is_claimed_only_for_cataloged_source_families():
         )
     )
 
+
+def test_nmap_import_shared_content_gateway_claims_only_completed_routes():
+    assert {
+        "source-history", "raw-evidence-download", "operator-exports",
+    } <= ROUTE_COVERAGE["nmap_import"]
+    assert "current-network" not in ROUTE_COVERAGE["nmap_import"]
+    assert "map" not in ROUTE_COVERAGE["nmap_import"]
+

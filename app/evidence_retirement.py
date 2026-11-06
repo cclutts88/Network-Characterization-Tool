@@ -483,6 +483,61 @@ def require_active_encounter(
         )
 
 
+def require_artifact_observation_authority(
+    connection: sqlite3.Connection,
+) -> None:
+    """Fail closed when encounter registration cannot support shared-content reads."""
+    try:
+        connection.execute(
+            "SELECT observation_id FROM artifact_observations LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).casefold():
+            raise EvidenceRetirementError(
+                "artifact observation authority is unavailable"
+            ) from exc
+        raise
+
+
+def require_active_registered_content(
+    connection: sqlite3.Connection, *, source_family: str,
+    source_kind: str, sha256: str,
+) -> tuple[str, ...]:
+    """Allow legacy content or content retained by at least one active encounter.
+
+    The returned observation identities are active exact encounters.  An empty
+    tuple means the content predates encounter registration and is therefore a
+    legacy record, not proof that a registered encounter remains active.
+    """
+    require_retirement_authority(connection)
+    require_artifact_observation_authority(connection)
+    rows = connection.execute(
+        """SELECT observation.observation_id
+             FROM artifact_observations observation
+            WHERE observation.source_kind=? AND observation.sha256=?
+              AND NOT EXISTS (
+                    SELECT 1 FROM evidence_retirement_events retired
+                     WHERE retired.source_family=?
+                       AND retired.encounter_id=observation.observation_id
+                       AND retired.sealed=1
+              )
+            ORDER BY observation.observed_at DESC,observation.observation_id""",
+        (source_kind, sha256, source_family),
+    ).fetchall()
+    if rows:
+        return tuple(str(row[0]) for row in rows)
+    registered = connection.execute(
+        """SELECT 1 FROM artifact_observations
+            WHERE source_kind=? AND sha256=? LIMIT 1""",
+        (source_kind, sha256),
+    ).fetchone()
+    if registered is not None:
+        raise RetiredEvidenceDependency(
+            "Every registered encounter for this retained content was retired"
+        )
+    return ()
+
+
 def active_encounter_sql(
     source_family: str, encounter_expression: str,
 ) -> tuple[str, tuple[str]]:

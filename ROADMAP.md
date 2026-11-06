@@ -265,6 +265,26 @@ The Independent Reviewer returned CLEAR after its own 41-test verification.
 Content-hash import history, raw-source and export endpoints remain an explicit
 follow-on shared-content gateway and are not claimed by this bounded slice.
 
+Cross-evidence retirement active-source Gate C shared Nmap import gateway completed
+(2026-11-05): legacy content-hash history, detail, comparison, raw XML and CSV export
+routes now remain available only while at least one registered same-content upload is
+active, use the current active upload's filename, time and analyst rather than retired
+encounter context, and disappear when every registered encounter is retired. Their
+final download publication check reselects that active metadata, including when the
+newest upload is retired during raw-path resolution or CSV preparation and an older
+identical upload remains active. True legacy content with no encounter identity remains
+readable until backfill. Missing retirement or artifact-observation authority fails
+closed. The built-in README and contextual Operator Guide explain the boundary.
+
+**Documented deviation:** these existing SHA-keyed routes remain shared-content
+compatibility views; they cannot identify one exact upload. Evidence Library remains
+the exact-encounter view for analyst and scope context. Exact encounter download and
+the remaining Inventory, Analyze, Hunt, Reach, Map, cache, restart and restore readers
+remain separate follow-on retirement gates and are not claimed here. Focused and broad
+verification passed (25 passed, 1 skipped; then 192 passed, 1 skipped), and the complete
+application suite passed (2,632 passed, 25 skipped). The Independent Reviewer returned
+CLEAR — DOCUMENTED DEVIATION after independently passing all 10 gateway tests.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
