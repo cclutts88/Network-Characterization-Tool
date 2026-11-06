@@ -120,7 +120,11 @@ def normalize_export(raw, output):
         return identities
 
 
-def stage(source, output, image, console, commit, build_id, existing_r4=False, fresh_install=False):
+def stage(source, output, image, console, commit, build_id, existing_r4=False, fresh_install=False, fresh_only=False):
+    if fresh_only and not fresh_install:
+        raise ValueError("Fresh-only packaging requires --fresh-install")
+    if fresh_only and existing_r4:
+        raise ValueError("Fresh-only packaging cannot advertise an existing-install upgrade")
     if image != "network-characterization-tool:" + build_id or console != "nct-recovery-console:" + build_id:
         raise ValueError("Image tags must match the full package's bound launcher names")
     if command("git", "-C", str(source), "rev-parse", "HEAD") != commit or command("git", "-C", str(source), "status", "--porcelain"):
@@ -182,21 +186,30 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
         "known_deferred_work": KNOWN_DEFERRED_WORK,
         "retirement_complete": True,
         "range_accepted": False, "kubernetes_updater_available": False}
-    release["existing_install_upgrade"] = {
-        "route": "independent-recovery-console-first-v1",
-        "launcher": "scripts/nct-install-range.sh",
-        "installer_mode": "all",
-        "application_delivery": "gui_update",
-    }
-    from build_nct_update import build
-    r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
-    # Terminal installer acceptance is not GUI-update acceptance. The embedded
-    # update must accept every exact source admitted by this full package; a
-    # narrower update contract would make one advertised upgrade path fail.
-    sources = [R4_SOURCE] if existing_r4 else gui_update_sources(release["supported_sources"])
-    update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
-    release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
-    release["helper_upgrade_source"] = dict(MIXED_FRESH_R2_R3_SOURCE)
+    if fresh_only:
+        release["supported_sources"] = []
+        release["schema_gate"] = "fresh-only-empty-host"
+        release["fresh_only"] = True
+        registry = output / "scripts/nct-package-sources.json"
+        registry.write_text("[]\n", encoding="utf-8")
+        for binding in bindings:
+            if binding["package"] == "scripts/nct-package-sources.json":
+                binding["sha256"] = digest(registry)
+    else:
+        release["existing_install_upgrade"] = {
+            "route": "independent-recovery-console-first-v1",
+            "launcher": "scripts/nct-install-range.sh",
+            "installer_mode": "all",
+            "application_delivery": "gui_update",
+        }
+        from build_nct_update import build
+        # Terminal installer acceptance is not GUI-update acceptance. The embedded
+        # update must accept every exact source admitted by this full package; a
+        # narrower update contract would make one advertised upgrade path fail.
+        sources = [R4_SOURCE] if existing_r4 else gui_update_sources(release["supported_sources"])
+        update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
+        release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
+        release["helper_upgrade_source"] = dict(MIXED_FRESH_R2_R3_SOURCE)
     if existing_r4:
         # This kit deliberately qualifies one existing-installation path only.
         # Bundled emergency/terminal tools are not newly qualified install paths.
@@ -244,7 +257,7 @@ def seal(root, acceptance, output):
     release = json.loads((root / "release.json").read_text())
     if result.get("result") != "pass" or result.get("tested_manifest_sha256") != tested or result.get("commit") != release["commit"]:
         raise ValueError("Acceptance does not bind this exact staged package")
-    if not release.get("supported_sources"):
+    if not release.get("supported_sources") and not (release.get("fresh_only") is True and release.get("fresh_install")):
         raise ValueError("Release must declare its supported upgrade sources")
     if release["supported_sources"]:
         expected = {(s["build_id"], s["commit"], s["schema_version"]) for s in release["supported_sources"]}
@@ -329,9 +342,10 @@ if __name__ == "__main__":
         staging.add_argument("--" + name, required=True)
     staging.add_argument("--existing-r4", action="store_true")
     staging.add_argument("--fresh-install", action="store_true")
+    staging.add_argument("--fresh-only", action="store_true")
     sealing = sub.add_parser("seal")
     for name in ("root", "acceptance", "output"):
         sealing.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
-    value = stage(args.source, args.output, args.image, args.console, args.commit, args.build_id, args.existing_r4, args.fresh_install) if args.action == "stage" else seal(args.root, args.acceptance, args.output)
+    value = stage(args.source, args.output, args.image, args.console, args.commit, args.build_id, args.existing_r4, args.fresh_install, args.fresh_only) if args.action == "stage" else seal(args.root, args.acceptance, args.output)
     print(json.dumps(value, indent=2))

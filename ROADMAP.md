@@ -832,6 +832,17 @@ quality gate, and the standard verified transfer set of pieces no larger than 48
 Until those checks complete, this work is qualification in progress and is not Range-ready,
 installed, mission-ready or available on stable `main`.
 
+Fresh-only Range package deviation started (2026-11-06): the operator explicitly chose
+to discard the prior NCT installation and evidence and install one blank instance. The
+exact R15 clean-install rehearsal passed, but sealing was still coupled to unrelated
+legacy-upgrade routes; one of those routes correctly halted instead of being represented
+as qualified. Add an explicit fresh-only package contract that advertises and requires
+only the empty-host installation route. It must still bind exact application, recovery
+console and proxy images; verify empty storage, interactive Administrator setup, HTTPS,
+recovery handoff, restart persistence and evidence downloads; and pass independent
+review. This deviation does not authorize deleting Range files and is not Range-ready
+until the new exact package is sealed and reviewed.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

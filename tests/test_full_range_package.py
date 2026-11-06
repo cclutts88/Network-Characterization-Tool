@@ -157,6 +157,35 @@ def test_fresh_install_kit_requires_its_own_acceptance(tmp_path,damage):
     else:package.seal(root,receipt,tmp_path/'fresh.zip')
 
 
+def test_fresh_only_kit_seals_without_unadvertised_upgrade_acceptance(tmp_path):
+    root = staged(tmp_path)
+    release = json.loads((root / "release.json").read_text())
+    release["supported_sources"] = []
+    release.pop("existing_install_upgrade")
+    release["fresh_only"] = True
+    release["fresh_install"] = {"route": "standalone-docker-empty-host-v1"}
+    (root / "release.json").write_text(json.dumps(release))
+    package.write_manifest(root)
+    result = evidence(root)
+    result["fresh_install"] = {
+        "result": "pass",
+        "route": release["fresh_install"],
+        "tested_manifest_sha256": result["tested_manifest_sha256"],
+        "commit": release["commit"],
+        "images": release["images"],
+        **{key: True for key in (
+            "empty_storage_verified", "fresh_admission_refusals", "interactive_admin_setup",
+            "ca_verified", "exact_application", "exact_console", "recovery_handoff",
+            "sign_in_final_restart", "stop_start_persistence", "helper_service_restart",
+            "console_stops_after_return", "library_import_and_device_downloads",
+        )},
+    }
+    receipt = tmp_path / "fresh-only.json"
+    receipt.write_text(json.dumps(result))
+
+    package.seal(root, receipt, tmp_path / "fresh-only.zip")
+
+
 @pytest.mark.parametrize('damage',[None,'missing','wrong_source','wrong_image','missing_restore','wrong_manifest'])
 def test_helper_delivery_requires_its_own_exact_package_acceptance(tmp_path,damage):
     root=staged(tmp_path)
