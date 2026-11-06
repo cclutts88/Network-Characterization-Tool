@@ -659,6 +659,21 @@ with a regression test requiring both contracts to remain equal. R6 is rejected 
 will not be sealed or distributed; the corrected payload requires a new exact candidate
 and the complete acceptance matrix.
 
+The first R7 Recovery-r1 rehearsal accepted the now-correct two-source GUI update and
+preserved the original account and evidence, then halted before replacement because a
+first-use retirement-guard directory was inspected before it was created. The recovery
+console retained the original runtime and reported the exact stopped phase. The host
+helper now creates and permissions that independent guard storage before either
+inspection or helper execution, with a regression test for a missing first-use guard.
+R7 is rejected and unsealed; a new candidate must repeat the full matrix.
+
+Independent review halted the initial missing-directory correction because creating or
+changing permissions through a linked guard path could affect unrelated host storage.
+The corrected boundary accepts only an owner-protected, private, direct child of the
+recovery root whose canonical path remains separate from evidence data; pre-existing
+directories are validated without changing their permissions. A linked-directory
+canary test verifies that both the link and its unrelated target remain untouched.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import sqlite3
+import stat
 import tarfile
 import threading
 import time
@@ -86,6 +87,76 @@ def package(tmp_path, *, member="image.tar", link=False, duplicate=False, wrong_
 def test_package_accepts_one_tagless_image_and_embedded_checksum(tmp_path):
     archive, release = package(tmp_path)
     assert host_module.validate_package(archive, tmp_path / "extracted") == release
+
+
+def test_first_update_creates_missing_retirement_guard_before_inspection(
+    tmp_path, monkeypatch,
+):
+    config = configuration(tmp_path)
+    host = host_module.Host(config, Engine(config))
+    assert not host.retirement_guard.exists()
+
+    def provision(_image, _command, **_kwargs):
+        assert host.retirement_guard.is_dir()
+        (host.retirement_guard / PROVISIONING_FILE).write_text(
+            json.dumps({"contract": "nct-retirement-guard-v1"})
+        )
+
+    monkeypatch.setattr(host, "retirement_helper", provision)
+
+    assert host.provision_retirement_guard("candidate") == {
+        "contract": "nct-retirement-guard-v1"
+    }
+
+
+def test_retirement_guard_refuses_link_without_changing_target(tmp_path):
+    config = configuration(tmp_path)
+    canary = tmp_path / "unrelated-storage"
+    canary.mkdir(mode=0o755)
+    before = canary.lstat()
+    linked = tmp_path / "retirement-guard"
+    linked.symlink_to(canary, target_is_directory=True)
+    config["retirement_guard_dir"] = str(linked)
+    host = host_module.Host(config, Engine(config))
+
+    with pytest.raises(ValueError, match="outside evidence data|owned directory|linked"):
+        host.ensure_retirement_guard_storage()
+
+    after = canary.lstat()
+    assert linked.is_symlink()
+    assert stat.S_IMODE(after.st_mode) == stat.S_IMODE(before.st_mode) == 0o755
+    assert list(canary.iterdir()) == []
+
+
+def test_retirement_guard_refuses_linked_recovery_root_before_creation(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    with sqlite3.connect(data / "analyzer.db") as db:
+        db.execute("CREATE TABLE evidence (id TEXT PRIMARY KEY)")
+    target = tmp_path / "unrelated-root"
+    target.mkdir(mode=0o755)
+    before = target.lstat()
+    linked_root = tmp_path / "linked-recovery-root"
+    linked_root.symlink_to(target, target_is_directory=True)
+    config = {
+        "state_dir": str(linked_root / "management"),
+        "data_dir": str(data),
+        "retirement_guard_dir": str(linked_root / "retirement-guard"),
+        "container": "nct",
+        "console_container": "console",
+        "console_image_id": "sha256:" + "c" * 64,
+        "application_url": "https://nct.test:8445",
+        "console_url": "https://nct.test:8446",
+        "maintenance_lock": str(tmp_path / "maintenance.lock"),
+    }
+    host = host_module.Host(config, Engine(config))
+
+    with pytest.raises(ValueError, match="owner-protected"):
+        host.ensure_retirement_guard_storage()
+
+    after = target.lstat()
+    assert stat.S_IMODE(after.st_mode) == stat.S_IMODE(before.st_mode) == 0o755
+    assert not (target / "retirement-guard").exists()
 
 
 @pytest.mark.parametrize("options", [

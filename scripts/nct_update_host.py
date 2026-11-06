@@ -698,9 +698,52 @@ class Host:
                 self.engine.command("rm", helper["Id"])
             save(receipt, {"name": name, "image": image, "phase": "stopped"})
 
+    def ensure_retirement_guard_storage(self):
+        protected_root = self.root.parent.absolute()
+        if self.retirement_guard.parent != protected_root:
+            raise ValueError(
+                "Retirement guard storage must be a direct child of the recovery root"
+            )
+        root_info = protected_root.lstat()
+        if (
+            stat.S_ISLNK(root_info.st_mode)
+            or not stat.S_ISDIR(root_info.st_mode)
+            or root_info.st_uid != os.geteuid()
+            or root_info.st_mode & 0o022
+            or protected_root.resolve(strict=True) != protected_root
+        ):
+            raise ValueError("Recovery root is not owner-protected storage")
+        data_path = self.data.resolve(strict=True)
+        guard_path = self.retirement_guard.resolve(strict=False)
+        if (
+            guard_path == data_path
+            or guard_path in data_path.parents
+            or data_path in guard_path.parents
+        ):
+            raise ValueError("Retirement guard storage must remain outside evidence data")
+        created = False
+        try:
+            os.mkdir(self.retirement_guard, mode=0o700)
+            created = True
+        except FileExistsError:
+            pass
+        guard_info = self.retirement_guard.lstat()
+        if (
+            stat.S_ISLNK(guard_info.st_mode)
+            or not stat.S_ISDIR(guard_info.st_mode)
+            or guard_info.st_uid != os.geteuid()
+        ):
+            raise ValueError("Retirement guard storage is not an owned directory")
+        if created and stat.S_IMODE(guard_info.st_mode) != 0o700:
+            os.chmod(self.retirement_guard, 0o700)
+            guard_info = self.retirement_guard.lstat()
+        if stat.S_IMODE(guard_info.st_mode) != 0o700:
+            raise ValueError("Existing retirement guard storage is not private")
+        if self.retirement_guard.resolve(strict=True) != self.retirement_guard:
+            raise ValueError("Retirement guard storage may not use linked paths")
+
     def retirement_helper(self, image, command, *, include_data=False, data_readonly=False):
-        self.retirement_guard.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.retirement_guard, 0o700)
+        self.ensure_retirement_guard_storage()
         options = ["--read-only", "--mount", (
             f"type=bind,src={self.retirement_guard},dst=/retirement-guard"
         )]
@@ -713,6 +756,7 @@ class Host:
 
     def provision_retirement_guard(self, image):
         """Provision only independent host authority; never open live evidence."""
+        self.ensure_retirement_guard_storage()
         provisioning = self.retirement_guard / "provisioning.json"
         if not provisioning.exists():
             if any(self.retirement_guard.iterdir()):
