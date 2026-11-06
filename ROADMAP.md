@@ -619,6 +619,14 @@ change package or application behavior. R3 remains unsealed until both supported
 upgrades and the separate helper and fresh-install routes pass against the corrected
 receipt logic.
 
+That same rehearsal then verified the preserved source and reached its retained-file
+download, where it exposed another seed-response assumption: the historical seed's
+import response predates the current `download_url` field. The fixture now calculates
+the imported XML's exact SHA-256 identity and verifies the supported public raw-evidence
+route before and after the guarded update. This strengthens the rehearsal around the
+stable evidence identity instead of depending on response presentation from an older
+release. The R4 stage is still unsealed and rejected pending a complete rerun.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

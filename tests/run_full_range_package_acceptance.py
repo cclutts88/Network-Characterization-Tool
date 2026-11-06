@@ -5,6 +5,7 @@ starts the real copied service as a process, and ss checks use Docker admission.
 All application/backup/upgrade/CA/HTTPS/account operations are real.
 """
 import argparse
+import hashlib
 import http.cookiejar
 import json
 import os
@@ -84,6 +85,7 @@ def main():
     body = b'--' + boundary.encode() + b'\r\nContent-Disposition: form-data; name="file"; filename="retained.xml"\r\nContent-Type: application/xml\r\n\r\n' + xml + b'\r\n--' + boundary.encode() + b'--\r\n'
     with browser.open(urllib.request.Request(app_url + "/api/import", data=body, headers={"Content-Type": "multipart/form-data; boundary=" + boundary}), timeout=30) as response:
         imported = json.load(response)
+    import_digest = hashlib.sha256(xml).hexdigest()
     if source_version == 8:
         engine.command("update", "--restart=no", original_id)
         engine.command("stop", original_id)
@@ -134,7 +136,7 @@ def main():
     preserved = engine.inspect(name)
     assert preserved["Image"] == original_image_id
     assert any(m["Source"] == str(data) and m["Destination"] == "/data" for m in preserved["Mounts"])
-    with browser.open(app_url + imported["download_url"], timeout=30) as response:
+    with browser.open(app_url + f"/api/imports/{import_digest}/raw", timeout=30) as response:
         assert response.read() == xml
     handoff = request("/api/updates/launch", {})
     request("/api/exchange", {"code": handoff["url"].split("#handoff=")[1]}, console=True)
@@ -196,7 +198,7 @@ def main():
     assert request("/health")["build_commit"] == (release["commit"] if compatible_restore else source["commit"])
     quarantine = Path(restored_operation["quarantine_path"])
     assert (quarantine / "later-evidence.txt").read_bytes() == b"preserve after protected restore"
-    with browser.open(app_url + imported["download_url"], timeout=30) as response:
+    with browser.open(app_url + f"/api/imports/{import_digest}/raw", timeout=30) as response:
         assert response.read() == xml
     restored_runtime = engine.inspect(name)
     if compatible_restore:
