@@ -16,6 +16,8 @@ from app.derived_jobs import (
 )
 from app.poc import init_poc_storage
 from app.main import app
+from app.evidence_retirement import init_evidence_retirement_storage, retire_evidence
+from app.evidence_retirement_sources import NMAP_SCAN_RUN, adapter_for_source
 from app.retained_scan_analysis import (
     GROUP_COMPOSITION_VERSION,
     RetainedScanAnalysisUnavailable,
@@ -38,6 +40,7 @@ def make_run(
     chunk_count: int | None = None,
 ) -> tuple[dict, Path]:
     init_poc_storage(db)
+    init_evidence_retirement_storage(db)
     run_dir = data / "scan-runs" / run_id
     run_dir.mkdir(parents=True)
     path = run_dir / "scan.xml"
@@ -108,6 +111,22 @@ def test_prepared_result_reopens_read_only_with_exact_provenance(tmp_path):
     assert child["result_id"] == queued["target_result_id"]
     assert child["sha256"]
     assert child["analysis_version"].startswith("nmap-base-analysis:")
+
+
+def test_retired_run_cannot_reopen_or_remain_in_prepared_selector(tmp_path):
+    db, data = tmp_path / "nct.db", tmp_path / "data"
+    manifest, path = make_run(db, data, "e" * 32)
+    prepare(db, manifest["run_id"], path, "prepare-retire")
+    assert list_prepared_scan_group_metadata(db)
+    retire_evidence(
+        db, source_family=NMAP_SCAN_RUN, encounter_id=manifest["run_id"],
+        actor="analyst", reason="wrong retained scan",
+        adapter=adapter_for_source(NMAP_SCAN_RUN),
+    )
+    with pytest.raises(RetainedScanAnalysisUnavailable) as exc:
+        load_prepared_scan_group(db, data, manifest["run_id"])
+    assert exc.value.code == "evidence_retired"
+    assert list_prepared_scan_group_metadata(db) == []
 
 
 def test_historical_analysis_route_is_read_only_and_returns_separate_annotations(tmp_path, monkeypatch):

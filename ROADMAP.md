@@ -117,6 +117,23 @@ evidence are covered by focused fixtures. The independent reviewer returned CLEA
 These adapters are not yet reachable through analyst controls; route filtering,
 startup/restore enforcement and compatibility migration remain in progress.
 
+Cross-evidence retirement active-source Gate C started (2026-11-05): the first
+bounded integration slice now applies the common active-encounter decision to manual
+and automated Nmap base analysis, prepared saved-scan selection and reopening,
+automatic admission and restart recovery, manual and automated scope processing,
+operator-requested queueing, failed-work retry and atomic result or assessment
+publication. A retirement that races parsing, scope processing or queued execution
+cannot publish or reuse that encounter, while an active sibling with the same exact
+bytes may still reuse the canonical calculation. Retired saved scans disappear from
+ordinary prepared-source selectors, automatic restart recovery cannot recreate their
+work, and retained history remains available for the later audit presentation. One
+hundred fifty-four focused Nmap calculation, queue, scope, topology, admission and
+saved-analysis checks pass, including concurrent retirement, same-content siblings,
+restart recovery and failed retry; another 33 forced-restart and database-recovery
+checks pass. The independent reviewer reproduced five exact retirement regressions and
+returned CLEAR. The remaining device, Arkime, hostname, Searchsploit, Inventory, Hunt,
+Reach, Map, comparison, export and cache surfaces remain in progress.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

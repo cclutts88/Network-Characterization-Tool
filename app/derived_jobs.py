@@ -27,6 +27,8 @@ from app.derived_contracts import (
     SEARCHSPLOIT_CANDIDATES_VERSION,
 )
 from app.derived_results import derived_result_identity, init_derived_result_storage
+from app.evidence_retirement import active_encounter_sql, require_active_encounter
+from app.evidence_retirement_sources import NMAP_IMPORT, NMAP_SCAN_RUN
 from app.nmap_base_analysis import (
     NMAP_ANALYSIS_TERMINAL_STATES,
     _parse_nmap_xml,
@@ -482,6 +484,9 @@ def _migrate_legacy_derived_jobs(db: sqlite3.Connection) -> None:
 
 
 def _source_snapshot(db: sqlite3.Connection, run_id: str) -> dict:
+    require_active_encounter(
+        db, source_family=NMAP_SCAN_RUN, encounter_id=run_id,
+    )
     row = db.execute("SELECT status FROM scan_runs WHERE run_id = ?", (run_id,)).fetchone()
     if row is None:
         raise KeyError("Scan run not found")
@@ -521,6 +526,25 @@ def _source_snapshot(db: sqlite3.Connection, run_id: str) -> dict:
     }
     frozen["job_key"] = _job_key(frozen)
     return frozen
+
+
+def _require_active_nmap_job_source(
+    db: sqlite3.Connection, job: sqlite3.Row | tuple,
+) -> None:
+    source_kind = str(job[13] or "")
+    if source_kind == "nmap_import":
+        source_family = NMAP_IMPORT
+        encounter_id = str(job[3] or "")
+    elif source_kind in {"nmap_scan", "scan_run"}:
+        source_family = NMAP_SCAN_RUN
+        encounter_id = str(job[2] or job[14] or "")
+    else:
+        return
+    if not encounter_id:
+        raise DerivedJobConflict("The Nmap evidence encounter identity is unavailable")
+    require_active_encounter(
+        db, source_family=source_family, encounter_id=encounter_id,
+    )
 
 
 def _attempt_dict(row) -> dict | None:
@@ -654,12 +678,16 @@ def _automatic_nmap_base_candidate(db: sqlite3.Connection):
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scan_runs'"
     ).fetchone() is None:
         return None
+    active_clause, active_parameters = active_encounter_sql(
+        NMAP_SCAN_RUN, "source.source_id",
+    )
     return db.execute(
-        """SELECT source.source_id, source.marked_by
+        f"""SELECT source.source_id, source.marked_by
            FROM pipeline_intake_sources source
            JOIN scan_runs run ON run.run_id = source.source_id
            WHERE source.source_kind = ? AND source.policy_version = ?
              AND run.status = 'completed'
+             AND {active_clause}
              AND EXISTS (
                  SELECT 1 FROM pipeline_admission_intents intent
                  WHERE intent.source_id = source.source_id AND intent.intent_kind = ?
@@ -677,7 +705,7 @@ def _automatic_nmap_base_candidate(db: sqlite3.Connection):
                  WHERE job.source_run_id = source.source_id AND job.job_type = ?
              )
            ORDER BY source.marked_at, source.source_id LIMIT 1""",
-        (AUTOMATED_NMAP_SOURCE, NMAP_INGESTION_POLICY_VERSION,
+        (AUTOMATED_NMAP_SOURCE, NMAP_INGESTION_POLICY_VERSION, *active_parameters,
          AUTOMATED_NMAP_INTENT, JOB_TYPE),
     ).fetchone()
 
@@ -723,6 +751,11 @@ def _nmap_scope_snapshot(
         raise KeyError("Eligible Nmap scope assignment does not exist")
     if row[6] != required_source_kind:
         raise DerivedJobConflict("The assignment is not for the expected Nmap evidence source")
+    require_active_encounter(
+        db,
+        source_family=(NMAP_SCAN_RUN if required_source_kind == "nmap_scan" else NMAP_IMPORT),
+        encounter_id=(str(row[7]) if required_source_kind == "nmap_scan" else str(row[0])),
+    )
     if db.execute(
         "SELECT 1 FROM artifact_scope_assignments WHERE supersedes_assignment_id = ?",
         (assignment_id,),
@@ -1403,6 +1436,7 @@ def retry_derived_job(
         ).fetchone()
         if latest is None or latest[1] not in {"failed", "interrupted"}:
             raise DerivedJobConflict("Only failed or interrupted work can be retried")
+        _require_active_nmap_job_source(db, job)
         attempt_id = f"analysis_attempt_{uuid.uuid4().hex}"
         db.execute(
             """INSERT INTO pipeline_job_attempts (
@@ -1649,6 +1683,17 @@ def execute_claimed_nmap_scope_job(db_path: Path, claim: dict) -> dict:
         raise DerivedJobConflict("The scoped Nmap job identity or processing rules changed before this job ran")
 
     def validate_authority(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db,
+            source_family=(
+                NMAP_SCAN_RUN if row["source_kind"] == "nmap_scan" else NMAP_IMPORT
+            ),
+            encounter_id=(
+                str(row["source_run_id"] or row["source_ref"])
+                if row["source_kind"] == "nmap_scan"
+                else str(row["source_observation_id"])
+            ),
+        )
         assignment = db.execute(
             """SELECT assignment.artifact_observation_id, assignment.scope_id,
                       assignment.revision, assignment.event_kind,

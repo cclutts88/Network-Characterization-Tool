@@ -17,6 +17,12 @@ from app.automated_nmap_foundation import (
     recover_interrupted_automated_scan_foundation,
 )
 from app.database import connect_database
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import NMAP_SCAN_RUN, nmap_scan_run_adapter
 from app.derived_jobs import (
     claim_next_derived_job,
     enqueue_automated_nmap_scope_job,
@@ -86,6 +92,7 @@ def scoped_run(
     db_path = db_path or (tmp_path / "analyzer.db")
     init_artifact_storage(db_path)
     init_poc_storage(db_path)
+    init_evidence_retirement_storage(db_path)
     network = create_saved_network(
         SavedNetworkCreate(
             name=f"{label} subnet", cidr=cidr, created_by="analyst"
@@ -190,6 +197,54 @@ def test_explicit_processing_uses_retained_scope_and_is_exactly_replayable(tmp_p
             "SELECT COUNT(*) FROM entity_assessments WHERE artifact_observation_id = ?",
             (component["observation_id"],),
         ).fetchone()[0] == 0
+
+
+def test_retired_automated_nmap_cannot_publish_retry_or_queue_again(
+    tmp_path, monkeypatch,
+):
+    db_path, run, _, _ = scoped_run(tmp_path)
+    monkeypatch.setattr("app.derived_jobs.start_derived_job_worker", lambda *args, **kwargs: None)
+    queued = enqueue_automated_nmap_scope_job(
+        db_path,
+        run["run_id"],
+        request_token="retired-automated-scope",
+        requested_by="analyst",
+    )
+    retire_evidence(
+        db_path,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=run["run_id"],
+        actor="analyst",
+        reason="incorrect automated scan",
+        adapter=nmap_scan_run_adapter(),
+    )
+
+    assert run_next_derived_job(db_path, tmp_path) is True
+    status = scan_run_job_statuses(db_path, [run["run_id"]], tmp_path)[run["run_id"]]
+    assert status["eligible"] is False
+    assert "retired at revision" in status["eligibility_reason"]
+    with connect_database(db_path, read_only=True) as db:
+        state, error = db.execute(
+            "SELECT state,error FROM pipeline_job_attempts WHERE job_id=?",
+            (queued["job_id"],),
+        ).fetchone()
+        assert state == "failed"
+        assert "retired at revision" in error
+        assert db.execute("SELECT COUNT(*) FROM entity_assessments").fetchone()[0] == 0
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        retry_derived_job(
+            db_path,
+            queued["job_id"],
+            request_token="retired-automated-retry",
+            requested_by="analyst",
+        )
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        enqueue_automated_nmap_scope_job(
+            db_path,
+            run["run_id"],
+            request_token="retired-automated-new",
+            requested_by="analyst",
+        )
 
 
 def test_supported_intake_saves_candidates_and_reuses_exact_content_for_encounters(

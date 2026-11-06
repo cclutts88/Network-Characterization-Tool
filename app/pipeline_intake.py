@@ -14,6 +14,8 @@ from app.derived_contracts import (
     DEVICE_SUMMARY_VERSION,
 )
 from app.nmap_evidence import NMAP_ENDPOINT_PARSER
+from app.evidence_retirement import active_encounter_sql
+from app.evidence_retirement_sources import NMAP_SCAN_RUN
 
 
 NMAP_INGESTION_POLICY_VERSION = 1
@@ -547,8 +549,11 @@ def recover_missing_automated_nmap_intents(db_path: Path) -> list[str]:
         if not required_tables.issubset(available_tables):
             return recovered
         db.execute("BEGIN IMMEDIATE")
+        active_clause, active_parameters = active_encounter_sql(
+            NMAP_SCAN_RUN, "run.run_id",
+        )
         rows = db.execute(
-            """SELECT run.run_id
+            f"""SELECT run.run_id
                  FROM scan_runs run
                  JOIN pipeline_intake_sources source
                    ON source.source_kind = ?
@@ -564,6 +569,7 @@ def recover_missing_automated_nmap_intents(db_path: Path) -> list[str]:
                    ON intent.intent_kind = ?
                   AND intent.source_id = run.run_id
                 WHERE run.status = 'completed'
+                  AND {active_clause}
                   AND intent.intent_id IS NULL
                 GROUP BY run.run_id
                HAVING COUNT(observation.observation_id) = 1
@@ -572,6 +578,7 @@ def recover_missing_automated_nmap_intents(db_path: Path) -> list[str]:
                 AUTOMATED_NMAP_SOURCE,
                 NMAP_INGESTION_POLICY_VERSION,
                 AUTOMATED_NMAP_INTENT,
+                *active_parameters,
             ),
         ).fetchall()
         for row in rows:

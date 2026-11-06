@@ -7,6 +7,7 @@ import app.network_map as network_map
 import app.nmap_topology_analysis as nmap_topology
 from app.artifacts import register_artifact_file
 from app.database import connect_database
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.nmap_topology_analysis import (
     NMAP_TOPOLOGY_FAMILY,
     analyze_scan_run_nmap_topology,
@@ -55,6 +56,7 @@ def create_scan(
         "display_name": "Users LAN verification",
     }
     insert_scan_run_manifest(manifest, db_path=db_path)
+    init_evidence_retirement_storage(db_path)
     run_dir = data_dir / RUNS_DIR_NAME / run_id
     run_dir.mkdir(parents=True)
     xml_path = run_dir / "scan.xml"

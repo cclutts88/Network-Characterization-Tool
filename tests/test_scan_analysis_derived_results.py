@@ -8,6 +8,7 @@ import app.main as main
 import app.nmap_base_analysis as nmap_base
 from app.artifacts import register_artifact_file
 from app.database import connect_database
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.identity_overrides import set_os_override
 from app.poc import init_poc_storage
 from app.storage_health import backfill_storage
@@ -48,6 +49,7 @@ def create_run(
     partial: bool = False,
 ) -> tuple[dict, dict | None]:
     init_poc_storage(db)
+    init_evidence_retirement_storage(db)
     run_dir = runs_root / run_id
     run_dir.mkdir(parents=True)
     (run_dir / "scan.xml").write_bytes(content)

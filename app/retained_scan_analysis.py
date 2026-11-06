@@ -16,6 +16,12 @@ from app.derived_contracts import (
     NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
 )
 from app.derived_results import _load_derived_result, derived_result_identity
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    active_encounter_sql,
+    require_active_encounter,
+)
+from app.evidence_retirement_sources import NMAP_SCAN_RUN
 
 
 GROUP_COMPOSITION_VERSION = "nmap-group-composition:1"
@@ -48,6 +54,14 @@ def _stable_verified_bytes(path: Path, digest: str, size_bytes: int, label: str)
 
 
 def _group_manifests(db: sqlite3.Connection, run_id: str) -> list[dict]:
+    try:
+        require_active_encounter(
+            db, source_family=NMAP_SCAN_RUN, encounter_id=run_id,
+        )
+    except RetiredEvidenceDependency as exc:
+        raise RetainedScanAnalysisUnavailable(
+            "evidence_retired", "This saved Nmap evidence was retired from analysis",
+        ) from exc
     row = db.execute(
         "SELECT run_id, status, manifest_json FROM scan_runs WHERE run_id = ?", (run_id,),
     ).fetchone()
@@ -77,6 +91,16 @@ def _group_manifests(db: sqlite3.Connection, run_id: str) -> list[dict]:
         manifests = [selected]
     if not manifests:
         raise RetainedScanAnalysisUnavailable("group_incomplete", "The saved scan group is unavailable")
+    for child_run_id in row_ids:
+        try:
+            require_active_encounter(
+                db, source_family=NMAP_SCAN_RUN, encounter_id=child_run_id,
+            )
+        except RetiredEvidenceDependency as exc:
+            raise RetainedScanAnalysisUnavailable(
+                "evidence_retired",
+                "This saved scan group includes evidence retired from analysis",
+            ) from exc
     if any(str(item.get("run_id") or "") != row_id for row_id, item in zip(row_ids, manifests)):
         raise RetainedScanAnalysisUnavailable(
             "source_conflict", "A saved scan chunk row and its manifest disagree about the run identity",
@@ -330,8 +354,11 @@ def list_prepared_scan_group_metadata(db_path: Path) -> list[dict]:
                 "history_limit",
                 f"Saved scan history exceeds the reviewed {MAX_PREPARED_HISTORY_RUNS:,}-run metadata limit",
             )
+        active_clause, active_parameters = active_encounter_sql(
+            NMAP_SCAN_RUN, "scan.run_id",
+        )
         rows = db.execute(
-            """SELECT scan.run_id, scan.manifest_json,
+            f"""SELECT scan.run_id, scan.manifest_json,
                       observation.sha256, artifact.size_bytes,
                       job.target_computation_key, job.target_result_id,
                       attempt.result_id, attempt.output_kind, attempt.output_id
@@ -363,6 +390,7 @@ def list_prepared_scan_group_metadata(db_path: Path) -> list[dict]:
                 AND attempt.output_kind = 'derived_result'
                 AND attempt.output_id = job.target_result_id
                WHERE scan.status = 'completed'
+                 AND {active_clause}
                  AND CASE WHEN json_valid(scan.manifest_json)
                           THEN json_extract(scan.manifest_json, '$.status') END = 'completed'
                  AND (
@@ -377,6 +405,7 @@ def list_prepared_scan_group_metadata(db_path: Path) -> list[dict]:
                 NMAP_BASE_ANALYSIS_VERSION,
                 NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
                 _canonical_json(dict(NMAP_BASE_PARAMETERS)),
+                *active_parameters,
             ),
         ).fetchall()
         eligible_by_run: dict[str, list[dict]] = {}

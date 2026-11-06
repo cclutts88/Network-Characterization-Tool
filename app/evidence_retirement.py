@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Callable, Mapping, Sequence, TypeVar
 import uuid
@@ -43,6 +44,9 @@ EVIDENCE_RETIREMENT_SCHEMA_OBJECTS = frozenset({
 _FORBIDDEN_CONTENT_IDENTITY_NAMES = frozenset({
     "sha", "sha256", "content_hash", "content_sha256", "artifact_sha256",
 })
+_SQL_IDENTITY_EXPRESSION = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?"
+)
 
 
 class EvidenceRetirementError(ValueError):
@@ -424,6 +428,54 @@ def is_evidence_retired(
         "WHERE source_family=? AND encounter_id=? AND sealed=1",
         (source_family, encounter_id),
     ).fetchone() is not None
+
+
+def retirement_record(
+    connection: sqlite3.Connection, *, source_family: str, encounter_id: str,
+) -> dict[str, object] | None:
+    row = connection.execute(
+        """SELECT revision,event_id,actor,reason,retired_at,event_digest
+             FROM evidence_retirement_events
+            WHERE source_family=? AND encounter_id=? AND sealed=1""",
+        (source_family, encounter_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "revision": int(row[0]),
+        "event_id": str(row[1]),
+        "actor": str(row[2]),
+        "reason": str(row[3]),
+        "retired_at": str(row[4]),
+        "event_digest": str(row[5]),
+    }
+
+
+def require_active_encounter(
+    connection: sqlite3.Connection, *, source_family: str, encounter_id: str,
+) -> None:
+    record = retirement_record(
+        connection, source_family=source_family, encounter_id=encounter_id,
+    )
+    if record is not None:
+        raise RetiredEvidenceDependency(
+            f"Evidence encounter was retired at revision {record['revision']}"
+        )
+
+
+def active_encounter_sql(
+    source_family: str, encounter_expression: str,
+) -> tuple[str, tuple[str]]:
+    """Return a bounded NOT EXISTS clause for a trusted table/column expression."""
+    if not _SQL_IDENTITY_EXPRESSION.fullmatch(encounter_expression):
+        raise EvidenceRetirementError("retirement SQL identity expression is invalid")
+    return (
+        "NOT EXISTS ("
+        "SELECT 1 FROM evidence_retirement_events retired "
+        "WHERE retired.source_family=? AND retired.encounter_id="
+        f"{encounter_expression} AND retired.sealed=1)",
+        (source_family,),
+    )
 
 
 def retired_dependency(

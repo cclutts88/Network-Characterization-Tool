@@ -21,6 +21,9 @@ from app.derived_jobs import (
     run_next_derived_job,
     scan_run_job_statuses,
 )
+from app.evidence_retirement import init_evidence_retirement_storage
+from app.evidence_retirement import RetiredEvidenceDependency, retire_evidence
+from app.evidence_retirement_sources import NMAP_SCAN_RUN, nmap_scan_run_adapter
 from app.poc import init_poc_storage
 
 
@@ -42,6 +45,7 @@ def _stale_process_publish(db_text: str, path_text: str, claim: dict, results) -
 
 def make_run(db: Path, data_dir: Path, run_id: str, content: bytes = XML):
     init_poc_storage(db)
+    init_evidence_retirement_storage(db)
     run_dir = data_dir / "scan-runs" / run_id
     run_dir.mkdir(parents=True)
     path = run_dir / "scan.xml"
@@ -104,6 +108,41 @@ def test_job_publishes_result_provenance_and_completion_together(tmp_path, queue
     with connect_database(db, read_only=True) as connection:
         assert connection.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM derived_result_observation_links").fetchone()[0] == 1
+
+
+def test_retired_scan_is_excluded_from_enqueue_execution_and_retry(tmp_path, queue_only):
+    db, data = tmp_path / "nct.db", tmp_path / "data"
+    run_id = "4" * 32
+    make_run(db, data, run_id)
+    queued = enqueue_nmap_base_job(
+        db, run_id, request_token="retirement-race", requested_by="alice",
+    )
+    retire_evidence(
+        db,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=run_id,
+        actor="analyst",
+        reason="wrong retained scan",
+        adapter=nmap_scan_run_adapter(),
+    )
+
+    assert run_next_derived_job(db, data) is True
+    failed = next(
+        item for item in list_derived_jobs(db, limit=20)["items"]
+        if item["job_id"] == queued["job_id"]
+    )
+    assert failed["latest_attempt"]["state"] == "failed"
+    assert "retired at revision" in failed["latest_attempt"]["error"]
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        retry_derived_job(
+            db, queued["job_id"], request_token="retirement-retry", requested_by="alice",
+        )
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        enqueue_nmap_base_job(
+            db, run_id, request_token="retirement-new", requested_by="alice",
+        )
 
 
 def test_lost_claim_rolls_back_new_result_and_success(tmp_path, queue_only):

@@ -25,6 +25,8 @@ from app.automated_nmap_scope_corrections import (
 )
 from app.database import connect_database
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
+from app.evidence_retirement import init_evidence_retirement_storage, retire_evidence
+from app.evidence_retirement_sources import NMAP_SCAN_RUN, nmap_scan_run_adapter
 from app.network_scopes import create_network_scope
 from app.pipeline_intake import (
     AUTOMATED_NMAP_INTENT,
@@ -56,6 +58,7 @@ XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10" s
 
 def manual_assignment(tmp_path: Path, *, marked: bool = True):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     observation = register_artifact_bytes(
         db_path=db_path,
         content=XML,
@@ -84,6 +87,7 @@ def completed_automated_run(
     scoped: bool = True,
 ):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     network = create_saved_network(
         SavedNetworkCreate(
             name="Lab subnet", cidr="192.0.2.0/24", created_by="analyst",
@@ -231,6 +235,7 @@ def test_automatic_base_analysis_does_not_adopt_unmarked_or_unknown_policy_histo
     from app.pipeline_intake import AUTOMATED_NMAP_SOURCE, mark_pipeline_source
 
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     run = dict(run_id="e" * 32, status="completed", created_at="2026-01-01T00:00:00+00:00",
                operator="analyst", reason="Retained history", originating_host="test",
                interface="eth0", profile="Standard", targets=["192.0.2.0/24"])
@@ -1183,6 +1188,43 @@ def test_restart_recovers_intent_after_final_xml_registration_crash_window(tmp_p
     assert recover_missing_automated_nmap_intents(db_path) == []
 
 
+def test_restart_does_not_recreate_intent_for_retired_automated_scan(tmp_path):
+    db_path, run, _, observation = completed_automated_run(tmp_path, finalize=False)
+    with connect_database(db_path) as db:
+        db.execute(
+            "DELETE FROM artifact_observations WHERE observation_id = ?",
+            (observation["observation_id"],),
+        )
+    update_scan_run_manifest(run, db_path)
+    xml_path = tmp_path / "retired-finalized-scan.xml"
+    xml_path.write_bytes(XML)
+    register_artifact_file(
+        db_path=db_path,
+        source_path=xml_path,
+        source_kind="nmap_scan",
+        source_ref=run["run_id"],
+        original_filename="scan.xml",
+        actor="analyst",
+        observed_at=run["completed_at"],
+        observation_key=f"nmap_scan:{run['run_id']}:scan.xml",
+        run_id=run["run_id"],
+        scope_context=get_run_scope_context(db_path, run["run_id"]),
+    )
+    retire_evidence(
+        db_path,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=run["run_id"],
+        actor="analyst",
+        reason="wrong automated scan",
+        adapter=nmap_scan_run_adapter(),
+    )
+
+    assert recover_missing_automated_nmap_intents(db_path) == []
+    assert get_admission_intent(
+        db_path, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run["run_id"],
+    ) is None
+
+
 def test_completed_run_metadata_updates_do_not_rewrite_admission_identity(tmp_path):
     db_path, run, _, _ = completed_automated_run(tmp_path)
     before = get_admission_intent(
@@ -1286,6 +1328,7 @@ def test_legacy_manual_target_scan_without_reviewed_context_needs_scope(tmp_path
 
 def test_unmarked_historical_completed_run_is_not_automatically_adopted(tmp_path):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     run = {
         "run_id": "a" * 32,
         "created_at": "2029-01-01T00:00:00+00:00",

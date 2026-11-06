@@ -10,6 +10,12 @@ import app.derived_jobs as jobs
 from app.artifacts import register_artifact_bytes
 from app.database import connect_database
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import NMAP_IMPORT, nmap_import_adapter
 from app.network_scopes import archive_network_scope, create_network_scope
 
 
@@ -23,6 +29,7 @@ XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10" s
 
 def manual_assignment(tmp_path: Path):
     db_path = tmp_path / "nct.db"
+    init_evidence_retirement_storage(db_path)
     observation = register_artifact_bytes(
         db_path=db_path,
         content=XML,
@@ -99,6 +106,81 @@ def test_stale_assignment_fails_without_publishing_receipts(tmp_path, monkeypatc
         assert db.execute(
             "SELECT COUNT(*) FROM assessment_scope_assignment_links"
         ).fetchone()[0] == 0
+
+
+def test_retired_manual_nmap_is_blocked_before_queue_and_during_publication(
+    tmp_path, monkeypatch,
+):
+    before_dir = tmp_path / "before"
+    race_dir = tmp_path / "race"
+    before_dir.mkdir()
+    race_dir.mkdir()
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+
+    blocked_db, blocked_observation, _, blocked_assignment = manual_assignment(before_dir)
+    retire_evidence(
+        blocked_db,
+        source_family=NMAP_IMPORT,
+        encounter_id=blocked_observation["observation_id"],
+        actor="analyst",
+        reason="incorrect upload",
+        adapter=nmap_import_adapter(),
+    )
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        jobs.enqueue_manual_nmap_scope_job(
+            blocked_db,
+            blocked_assignment["assignment_id"],
+            request_token="retired-before-queue",
+            requested_by="analyst",
+        )
+
+    race_db, race_observation, _, race_assignment = manual_assignment(race_dir)
+    queued = jobs.enqueue_manual_nmap_scope_job(
+        race_db,
+        race_assignment["assignment_id"],
+        request_token="retire-during-publication",
+        requested_by="analyst",
+    )
+    original = jobs.ingest_assigned_nmap_observation
+
+    def retire_between_parse_and_publish(*args, **kwargs):
+        verify = kwargs["before_publish"]
+
+        def retire_source():
+            verify()
+            retire_evidence(
+                race_db,
+                source_family=NMAP_IMPORT,
+                encounter_id=race_observation["observation_id"],
+                actor="analyst",
+                reason="retired while scope analysis was running",
+                adapter=nmap_import_adapter(),
+            )
+
+        kwargs["before_publish"] = retire_source
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, "ingest_assigned_nmap_observation", retire_between_parse_and_publish)
+    assert jobs.run_next_derived_job(race_db, race_dir) is True
+    failed = jobs.nmap_scope_job_for_assignment(
+        race_db, race_assignment["assignment_id"],
+    )
+    assert failed["job_id"] == queued["job_id"]
+    assert failed["latest_attempt"]["state"] == "failed"
+    assert "retired at revision" in failed["latest_attempt"]["error"]
+    with connect_database(race_db, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM entity_assessments").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM pipeline_jobs WHERE job_type = ?",
+            (jobs.SEARCHSPLOIT_CANDIDATE_JOB_TYPE,),
+        ).fetchone()[0] == 0
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        jobs.retry_derived_job(
+            race_db,
+            queued["job_id"],
+            request_token="retired-scope-retry",
+            requested_by="analyst",
+        )
 
 
 def test_archived_scope_and_parser_change_fail_before_publication(tmp_path, monkeypatch):

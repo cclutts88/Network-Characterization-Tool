@@ -22,6 +22,8 @@ from app.derived_results import (
     prepare_derived_result,
     publish_derived_result,
 )
+from app.evidence_retirement import require_active_encounter
+from app.evidence_retirement_sources import NMAP_IMPORT, NMAP_SCAN_RUN
 
 
 NMAP_ANALYSIS_TERMINAL_STATES = {
@@ -69,6 +71,12 @@ def _verified_observation_bytes(db_path: Path, observation_id: str) -> tuple[byt
                WHERE observation.observation_id = ?""",
             (observation_id,),
         ).fetchone()
+        if row is not None and row[2] in {"nmap_import", "nmap_scan"}:
+            require_active_encounter(
+                db,
+                source_family=(NMAP_IMPORT if row[2] == "nmap_import" else NMAP_SCAN_RUN),
+                encounter_id=(observation_id if row[2] == "nmap_import" else str(row[3])),
+            )
     if row is None:
         raise KeyError("Artifact observation is not available")
     if row[2] not in {"nmap_import", "nmap_scan"}:
@@ -115,12 +123,26 @@ def analyze_registered_nmap_result(
         parameters=parameters,
         inputs=inputs,
     )
+    source_family = (
+        NMAP_IMPORT if observation["source_kind"] == "nmap_import" else NMAP_SCAN_RUN
+    )
+    encounter_id = (
+        observation_id if source_family == NMAP_IMPORT else observation["source_ref"]
+    )
+
+    def active_authority_guard(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db, source_family=source_family, encounter_id=encounter_id,
+        )
+        if authority_guard is not None:
+            authority_guard(db)
+
     linked = load_linked_derived_result(
         db_path,
         identity,
         role="nmap_xml",
         observation_id=observation_id,
-        read_guard=authority_guard,
+        read_guard=active_authority_guard,
     )
     if linked is not None and transaction_finalize is None:
         return {**linked, "reused": True, "observation": observation}
@@ -145,7 +167,7 @@ def analyze_registered_nmap_result(
         db_path,
         prepared,
         observation_links=[{"role": "nmap_xml", "observation_id": observation_id}],
-        transaction_guard=authority_guard,
+        transaction_guard=active_authority_guard,
         transaction_finalize=transaction_finalize,
     )
     if transaction_finalize is not None and retained is not None:
@@ -167,7 +189,7 @@ def analyze_registered_nmap_result(
             identity,
             role="nmap_xml",
             observation_id=observation_id,
-            read_guard=authority_guard,
+            read_guard=active_authority_guard,
         )
         if retained is None:
             raise RuntimeError("Published derived result and provenance could not be reloaded")
@@ -244,6 +266,9 @@ def _require_scan_run(
 
 def _scan_authority_guard(run_id: str, observation_id: str):
     def require_authority(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db, source_family=NMAP_SCAN_RUN, encounter_id=run_id,
+        )
         _require_scan_run(db, run_id, finalized=True)
         rows = _scan_xml_rows(db, run_id)
         if len(rows) != 1:

@@ -18,6 +18,15 @@ from app.derived_results import (
     prepare_derived_result,
     publish_derived_result,
 )
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import (
+    NMAP_IMPORT,
+    nmap_import_adapter,
+)
 import app.nmap_base_analysis as nmap_base
 from app.nmap_base_analysis import analyze_registered_nmap_base
 from app.main import parse_xml
@@ -32,6 +41,7 @@ XML = b'''<nmaprun scanner="nmap" version="7.95" args="nmap -n -sS 192.0.2.10" s
 
 
 def observation(db: Path, content: bytes = XML, source_ref: str = "upload:one") -> dict:
+    init_evidence_retirement_storage(db)
     return register_artifact_bytes(
         db_path=db,
         content=content,
@@ -242,6 +252,55 @@ def test_adapter_reuses_exact_bytes_but_preserves_each_observation(tmp_path, mon
         assert connection.execute(
             "SELECT COUNT(*) FROM derived_result_observation_links"
         ).fetchone()[0] == 2
+
+
+def test_retired_import_cannot_be_analyzed_but_same_bytes_sibling_can_reuse(
+    tmp_path,
+):
+    db = tmp_path / "nct.db"
+    retired = observation(db, source_ref="upload:retired")
+    sibling = observation(db, source_ref="upload:active-sibling")
+    first = analyze_registered_nmap_base(db, retired["observation_id"])
+
+    retire_evidence(
+        db,
+        source_family=NMAP_IMPORT,
+        encounter_id=retired["observation_id"],
+        actor="analyst",
+        reason="duplicate operator import",
+        adapter=nmap_import_adapter(),
+    )
+
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        analyze_registered_nmap_base(db, retired["observation_id"])
+    reused = analyze_registered_nmap_base(db, sibling["observation_id"])
+    assert reused["reused"] is True
+    assert reused["result_id"] == first["result_id"]
+
+
+def test_retirement_racing_nmap_parse_blocks_publication(tmp_path, monkeypatch):
+    db = tmp_path / "nct.db"
+    source = observation(db, source_ref="upload:race")
+
+    def retire_during_parse(content):
+        retire_evidence(
+            db,
+            source_family=NMAP_IMPORT,
+            encounter_id=source["observation_id"],
+            actor="analyst",
+            reason="retired while analysis was running",
+            adapter=nmap_import_adapter(),
+        )
+        return parse_xml(content)
+
+    monkeypatch.setattr(nmap_base, "_parse_nmap_xml", retire_during_parse)
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        analyze_registered_nmap_base(db, source["observation_id"])
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM derived_result_observation_links"
+        ).fetchone()[0] == 0
 
 
 def test_adapter_rejects_a_fixed_contract_override(tmp_path):
