@@ -684,6 +684,21 @@ archive identity actually transferred, while admitting the package-recorded mode
 classic identities for the already-running recovery console. The R8 payload is
 unchanged and remains unsealed pending a clean rerun and the remaining matrix routes.
 
+The clean R8 rerun then passed the guarded update, existing-account verification and
+retained-evidence checks before its deliberate backup-restore exercise exposed a real
+recovery-helper defect. The immutable maintenance container correctly used a read-only
+root filesystem, but schema compatibility inspection requires a temporary working
+directory and the helper provided none. Docker therefore reported only a failed helper
+start after the verified backup had already been restored; the independent retirement
+authority kept the application safely held and the later candidate bytes quarantined.
+Maintenance helpers now receive a bounded, memory-backed, non-persistent `/tmp` while
+remaining offline and read-only everywhere else. Exact reproduction without that mount
+fails with the captured temporary-directory error; the corrected helper completes the
+versioned schema check and retirement-authority reconciliation. Local helper checks pass
+13 tests and the recovery-console set passes 87 tests with one expected skip. R8 is
+rejected and remains unsealed because this source correction requires a new exact image
+and complete package matrix before distribution.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

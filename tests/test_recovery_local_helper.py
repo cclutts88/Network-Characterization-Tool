@@ -65,7 +65,13 @@ def test_local_create_pins_image_and_preserves_mount_and_network_restrictions(tm
     config = engine.created
     assert config["Image"] == IMAGE and config["Entrypoint"] == ["python"]
     assert config["Env"] == ["PYTHONPATH=/app"] and config["Cmd"] == ["check.py"]
-    assert config["HostConfig"] == {"NetworkMode": "none", "ReadonlyRootfs": True, "Mounts": [{"Type": "bind", "Source": "/saved", "Target": "/data", "ReadOnly": True}], "RestartPolicy": {"Name": "no"}}
+    assert config["HostConfig"] == {
+        "NetworkMode": "none",
+        "ReadonlyRootfs": True,
+        "Mounts": [{"Type": "bind", "Source": "/saved", "Target": "/data", "ReadOnly": True}],
+        "RestartPolicy": {"Name": "no"},
+        "Tmpfs": {"/tmp": "rw,noexec,nosuid,nodev,size=64m,mode=1777"},
+    }
     assert engine.item is None
 
 

@@ -671,7 +671,11 @@ class Host:
             identity = self.engine.create(name, {"Image": image, "Entrypoint": ["python"], "Cmd": command,
                 "Env": ["PYTHONPATH=/app"], "AttachStdout": True, "AttachStderr": True,
                 "Tty": False, "HostConfig": {"NetworkMode": "none", "ReadonlyRootfs": readonly,
-                    "Mounts": mounts, "RestartPolicy": {"Name": "no"}}})
+                    "Mounts": mounts, "RestartPolicy": {"Name": "no"},
+                    # Schema compatibility checks use Python's temporary-file
+                    # support. Keep the image read-only while providing a
+                    # bounded, non-persistent workspace for those checks.
+                    "Tmpfs": {"/tmp": "rw,noexec,nosuid,nodev,size=64m,mode=1777"}}})
             helper = self.engine.inspect(identity)
             if helper["Image"] != image or helper["State"]["Running"]:
                 raise ValueError("Created maintenance helper identity/state mismatch")
