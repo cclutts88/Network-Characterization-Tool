@@ -715,6 +715,36 @@ restore that deliberately requires the compatible candidate. Focused Linux check
 unsealed; the corrected source requires a new committed candidate, complete regression
 suite and every package route before distribution.
 
+Retirement R10 local release qualification completed (2026-11-06): exact commit
+`b428669d4b100b487a02d087c9df6b9e87710de6` passed the complete regression suite
+with 2,722 passing tests, 25 expected skips and one existing Starlette warning. The
+new package was then exercised from four separate disposable stores: a clean install,
+an installed-helper/recovery-console upgrade with deliberate power loss immediately
+after replacement-container creation, an upgrade from Recovery-r1 and an upgrade from
+Fresh-r2. All four routes passed account, retained-evidence, issuing-CA HTTPS,
+stop/start and exact-image checks. The three upgrade routes also passed protected
+restore. The fresh-install route instead proved the corrected retirement-guard mount,
+receipt contract, first Administrator setup and final restart before accepting sample
+evidence. These disposable host rehearsals use a controlled systemd launcher
+substitution; booting the package under the target Range host's real systemd remains
+part of morning Range acceptance. The staged manifest tested by those receipts is
+`cd5b8ef8575a9fda2b1ad1ab7b0516c3decc94059b2cf7e85dc8d51ccc60b1e8`.
+
+The sealed local deployment candidate is
+`C:\Users\chris\Downloads\NCT-Full-Range-20261106-Retirement-r10.zip`, 124,221,896
+bytes, SHA-256
+`16b36022bb8d2d0e5fd0cf5fa986ec957d6bbb3f99b7ac0b3bca673d5c46716f`. Its embedded
+post-seal manifest independently verifies as
+`05e621e8ba3bf465d46df260f5d6840c44136974f95df0e75e2c46271d817db9`; the embedded
+release records retirement complete, two exact supported-source acceptances and a
+passing aggregate validation receipt. The controller transfer set contains three
+pieces of 50,331,648, 50,331,648 and 23,558,600 bytes. A clean Linux reconstruction
+reproduced the ZIP byte-for-byte, a repeated join safely reused the already-correct
+ZIP, and a conflicting destination was preserved and refused. The package is locally
+qualified and ready to transfer for morning Range acceptance. It has not been installed
+or accepted on either Range, is not mission-ready and is not available on stable
+`main`; those boundaries must remain visible during handoff.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
