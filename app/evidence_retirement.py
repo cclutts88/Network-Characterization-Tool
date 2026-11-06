@@ -123,7 +123,7 @@ def _retirement_impact(
             f"{identity_count} protected exact identities "
             f"({identity_snapshot_sha256[:12]})."
         ),
-        "Any active same-content sibling remains independently available.",
+        "Another separately saved record with the same original bytes remains available.",
         "Original source bytes and the immutable retirement receipt are retained.",
         "This action does not contact the network and does not physically delete files.",
     ]

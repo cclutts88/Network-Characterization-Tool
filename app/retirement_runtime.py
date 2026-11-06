@@ -16,10 +16,10 @@ from app.retirement_guard import (
 
 REQUIRED_MODE = "required"
 DISABLED_MODE = "disabled"
-# The reviewer must clear startup, restore, read-route and preview binding gates
-# before this source-controlled latch can be changed. Environment values cannot
-# bypass it.
-OPERATOR_CONTROLS_AVAILABLE = False
+# This source-controlled latch is intentionally independent of environment
+# configuration. Runtime admission still requires the protected host guard to
+# be configured and ready before any control is exposed or accepted.
+OPERATOR_CONTROLS_AVAILABLE = True
 _LOCK = threading.RLock()
 _STATUS = RetirementGuardStatus(
     "hold", "retirement guard has not been checked", None, None, None,

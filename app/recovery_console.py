@@ -43,7 +43,7 @@ def health():
 @app.api_route("/api/{action}", methods=["GET", "POST"])
 async def proxy(action: str, request: Request):
     methods = {"status": "GET", "diagnose": "GET", **{name: "POST" for name in
-        ("exchange", "upload", "apply", "rollback", "verify-sign-in", "verify-backup", "start", "stop", "restart", "close", "prepare-repair", "apply-repair", "cancel-repair")}}
+        ("exchange", "upload", "apply", "rollback", "resume-compatible", "verify-sign-in", "verify-backup", "start", "stop", "restart", "close", "prepare-repair", "apply-repair", "cancel-repair")}}
     if methods.get(action) != request.method:
         return JSONResponse({"detail": "Unsupported recovery action"}, status_code=404)
     token = request.cookies.get(COOKIE, "")

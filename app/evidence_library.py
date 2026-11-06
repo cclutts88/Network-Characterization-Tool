@@ -20,7 +20,16 @@ from app.evidence_retirement import (
     require_active_encounter,
     require_retirement_authority,
 )
-from app.evidence_retirement_sources import DEVICE_COLLECTION, NMAP_IMPORT, NMAP_SCAN_RUN
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT,
+    ARKIME_SUMMARY_IMPORT,
+    DEVICE_COLLECTION,
+    HOSTNAME_EVIDENCE_UPLOAD,
+    MAX_HOSTNAME_MANIFEST_BYTES,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+    _bounded_regular_json,
+)
 
 LOG = logging.getLogger(__name__)
 LOCK = threading.RLock()
@@ -171,14 +180,47 @@ def _tables(db):
     return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
-def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="", end="", limit=25, offset=0, after=""):
+def _hostname_catalog(root: Path | None) -> list[tuple[str, str, str, str]]:
+    """Read bounded display identity for retained hostname uploads."""
+    if root is None:
+        return []
+    root = Path(root)
+    if not root.exists():
+        return []
+    if root.is_symlink() or not root.is_dir():
+        raise OSError("Hostname evidence directory is unsafe")
+    items: list[tuple[str, str, str, str]] = []
+    for child in root.iterdir():
+        if not RUN.fullmatch(child.name) or child.is_symlink() or not child.is_dir():
+            continue
+        try:
+            value = _bounded_regular_json(
+                child / "manifest.json", MAX_HOSTNAME_MANIFEST_BYTES,
+            )
+        except (OSError, ValueError, EvidenceRetirementError):
+            continue
+        if str(value.get("evidence_id") or "") != child.name:
+            continue
+        items.append((
+            child.name,
+            str(value.get("imported_at") or "")[:100],
+            str(value.get("filename") or child.name)[:500],
+            str(value.get("imported_by") or "")[:100],
+        ))
+    return items
+
+
+def list_evidence(db_path, root, *, hostname_root=None, q="", kind="", scope="", analyst="", start="", end="", limit=25, offset=0, after=""):
     from datetime import date
     for value in (start,end):
         if value and (len(value)!=10 or date.fromisoformat(value).isoformat()!=value):
             raise ValueError('Use YYYY-MM-DD dates')
     if start and end and start>end:
         raise ValueError('Start date must not follow end date')
-    if kind not in {"", "scan", "import", "device"}:
+    if kind not in {
+        "", "scan", "import", "device", "arkime_sessions", "arkime_summary",
+        "hostname",
+    }:
         raise ValueError("Choose a supported evidence type")
     if not 1 <= limit <= 100 or offset < 0:
         raise ValueError("Invalid page range")
@@ -189,6 +231,13 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
         db.execute('BEGIN')
         require_retirement_authority(db)
         tables = _tables(db)
+        db.execute("""CREATE TEMP TABLE hostname_catalog(
+            evidence_id TEXT PRIMARY KEY, saved_at TEXT, title TEXT, actor TEXT
+        )""")
+        db.executemany(
+            "INSERT INTO hostname_catalog VALUES (?,?,?,?)",
+            _hostname_catalog(hostname_root),
+        )
         if "scan_runs" in tables:
             scope_sql = "(SELECT scope_id FROM scan_run_scope_contexts c WHERE c.run_id=r.run_id)" if "scan_run_scope_contexts" in tables else "NULL"
             scan_active, scan_active_parameters = active_encounter_sql(
@@ -219,6 +268,31 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             FROM artifact_observations o LEFT JOIN imports i ON i.sha256=o.sha256 WHERE o.source_kind='nmap_import' AND """ + import_active)
             legacy = "WHERE NOT EXISTS (SELECT 1 FROM artifact_observations o WHERE o.sha256=i.sha256 AND o.source_kind='nmap_import')"
             parts.append(f"SELECT 'import-legacy:'||i.sha256,'import',i.sha256,i.imported_at,i.filename,'','','','Legacy import','' FROM imports i {legacy}")
+        arkime_active_parameters = ()
+        if "arkime_imports" in tables:
+            arkime_active, arkime_active_parameters = active_encounter_sql(
+                ARKIME_SESSIONS_IMPORT, "a.import_id",
+            )
+            parts.append(f"""SELECT 'arkime-sessions:'||a.import_id,'arkime_sessions',a.import_id,a.imported_at,
+            'Arkime Sessions · '||a.operator_sensor,a.actor,a.query_start||' through '||a.query_end,a.scope_id,
+            'Retained traffic evidence · '||a.returned_count||' rows',a.observation_id
+            FROM arkime_imports a WHERE {arkime_active}""")
+        arkime_summary_active_parameters = ()
+        if "arkime_summary_imports" in tables:
+            summary_active, arkime_summary_active_parameters = active_encounter_sql(
+                ARKIME_SUMMARY_IMPORT, "a.import_id",
+            )
+            parts.append(f"""SELECT 'arkime-summary:'||a.import_id,'arkime_summary',a.import_id,a.imported_at,
+            'Arkime Summary · '||a.operator_sensor,a.actor,a.query_start||' through '||a.query_end,a.scope_id,
+            'Retained traffic summary · '||a.returned_count||' rows',a.observation_id
+            FROM arkime_summary_imports a WHERE {summary_active}""")
+        hostname_active, hostname_active_parameters = active_encounter_sql(
+            HOSTNAME_EVIDENCE_UPLOAD, "h.evidence_id",
+        )
+        parts.append(f"""SELECT 'hostname:'||h.evidence_id,'hostname',h.evidence_id,h.saved_at,
+        h.title,h.actor,'DHCP / DNS server evidence','',
+        'Retained hostname server evidence','' FROM hostname_catalog h
+        WHERE {hostname_active}""")
         device_attached = False
         try:
             if index_path(db_path).is_symlink() or str(index_path(db_path).resolve()) in FAILED:
@@ -263,6 +337,9 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
         retirement_args = [
             *scan_active_parameters,
             *import_active_parameters,
+            *arkime_active_parameters,
+            *arkime_summary_active_parameters,
+            *hostname_active_parameters,
             *device_active_parameters,
         ]
         total = db.execute(
@@ -296,6 +373,9 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             'scan': NMAP_SCAN_RUN,
             'import': NMAP_IMPORT,
             'device': DEVICE_COLLECTION,
+            'arkime_sessions': ARKIME_SESSIONS_IMPORT,
+            'arkime_summary': ARKIME_SUMMARY_IMPORT,
+            'hostname': HOSTNAME_EVIDENCE_UPLOAD,
         }[row['kind']]
         row['encounter_id'] = (
             row['observation_id'] if row['kind'] == 'import' else row['source_id']
@@ -351,8 +431,20 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             row['detail_url'] = f'/api/scan-runs/{sid}'
             row['analysis_url'] = f'/analysis?run={sid}'
             row['download_url'] = f'/api/scan-runs/{sid}/artifacts/xml'
-        else:
+        elif row['kind']=='import':
             row['detail_url'] = f'/api/imports/{sid}'
             row['analysis_url'] = ''  # Shared bytes do not establish selected encounter context.
             row['download_url'] = '' if row['status'].startswith('Incomplete import record') else f'/api/imports/{sid}/raw'
+        elif row['kind']=='arkime_sessions':
+            row['detail_url'] = f'/api/arkime/imports/{sid}'
+            row['analysis_url'] = f'/arkime?analyze={sid}#arkimeTrafficAnalysis'
+            row['download_url'] = f'/api/arkime/imports/{sid}/raw'
+        elif row['kind']=='arkime_summary':
+            row['detail_url'] = f'/api/arkime/summary-imports/{sid}'
+            row['analysis_url'] = f'/arkime?analyze={sid}#arkimeTrafficAnalysis'
+            row['download_url'] = f'/api/arkime/summary-imports/{sid}/raw'
+        else:
+            row['detail_url'] = ''
+            row['analysis_url'] = '/hostnames#serverEvidence'
+            row['download_url'] = f'/api/hostnames/evidence/{sid}/file'
     return {"items":rows,"total":total,"limit":limit,"offset":offset,"next_cursor":next_cursor,"scopes":[{'id':k,'label':v} for k,v in scopes.items()],"device_coverage":coverage}

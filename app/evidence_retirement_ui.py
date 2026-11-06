@@ -22,6 +22,7 @@ function ensureDialog(){
 }
 async function responseJson(response){
   const data=await response.json().catch(()=>({}));
+  if(!response.ok&&data&&data.committed===true)return data;
   if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:'Evidence retirement could not be completed.');
   return data;
 }
@@ -50,7 +51,7 @@ async function confirmRetirement(){
   busy=true;submit.disabled=true;document.getElementById('nctRetirementCancel').disabled=true;status.textContent='Recording the retirement decision and rechecking the source…';status.className='nct-retirement-status';
   try{
     const result=await responseJson(await fetch('/api/evidence-retirements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_family:active.sourceFamily,encounter_id:active.encounterId,reason,confirmation,review_token:active.reviewToken})}));
-    status.textContent=`Retired from ordinary use at audit revision ${result.revision}. Original files remain retained.`;status.className='nct-retirement-status good';
+    status.textContent=result.committed===true&&result.status==='retired-held'?`Retirement was recorded at audit revision ${result.revision}, but evidence views are now paused for protected-state reconciliation. Do not repeat this action.`:`Retired from ordinary use at audit revision ${result.revision}. Original files remain retained.`;status.className=result.status==='retired-held'?'nct-retirement-status bad':'nct-retirement-status good';
     const finished=active;setTimeout(()=>{dialog.close();active=null;if(typeof finished.after==='function')finished.after(result)},500);
   }catch(error){status.textContent=error.message;status.className='nct-retirement-status bad'}
   finally{busy=false;submit.disabled=false;document.getElementById('nctRetirementCancel').disabled=false}

@@ -29,7 +29,12 @@ def test_guard_cli_provisions_checks_and_marks_restore_hold(tmp_path, capsys):
         "mark-restore-hold", "--guard-dir", str(guard),
         "--data-identity", identity, "--operation-id", "restore-test",
         "--detail", "before data replacement",
-    ]) == 2
+    ]) == 0
     held = json.loads(capsys.readouterr().out)
     assert held["state"] == "hold"
+    assert main([
+        "check", "--db", str(db_path), "--data-dir", str(data),
+        "--guard-dir", str(guard), "--data-identity", identity,
+    ]) == 2
+    assert json.loads(capsys.readouterr().out)["state"] == "hold"
 

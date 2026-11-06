@@ -16,7 +16,12 @@ pytest.importorskip("fcntl")
 from fastapi.testclient import TestClient
 
 from app import schema_compatibility as schema
-from app.evidence_retirement import init_evidence_retirement_storage
+from app.evidence_retirement import (
+    active_encounter_sql,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import NMAP_IMPORT, nmap_import_adapter
 import app.retirement_guard as guard_module
 from app.retirement_guard import (
     BINDING_FILE,
@@ -114,8 +119,10 @@ class Engine:
         self.items = {"old": {"Id": "old", "Image": "sha256:" + "a" * 64, "Name": "/nct",
             "Config": {"Env": ["NCT_AUTH_MODE=local"], "Labels": {}, "Cmd": ["uvicorn", "app.main:app"]},
             "State": {"Running": True, "Status": "running"},
+            "NetworkSettings": {"Networks": {"bridge": {}}},
             "Mounts": [{"Destination": "/data", "Type": "bind", "Source": config["data_dir"]}],
-            "HostConfig": {"RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": 4}}}}
+            "HostConfig": {"Binds": [config["data_dir"] + ":/data:rw"],
+                           "RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": 4}}}}
 
     def inspect(self, name):
         for value in self.items.values():
@@ -148,10 +155,24 @@ class Engine:
 
     def create(self, name, config):
         original = copy.deepcopy(self.items["old"])
-        original.update(Id="new", Name="/" + name, Image=config["Image"], Config=config, HostConfig=config["HostConfig"])
+        index = 1
+        identifier = "new"
+        while identifier in self.items:
+            index += 1
+            identifier = f"new-{index}"
+        mounts = []
+        for binding in config["HostConfig"].get("Binds", []):
+            source, destination, *_options = binding.split(":")
+            mounts.append({"Destination": destination, "Type": "bind", "Source": source,
+                           "RW": not _options or _options[0] != "ro"})
+        original.update(Id=identifier, Name="/" + name, Image=config["Image"], Config=config,
+                        HostConfig=config["HostConfig"], Mounts=mounts,
+                        NetworkSettings={"Networks": {
+                            host_module.expected_network_name(config): {}
+                        }})
         original["State"] = {"Running": False, "Status": "created"}
-        self.items["new"] = original
-        return "new"
+        self.items[identifier] = original
+        return identifier
 
 
 class StorageHost(host_module.Host):
@@ -166,6 +187,18 @@ class StorageHost(host_module.Host):
 
     def compatibility(self, *_args, **_kwargs):
         pass
+
+    def candidate_runtime_contract(self, state):
+        return {
+            "build_id": state["manifest"].get("build_id", "candidate"),
+            "build_commit": state["manifest"].get("build_commit", "b" * 40),
+            "schema": {
+                "writable_schema_version": 9,
+                "readable_schema_versions": [8, 9],
+                "data_layout_contract": schema.DATA_LAYOUT_CONTRACT,
+            },
+            "guard_contract": "nct-retirement-guard-v1",
+        }
 
     def checkpoint(self, image):
         with sqlite3.connect(self.data / "analyzer.db") as db:
@@ -259,6 +292,55 @@ class FirstBindInterruptedHost(EarlyStartVirginGuardHost):
         return super().verify_health(state, original=original)
 
 
+class CompatibleRecoveryHost(EarlyStartVirginGuardHost):
+    """Fail once after a protected write, then accept only the pinned candidate."""
+
+    def runtime_supports_retirement_guard(self, target):
+        return (
+            target.get("Image") == "sha256:" + "b" * 64
+            and host_module.Host.runtime_supports_retirement_guard(self, target)
+        )
+
+    def check_retirement_guard(self, image):
+        return check_retirement_guard(
+            self.data / "analyzer.db",
+            data_dir=self.data,
+            guard_dir=self.retirement_guard,
+            data_identity=self.retirement_data_identity,
+        ).__dict__
+
+    def verify_health(self, state, original=False):
+        if not original and not getattr(self, "failed_once", False):
+            self.failed_once = True
+            db_path = self.data / "analyzer.db"
+            attempt = schema.begin_schema_migration(db_path)
+            init_evidence_retirement_storage(db_path)
+            schema.complete_schema_migration(db_path, attempt)
+            check_retirement_guard(
+                db_path,
+                data_dir=self.data,
+                guard_dir=self.retirement_guard,
+                data_identity=self.retirement_data_identity,
+            )
+            retire_evidence(
+                db_path,
+                source_family=NMAP_IMPORT,
+                encounter_id="observation-retired",
+                actor="analyst",
+                reason="qualification failure-path retirement",
+                adapter=nmap_import_adapter(),
+            )
+            check_retirement_guard(
+                db_path,
+                data_dir=self.data,
+                guard_dir=self.retirement_guard,
+                data_identity=self.retirement_data_identity,
+            )
+            (self.data / "evidence.xml").write_text("candidate later bytes")
+            raise ValueError("candidate failed after protected retirement")
+        return {"status": "ok"}
+
+
 def _replace_database_with_exact_v8(path: Path) -> None:
     path.unlink()
     with sqlite3.connect(path) as db:
@@ -316,8 +398,17 @@ def planned_host(tmp_path, host_class=StorageHost):
     image.write_bytes(b"candidate image")
     state = {"id": "1" * 32, "actor": "analyst", "original": engine.inspect("old"),
         "candidate_image_id": "sha256:" + "b" * 64,
+        "candidate_runtime_env": {
+            "NCT_APP_VERSION": "test-version",
+            "NCT_BUILD_ID": "candidate",
+            "NCT_BUILD_COMMIT": "b" * 40,
+        },
         "original_build": {"build_id": "old", "build_commit": "a" * 40},
-        "manifest": {"image_config_id": "sha256:" + "b" * 64, "image_sha256": host_module.digest_file(image)},
+        "manifest": {
+            "build_id": "candidate", "build_commit": "b" * 40,
+            "image_config_id": "sha256:" + "b" * 64,
+            "image_sha256": host_module.digest_file(image),
+        },
         "plan_digest": "d" * 64}
     host.phase(state, "validated")
     return host, engine
@@ -465,6 +556,301 @@ def test_first_v8_upgrade_early_start_failure_recovers_virgin_guard_and_stays_fe
     assert (host.retirement_guard / "virgin-restore-binding.json").is_file()
     assert engine.inspect("old")["State"]["Running"] is False
     assert engine.inspect("old")["HostConfig"]["RestartPolicy"]["Name"] == "no"
+
+
+def _prepare_v8_compatible_restore(tmp_path):
+    host, engine = planned_host(tmp_path, CompatibleRecoveryHost)
+    _replace_database_with_exact_v8(host.data / "analyzer.db")
+    with sqlite3.connect(host.data / "analyzer.db") as db:
+        db.execute(
+            "INSERT INTO analyst_users VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "admin", "Range Administrator", "admin", "salt", "hash", 0,
+                "now", "fixture",
+            ),
+        )
+        db.executemany(
+            "INSERT INTO artifact_registry VALUES (?,?,?,?,?,?)",
+            [
+                ("1" * 64, 14, "application/xml", "/data/retired.xml", "now", "now"),
+                ("2" * 64, 13, "application/xml", "/data/active.xml", "now", "now"),
+            ],
+        )
+        db.executemany(
+            "INSERT INTO artifact_observations VALUES (?,?,?,?,?,?,?,?)",
+            [
+                ("observation-retired", "1" * 64, "nmap_import", "import-retired", "now", "retired.xml", "analyst", "{}"),
+                ("observation-active", "2" * 64, "nmap_import", "import-active", "now", "active.xml", "analyst", "{}"),
+            ],
+        )
+    (host.data / "retired.xml").write_text("retired bytes")
+    (host.data / "active.xml").write_text("active bytes")
+    state = host.read()
+    state["manifest"].update(build_id="candidate", build_commit="b" * 40)
+    host.prepare_compatible_recovery_proof(state)
+    host.phase(state, "validated")
+    host.apply("d" * 64, "analyst")
+    return host, engine
+
+
+def test_v8_restore_returns_on_exact_compatible_runtime_with_retirement_preserved(
+    tmp_path,
+):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    state = host.read()
+    assert state["phase"] == "awaiting_compatible_recovery"
+    assert state["retirement"]["revision"] == 1
+    assert state["retirement"]["state"] == "ready"
+    assert engine.inspect("old")["State"]["Running"] is False
+    assert engine.inspect("old")["HostConfig"]["RestartPolicy"]["Name"] == "no"
+    assert (host.data / "evidence.xml").read_text() == "original exact bytes"
+    assert Path(state["quarantine_path"]).joinpath("evidence.xml").read_text() == "candidate later bytes"
+
+    host.resume_compatible_recovery("analyst")
+    state = host.read()
+    assert state["phase"] == "awaiting_restore_sign_in"
+    assert state["compatible_runtime_recovery"] is True
+    runtime = engine.inspect("nct")
+    assert runtime["Id"] == state["compatible_recovery_runtime_id"]
+    assert runtime["Image"] == "sha256:" + "b" * 64
+    assert runtime["State"]["Running"] is True
+    assert runtime["HostConfig"]["RestartPolicy"]["Name"] == "no"
+    with sqlite3.connect(host.data / "analyzer.db") as db:
+        active_sql, active_parameters = active_encounter_sql(
+            NMAP_IMPORT, "o.observation_id",
+        )
+        rows = db.execute(
+            "SELECT observation_id FROM artifact_observations o WHERE "
+            + active_sql + " ORDER BY observation_id",
+            active_parameters,
+        ).fetchall()
+        account = db.execute(
+            "SELECT username,display_name,role,password_salt,password_hash,disabled "
+            "FROM analyst_users WHERE username='admin'"
+        ).fetchone()
+    assert rows == [("observation-active",)]
+    assert account == (
+        "admin", "Range Administrator", "admin", "salt", "hash", 0,
+    )
+    assert (host.data / "retired.xml").read_text() == "retired bytes"
+    assert (host.data / "active.xml").read_text() == "active bytes"
+
+
+def test_compatible_recovery_existing_account_and_final_restart_complete(
+    tmp_path, monkeypatch,
+):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    host.resume_compatible_recovery("analyst")
+
+    class Cookie:
+        name = "nct_session"
+
+    class Response:
+        status = 200
+
+        def __init__(self, value):
+            self.value = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Opener:
+        def __init__(self):
+            self.responses = iter((
+                {"authenticated": True},
+                {"analyst": {"username": "admin", "role": "admin"}},
+            ))
+
+        def open(self, *_args, **_kwargs):
+            return Response(next(self.responses))
+
+    monkeypatch.setattr(
+        host_module.ssl, "create_default_context", lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        host_module.http.cookiejar, "CookieJar", lambda: [Cookie()],
+    )
+    monkeypatch.setattr(
+        host_module.urllib.request, "build_opener", lambda *_args: Opener(),
+    )
+    monkeypatch.setattr(
+        host_module.json, "load", lambda response: response.value,
+    )
+
+    result = host.confirm(
+        "admin", "temporary local value", "recovery-console",
+    )
+    state = host.read()
+    assert state["phase"] == "restored"
+    assert state["controller_sign_in_verified"] is True
+    assert result["operation"]["phase"] == "restored"
+    runtime = engine.inspect("nct")
+    assert runtime["State"]["Running"] is True
+    assert runtime["HostConfig"]["RestartPolicy"]["Name"] == "on-failure"
+    assert not (host.data / "recovery" / "update-maintenance.json").exists()
+    assert engine.inspect("old")["State"]["Running"] is False
+    assert engine.inspect("old")["HostConfig"]["RestartPolicy"]["Name"] == "no"
+
+
+def test_compatible_recovery_create_interruption_is_safe_to_retry(tmp_path, monkeypatch):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    original_create = engine.create
+    interrupted = False
+
+    def interrupt_once(name, config):
+        nonlocal interrupted
+        if name == "nct" and not interrupted:
+            interrupted = True
+            raise ValueError("simulated compatible runtime create interruption")
+        return original_create(name, config)
+
+    monkeypatch.setattr(engine, "create", interrupt_once)
+    with pytest.raises(ValueError, match="create interruption"):
+        host.resume_compatible_recovery("analyst")
+    assert host.read()["phase"] == "compatible_recovery_create_intent"
+    assert engine.inspect("old")["State"]["Running"] is False
+    monkeypatch.setattr(engine, "create", original_create)
+    host.resume_compatible_recovery("analyst")
+    assert host.read()["phase"] == "awaiting_restore_sign_in"
+
+
+def test_compatible_recovery_adopts_exact_container_created_before_host_loss(
+    tmp_path, monkeypatch,
+):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    original_create = engine.create
+    interrupted = False
+
+    class SimulatedHostLoss(BaseException):
+        pass
+
+    def create_then_lose_host(name, config):
+        nonlocal interrupted
+        identity = original_create(name, config)
+        if name == "nct" and not interrupted:
+            interrupted = True
+            raise SimulatedHostLoss()
+        return identity
+
+    monkeypatch.setattr(engine, "create", create_then_lose_host)
+    with pytest.raises(SimulatedHostLoss):
+        host.resume_compatible_recovery("analyst")
+    assert host.read()["phase"] == "compatible_recovery_create_intent"
+    assert engine.inspect("nct")["State"]["Running"] is False
+
+    restarted = CompatibleRecoveryHost(host.config, engine, reconcile=True)
+    restarted.failed_once = True
+    restarted.resume_compatible_recovery("analyst")
+    assert restarted.read()["phase"] == "awaiting_restore_sign_in"
+    assert restarted.read()["compatible_recovery_runtime_id"] == engine.inspect("nct")["Id"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["command", "environment", "capability", "restart", "port", "mount", "network"],
+)
+def test_compatible_recovery_refuses_drift_after_create_before_host_receipt(
+    tmp_path, monkeypatch, change,
+):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    original_create = engine.create
+
+    class SimulatedHostLoss(BaseException):
+        pass
+
+    def create_then_lose_host(name, config):
+        identity = original_create(name, config)
+        if name == "nct":
+            raise SimulatedHostLoss()
+        return identity
+
+    monkeypatch.setattr(engine, "create", create_then_lose_host)
+    with pytest.raises(SimulatedHostLoss):
+        host.resume_compatible_recovery("analyst")
+    current = engine.items[engine.inspect("nct")["Id"]]
+    if change == "command":
+        current["Config"]["Cmd"] = ["sh", "-c", "sleep infinity"]
+    elif change == "environment":
+        current["Config"]["Env"].append("UNREVIEWED=1")
+    elif change == "capability":
+        current["HostConfig"]["CapAdd"] = ["SYS_ADMIN"]
+    elif change == "restart":
+        current["HostConfig"]["RestartPolicy"] = {
+            "Name": "always", "MaximumRetryCount": 0,
+        }
+    elif change == "port":
+        current["HostConfig"]["PortBindings"] = {
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "1"}],
+        }
+    elif change == "mount":
+        current["Mounts"].append({
+            "Destination": "/host", "Type": "bind",
+            "Source": str(tmp_path), "RW": True,
+        })
+    else:
+        current["NetworkSettings"]["Networks"]["unreviewed"] = {}
+
+    restarted = CompatibleRecoveryHost(host.config, engine, reconcile=True)
+    restarted.failed_once = True
+    with pytest.raises(ValueError, match="configuration differs|mount contract|network identity"):
+        restarted.resume_compatible_recovery("analyst")
+    assert engine.inspect("nct")["State"]["Running"] is False
+    assert engine.inspect("old")["State"]["Running"] is False
+
+
+def test_compatible_recovery_start_crash_is_safe_to_retry_after_helper_restart(
+    tmp_path, monkeypatch,
+):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    original_health = host.verify_health
+    interrupted = False
+
+    class SimulatedHostCrash(BaseException):
+        pass
+
+    def crash_after_start(state, original=False):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise SimulatedHostCrash()
+        return original_health(state, original=original)
+
+    monkeypatch.setattr(host, "verify_health", crash_after_start)
+    with pytest.raises(SimulatedHostCrash):
+        host.resume_compatible_recovery("analyst")
+    assert host.read()["phase"] == "compatible_recovery_start_intent"
+    assert engine.inspect("nct")["State"]["Running"] is True
+
+    restarted = CompatibleRecoveryHost(host.config, engine, reconcile=True)
+    restarted.failed_once = True
+    restarted.resume_compatible_recovery("analyst")
+    assert restarted.read()["phase"] == "awaiting_restore_sign_in"
+    assert engine.inspect("nct")["State"]["Running"] is True
+
+
+@pytest.mark.parametrize("change", ["image", "mount"])
+def test_compatible_recovery_refuses_changed_runtime_identity(tmp_path, change):
+    host, engine = _prepare_v8_compatible_restore(tmp_path)
+    state = host.read()
+    host._compatible_recovery_container(state)
+    current = engine.items[state["compatible_recovery_runtime_id"]]
+    if change == "image":
+        current["Image"] = "sha256:" + "d" * 64
+    else:
+        guard_mount = next(
+            item for item in current["Mounts"]
+            if item["Destination"] == "/run/nct-retirement-guard"
+        )
+        guard_mount["Source"] = str(tmp_path / "wrong-guard")
+    with pytest.raises(
+        ValueError,
+        match="identity changed|guard binding|mount contract|unrelated container",
+    ):
+        host.resume_compatible_recovery("analyst")
+    assert engine.inspect("old")["State"]["Running"] is False
 
 
 def test_first_v8_candidate_binding_crash_restores_through_journaled_partial_root(
@@ -1229,6 +1615,9 @@ def test_update_pages_explain_offline_intake_and_backup_time():
     assert "Operator Guide" in html
     assert "var(--panel)" in html
     assert "Update failure that started recovery" in html
+    assert "Start the checked recovery version" in html
+    assert "/resume-compatible" in html
+    assert "START COMPATIBLE RECOVERY" in html
 
 
 def test_recovery_feedback_survives_status_polling():

@@ -26,7 +26,7 @@ def test_disabled_runtime_keeps_operator_controls_fail_closed(tmp_path, monkeypa
     monkeypatch.setenv("NCT_RETIREMENT_GUARD_MODE", "disabled")
     status = runtime.require_retirement_startup_ready(db_path, data)
     assert not status.ready
-    with pytest.raises(runtime.RetirementRuntimeError, match="quality gate"):
+    with pytest.raises(runtime.RetirementRuntimeError, match="disabled"):
         runtime.require_retirement_controls_ready()
 
 
@@ -48,8 +48,8 @@ def test_required_runtime_binds_and_admits_protected_fresh_data(tmp_path, monkey
     monkeypatch.setenv("NCT_RETIREMENT_DATA_IDENTITY", "volume:a")
     status = runtime.require_retirement_startup_ready(db_path, data)
     assert status.ready and status.revision == 0
-    with pytest.raises(runtime.RetirementRuntimeError, match="quality gate"):
-        runtime.require_retirement_controls_ready()
+    controls = runtime.require_retirement_controls_ready()
+    assert controls.ready and controls.revision == 0
 
 
 def test_required_runtime_refuses_unprovisioned_or_wrong_authority(
@@ -102,3 +102,26 @@ def test_ordinary_api_requests_revalidate_guard_instead_of_trusting_startup_cach
     held = main._retirement_projection_hold(request)
     assert held is not None
     assert held.status_code == 503
+
+
+def test_retirement_requires_an_attributable_analyst_or_administrator(monkeypatch):
+    request = Request({
+        "type": "http", "method": "POST", "path": "/api/evidence-retirements",
+        "headers": [], "query_string": b"", "scheme": "http",
+        "server": ("test", 80), "client": ("test", 1),
+    })
+    monkeypatch.setattr(main, "auth_enabled", lambda: True)
+    request.state.analyst = {"username": "viewer", "role": "viewer"}
+    with pytest.raises(main.HTTPException) as viewer:
+        main.require_retirement_operator(request)
+    assert viewer.value.status_code == 403
+
+    request.state.analyst = {"username": "alice", "role": "analyst"}
+    assert main.require_retirement_operator(request) == "alice"
+    request.state.analyst = {"username": "admin", "role": "admin"}
+    assert main.require_retirement_operator(request) == "admin"
+
+    monkeypatch.setattr(main, "auth_enabled", lambda: False)
+    with pytest.raises(main.HTTPException) as unauthenticated:
+        main.require_retirement_operator(request)
+    assert unauthenticated.value.status_code == 403

@@ -11,7 +11,14 @@ from app.evidence_retirement import (
     init_evidence_retirement_storage,
     retire_evidence,
 )
-from app.evidence_retirement_sources import DEVICE_COLLECTION, NMAP_IMPORT, NMAP_SCAN_RUN
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT,
+    ARKIME_SUMMARY_IMPORT,
+    DEVICE_COLLECTION,
+    HOSTNAME_EVIDENCE_UPLOAD,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+)
 
 
 @pytest.fixture
@@ -311,6 +318,56 @@ def test_retired_sources_are_hidden_and_active_same_content_import_remains(store
 
     retire_for_catalog(p, NMAP_IMPORT, 'active-import')
     assert lib.list_evidence(p, root, kind='import')['total'] == 0
+
+
+def test_common_catalog_lists_and_filters_arkime_and_hostname_encounters(store):
+    p, root = store
+    hostname_root = p.parent / 'hostname-evidence'
+    evidence_id = 'e' * 32
+    upload = hostname_root / evidence_id
+    upload.mkdir(parents=True)
+    (upload / 'manifest.json').write_text(json.dumps({
+        'evidence_id': evidence_id,
+        'filename': 'dns-export.csv',
+        'stored_name': 'uploaded-dns-export.csv',
+        'imported_by': 'Dana',
+        'imported_at': '2026-11-03T10:00:00+00:00',
+        'records': [],
+    }))
+    (upload / 'uploaded-dns-export.csv').write_text('ip,hostname\n')
+    with sqlite3.connect(p) as db:
+        db.executescript('''
+        CREATE TABLE arkime_imports(import_id TEXT PRIMARY KEY,observation_id TEXT,
+          scope_id TEXT,scope_label TEXT,scope_version INTEGER,operator_sensor TEXT,
+          query_start TEXT,query_end TEXT,returned_count INTEGER,imported_at TEXT,actor TEXT);
+        CREATE TABLE arkime_summary_imports(import_id TEXT PRIMARY KEY,observation_id TEXT,
+          scope_id TEXT,scope_label TEXT,scope_version INTEGER,operator_sensor TEXT,
+          query_start TEXT,query_end TEXT,returned_count INTEGER,imported_at TEXT,actor TEXT);
+        INSERT INTO arkime_imports VALUES
+          ('sessions','arkime-observation','scope','Office',1,'sensor-a','2026-11-03T08:00:00+00:00',
+           '2026-11-03T09:00:00+00:00',4,'2026-11-03T09:05:00+00:00','Alice');
+        INSERT INTO arkime_summary_imports VALUES
+          ('summary','summary-observation','scope','Office',1,'sensor-b','2026-11-03T08:00:00+00:00',
+           '2026-11-03T09:00:00+00:00',2,'2026-11-03T09:06:00+00:00','Bob');
+        ''')
+
+    result = lib.list_evidence(p, root, hostname_root=hostname_root)
+    assert {item['kind'] for item in result['items']} == {
+        'arkime_sessions', 'arkime_summary', 'hostname',
+    }
+    assert lib.list_evidence(
+        p, root, hostname_root=hostname_root, kind='hostname', q='dns-export',
+    )['total'] == 1
+    assert lib.list_evidence(
+        p, root, hostname_root=hostname_root, scope='scope',
+    )['total'] == 2
+
+    retire_for_catalog(p, ARKIME_SESSIONS_IMPORT, 'sessions')
+    retire_for_catalog(p, ARKIME_SUMMARY_IMPORT, 'summary')
+    retire_for_catalog(p, HOSTNAME_EVIDENCE_UPLOAD, evidence_id)
+    assert lib.list_evidence(
+        p, root, hostname_root=hostname_root,
+    )['total'] == 0
 
 
 def test_catalog_fails_closed_without_complete_retirement_authority(store):

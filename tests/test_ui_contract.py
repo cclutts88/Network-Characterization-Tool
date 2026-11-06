@@ -3323,21 +3323,19 @@ def test_operator_readme_explains_scope_continuity_and_scoped_vlan_limits():
     assert "<summary>Scoped VLAN evidence</summary>" in html
 
 
-def test_operator_readme_keeps_retirement_foundation_distinct_from_current_controls():
+def test_operator_readme_explains_the_protected_retirement_workflow():
     html = how_nct_works_page().body.decode()
 
-    assert "Retirement integration, not yet an operator control" in html
-    assert "one exact evidence encounter rather than shared file bytes" in html
-    assert "ordinary Arkime lists, coverage, analysis, Hunt comparisons" in html
-    assert "retired DHCP/DNS hostname uploads no longer appear" in html
-    assert "saved SearchSploit candidate views exclude retired Nmap runs" in html
-    assert "Map topology applies the same rule" in html
-    assert "including when an older topology was cached" in html
-    assert "Current Network and network-wide Hunt exclude retired automated scans" in html
-    assert "Map stored-file listing and other remaining routes" in html
+    assert "Retire one saved evidence encounter" in html
+    assert "Signed-in analysts and administrators" in html
+    assert "reason, and type the displayed confirmation phrase" in html
+    assert "The original files remain retained" in html
+    assert "Inventory, Analyze, Hunt, Reach, Map" in html
+    assert "Active collection or processing blocks retirement" in html
+    assert "without providing source-download or analysis shortcuts" in html
+    assert "not to repeat the action" in html
     assert "Retired scans, imported topology encounters, and device collections" in SHELL_SCRIPT
     assert "Retired scan groups and device collections do not contribute" in SHELL_SCRIPT
-    assert "Map stored-file listing" in html
     assert "Same evidence, separate records" in html
     assert "If two separately saved records contain the same evidence, retiring one leaves the other available" in html
     assert "Retirement does not delete either original file" in html

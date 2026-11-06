@@ -76,6 +76,11 @@ def main(argv: list[str] | None = None) -> int:
             operation_id=args.operation_id,
         )
     print(json.dumps(status.__dict__, sort_keys=True))
+    if args.command == "mark-restore-hold":
+        # A successfully persisted hold is the requested result.  It must be a
+        # successful host operation even though a later ordinary guard check
+        # correctly reports the held authority as not ready.
+        return 0 if status.state == "hold" else 2
     return 0 if status.ready else 2
 
 

@@ -461,6 +461,93 @@ completed authority, another operation, unexpected lineage or any protected even
 fails closed. Focused checks cover same-database restart, exact version-8 update restore
 after a real first-binding interruption and refusal to recreate later-missing authority.
 Controls remain unavailable pending reviewer clearance.
+
+Cross-evidence retirement final completion gate started (2026-11-06): qualify an
+explicit return-to-service path before exposing retirement controls. A failed update
+may restore an exact older version-8 backup into the protected version-9 layout, but
+the older runtime must remain stopped. The recovery helper must use only the immutable
+candidate image already checked during package validation, bind it to the exact update
+operation and protected authority, keep every older or failed writer fenced across
+restart, and require a deliberate operator action before starting it. The acceptance
+case must preserve accounts, original evidence bytes, separately preserved later data
+and a non-empty retirement history; retired evidence must remain blocked while another
+separately saved matching record remains usable. Create/start interruptions and changed
+image or guard mounts must remain safe and retryable or fail closed. Only after this
+recovery path passes may the Evidence Library expose authenticated analyst/admin review,
+exact confirmation, reason capture and bounded audit controls.
+
+Cross-evidence retirement compatible recovery and operator workflow implemented for
+final review (2026-11-06): update validation now records a protected proof of one exact
+candidate runtime's immutable image, build, schema and guard contracts without attaching
+mission data. If a failed candidate requires a migrated backup restore, the incompatible
+older runtime remains stopped and the recovery console offers one explicit **Start
+checked recovery version** action. Container creation, start and reuse are journaled;
+the exact data and authority mounts, operation label, image and configuration are
+rechecked; unrelated occupants are refused; and automatic restart remains disabled
+until retained evidence, readiness and the existing account pass before the final
+restart. The exact version-8 qualification fixture records a protected retirement after
+candidate startup, restores the verified backup, preserves later candidate bytes
+separately, returns on the checked runtime, withholds the retired Nmap import and keeps
+the active matching import and both original files. Create interruption, host loss after
+start, wrong image and wrong authority-mount cases are covered.
+
+The source-controlled operator latch is now enabled, but runtime admission still requires
+local authentication and a ready required host guard; an environment value cannot bypass
+those checks. Evidence Library shows retirement only to signed-in analyst or administrator
+roles. The existing server-bound preview token carries the exact actor, encounter,
+authority revision, identity digest and impact digest; confirmation revalidates them in
+the write transaction. The page includes reason and exact-phrase confirmation plus a
+bounded metadata-only audit with no source or analysis links. A committed-but-held result
+explicitly tells the operator not to repeat the action. The built-in README and Guide use
+plain language for separately saved matching evidence. The common catalog now includes
+retained Nmap scans and imports, device collections, Arkime Sessions and Summary imports,
+and hostname-server evidence; source-specific analysis remains in its existing workspace.
+
+Final isolated qualification passed 304 focused checks with two expected skips, followed
+by the complete application suite with 2,707 passed and 25 expected skips. A disposable
+required-guard/local-auth browser copy displayed all common evidence types, exposed the
+control only to the signed-in administrator, previewed the exact source and effect,
+retired one exact import after reason and phrase confirmation, reduced the ordinary list
+from 31 to 30 while retaining its separately saved matching evidence, and displayed one
+metadata-only audit row with no source or analysis links. The rendered theme, page flow
+and Operator Guide were visually checked. This is committed and tested development work,
+not Range-ready or mission-ready work: Independent Reviewer clearance is still required,
+and no Range, package or `main` checkout has been changed.
+
+Independent review halted the first activation candidate (2026-11-06) before
+integration: a compatible container first observed after host-process loss had its image,
+operation label, data mount and protected guard checked, but the helper had not yet
+compared its complete command, environment, privileges, restart policy, ports, every
+mount and network attachment with the immutable pre-update runtime proof. The recovery
+adoption path now requires an operation-owned create intent and exact semantic match
+before it can stop, record or start that container. Focused failure injection covers
+loss immediately after Docker creates the exact container plus controlled command,
+environment, capability, restart, port, extra-mount and network drift. Activation remains
+halted until a real Docker/TLS migrated-restore rehearsal and renewed Independent Reviewer
+clearance pass.
+
+Real compatible-recovery acceptance correction and rehearsal completed in isolated
+development (2026-11-06): the first real Docker exercise exposed that the host command
+which successfully wrote the mandatory restore hold returned a non-success status merely
+because the authority was intentionally held. That falsely stopped reconciliation even
+though the safety record was correct. The hold command now reports success only for the
+requested, durably recorded hold, while an ordinary readiness check continues to report
+the held authority as unavailable. The protected runtime proof now includes the exact
+candidate build environment and normalized Docker create semantics; first observation
+compares the complete command, environment, labels, privileges, restart policy, ports,
+all mounts and sole network attachment before adopting or starting a container.
+
+A disposable real Docker/TLS rehearsal started from the exact pre-retirement version-8
+source, retained two separately saved copies of identical Nmap bytes and an existing
+administrator, started the checked version-9 candidate, retired one exact encounter,
+created later candidate bytes, injected failure and restored the verified cold backup.
+It then reconciled the protected revision-1 retirement tail, quarantined the later bytes,
+kept the older and failed writers stopped, started the exact compatible runtime, verified
+the existing account over TLS, completed the final restart, withheld only the retired
+encounter and retained the active matching encounter and original source bytes. Eighty-
+five focused updater/guard checks pass with one expected platform skip. Full-suite and
+renewed Independent Reviewer gates remain required before this isolated candidate may be
+integrated; no Range, package or `main` checkout has changed.
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

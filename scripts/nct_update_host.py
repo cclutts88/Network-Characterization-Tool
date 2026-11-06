@@ -36,9 +36,16 @@ import urllib.request
 import ssl
 
 CONTRACT = "nct-update-v1"
+COMPATIBLE_RECOVERY_CONTRACT = "nct-compatible-recovery-v1"
 MAX_UPLOAD = 12 * 1024**3
 MAX_IMAGE = 30 * 1024**3
 TERMINAL = {"complete", "restored", "failed", "interrupted"}
+COMPATIBLE_RECOVERY_PHASES = {
+    "awaiting_compatible_recovery",
+    "compatible_recovery_create_intent",
+    "compatible_recovery_created",
+    "compatible_recovery_start_intent",
+}
 
 
 def canonical(value):
@@ -66,6 +73,88 @@ def runtime_snapshot(value):
             key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
         ),
     }
+
+
+def runtime_create_semantics(value):
+    """Reconstruct the complete create-time contract from Docker inspection."""
+    inspected = "Id" in value and isinstance(value.get("Config"), dict)
+    config = copy.deepcopy(value.get("Config") if inspected else value)
+    # Docker assigns these two values even when the create request deliberately
+    # omitted them. They are runtime identity, not caller-controlled behavior.
+    config.pop("Hostname", None)
+    config.pop("Domainname", None)
+    # The in-memory test adapter retains HostConfig inside Config while the real
+    # Docker API stores it separately. Normalize both forms to the API request.
+    embedded_host = config.pop("HostConfig", None)
+    host = copy.deepcopy(
+        value.get("HostConfig") if inspected else embedded_host or {}
+    )
+    # Docker represents the unset OOM-kill flag as false after create.  Record
+    # that exact semantic value in both the protected request and observation.
+    host["OomKillDisable"] = bool(host.get("OomKillDisable"))
+    config["HostConfig"] = host
+    return config
+
+
+def expected_network_name(config):
+    mode = str((config.get("HostConfig") or {}).get("NetworkMode") or "default")
+    return "bridge" if mode == "default" else mode
+
+
+def validate_runtime_network(value, config):
+    """Refuse a same-label container attached to an unapproved network."""
+    network_settings = value.get("NetworkSettings")
+    if not isinstance(network_settings, dict):
+        raise ValueError("Compatible recovery runtime network identity is unavailable")
+    networks = network_settings.get("Networks")
+    if not isinstance(networks, dict) or set(networks) != {expected_network_name(config)}:
+        raise ValueError("Compatible recovery runtime network identity changed")
+
+
+def expected_bind_mounts(config):
+    host = config.get("HostConfig") or {}
+    expected = []
+    for binding in host.get("Binds") or []:
+        parts = binding.rsplit(":", 2)
+        if len(parts) < 2:
+            raise ValueError("Compatible recovery bind contract is invalid")
+        source, destination = parts[0], parts[1]
+        mode = parts[2] if len(parts) == 3 else "rw"
+        expected.append({
+            "destination": destination,
+            "type": "bind",
+            "source": str(Path(source).resolve()),
+            "rw": "ro" not in mode.split(","),
+        })
+    for mount in host.get("Mounts") or []:
+        if mount.get("Type") != "bind":
+            raise ValueError("Compatible recovery supports exact bind mounts only")
+        expected.append({
+            "destination": mount.get("Target"),
+            "type": "bind",
+            "source": str(Path(mount.get("Source", "")).resolve()),
+            "rw": not bool(mount.get("ReadOnly")),
+        })
+    if set((config.get("Volumes") or {})) - {
+        item["destination"] for item in expected
+    }:
+        raise ValueError("Compatible recovery refuses implicit evidence volumes")
+    return sorted(expected, key=lambda item: canonical(item))
+
+
+def validate_runtime_mounts(value, config):
+    observed = []
+    for mount in value.get("Mounts") or []:
+        if mount.get("Type") != "bind":
+            raise ValueError("Compatible recovery runtime mount type changed")
+        observed.append({
+            "destination": mount.get("Destination"),
+            "type": "bind",
+            "source": str(Path(mount.get("Source", "")).resolve()),
+            "rw": bool(mount.get("RW")),
+        })
+    if sorted(observed, key=lambda item: canonical(item)) != expected_bind_mounts(config):
+        raise ValueError("Compatible recovery runtime mount contract changed")
 
 
 def protected_root_file(path, trusted_root, label):
@@ -396,7 +485,13 @@ class Host:
                     self.finalize(state)
                 except Exception as exc:
                     self.phase(state, "interrupted", detail="Final verification requires review: " + str(exc)[:300])
-            elif state.get("phase") not in TERMINAL and state.get("phase") not in {"awaiting_sign_in", "awaiting_restore_sign_in", "awaiting_repair_sign_in"}:
+            elif (
+                state.get("phase") not in TERMINAL
+                and state.get("phase") not in {
+                    "awaiting_sign_in", "awaiting_restore_sign_in",
+                    "awaiting_repair_sign_in", *COMPATIBLE_RECOVERY_PHASES,
+                }
+            ):
                 self.phase(state, "interrupted", detail="Host service restarted. Review the saved operation and recovery diagnostics before continuing.")
         if reconcile:
             for receipt in self.root.glob("nct-maintenance-helper-*.json"):
@@ -718,7 +813,7 @@ class Host:
 
     def public(self):
         state = self.read()
-        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome", "verification_mode", "apply_failure"}
+        allowed = {"id", "phase", "detail", "actor", "build_id", "build_commit", "running_build_id", "running_build_commit", "updated_at", "plan_digest", "package_sha256", "controller_sign_in_verified", "evidence_verified", "backup_verified", "backup_at", "quarantine_path", "backup_path", "preserved_paths", "repair_summary", "kind", "completion_kind", "activity", "recovery_outcome", "verification_mode", "apply_failure", "compatible_recovery"}
         value = {k: v for k, v in state.items() if k in allowed}
         marker = state.get("candidate_may_have_written")
         value["recovery_guidance"] = "backup_restore" if marker is True else "original_reconciliation" if marker is False else "unknown"
@@ -731,7 +826,11 @@ class Host:
             inspect = getattr(self.engine, "observe", self.engine.inspect)
             target = inspect(self.config["container"])
             operation = self.read()
-            known = {operation.get("original", {}).get("Id"), operation.get("candidate_id")}
+            known = {
+                operation.get("original", {}).get("Id"),
+                operation.get("candidate_id"),
+                operation.get("compatible_recovery_runtime_id"),
+            }
             if operation.get("original") and target.get("Id") not in known:
                 raise ValueError("Configured runtime identity changed")
             state = target["State"]
@@ -823,16 +922,27 @@ class Host:
             env = dict(item.split("=", 1) for item in candidate["Config"].get("Env", []) if "=" in item)
             if env.get("NCT_BUILD_ID") != manifest["build_id"] or env.get("NCT_BUILD_COMMIT") != manifest["build_commit"]:
                 raise ValueError("Loaded image build identity does not match the package")
+            candidate_runtime_env = {
+                key: env.get(key)
+                for key in ("NCT_APP_VERSION", "NCT_BUILD_ID", "NCT_BUILD_COMMIT")
+            }
+            if any(
+                not isinstance(value, str) or not value or len(value) > 200
+                for value in candidate_runtime_env.values()
+            ):
+                raise ValueError("Loaded image runtime identity is incomplete")
             used = sum(p.stat().st_size for p in self.data.rglob("*") if p.is_file())
             if shutil.disk_usage(self.data).free < 3 * used + 1024**3:
                 raise ValueError("Insufficient space for a verified backup, restore and failed-data preservation")
             state = {"id": operation_id, "actor": actor, "manifest": manifest, "original": target,
                      "candidate_may_have_written": False,
                      "candidate_image_id": candidate["Id"],
+                     "candidate_runtime_env": candidate_runtime_env,
                      "package_sha256": digest_file(archive), "build_id": manifest["build_id"],
                      "build_commit": manifest["build_commit"], "original_build": original_build}
-            state["plan_digest"] = hashlib.sha256(canonical(state)).hexdigest()
             self.compatibility(state, preview=True)
+            self.prepare_compatible_recovery_proof(state)
+            state["plan_digest"] = hashlib.sha256(canonical(state)).hexdigest()
             self.phase(state, "validated", detail="Package and exact source build match. Apply takes a cold backup before replacing NCT. Checksums verify integrity; use a trusted release source.")
             return self.public()
 
@@ -850,7 +960,11 @@ class Host:
     def finalize(self, state):
         self.activity(state, "final_restart", "Account verified — finishing NCT's restart and checking readiness", force=True)
         target = self.target(expected_id=state["verified_runtime_id"])
-        expected_image = state["original"]["Image"] if state["verified_result_phase"] == "restored" else state["candidate_image_id"]
+        expected_image = state.get("verified_runtime_image_id") or (
+            state["original"]["Image"]
+            if state["verified_result_phase"] == "restored"
+            else state["candidate_image_id"]
+        )
         if target["Image"] != expected_image:
             raise ValueError("Verified runtime image changed before finalization")
         path = self.data / "recovery" / "update-maintenance.json"
@@ -877,7 +991,13 @@ class Host:
             target = self.target(expected_id=state["verified_runtime_id"])
             if not target["State"]["Running"]:
                 self.engine.command("start", target["Id"])
-            self.verify_health(state, original=state["verified_result_phase"] == "restored")
+            self.verify_health(
+                state,
+                original=state.get(
+                    "verified_runtime_uses_original",
+                    state["verified_result_phase"] == "restored",
+                ),
+            )
             self.engine.command("update", "--restart=" + restart_policy(state["original"]), target["Id"])
         except Exception as exc:
             # New normal work may have run after release. Preserve it; only an
@@ -1051,6 +1171,92 @@ class Host:
             raise ValueError("Replacement image did not accept the exact saved schema")
         save(self.root / state["id"] / ("schema-preview.json" if preview else "schema-preflight.json"), report)
 
+    def candidate_runtime_contract(self, state):
+        """Read the immutable candidate's recovery capability without retained data."""
+        result = self.run_helper(
+            state["candidate_image_id"], ["--read-only"], [
+                "-c",
+                "import json; "
+                "from app.build_info import BUILD_ID,BUILD_COMMIT; "
+                "from app.schema_compatibility import image_schema_contract; "
+                "from app.retirement_guard import GUARD_CONTRACT; "
+                "print(json.dumps({'build_id':BUILD_ID,'build_commit':BUILD_COMMIT,"
+                "'schema':image_schema_contract(),'guard_contract':GUARD_CONTRACT},"
+                "sort_keys=True))",
+            ],
+        )
+        value = json.loads(result)
+        schema_contract = value.get("schema") or {}
+        if (
+            value.get("build_id") != state["manifest"]["build_id"]
+            or value.get("build_commit") != state["manifest"]["build_commit"]
+            or value.get("guard_contract") != "nct-retirement-guard-v1"
+            or schema_contract.get("writable_schema_version") != 9
+            or schema_contract.get("data_layout_contract") != "nct-data-layout-v1"
+            or 8 not in schema_contract.get("readable_schema_versions", [])
+            or 9 not in schema_contract.get("readable_schema_versions", [])
+        ):
+            raise ValueError(
+                "Replacement image cannot provide the exact protected recovery runtime"
+            )
+        return value
+
+    def prepare_compatible_recovery_proof(self, state):
+        contract = self.candidate_runtime_contract(state)
+        proof = {
+            "contract": COMPATIBLE_RECOVERY_CONTRACT,
+            "operation_id": state["id"],
+            "image_id": state["candidate_image_id"],
+            "build_id": state["manifest"]["build_id"],
+            "build_commit": state["manifest"]["build_commit"],
+            "schema": contract["schema"],
+            "guard_contract": contract["guard_contract"],
+            "runtime_config_sha256": hashlib.sha256(
+                canonical(runtime_create_semantics(self.replacement(state)))
+            ).hexdigest(),
+        }
+        receipt = self.root / state["id"] / "compatible-recovery.json"
+        save(receipt, proof)
+        state["compatible_recovery_proof_sha256"] = digest_file(receipt)
+        return proof
+
+    def compatible_recovery_proof(self, state):
+        receipt = self.root / state["id"] / "compatible-recovery.json"
+        protected_root_file(receipt, self.root, "Compatible recovery proof")
+        if digest_file(receipt) != state.get("compatible_recovery_proof_sha256"):
+            raise ValueError("Compatible recovery proof changed")
+        proof = json.loads(receipt.read_text(encoding="utf-8"))
+        contract = self.candidate_runtime_contract(state)
+        expected = {
+            "contract": COMPATIBLE_RECOVERY_CONTRACT,
+            "operation_id": state["id"],
+            "image_id": state["candidate_image_id"],
+            "build_id": state["manifest"]["build_id"],
+            "build_commit": state["manifest"]["build_commit"],
+            "schema": contract["schema"],
+            "guard_contract": contract["guard_contract"],
+            "runtime_config_sha256": hashlib.sha256(
+                canonical(runtime_create_semantics(self.replacement(state)))
+            ).hexdigest(),
+        }
+        if proof != expected:
+            raise ValueError("Compatible recovery proof does not match this operation")
+        return proof
+
+    def validate_compatible_recovery_runtime(self, state, proof, current):
+        expected = self.replacement(state)
+        observed = runtime_create_semantics(current)
+        observed_sha256 = hashlib.sha256(canonical(observed)).hexdigest()
+        if observed_sha256 != proof.get("runtime_config_sha256"):
+            raise ValueError(
+                "Compatible recovery runtime configuration differs from its protected proof"
+            )
+        validate_runtime_network(current, expected)
+        validate_runtime_mounts(current, expected)
+        if current.get("Image") != proof.get("image_id"):
+            raise ValueError("Compatible recovery image identity changed")
+        return hashlib.sha256(canonical(runtime_snapshot(current))).hexdigest()
+
     def replacement(self, state):
         original = state["original"]
         config = copy.deepcopy(original["Config"])
@@ -1063,6 +1269,19 @@ class Host:
             "NCT_RETIREMENT_GUARD_MODE=", "NCT_RETIREMENT_GUARD_DIR=",
             "NCT_RETIREMENT_DATA_IDENTITY=",
         ))]
+        runtime_env = state.get("candidate_runtime_env")
+        if (
+            not isinstance(runtime_env, dict)
+            or set(runtime_env) != {"NCT_APP_VERSION", "NCT_BUILD_ID", "NCT_BUILD_COMMIT"}
+            or runtime_env.get("NCT_BUILD_ID") != state["manifest"]["build_id"]
+            or runtime_env.get("NCT_BUILD_COMMIT") != state["manifest"]["build_commit"]
+            or any(not isinstance(value, str) or not value for value in runtime_env.values())
+        ):
+            raise ValueError("Compatible recovery runtime identity is incomplete")
+        config["Env"] += [
+            f"{key}={runtime_env[key]}"
+            for key in ("NCT_APP_VERSION", "NCT_BUILD_ID", "NCT_BUILD_COMMIT")
+        ]
         config["Env"] += [
             "NCT_RETIREMENT_GUARD_MODE=required",
             "NCT_RETIREMENT_GUARD_DIR=/run/nct-retirement-guard",
@@ -1072,6 +1291,7 @@ class Host:
         if host.get("AutoRemove") or host.get("NetworkMode", "").startswith("container:") or host.get("VolumesFrom"):
             raise ValueError("Shared-container or auto-remove deployment requires a qualified adapter")
         host["RestartPolicy"] = {"Name": "no", "MaximumRetryCount": 0}
+        host["OomKillDisable"] = bool(host.get("OomKillDisable"))
         binds = [
             item for item in (host.get("Binds") or [])
             if ":/run/nct-retirement-guard" not in item
@@ -1267,10 +1487,28 @@ class Host:
         self.hold_collection(state)
         refreshed_original = self.engine.inspect(original["Id"])
         if restoring and not self.runtime_supports_retirement_guard(refreshed_original):
-            raise ValueError(
-                "The restored image cannot enforce protected retirement state or the "
-                "migrated schema; its restart policy remains disabled and it stays stopped"
+            try:
+                proof = self.compatible_recovery_proof(state)
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                raise ValueError(
+                    "The restored image cannot enforce protected retirement state or the "
+                    "migrated schema; its restart policy remains disabled and it stays stopped"
+                ) from None
+            self.phase(
+                state,
+                "awaiting_compatible_recovery",
+                compatible_recovery={
+                    "available": True,
+                    "build_id": proof["build_id"],
+                    "build_commit": proof["build_commit"],
+                },
+                detail=(
+                    "The verified backup and protected retirement history are restored. "
+                    "The older runtime is safely stopped. Review and explicitly start the "
+                    "preflighted compatible recovery runtime to return NCT to service."
+                ),
             )
+            return
         try:
             self.engine.command("start", original["Id"])
             self.verify_health(state, original=True)
@@ -1280,6 +1518,156 @@ class Host:
         self.engine.command("update", "--restart=" + restart_policy(state["original"]), original["Id"])
         self.phase(state, "awaiting_restore_sign_in", evidence_verified=True,
             detail=("NCT is running from the verified backup. Later evidence remains preserved separately. " if restoring else "The original installation restarted without a backup data swap. " + ("Earlier replacement-write history is unknown; retain administrator review. " if outcome == "original_restart_unknown_history" else "")) + "Verify an existing NCT account before finishing.")
+
+    def _compatible_recovery_container(self, state):
+        proof = self.compatible_recovery_proof(state)
+        original = self.engine.inspect(state["original"]["Id"])
+        self.stop_exact(original)
+        original_name = original["Name"].lstrip("/")
+        parked_name = "nct-restored-original-" + state["id"]
+        if original_name == self.config["container"]:
+            self.engine.command("rename", original["Id"], parked_name)
+        elif original_name != parked_name and not original_name.startswith("nct-rollback-"):
+            raise ValueError("Restored original container identity changed")
+
+        current = self.engine.exists(self.config["container"])
+        saved_id = state.get("compatible_recovery_runtime_id")
+        if current is not None:
+            if saved_id and current["Id"] != saved_id:
+                raise ValueError("An unrelated container occupies the NCT name")
+            if not saved_id and state.get("phase") != "compatible_recovery_create_intent":
+                raise ValueError(
+                    "Compatible recovery container exists without this operation's create intent"
+                )
+            labels = current.get("Config", {}).get("Labels", {}) or {}
+            if (
+                current.get("Image") != proof["image_id"]
+                or labels.get("org.nct.update-operation") != state["id"]
+            ):
+                raise ValueError("Compatible recovery container identity changed")
+            saved_id = current["Id"]
+        elif saved_id:
+            current = self.engine.inspect(saved_id)
+            if current["Name"].lstrip("/") != self.config["container"]:
+                raise ValueError("Compatible recovery container name changed")
+        else:
+            self.phase(
+                state, "compatible_recovery_create_intent",
+                detail="Creating the preflighted compatible recovery runtime while all writers remain stopped.",
+            )
+            saved_id = self.engine.create(
+                self.config["container"], self.replacement(state),
+            )
+            current = self.engine.inspect(saved_id)
+
+        current = self.target(expected_id=saved_id)
+        snapshot_sha256 = self.validate_compatible_recovery_runtime(
+            state, proof, current,
+        )
+        if not self.runtime_supports_retirement_guard(current):
+            raise ValueError("Compatible recovery runtime lost its protected guard binding")
+        recorded = state.get("compatible_recovery_runtime_sha256")
+        if recorded and recorded != snapshot_sha256:
+            raise ValueError("Compatible recovery runtime configuration changed")
+        self.phase(
+            state, "compatible_recovery_created",
+            compatible_recovery_runtime_id=saved_id,
+            compatible_recovery_runtime_sha256=snapshot_sha256,
+            detail="Compatible recovery runtime created and fenced from automatic restart.",
+        )
+        return current
+
+    def resume_compatible_recovery(self, actor):
+        """Explicitly return a migrated restore with protected state to service."""
+        with self.exclusive():
+            state = self.read()
+            if state.get("phase") not in COMPATIBLE_RECOVERY_PHASES:
+                raise ValueError("No compatible recovery runtime is awaiting explicit start")
+            if not (
+                state.get("candidate_may_have_written") is True
+                and state.get("backup_verified") is True
+                and state.get("restore_data_verified") is True
+                and state.get("retirement_restore_reconciled") is True
+                and state.get("swap")
+            ):
+                raise ValueError("Verified restore prerequisites are incomplete")
+            state["actor"] = actor
+            proof = self.compatible_recovery_proof(state)
+            retirement = self.check_retirement_guard(state["candidate_image_id"])
+            expected = state.get("retirement") or {}
+            if (
+                retirement.get("state") != "ready"
+                or retirement.get("revision") != expected.get("revision")
+                or retirement.get("event_digest") != expected.get("event_digest")
+            ):
+                raise ValueError("Protected retirement authority changed after restore")
+            self.hold_collection(state)
+            current = self.engine.exists(self.config["container"])
+            if current is not None:
+                labels = current.get("Config", {}).get("Labels", {}) or {}
+                if current["Id"] == state["original"]["Id"]:
+                    self.stop_exact(current)
+                elif (
+                    current.get("Image") == state["candidate_image_id"]
+                    and labels.get("org.nct.update-operation") == state["id"]
+                ):
+                    # Validate before stop_exact can normalize a hostile restart
+                    # policy and hide drift from the protected create proof.
+                    self.validate_compatible_recovery_runtime(state, proof, current)
+                    self.stop_exact(current)
+                else:
+                    raise ValueError("An unrelated container occupies the NCT name")
+            lock = self.writer_lock()
+            target = None
+            try:
+                target = self._compatible_recovery_container(state)
+            finally:
+                os.close(lock)
+            try:
+                self.phase(
+                    state, "compatible_recovery_start_intent",
+                    detail="Starting the exact preflighted runtime against the verified restored evidence.",
+                )
+                self.engine.command("start", target["Id"])
+                self.verify_health(state)
+                self.stop_exact(self.engine.inspect(target["Id"]))
+                lock = self.writer_lock()
+                try:
+                    self.checkpoint(state["candidate_image_id"])
+                    self.verify_evidence(state)
+                finally:
+                    os.close(lock)
+                self.engine.command("start", target["Id"])
+                self.verify_health(state)
+            except Exception as exc:
+                if target is not None:
+                    self.stop_exact(self.engine.inspect(target["Id"]))
+                self.phase(
+                    state,
+                    "awaiting_compatible_recovery",
+                    compatible_recovery={
+                        **(state.get("compatible_recovery") or {}),
+                        "available": True,
+                        "last_failure": str(exc)[:250],
+                    },
+                    detail=(
+                        "Compatible recovery did not pass readiness and retained-evidence "
+                        "checks. Every NCT writer remains stopped; review before retrying."
+                    ),
+                )
+                raise
+            self.phase(
+                state,
+                "awaiting_restore_sign_in",
+                completion_kind="compatible_runtime_restore",
+                compatible_runtime_recovery=True,
+                evidence_verified=True,
+                detail=(
+                    "The verified backup is running on the exact compatible recovery "
+                    "runtime. Verify an existing NCT account before the final restart."
+                ),
+            )
+            return self.public()
 
     def reconcile_swap(self, state, before, *, verify_snapshot=True):
         swap = state["swap"]
@@ -1325,8 +1713,16 @@ class Host:
             phase = state["phase"]
             if phase not in {"awaiting_sign_in", "awaiting_restore_sign_in", "awaiting_repair_sign_in"}:
                 raise ValueError("This update is not awaiting sign-in verification")
-            original = phase != "awaiting_sign_in"
-            runtime_id = state["original"]["Id"] if original else state["candidate_id"]
+            compatible_recovery = bool(
+                phase == "awaiting_restore_sign_in"
+                and state.get("compatible_runtime_recovery") is True
+            )
+            original = phase != "awaiting_sign_in" and not compatible_recovery
+            runtime_id = (
+                state["compatible_recovery_runtime_id"]
+                if compatible_recovery else
+                state["original"]["Id"] if original else state["candidate_id"]
+            )
             self.activity(state, "account", "Checking the existing NCT account — password is not saved", force=True)
             self.target(expected_id=runtime_id)
             self.verify_health(state, original=original)
@@ -1346,8 +1742,17 @@ class Host:
                 if identity.get("analyst", {}).get("username") != username:
                     raise ValueError("Replacement did not accept the authenticated session")
             self.engine.command("update", "--restart=" + restart_policy(state["original"]), runtime_id)
-            self.phase(state, "release_intent", controller_sign_in_verified=True, actor=actor,
-                verified_runtime_id=runtime_id, verified_result_phase="restored" if original else "complete")
+            restored_result = phase == "awaiting_restore_sign_in"
+            self.phase(
+                state, "release_intent", controller_sign_in_verified=True,
+                actor=actor, verified_runtime_id=runtime_id,
+                verified_runtime_image_id=(
+                    state["original"]["Image"] if original
+                    else state["candidate_image_id"]
+                ),
+                verified_runtime_uses_original=original,
+                verified_result_phase="restored" if restored_result else "complete",
+            )
             self.finalize(state)
             return {"url": self.config["application_url"], "operation": self.public()}
 
@@ -1686,7 +2091,7 @@ class Handler(BaseHTTPRequestHandler):
             return host.diagnose()
         if self.command == "POST" and self.path == "/upload":
             return host.stage(self.rfile, int(self.headers.get("Content-Length", "0")), actor)
-        if self.command == "POST" and self.path in {"/apply", "/rollback", "/prepare-repair", "/apply-repair", "/cancel-repair"}:
+        if self.command == "POST" and self.path in {"/apply", "/rollback", "/resume-compatible", "/prepare-repair", "/apply-repair", "/cancel-repair"}:
             body = self.json_body()
             if self.path == "/apply":
                 state = host.read()
@@ -1699,6 +2104,10 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get("confirm") != "RESTORE":
                     raise ValueError("Confirm restore to the saved backup time")
                 work = lambda: host.rollback(actor)
+            elif self.path == "/resume-compatible":
+                if body.get("confirm") != "START COMPATIBLE RECOVERY":
+                    raise ValueError("Confirm the checked compatible recovery runtime")
+                work = lambda: host.resume_compatible_recovery(actor)
             elif self.path == "/prepare-repair":
                 work = lambda: host.prepare_repair(actor)
             elif self.path == "/apply-repair":

@@ -2106,6 +2106,7 @@ def evidence_library_catalog(
         result = list_evidence(
             DB_PATH,
             CONFIG_DIR,
+            hostname_root=HOSTNAME_EVIDENCE_DIR,
             q=q,
             kind=kind,
             scope=scope,
