@@ -20,6 +20,23 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Range package transfer hardening completed in development (2026-11-05): the standard
+48 MiB transfer-set builder now gives each sealed package a visible checksum-derived
+transfer identity, rereads every persisted piece and proves byte-exact local
+reconstruction before reporting success. The generated controller joiner shows four
+plain progress stages, requires the exact regular-file piece set, refuses missing,
+corrupt, linked, extra or mixed-release pieces, preserves a conflicting completed ZIP
+and safely verifies an already-correct reconstruction on repeat. Its generated readme
+names the exact files to upload, states that all pieces belong together in one new
+controller folder, and distinguishes joining from extraction and installation. A
+separate maintainer guide records the same single supported workflow. One hundred
+seventeen transfer, full-package and Range-operator regression checks pass. This
+improves the next package handoff only; it does not create, seal, deploy or qualify a
+new package, change a Range, or make the current branch Range-ready. Independent review
+initially halted the joiner for three race and mixed-set gaps; after exact regressions
+and corrections it independently reproduced the 117-check Docker gate and returned
+CLEAR. The primary agent may integrate and commit this bounded process slice.
+
 Cross-evidence retirement contract added to the stabilization gate (2026-11-05):
 Nmap scans, device-configuration collections, Arkime captures and imported evidence
 must use one understandable lifecycle. An operator must be able to retire incorrect
@@ -133,6 +150,23 @@ restart recovery and failed retry; another 33 forced-restart and database-recove
 checks pass. The independent reviewer reproduced five exact retirement regressions and
 returned CLEAR. The remaining device, Arkime, hostname, Searchsploit, Inventory, Hunt,
 Reach, Map, comparison, export and cache surfaces remain in progress.
+
+Cross-evidence retirement active-source Gate C device slice completed in development
+(2026-11-05): manual uploads and completed device collections now require an active
+exact encounter before summary admission, direct saved-result reuse, worker execution,
+interface-address normalization, VLAN normalization, retry or atomic publication.
+Retirement before admission records the pending work as blocked; retirement after
+queueing or during calculation fails the attempt without publishing a summary,
+interface assessment or VLAN assessment. A failed or interrupted job cannot be retried
+after its source is retired, while a separate active encounter with identical bytes
+continues to reuse the canonical calculation independently. Isolated database fixtures
+now initialize the retirement ledger exactly as application startup does rather than
+weakening the production fail-closed contract. All 115 focused device-summary,
+collection-authority, pipeline, interface, VLAN, direct-analysis and cache checks pass,
+including eight explicit retirement race, retry and sibling regressions. The independent
+reviewer reproduced six focused cases and returned CLEAR. The remaining Arkime,
+hostname, Searchsploit, Inventory, Hunt, Reach, Map, comparison, export and cache surfaces
+are still in progress; no operator retirement control or Range package is ready.
 
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file

@@ -29,10 +29,13 @@ separately tested Docker Compose deployment.
 ## 1. Put the package on the controller
 
 Range releases larger than 48 MiB are supplied with smaller transfer pieces.
-Upload every `.part` file and `JOIN-NCT.sh` into the same controller folder, then
-run `sh JOIN-NCT.sh` there. Wait for **PASS**: this checks each piece and rebuilds
-the original verified ZIP. It does not install NCT. Do not extract individual
-pieces or try to upload the large ZIP again when the transfer tool rejects it.
+Create one new empty controller folder for that release, then upload every `.part`
+file, `JOIN-NCT.sh`, and `READ-ME-FIRST.txt` named in the readme into that same
+folder. The pieces belong together; they do not need separate folders. Run
+`sh JOIN-NCT.sh` there and wait for all four numbered stages plus **PASS**. The
+joiner refuses missing, corrupt, linked, extra, or mixed-release pieces and rebuilds
+the original verified ZIP without installing NCT. Do not extract individual pieces
+or try to upload the large ZIP again when the transfer tool rejects it.
 
 Once the complete ZIP is on the controller, extract it into a new folder. Keep
 the ZIP. Open a root
