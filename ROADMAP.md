@@ -20,6 +20,20 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Deferred scheduled multi-network naming defect recorded from Range use
+(2026-11-06): when **Queue Separate Scans for Multiple Networks** is used for a
+scheduled scan, the generated-name preview does not reliably expand the required
+literal `$subnet` token for each selected Saved Network. In the observed case,
+AFB-DMZ and AFB-Servers both previewed as `AFB-Clients Baseline`, while the page also
+reported that the template must include `$subnet` exactly. Do not change the running
+demo Range during environment setup. In the next stabilization pass, reproduce this
+with two or more differently named Saved Networks, then correct preview, validation,
+saved schedule, reload, queue order and actual scheduled-occurrence naming as one
+contract. Prove that each generated run uses its own retained Saved Network name and
+never a stale prior selection; cover reordering, schedule edits and browser reload,
+and update the Operator Guide/tutorial explanation of the token. This remains an open
+functionality defect and is not included in the current Range installation.
+
 Device-role selection visibility correction started (2026-11-06): hands-on review of
 the locally qualified R11 candidate found that the browser's native multi-select did
 not make selected Router, Firewall and Switch roles visually distinct enough. Preserve
