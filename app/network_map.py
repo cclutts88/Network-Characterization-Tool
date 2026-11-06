@@ -30,6 +30,7 @@ from app.network_evidence_cache import (
     NetworkEvidenceCache,
     NetworkEvidenceSourceChanged,
     capture_network_evidence_snapshot,
+    map_configuration_record_is_stable,
     select_map_configuration_file,
     select_map_configuration_records,
     select_map_import_rows,
@@ -1513,6 +1514,8 @@ def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, st
         if operation not in {
             "configuration_pull", "interactive_configuration_pull", "manual_upload",
         } and not legacy_pull:
+            continue
+        if not map_configuration_record_is_stable(manifest):
             continue
         device_address = str(manifest.get("device_address") or "").strip()
         ip = valid_ip(device_address)

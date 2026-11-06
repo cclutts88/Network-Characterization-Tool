@@ -20,6 +20,26 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Current Network false verification block correction completed (2026-11-06): Range
+Host Inventory reported that retained evidence could not be verified even though the
+saved Nmap evidence was intact. Read-only inspection identified one cancelled
+interactive device collection with no promoted evidence; the shared source-revision
+builder incorrectly classified that terminal cancellation as a changing input and
+withheld the stable revision. The shared Current Network/Map eligibility contract now
+filters queued, running, cancelled and interrupted device attempts before selection
+or retained-file fingerprinting, so those attempts remain in
+collection history but neither hide the last verified network model nor create a
+provisional current-device node. Preserve fail-closed behavior for unreadable,
+changed or mismatched eligible retained evidence. Regression coverage includes
+status transitions during a build, 300 newer unfinished attempts, Map node
+selection and the existing unreadable-evidence guard. The focused cache, Map and UI
+contracts passed; the full network-inventory/cache set passed 61 tests. Independent
+review returned **CLEAR**. A minimal, backed-up live-container patch restored the
+demo Range Host Inventory to 50 systems after restart and browser refresh. That
+hotpatch is a temporary demo recovery which survives a container restart but will be
+replaced by the next image deployment; the durable tested correction is retained on
+this branch for the next package.
+
 Deferred scheduled multi-network naming defect recorded from Range use
 (2026-11-06): when **Queue Separate Scans for Multiple Networks** is used for a
 scheduled scan, the generated-name preview does not reliably expand the required

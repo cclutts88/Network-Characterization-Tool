@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.exports import host_summary_rows, port_level_rows, rows_to_csv, PORT_LEVEL_FIELDS
 from app.main import parse_xml
 from app.network_map import (
@@ -23,6 +26,7 @@ from app.network_map import (
     parse_config_text,
 )
 from app.saved_networks import SavedNetworkCreate, create_saved_network
+from app.poc import init_poc_storage
 
 
 SAMPLE_XML = b'''<?xml version="1.0"?>
@@ -787,6 +791,33 @@ def test_hostname_configuration_without_identity_or_interface_ip_is_not_invented
         encoding="utf-8",
     )
     monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    nodes, edges, warnings = {}, {}, []
+
+    assert configuration_devices(nodes, edges, warnings) == 0
+    assert nodes == {}
+    assert edges == {}
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "cancelled", "interrupted"])
+def test_unfinished_configuration_does_not_create_current_map_device(
+    tmp_path, monkeypatch, status,
+):
+    db_path = tmp_path / "analyzer.db"
+    init_poc_storage(db_path)
+    init_evidence_retirement_storage(db_path)
+    run_dir = tmp_path / ("c" * 32)
+    run_dir.mkdir()
+    (run_dir / "manifest.json").write_text(json.dumps({
+        "run_id": "c" * 32,
+        "operation": "interactive_configuration_pull",
+        "device_address": "192.0.2.40",
+        "device_name": "unfinished-router",
+        "vendor": "cisco",
+        "device_type": "router",
+        "status": status,
+    }), encoding="utf-8")
+    monkeypatch.setattr("app.network_map.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("app.network_map.DB_PATH", db_path)
     nodes, edges, warnings = {}, {}, []
 
     assert configuration_devices(nodes, edges, warnings) == 0

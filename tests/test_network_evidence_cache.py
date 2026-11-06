@@ -529,6 +529,158 @@ def test_map_device_selector_filters_retired_and_rejects_identity_mismatch(tmp_p
     assert "does not match its retained directory" in error
 
 
+@pytest.mark.parametrize("status", ["queued", "running", "cancelled", "interrupted"])
+def test_unfinished_device_collection_does_not_block_stable_network_revision(
+    tmp_path, status,
+):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("c" * 32)
+    run_dir.mkdir(parents=True)
+    _init_descriptor_database(db_path)
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps({
+            "run_id": "c" * 32,
+            "operation": "interactive_configuration_pull",
+            "status": status,
+            "created_at": "2026-11-06T16:24:44Z",
+            "device_address": "192.0.2.10",
+            "device_name": "unfinished-router",
+            "vendor": "cisco",
+            "device_type": "router",
+        }),
+        encoding="utf-8",
+    )
+
+    first = _capture(db_path, config_dir)
+
+    assert first.key is not None
+    assert first.reason is None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["operator_note"] = "retained attempt changed"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    second = _capture(db_path, config_dir)
+    assert second.key == first.key
+
+    manifest["status"] = "completed"
+    manifest["completed_at"] = "2026-11-06T16:25:00Z"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "stdout.txt").write_text("hostname completed-router\n", encoding="utf-8")
+    third = _capture(db_path, config_dir)
+    assert third.key is not None and third.key != first.key
+
+
+def test_unfinished_device_manifests_do_not_consume_stable_selection_limit(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    stable_id = "stable-older"
+    stable_dir = config_dir / stable_id
+    stable_dir.mkdir(parents=True)
+    (stable_dir / "manifest.json").write_text(json.dumps({
+        "run_id": stable_id,
+        "operation": "configuration_pull",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:01:00Z",
+        "vendor": "cisco",
+        "device_type": "router",
+    }), encoding="utf-8")
+    (stable_dir / "stdout.txt").write_text("hostname stable-router\n", encoding="utf-8")
+    for index in range(300):
+        run_id = f"pending-{index:03d}"
+        run_dir = config_dir / run_id
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(json.dumps({
+            "run_id": run_id,
+            "operation": "interactive_configuration_pull",
+            "status": "running",
+            "created_at": f"2026-11-06T16:{index // 60:02d}:{index % 60:02d}Z",
+            "vendor": "cisco",
+            "device_type": "router",
+        }), encoding="utf-8")
+
+    selected, warning = select_map_configuration_records(config_dir, limit=1)
+    snapshot = _capture(db_path, config_dir)
+
+    assert warning is None
+    assert [path.parent.name for path, _manifest in selected] == [stable_id]
+    assert snapshot.key is not None
+
+
+def test_running_manifest_is_not_fingerprinted_or_allowed_to_block_revision(
+    tmp_path, monkeypatch,
+):
+    import app.network_evidence_cache as evidence_cache
+
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("a" * 32)
+    run_dir.mkdir(parents=True)
+    _init_descriptor_database(db_path)
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "run_id": "a" * 32,
+        "operation": "interactive_configuration_pull",
+        "status": "running",
+        "created_at": "2026-11-06T16:24:44Z",
+        "vendor": "cisco",
+        "device_type": "router",
+    }), encoding="utf-8")
+    original = evidence_cache.stable_file_identity
+
+    def fail_if_running_manifest(path):
+        if path == manifest_path:
+            raise OSError("active manifest changed during fingerprinting")
+        return original(path)
+
+    monkeypatch.setattr(evidence_cache, "stable_file_identity", fail_if_running_manifest)
+
+    snapshot = _capture(db_path, config_dir)
+
+    assert snapshot.key is not None
+    assert snapshot.reason is None
+
+
+def test_ineligible_device_becoming_complete_is_detected_after_build(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    run_dir = config_dir / ("b" * 32)
+    run_dir.mkdir(parents=True)
+    _init_descriptor_database(db_path)
+    manifest_path = run_dir / "manifest.json"
+    manifest = {
+        "run_id": "b" * 32,
+        "operation": "interactive_configuration_pull",
+        "status": "running",
+        "created_at": "2026-11-06T16:24:44Z",
+        "vendor": "cisco",
+        "device_type": "router",
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    cache = NetworkEvidenceCache()
+    builds = []
+
+    def snapshot():
+        return _capture(db_path, config_dir)
+
+    def builder(context):
+        builds.append(context["source_revision"])
+        if len(builds) == 1:
+            manifest["status"] = "completed"
+            manifest["completed_at"] = "2026-11-06T16:25:00Z"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            (run_dir / "stdout.txt").write_text("hostname stable-router\n", encoding="utf-8")
+        return {"revision": context["source_revision"]}
+
+    result = cache.get(snapshot, builder)
+
+    assert len(builds) == 2
+    assert builds[0] != builds[1]
+    assert result == {"revision": builds[1]}
+
+
 def test_exact_database_rows_invalidate_without_timestamp_or_length_changes(tmp_path):
     db_path = tmp_path / "analyzer.db"
     config_dir = tmp_path / "device-configs"

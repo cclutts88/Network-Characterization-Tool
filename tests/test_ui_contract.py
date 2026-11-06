@@ -3386,6 +3386,7 @@ def test_operator_readme_explains_the_protected_retirement_workflow():
     assert "without providing source-download or analysis shortcuts" in html
     assert "not to repeat the action" in html
     assert "Retired scans, imported topology encounters, and device collections" in SHELL_SCRIPT
+    assert "they do not replace or hide the last verified Current Network picture" in SHELL_SCRIPT
     assert "Retired scan groups and device collections do not contribute" in SHELL_SCRIPT
     assert "Same evidence, separate records" in html
     assert "If two separately saved records contain the same evidence, retiring one leaves the other available" in html

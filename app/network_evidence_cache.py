@@ -37,6 +37,12 @@ from app.mac_enrichment import oui_search_paths
 
 NETWORK_MODEL_CONTRACT_VERSION = 2
 MAX_MAP_CONFIG_BYTES = 100 * 1024 * 1024
+MAP_CONFIGURATION_OPERATIONS = frozenset({
+    "configuration_pull",
+    "interactive_configuration_pull",
+    "manual_upload",
+})
+MAP_CONFIGURATION_STABLE_STATES = frozenset({"completed", "uploaded", "failed"})
 
 
 class NetworkEvidenceSourceChanged(RuntimeError):
@@ -412,6 +418,15 @@ def select_map_configuration_file(run_dir: Path) -> Path | None:
     return None
 
 
+def map_configuration_record_is_stable(manifest: dict) -> bool:
+    """Return whether a device record may contribute to the stable network model."""
+    operation = manifest.get("operation")
+    legacy_pull = operation is None and manifest.get("vendor") and manifest.get("device_type")
+    if operation not in MAP_CONFIGURATION_OPERATIONS and not legacy_pull:
+        return False
+    return str(manifest.get("status") or "").casefold() in MAP_CONFIGURATION_STABLE_STATES
+
+
 def select_map_configuration_records(
     config_dir: Path, limit: int = 300,
     *, retired_run_ids: frozenset[str] = frozenset(),
@@ -436,6 +451,8 @@ def select_map_configuration_records(
             )
             continue
         if manifest_run_id in retired_run_ids:
+            continue
+        if not map_configuration_record_is_stable(value):
             continue
         records.append((path, value))
     records.sort(
@@ -464,19 +481,6 @@ def _configuration_inputs(
         records.append((path, value, identity))
     described: list[dict] = []
     for path, manifest, manifest_identity in records:
-        operation = manifest.get("operation")
-        legacy_pull = operation is None and manifest.get("vendor") and manifest.get("device_type")
-        if operation not in {
-            "configuration_pull",
-            "interactive_configuration_pull",
-            "manual_upload",
-        } and not legacy_pull:
-            described.append({"manifest": manifest_identity, "eligible": False})
-            continue
-        if str(manifest.get("status") or "").casefold() not in {
-            "completed", "uploaded", "failed",
-        }:
-            return [], warning, f"Device collection {path.parent.name} is still changing"
         evidence_path = select_map_configuration_file(path.parent)
         if evidence_path is None:
             return [], warning, f"Device collection {path.parent.name} has no stable selected evidence"
