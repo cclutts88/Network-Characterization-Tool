@@ -219,6 +219,8 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     assert "item.last_run_status==='completed_without_nmap'" in html
     assert "The latest scan chunk finished after the operator declined full Nmap fallback" in html
     assert "/api/system/scan-work-recovery/emergency-stop-clear" in html
+    assert "function emergencyErrorMessage(detail)" in html
+    assert "item?.msg||item?.message||String(item)" in html
     assert "pauses saved schedules" in html
     assert "create and independently verify a complete backup" in html
     assert "Select Run unfinished work self-check" in SHELL_SCRIPT

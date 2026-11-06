@@ -62,9 +62,15 @@ Stop form still requires fresh Administrator verification when authentication is
 enabled, while an explicitly authentication-disabled isolated build uses its existing
 local Administrator role without presenting unusable password fields. The Debian
 Python 3.12 complete application suite passes 2,750 checks with 25 skipped, and all 24
-Debian Node 22 browser-runtime scripts pass. Exact-image novice repetition and
-independent review remain required before packaging. Backend observation also measured
-approximately 109 local status reads per
+Debian Node 22 browser-runtime scripts pass. The R19 exact-image novice repetition
+halted the gate because authentication-disabled local installs hid the credential
+fields but the request model still rejected their intentionally empty values; the UI
+also rendered the structured validation details as `[object Object]`. The request
+model now permits empty credentials while the endpoint continues to require and
+verify fresh Administrator credentials whenever authentication is enabled, and the
+browser translates structured validation details into readable text. This correction
+must pass the exact-image Emergency Stop case before the novice and independent-review
+gates can clear. Backend observation also measured approximately 109 local status reads per
 minute while an Active Scan waits for fallback; this is bounded to the visible page
 and is not a correctness blocker, but later efficiency work should back off held-state
 polling or combine status reads without weakening operator feedback.

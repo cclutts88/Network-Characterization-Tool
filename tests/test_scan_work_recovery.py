@@ -816,6 +816,34 @@ def test_emergency_stop_clear_endpoint_requires_fresh_admin_credentials(
     assert accepted["stopped"] is True
 
 
+def test_emergency_stop_clear_endpoint_accepts_empty_credentials_when_auth_disabled(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    from app import main
+
+    data_dir, db_path = ready_database(tmp_path)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "auth_enabled", lambda: False)
+    monkeypatch.setattr(
+        main,
+        "emergency_stop_and_clear_scan_queue",
+        lambda **kwargs: {
+            "stopped": True,
+            "cancelled_count": 0,
+            "cancelled_run_ids": [],
+            "scanner_capacity_released": True,
+        },
+    )
+    request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+    body = main.EmergencyStopClearRequest(username="", password="")
+
+    accepted = main.emergency_stop_clear_scan_work(request, body)
+
+    assert accepted["cleared_by"] == "local-operator"
+    assert accepted["stopped"] is True
+
+
 def test_resume_requires_exact_confirmation_then_restarts_preserved_work(
     monkeypatch, tmp_path: Path,
 ) -> None:

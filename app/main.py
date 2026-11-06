@@ -750,8 +750,8 @@ class ScanRecoveryResumeRequest(BaseModel):
 
 class EmergencyStopClearRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    username: str = Field(min_length=1, max_length=100)
-    password: str = Field(min_length=1, max_length=256)
+    username: str = Field(default="", max_length=100)
+    password: str = Field(default="", max_length=256)
 
 
 class PassiveRecoveryResumeRequest(BaseModel):
