@@ -104,6 +104,19 @@ symlink substitution. The independent reviewer returned CLEAR. This is foundatio
 startup/restore-script enforcement, source adapters, active-source filtering and analyst
 controls remain in progress and no Range package includes this capability yet.
 
+Cross-evidence retirement source-adapter Gate B completed (2026-11-05): exact
+encounter resolvers now cover completed automated Nmap runs, individual manual Nmap
+observations, active device collections and uploads, Arkime Sessions imports, Arkime
+Summary imports and retained hostname uploads. A device or scan decision snapshots its
+registered child observations with stable observation-derived identities, including
+captures, while same-content sibling encounters remain independent. Active scan work,
+preparing or previously physically deleted device collections, unregistered legacy Nmap
+runs, noncanonical hostname identities and linked, nonregular, oversized or malformed
+hostname manifests are refused. Scoped manual uploads and collected multi-file device
+evidence are covered by focused fixtures. The independent reviewer returned CLEAR.
+These adapters are not yet reachable through analyst controls; route filtering,
+startup/restore enforcement and compatibility migration remain in progress.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
