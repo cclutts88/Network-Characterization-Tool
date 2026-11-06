@@ -140,6 +140,11 @@ def main():
         assert response.read() == xml
     handoff = request("/api/updates/launch", {})
     request("/api/exchange", {"code": handoff["url"].split("#handoff=")[1]}, console=True)
+    # Installing the independent recovery path intentionally leaves collection
+    # paused until the existing account is verified. Complete that first
+    # operation before asking the same console to accept an application update.
+    request("/api/verify-sign-in", {"username": "package-operator", "password": password}, console=True)
+    assert request("/health")["build_commit"] == source["commit"]
     update = package / release["gui_update"]["file"]
     with update.open("rb") as stream:
         with browser.open(urllib.request.Request(

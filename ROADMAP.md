@@ -627,6 +627,21 @@ route before and after the guarded update. This strengthens the rehearsal around
 stable evidence identity instead of depending on response presentation from an older
 release. The R4 stage is still unsealed and rejected pending a complete rerun.
 
+The R5 rehearsal then reached the application-update upload and correctly received a
+temporary refusal because independent recovery installation was still awaiting the
+required existing-account verification. The fixture now completes that distinct helper
+installation verification, confirms the supported source is still running, and only
+then begins the separate application update. This mirrors the operator workflow and
+keeps the two protected operations explicit. R5 remains unsealed while the full matrix
+continues; this validation-only correction does not alter the R5 package payload.
+
+Independent review identified the matching operator-documentation requirement before
+sealing: the terminal completion message and package guides must show the same two-step
+order. They now direct an existing-install operator to verify the existing account and
+finish recovery setup first, confirm the source remains available, then reopen the
+workspace for the separate application update and its own final verification. This
+instruction change is included in the next exact package candidate; R5 remains unsealed.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

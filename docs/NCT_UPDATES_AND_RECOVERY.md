@@ -32,6 +32,13 @@ Uploading an application archive does not update them. Existing helper upgrades
 must use the trusted full package's separately qualified administrator procedure;
 do not rerun the one-time installer over saved recovery state.
 
+When a full package installs the independent helper for the first time on an existing
+NCT application, finish that recovery-setup operation before uploading the application
+update. Open the workspace, verify the existing account, wait for setup completion,
+return to NCT, and reopen the workspace. The included application archive is a second
+operation with its own review, apply, and existing-account verification. Keeping these
+steps separate prevents an update from starting while recovery setup is still paused.
+
 ### Quick steps and expected results
 
 Keep the update file compressed. Put it on the computer whose browser opens NCT;

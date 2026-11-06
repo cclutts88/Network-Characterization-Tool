@@ -190,7 +190,7 @@ progress "6/6" "NCT and its independent recovery service are installed."
 if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
     printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT and sign in once with the new Administrator account to finish."
 elif [ "$NCT_EXISTING_SOURCE" = 1 ]; then
-    printf '%s\n' "The current application was not replaced. Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates, launch the recovery workspace, upload the enclosed nct-update tar.gz, and complete the guarded update there."
+    printf '%s\n' "The current application was not replaced. Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates, launch the recovery workspace, and verify the existing account to finish recovery setup. Then reopen the workspace, upload the enclosed nct-update tar.gz, and complete the separate guarded application update."
 else
     printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates and verify an existing account to finish."
 fi

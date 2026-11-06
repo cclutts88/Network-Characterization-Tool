@@ -168,9 +168,12 @@ policy remain in place. It does not apply the new application image, delete evid
 replace accounts or reset passwords.
 
 When the terminal reports completion, open NCT → **Account and settings → Updates &
-Recovery → Open update and recovery workspace**. Upload the included
-`nct-update-….tar.gz`, review the identified source and saved-work checks, then apply
-it and verify the existing account. This recovery workspace performs the cold backup,
+Recovery → Open update and recovery workspace**. First complete **Verify sign-in and
+finish** with the existing account. Wait for recovery setup to report completion and
+confirm NCT still shows the supported source build. Then return to NCT, reopen the
+workspace, upload the included `nct-update-….tar.gz`, review the identified source and
+saved-work checks, apply it, and verify the existing account again for that separate
+application update. The recovery workspace performs the cold backup,
 schema check, application replacement, retained-evidence verification and protected
 restore if needed. The terminal updater deliberately refuses this retirement-capable
 release before stopping the source application; it is not a fallback update route.
@@ -200,8 +203,10 @@ from the authorized workstation and prepare trust in the issuing CA. The install
 does not change firewall policy or disable certificate validation.
 
 After recovery setup, open **Account and settings → Updates & Recovery**, select
-**Open update and recovery workspace**, upload the included update, review it, apply
-it, and verify an existing NCT account. The helper verifies the exact source, saved
+**Open update and recovery workspace**, and first verify the existing account to
+finish recovery setup. Wait for completion, return to NCT, reopen the workspace, then
+upload the included update, review it, apply it, and verify the existing account again
+for the application update. The helper verifies the exact source, saved
 evidence, backup and new readiness, activates normal background services through a
 final restart, and returns you to NCT. The console then stops; the small host launcher
 remains available for later recovery.
