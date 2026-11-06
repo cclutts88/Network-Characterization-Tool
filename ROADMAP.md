@@ -35,8 +35,24 @@ screen space permits, and repeat the same narrow-screen check before qualificati
 The repeat check found that a full-width target at 950 by 760 pixels still left no
 safe side position, so the redundant floating badge is now hidden in that case while
 the outline and tutorial panel continue to identify the field. Tutorial scrolling now
-also keeps the highlighted control below the fixed header. Focused UI validation is
-green; final novice and independent review remain required before resealing R12.
+also keeps the highlighted control below the fixed header. Final exact-package browser
+review then found that adding Firewall to Router could expand the selected-role summary
+after the initial highlight and move the role area under the tutorial panel. Preserve
+the sealed R12 artifacts as qualification evidence but do not distribute them. The role
+summary now tells the tutorial whenever its layout changes, and window resizing uses
+the same visibility correction. The tutorial immediately restores safe header and panel
+clearance without requiring Retry. Eighty-nine focused UI checks pass, and browser
+validation at 950 by 760 pixels now confirms both Router alone and Router plus Firewall
+remain highlighted, plainly listed and clear of the tutorial panel. Repeat the complete
+suite, package rehearsals, novice review and independent release gate in R13 before
+calling the candidate Range-ready for transfer. A novice resize check at 1080 by 810
+pixels found that the Vendor field can move behind the fixed header while the role
+selector itself remains clear. The user explicitly deferred that presentation-only
+refinement on 2026-11-06 so it does not delay the working Range build; retain it as a
+known usability item for the next visual pass. R13 is being qualified for the user's
+requested clean Range installation: remove only the prior NCT deployment at install
+time, retain no old NCT evidence or settings, and do not treat migration or upgrade as
+part of that target acceptance.
 
 Range package transfer hardening completed in development (2026-11-05): the standard
 48 MiB transfer-set builder now gives each sealed package a visible checksum-derived

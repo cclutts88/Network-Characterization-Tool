@@ -1273,6 +1273,7 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert 'id="selectedDeviceRoles"' in html
     assert "function updateSelectedDeviceRoles()" in html
     assert "option.textContent.trim()" in html
+    assert "new CustomEvent('nct:tutorial-layout-changed')" in html
     assert "#type option:checked { background:linear-gradient(var(--accent),var(--accent))" in html
     assert ".selected-role-badge { border:1px solid var(--accent)" in html
     assert "device_types:deviceTypes" in html
@@ -1289,6 +1290,9 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "roomOnLeft=rect.left-150>sidebarRight" in SHELL_SCRIPT
     assert "safeTop=76" in SHELL_SCRIPT
     assert "if(topOverlap>0)" in SHELL_SCRIPT
+    assert "function refreshTutorialTargetVisibility()" in SHELL_SCRIPT
+    assert "window.addEventListener('resize',refreshTutorialTargetVisibility)" in SHELL_SCRIPT
+    assert "window.addEventListener('nct:tutorial-layout-changed',refreshTutorialTargetVisibility)" in SHELL_SCRIPT
     assert 'id="captureCommand"' not in html
     assert 'id="scp"' not in html
     assert 'id="cleanupPlan"' not in html
