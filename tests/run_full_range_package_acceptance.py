@@ -67,7 +67,7 @@ def main():
     initial = list(launch)
     if source_version == 8:
         initial[initial.index(args.source_image)] = "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1"
-    original_id = engine.command(*initial)
+    original_id = engine.command(*initial).strip()
     original_image_id = engine.inspect(original_id)["Image"]
     app_url, console_url = f"https://{gateway}:18159", f"https://{gateway}:18160"
     probe = Host({"state_dir": str(root / "probe"), "data_dir": str(data), "application_url": app_url,
@@ -94,7 +94,7 @@ def main():
         # schema-8 fixture. Remove it before recovery setup so the real source is
         # the sole container with a writable retained-data mount.
         engine.command("rm", original_id)
-        original_id = engine.command(*launch)
+        original_id = engine.command(*launch).strip()
         # The historical migration seed is intentionally replaced by the exact
         # supported source image. Bind the preservation check to that live
         # source, not to the disposable seed that no longer exists.

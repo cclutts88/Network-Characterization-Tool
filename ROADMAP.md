@@ -56,7 +56,10 @@ part of that target acceptance. The first exact-package rehearsal also found tha
 disposable race-condition fixture still watched Docker's older short `inspect` command
 while the helper now uses the explicit `container inspect` form. Update the fixture to
 recognize both equivalent commands, then rebuild and repeat qualification so this
-test-only drift cannot hide the intended late-container refusal check.
+test-only drift cannot hide the intended late-container refusal check. The same
+qualification pass found that the retained-source fixture passed Docker's newline-
+terminated create result back as an identifier; normalize the fixture result before
+inspection so the exact package can complete its existing-source compatibility proof.
 
 Range package transfer hardening completed in development (2026-11-05): the standard
 48 MiB transfer-set builder now gives each sealed package a visible checksum-derived
