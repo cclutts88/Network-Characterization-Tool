@@ -674,6 +674,16 @@ recovery root whose canonical path remains separate from evidence data; pre-exis
 directories are validated without changing their permissions. A linked-directory
 canary test verifies that both the link and its unrelated target remain untouched.
 
+The first R8 Recovery-r1 rehearsal completed the update, final account verification,
+and retained-evidence checks, then the acceptance fixture compared the installed
+single-platform archive identity to the development host's multi-platform tag identity.
+Both identities were already recorded in the package and referred to the same exact
+image content, but the assertion treated the mutable local tag as authoritative. The
+fixture now requires the installed application to equal the immutable normalized
+archive identity actually transferred, while admitting the package-recorded modern and
+classic identities for the already-running recovery console. The R8 payload is
+unchanged and remains unsealed pending a clean rerun and the remaining matrix routes.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

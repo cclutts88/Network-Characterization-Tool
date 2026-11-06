@@ -176,8 +176,17 @@ def main():
     assert request("/api/status", console=True)["operation"]["phase"] == "complete"
     assert request("/health")["build_commit"] == release["commit"]
     current = engine.inspect(name)
-    assert current["Image"] == json.loads(engine.command("image", "inspect", release["application_image"]))[0]["Id"]
-    assert engine.inspect(console_name)["Image"] == json.loads(engine.command("image", "inspect", release["console_image"]))[0]["Id"]
+    # BuildKit may keep a local multi-platform manifest-list ID on the tag while
+    # the normalized offline archive loads its exact single-platform runtime ID.
+    # Compare the installed application to the immutable archive identity that
+    # the package actually transferred, not to mutable local tag resolution.
+    expected_application_runtime_id = release["images"][release["application_image"]]["archive_runtime_id"]
+    assert current["Image"] == expected_application_runtime_id
+    console_ids = {
+        release["images"][release["console_image"]][key]
+        for key in ("export_runtime_id", "archive_config_digest", "archive_runtime_id")
+    }
+    assert engine.inspect(console_name)["Image"] in console_ids
     assert current["HostConfig"]["RestartPolicy"] == {"Name": "on-failure", "MaximumRetryCount": 3}
     assert "NCT_PACKAGE_PRESERVE_ME=retained-setting" in current["Config"]["Env"]
     assert any(m["Source"] == str(bootstrap) for m in current["Mounts"])
@@ -216,7 +225,7 @@ def main():
         assert response.read() == xml
     restored_runtime = engine.inspect(name)
     if compatible_restore:
-        assert restored_runtime["Image"] == json.loads(engine.command("image", "inspect", release["application_image"]))[0]["Id"]
+        assert restored_runtime["Image"] == expected_application_runtime_id
         assert "NCT_RETIREMENT_GUARD_MODE=required" in restored_runtime["Config"]["Env"]
         assert any(m["Destination"] == "/run/nct-retirement-guard" for m in restored_runtime["Mounts"])
         assert restored_operation["compatible_recovery"]["build_commit"] == release["commit"]
