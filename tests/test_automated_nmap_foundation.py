@@ -18,6 +18,7 @@ from app.automated_nmap_foundation import (
 )
 from app.database import connect_database
 from app.evidence_retirement import (
+    EvidenceRetirementError,
     RetiredEvidenceDependency,
     init_evidence_retirement_storage,
     retire_evidence,
@@ -333,6 +334,111 @@ def test_supported_intake_saves_candidates_and_reuses_exact_content_for_encounte
     assert len(mixed["source_states"]) == 2
     assert mixed["source_states"][-1]["state"] == "historical_unassessed"
     assert mixed["source_states"][-1]["run_id"] == "legacy-unregistered-run"
+
+    retire_evidence(
+        db_path,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=first_run["run_id"],
+        actor="analyst",
+        reason="incorrect first scan",
+        adapter=nmap_scan_run_adapter(),
+    )
+    active_sibling = load_retained_searchsploit_candidates(
+        db_path, [first_run["run_id"], second_run["run_id"]]
+    )
+    assert active_sibling["status"] == "retained_candidates_complete"
+    assert active_sibling["match_count"] == 1
+    assert [item["run_id"] for item in active_sibling["encounters"]] == [
+        second_run["run_id"]
+    ]
+    assert [item["run_id"] for item in active_sibling["source_states"]] == [
+        second_run["run_id"]
+    ]
+    assert load_retained_searchsploit_candidates(
+        db_path, [first_run["run_id"]]
+    )["status"] == "retained_candidates_no_evidence"
+
+
+def test_candidate_publication_is_blocked_when_scan_retires_during_calculation(
+    tmp_path, monkeypatch,
+):
+    import app.searchsploit_results as results
+
+    provider = {
+        "available": True,
+        "provider": "SearchSploit / Exploit-DB",
+        "provider_key": "9" * 64,
+        "active_version": "dataset-race",
+        "archive_sha256": "8" * 64,
+        "database_updated_epoch": 1000,
+        "database_path": "/offline/race",
+        "command_path": "/offline/race/searchsploit",
+        "installed_at": "2030-01-01T00:00:00+00:00",
+        "source": "test",
+        "message": "ready",
+    }
+    db_path, run, _, observation = scoped_run(tmp_path)
+    monkeypatch.setattr(results, "searchsploit_provider_snapshot", lambda: dict(provider))
+
+    def retire_while_calculating(*_args, **_kwargs):
+        retire_evidence(
+            db_path,
+            source_family=NMAP_SCAN_RUN,
+            encounter_id=run["run_id"],
+            actor="analyst",
+            reason="retired while calculating",
+            adapter=nmap_scan_run_adapter(),
+        )
+        return candidate_payload(None)
+
+    monkeypatch.setattr(
+        results, "enrich_hunting_with_searchsploit", retire_while_calculating,
+    )
+
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        generate_searchsploit_candidate_result(
+            db_path, observation["observation_id"], provider=provider,
+        )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_results WHERE family=?",
+            ("nmap_searchsploit_candidates",),
+        ).fetchone()[0] == 0
+        assert db.execute(
+            "SELECT COUNT(*) FROM derived_result_observation_links"
+        ).fetchone()[0] == 0
+
+
+def test_retired_unassessed_scan_is_not_reported_as_missing_candidate_work(tmp_path):
+    db_path, run, _, observation = scoped_run(tmp_path)
+    with connect_database(db_path) as db:
+        db.execute(
+            "UPDATE artifact_observations SET original_filename='tcp-scan.xml' "
+            "WHERE observation_id=?",
+            (observation["observation_id"],),
+        )
+    retire_evidence(
+        db_path,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=run["run_id"],
+        actor="analyst",
+        reason="retired historical scan",
+        adapter=nmap_scan_run_adapter(),
+    )
+
+    retained = load_retained_searchsploit_candidates(db_path, [run["run_id"]])
+
+    assert retained["status"] == "retained_candidates_no_evidence"
+    assert retained["matches"] == []
+
+
+def test_candidate_reads_fail_closed_without_complete_retirement_authority(tmp_path):
+    db_path, run, _, _ = scoped_run(tmp_path)
+    with connect_database(db_path) as db:
+        db.execute("DROP TABLE evidence_retirement_events")
+
+    with pytest.raises(EvidenceRetirementError, match="authority is unavailable"):
+        load_retained_searchsploit_candidates(db_path, [run["run_id"]])
 
 
 def test_failed_candidate_query_records_retryable_attempt_without_result(

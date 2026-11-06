@@ -3324,5 +3324,8 @@ def test_operator_readme_keeps_retirement_foundation_distinct_from_current_contr
     assert "one exact evidence encounter rather than shared file bytes" in html
     assert "ordinary Arkime lists, coverage, analysis, Hunt comparisons" in html
     assert "retired DHCP/DNS hostname uploads no longer appear" in html
-    assert "Existing analyst-approved hostname decisions remain separate" in html
+    assert "saved SearchSploit candidate views exclude retired Nmap runs" in html
+    assert "An active same-content scan can still use its own verified result link" in html
+    assert "Existing analyst-approved hostname decisions and Exploit-DB" in html
+    assert "Exploit-DB reference maintenance remain separate" in html
     assert "no evidence is physically removed" in html

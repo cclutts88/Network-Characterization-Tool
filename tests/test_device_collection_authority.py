@@ -52,6 +52,22 @@ def _upload(client: TestClient, filename: str = "router.txt"):
     )
 
 
+def _wait_for_summary_jobs(db_path, run_ids: tuple[str, ...]) -> list[dict | None]:
+    from app.derived_jobs import device_summary_job_for_run
+
+    prepared: list[dict | None] = []
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        prepared = [device_summary_job_for_run(db_path, run_id) for run_id in run_ids]
+        if all(
+            item and item["latest_attempt"]["state"] == "completed"
+            for item in prepared
+        ):
+            break
+        time.sleep(0.01)
+    return prepared
+
+
 def test_new_uploads_use_active_authority_and_reuse_one_verified_result(
     tmp_path, monkeypatch,
 ):
@@ -64,29 +80,15 @@ def test_new_uploads_use_active_authority_and_reuse_one_verified_result(
     with TestClient(app) as client:
         first = _upload(client, "first.txt")
         second = _upload(client, "second.txt")
+        assert first.status_code == second.status_code == 200
+        first_id = first.json()["run_id"]
+        second_id = second.json()["run_id"]
+        prepared = _wait_for_summary_jobs(db_path, (first_id, second_id))
 
-    assert first.status_code == second.status_code == 200
-    first_id = first.json()["run_id"]
-    second_id = second.json()["run_id"]
     assert get_device_collection_authority(db_path, first_id)["state"] == "active"
     assert get_device_collection_authority(db_path, second_id)["state"] == "active"
-
-    from app.derived_jobs import device_summary_job_for_run
-
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        prepared = [
-            device_summary_job_for_run(db_path, run_id)
-            for run_id in (first_id, second_id)
-        ]
-        if all(
-            item and item["latest_attempt"]["state"] == "completed"
-            for item in prepared
-        ):
-            break
-        time.sleep(0.01)
     assert all(
-        item["latest_attempt"]["state"] == "completed" for item in prepared
+        item and item["latest_attempt"]["state"] == "completed" for item in prepared
     )
 
     first_analysis = device_analysis.analyze_device_collection(
@@ -140,18 +142,10 @@ def test_presentation_change_is_visible_but_semantic_change_is_rejected(
     monkeypatch.setattr(device_analysis, "CONFIG_DIR", config_dir)
     with TestClient(app) as client:
         response = _upload(client)
-    run_id = response.json()["run_id"]
+        run_id = response.json()["run_id"]
+        prepared = _wait_for_summary_jobs(db_path, (run_id,))[0]
     run_dir = config_dir / run_id
-
-    from app.derived_jobs import device_summary_job_for_run
-
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        prepared = device_summary_job_for_run(db_path, run_id)
-        if prepared and prepared["latest_attempt"]["state"] == "completed":
-            break
-        time.sleep(0.01)
-    assert prepared["latest_attempt"]["state"] == "completed"
+    assert prepared and prepared["latest_attempt"]["state"] == "completed"
 
     initial = device_analysis.analyze_device_collection(
         run_id, config_dir=config_dir, db_path=db_path, data_dir=tmp_path,

@@ -226,6 +226,27 @@ ledger gaps, then independently passed the corrected cases and returned CLEAR. O
 controls, Searchsploit and the remaining cross-workspace consumers stay in progress; no
 Range package is ready.
 
+Cross-evidence retirement active-source Gate C Searchsploit slice completed in
+development (2026-11-05): saved offline candidate generation now rechecks the exact Nmap
+encounter inside the final write transaction, so retirement racing calculation blocks
+both a new result and a new link. Ordinary merged candidate views read retirement
+authority, eligible scan encounters, processing states, verified links and retained
+payloads from one database snapshot. Retired scans contribute neither candidates nor
+misleading unassessed-source counts; an active same-content sibling keeps its own
+verified result link. Missing retirement authority fails closed. Exploit-DB dataset
+installation and version selection remain separate reference-data maintenance rather
+than mission-evidence retirement. One pre-existing device-authority test race exposed by
+the full gate was corrected without changing runtime behavior: the test now waits while
+its application worker is still running and retains a bounded failure timeout. The two
+worker-lifecycle cases passed independently, the exact formerly flaky workflow passed
+10 consecutive repetitions, 135 focused Searchsploit/derived-result/guide/authority
+checks passed, and the complete suite passed with 2,615 passed, 25 intentionally skipped
+and one dependency deprecation warning. The independent reviewer reproduced eight
+retirement regressions, independently verified the worker test correction and returned
+CLEAR for both. Operator controls and broader Inventory, Analyze, Hunt, Reach, Map,
+export, cache, restart and restore integration remain in progress; no Range package is
+ready.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

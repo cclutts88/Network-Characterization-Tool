@@ -458,19 +458,37 @@ def load_linked_derived_result(
     read_guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict | None:
     """Read one result and its provenance link from the same read-only snapshot."""
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        return load_linked_derived_result_from_connection(
+            db,
+            identity,
+            role=role,
+            observation_id=observation_id,
+            read_guard=read_guard,
+        )
+
+
+def load_linked_derived_result_from_connection(
+    db: sqlite3.Connection,
+    identity: DerivedResultIdentity,
+    *,
+    role: str,
+    observation_id: str,
+    read_guard: Callable[[sqlite3.Connection], None] | None = None,
+) -> dict | None:
+    """Read one linked result inside the caller's existing database snapshot."""
     _validated_identity(identity)
     role = _text(role, "link role", 100)
     observation_id = _text(observation_id, "observation_id", 200)
-    with connect_database(db_path, read_only=True) as db:
-        db.execute("BEGIN")
-        if read_guard is not None:
-            read_guard(db)
-        retained = _load_derived_result(db, identity)
-        if retained is None:
-            return None
-        linked = db.execute(
-            """SELECT 1 FROM derived_result_observation_links
-               WHERE result_id = ? AND input_role = ? AND observation_id = ?""",
-            (identity.result_id, role, observation_id),
-        ).fetchone()
-        return retained if linked is not None else None
+    if read_guard is not None:
+        read_guard(db)
+    retained = _load_derived_result(db, identity)
+    if retained is None:
+        return None
+    linked = db.execute(
+        """SELECT 1 FROM derived_result_observation_links
+           WHERE result_id = ? AND input_role = ? AND observation_id = ?""",
+        (identity.result_id, role, observation_id),
+    ).fetchone()
+    return retained if linked is not None else None

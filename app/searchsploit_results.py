@@ -17,11 +17,13 @@ from app.derived_results import (
     derived_result_identity,
     init_derived_result_storage,
     load_derived_result,
-    load_linked_derived_result,
+    load_linked_derived_result_from_connection,
     prepare_derived_result,
     publish_derived_result,
 )
 from app.database import connect_database
+from app.evidence_retirement import require_active_encounter, require_retirement_authority
+from app.evidence_retirement_sources import NMAP_IMPORT, NMAP_SCAN_RUN
 from app.hunting import build_hunting_analysis
 from app.nmap_base_analysis import _parse_nmap_xml, _verified_observation_bytes
 from app.searchsploit import (
@@ -31,6 +33,38 @@ from app.searchsploit import (
 
 
 SEARCHSPLOIT_CANDIDATE_JOB_TYPE = "nmap_searchsploit_candidates"
+
+
+def _require_active_observation(
+    db: sqlite3.Connection, observation_id: str,
+) -> tuple[str, str]:
+    row = db.execute(
+        """SELECT source_kind, source_ref
+             FROM artifact_observations WHERE observation_id = ?""",
+        (observation_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError("Artifact observation is not available")
+    if row[0] == "nmap_import":
+        source_family, encounter_id = NMAP_IMPORT, observation_id
+    elif row[0] == "nmap_scan":
+        source_family, encounter_id = NMAP_SCAN_RUN, str(row[1])
+    else:
+        raise ValueError("SearchSploit candidates require a registered Nmap observation")
+    require_active_encounter(
+        db, source_family=source_family, encounter_id=encounter_id,
+    )
+    return source_family, encounter_id
+
+
+def _no_evidence_payload() -> dict:
+    return {
+        "status": "retained_candidates_no_evidence",
+        "query_count": 0,
+        "matches": [],
+        "warnings": [],
+        "disclaimer": "Potential product/version matches require analyst validation.",
+    }
 
 
 def _provider_identity(provider: dict) -> str:
@@ -83,6 +117,12 @@ def generate_searchsploit_candidate_result(
     provider_key = _provider_identity(provider)
     init_derived_result_storage(db_path)
     content, observation = _verified_observation_bytes(db_path, observation_id)
+
+    def active_publication_guard(db: sqlite3.Connection) -> None:
+        _require_active_observation(db, observation_id)
+        if transaction_guard is not None:
+            transaction_guard(db)
+
     identity = candidate_result_identity(observation["sha256"], provider)
     current = searchsploit_provider_snapshot()
     if _provider_identity(current) != provider_key:
@@ -102,7 +142,7 @@ def generate_searchsploit_candidate_result(
             db_path,
             prepared,
             observation_links=[{"role": "nmap_xml", "observation_id": observation_id}],
-            transaction_guard=transaction_guard,
+            transaction_guard=active_publication_guard,
             transaction_finalize=transaction_finalize,
         )
         return {
@@ -149,7 +189,7 @@ def generate_searchsploit_candidate_result(
         db_path,
         prepared,
         observation_links=[{"role": "nmap_xml", "observation_id": observation_id}],
-        transaction_guard=transaction_guard,
+        transaction_guard=active_publication_guard,
         transaction_finalize=transaction_finalize,
     )
     return {
@@ -160,14 +200,15 @@ def generate_searchsploit_candidate_result(
     }
 
 
-def _load_linked_result(db_path: Path, result_id: str, observation_id: str) -> dict | None:
-    with connect_database(db_path, read_only=True) as db:
-        row = db.execute(
-            """SELECT family, analysis_version, payload_schema_version,
-                      parameters_json, inputs_json
-               FROM derived_results WHERE result_id = ?""",
-            (result_id,),
-        ).fetchone()
+def _load_linked_result(
+    db: sqlite3.Connection, result_id: str, observation_id: str,
+) -> dict | None:
+    row = db.execute(
+        """SELECT family, analysis_version, payload_schema_version,
+                  parameters_json, inputs_json
+           FROM derived_results WHERE result_id = ?""",
+        (result_id,),
+    ).fetchone()
     if row is None or row[0] != SEARCHSPLOIT_CANDIDATES_FAMILY:
         return None
     identity = derived_result_identity(
@@ -179,8 +220,14 @@ def _load_linked_result(db_path: Path, result_id: str, observation_id: str) -> d
     )
     if identity.result_id != result_id:
         raise ValueError("Retained candidate-result identity is inconsistent")
-    return load_linked_derived_result(
-        db_path, identity, role="nmap_xml", observation_id=observation_id,
+    return load_linked_derived_result_from_connection(
+        db,
+        identity,
+        role="nmap_xml",
+        observation_id=observation_id,
+        read_guard=lambda connection: _require_active_observation(
+            connection, observation_id,
+        ),
     )
 
 
@@ -256,15 +303,23 @@ def load_retained_searchsploit_candidates(db_path: Path, run_ids: list[str]) -> 
     """Load saved candidates and processing states without launching a lookup."""
     run_ids = list(dict.fromkeys(str(value) for value in run_ids if value))
     if not run_ids:
-        return {
-            "status": "retained_candidates_no_evidence",
-            "query_count": 0,
-            "matches": [],
-            "warnings": [],
-            "disclaimer": "Potential product/version matches require analyst validation.",
-        }
+        return _no_evidence_payload()
     placeholders = ",".join("?" for _ in run_ids)
     with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        require_retirement_authority(db)
+        retired_run_ids = {
+            str(row[0]) for row in db.execute(
+                f"""SELECT encounter_id FROM evidence_retirement_events
+                      WHERE source_family=? AND sealed=1
+                        AND encounter_id IN ({placeholders})""",
+                (NMAP_SCAN_RUN, *run_ids),
+            ).fetchall()
+        }
+        run_ids = [run_id for run_id in run_ids if run_id not in retired_run_ids]
+        if not run_ids:
+            return _no_evidence_payload()
+        placeholders = ",".join("?" for _ in run_ids)
         observations = db.execute(
             f"""SELECT source_ref, observation_id
                  FROM artifact_observations
@@ -288,40 +343,42 @@ def load_retained_searchsploit_candidates(db_path: Path, run_ids: list[str]) -> 
                 ORDER BY job.requested_at DESC""",
             (SEARCHSPLOIT_CANDIDATE_JOB_TYPE, *run_ids),
         ).fetchall()
-    jobs_by_observation: dict[str, tuple] = {}
-    for job in jobs:
-        jobs_by_observation.setdefault(str(job[1]), job)
-    loaded_by_result: dict[str, dict] = {}
-    encounters = []
-    source_states = []
-    for run_id, observation_id in observations:
-        job = jobs_by_observation.get(str(observation_id))
-        if job is None:
+        jobs_by_observation: dict[str, tuple] = {}
+        for job in jobs:
+            jobs_by_observation.setdefault(str(job[1]), job)
+        loaded_by_result: dict[str, dict] = {}
+        encounters = []
+        source_states = []
+        for run_id, observation_id in observations:
+            job = jobs_by_observation.get(str(observation_id))
+            if job is None:
+                source_states.append({
+                    "run_id": run_id, "observation_id": observation_id,
+                    "state": "historical_unassessed",
+                    "detail": "This evidence predates automatic offline-candidate assessment.",
+                })
+                continue
+            state, output_id, error = str(job[3]), job[4], job[5]
             source_states.append({
                 "run_id": run_id, "observation_id": observation_id,
-                "state": "historical_unassessed",
-                "detail": "This evidence predates automatic offline-candidate assessment.",
+                "job_id": job[2], "state": state, "detail": error,
             })
-            continue
-        state, output_id, error = str(job[3]), job[4], job[5]
-        source_states.append({
-            "run_id": run_id, "observation_id": observation_id,
-            "job_id": job[2], "state": state, "detail": error,
-        })
-        if state != "completed" or not output_id:
-            continue
-        retained = _load_linked_result(db_path, str(output_id), str(observation_id))
-        if retained is None:
-            source_states[-1]["state"] = "integrity_conflict"
-            source_states[-1]["detail"] = "The retained candidate result could not be verified."
-            continue
-        loaded_by_result.setdefault(str(output_id), retained)
-        encounters.append({
-            "run_id": run_id,
-            "observation_id": observation_id,
-            "result_id": output_id,
-            "prepared_at": retained["generated_at"],
-        })
+            if state != "completed" or not output_id:
+                continue
+            retained = _load_linked_result(db, str(output_id), str(observation_id))
+            if retained is None:
+                source_states[-1]["state"] = "integrity_conflict"
+                source_states[-1]["detail"] = (
+                    "The retained candidate result could not be verified."
+                )
+                continue
+            loaded_by_result.setdefault(str(output_id), retained)
+            encounters.append({
+                "run_id": run_id,
+                "observation_id": observation_id,
+                "result_id": output_id,
+                "prepared_at": retained["generated_at"],
+            })
     retained_results = list(loaded_by_result.values())
     observed_run_ids = {str(row[0]) for row in observations}
     for run_id in run_ids:
