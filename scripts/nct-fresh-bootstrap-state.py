@@ -94,11 +94,17 @@ def runtime_snapshot(args: argparse.Namespace) -> dict:
     if (host.get("PortBindings") or {}) != expected_port:
         raise ValueError("the bootstrap port binding changed")
 
+    data_dir = args.data_dir.resolve()
+    guard_dir = args.retirement_guard_dir.resolve()
+    if (data_dir == guard_dir or data_dir.is_relative_to(guard_dir)
+            or guard_dir.is_relative_to(data_dir)):
+        raise ValueError("the bootstrap retirement authority is not separate from evidence data")
     expected_mounts = {
-        "/data": (args.data_dir.resolve(), True),
-        "/run/tls/nct-server.crt": (args.cert_file.resolve(), False),
-        "/run/tls/nct-server.key": (args.key_file.resolve(), False),
-        "/run/secrets/nct_bootstrap_password": (args.secret_file.resolve(), False),
+        "/data": (data_dir, True, "bind"),
+        "/run/nct-retirement-guard": (guard_dir, True, "bind"),
+        "/run/tls/nct-server.crt": (args.cert_file.resolve(), False, "bind"),
+        "/run/tls/nct-server.key": (args.key_file.resolve(), False, "bind"),
+        "/run/secrets/nct_bootstrap_password": (args.secret_file.resolve(), False, "bind"),
     }
     observed_mounts = {}
     for mount in value.get("Mounts") or []:
@@ -106,7 +112,8 @@ def runtime_snapshot(args: argparse.Namespace) -> dict:
         if destination in observed_mounts:
             raise ValueError("the bootstrap container has a duplicate mount")
         observed_mounts[destination] = (
-            Path(str(mount.get("Source", ""))).resolve(), bool(mount.get("RW"))
+            Path(str(mount.get("Source", ""))).resolve(), bool(mount.get("RW")),
+            str(mount.get("Type", "")),
         )
     if observed_mounts != expected_mounts:
         raise ValueError("the bootstrap mount contract changed")
@@ -122,6 +129,9 @@ def runtime_snapshot(args: argparse.Namespace) -> dict:
         "NCT_COOKIE_SECURE": "1",
         "NCT_BOOTSTRAP_ADMIN": args.admin_user,
         "NCT_BOOTSTRAP_PASSWORD_FILE": "/run/secrets/nct_bootstrap_password",
+        "NCT_RETIREMENT_GUARD_MODE": "required",
+        "NCT_RETIREMENT_GUARD_DIR": "/run/nct-retirement-guard",
+        "NCT_RETIREMENT_DATA_IDENTITY": "bind:" + str(data_dir),
     }
     if any(env.get(key) != expected for key, expected in expected_env.items()):
         raise ValueError("the bootstrap environment contract changed")
@@ -135,8 +145,8 @@ def runtime_snapshot(args: argparse.Namespace) -> dict:
         "image_id": value["Image"],
         "command": [value["Path"], *list(value.get("Args") or [])],
         "mounts": {
-            destination: {"source": str(source), "writable": writable}
-            for destination, (source, writable) in sorted(observed_mounts.items())
+            destination: {"source": str(source), "writable": writable, "type": mount_type}
+            for destination, (source, writable, mount_type) in sorted(observed_mounts.items())
         },
         "port_binding": expected_port,
         "restart_policy": restart,
@@ -184,6 +194,7 @@ def expected_receipt(args: argparse.Namespace, runtime: dict) -> dict:
         "host_port": args.host_port,
         "container_port": args.container_port,
         "data_dir": str(args.data_dir.resolve()),
+        "retirement_guard_dir": str(args.retirement_guard_dir.resolve()),
         "cert_file": str(args.cert_file.resolve()),
         "cert_sha256": sha256_file(args.cert_file),
         "key_file": str(args.key_file.resolve()),
@@ -229,7 +240,8 @@ def validate(args: argparse.Namespace) -> dict:
     current = expected_receipt(args, runtime)
     for key in (
         "container", "image_reference", "admin_user", "range_ip", "bind_address",
-        "host_port", "container_port", "data_dir", "cert_file", "cert_sha256",
+        "host_port", "container_port", "data_dir", "retirement_guard_dir",
+        "cert_file", "cert_sha256",
         "key_file", "key_sha256", "secret_file", "secret_sha256",
         "archive_sha256", "runtime",
     ):
@@ -263,10 +275,16 @@ def final_runtime(receipt: dict) -> dict:
     }
     if (host.get("PortBindings") or {}) != expected_port:
         raise ValueError("the final fresh-install port binding changed")
+    data_dir = Path(receipt["data_dir"]).resolve()
+    guard_dir = Path(receipt["retirement_guard_dir"]).resolve()
+    if (data_dir == guard_dir or data_dir.is_relative_to(guard_dir)
+            or guard_dir.is_relative_to(data_dir)):
+        raise ValueError("the final retirement authority is not separate from evidence data")
     expected_mounts = {
-        "/data": (Path(receipt["data_dir"]).resolve(), True),
-        "/run/tls/nct-server.crt": (Path(receipt["cert_file"]).resolve(), False),
-        "/run/tls/nct-server.key": (Path(receipt["key_file"]).resolve(), False),
+        "/data": (data_dir, True, "bind"),
+        "/run/nct-retirement-guard": (guard_dir, True, "bind"),
+        "/run/tls/nct-server.crt": (Path(receipt["cert_file"]).resolve(), False, "bind"),
+        "/run/tls/nct-server.key": (Path(receipt["key_file"]).resolve(), False, "bind"),
     }
     observed_mounts = {}
     for mount in value.get("Mounts") or []:
@@ -274,7 +292,8 @@ def final_runtime(receipt: dict) -> dict:
         if destination in observed_mounts:
             raise ValueError("the final fresh-install runtime has a duplicate mount")
         observed_mounts[destination] = (
-            Path(str(mount.get("Source", ""))).resolve(), bool(mount.get("RW"))
+            Path(str(mount.get("Source", ""))).resolve(), bool(mount.get("RW")),
+            str(mount.get("Type", "")),
         )
     if observed_mounts != expected_mounts:
         raise ValueError("the final fresh-install mount contract changed")
@@ -284,7 +303,10 @@ def final_runtime(receipt: dict) -> dict:
         if separator:
             env[key] = value_text
     expected_env = {
-        "NCT_AUTH_MODE": "local", "NCT_SESSION_HOURS": "12", "NCT_COOKIE_SECURE": "1"
+        "NCT_AUTH_MODE": "local", "NCT_SESSION_HOURS": "12", "NCT_COOKIE_SECURE": "1",
+        "NCT_RETIREMENT_GUARD_MODE": "required",
+        "NCT_RETIREMENT_GUARD_DIR": "/run/nct-retirement-guard",
+        "NCT_RETIREMENT_DATA_IDENTITY": "bind:" + receipt["data_dir"],
     }
     if any(env.get(key) != expected for key, expected in expected_env.items()) or any(
         key.startswith("NCT_BOOTSTRAP_") for key in env
@@ -309,6 +331,7 @@ def common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host-port", type=int, required=True)
     parser.add_argument("--container-port", type=int, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--retirement-guard-dir", type=Path, required=True)
     parser.add_argument("--cert-file", type=Path, required=True)
     parser.add_argument("--key-file", type=Path, required=True)
     parser.add_argument("--secret-file", type=Path, required=True)

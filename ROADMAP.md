@@ -699,6 +699,22 @@ versioned schema check and retirement-authority reconciliation. Local helper che
 rejected and remains unsealed because this source correction requires a new exact image
 and complete package matrix before distribution.
 
+The first R9 clean-install rehearsal then found a separate fail-closed contract drift
+before an Administrator password was accepted. Retirement authority was correctly
+provisioned and mounted into the new application, but the resumable fresh-install
+receipt still allowed only the older data, TLS and one-time-password mount set. It
+therefore refused to record ownership of the otherwise-correct bootstrap container.
+The receipt now requires an exact bind mount for the separate writable retirement
+authority and verifies its required mode, location and canonical evidence identity in
+both the bootstrap and final runtime. The launcher passes the reviewed host path
+explicitly. The helper-upgrade acceptance fixture was also brought up to the already-
+implemented explicit compatible-recovery transition; it no longer waits for the
+obsolete automatic transition or expects older code to resume after a protected
+restore that deliberately requires the compatible candidate. Focused Linux checks pass
+46 tests and the launcher passes shell syntax validation. R9 is rejected and remains
+unsealed; the corrected source requires a new committed candidate, complete regression
+suite and every package route before distribution.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

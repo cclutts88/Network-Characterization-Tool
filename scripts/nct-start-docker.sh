@@ -97,7 +97,8 @@ fresh_state() {
         --image-reference "$IMAGE" --image-id "$IMAGE_ID" --admin-user "$ADMIN_USER" \
         --range-ip "$RANGE_IP" --bind-address "$APP_BIND_ADDRESS" \
         --host-port "$HOST_PORT" --container-port "$CONTAINER_PORT" \
-        --data-dir "$DATA_DIR" --cert-file "$TLS_ROOT/tls/nct-server.crt" \
+        --data-dir "$DATA_DIR" --retirement-guard-dir "$RETIREMENT_GUARD_DIR" \
+        --cert-file "$TLS_ROOT/tls/nct-server.crt" \
         --key-file "$TLS_ROOT/tls/nct-server.key" --secret-file "$BOOTSTRAP_PASSWORD" \
         --archive "$ARCHIVE"
 }

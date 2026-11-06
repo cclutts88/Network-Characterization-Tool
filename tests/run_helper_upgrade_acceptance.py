@@ -173,11 +173,15 @@ def main():
         later=data/'later-evidence.txt';later.write_bytes(b'preserve after helper upgrade')
         request('/api/rollback',{'confirm':'RESTORE'},console=True)
         for _ in range(180):
-            if host.read()['phase']=='awaiting_restore_sign_in':break
+            phase=host.read()['phase']
+            if phase=='awaiting_compatible_recovery':
+                request('/api/resume-compatible',{'confirm':'START COMPATIBLE RECOVERY'},console=True)
+            elif phase=='awaiting_restore_sign_in':break
+            elif phase in {'interrupted','failed'}:raise AssertionError(host.public())
             time.sleep(1)
         else:raise AssertionError(host.public())
         request('/api/verify-sign-in',{'username':'fixture-operator','password':password},console=True)
-        assert request('/health')['build_commit']==source['build_commit']
+        assert request('/health')['build_commit']==release['commit']
         verify_xml()
         assert (Path(host.read()['quarantine_path'])/'later-evidence.txt').read_bytes()==b'preserve after helper upgrade'
         result={'result':'pass','tested_manifest_sha256':manifest,'commit':release['commit'],'images':release['images'],

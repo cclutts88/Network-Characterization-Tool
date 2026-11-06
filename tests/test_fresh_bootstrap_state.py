@@ -31,6 +31,9 @@ def runtime(container: str, image: str, image_id: str, root: Path) -> dict:
                 "NCT_AUTH_MODE=local", "NCT_SESSION_HOURS=12", "NCT_COOKIE_SECURE=1",
                 "NCT_BOOTSTRAP_ADMIN=admin",
                 "NCT_BOOTSTRAP_PASSWORD_FILE=/run/secrets/nct_bootstrap_password",
+                "NCT_RETIREMENT_GUARD_MODE=required",
+                "NCT_RETIREMENT_GUARD_DIR=/run/nct-retirement-guard",
+                "NCT_RETIREMENT_DATA_IDENTITY=bind:" + str(root / "data"),
                 "NCT_BUILD_ID=fixture",
             ],
         },
@@ -44,10 +47,11 @@ def runtime(container: str, image: str, image_id: str, root: Path) -> dict:
             "PortBindings": {"8445/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18445"}]},
         },
         "Mounts": [
-            {"Destination": "/data", "Source": str(root / "data"), "RW": True},
-            {"Destination": "/run/tls/nct-server.crt", "Source": str(root / "server.crt"), "RW": False},
-            {"Destination": "/run/tls/nct-server.key", "Source": str(root / "server.key"), "RW": False},
-            {"Destination": "/run/secrets/nct_bootstrap_password", "Source": str(root / "secret"), "RW": False},
+            {"Type": "bind", "Destination": "/data", "Source": str(root / "data"), "RW": True},
+            {"Type": "bind", "Destination": "/run/nct-retirement-guard", "Source": str(root / "retirement-guard"), "RW": True},
+            {"Type": "bind", "Destination": "/run/tls/nct-server.crt", "Source": str(root / "server.crt"), "RW": False},
+            {"Type": "bind", "Destination": "/run/tls/nct-server.key", "Source": str(root / "server.key"), "RW": False},
+            {"Type": "bind", "Destination": "/run/secrets/nct_bootstrap_password", "Source": str(root / "secret"), "RW": False},
         ],
     }
 
@@ -65,6 +69,7 @@ def helper_args(root: Path, action: str) -> list[str]:
         "--host-port", "18445",
         "--container-port", "8445",
         "--data-dir", str(root / "data"),
+        "--retirement-guard-dir", str(root / "retirement-guard"),
         "--cert-file", str(root / "server.crt"),
         "--key-file", str(root / "server.key"),
         "--secret-file", str(root / "secret"),
@@ -81,6 +86,7 @@ def test_fresh_resume_receipt_binds_exact_container_runtime_and_password_phase(t
     docker.write_text('#!/bin/sh\n[ "$1" = inspect ] || exit 91\ncat "$FAKE_INSPECT"\n')
     docker.chmod(0o700)
     (tmp_path / "data").mkdir()
+    (tmp_path / "retirement-guard").mkdir()
     (tmp_path / "deployment" / "bootstrap").mkdir(parents=True, mode=0o700)
     for name, value in (
         ("server.crt", b"certificate"), ("server.key", b"key"),
@@ -106,6 +112,46 @@ def test_fresh_resume_receipt_binds_exact_container_runtime_and_password_phase(t
     assert receipt["runtime"]["network_mode"] == "bridge"
     assert receipt["runtime"]["mounts"]["/run/secrets/nct_bootstrap_password"]["writable"] is False
     subprocess.run(helper_args(tmp_path, "verify"), env=env, check=True)
+
+    guard_mount = next(
+        item for item in value["Mounts"]
+        if item["Destination"] == "/run/nct-retirement-guard"
+    )
+    for field, changed in (
+        ("Type", "volume"), ("Source", str(tmp_path / "other")), ("RW", False),
+    ):
+        original = guard_mount[field]
+        guard_mount[field] = changed
+        inspect_path.write_text(json.dumps([value]))
+        rejected = subprocess.run(
+            helper_args(tmp_path, "verify"), env=env, capture_output=True, text=True
+        )
+        assert rejected.returncode != 0
+        assert "mount contract changed" in rejected.stderr
+        guard_mount[field] = original
+    guard_mount["Source"] = str(tmp_path / "data")
+    inspect_path.write_text(json.dumps([value]))
+    overlapping_args = helper_args(tmp_path, "verify")
+    overlapping_args[overlapping_args.index("--retirement-guard-dir") + 1] = str(tmp_path / "data")
+    rejected = subprocess.run(
+        overlapping_args, env=env, capture_output=True, text=True
+    )
+    assert rejected.returncode != 0
+    assert "not separate from evidence data" in rejected.stderr
+    guard_mount["Source"] = str(tmp_path / "retirement-guard")
+    retirement_env = value["Config"]["Env"]
+    value["Config"]["Env"] = [
+        item for item in retirement_env
+        if not item.startswith("NCT_RETIREMENT_GUARD_MODE=")
+    ]
+    inspect_path.write_text(json.dumps([value]))
+    rejected = subprocess.run(
+        helper_args(tmp_path, "verify"), env=env, capture_output=True, text=True
+    )
+    assert rejected.returncode != 0
+    assert "environment contract changed" in rejected.stderr
+    value["Config"]["Env"] = retirement_env
+    inspect_path.write_text(json.dumps([value]))
 
     subprocess.run(
         [
