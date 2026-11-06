@@ -61,7 +61,7 @@ approval** and **Finished without Nmap** instead of raw internal state. The Emer
 Stop form still requires fresh Administrator verification when authentication is
 enabled, while an explicitly authentication-disabled isolated build uses its existing
 local Administrator role without presenting unusable password fields. The Debian
-Python 3.12 complete application suite passes 2,752 checks with 25 skipped, and all 24
+Python 3.12 complete application suite passes 2,754 checks with 25 skipped, and all 24
 Debian Node 22 browser-runtime scripts pass. The R19 exact-image novice repetition
 halted the gate because authentication-disabled local installs hid the credential
 fields but the request model still rejected their intentionally empty values; the UI
@@ -98,18 +98,40 @@ retained-output explanation, and populated interface and route sections. The dee
 evidence check then found two release blockers: the unfiltered accountability capture
 had also retained the browser-to-NCT password submission, and the Cisco interface
 summary heading was incorrectly presented as an interface named `IP-Address`. R21 is
-therefore not a cleared candidate. Development now restricts packet accountability to
+therefore was not a cleared candidate. Development now restricts packet accountability to
 the exact certified device IPv4 address and SSH port, resets command-boundary parser
-context, and rejects the Cisco interface-summary heading. A fresh exact Linux candidate
-must repeat the live command, prove that the disposable credential is absent from all
-retained and canonical bytes, show only the two real fixture interfaces, and receive
-independent-review clearance before this gate can return to complete.
+context, and rejects the Cisco interface-summary heading. Exact R22 Linux repetition
+cleared the corrected implementation: collection `93d4acfea6174fe7ad78962a86ba5cfa`
+ran the saved profile's additional `show clock` command, retained its labeled output,
+and generated the Completed per-command analysis row. Device Analysis showed exactly
+`GigabitEthernet0/0` and `Loopback0`, with four routes and no invented heading row. The
+23,945-byte accountability capture contained 113 packets, all between NCT and the
+certified device SSH endpoint; no proxy, application or API traffic was present. A
+read-only whole-volume byte scan and application-log scan found zero occurrences of
+the disposable credential. All six retained and canonical artifacts matched their
+registered hashes and sizes, both leases released, no child process remained, database
+integrity passed, and no server, lock or restart error appeared. The complete Debian
+Python 3.12 suite then passed 2,754 checks with 25 skipped, and all 24 Debian Node 22
+browser-runtime scripts passed.
 Graphite and Sage checks at 950 by 760 pixels retained aligned headers, normal Guide
 typography and no page overflow. Non-blocking usability follow-up remains: translate
 raw command-status identifiers into operator language, give the per-command table a
 specific Guide topic, and retain the suggested scope label in Collection History
 instead of falling back to its internal identifier. These do not affect command
 execution, retained evidence or analysis generation.
+
+Planned device-credential boundary (recorded 2026-11-06): later automatic or scheduled
+network-device collection may use administrator-approved saved credentials, but those
+secrets must live in a dedicated encrypted credential store rather than device profiles,
+SQLite evidence metadata, manifests, logs, packet captures or the Artifact Registry.
+Collection plans reference a credential identity without revealing its value. Access,
+replacement, rotation and use require durable audit records; exports and ordinary
+analyst backups exclude secret values by default. Every automatic contact still freezes
+the exact Network Scope, No-Strike review, device target, read-only command profile and
+credential reference before dispatch. Recovery must fail closed when the vault is
+locked or unavailable, and neither evidence download nor troubleshooting output may
+provide a path to recover the plaintext credential. This is planned work; the current
+build continues to use one-time device passwords and does not retain them.
 
 Evidence-retirement confirmation parsing tightened in development (2026-11-06): the
 complete regression suite found that a changed final base64url character could, for
