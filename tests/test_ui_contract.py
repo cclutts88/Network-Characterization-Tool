@@ -43,7 +43,7 @@ def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
         "#currentRunPanel",
         "#scanHistory",
         "#vendor",
-        "#type",
+        "#deviceRoleSelection",
         "#discoveredDevice",
         "#address",
         "#username",
@@ -1268,6 +1268,13 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert '<option value="unifi">UniFi</option>' in html
     assert '<option value="switch">Switch</option>' in html
     assert '<select id="type" multiple size="3"' in html
+    assert 'aria-describedby="selectedDeviceRoles vendorHint"' in html
+    assert 'id="deviceRoleSelection"' in html
+    assert 'id="selectedDeviceRoles"' in html
+    assert "function updateSelectedDeviceRoles()" in html
+    assert "option.textContent.trim()" in html
+    assert "#type option:checked { background:linear-gradient(var(--accent),var(--accent))" in html
+    assert ".selected-role-badge { border:1px solid var(--accent)" in html
     assert "device_types:deviceTypes" in html
     assert "Router + Firewall selected" in html
     assert "supportsSwitch=['cisco','juniper','unifi'].includes(vendor)" in html
@@ -1275,6 +1282,9 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "$('type').onchange=()=>{updateVendorHint();markProfileDraftModified()}" in html
     assert "Current consoles and gateways normally use the root SSH account" in html
     assert "EdgeRouter devices should continue to use the VyOS template" in html
+    assert "selector:'#deviceRoleSelection'" in SHELL_SCRIPT
+    assert "hold Ctrl while selecting the second role" in SHELL_SCRIPT
+    assert "Selected role or Selected roles strip underneath" in SHELL_SCRIPT
     assert 'id="captureCommand"' not in html
     assert 'id="scp"' not in html
     assert 'id="cleanupPlan"' not in html

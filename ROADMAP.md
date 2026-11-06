@@ -20,6 +20,15 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Device-role selection visibility correction started (2026-11-06): hands-on review of
+the locally qualified R11 candidate found that the browser's native multi-select did
+not make selected Router, Firewall and Switch roles visually distinct enough. Preserve
+the sealed R11 artifacts as evidence but do not distribute them. Add a theme-aware
+selected state plus a persistent plain-language summary beside the control, verify
+single and combined role selection with keyboard and mouse interaction, update the
+guided tutorial to highlight and explain the whole selection area, and repeat the
+applicable package, novice-operator and independent-review gates in a new candidate.
+
 Range package transfer hardening completed in development (2026-11-05): the standard
 48 MiB transfer-set builder now gives each sealed package a visible checksum-derived
 transfer identity, rereads every persisted piece and proves byte-exact local
