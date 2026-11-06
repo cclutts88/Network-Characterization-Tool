@@ -451,9 +451,29 @@ def retirement_record(
     }
 
 
+def require_retirement_authority(connection: sqlite3.Connection) -> None:
+    """Fail closed unless the lineage and event ledger are both readable."""
+    try:
+        lineage = connection.execute(
+            "SELECT lineage_id FROM evidence_retirement_lineage WHERE singleton=1"
+        ).fetchone()
+        connection.execute(
+            "SELECT revision FROM evidence_retirement_events WHERE sealed=1 LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).casefold():
+            raise EvidenceRetirementError(
+                "retirement authority is unavailable"
+            ) from exc
+        raise
+    if lineage is None:
+        raise EvidenceRetirementError("retirement lineage is missing")
+
+
 def require_active_encounter(
     connection: sqlite3.Connection, *, source_family: str, encounter_id: str,
 ) -> None:
+    require_retirement_authority(connection)
     record = retirement_record(
         connection, source_family=source_family, encounter_id=encounter_id,
     )

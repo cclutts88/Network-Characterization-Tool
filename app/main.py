@@ -158,7 +158,10 @@ from app.schema_compatibility import (
     complete_schema_migration,
     fail_schema_migration,
 )
-from app.evidence_retirement import init_evidence_retirement_storage
+from app.evidence_retirement import (
+    EvidenceRetirementError,
+    init_evidence_retirement_storage,
+)
 from app.active_collection import (
     active_collection_enabled,
     active_collection_status,
@@ -5121,7 +5124,10 @@ def retained_host_identities() -> dict:
 
 @app.get("/api/hostnames")
 def hostname_workspace() -> dict:
-    return build_hostname_workspace(DB_PATH)
+    try:
+        return build_hostname_workspace(DB_PATH)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/api/hostnames/select")
@@ -5253,7 +5259,12 @@ async def upload_hostname_server_evidence(
 
 @app.get("/api/hostnames/evidence/{evidence_id}/file")
 def download_hostname_server_evidence(evidence_id: str) -> FileResponse:
-    item = hostname_evidence_file(HOSTNAME_EVIDENCE_DIR, evidence_id)
+    try:
+        item = hostname_evidence_file(
+            HOSTNAME_EVIDENCE_DIR, evidence_id, db_path=DB_PATH,
+        )
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Hostname evidence file not found")
     path, filename = item
@@ -5262,7 +5273,12 @@ def download_hostname_server_evidence(evidence_id: str) -> FileResponse:
 
 @app.get("/api/hostnames/evidence/{evidence_id}/accountability")
 def download_hostname_accountability(evidence_id: str) -> FileResponse:
-    item = hostname_accountability_file(HOSTNAME_EVIDENCE_DIR, evidence_id)
+    try:
+        item = hostname_accountability_file(
+            HOSTNAME_EVIDENCE_DIR, evidence_id, db_path=DB_PATH,
+        )
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Accountability capture not found")
     path, filename = item

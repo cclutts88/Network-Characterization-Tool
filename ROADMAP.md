@@ -211,6 +211,21 @@ skipped checks. Hostname, Searchsploit, remaining cross-workspace selectors, ope
 controls and restore/startup enforcement are still in progress; no Range package is
 ready.
 
+Cross-evidence retirement active-source Gate C hostname-upload slice completed in
+development (2026-11-05): ordinary retained DHCP/DNS hostname candidates and direct
+source or accountability downloads now require the exact upload encounter to remain
+active. Retiring one upload leaves an identical sibling usable, preserves an existing
+analyst-approved hostname decision, and retains the source bytes, manifest,
+accountability capture and retirement receipt. The canonical upload-directory identity
+must exactly match the manifest, preventing a changed manifest from impersonating an
+active sibling. Listing and download paths share one fail-closed authority check for
+both the lineage and event ledger. Fifty-two focused hostname and retirement checks
+pass; the complete application suite passes 2,612 tests with 25 intentionally skipped
+checks. Independent review initially halted manifest-identity substitution and partial-
+ledger gaps, then independently passed the corrected cases and returned CLEAR. Operator
+controls, Searchsploit and the remaining cross-workspace consumers stay in progress; no
+Range package is ready.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

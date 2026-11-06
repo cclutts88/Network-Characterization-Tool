@@ -10,6 +10,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.database import connect_database
+from app.evidence_retirement import (
+    EvidenceRetirementError,
+    RetiredEvidenceDependency,
+    require_active_encounter,
+    require_retirement_authority,
+)
+from app.evidence_retirement_sources import HOSTNAME_EVIDENCE_UPLOAD
+
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 HOSTNAME_EVIDENCE_DIR = DATA_DIR / "hostname-evidence"
@@ -277,38 +286,73 @@ def store_hostname_evidence(
     }
 
 
-def list_hostname_evidence(evidence_dir: Path = HOSTNAME_EVIDENCE_DIR) -> list[dict]:
-    if not evidence_dir.exists():
-        return []
+def _active_hostname_upload(db, evidence_id: str) -> bool:
+    try:
+        require_active_encounter(
+            db,
+            source_family=HOSTNAME_EVIDENCE_UPLOAD,
+            encounter_id=evidence_id,
+        )
+    except RetiredEvidenceDependency:
+        return False
+    return True
+
+
+def list_hostname_evidence(
+    evidence_dir: Path = HOSTNAME_EVIDENCE_DIR,
+    *,
+    db_path: Path | None = None,
+) -> list[dict]:
     imported: list[dict] = []
-    for manifest_path in evidence_dir.glob("*/manifest.json"):
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        evidence_id = str(manifest.get("evidence_id") or manifest_path.parent.name)
-        for record in manifest.get("records") or []:
-            if record.get("source") not in _SOURCES:
+    connection = connect_database(db_path, read_only=True) if db_path is not None else None
+    try:
+        if connection is not None:
+            # Validate the retirement authority even when no hostname uploads exist.
+            require_retirement_authority(connection)
+        if not evidence_dir.exists():
+            return []
+        for manifest_path in evidence_dir.glob("*/manifest.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
                 continue
-            imported.append({
-                **record,
-                "observed_at": record.get("observed_at") or manifest.get("imported_at"),
-                "evidence_id": evidence_id,
-                "evidence_label": f"{record.get('source', '').upper()} server export · {manifest.get('filename', 'uploaded evidence')}",
-                "evidence_url": f"/api/hostnames/evidence/{evidence_id}/file",
-                "accountability_url": (
-                    f"/api/hostnames/evidence/{evidence_id}/accountability"
-                    if manifest.get("accountability_filename") else None
-                ),
-            })
+            evidence_id = manifest_path.parent.name
+            if (
+                not re.fullmatch(r"[a-f0-9]{32}", evidence_id)
+                or str(manifest.get("evidence_id") or "") != evidence_id
+            ):
+                continue
+            if connection is not None and not _active_hostname_upload(connection, evidence_id):
+                continue
+            for record in manifest.get("records") or []:
+                if record.get("source") not in _SOURCES:
+                    continue
+                imported.append({
+                    **record,
+                    "observed_at": record.get("observed_at") or manifest.get("imported_at"),
+                    "evidence_id": evidence_id,
+                    "evidence_label": f"{record.get('source', '').upper()} server export · {manifest.get('filename', 'uploaded evidence')}",
+                    "evidence_url": f"/api/hostnames/evidence/{evidence_id}/file",
+                    "accountability_url": (
+                        f"/api/hostnames/evidence/{evidence_id}/accountability"
+                        if manifest.get("accountability_filename") else None
+                    ),
+                })
+    finally:
+        if connection is not None:
+            connection.close()
     return imported
 
 
 def hostname_evidence_file(
-    evidence_dir: Path, evidence_id: str
+    evidence_dir: Path, evidence_id: str, *, db_path: Path | None = None,
 ) -> tuple[Path, str] | None:
     if not re.fullmatch(r"[a-f0-9]{32}", evidence_id):
         return None
+    if db_path is not None:
+        with connect_database(db_path, read_only=True) as db:
+            if not _active_hostname_upload(db, evidence_id):
+                return None
     run_dir = evidence_dir / evidence_id
     manifest_path = run_dir / "manifest.json"
     try:
@@ -316,7 +360,11 @@ def hostname_evidence_file(
     except (OSError, ValueError):
         return None
     stored_name = str(manifest.get("stored_name") or "")
-    if not stored_name or Path(stored_name).name != stored_name:
+    if (
+        str(manifest.get("evidence_id") or "") != evidence_id
+        or not stored_name
+        or Path(stored_name).name != stored_name
+    ):
         return None
     path = run_dir / stored_name
     if not path.is_file():
@@ -325,10 +373,14 @@ def hostname_evidence_file(
 
 
 def hostname_accountability_file(
-    evidence_dir: Path, evidence_id: str
+    evidence_dir: Path, evidence_id: str, *, db_path: Path | None = None,
 ) -> tuple[Path, str] | None:
     if not re.fullmatch(r"[a-f0-9]{32}", evidence_id):
         return None
+    if db_path is not None:
+        with connect_database(db_path, read_only=True) as db:
+            if not _active_hostname_upload(db, evidence_id):
+                return None
     run_dir = evidence_dir / evidence_id
     manifest_path = run_dir / "manifest.json"
     try:
@@ -336,7 +388,7 @@ def hostname_accountability_file(
     except (OSError, ValueError):
         return None
     path = run_dir / "accountability.pcap"
-    if not path.is_file():
+    if str(manifest.get("evidence_id") or "") != evidence_id or not path.is_file():
         return None
     return path, str(
         manifest.get("accountability_filename")

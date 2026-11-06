@@ -3323,4 +3323,6 @@ def test_operator_readme_keeps_retirement_foundation_distinct_from_current_contr
     assert "Retirement integration, not yet an operator control" in html
     assert "one exact evidence encounter rather than shared file bytes" in html
     assert "ordinary Arkime lists, coverage, analysis, Hunt comparisons" in html
+    assert "retired DHCP/DNS hostname uploads no longer appear" in html
+    assert "Existing analyst-approved hostname decisions remain separate" in html
     assert "no evidence is physically removed" in html

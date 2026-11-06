@@ -329,7 +329,7 @@ def build_hostname_workspace(
             )
 
     imported_root = HOSTNAME_EVIDENCE_DIR if evidence_dir is None else evidence_dir
-    for evidence in list_hostname_evidence(imported_root):
+    for evidence in list_hostname_evidence(imported_root, db_path=db_path):
         expiry = evidence.get("lease_expires_at")
         add_candidate(
             evidence.get("ip"), evidence.get("hostname"), evidence.get("source", ""),
