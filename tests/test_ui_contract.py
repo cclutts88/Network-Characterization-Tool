@@ -28,6 +28,7 @@ def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
     assert "const TUTORIAL_VERSION=1" in SHELL_SCRIPT
     assert "mission_environment:{title:'Prepare the Mission Environment'" in SHELL_SCRIPT
     assert "nmap_scan:{title:'Run an Authorized Nmap Scan'" in SHELL_SCRIPT
+    assert "device_collection:{title:'Collect Network Device Evidence'" in SHELL_SCRIPT
     assert "Requires a ready Mission Environment" in SHELL_SCRIPT
     for selector in (
         "#identityScopeLabel",
@@ -41,8 +42,24 @@ def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
         "#runNow",
         "#currentRunPanel",
         "#scanHistory",
+        "#vendor",
+        "#type",
+        "#discoveredDevice",
+        "#address",
+        "#username",
+        "#port",
+        "#preferredScope",
+        "#captureInterface",
+        "#startSsh",
+        "#activeDeviceContact",
+        "#deviceHistory",
     ):
         assert f"selector:'{selector}'" in SHELL_SCRIPT
+    assert "If the address is not in retained Nmap evidence" in SHELL_SCRIPT
+    assert "If this button is unavailable, read the visible page message" in SHELL_SCRIPT
+    assert "No device contact is active, so the monitoring panel is hidden" in SHELL_SCRIPT
+    assert "step.optionalTarget?step.unavailable" in SHELL_SCRIPT
+    assert "buttonTarget&&roomOnRight?rect.right+8:rect.left" in SHELL_SCRIPT
     assert "Turn off tutorials" in SHELL_SCRIPT
     assert "Progress is preserved" in SHELL_SCRIPT
     assert "Resume tutorial" in SHELL_SCRIPT
@@ -67,8 +84,24 @@ def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
     assert "configureTutorialSidebarRestore(shellPreferencePersistenceMode,String(data.preference_owner||''))" in SHELL_SCRIPT
     assert "localStorage.removeItem(TUTORIAL_SIDEBAR_RESTORE_KEY)" in SHELL_SCRIPT
     assert "location.assign(`${step.path}${step.hash}`)" in SHELL_SCRIPT
+    assert "!document.body.classList.contains('nct-tutorial-active')&&!guide.hidden" in SHELL_SCRIPT
     assert "target.click()" not in SHELL_SCRIPT
     assert "target.value=" not in SHELL_SCRIPT
+
+
+def test_device_collection_start_requires_a_real_preview_and_explains_refusal():
+    html = device_config_page().body.decode()
+
+    assert "function collectionStartReady()" in html
+    assert "contact.ready&&contact.compatible" in html
+    assert "collectionDraftFingerprint()===collectionDraftFingerprint(reviewedCollectionPayload)" in html
+    assert "body:JSON.stringify(reviewedCollectionPayload)" in html
+    assert "The collection fields changed after preview." in html
+    assert "Collection details changed. Generate and review a fresh command set" in html
+    assert "refreshCollectionStartState()" in html
+    assert "Generate and review a valid command set before starting SSH." in html
+    assert "Resolve the Mission Environment scope and No-Strike checks shown in the preview" in html
+    assert "Open NCT at its approved HTTPS address before entering a device password." in html
 
 
 def test_scan_history_retains_evidence_without_delete_controls():

@@ -760,6 +760,25 @@ case and the changed-path tests pass in the current host-capable image. Independ
 quality review returned CLEAR. This post-package work is development-ready on the
 foundation branch only and requires a later package and Range gate before deployment.
 
+Post-package context-aware tutorial expansion completed (2026-11-06): the optional,
+resumable Helper now includes a 12-step Device Collection walkthrough using the real
+vendor, role, discovered-device, address, account, port, scope, capture-interface,
+preview, start, active-contact and retained-history controls. The instructions explain
+what is required, what may be entered manually, why a control can remain unavailable,
+where Mission Environment safety applies and which step first contacts the device.
+The tutorial never fills a field, supplies a credential, changes shared data or starts
+contact. Start is now bound to the exact reviewed preview: any payload-field edit,
+failed identity/preview refresh or late stale preview keeps it disabled and requires a
+fresh review before real SSH contact. Browser checks confirmed the compact guidance,
+non-overlapping highlight label, hidden-idle monitor explanation, fresh-preview warning
+and halfway-edge Guide tab while a tutorial is active. Focused validation passed 114
+tests with one expected Node-unavailable wrapper skip; the actual host Node runtime
+regressions passed. The complete application suite passed 2,724 tests with 25 expected
+environment skips and one existing dependency warning. Final novice gate: PASS. Final
+independent quality gate: CLEAR. This remains development-ready on the foundation
+branch and is not part of the sealed R10 package; a later package and Range gate are
+required before deployment.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

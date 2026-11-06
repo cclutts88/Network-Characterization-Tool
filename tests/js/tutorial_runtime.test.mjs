@@ -6,17 +6,18 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shellSource = fs.readFileSync(path.join(here, '..', '..', 'app', 'shell_ui.py'), 'utf8');
+const deviceSource = fs.readFileSync(path.join(here, '..', '..', 'app', 'device_ui.py'), 'utf8');
 
-function extractFunction(name) {
+function extractFunction(name, source = shellSource) {
   const markers = [`async function ${name}`, `function ${name}`];
-  const start = markers.map(marker => shellSource.indexOf(marker)).find(index => index !== -1) ?? -1;
+  const start = markers.map(marker => source.indexOf(marker)).find(index => index !== -1) ?? -1;
   assert.notEqual(start, -1, `${name} must exist in the production shell`);
-  const bodyStart = shellSource.indexOf('{', start);
+  const bodyStart = source.indexOf('{', start);
   let depth = 0;
   let quote = null;
   let escaped = false;
-  for (let index = bodyStart; index < shellSource.length; index += 1) {
-    const character = shellSource[index];
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const character = source[index];
     if (quote) {
       if (escaped) escaped = false;
       else if (character === '\\') escaped = true;
@@ -30,7 +31,7 @@ function extractFunction(name) {
     if (character === '{') depth += 1;
     if (character === '}') {
       depth -= 1;
-      if (depth === 0) return shellSource.slice(start, index + 1);
+      if (depth === 0) return source.slice(start, index + 1);
     }
   }
   throw new Error(`Could not extract ${name}`);
@@ -191,6 +192,89 @@ async function failedLoadCannotWriteAnonymousProgress() {
   assert.equal(localWrites, 0);
 }
 
+async function blockedDevicePreviewSurvivesDelayedModeRefresh() {
+  const startButton = { disabled: false };
+  const draft = { device_address: '192.0.2.10', ssh_port: 22 };
+  const runtime = context({
+    current: { collection_scope_preview: { ready: false, compatible: false } },
+    reviewedCollectionPayload: { ...draft },
+    payload: () => ({ ...draft }),
+    window: { isSecureContext: true },
+    activeCollectionEnabled: true,
+    currentAnalystRole: 'analyst',
+    historyRecords: [],
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ analyst: { role: 'admin' }, active_collection: { enabled: true } }),
+    }),
+    $: id => id === 'startSsh' ? startButton : { classList: { toggle: () => {} } },
+    renderHistory: () => {},
+    notice: () => {},
+  });
+  vm.runInContext(`${extractFunction('collectionDraftFingerprint', deviceSource)}; ${extractFunction('collectionStartReady', deviceSource)}; ${extractFunction('refreshCollectionStartState', deviceSource)}; ${extractFunction('loadActiveCollectionMode', deviceSource)}; this.load = loadActiveCollectionMode;`, runtime);
+  assert.equal(await runtime.load(), true);
+  assert.equal(startButton.disabled, true, 'a delayed mode refresh cannot enable Start for a blocked preview');
+
+  startButton.disabled = false;
+  runtime.fetch = async () => ({ ok: false, json: async () => ({ detail: 'signed out' }) });
+  assert.equal(await runtime.load(), false);
+  assert.equal(startButton.disabled, true, 'an unsuccessful identity refresh keeps Start disabled');
+}
+
+async function editedDeviceDraftCannotUseOldPreview() {
+  const startButton = { disabled: false };
+  const draft = { device_address: '192.0.2.11', ssh_port: 22 };
+  let fetchCount = 0;
+  const runtime = context({
+    current: { collection_scope_preview: { ready: true, compatible: true } },
+    reviewedCollectionPayload: { device_address: '192.0.2.10', ssh_port: 22 },
+    payload: () => ({ ...draft }),
+    window: { isSecureContext: true },
+    activeCollectionEnabled: true,
+    $: id => id === 'startSsh' ? startButton : { textContent: '' },
+    notice: () => {},
+    fetch: async () => { fetchCount += 1; return { ok: true, json: async () => ({}) }; },
+  });
+  vm.runInContext(`${extractFunction('collectionDraftFingerprint', deviceSource)}; ${extractFunction('collectionStartReady', deviceSource)}; ${extractFunction('refreshCollectionStartState', deviceSource)}; ${extractFunction('startInteractiveSsh', deviceSource)}; this.ready = collectionStartReady; this.start = startInteractiveSsh;`, runtime);
+  assert.equal(runtime.ready(), false, 'editing a manual address after preview invalidates Start');
+  await runtime.start();
+  assert.equal(fetchCount, 0, 'a stale preview never starts device contact');
+  assert.equal(startButton.disabled, true);
+}
+
+async function editDuringPreviewCannotPublishStaleResult() {
+  const previewButton = { disabled: false };
+  const startButton = { disabled: false };
+  const hiddenClassList = { add: () => {}, remove: () => {} };
+  let draft = { device_address: '192.0.2.10', ssh_port: 22 };
+  let resolveFetch;
+  let shown = 0;
+  const response = new Promise(resolve => { resolveFetch = resolve; });
+  const runtime = context({
+    current: null,
+    reviewedCollectionPayload: null,
+    previewRequestRevision: 0,
+    payload: () => ({ ...draft }),
+    $: id => {
+      if (id === 'preview') return previewButton;
+      if (id === 'startSsh') return startButton;
+      return { classList: hiddenClassList };
+    },
+    notice: () => {},
+    fetch: () => response,
+    showPreview: () => { shown += 1; },
+    apiError: () => 'failed',
+  });
+  vm.runInContext(`${extractFunction('collectionDraftFingerprint', deviceSource)}; ${extractFunction('invalidateCollectionPreview', deviceSource)}; ${extractFunction('generate', deviceSource)}; this.invalidate = invalidateCollectionPreview; this.generate = generate;`, runtime);
+  const pending = runtime.generate();
+  draft = { device_address: '192.0.2.11', ssh_port: 22 };
+  runtime.invalidate();
+  resolveFetch({ ok: true, json: async () => ({ collection_scope_preview: { ready: true, compatible: true } }) });
+  await pending;
+  assert.equal(shown, 0, 'a preview response for fields edited in flight is discarded');
+  assert.equal(startButton.disabled, true);
+}
+
 async function exitInvalidatesDeferredNavigation() {
   let resolveSave;
   let assignments = 0;
@@ -218,6 +302,9 @@ async function exitInvalidatesDeferredNavigation() {
 }
 
 await authOffKeepsBrowserAppearance();
+await blockedDevicePreviewSurvivesDelayedModeRefresh();
+await editedDeviceDraftCannotUseOldPreview();
+await editDuringPreviewCannotPublishStaleResult();
 sidebarRestoreIsScopedToConfirmedOwner();
 await anotherAccountKeepsItsServerSidebarPreference();
 await failedLoadCannotWriteAnonymousProgress();
