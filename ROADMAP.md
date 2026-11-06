@@ -20,6 +20,17 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Evidence-retirement confirmation parsing tightened in development (2026-11-06): the
+complete regression suite found that a changed final base64url character could, for
+some signatures, decode to the same signed bytes because unused encoding bits were not
+required to be canonical. The signature, actor and encounter checks were not bypassed,
+but malformed alternate text could be accepted as the same token. Retirement reviews
+now accept only the one canonical unpadded base64url representation and reject padding,
+invalid characters and non-canonical trailing bits before any retirement decision.
+The existing mutation regression now deterministically passes. This correction remains
+development-only until the complete functional, novice and independent-review gates
+finish.
+
 Active Scans emergency queue recovery completed (2026-11-06): Range verification
 found that a restart while scheduled scanner ownership remained active left the
 single scanner-capacity record in **recovery required**, even though its saved run
@@ -79,33 +90,36 @@ hotpatch is a temporary demo recovery which survives a container restart but wil
 replaced by the next image deployment; the durable tested correction is retained on
 this branch for the next package.
 
-Deferred scheduled multi-network naming defect recorded from Range use
-(2026-11-06): when **Queue Separate Scans for Multiple Networks** is used for a
-scheduled scan, the generated-name preview does not reliably expand the required
-literal `$subnet` token for each selected Saved Network. In the observed case,
-AFB-DMZ and AFB-Servers both previewed as `AFB-Clients Baseline`, while the page also
-reported that the template must include `$subnet` exactly. Do not change the running
-demo Range during environment setup. In the next stabilization pass, reproduce this
-with two or more differently named Saved Networks, then correct preview, validation,
-saved schedule, reload, queue order and actual scheduled-occurrence naming as one
-contract. Prove that each generated run uses its own retained Saved Network name and
-never a stale prior selection; cover reordering, schedule edits and browser reload,
-and update the Operator Guide/tutorial explanation of the token. This remains an open
-functionality defect and is not included in the current Range installation.
+Scheduled multi-network naming defect corrected in development (2026-11-06): the
+scheduled-scan workspace was previewing names from the immediate-scan name field while
+the saved schedule used a different field, allowing a stale prior name to appear for
+every selected network. Scheduled multi-network creation now treats the Schedule name
+as the one template, requires the literal `$subnet`, previews the expanded Saved
+Network name for every numbered row, and saves one schedule definition per selected
+network. The entire ordered set is validated and written atomically with frozen scope,
+profile and network context; a stale selection rejects the whole set, and a safe retry
+returns the original receipt rather than creating duplicate schedules. The browser
+locks and retains the exact payload and request token before submission, ignores a
+second click, and restores an unresolved attempt after navigation or reload. A lost or
+ambiguous response can therefore be retried byte-for-byte; only a validated receipt or
+definite pre-admission rejection releases the saved attempt. Focused tests cover
+different network names, retained order and context, idempotent replay, all-or-nothing
+rejection, double-clicks and lost-response retry. Full-suite, novice-browser and
+independent-review gates are still required before this correction is packaged or
+described as Range-ready.
 
-Deferred scan-profile deletion confirmation defect recorded from Range use
-(2026-11-06): selecting delete appeared to hang with no immediate prompt or visible
-pending state. The random-code confirmation appeared only after the operator created
-a scheduled scan, navigated away and opened Scan History. Treat this as a stale
-destructive-action/context defect, not merely a slow dialog. The next stabilization
-pass must reproduce it, identify whether the delay is in the browser event path or
-server confirmation creation, and keep the confirmation bound to the exact profile
-and originating action. Show immediate progress or the prompt, prevent unrelated
-navigation/actions from releasing a delayed confirmation, expire or cancel stale
-requests safely, and never delete without a current matching confirmation. Cover
-success, cancel, navigation, repeated clicks, schedule creation and browser reload in
-the operator and automated gates. This remains open and is not corrected in the
-current Range installation.
+Scan-profile deletion confirmation defect corrected in development (2026-11-06): the
+confirmation dialog was nested inside the hidden Scan History page section. The server
+created the challenge immediately, but the browser could not display it until later
+navigation revealed that section. The dialog now lives in the shared page layer and
+the originating page shows progress immediately. Each request is bound to the exact
+profile, originating task and request revision; leaving the page or starting another
+request cancels the pending browser action, so a late response cannot surface a stale
+destructive prompt. Existing server-side expiry, exact confirmation and schedule-
+dependency checks remain authoritative. Focused contracts cover shared placement,
+immediate state and navigation cancellation. Full-suite, novice-browser and
+independent-review gates are still required before this correction is packaged or
+described as Range-ready.
 
 Device-role selection visibility correction started (2026-11-06): hands-on review of
 the locally qualified R11 candidate found that the browser's native multi-select did

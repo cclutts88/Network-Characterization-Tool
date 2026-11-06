@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const source=fs.readFileSync('app/evidence_library_ui.py','utf8').match(/<script>\n([\s\S]*?)<\/script>/)[1];
+const source=fs.readFileSync('app/evidence_library_ui.py','utf8').match(/<script>\r?\n([\s\S]*?)<\/script>/)[1];
 const nodes=new Map();
 const el=id=>{if(!nodes.has(id))nodes.set(id,{id,value:'',innerHTML:'',textContent:'',disabled:false,hidden:false,listeners:{},replaceChildren(){this.innerHTML='';},addEventListener(name,fn){this.listeners[name]=fn;},reset(){for(const x of nodes.values())x.value='';}});return nodes.get(id);};
 const requests=[];

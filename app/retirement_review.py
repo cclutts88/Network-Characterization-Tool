@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -28,7 +29,19 @@ def _encode(value: bytes) -> str:
 
 
 def _decode(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    if not value or "=" in value:
+        raise ValueError("non-canonical base64url value")
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("invalid base64url value") from exc
+    if _encode(decoded) != value:
+        raise ValueError("non-canonical base64url value")
+    return decoded
 
 
 def issue_review_token(review: dict[str, object], *, actor: str) -> str:

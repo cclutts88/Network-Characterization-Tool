@@ -78,6 +78,7 @@ from app.saved_networks import (
     init_saved_network_storage,
     insert_saved_network_record,
     list_saved_networks,
+    normalize_cidr,
     resolve_saved_network_targets,
     saved_network_integrity_message,
     update_saved_network,
@@ -573,6 +574,54 @@ class ScanBatchNetworkSelection(BaseModel):
         if not cleaned or "\x00" in cleaned:
             raise ValueError("Batch Saved Network fields cannot be blank")
         return cleaned
+
+
+class ScanScheduleBatchCreate(BaseModel):
+    """Create one independently accountable schedule per ordered Saved Network."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_token: str = Field(min_length=16, max_length=128)
+    name_template: str = Field(min_length=1, max_length=100)
+    created_by: str = Field(min_length=1, max_length=100)
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: int = Field(ge=1)
+    selections: list[ScanBatchNetworkSelection] = Field(min_length=2, max_length=50)
+    reviewed_mission_scopes: list[ReviewedMissionScope] = Field(default_factory=list)
+    no_strike: list[str] = Field(default_factory=list)
+    interface: str = Field(min_length=1, max_length=64)
+    cadence: Literal[
+        "once", "interval", "custom_hours", "hourly", "daily", "weekly", "monthly"
+    ] = "once"
+    first_run_at: datetime
+    cadence_hours: int = Field(default=2, ge=1, le=8760)
+    interval_minutes: int = Field(default=60, ge=5, le=10080)
+    reason: str = Field(default="Scheduled authorized characterization", min_length=1, max_length=500)
+    originating_host: str = Field(default="scheduler", min_length=1, max_length=255)
+    timeout_seconds: int = Field(default=2700, ge=10, le=3600)
+    chunking_enabled: bool = False
+    chunk_size: int = Field(default=256, ge=1, le=4096)
+    chunk_delay_seconds: int = Field(default=30, ge=0, le=3600)
+    fallback_policy: Literal["require_approval", "stop_without_nmap"] = "require_approval"
+    enabled: bool = False
+
+    @field_validator(
+        "request_token", "name_template", "created_by", "profile_id",
+        "reason", "originating_host",
+    )
+    @classmethod
+    def clean_schedule_batch_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or "\x00" in cleaned:
+            raise ValueError("Schedule batch fields cannot be blank")
+        return cleaned
+
+    @field_validator("interface")
+    @classmethod
+    def validate_schedule_batch_interface(cls, value: str) -> str:
+        if not INTERFACE_RE.fullmatch(value):
+            raise ValueError("Interface must be a simple local interface name")
+        return value
 
 
 class ScanRunBatchPreviewRequest(BaseModel):
@@ -2551,10 +2600,58 @@ def _store_scan_schedule(schedule: dict, db_path: Path = DB_PATH) -> dict:
     return schedule
 
 
-def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -> dict:
-    """Create an executable schedule pinned to one immutable profile version."""
-    init_poc_storage(db_path)
-    profile = get_scan_profile(request.profile_id, request.profile_version, db_path)
+def _resolve_schedule_targets_on_connection(
+    db: sqlite3.Connection,
+    saved_network_ids: list[str],
+    manual_targets: list[str],
+) -> tuple[list[str], list[dict], list[str]]:
+    snapshots: list[dict] = []
+    selected_cidrs: list[str] = []
+    seen_ids: set[str] = set()
+    for saved_network_id in saved_network_ids:
+        if saved_network_id in seen_ids:
+            continue
+        seen_ids.add(saved_network_id)
+        record = get_saved_network_on_connection(db, saved_network_id)
+        if record is None:
+            raise ValueError(f"Saved Network not found: {saved_network_id}")
+        if not record["active"]:
+            raise ValueError(f"Saved Network is archived: {record['name']}")
+        selected_cidrs.append(record["cidr"])
+        snapshots.append({
+            "saved_network_id": record["saved_network_id"],
+            "name": record["name"],
+            "cidr": record["cidr"],
+            "description": record["description"],
+            "category": record["category"],
+            "tags": list(record["tags"]),
+        })
+    normalized_manual = [
+        normalize_cidr(value)[0] for value in manual_targets if value.strip()
+    ]
+    networks = [
+        ipaddress.ip_network(value)
+        for value in selected_cidrs + normalized_manual
+    ]
+    collapsed = list(ipaddress.collapse_addresses(networks))
+    if not collapsed:
+        raise ValueError("Select a Saved Network or enter at least one manual target")
+    if sum(network.num_addresses for network in collapsed) > MAX_EXPANDED_ADDRESSES:
+        raise ValueError(
+            f"Target scope exceeds the {MAX_EXPANDED_ADDRESSES}-address safety limit"
+        )
+    return [str(network) for network in collapsed], snapshots, normalized_manual
+
+
+def _create_scan_schedule_on_connection(
+    db: sqlite3.Connection,
+    request: ScanScheduleCreate,
+    *,
+    schedule_batch: dict | None = None,
+) -> dict:
+    profile = _profile_record_on_connection(
+        db, request.profile_id, request.profile_version
+    )
     if profile is None:
         raise ValueError("A schedule must reference an existing profile version")
     if not INTERFACE_RE.fullmatch(request.interface):
@@ -2567,11 +2664,8 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
     chunking_enabled = request.chunking_enabled or legacy_chunk_request
     if request.saved_network_ids or request.manual_targets:
         resolved_targets, saved_network_snapshots, manual_targets = (
-            resolve_saved_network_targets(
-                request.saved_network_ids,
-                request.manual_targets,
-                db_path,
-                max_addresses=MAX_EXPANDED_ADDRESSES,
+            _resolve_schedule_targets_on_connection(
+                db, request.saved_network_ids, request.manual_targets
             )
         )
     else:
@@ -2659,54 +2753,242 @@ def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -
         "recovery_count": 0,
         "implementation_status": "active_scheduler",
     }
+    if schedule_batch is not None:
+        definition["schedule_batch"] = dict(schedule_batch)
     definition["definition_digest"] = definition_identity(definition)[1]
+    context = resolve_reviewed_scope_context(
+        db,
+        saved_network_ids=definition["saved_network_ids"],
+        manual_targets=definition["manual_targets"],
+        reviewed_associations=definition["reviewed_scope_associations"],
+    )
+    _setup, context = bind_collection_scope_context_on_connection(
+        db,
+        context=context,
+        saved_network_ids=definition["saved_network_ids"],
+    )
+    definition["collection_safety_setup"] = _setup["review"]
+    definition["network_scope_context"] = context
+    definition["network_scope_status"] = (
+        "pinned" if context is not None else "unscoped"
+    )
+    mission_review = resolve_collection_mission_review(
+        db,
+        saved_network_ids=definition["saved_network_ids"],
+        manual_targets=definition["manual_targets"],
+        reviewed_scopes=definition["reviewed_mission_scopes"],
+        collection_scope_id=(context or {}).get("scope_id"),
+        enforce_prohibited=bool(request.enabled),
+    )
+    definition["mission_environment_review"] = mission_review
+    definition["mission_environment_status"] = mission_review["decision"]
+    definition["definition_digest"] = definition_identity(definition)[1]
+    db.execute(
+        """
+        INSERT INTO scan_schedules (
+            schedule_id, name, created_at, created_by,
+            profile_id, profile_version, definition_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            definition["schedule_id"], definition["name"], definition["created_at"],
+            definition["created_by"], definition["profile_id"],
+            definition["profile_version"], json.dumps(definition, sort_keys=True),
+        ),
+    )
+    register_schedule_definition_on_connection(
+        db, definition, created_by=definition["created_by"]
+    )
+    insert_schedule_scope_context(db, definition["schedule_id"], context)
+    return definition
+
+
+def create_scan_schedule(request: ScanScheduleCreate, db_path: Path = DB_PATH) -> dict:
+    """Create an executable schedule pinned to one immutable profile version."""
+    init_poc_storage(db_path)
     with connect_database(db_path) as db:
         db.execute("BEGIN IMMEDIATE")
-        context = resolve_reviewed_scope_context(
-            db,
-            saved_network_ids=definition["saved_network_ids"],
-            manual_targets=definition["manual_targets"],
-            reviewed_associations=definition["reviewed_scope_associations"],
+        return _create_scan_schedule_on_connection(db, request)
+
+
+_SCAN_SCHEDULE_BATCH_RECEIPT_PREFIX = "scan_schedule_batch:v1:"
+
+
+def create_scan_schedule_batch(
+    request: ScanScheduleBatchCreate,
+    db_path: Path = DB_PATH,
+) -> dict:
+    """Atomically create one named schedule per reviewed Saved Network."""
+    init_poc_storage(db_path)
+    init_saved_network_storage(db_path)
+    init_saved_network_scope_storage(db_path)
+    init_mission_environment_storage(db_path)
+    if "$subnet" not in request.name_template:
+        raise ValueError(
+            "The multi-network schedule name template must include the literal $subnet placeholder"
         )
-        _setup, context = bind_collection_scope_context_on_connection(
-            db,
-            context=context,
-            saved_network_ids=definition["saved_network_ids"],
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{16,128}", request.request_token):
+        raise ValueError(
+            "Schedule batch request token must contain 16-128 letters, numbers, dots, colons, underscores, or hyphens"
         )
-        definition["collection_safety_setup"] = _setup["review"]
-        definition["network_scope_context"] = context
-        definition["network_scope_status"] = (
-            "pinned" if context is not None else "unscoped"
-        )
-        mission_review = resolve_collection_mission_review(
-            db,
-            saved_network_ids=definition["saved_network_ids"],
-            manual_targets=definition["manual_targets"],
-            reviewed_scopes=definition["reviewed_mission_scopes"],
-            collection_scope_id=(context or {}).get("scope_id"),
-            enforce_prohibited=bool(request.enabled),
-        )
-        definition["mission_environment_review"] = mission_review
-        definition["mission_environment_status"] = mission_review["decision"]
-        definition["definition_digest"] = definition_identity(definition)[1]
+    request_json = json.dumps(
+        request.model_dump(mode="json", exclude={"request_token"}),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    request_sha256 = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+    receipt_key = f"{_SCAN_SCHEDULE_BATCH_RECEIPT_PREFIX}{request.request_token}"
+    batch_id = uuid.uuid4().hex
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        receipt_row = db.execute(
+            "SELECT value_json FROM app_settings WHERE key = ?", (receipt_key,)
+        ).fetchone()
+        if receipt_row is not None:
+            receipt = json.loads(receipt_row[0])
+            if (
+                receipt.get("actor") != request.created_by
+                or receipt.get("request_json") != request_json
+                or receipt.get("request_sha256") != request_sha256
+            ):
+                raise RuntimeError(
+                    "This schedule batch request token was already used for different work"
+                )
+            result = dict(receipt["result"])
+            schedule_ids = [item["schedule_id"] for item in result.get("schedules") or []]
+            if schedule_ids:
+                placeholders = ",".join("?" for _ in schedule_ids)
+                retained = int(db.execute(
+                    f"SELECT COUNT(*) FROM scan_schedules WHERE schedule_id IN ({placeholders})",
+                    tuple(schedule_ids),
+                ).fetchone()[0])
+                if retained != len(schedule_ids):
+                    raise RuntimeError(
+                        "An earlier accepted schedule batch no longer has every retained definition"
+                    )
+            result["request_replayed"] = True
+            return result
+
+        selected_ids = [item.saved_network_id for item in request.selections]
+        if len(selected_ids) != len(set(selected_ids)):
+            raise ValueError("Choose each Saved Network only once in a schedule batch")
+        generated_names: set[str] = set()
+        created: list[dict] = []
+        for ordinal, selection in enumerate(request.selections, start=1):
+            network = get_saved_network_on_connection(db, selection.saved_network_id)
+            if network is None or not network["active"]:
+                raise SavedNetworkScopeConflict(
+                    "A selected Saved Network was removed; review the schedule batch again"
+                )
+            if network["updated_at"] != selection.expected_updated_at:
+                raise SavedNetworkScopeConflict(
+                    f"Saved Network {network['name']} changed after review; review the schedule batch again"
+                )
+            association = current_scope_association_in_transaction(
+                db, selection.saved_network_id
+            )
+            association_id = association["association_id"] if association else None
+            association_revision = int(association["revision"]) if association else None
+            if association is None or not association.get("scope_id"):
+                raise SavedNetworkScopeConflict(
+                    f"Saved Network {network['name']} must be assigned to the active Network Scope before it can be scheduled in a batch"
+                )
+            if (
+                selection.expected_association_id != association_id
+                or selection.expected_association_revision != association_revision
+            ):
+                raise SavedNetworkScopeConflict(
+                    f"Saved Network context for {network['name']} changed after review; review the schedule batch again"
+                )
+            generated_name = request.name_template.replace("$subnet", network["name"])
+            if len(generated_name) > 100:
+                raise ValueError(
+                    f"The generated schedule name for {network['name']} is longer than 100 characters"
+                )
+            if generated_name.casefold() in generated_names:
+                raise ValueError(
+                    "The schedule template produced duplicate names; revise the template"
+                )
+            generated_names.add(generated_name.casefold())
+            schedule_request = ScanScheduleCreate(
+                name=generated_name,
+                created_by=request.created_by,
+                profile_id=request.profile_id,
+                profile_version=request.profile_version,
+                targets=[network["cidr"]],
+                manual_targets=[],
+                saved_network_ids=[network["saved_network_id"]],
+                reviewed_scope_associations=[{
+                    "association_id": association_id,
+                    "revision": association_revision,
+                }],
+                reviewed_mission_scopes=request.reviewed_mission_scopes,
+                no_strike=request.no_strike,
+                interface=request.interface,
+                cadence=request.cadence,
+                first_run_at=request.first_run_at,
+                cadence_hours=request.cadence_hours,
+                interval_minutes=request.interval_minutes,
+                reason=request.reason,
+                originating_host=request.originating_host,
+                timeout_seconds=request.timeout_seconds,
+                chunking_enabled=request.chunking_enabled,
+                chunk_size=request.chunk_size,
+                chunk_delay_seconds=request.chunk_delay_seconds,
+                fallback_policy=request.fallback_policy,
+                enabled=request.enabled,
+            )
+            schedule = _create_scan_schedule_on_connection(
+                db,
+                schedule_request,
+                schedule_batch={
+                    "contract": "nct-scan-schedule-batch:1",
+                    "batch_id": batch_id,
+                    "request_token": request.request_token,
+                    "selection_order": ordinal,
+                    "size": len(request.selections),
+                    "name_template": request.name_template,
+                    "saved_network_updated_at": network["updated_at"],
+                },
+            )
+            created.append({
+                "selection_order": ordinal,
+                "schedule_id": schedule["schedule_id"],
+                "generated_name": schedule["name"],
+                "saved_network_id": network["saved_network_id"],
+                "saved_network_name": network["name"],
+                "cidr": network["cidr"],
+                "enabled": schedule["enabled"],
+            })
+        result = {
+            "contract": "nct-scan-schedule-batch:1",
+            "batch_id": batch_id,
+            "request_token": request.request_token,
+            "requested_count": len(request.selections),
+            "accepted_count": len(created),
+            "all_accepted": len(created) == len(request.selections),
+            "request_replayed": False,
+            "schedules": created,
+        }
         db.execute(
             """
-            INSERT INTO scan_schedules (
-                schedule_id, name, created_at, created_by,
-                profile_id, profile_version, definition_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
             """,
             (
-                definition["schedule_id"], definition["name"], definition["created_at"],
-                definition["created_by"], definition["profile_id"],
-                definition["profile_version"], json.dumps(definition, sort_keys=True),
+                receipt_key,
+                json.dumps({
+                    "contract": "nct-scan-schedule-batch:1",
+                    "actor": request.created_by,
+                    "request_json": request_json,
+                    "request_sha256": request_sha256,
+                    "result": result,
+                }, sort_keys=True),
+                utc_now(),
+                request.created_by,
             ),
         )
-        register_schedule_definition_on_connection(
-            db, definition, created_by=definition["created_by"]
-        )
-        insert_schedule_scope_context(db, definition["schedule_id"], context)
-    return definition
+    return result
 
 
 def list_scan_schedules(db_path: Path = DB_PATH) -> list[dict]:
@@ -8217,6 +8499,27 @@ def save_scan_schedule(request: ScanScheduleCreate, http_request: Request) -> di
     except SavedNetworkScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MissionEnvironmentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scan-schedules/batch", status_code=201)
+def save_scan_schedule_batch(
+    request: ScanScheduleBatchCreate, http_request: Request
+) -> dict:
+    try:
+        if request.enabled:
+            require_active_collection()
+        request = bind_signed_in_actor(http_request, request, "created_by")
+        return create_scan_schedule_batch(request, DB_PATH)
+    except CollectionSafetySetupIncomplete as exc:
+        raise HTTPException(status_code=409, detail=f"Mission Environment: {exc}") from exc
+    except SavedNetworkScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MissionEnvironmentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

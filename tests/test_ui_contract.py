@@ -3411,3 +3411,32 @@ def test_operator_readme_explains_the_protected_retirement_workflow():
     assert "no evidence is physically removed" in html
     assert "Retired automated scans, manual-import encounters, and device collections" in SHELL_SCRIPT
     assert "do not contribute to topology" in SHELL_SCRIPT
+
+
+def test_schedule_batch_names_and_delete_confirmation_are_bound_to_the_active_task():
+    html = operator_page().body.decode()
+    guide = how_nct_works_page().body.decode()
+
+    assert "/api/scan-schedules/batch" in html
+    assert "nct-scan-schedule-batch:1" in html
+    assert "function activeBatchNameTemplate()" in html
+    assert "currentScanTask()==='scheduledScansPanel'?$('scheduleName').value.trim()" in html
+    assert "Schedule name template must include $subnet exactly." in html
+    assert "Saved ${data.accepted_count} schedules together" in html
+    assert "if($('scopeMode').value==='batch'){$('scopeMode').value='saved'" not in html
+
+    history_dialog = html.index('id="networkAttribution"')
+    shared_delete_dialog = html.index('id="deleteConfirm"')
+    footer = html.index('class="footer"')
+    assert history_dialog < shared_delete_dialog < footer
+    assert "Preparing the deletion confirmation now" in html
+    assert "cancelPendingDeleteForNavigation" in html
+    assert "originTask!==currentScanTask()" in html
+    assert "the Schedule name is a template" in guide
+    assert "saves one schedule definition per selected network" in guide
+    assert "The whole set is accepted together or not at all" in guide
+    assert "Retry saved schedule submission" in guide
+    assert "restores an unresolved attempt after navigation or reload" in (Path(__file__).parents[1] / "ROADMAP.md").read_text(encoding="utf-8")
+    assert "Deleting a custom scan profile" in guide
+    assert "Leaving the page cancels the pending browser action" in guide
+    assert "The page shows that check immediately" in SHELL_SCRIPT

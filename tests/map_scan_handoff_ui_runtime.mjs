@@ -112,6 +112,8 @@ function runScopeReview({mode="manual", selected=[], safety}) {
     ["preview", {disabled:false}],
     ["generatePackage", {disabled:false}],
     ["runNow", {disabled:false}],
+    ["reviewBatch", {disabled:false}],
+    ["queueBatch", {disabled:false}],
   ]);
   const $=id=>controls.get(id);
   const collectionSafety=safety;
@@ -121,6 +123,11 @@ function runScopeReview({mode="manual", selected=[], safety}) {
   }]};
   const sessionAnalyst={role:"analyst"};
   const activeCollectionEnabled=true;
+  const batchReviewInFlight=false;
+  const batchSubmitInFlight=false;
+  const batchSubmissionUncertain=false;
+  const batchPreview=null;
+  const batchPendingSubmission=null;
   const selectedSavedNetworkRecords=()=>selected;
   const esc=value=>String(value??"").replace(/[&<>"']/g,character=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[character]);
   const updateSchedulePin=()=>{};

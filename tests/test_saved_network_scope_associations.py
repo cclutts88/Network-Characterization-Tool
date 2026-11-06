@@ -15,8 +15,10 @@ from app.artifacts import (
 from app.database import connect_database
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.poc import (
+    ScanScheduleBatchCreate,
     ScanRunRequest,
     ScanScheduleCreate,
+    create_scan_schedule_batch,
     create_scan_schedule,
     init_poc_storage,
     prepare_scan_run,
@@ -279,6 +281,81 @@ def test_schedule_pins_context_and_archived_scope_blocks_dispatch(tmp_path):
         get_schedule_scope_context(
             db_path, schedule["schedule_id"], require_active=True
         )
+
+
+def test_multi_network_schedule_batch_expands_names_atomically_and_replays(tmp_path):
+    db_path = ready_database(tmp_path)
+    network_scope = scope(db_path, "North America")
+    dmz = saved_network(db_path, "AFB-DMZ", "198.51.100.0/29")
+    servers = saved_network(db_path, "AFB-Servers", "203.0.113.0/29")
+    dmz_association = assign(db_path, dmz, network_scope)
+    server_association = assign(db_path, servers, network_scope)
+    request = ScanScheduleBatchCreate(
+        request_token="schedule-batch-test-00000001",
+        name_template="$subnet Baseline",
+        created_by="analyst",
+        profile_id="builtin-standard",
+        profile_version=2,
+        selections=[
+            {
+                "saved_network_id": dmz["saved_network_id"],
+                "expected_updated_at": dmz["updated_at"],
+                "expected_association_id": dmz_association["association_id"],
+                "expected_association_revision": dmz_association["revision"],
+            },
+            {
+                "saved_network_id": servers["saved_network_id"],
+                "expected_updated_at": servers["updated_at"],
+                "expected_association_id": server_association["association_id"],
+                "expected_association_revision": server_association["revision"],
+            },
+        ],
+        reviewed_mission_scopes=[{
+            "scope_id": network_scope["scope_id"], "version": 0,
+        }],
+        interface="eth0",
+        cadence="daily",
+        first_run_at=datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc),
+    )
+
+    result = create_scan_schedule_batch(request, db_path)
+
+    assert result["all_accepted"] is True
+    assert [item["generated_name"] for item in result["schedules"]] == [
+        "AFB-DMZ Baseline", "AFB-Servers Baseline",
+    ]
+    assert [item["selection_order"] for item in result["schedules"]] == [1, 2]
+    with connect_database(db_path) as db:
+        retained = [json.loads(row[0]) for row in db.execute(
+            "SELECT definition_json FROM scan_schedules ORDER BY rowid"
+        ).fetchall()]
+    assert [item["name"] for item in retained] == [
+        "AFB-DMZ Baseline", "AFB-Servers Baseline",
+    ]
+    assert [item["schedule_batch"]["selection_order"] for item in retained] == [1, 2]
+    assert all(item["network_scope_context"]["scope_id"] == network_scope["scope_id"] for item in retained)
+
+    replay = create_scan_schedule_batch(request, db_path)
+    assert replay["request_replayed"] is True
+    assert [item["schedule_id"] for item in replay["schedules"]] == [
+        item["schedule_id"] for item in result["schedules"]
+    ]
+    with connect_database(db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM scan_schedules").fetchone()[0] == 2
+
+    stale = request.model_copy(update={
+        "request_token": "schedule-batch-test-00000002",
+        "selections": [
+            request.selections[0],
+            request.selections[1].model_copy(update={
+                "expected_updated_at": "stale-review",
+            }),
+        ],
+    })
+    with pytest.raises(SavedNetworkScopeConflict, match="changed after review"):
+        create_scan_schedule_batch(stale, db_path)
+    with connect_database(db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM scan_schedules").fetchone()[0] == 2
 
 
 def test_changed_scope_waiting_schedule_does_not_block_valid_waiting_schedule(tmp_path, monkeypatch):
