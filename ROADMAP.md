@@ -603,6 +603,13 @@ independent reviewer returned CLEAR — DOCUMENTED DEVIATION. Exact image build,
 supported-source rehearsals, helper upgrade, fresh installation, sealing, transfer-part
 reconstruction and Range acceptance remain separate gates.
 
+The first exact helper-first package rehearsal then found a fixture-only second-writer
+conflict before recovery setup: the disposable container used solely to create the
+historical schema migration remained stopped with a writable mount. The rehearsal now
+removes that seed container after the migrated source is ready so the qualified source
+is the only writer candidate. No application or Range data path was changed, and the
+unsealed R2 stage remains rejected rather than distributed.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

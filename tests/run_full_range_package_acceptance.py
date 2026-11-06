@@ -87,7 +87,10 @@ def main():
     if source_version == 8:
         engine.command("update", "--restart=no", original_id)
         engine.command("stop", original_id)
-        engine.command("rename", original_id, name + "-schema7-seed")
+        # This first container exists only to produce the historical schema-7 to
+        # schema-8 fixture. Remove it before recovery setup so the real source is
+        # the sole container with a writable retained-data mount.
+        engine.command("rm", original_id)
         original_id = engine.command(*launch)
         probe.wait_url(app_url + "/health/readiness", lambda value: value.get("healthy") is True)
         request("/api/auth/login", {"username": "package-operator", "password": password})
