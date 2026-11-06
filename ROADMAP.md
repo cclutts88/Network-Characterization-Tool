@@ -61,6 +61,49 @@ older backup must hold affected projections until the retirement lineage is audi
 Preserve the existing device destructive-delete behavior until it is migrated explicitly;
 do not silently redefine physical cleanup as retirement.
 
+Cross-evidence retirement integration started (2026-11-05): the active source inventory
+is Nmap scan runs, manual Nmap import observations, device-configuration collections,
+Arkime Sessions imports (including connector pulls), Arkime Summary imports and retained
+hostname-evidence uploads. A capture stored alongside one of those encounters follows its
+parent decision; it is not independently hidden while the parent remains active. Legacy
+Nmap rows that do not yet have an encounter identity must first be registered by the
+existing backfill and may never be retired by content hash. The integration is not
+complete until explicit opens and newest-source selection, Evidence Library, Current
+Network, Network Devices, Changes Over Time, Hunt, Reach, Map, exports, saved-result reuse
+and background publication all use the same active-source decision. Scan and collection
+history retain a visible retired audit entry. Physical cleanup remains a separate action.
+Architecture review of the source adapters, atomic dependent-result invalidation and
+restore reconciliation is required before operator controls are enabled.
+
+Architecture review halted the first integration design (2026-11-05): a cache token
+stored only inside the same backup as the database cannot detect that the backup is
+older, and canonical derived results may be referenced by immutable Arkime history,
+saved work or provenance. Revised work must maintain a protected retirement high-water
+receipt outside the mission-data backup. A database head ahead of that receipt may
+advance it only after proving the recorded receipt is an ancestor in the immutable event
+chain; a receipt ahead of the database, a lineage mismatch or a missing receipt after
+retirement must hold projections until an auditable reconciliation. Canonical derived
+results remain retained. Reuse eligibility is decided against the selected exact active
+observation/dependency, so retiring one encounter never suppresses an active sibling
+that shares identical bytes. Only disposable caches may be removed. A route-by-route
+matrix must cover direct SQL and persisted readers—including scan preparation, Evidence
+Library, Arkime coverage/analytics/history, device summaries, Nmap base analysis,
+Searchsploit, ingestion, derived-result status and exposure reports—rather than assuming
+shared loaders cover every surface. Analyst host identities, OS overrides and other
+annotations are decisions about evidence and are not upload encounters to retire.
+
+Cross-evidence retirement guard Gate A completed (2026-11-05): an independently
+stored, host-provisioned authority now binds exactly once to the retirement lineage,
+mirrors sealed event receipts and advances a monotonic high-water receipt only after
+proving ancestry. Missing, older, divergent, corrupt, insecure or substituted guard
+state fails closed. A restore can place the authority into a persistent hold before
+mission data is replaced. Focused validation covers interrupted writes on both sides of
+the receipt update, older empty-ledger restores, lost receipts, divergent same-revision
+heads, competing advances, tampered or missing mirrored events, unsafe permissions and
+symlink substitution. The independent reviewer returned CLEAR. This is foundation-only:
+startup/restore-script enforcement, source adapters, active-source filtering and analyst
+controls remain in progress and no Range package includes this capability yet.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
