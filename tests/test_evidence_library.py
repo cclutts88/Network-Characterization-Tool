@@ -5,6 +5,13 @@ import sqlite3
 import pytest
 
 from app import evidence_library as lib
+from app.evidence_retirement import (
+    EvidenceRetirementAdapter,
+    EvidenceRetirementError,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, NMAP_IMPORT, NMAP_SCAN_RUN
 
 
 @pytest.fixture
@@ -22,7 +29,23 @@ def store(tmp_path):
         semantic_manifest_sha256 TEXT,created_at TEXT,activated_at TEXT,deleted_at TEXT);
         CREATE TABLE device_scope_assignments(run_id TEXT,authority_revision INTEGER,scope_id TEXT,revision INTEGER);
         INSERT INTO network_scopes VALUES ('scope','Office');''')
+    init_evidence_retirement_storage(p)
     return p,root
+
+
+def retire_for_catalog(path, source_family, encounter_id):
+    adapter = EvidenceRetirementAdapter(
+        lambda _db, value: {"encounter_id": value},
+        lambda _db, _value: None,
+    )
+    return retire_evidence(
+        path,
+        source_family=source_family,
+        encounter_id=encounter_id,
+        actor="catalog-test",
+        reason="incorrect retained encounter",
+        adapter=adapter,
+    )
 
 
 def device(root, run='a'*32, **fields):
@@ -253,4 +276,82 @@ def test_orphan_import_observation_is_visible_without_unsafe_source_link(store):
         db.execute("INSERT INTO artifact_observations VALUES ('orphan','missing','nmap_import','2026-11-02','Retained-incomplete.xml','Alice')")
     row=lib.list_evidence(p,root)['items'][0]
     assert row['id']=='import:orphan' and 'Incomplete' in row['status']
+    assert not row['download_url']
+
+
+def test_retired_sources_are_hidden_and_active_same_content_import_remains(store):
+    p, root = store
+    device(root, 'a' * 32)
+    device(root, 'b' * 32)
+    scan(p, 'retired-scan')
+    scan(p, 'active-scan')
+    with sqlite3.connect(p) as db:
+        db.execute(
+            "INSERT INTO imports VALUES ('same','same.xml','/data/imports/same.xml','2026-11-01','{}')"
+        )
+        db.executemany(
+            'INSERT INTO artifact_observations VALUES (?,?,?,?,?,?)',
+            [
+                ('retired-import', 'same', 'nmap_import', '2026-11-01', 'one.xml', 'Alice'),
+                ('active-import', 'same', 'nmap_import', '2026-11-02', 'two.xml', 'Alice'),
+            ],
+        )
+    lib.rebuild_device_index(p, root)
+    retire_for_catalog(p, NMAP_SCAN_RUN, 'retired-scan')
+    retire_for_catalog(p, NMAP_IMPORT, 'retired-import')
+    retire_for_catalog(p, DEVICE_COLLECTION, 'a' * 32)
+
+    result = lib.list_evidence(p, root)
+
+    assert {item['source_id'] for item in result['items']} == {
+        'active-scan', 'same', 'b' * 32,
+    }
+    imports = [item for item in result['items'] if item['kind'] == 'import']
+    assert [item['id'] for item in imports] == ['import:active-import']
+
+    retire_for_catalog(p, NMAP_IMPORT, 'active-import')
+    assert lib.list_evidence(p, root, kind='import')['total'] == 0
+
+
+def test_catalog_fails_closed_without_complete_retirement_authority(store):
+    p, root = store
+    scan(p, 'scan')
+    with sqlite3.connect(p) as db:
+        db.execute('DROP TABLE evidence_retirement_events')
+
+    with pytest.raises(EvidenceRetirementError, match='authority is unavailable'):
+        lib.list_evidence(p, root)
+
+
+def test_imports_are_withheld_when_observation_storage_is_unavailable(store):
+    p, root = store
+    with sqlite3.connect(p) as db:
+        db.execute(
+            "INSERT INTO imports VALUES ('legacy','legacy.xml','/data/imports/legacy.xml','2026-11-01','{}')"
+        )
+        db.execute('DROP TABLE artifact_observations')
+
+    assert lib.list_evidence(p, root, kind='import')['total'] == 0
+
+
+def test_device_retirement_between_catalog_snapshot_and_actions_suppresses_links(
+    store, monkeypatch,
+):
+    from app import device_collection_authority as authority
+
+    p, root = store
+    device(root, 'a' * 32)
+    lib.rebuild_device_index(p, root)
+
+    def retire_during_action_check(*_args, **_kwargs):
+        retire_for_catalog(p, DEVICE_COLLECTION, 'a' * 32)
+
+    monkeypatch.setattr(
+        authority, 'require_available_collection', retire_during_action_check,
+    )
+    row = lib.list_evidence(p, root)['items'][0]
+
+    assert row['status'] == 'Unavailable / authority requires review'
+    assert not row['detail_url']
+    assert not row['analysis_url']
     assert not row['download_url']

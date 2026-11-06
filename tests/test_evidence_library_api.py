@@ -49,6 +49,20 @@ def test_unavailable_catalog_returns_actionable_error(store,monkeypatch):
     assert 'no evidence was changed' in response.json()['detail']
 
 
+def test_missing_retirement_authority_returns_service_unavailable(store, monkeypatch):
+    p, root = store
+    with sqlite3.connect(p) as db:
+        db.execute('DROP TABLE evidence_retirement_events')
+    monkeypatch.setenv('NCT_AUTH_MODE', 'disabled')
+    monkeypatch.setattr(main, 'DB_PATH', p)
+    monkeypatch.setattr(main, 'CONFIG_DIR', root)
+
+    response = TestClient(main.app).get('/api/evidence-library')
+
+    assert response.status_code == 503
+    assert 'retirement authority is unavailable' in response.json()['detail']
+
+
 def test_filters_precede_paging_on_large_catalog(store):
     p,root=store
     with sqlite3.connect(p) as db:

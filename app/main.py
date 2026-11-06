@@ -1985,9 +1985,12 @@ def evidence_library_catalog(
     after: str = Query(default="", max_length=1500),
 ):
     from app.evidence_library import list_evidence
+    from app.evidence_retirement import EvidenceRetirementError
     try:
         return list_evidence(DB_PATH, CONFIG_DIR, q=q, kind=kind, scope=scope,
                              analyst=analyst, start=start, end=end, limit=limit, after=after)
+    except EvidenceRetirementError:
+        raise HTTPException(status_code=503, detail="Evidence catalog retirement authority is unavailable. Review System Health and retry; no evidence was changed.") from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):

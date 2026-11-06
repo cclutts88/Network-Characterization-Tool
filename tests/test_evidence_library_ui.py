@@ -21,7 +21,7 @@ def test_library_guide_theme_and_static_table_contract():
     guide=how_nct_works_page().body.decode()
     assert 'Open analysis shows an explanation and an Open Scan History link' in guide
     assert 'Opening the link does not compute analysis or launch a scan' in guide
-    for text in ['Evidence Library','literal text','temporary runtime','each import encounter','Library reads never rebuild','selected encounter']:
+    for text in ['Evidence Library','literal text','temporary runtime','each import encounter','Library reads never rebuild','selected encounter','retiring one does not hide an active same-content sibling','retirement audit record']:
         assert text.lower() in guide.lower()
 
 

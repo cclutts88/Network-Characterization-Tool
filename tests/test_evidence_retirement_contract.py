@@ -31,3 +31,17 @@ def test_route_inventory_is_unique_and_coverage_never_invents_routes():
     allowed = set(PROJECTION_ROUTES)
     assert all(set(routes) <= allowed for routes in ROUTE_COVERAGE.values())
 
+
+def test_evidence_library_route_is_claimed_only_for_cataloged_source_families():
+    assert "evidence-library" in ROUTE_COVERAGE["nmap_scan_run"]
+    assert "evidence-library" in ROUTE_COVERAGE["nmap_import"]
+    assert "evidence-library" in ROUTE_COVERAGE["device_collection"]
+    assert all(
+        "evidence-library" not in ROUTE_COVERAGE[source_family]
+        for source_family in (
+            "arkime_sessions_import",
+            "arkime_summary_import",
+            "hostname_evidence_upload",
+        )
+    )
+

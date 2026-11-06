@@ -80,6 +80,11 @@ PROJECTION_ROUTES = (
 ROUTE_COVERAGE: dict[str, frozenset[str]] = {
     source.source_family: frozenset() for source in SOURCE_CONTRACTS
 }
+ROUTE_COVERAGE.update({
+    "nmap_scan_run": frozenset({"evidence-library"}),
+    "nmap_import": frozenset({"evidence-library"}),
+    "device_collection": frozenset({"evidence-library"}),
+})
 
 
 def source_contract(source_family: str) -> RetirementSourceContract:

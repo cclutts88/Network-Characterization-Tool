@@ -11,7 +11,7 @@ def evidence_library_page():
 </style><script src="/assets/nct-session.js"></script></head><body>
 <header><strong>NCT</strong> · Network Correlation &amp; Triage</header><main>
 <p class="hint">Evidence</p><h1>Evidence Library</h1>
-<p>Find retained Nmap scans, imported XML, and device collection files together. Use the filters, then open a record’s files or analysis.</p>
+<p>Find active retained Nmap scans, imported XML, and device collection files together. Retired encounters stay in the audit record but no longer appear in this working catalog. Use the filters, then open a record’s files or analysis.</p>
 <section class="panel" aria-label="Retained evidence catalog">
 <form id="libraryFilters" class="library-filters" data-library-help="filters">
 <label>Network, CIDR, device or filename<input id="librarySearch" type="search" maxlength="200" placeholder="Example: Office Servers or 10.2.0.0/24"></label>

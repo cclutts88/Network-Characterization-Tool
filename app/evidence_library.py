@@ -15,6 +15,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 from app.database import connect_database
+from app.evidence_retirement import (
+    active_encounter_sql,
+    require_active_encounter,
+    require_retirement_authority,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, NMAP_IMPORT, NMAP_SCAN_RUN
 
 LOG = logging.getLogger(__name__)
 LOCK = threading.RLock()
@@ -181,9 +187,13 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
     with connect_database(Path(db_path), read_only=True) as db:
         db.row_factory = sqlite3.Row
         db.execute('BEGIN')
+        require_retirement_authority(db)
         tables = _tables(db)
         if "scan_runs" in tables:
             scope_sql = "(SELECT scope_id FROM scan_run_scope_contexts c WHERE c.run_id=r.run_id)" if "scan_run_scope_contexts" in tables else "NULL"
+            scan_active, scan_active_parameters = active_encounter_sql(
+                NMAP_SCAN_RUN, "r.run_id",
+            )
             parts.append(f"""SELECT 'scan:'||r.run_id id,'scan' kind,r.run_id source_id,r.created_at saved_at,
             COALESCE(json_extract(m,'$.display_name'),json_extract(m,'$.name'),r.run_id) title,r.operator_name actor,
             COALESCE((SELECT group_concat(COALESCE(json_extract(CASE WHEN j.type='object' THEN j.value ELSE '{{}}' END,'$.name'),'')||' '||COALESCE(json_extract(CASE WHEN j.type='object' THEN j.value ELSE '{{}}' END,'$.cidr'),''),' · ')
@@ -194,16 +204,20 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
                 WHEN json_type(m,'$.target_selection.manual_targets')='array' THEN json_extract(m,'$.target_selection.manual_targets') ELSE '[]' END) j
                 WHERE j.type='text'),'') network,
             COALESCE({scope_sql},'') scope_id,CASE WHEN json_valid(manifest_json) AND json_type(m)='object' THEN r.status ELSE 'Unreadable scan metadata' END status,'' observation_id
-            FROM (SELECT *,CASE WHEN json_valid(manifest_json) THEN manifest_json ELSE '{{}}' END m FROM scan_runs) r""")
-        if "imports" in tables:
-            if "artifact_observations" in tables:
-                parts.append("""SELECT 'import:'||o.observation_id,'import',o.sha256,o.observed_at,
-                COALESCE(o.original_filename,i.filename,o.observation_id),COALESCE(o.actor,''),'','',
-                CASE WHEN i.sha256 IS NULL THEN 'Incomplete import record — source access unavailable' ELSE 'Retained import' END,o.observation_id
-                FROM artifact_observations o LEFT JOIN imports i ON i.sha256=o.sha256 WHERE o.source_kind='nmap_import'""")
-                legacy = "WHERE NOT EXISTS (SELECT 1 FROM artifact_observations o WHERE o.sha256=i.sha256 AND o.source_kind='nmap_import')"
-            else:
-                legacy = ""
+            FROM (SELECT *,CASE WHEN json_valid(manifest_json) THEN manifest_json ELSE '{{}}' END m FROM scan_runs) r
+            WHERE {scan_active}""")
+        else:
+            scan_active_parameters = ()
+        import_active_parameters = ()
+        if "imports" in tables and "artifact_observations" in tables:
+            import_active, import_active_parameters = active_encounter_sql(
+                NMAP_IMPORT, "o.observation_id",
+            )
+            parts.append("""SELECT 'import:'||o.observation_id,'import',o.sha256,o.observed_at,
+            COALESCE(o.original_filename,i.filename,o.observation_id),COALESCE(o.actor,''),'','',
+            CASE WHEN i.sha256 IS NULL THEN 'Incomplete import record — source access unavailable' ELSE 'Retained import' END,o.observation_id
+            FROM artifact_observations o LEFT JOIN imports i ON i.sha256=o.sha256 WHERE o.source_kind='nmap_import' AND """ + import_active)
+            legacy = "WHERE NOT EXISTS (SELECT 1 FROM artifact_observations o WHERE o.sha256=i.sha256 AND o.source_kind='nmap_import')"
             parts.append(f"SELECT 'import-legacy:'||i.sha256,'import',i.sha256,i.imported_at,i.filename,'','','','Legacy import','' FROM imports i {legacy}")
         device_attached = False
         try:
@@ -221,10 +235,15 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             authority_join = "LEFT JOIN device_collection_authority a ON a.run_id=d.run_id" if "device_collection_authority" in tables else ""
             status = "CASE WHEN a.state='preparing' THEN 'Preparing — not available' ELSE d.status END" if authority_join else "d.status"
             where = "AND COALESCE(a.state,'')!='deleted'" if authority_join else ""
+            device_active, device_active_parameters = active_encounter_sql(
+                DEVICE_COLLECTION, "d.run_id",
+            )
             device_scope = "(SELECT s.scope_id FROM device_scope_assignments s WHERE s.run_id=d.run_id AND s.authority_revision=a.revision ORDER BY s.revision DESC LIMIT 1)" if authority_join and 'device_scope_assignments' in tables else "''"
             parts.append(f"""SELECT 'device:'||d.run_id,'device',d.run_id,d.saved_at,d.title,d.actor,d.target,COALESCE({device_scope},''),
             {status},d.observation_id FROM library.devices d {authority_join}
-            WHERE d.operation!='ssh_preflight' {where}""")
+            WHERE d.operation!='ssh_preflight' {where} AND {device_active}""")
+        else:
+            device_active_parameters = ()
         if not parts:
             return {"items": [], "total": 0, "limit": limit, "offset": offset, "device_coverage": coverage}
         # Latest explicit observation assignment overrides unknown; preferences never assign scope.
@@ -241,7 +260,15 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             clauses.append("instr(lower(title||' '||network||' '||source_id),lower(?))>0"); args.append(q)
         cte = f"WITH sources AS ({union}), catalog AS (SELECT e.id,e.kind,e.source_id,e.saved_at,e.title,e.actor,e.network,COALESCE({assignment},e.scope_id) scope_id,e.status FROM sources e)"
         conditions = " WHERE "+' AND '.join(clauses) if clauses else ""
-        total = db.execute(cte+" SELECT count(*) FROM catalog"+conditions,args).fetchone()[0]
+        retirement_args = [
+            *scan_active_parameters,
+            *import_active_parameters,
+            *device_active_parameters,
+        ]
+        total = db.execute(
+            cte+" SELECT count(*) FROM catalog"+conditions,
+            [*retirement_args, *args],
+        ).fetchone()[0]
         page_conditions, page_args = conditions, list(args)
         if after:
             cursor = json.loads(after)
@@ -249,7 +276,11 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
                 raise ValueError('Invalid page cursor')
             page_conditions += (' AND ' if conditions else ' WHERE ')+"(saved_at<? OR (saved_at=? AND id>?))"
             page_args += [cursor[0],cursor[0],cursor[1]]
-        rows = [dict(r) for r in db.execute(cte+" SELECT * FROM catalog"+page_conditions+" ORDER BY saved_at DESC,id ASC LIMIT ? OFFSET ?",[*page_args,limit+1,offset])]
+        rows = [dict(r) for r in db.execute(
+            cte+" SELECT * FROM catalog"+page_conditions+
+            " ORDER BY saved_at DESC,id ASC LIMIT ? OFFSET ?",
+            [*retirement_args, *page_args, limit+1, offset],
+        )]
         more=len(rows)>limit
         rows=rows[:limit]
         next_cursor = json.dumps([rows[-1]['saved_at'],rows[-1]['id']]) if more else ''
@@ -287,6 +318,11 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
                 with connect_database(Path(db_path),read_only=True) as fresh:
                     fresh.row_factory=sqlite3.Row
                     fresh.execute('BEGIN')
+                    require_active_encounter(
+                        fresh,
+                        source_family=DEVICE_COLLECTION,
+                        encounter_id=row['source_id'],
+                    )
                     a=fresh.execute('SELECT * FROM device_collection_authority WHERE run_id=?',(row['source_id'],)).fetchone() if 'device_collection_authority' in tables else None
                     assignments=[tuple(r) for r in fresh.execute('SELECT * FROM device_scope_assignments WHERE run_id=? ORDER BY authority_revision,revision',(row['source_id'],))] if 'device_scope_assignments' in tables else []
                     if (dict(a) if a else None,assignments)!=snapshots[row['source_id']]:

@@ -247,6 +247,24 @@ CLEAR for both. Operator controls and broader Inventory, Analyze, Hunt, Reach, M
 export, cache, restart and restore integration remain in progress; no Range package is
 ready.
 
+Cross-evidence retirement active-source Gate C Evidence Library slice completed
+(2026-11-05): the ordinary combined catalog now excludes retired automated Nmap runs,
+exact manual Nmap import observations and device collections before filters, counts and
+paging. The catalog reads one retirement-consistent snapshot, fails closed when its
+retirement or import-observation authority is incomplete, keeps active same-content
+siblings independent and rechecks a device encounter before presenting its actions.
+Fully retired registered imports cannot reappear through the legacy-content fallback;
+true legacy content-only imports remain visible but ineligible for retirement until
+backfill gives them an exact encounter identity. The Evidence Library page, contextual
+Operator Guide and built-in README explain that retirement removes an encounter from
+ordinary work while preserving its append-only audit record. The focused catalog/API/
+UI/contract gate passed 130 tests with one skipped, the isolated container started
+successfully, and the rendered page and Operator Guide were visually checked. The
+full repository gate then passed 2,621 tests with 25 expected skips and no failures.
+The Independent Reviewer returned CLEAR after its own 41-test verification.
+Content-hash import history, raw-source and export endpoints remain an explicit
+follow-on shared-content gateway and are not claimed by this bounded slice.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
