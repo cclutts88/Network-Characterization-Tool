@@ -34,6 +34,20 @@ never a stale prior selection; cover reordering, schedule edits and browser relo
 and update the Operator Guide/tutorial explanation of the token. This remains an open
 functionality defect and is not included in the current Range installation.
 
+Deferred scan-profile deletion confirmation defect recorded from Range use
+(2026-11-06): selecting delete appeared to hang with no immediate prompt or visible
+pending state. The random-code confirmation appeared only after the operator created
+a scheduled scan, navigated away and opened Scan History. Treat this as a stale
+destructive-action/context defect, not merely a slow dialog. The next stabilization
+pass must reproduce it, identify whether the delay is in the browser event path or
+server confirmation creation, and keep the confirmation bound to the exact profile
+and originating action. Show immediate progress or the prompt, prevent unrelated
+navigation/actions from releasing a delayed confirmation, expire or cancel stale
+requests safely, and never delete without a current matching confirmation. Cover
+success, cancel, navigation, repeated clicks, schedule creation and browser reload in
+the operator and automated gates. This remains open and is not corrected in the
+current Range installation.
+
 Device-role selection visibility correction started (2026-11-06): hands-on review of
 the locally qualified R11 candidate found that the browser's native multi-select did
 not make selected Router, Firewall and Switch roles visually distinct enough. Preserve
