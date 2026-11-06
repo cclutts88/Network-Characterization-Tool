@@ -92,6 +92,10 @@ def main():
         # the sole container with a writable retained-data mount.
         engine.command("rm", original_id)
         original_id = engine.command(*launch)
+        # The historical migration seed is intentionally replaced by the exact
+        # supported source image. Bind the preservation check to that live
+        # source, not to the disposable seed that no longer exists.
+        original_image_id = engine.inspect(original_id)["Image"]
         probe.wait_url(app_url + "/health/readiness", lambda value: value.get("healthy") is True)
         request("/api/auth/login", {"username": "package-operator", "password": password})
         assert request("/health")["build_commit"] == source["commit"]

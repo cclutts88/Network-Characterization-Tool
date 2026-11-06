@@ -610,6 +610,15 @@ removes that seed container after the migrated source is ready so the qualified 
 is the only writer candidate. No application or Range data path was changed, and the
 unsealed R2 stage remains rejected rather than distributed.
 
+The corrected R3 rehearsal then reached the source-preservation check and exposed a
+second fixture bookkeeping error: after replacing that disposable migration seed with
+the exact supported source, the test still compared the preserved source against the
+removed seed's image identity. The acceptance harness now rebinds the preservation
+assertion to the live supported source immediately after replacement. This does not
+change package or application behavior. R3 remains unsealed until both supported-source
+upgrades and the separate helper and fresh-install routes pass against the corrected
+receipt logic.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
