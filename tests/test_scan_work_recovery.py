@@ -36,7 +36,11 @@ from app.scan_work_recovery import (
 )
 from app.schema_compatibility import begin_schema_migration, complete_schema_migration
 from app.storage_health import _init_compaction_journal
-from app.work_coordination import init_work_coordination_storage
+from app.work_coordination import (
+    acquire_work_lease,
+    init_work_coordination_storage,
+    work_lease_status,
+)
 
 
 def ready_database(
@@ -570,6 +574,110 @@ def test_read_only_status_is_available_to_queue_viewers(monkeypatch, tmp_path: P
     assert result["pause"] is None
     assert result["plan"]["safe_to_apply"] is True
     assert result["plan"]["affected_count"] == 0
+
+
+def test_emergency_stop_clear_cancels_waiting_scans_and_releases_capacity(
+    tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    run_id = "a" * 32
+    add_run(db_path, run_id, "queued")
+    acquire_work_lease(
+        db_path,
+        lease_key=poc.SCAN_CAPACITY_LEASE_KEY,
+        work_kind="scan_execution",
+        work_id="b" * 32,
+        owner_id="former-worker",
+        lease_seconds=30,
+        expired_policy="recovery_required",
+    )
+
+    result = poc.emergency_stop_and_clear_scan_queue(
+        actor="admin", db_path=db_path, data_dir=data_dir
+    )
+
+    assert result["stopped"] is True
+    assert result["cancelled_run_ids"] == [run_id]
+    assert result["scanner_capacity_released"] is True
+    assert poc.get_scan_run_plan(run_id, db_path)["status"] == "cancelled"
+    assert work_lease_status(db_path, poc.SCAN_CAPACITY_LEASE_KEY)["state"] == "released"
+    with connect_database(db_path) as db:
+        audit = db.execute(
+            "SELECT event,actor FROM scan_run_audit WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    assert audit == ("emergency_cancelled", "admin")
+
+
+def test_emergency_stop_clear_refuses_to_mutate_if_every_worker_does_not_stop(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    run_id = "c" * 32
+    add_run(db_path, run_id, "queued")
+    monkeypatch.setattr(poc, "stop_schedule_batch_workers", lambda timeout: False)
+    monkeypatch.setattr(poc, "stop_scan_workers", lambda timeout: True)
+    monkeypatch.setattr(
+        poc,
+        "resume_scan_workers",
+        lambda: pytest.fail("Failed shutdown must keep scan admission blocked"),
+    )
+
+    with pytest.raises(RuntimeError, match="did not stop safely"):
+        poc.emergency_stop_and_clear_scan_queue(
+            actor="admin", db_path=db_path, data_dir=data_dir
+        )
+
+    assert poc.get_scan_run_plan(run_id, db_path)["status"] == "queued"
+
+
+def test_emergency_stop_clear_endpoint_requires_fresh_admin_credentials(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    from app import main
+
+    data_dir, db_path = ready_database(tmp_path)
+    monkeypatch.setattr(main, "DATA_DIR", data_dir)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "auth_enabled", lambda: True)
+    request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+    request.state.analyst = {"username": "viewer.one", "role": "viewer"}
+    body = main.EmergencyStopClearRequest(username="admin", password="wrong")
+
+    monkeypatch.setattr(main, "verify_credentials", lambda *_args: None)
+    with pytest.raises(HTTPException, match="Administrator sign-in") as rejected:
+        main.emergency_stop_clear_scan_work(request, body)
+    assert rejected.value.status_code == 401
+
+    monkeypatch.setattr(
+        main,
+        "verify_credentials",
+        lambda *_args: {"username": "analyst", "role": "analyst"},
+    )
+    with pytest.raises(HTTPException, match="Administrator sign-in") as non_admin:
+        main.emergency_stop_clear_scan_work(request, body)
+    assert non_admin.value.status_code == 401
+
+    monkeypatch.setattr(
+        main,
+        "verify_credentials",
+        lambda *_args: {"username": "admin", "role": "admin"},
+    )
+    monkeypatch.setattr(
+        main,
+        "emergency_stop_and_clear_scan_queue",
+        lambda **kwargs: {
+            "stopped": True,
+            "cancelled_count": 0,
+            "cancelled_run_ids": [],
+            "scanner_capacity_released": True,
+        },
+    )
+
+    accepted = main.emergency_stop_clear_scan_work(request, body)
+
+    assert accepted["cleared_by"] == "admin"
+    assert accepted["stopped"] is True
 
 
 def test_resume_requires_exact_confirmation_then_restarts_preserved_work(

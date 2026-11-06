@@ -147,6 +147,7 @@ from app.scheduled_work import (
     close_reviewed_occurrence,
     content_digest,
     definition_identity,
+    emergency_cancel_open_occurrences_on_connection,
     get_occurrence,
     init_scheduled_work_storage,
     list_schedule_occurrences,
@@ -165,6 +166,7 @@ from app.work_coordination import (
     acquire_work_lease_on_connection,
     assert_work_lease_on_connection,
     init_work_coordination_storage,
+    recover_abandoned_work_lease_on_connection,
     release_work_lease_on_connection,
     renew_work_lease,
 )
@@ -7507,6 +7509,152 @@ def stop_schedule_batch_workers(timeout: float = 2.0) -> bool:
         return not any(
             thread.is_alive() for thread in ACTIVE_SCHEDULE_THREADS.values()
         )
+
+
+def emergency_stop_and_clear_scan_queue(
+    *,
+    actor: str,
+    db_path: Path = DB_PATH,
+    data_dir: Path = DATA_DIR,
+    timeout: float = 10.0,
+) -> dict:
+    """Stop live scan contact, cancel waiting work, and release scanner capacity."""
+    stopped_scans = stop_scan_workers(timeout=timeout)
+    stopped_batches = stop_schedule_batch_workers(timeout=min(2.0, timeout))
+    if not stopped_batches or not stopped_scans:
+        raise RuntimeError(
+            "All scan workers did not stop safely. NCT kept scan admission blocked."
+        )
+
+    changed_at = utc_now()
+    cancelled_run_ids: list[str] = []
+    released_capacity = False
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            rows = db.execute(
+                """SELECT manifest_json FROM scan_runs
+                     WHERE status IN ('queued','dispatching','running','awaiting_fallback_approval')
+                     ORDER BY rowid"""
+            ).fetchall()
+            for (manifest_json,) in rows:
+                manifest = json.loads(manifest_json)
+                scheduled_claim = manifest.get("work_claim")
+                if isinstance(scheduled_claim, dict):
+                    publish_chunk_terminal_on_connection(
+                        db,
+                        occurrence_id=str(scheduled_claim["occurrence_id"]),
+                        chunk_number=int(scheduled_claim["chunk_number"]),
+                        terminal_state="cancelled",
+                        reason=(
+                            "Administrator used Emergency Stop & Clear; this occurrence "
+                            "will not continue to later chunks"
+                        ),
+                        lease=scheduled_claim,
+                        contact_started=bool(manifest.get("started_at")),
+                    )
+                manifest.update(
+                    {
+                        "status": "cancelled",
+                        "success": False,
+                        "completed_at": changed_at,
+                        "execution_note": (
+                            "Emergency Stop & Clear cancelled this active or waiting scan"
+                        ),
+                    }
+                )
+                if isinstance(manifest.get("progress"), dict):
+                    update_scan_progress(
+                        manifest["progress"], phase="cancelled", updated_at=changed_at
+                    )
+                db.execute(
+                    "UPDATE scan_runs SET status='cancelled', manifest_json=? WHERE run_id=?",
+                    (json.dumps(manifest, sort_keys=True), manifest["run_id"]),
+                )
+                sync_scan_history_manifest(db, manifest)
+                append_scan_audit_on_connection(
+                    db,
+                    run_id=manifest["run_id"],
+                    event="emergency_cancelled",
+                    actor=actor,
+                    details=(
+                        "Administrator used Emergency Stop & Clear; completed evidence "
+                        "and saved settings were not deleted"
+                    ),
+                    changed_at=changed_at,
+                )
+                cancelled_run_ids.append(manifest["run_id"])
+
+            scheduled = emergency_cancel_open_occurrences_on_connection(
+                db,
+                actor=actor,
+                reason=(
+                    "Administrator used Emergency Stop & Clear after every local scan "
+                    "worker was confirmed stopped"
+                ),
+            )
+
+            lease = db.execute(
+                """SELECT fencing_epoch, lease_id, owner_id, state, work_kind, work_id
+                     FROM work_leases WHERE lease_key=?""",
+                (SCAN_CAPACITY_LEASE_KEY,),
+            ).fetchone()
+            if lease and lease[3] == "active" and lease[1] and lease[2]:
+                recover_abandoned_work_lease_on_connection(
+                    db,
+                    {
+                        "lease_key": SCAN_CAPACITY_LEASE_KEY,
+                        "lease_id": lease[1],
+                        "lease_owner": lease[2],
+                        "lease_epoch": int(lease[0]),
+                    },
+                    recovery_required=False,
+                    detail=f"{actor}: Emergency Stop & Clear verified the worker stopped",
+                )
+                released_capacity = True
+            elif lease and lease[3] == "recovery_required":
+                changed = db.execute(
+                    """UPDATE work_leases
+                          SET state='released', released_at=?, renewed_at=?,
+                              recovery_reason=NULL
+                        WHERE lease_key=? AND fencing_epoch=?
+                          AND state='recovery_required'
+                          AND lease_id IS NULL AND owner_id IS NULL""",
+                    (changed_at, changed_at, SCAN_CAPACITY_LEASE_KEY, int(lease[0])),
+                ).rowcount
+                if changed:
+                    db.execute(
+                        """INSERT INTO work_lease_events(
+                               event_id,lease_key,fencing_epoch,lease_id,owner_id,
+                               event_kind,recorded_at,detail
+                           ) VALUES(?,?,?,?,?,'recovery_cleared',?,?)""",
+                        (
+                            uuid.uuid4().hex,
+                            SCAN_CAPACITY_LEASE_KEY,
+                            int(lease[0]),
+                            None,
+                            None,
+                            changed_at,
+                            f"{actor}: Emergency Stop & Clear verified no scan worker remained",
+                        ),
+                    )
+                    released_capacity = True
+        except Exception:
+            db.rollback()
+            raise
+
+    resume_scan_workers()
+
+    return {
+        "stopped": True,
+        "schedule_batches_stopped": stopped_batches,
+        "cancelled_run_ids": cancelled_run_ids,
+        "cancelled_count": len(cancelled_run_ids),
+        "cancelled_occurrence_ids": scheduled["cancelled_occurrence_ids"],
+        "paused_schedule_ids": scheduled["paused_schedule_ids"],
+        "paused_schedule_count": len(scheduled["paused_schedule_ids"]),
+        "scanner_capacity_released": released_capacity,
+    }
 
 
 def _import_content_rows(

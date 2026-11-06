@@ -31,7 +31,7 @@ from app.scheduled_work import (
     mark_chunk_contact_starting,
     recover_schedule_occurrences,
 )
-from app.work_coordination import WorkLeaseLost, WorkRecoveryRequired
+from app.work_coordination import WorkLeaseLost, WorkRecoveryRequired, work_lease_status
 
 
 def make_schedule(db_path: Path, *, first_run: datetime | None = None) -> dict:
@@ -63,6 +63,110 @@ def frozen() -> dict:
         "contact_policy": {"interface": "eth0"},
         "authorization": {"executed_by": "scheduler"},
     }
+
+
+def test_emergency_clear_cancels_waiting_occurrence_before_first_scan(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = make_schedule(db_path)
+    occurrence = prepare_occurrence(
+        db_path,
+        schedule=schedule,
+        due_at="2026-01-01T00:00:00+00:00",
+        trigger_kind="scheduled",
+        trigger_key="cadence",
+        actor="scheduler",
+        frozen_contract=frozen(),
+        chunks=[["198.51.100.1"], ["198.51.100.2"]],
+        next_due_at="2026-01-02T00:00:00+00:00",
+    )
+
+    result = poc.emergency_stop_and_clear_scan_queue(
+        actor="admin", db_path=db_path, data_dir=tmp_path
+    )
+
+    saved = get_occurrence(db_path, occurrence.occurrence_id)
+    assert saved["state"] == "cancelled"
+    assert [chunk["state"] for chunk in saved["chunks"]] == ["cancelled", "cancelled"]
+    assert all(chunk["contact_phase"] == "not_started" for chunk in saved["chunks"])
+    assert result["cancelled_run_ids"] == []
+    assert result["cancelled_occurrence_ids"] == [occurrence.occurrence_id]
+    assert result["paused_schedule_ids"] == [schedule["schedule_id"]]
+    updated = poc.get_scan_schedule(schedule["schedule_id"], db_path)
+    assert updated["enabled"] is False
+    assert updated["batch_status"] == "emergency_stopped"
+    with connect_database(db_path) as connection:
+        review = connection.execute(
+            "SELECT reviewed_by,confirmed_former_contact_stopped "
+            "FROM scan_schedule_recovery_reviews WHERE occurrence_id=?",
+            (occurrence.occurrence_id,),
+        ).fetchone()
+    assert review == ("admin", 1)
+
+
+def test_emergency_clear_preserves_completed_chunk_and_cancels_remaining_work(tmp_path):
+    db_path = tmp_path / "analyzer.db"
+    schedule = make_schedule(db_path)
+    occurrence = prepare_occurrence(
+        db_path,
+        schedule=schedule,
+        due_at="2026-01-01T00:00:00+00:00",
+        trigger_kind="scheduled",
+        trigger_key="cadence",
+        actor="scheduler",
+        frozen_contract=frozen(),
+        chunks=[
+            ["198.51.100.1"],
+            ["198.51.100.2"],
+            ["198.51.100.3"],
+        ],
+        next_due_at="2026-01-02T00:00:00+00:00",
+    )
+    first, first_lease = claim_next_chunk(
+        db_path, occurrence.occurrence_id, owner_id="schedule:test:first"
+    )
+    publish_chunk_terminal(
+        db_path,
+        occurrence_id=occurrence.occurrence_id,
+        chunk_number=first["chunk_number"],
+        terminal_state="complete",
+        reason="first chunk complete",
+        lease=first_lease,
+    )
+    second, second_lease = claim_next_chunk(
+        db_path, occurrence.occurrence_id, owner_id="schedule:test:second"
+    )
+    bind_chunk_scan_run(
+        db_path,
+        occurrence_id=occurrence.occurrence_id,
+        chunk_number=second["chunk_number"],
+        scan_run_id="d" * 32,
+        lease=second_lease,
+    )
+    mark_chunk_contact_starting(
+        db_path,
+        occurrence_id=occurrence.occurrence_id,
+        chunk_number=second["chunk_number"],
+        lease=second_lease,
+    )
+
+    result = poc.emergency_stop_and_clear_scan_queue(
+        actor="admin", db_path=db_path, data_dir=tmp_path
+    )
+
+    saved = get_occurrence(db_path, occurrence.occurrence_id)
+    assert saved["state"] == "cancelled"
+    assert [chunk["state"] for chunk in saved["chunks"]] == [
+        "complete",
+        "cancelled",
+        "cancelled",
+    ]
+    assert saved["chunks"][0]["contact_phase"] == "complete"
+    assert saved["chunks"][1]["contact_phase"] == "contact_stopped"
+    assert saved["chunks"][2]["contact_phase"] == "not_started"
+    assert result["cancelled_run_ids"] == []
+    assert result["cancelled_occurrence_ids"] == [occurrence.occurrence_id]
+    lease_key = f"schedule-chunk:{occurrence.occurrence_id}:2"
+    assert work_lease_status(db_path, lease_key)["state"] == "released"
 
 
 @pytest.mark.parametrize("state", ["waiting", "preparing", "active", "needs_attention", "complete", "cancelled"])

@@ -17,6 +17,7 @@ from app.work_coordination import (
     acquire_work_lease_on_connection,
     assert_work_lease_on_connection,
     init_work_coordination_storage,
+    recover_abandoned_work_lease_on_connection,
     release_work_lease_on_connection,
 )
 
@@ -906,6 +907,151 @@ def publish_chunk_terminal_on_connection(
         (occurrence_state, occurrence_state, now, reason[:500], occurrence_id),
     )
     return occurrence_state
+
+
+def emergency_cancel_open_occurrences_on_connection(
+    connection: sqlite3.Connection,
+    *,
+    actor: str,
+    reason: str,
+) -> dict[str, list[str]]:
+    """Cancel every unfinished scheduled occurrence after all local workers stop."""
+    now = _db_now(connection)
+    occurrence_rows = connection.execute(
+        """SELECT occurrence_id,schedule_id FROM scan_schedule_occurrences
+             WHERE state IN ('waiting','preparing','active','needs_attention')
+             ORDER BY created_at, occurrence_id"""
+    ).fetchall()
+    cancelled_occurrence_ids: list[str] = []
+    paused_schedule_ids: set[str] = set()
+    for occurrence_id, schedule_id in occurrence_rows:
+        chunks = connection.execute(
+            """SELECT chunk_number,contact_phase FROM scan_schedule_chunks
+                 WHERE occurrence_id=?
+                   AND state IN ('waiting','preparing','active','needs_attention')
+                 ORDER BY chunk_number""",
+            (occurrence_id,),
+        ).fetchall()
+        for chunk_number, contact_phase in chunks:
+            lease_key = f"schedule-chunk:{occurrence_id}:{int(chunk_number)}"
+            lease = connection.execute(
+                """SELECT fencing_epoch,lease_id,owner_id,state
+                     FROM work_leases WHERE lease_key=?""",
+                (lease_key,),
+            ).fetchone()
+            if lease and lease[3] == "active" and lease[1] and lease[2]:
+                recover_abandoned_work_lease_on_connection(
+                    connection,
+                    {
+                        "lease_key": lease_key,
+                        "lease_id": lease[1],
+                        "lease_owner": lease[2],
+                        "lease_epoch": int(lease[0]),
+                    },
+                    recovery_required=False,
+                    detail=f"{actor}: {reason}",
+                )
+            elif lease and lease[3] == "recovery_required":
+                changed = connection.execute(
+                    """UPDATE work_leases
+                          SET state='released', released_at=?, renewed_at=?,
+                              recovery_reason=NULL
+                        WHERE lease_key=? AND fencing_epoch=?
+                          AND state='recovery_required'
+                          AND lease_id IS NULL AND owner_id IS NULL""",
+                    (now, now, lease_key, int(lease[0])),
+                ).rowcount
+                if changed:
+                    connection.execute(
+                        """INSERT INTO work_lease_events(
+                               event_id,lease_key,fencing_epoch,lease_id,owner_id,
+                               event_kind,recorded_at,detail
+                           ) VALUES(?,?,?,?,?,'recovery_cleared',?,?)""",
+                        (
+                            uuid.uuid4().hex,
+                            lease_key,
+                            int(lease[0]),
+                            None,
+                            None,
+                            now,
+                            f"{actor}: {reason}",
+                        ),
+                    )
+            stopped_phase = (
+                "not_started" if contact_phase == "not_started" else "contact_stopped"
+            )
+            connection.execute(
+                """UPDATE scan_schedule_chunks
+                      SET state='cancelled', contact_phase=?, completed_at=?,
+                          status_reason=?
+                    WHERE occurrence_id=? AND chunk_number=?
+                      AND state IN ('waiting','preparing','active','needs_attention')""",
+                (
+                    stopped_phase,
+                    now,
+                    reason[:500],
+                    occurrence_id,
+                    int(chunk_number),
+                ),
+            )
+        connection.execute(
+            """UPDATE scan_schedule_occurrences
+                  SET state='cancelled', completed_at=?, status_reason=?
+                WHERE occurrence_id=?
+                  AND state IN ('waiting','preparing','active','needs_attention')""",
+            (now, reason[:500], occurrence_id),
+        )
+        connection.execute(
+            """INSERT OR IGNORE INTO scan_schedule_recovery_reviews(
+                   review_id,occurrence_id,reviewed_by,reviewed_at,reason,
+                   confirmed_former_contact_stopped
+               ) VALUES(?,?,?,?,?,1)""",
+            (uuid.uuid4().hex, occurrence_id, actor, now, reason[:500]),
+        )
+        cancelled_occurrence_ids.append(occurrence_id)
+        paused_schedule_ids.add(schedule_id)
+
+    schedule_rows = connection.execute(
+        "SELECT schedule_id,definition_json FROM scan_schedules"
+    ).fetchall()
+    for schedule_id, definition_json in schedule_rows:
+        schedule = json.loads(definition_json)
+        has_cancelled_occurrence = schedule_id in paused_schedule_ids
+        if not schedule.get("enabled") and not has_cancelled_occurrence:
+            continue
+        schedule["enabled"] = False
+        schedule["active_batch_id"] = None
+        schedule["next_chunk_at"] = None
+        schedule["batch_status"] = "emergency_stopped"
+        schedule["last_occurrence_status"] = (
+            "cancelled" if has_cancelled_occurrence else schedule.get("last_occurrence_status")
+        )
+        if has_cancelled_occurrence:
+            schedule["last_occurrence_completed_at"] = now
+        schedule["last_dispatch_note"] = (
+            "Emergency Stop & Clear paused this saved schedule; re-enable it after review"
+        )
+        schedule["control_revision"] = int(schedule.get("control_revision") or 0) + 1
+        history = list(schedule.get("modification_history") or [])
+        history.append(
+            {
+                "event": "emergency_stopped",
+                "changed_at": now,
+                "changed_by": actor,
+                "details": reason,
+            }
+        )
+        schedule["modification_history"] = history[-100:]
+        connection.execute(
+            "UPDATE scan_schedules SET definition_json=? WHERE schedule_id=?",
+            (json.dumps(schedule, sort_keys=True), schedule_id),
+        )
+        paused_schedule_ids.add(schedule_id)
+
+    return {
+        "cancelled_occurrence_ids": cancelled_occurrence_ids,
+        "paused_schedule_ids": sorted(paused_schedule_ids),
+    }
 
 
 def recover_schedule_occurrences(

@@ -152,6 +152,9 @@ def test_active_scan_has_a_bounded_provisional_discovery_workspace():
     html = operator_page().body.decode()
 
     assert 'id="liveDiscoveriesPanel"' in html
+    assert 'id="liveDiscoveriesState" class="pill completed">Idle</span>' in html
+    assert "No scan is active. Nothing is waiting in the scan queue." in html
+    assert "Completed runs are in Scan History." in html
     assert "Live discoveries" in html
     assert "Provisional host and port observations" in html
     assert "Nmap has fully closed" in SHELL_SCRIPT
@@ -165,6 +168,13 @@ def test_active_scan_has_a_bounded_provisional_discovery_workspace():
     assert "/live-discoveries" in html
     assert "function renderLiveDiscoveries" in html
     assert "function renderLiveDiscoveryFinal" in html
+    assert "function renderLiveDiscoveryIdle(message='No scan is active. Nothing is waiting in the scan queue.',queued=false)" in html
+    assert "queued?'Queued':'Idle'" in html
+    assert "function renderLiveDiscoveryStarting(message)" in html
+    assert "renderLiveDiscoveryStarting('Reading fully closed host records from this active scan.')" in html
+    assert "waiting=runs.filter(run=>run.status==='queued')" in html
+    assert "waiting.length>0" in html
+    assert "document.querySelector('.queue-item[data-queue-run]')" in html
     assert "The scan continues unchanged" in html
     assert "loadLiveDiscoveries(runId,revision)" in html
     assert "liveDiscoveryInFlight&&liveDiscoveryRunId===runId" in html
@@ -201,6 +211,11 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     assert "Resume storage maintenance" in html
     assert "/api/system/scan-work-recovery" in html
     assert "/api/system/scan-work-recovery/resume-passive" in html
+    assert 'id="emergencyStopClear"' in html
+    assert 'data-guide-context="scan-queue-self-check">Emergency Stop' in html
+    assert 'id="emergencyStopClearForm"' in html
+    assert "/api/system/scan-work-recovery/emergency-stop-clear" in html
+    assert "pauses saved schedules" in html
     assert "create and independently verify a complete backup" in html
     assert "Select Run unfinished work self-check" in SHELL_SCRIPT
     assert "Resume local processing starts retained-data calculations without network contact" in SHELL_SCRIPT

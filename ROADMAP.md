@@ -20,6 +20,45 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Active Scans emergency queue recovery completed (2026-11-06): Range verification
+found that a restart while scheduled scanner ownership remained active left the
+single scanner-capacity record in **recovery required**, even though its saved run
+later appeared terminal. The unfinished-work check correctly preserved a new,
+unstarted request but reported Clear while the dispatcher silently left every new
+scan Pending. The exact stale capacity record was verified, released without changing
+the waiting request, and the preserved AFB-DMZ scan entered Running with five
+responsive hosts. Active Scans now provides an explicit **Emergency Stop & Clear**
+action with fresh administrator credential verification. Any signed-in operator can
+open the control, but only verified administrator credentials authorize it. It stops
+the live scanner before stopping scheduled-batch writers, cancels active and waiting
+scan requests plus durable scheduled chunks that have not completed, pauses saved
+schedules so they cannot immediately refill the queue, releases only proven-stopped
+ownership records, and preserves completed evidence, schedule definitions, profiles
+and other settings. The operation keeps scan admission blocked if every worker cannot
+be proven stopped or if reconciliation fails. Regression coverage verifies queue and
+scheduled-occurrence cancellation, completed-chunk preservation, capacity release,
+audit attribution, credential and role rejection, and the visible recovery control.
+This is the bounded demonstration recovery path; it is not evidence deletion or a
+substitute for root-cause review.
+
+Active Scans idle-state correction completed (2026-11-06): after a scheduled scan
+finished, the analyzer and queue were clear but the Live Discoveries card continued
+to display **Waiting**, which looked like uncleared scan work. The idle card now says
+**Idle**, explicitly states that no scan or queued work is active, and routes completed
+runs to Scan History. Active-scan provisional and finalized states remain unchanged.
+This is a presentation correction only; it does not erase, cancel or rewrite scan
+records.
+
+Future Map selected-connection interface detail requested (2026-11-06): when an
+operator selects a connection, provide an end-to-end path view that identifies each
+device and its ingress and egress interface, interface IP/CIDR, VLAN, configured
+description, link state and speed when known, and the exact supporting configuration,
+Nmap or passive evidence. Add Arkime traffic volume and observation-window summaries
+when available. Keep configured, observed and inferred values visibly distinct, and
+label missing path segments as unknown rather than presenting an assumed connection.
+This is recorded for later design and is not part of the emergency queue-recovery
+change.
+
 Current Network false verification block correction completed (2026-11-06): Range
 Host Inventory reported that retained evidence could not be verified even though the
 saved Nmap evidence was intact. Read-only inspection identified one cancelled

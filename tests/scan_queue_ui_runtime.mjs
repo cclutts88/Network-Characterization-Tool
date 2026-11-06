@@ -19,6 +19,42 @@ function functionBlock(name, nextName) {
 }
 
 await eval(`(() => {
+  const controls=new Map();
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:''});return controls.get(id)};
+  ${functionBlock("renderLiveDiscoveryIdle", "renderLiveDiscoveryStarting")}
+  renderLiveDiscoveryIdle();
+  assert.equal(controls.get('liveDiscoveriesState').textContent,'Idle');
+  assert.match(controls.get('liveDiscoveriesSummary').textContent,/Nothing is waiting/i);
+  renderLiveDiscoveryIdle('One scan is waiting to start.',true);
+  assert.equal(controls.get('liveDiscoveriesState').textContent,'Queued');
+  assert.match(controls.get('liveDiscoveriesBody').textContent,/next waiting scan/i);
+})()`);
+
+await eval(`(() => {
+  const controls=new Map();
+  const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:''});return controls.get(id)};
+  ${functionBlock("renderLiveDiscoveryStarting", "renderLiveDiscoveryFinal")}
+  renderLiveDiscoveryStarting('Reading active scan records.');
+  assert.equal(controls.get('liveDiscoveriesState').textContent,'Starting');
+  assert.match(controls.get('liveDiscoveriesSummary').textContent,/active scan/i);
+})()`);
+
+await eval(`(async () => {
+  let activeStatusRequestRevision=0,activeStatusAppliedRevision=0,currentLive=false,currentId=null;
+  const fetch=async()=>({ok:true,json:async()=>({runs:[{run_id:'waiting-run',status:'queued'}]})});
+  const claimActiveStatus=revision=>{activeStatusAppliedRevision=revision;return true};
+  const calls=[];
+  const showActiveEmpty=(message,invalidate,queued)=>calls.push({message,invalidate,queued});
+  const startActiveView=()=>{throw new Error('queued work must not start the active view')};
+  const status=()=>{};
+  ${handler("loadActiveRun")}
+  await loadActiveRun();
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].queued,true);
+  assert.match(calls[0].message,/1 scan is waiting/i);
+})()`);
+
+await eval(`(() => {
   ${functionBlock("recoveryIssues", "pausedRecoveryLabels")}
   const plan={
     scans:[{run_id:'live-run',action:'interrupt_for_review'},{run_id:'stale-run',action:'interrupt_for_review'}],

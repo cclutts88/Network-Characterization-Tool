@@ -251,6 +251,7 @@ from app.network_scopes import (
 )
 from app.poc import (
     active_scan_worker_ids,
+    emergency_stop_and_clear_scan_queue,
     LEGACY_PROFILE_IDS,
     ScanOptions,
     ReviewedScopeAssociation,
@@ -745,6 +746,12 @@ class ScanRecoveryResumeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     confirmation: str = Field(min_length=1, max_length=120)
+
+
+class EmergencyStopClearRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=256)
 
 
 class PassiveRecoveryResumeRequest(BaseModel):
@@ -2345,6 +2352,26 @@ def scan_work_recovery_status(request: Request) -> dict:
         "storage_resume_confirmation": "RESUME STORAGE MAINTENANCE",
         "host_command": "sh scripts/nct-reset-unfinished.sh --container nct",
     }
+
+
+@app.post("/api/system/scan-work-recovery/emergency-stop-clear")
+def emergency_stop_clear_scan_work(
+    request: Request, body: EmergencyStopClearRequest
+) -> dict:
+    if auth_enabled():
+        verified = verify_credentials(DB_PATH, body.username, body.password)
+        if not verified or verified.get("role") != "admin":
+            raise HTTPException(status_code=401, detail="Administrator sign-in was not verified")
+        actor = str(verified["username"])
+    else:
+        actor = "local-operator"
+    try:
+        result = emergency_stop_and_clear_scan_queue(
+            actor=actor, db_path=DB_PATH, data_dir=DATA_DIR
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {**result, "cleared_by": actor}
 
 
 @app.post("/api/system/scan-work-recovery/resume")
