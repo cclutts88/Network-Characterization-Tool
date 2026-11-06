@@ -68,9 +68,16 @@ fields but the request model still rejected their intentionally empty values; th
 also rendered the structured validation details as `[object Object]`. The request
 model now permits empty credentials while the endpoint continues to require and
 verify fresh Administrator credentials whenever authentication is enabled, and the
-browser translates structured validation details into readable text. This correction
-must pass the exact-image Emergency Stop case before the novice and independent-review
-gates can clear. Backend observation also measured approximately 109 local status reads per
+browser translates structured validation details into readable text. R20 then passed
+the visible Emergency action and proved that both open runs, the stale capacity owner,
+and every scan process were cleared without changing retained evidence, but a new safe
+scan remained Pending because the old startup scan-admission pause was still active.
+Emergency Stop now releases only that scan-contact hold after it has proved all scan
+workers stopped and reconciled the queue; passive pulls, device contact, local
+processing and storage maintenance retain their independent recovery holds. The result
+states whether new scans can start. This correction must pass the exact-image
+Emergency Stop and follow-up scan case before the novice and independent-review gates
+can clear. Backend observation also measured approximately 109 local status reads per
 minute while an Active Scan waits for fallback; this is bounded to the visible page
 and is not a correctness blocker, but later efficiency work should back off held-state
 polling or combine status reads without weakening operator feedback.

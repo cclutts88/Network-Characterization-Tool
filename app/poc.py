@@ -171,7 +171,11 @@ from app.work_coordination import (
     release_work_lease_on_connection,
     renew_work_lease,
 )
-from app.scan_work_recovery import scan_contact_paused
+from app.scan_work_recovery import (
+    emergency_clear_scan_recovery_pause,
+    recovery_pause,
+    scan_contact_paused,
+)
 
 DATA_DIR = Path(os.environ.get("ANALYZER_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "analyzer.db"
@@ -7939,7 +7943,11 @@ def emergency_stop_and_clear_scan_queue(
             db.rollback()
             raise
 
-    resume_scan_workers()
+    try:
+        pause_released = emergency_clear_scan_recovery_pause(data_dir, actor=actor)
+        remaining_pause = recovery_pause(data_dir)
+    finally:
+        resume_scan_workers()
 
     return {
         "stopped": True,
@@ -7950,6 +7958,10 @@ def emergency_stop_and_clear_scan_queue(
         "paused_schedule_ids": scheduled["paused_schedule_ids"],
         "paused_schedule_count": len(scheduled["paused_schedule_ids"]),
         "scanner_capacity_released": released_capacity,
+        "scan_recovery_pause_released": pause_released,
+        "scan_contact_ready": not bool(
+            remaining_pause and remaining_pause.get("scan_contact_paused", True)
+        ),
     }
 
 

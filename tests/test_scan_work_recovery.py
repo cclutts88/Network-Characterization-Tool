@@ -745,6 +745,31 @@ def test_emergency_stop_clear_cancels_waiting_scans_and_releases_capacity(
     assert audit == ("emergency_cancelled", "admin")
 
 
+def test_emergency_stop_clear_releases_only_scan_recovery_pause(
+    tmp_path: Path,
+) -> None:
+    data_dir, db_path = ready_database(tmp_path)
+    run_id = "9" * 32
+    add_run(db_path, run_id, "queued")
+    plan = diagnose_scan_work(db_path)
+    pause_for_diagnosis(data_dir, plan, "stale scan owner")
+
+    result = poc.emergency_stop_and_clear_scan_queue(
+        actor="admin", db_path=db_path, data_dir=data_dir
+    )
+
+    pause = recovery_pause(data_dir)
+    assert result["scan_recovery_pause_released"] is True
+    assert result["scan_contact_ready"] is True
+    assert pause is not None
+    assert pause["scan_contact_paused"] is False
+    assert pause["passive_contact_paused"] is True
+    assert pause["device_contact_paused"] is True
+    assert pause["local_processing_paused"] is True
+    assert pause["storage_maintenance_paused"] is True
+    assert pause["emergency_scan_released_by"] == "admin"
+
+
 def test_emergency_stop_clear_refuses_to_mutate_if_every_worker_does_not_stop(
     monkeypatch, tmp_path: Path,
 ) -> None:

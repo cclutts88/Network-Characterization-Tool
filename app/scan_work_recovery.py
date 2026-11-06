@@ -227,6 +227,29 @@ def clear_recovery_pause(data_dir: Path, expected_plan_digest: str) -> bool:
     return True
 
 
+def emergency_clear_scan_recovery_pause(data_dir: Path, *, actor: str) -> bool:
+    """Release only scan admission after Emergency Stop proved scan workers stopped."""
+    current = recovery_pause(data_dir)
+    if current is None:
+        return False
+    if current.get("contract") not in {LEGACY_PAUSE_CONTRACT, PAUSE_CONTRACT} or (
+        current.get("state") not in {"diagnosis_required", "review_required"}
+    ):
+        raise ScanWorkRecoveryError(
+            "The recovery pause record cannot be changed safely by Emergency Stop & Clear"
+        )
+    if not current.get("scan_contact_paused", True):
+        return False
+    current["scan_contact_paused"] = False
+    current["emergency_scan_released_at"] = utc_now()
+    current["emergency_scan_released_by"] = actor
+    current["reason"] = _review_reason(
+        current, "Emergency Stop & Clear restored Nmap scan admission"
+    )
+    _save_or_remove_pause(data_dir, current)
+    return True
+
+
 def clear_passive_recovery_pause(data_dir: Path, expected_plan_digest: str) -> bool:
     current = recovery_pause(data_dir)
     if current is None:

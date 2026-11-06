@@ -221,6 +221,7 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     assert "/api/system/scan-work-recovery/emergency-stop-clear" in html
     assert "function emergencyErrorMessage(detail)" in html
     assert "item?.msg||item?.message||String(item)" in html
+    assert "New scans can start; any separate non-scan recovery holds remain in place." in html
     assert "pauses saved schedules" in html
     assert "create and independently verify a complete backup" in html
     assert "Select Run unfinished work self-check" in SHELL_SCRIPT
