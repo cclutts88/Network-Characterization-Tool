@@ -21,6 +21,12 @@ from app.pipeline_intake import (
     MANUAL_DEVICE_INTENT,
     get_admission_intent,
 )
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, adapter_for_source
 
 
 CONFIG = """===== show running-config =====
@@ -35,6 +41,7 @@ def _prepared_collected(tmp_path, monkeypatch, *, run_id="d" * 32):
     db_path = tmp_path / "analyzer.db"
     run_dir = tmp_path / "device-configs" / run_id
     run_dir.mkdir(parents=True)
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     (run_dir / "router-config.txt").write_text(CONFIG)
@@ -83,6 +90,7 @@ def test_new_manual_upload_uses_worker_and_never_calculates_on_summary_request(
     tmp_path, monkeypatch,
 ):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -125,6 +133,7 @@ def test_wrong_manual_upload_is_visibly_classified_before_deletion(
     tmp_path, monkeypatch,
 ):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -336,6 +345,7 @@ def test_failed_device_job_retries_same_frozen_contract_without_network_contact(
     tmp_path, monkeypatch,
 ):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -359,13 +369,66 @@ def test_failed_device_job_retries_same_frozen_contract_without_network_contact(
     assert completed["definition"] == before["definition"]
 
 
-@pytest.mark.parametrize("failure_mode", ["deleted", "lost_claim"])
+def test_retired_device_upload_is_blocked_before_summary_admission(tmp_path, monkeypatch):
+    db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(device_configs, "DB_PATH", db_path)
+    monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+    with TestClient(app) as client:
+        run_id = _upload(client).json()["run_id"]
+    retire_evidence(
+        db_path, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+        actor="pipeline-analyst", reason="wrong device evidence",
+        adapter=adapter_for_source(DEVICE_COLLECTION),
+    )
+
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    intent = get_admission_intent(
+        db_path, intent_kind=MANUAL_DEVICE_INTENT, source_id=run_id,
+    )
+    assert intent["state"] == "blocked"
+    assert "retired at revision" in intent["last_error"]
+    assert jobs.device_summary_job_for_run(db_path, run_id) is None
+
+
+def test_retired_queued_device_summary_fails_and_cannot_retry(tmp_path, monkeypatch):
+    db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(device_configs, "DB_PATH", db_path)
+    monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
+    with TestClient(app) as client:
+        run_id = _upload(client).json()["run_id"]
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    queued = jobs.device_summary_job_for_run(db_path, run_id)
+    retire_evidence(
+        db_path, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+        actor="pipeline-analyst", reason="retired after queue",
+        adapter=adapter_for_source(DEVICE_COLLECTION),
+    )
+
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    failed = jobs.device_summary_job_for_run(db_path, run_id)
+    assert failed["latest_attempt"]["state"] == "failed"
+    assert "retired at revision" in failed["latest_attempt"]["error"]
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        jobs.retry_derived_job(
+            db_path, queued["job_id"], request_token="retired-device-retry",
+            requested_by="pipeline-analyst",
+        )
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("failure_mode", ["deleted", "retired", "lost_claim"])
 def test_device_publication_rejects_deleted_authority_or_lost_claim(
     tmp_path, monkeypatch, failure_mode,
 ):
     from app import device_summary_result
 
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -378,6 +441,12 @@ def test_device_publication_rejects_deleted_authority_or_lost_claim(
     def invalidate(**kwargs):
         if failure_mode == "deleted":
             tombstone_device_collection(db_path, run_id)
+        elif failure_mode == "retired":
+            retire_evidence(
+                db_path, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+                actor="pipeline-analyst", reason="retired during calculation",
+                adapter=adapter_for_source(DEVICE_COLLECTION),
+            )
         else:
             with connect_database(db_path) as db:
                 db.execute(
@@ -394,14 +463,21 @@ def test_device_publication_rejects_deleted_authority_or_lost_claim(
     assert jobs.run_next_derived_job(db_path, tmp_path) is True
     assert changed.is_set()
     job = jobs.device_summary_job_for_run(db_path, run_id)
-    expected = "failed" if failure_mode == "deleted" else "queued"
+    expected = "queued" if failure_mode == "lost_claim" else "failed"
     assert job["latest_attempt"]["state"] == expected
     with connect_database(db_path, read_only=True) as db:
         assert db.execute("SELECT COUNT(*) FROM derived_results").fetchone()[0] == 0
+    if failure_mode == "retired":
+        with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+            jobs.retry_derived_job(
+                db_path, job["job_id"], request_token="retired-publication-retry",
+                requested_by="pipeline-analyst",
+            )
 
 
 def test_duplicate_device_encounters_finish_created_then_reused(tmp_path, monkeypatch):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -426,6 +502,7 @@ def test_identical_pending_encounter_cannot_publish_links_from_page_request(
     tmp_path, monkeypatch,
 ):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -456,6 +533,7 @@ def test_identical_pending_encounter_cannot_publish_links_from_page_request(
 
 def test_concurrent_device_publication_completes_both_attempts(tmp_path, monkeypatch):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)

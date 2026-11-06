@@ -37,6 +37,12 @@ from app.device_observations import (
 from app.main import app
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.pipeline_intake import DEVICE_OBSERVATION_INTENT, get_admission_intent
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, adapter_for_source
 
 
 def _upload(client: TestClient, configuration: str, address: str = "192.0.2.90"):
@@ -103,6 +109,7 @@ def test_safe_bytes_rejects_parent_directory_replacement(tmp_path, monkeypatch):
 
 def _complete_summary(tmp_path, monkeypatch, configuration: str, address="192.0.2.90"):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -1264,6 +1271,7 @@ def test_correction_is_append_only_and_stale_assignment_cannot_publish(tmp_path,
 
 def test_assignment_requires_completed_new_pipeline_summary(tmp_path, monkeypatch):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", tmp_path / "device-configs")
     monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *args, **kwargs: None)
@@ -1481,3 +1489,78 @@ def test_replay_rejects_changed_receipt_facts(tmp_path, monkeypatch):
             extracted=changed,
         )
     assert get_device_interface_receipts(db_path, run_id)["receipts"][0]["address"] == "10.0.0.1"
+
+
+def test_retired_device_blocks_queued_interface_publication_and_retry(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "interface Ethernet0\n ip address 10.40.0.1 255.255.255.0\n",
+    )
+    scope = _scope(db_path, "Retired interface scope")
+    assignment = assign_device_scope(
+        db_path, run_id=run_id, scope_id=scope["scope_id"], actor="analyst",
+        reason="Confirmed whole collection context", whole_collection_confirmed=True,
+    )
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    intent = get_admission_intent(
+        db_path, intent_kind=DEVICE_OBSERVATION_INTENT,
+        source_id=assignment["assignment_id"],
+    )
+    retire_evidence(
+        db_path, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+        actor="analyst", reason="wrong scoped device evidence",
+        adapter=adapter_for_source(DEVICE_COLLECTION),
+    )
+
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        attempt = db.execute(
+            """SELECT state,error FROM pipeline_job_attempts
+                 WHERE job_id=? ORDER BY attempt_number DESC LIMIT 1""",
+            (intent["admitted_job_id"],),
+        ).fetchone()
+        assert attempt[0] == "failed"
+        assert "retired at revision" in attempt[1]
+        assert db.execute("SELECT COUNT(*) FROM device_interface_assessments").fetchone()[0] == 0
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        jobs.retry_derived_job(
+            db_path, intent["admitted_job_id"], request_token="retired-interface-retry",
+            requested_by="analyst",
+        )
+
+
+def test_retired_device_blocks_queued_vlan_publication_and_retry(tmp_path, monkeypatch):
+    db_path, run_id = _complete_summary(
+        tmp_path, monkeypatch,
+        "vlan 40\n name USERS\ninterface Ethernet0\n switchport access vlan 40\n",
+    )
+    scope = _scope(db_path, "Retired VLAN scope")
+    assignment = _assign_and_process(db_path, tmp_path, run_id, scope)
+    assert jobs.dispatch_next_pipeline_intake(db_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        vlan_job_id = db.execute(
+            """SELECT admitted_job_id FROM device_vlan_admission_intents
+                 WHERE assignment_id=?""",
+            (assignment["assignment_id"],),
+        ).fetchone()[0]
+    retire_evidence(
+        db_path, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+        actor="analyst", reason="wrong VLAN evidence",
+        adapter=adapter_for_source(DEVICE_COLLECTION),
+    )
+
+    assert jobs.run_next_derived_job(db_path, tmp_path) is True
+    with connect_database(db_path, read_only=True) as db:
+        attempt = db.execute(
+            """SELECT state,error FROM pipeline_job_attempts
+                 WHERE job_id=? ORDER BY attempt_number DESC LIMIT 1""",
+            (vlan_job_id,),
+        ).fetchone()
+        assert attempt[0] == "failed"
+        assert "retired at revision" in attempt[1]
+        assert db.execute("SELECT COUNT(*) FROM device_vlan_assessments").fetchone()[0] == 0
+    with pytest.raises(RetiredEvidenceDependency, match="retired at revision"):
+        jobs.retry_derived_job(
+            db_path, vlan_job_id, request_token="retired-vlan-retry",
+            requested_by="analyst",
+        )

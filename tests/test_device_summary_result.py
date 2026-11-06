@@ -20,6 +20,12 @@ from app.device_configs import (
     calculate_device_collection_summary,
     device_collection_summary,
 )
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, adapter_for_source
 
 
 CONFIG = b'''===== show running-config =====
@@ -43,6 +49,7 @@ def manual_upload(
 ) -> tuple[Path, dict]:
     run_dir = config_dir / run_id
     run_dir.mkdir(parents=True)
+    init_evidence_retirement_storage(db_path)
     evidence_path = run_dir / retained_filename
     evidence_path.write_bytes(content)
     begin_manual_upload_authority(db_path, run_id)
@@ -270,3 +277,24 @@ def test_existing_empty_higher_priority_file_wins_and_missing_history_is_distinc
         "recognized_categories": [],
         "detail": "Processing completed and the original file was retained, but no supported network facts were recognized. Verify the selected vendor, device role, and file before using this result.",
     }
+
+
+def test_retired_device_does_not_hide_same_content_active_sibling(tmp_path):
+    db_path = tmp_path / "nct.db"
+    config_dir = tmp_path / "device-configs"
+    first_id, second_id = "1" * 32, "2" * 32
+    first_dir, _ = manual_upload(db_path, config_dir, first_id)
+    second_dir, _ = manual_upload(db_path, config_dir, second_id)
+    first = device_result.analyze_manual_upload_summary(db_path, first_id, first_dir)
+    second = device_result.analyze_manual_upload_summary(db_path, second_id, second_dir)
+    assert first["result_id"] == second["result_id"]
+    retire_evidence(
+        db_path, source_family=DEVICE_COLLECTION, encounter_id=first_id,
+        actor="analyst", reason="wrong encounter",
+        adapter=adapter_for_source(DEVICE_COLLECTION),
+    )
+
+    with pytest.raises(RetiredEvidenceDependency, match="retired"):
+        device_result.analyze_manual_upload_summary(db_path, first_id, first_dir)
+    active = device_result.analyze_manual_upload_summary(db_path, second_id, second_dir)
+    assert active["result_id"] == second["result_id"]

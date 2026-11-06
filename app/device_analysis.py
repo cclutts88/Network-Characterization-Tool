@@ -26,6 +26,8 @@ from app.device_summary_result import (
     analyze_collected_device_summary,
     analyze_manual_upload_summary,
 )
+from app.evidence_retirement import RetiredEvidenceDependency, require_active_encounter
+from app.evidence_retirement_sources import DEVICE_COLLECTION
 from app.derived_contracts import (
     DEVICE_SUMMARY_PARAMETERS as DERIVED_DEVICE_SUMMARY_PARAMETERS,
     DEVICE_SUMMARY_SCHEMA_VERSION as DERIVED_DEVICE_SUMMARY_SCHEMA_VERSION,
@@ -187,6 +189,15 @@ def _device_summary_snapshot(
         from app.device_configs import _unavailable_summary_detail
 
         raise DeviceCollectionIncomplete(_unavailable_summary_detail(manifest))
+    with connect_database(db_path, read_only=True) as db:
+        try:
+            require_active_encounter(
+                db, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+            )
+        except RetiredEvidenceDependency as exc:
+            raise DeviceCollectionDeleted(
+                "Device collection was retired from active analysis"
+            ) from exc
     try:
         from app.pipeline_intake import (
             COLLECTED_DEVICE_INTENT,

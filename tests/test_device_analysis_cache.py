@@ -31,6 +31,7 @@ from app.device_observations import init_device_observation_storage
 from app.device_observations import assign_device_scope, correct_device_scope
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.network_semantics import init_network_semantics_storage, set_external_wan_gateway
+from app.evidence_retirement import init_evidence_retirement_storage
 
 
 CONFIG = b"""===== show running-config =====
@@ -52,6 +53,7 @@ def _ready_device(
     config_dir = tmp_path / "device-configs"
     run_dir = config_dir / run_id
     run_dir.mkdir(parents=True)
+    init_evidence_retirement_storage(db_path)
     init_device_observation_storage(db_path)
     init_network_semantics_storage(db_path)
     begin_manual_upload_authority(db_path, run_id)
@@ -364,6 +366,7 @@ def test_more_than_one_hundred_distinct_devices_reach_cached_builder(
             name=f"Router {index + 1}",
         )
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(main, "DB_PATH", db_path)
     monkeypatch.setattr(main, "CONFIG_DIR", config_dir)

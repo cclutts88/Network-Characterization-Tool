@@ -28,7 +28,11 @@ from app.derived_contracts import (
 )
 from app.derived_results import derived_result_identity, init_derived_result_storage
 from app.evidence_retirement import active_encounter_sql, require_active_encounter
-from app.evidence_retirement_sources import NMAP_IMPORT, NMAP_SCAN_RUN
+from app.evidence_retirement_sources import (
+    DEVICE_COLLECTION,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+)
 from app.nmap_base_analysis import (
     NMAP_ANALYSIS_TERMINAL_STATES,
     _parse_nmap_xml,
@@ -528,7 +532,7 @@ def _source_snapshot(db: sqlite3.Connection, run_id: str) -> dict:
     return frozen
 
 
-def _require_active_nmap_job_source(
+def _require_active_job_source(
     db: sqlite3.Connection, job: sqlite3.Row | tuple,
 ) -> None:
     source_kind = str(job[13] or "")
@@ -538,6 +542,11 @@ def _require_active_nmap_job_source(
     elif source_kind in {"nmap_scan", "scan_run"}:
         source_family = NMAP_SCAN_RUN
         encounter_id = str(job[2] or job[14] or "")
+    elif source_kind in {
+        "device_config_upload", "device_collection", "device_configuration",
+    }:
+        source_family = DEVICE_COLLECTION
+        encounter_id = str(job[2] or "")
     else:
         return
     if not encounter_id:
@@ -1112,6 +1121,9 @@ def _automated_contract_from_evidence(evidence: dict) -> dict:
 def _device_summary_snapshot(
     db: sqlite3.Connection, run_id: str, *, intent_kind: str,
 ) -> tuple[dict, dict]:
+    require_active_encounter(
+        db, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+    )
     contract, _context = _device_authority_contract(
         db, run_id, intent_kind=intent_kind,
     )
@@ -1147,6 +1159,11 @@ def _device_observation_snapshot(
 
     contract = assignment_contract_on_connection(db, assignment_id)
     assignment = contract["assignment"]
+    require_active_encounter(
+        db,
+        source_family=DEVICE_COLLECTION,
+        encounter_id=str(assignment["run_id"]),
+    )
     authority = contract["authority"]
     configuration = next(
         (
@@ -1257,6 +1274,11 @@ def _dispatch_next_device_vlan_intake_on_connection(db: sqlite3.Connection) -> b
     db.execute("SAVEPOINT device_vlan_admission")
     try:
         contract = json.loads(row[5] or "{}")
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(contract.get("run_id") or ""),
+        )
         if (
             int(row[2]) != DEVICE_VLAN_POLICY_VERSION
             or contract.get("assignment_id") != assignment_id
@@ -1436,7 +1458,7 @@ def retry_derived_job(
         ).fetchone()
         if latest is None or latest[1] not in {"failed", "interrupted"}:
             raise DerivedJobConflict("Only failed or interrupted work can be retried")
-        _require_active_nmap_job_source(db, job)
+        _require_active_job_source(db, job)
         attempt_id = f"analysis_attempt_{uuid.uuid4().hex}"
         db.execute(
             """INSERT INTO pipeline_job_attempts (
@@ -1876,6 +1898,11 @@ def execute_claimed_device_summary_job(
         raise DerivedJobConflict("The device summary job contract is inconsistent")
 
     def validate_authority(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(row["source_run_id"]),
+        )
         current, _context = _device_authority_contract(
             db, row["source_run_id"], intent_kind=intent_kind,
         )
@@ -1894,6 +1921,11 @@ def execute_claimed_device_summary_job(
         validate_authority(db)
 
     def guard(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(row["source_run_id"]),
+        )
         _assert_claim_on_connection(
             db, claim, "The device summary worker lost its claim or protected ownership"
         )
@@ -1999,6 +2031,12 @@ def execute_claimed_device_observation_job(
     ):
         raise DerivedJobConflict("The device observation job contract is inconsistent")
     assignment_id = row["source_ref"]
+    with connect_database(db_path, read_only=True) as db:
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(row["source_run_id"]),
+        )
     snapshot = capture_device_interface_source(db_path, row["source_run_id"], data_dir)
     if (
         snapshot["observation_id"] != row["source_observation_id"]
@@ -2014,6 +2052,11 @@ def execute_claimed_device_observation_job(
         raise DerivedJobConflict("Device configuration changed during extraction")
 
     def guard(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(row["source_run_id"]),
+        )
         _assert_claim_on_connection(
             db, claim, "The device observation worker lost its claim or protected ownership"
         )
@@ -2135,6 +2178,12 @@ def execute_claimed_device_vlan_job(
         raise DerivedJobConflict("The device VLAN job contract is inconsistent")
     assignment_id = contract["assignment_id"]
     summary_result_id = contract["summary_result_id"]
+    with connect_database(db_path, read_only=True) as db:
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(row["source_run_id"]),
+        )
     snapshot = capture_device_interface_source(
         db_path, row["source_run_id"], data_dir,
     )
@@ -2154,6 +2203,11 @@ def execute_claimed_device_vlan_job(
         raise DerivedJobConflict("Device VLAN configuration changed during extraction")
 
     def guard(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db,
+            source_family=DEVICE_COLLECTION,
+            encounter_id=str(row["source_run_id"]),
+        )
         _assert_claim_on_connection(
             db, claim, "The device VLAN worker lost its claim or protected ownership"
         )

@@ -22,6 +22,8 @@ from app.derived_results import (
     prepare_derived_result,
     publish_derived_result,
 )
+from app.evidence_retirement import require_active_encounter
+from app.evidence_retirement_sources import DEVICE_COLLECTION
 from app.device_configs import (
     MAX_RESPONSE_OUTPUT_CHARS,
     MAX_SUMMARY_ITEMS,
@@ -220,6 +222,9 @@ def _inputs(snapshot: dict) -> list[dict]:
 
 def _authority_guard(run_id: str, snapshot: dict, authority: dict):
     def require_observation(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+        )
         row = db.execute(
             """SELECT sha256, source_kind, source_ref
                FROM artifact_observations WHERE observation_id = ?""",
@@ -655,6 +660,9 @@ def _collected_inputs(snapshot: dict) -> list[dict]:
 
 def _collected_authority_guard(run_id: str, snapshot: dict, authority: dict):
     def require_inputs(db: sqlite3.Connection) -> None:
+        require_active_encounter(
+            db, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+        )
         require_active_snapshot(
             db,
             run_id=run_id,

@@ -25,11 +25,14 @@ from app.main import app
 from app.poc import RUNS_DIR_NAME, insert_scan_run_manifest
 from app.saved_networks import SavedNetworkCreate, create_saved_network
 from app.storage_health import backfill_storage
+from app.evidence_retirement import init_evidence_retirement_storage
 
 
 def make_collection(config_dir: Path, db_path: Path, run_id: str, config: str) -> None:
     run_dir = config_dir / run_id
     run_dir.mkdir(parents=True)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    init_evidence_retirement_storage(db_path)
     retained_filename = "uploaded-edge-config.txt"
     retained_path = run_dir / retained_filename
     retained_path.write_text(config, encoding="utf-8")

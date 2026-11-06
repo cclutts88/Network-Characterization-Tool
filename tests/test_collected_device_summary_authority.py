@@ -24,6 +24,7 @@ from app.derived_contracts import (
     LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
     LEGACY_DEVICE_SUMMARY_VERSION,
 )
+from app.evidence_retirement import init_evidence_retirement_storage
 
 
 CONFIG = """===== show running-config =====
@@ -44,6 +45,7 @@ def finalized_collection(tmp_path, monkeypatch, *, run_id="1" * 32, history=True
     config_dir = tmp_path / "device-configs"
     run_dir = config_dir / run_id
     run_dir.mkdir(parents=True)
+    init_evidence_retirement_storage(db_path)
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
     (run_dir / "router-config.txt").write_text(CONFIG)
@@ -174,6 +176,7 @@ def test_read_only_analysis_can_open_completed_legacy_summary(
 
 def test_interactive_finalization_uses_same_verified_authority(tmp_path, monkeypatch):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -318,6 +321,7 @@ def test_verification_failure_retries_locally_without_duplicate_observations(
         ),
     )
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     config_dir = tmp_path / "device-configs"
     run_id = "3" * 32
     run_dir = config_dir / run_id
@@ -395,6 +399,7 @@ def test_file_replacement_between_freeze_and_registration_cannot_activate(
         device_configs, "register_finalized_files", replace_before_registration
     )
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     config_dir = tmp_path / "device-configs"
     run_id = "5" * 32
     run_dir = config_dir / run_id
@@ -435,6 +440,7 @@ def test_incomplete_collections_never_fall_back_to_old_analysis(
     tmp_path, monkeypatch, status, output_complete, output_truncated,
 ):
     db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
     config_dir = tmp_path / "device-configs"
     run_id = "4" * 32
     run_dir = config_dir / run_id
