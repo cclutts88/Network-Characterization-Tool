@@ -410,6 +410,7 @@ def _diagnose(
         return result
 
     scans: list[dict[str, Any]] = []
+    scheduled_run_claims: dict[str, tuple[Any, ...]] = {}
     for rowid, run_id, status, manifest_json, created_at in connection.execute(
         "SELECT rowid,run_id,status,manifest_json,created_at FROM scan_runs ORDER BY rowid"
     ):
@@ -425,6 +426,14 @@ def _diagnose(
             blockers.append(f"Scan {run_id} has unsupported state {status}")
         if status not in ACTIVE_SCAN_STATES:
             continue
+        work_claim = manifest.get("work_claim")
+        if isinstance(work_claim, dict) and str(work_claim.get("lease_key") or "").startswith(
+            "schedule-chunk:"
+        ):
+            scheduled_run_claims[str(run_id)] = (
+                work_claim.get("lease_key"), work_claim.get("lease_id"),
+                work_claim.get("lease_owner"), work_claim.get("lease_epoch"),
+            )
         started = bool(manifest.get("started_at"))
         claim = manifest.get("execution_claim")
         action = "preserve_queue"
@@ -562,6 +571,18 @@ def _diagnose(
              WHERE state='pending' ORDER BY created_at,intent_id""",
     ) if "device_vlan_admission_intents" in available_tables else []
 
+    scheduled_chunk_lease_bindings = {
+        f"schedule-chunk:{row['occurrence_id']}:{int(row['chunk_number'])}": (
+            f"{row['occurrence_id']}:{int(row['chunk_number'])}",
+            row["last_fencing_epoch"], row["scan_run_id"],
+        )
+        for row in _snapshot_rows(
+            connection,
+            """SELECT occurrence_id,chunk_number,last_fencing_epoch,scan_run_id
+                 FROM scan_schedule_chunks
+                 WHERE state IN ('preparing','active','needs_attention')""",
+        )
+    }
     leases = _snapshot_rows(
         connection,
         """SELECT * FROM work_leases
@@ -572,6 +593,27 @@ def _diagnose(
         key = str(item["lease_key"])
         binding = device_lease_bindings.get(key) or derived_lease_bindings.get(key)
         if key == SCAN_CAPACITY_LEASE_KEY:
+            continue
+        if key in scheduled_chunk_lease_bindings and item["work_kind"] == "scheduled_scan_chunk":
+            expected_work_id, expected_epoch, scan_run_id = scheduled_chunk_lease_bindings[key]
+            retained_claim = scheduled_run_claims.get(str(scan_run_id)) if scan_run_id else None
+            matches_chunk = (
+                item["work_id"] == expected_work_id
+                and expected_epoch is not None
+                and int(item["fencing_epoch"]) == int(expected_epoch)
+            )
+            matches_run = (
+                retained_claim is not None
+                and retained_claim == (
+                    key, item["lease_id"], item["owner_id"], int(item["fencing_epoch"]),
+                )
+            )
+            if matches_chunk and matches_run:
+                # The frozen chunk and its live scan retain the same exact
+                # lease identity. This is ordinary current work; the chunk is
+                # still represented in the recovery plan below.
+                continue
+            blockers.append(f"Scheduled work lease {key} does not match its saved chunk and scan ownership")
             continue
         if key == "storage-maintenance" and str(item["work_kind"]).startswith("storage-"):
             storage_maintenance.append({

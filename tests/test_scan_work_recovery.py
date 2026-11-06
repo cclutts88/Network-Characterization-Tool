@@ -506,6 +506,142 @@ def test_schedule_contact_is_held_without_reopening_completed_chunk(tmp_path: Pa
     assert enabled == 0
 
 
+def test_live_scheduled_chunk_lease_is_not_reported_as_unsupported(tmp_path: Path) -> None:
+    _, db_path = ready_database(tmp_path)
+    schedule_id = "schedule-live-lease-test"
+    occurrence_id = "3" * 32
+    digest = "4" * 64
+    now = "2026-10-23T00:00:00Z"
+    lease_key = f"schedule-chunk:{occurrence_id}:1"
+    run_id = "5" * 32
+    add_run(db_path, run_id, "awaiting_fallback_approval", started=True, scheduled=True)
+    with connect_database(db_path) as db:
+        manifest = json.loads(db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id=?", (run_id,)
+        ).fetchone()[0])
+        manifest["work_claim"] = {
+            "lease_key": lease_key, "lease_id": "live-lease",
+            "lease_owner": "live-worker", "lease_epoch": 1,
+        }
+        db.execute(
+            "UPDATE scan_runs SET manifest_json=? WHERE run_id=?",
+            (json.dumps(manifest, sort_keys=True), run_id),
+        )
+        profile_id, profile_version = db.execute(
+            "SELECT profile_id,version FROM scan_profiles ORDER BY built_in DESC LIMIT 1"
+        ).fetchone()
+        db.execute(
+            "INSERT INTO scan_schedules VALUES(?,?,?,?,?,?,?)",
+            (schedule_id, "Live schedule", now, "admin", profile_id, profile_version, '{}'),
+        )
+        db.execute(
+            "INSERT INTO scan_schedule_definitions VALUES(?,?,?,?,?,?)",
+            (schedule_id, 1, digest, '{}', now, "admin"),
+        )
+        db.execute(
+            """INSERT INTO scan_schedule_occurrences(
+                   occurrence_id,schedule_id,definition_version,definition_digest,due_at,
+                   trigger_kind,trigger_key,actor,state,frozen_json,frozen_digest,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (occurrence_id, schedule_id, 1, digest, now, "scheduled", "daily", "scheduler",
+             "active", '{}', digest, now),
+        )
+        db.execute(
+            """INSERT INTO scan_schedule_chunks(
+                   occurrence_id,chunk_number,targets_json,targets_digest,target_count,
+                   state,contact_phase,attempt_count,last_fencing_epoch,scan_run_id,
+                   created_at,started_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (occurrence_id, 1, '["192.0.2.1"]', digest, 1, "active", "contact_active",
+             1, 1, run_id, now, now),
+        )
+        db.execute(
+            """INSERT INTO work_leases VALUES(
+                   ?,?,?,?,?,?,'active',?,?,?,NULL,NULL)""",
+            (lease_key, "scheduled_scan_chunk", f"{occurrence_id}:1", 1,
+             "live-lease", "live-worker", now, now, "2099-10-23T03:00:00Z"),
+        )
+
+    plan = diagnose_scan_work(db_path)
+
+    assert not any("Unsupported active work lease" in item for item in plan["blockers"])
+    assert plan["safe_to_apply"] is True
+    assert plan["schedule_chunks"][0]["action"] == "hold_for_review"
+
+
+@pytest.mark.parametrize(
+    ("lease_work_id", "lease_epoch", "claim_lease_id"),
+    [
+        ("unrelated:1", 1, "live-lease"),
+        (None, 999, "live-lease"),
+        (None, 1, "different-lease"),
+    ],
+)
+def test_mismatched_live_scheduled_chunk_lease_blocks_recovery(
+    tmp_path: Path, lease_work_id: str | None, lease_epoch: int,
+    claim_lease_id: str,
+) -> None:
+    _, db_path = ready_database(tmp_path)
+    occurrence_id = "6" * 32
+    run_id = "7" * 32
+    lease_key = f"schedule-chunk:{occurrence_id}:1"
+    now = "2026-10-23T00:00:00Z"
+    add_run(db_path, run_id, "awaiting_fallback_approval", started=True, scheduled=True)
+    with connect_database(db_path) as db:
+        manifest = json.loads(db.execute(
+            "SELECT manifest_json FROM scan_runs WHERE run_id=?", (run_id,)
+        ).fetchone()[0])
+        manifest["work_claim"] = {
+            "lease_key": lease_key, "lease_id": claim_lease_id,
+            "lease_owner": "live-worker", "lease_epoch": 1,
+        }
+        db.execute(
+            "UPDATE scan_runs SET manifest_json=? WHERE run_id=?",
+            (json.dumps(manifest, sort_keys=True), run_id),
+        )
+        profile_id, profile_version = db.execute(
+            "SELECT profile_id,version FROM scan_profiles ORDER BY built_in DESC LIMIT 1"
+        ).fetchone()
+        schedule_id = "schedule-mismatch-test"
+        db.execute(
+            "INSERT INTO scan_schedules VALUES(?,?,?,?,?,?,?)",
+            (schedule_id, "Mismatch schedule", now, "admin", profile_id,
+             profile_version, '{}'),
+        )
+        db.execute(
+            "INSERT INTO scan_schedule_definitions VALUES(?,?,?,?,?,?)",
+            (schedule_id, 1, "8" * 64, '{}', now, "admin"),
+        )
+        db.execute(
+            """INSERT INTO scan_schedule_occurrences(
+                   occurrence_id,schedule_id,definition_version,definition_digest,due_at,
+                   trigger_kind,trigger_key,actor,state,frozen_json,frozen_digest,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (occurrence_id, schedule_id, 1, "8" * 64, now, "scheduled", "daily",
+             "scheduler", "active", '{}', "8" * 64, now),
+        )
+        db.execute(
+            """INSERT INTO scan_schedule_chunks(
+                   occurrence_id,chunk_number,targets_json,targets_digest,target_count,
+                   state,contact_phase,attempt_count,last_fencing_epoch,scan_run_id,created_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (occurrence_id, 1, '["192.0.2.1"]', "8" * 64, 1, "active",
+             "contact_active", 1, 1, run_id, now),
+        )
+        db.execute(
+            """INSERT INTO work_leases VALUES(
+                   ?,?,?,?,?,?,'active',?,?,?,NULL,NULL)""",
+            (lease_key, "scheduled_scan_chunk", lease_work_id or f"{occurrence_id}:1",
+             lease_epoch, "live-lease", "live-worker", now, now,
+             "2099-10-23T03:00:00Z"),
+        )
+
+    plan = diagnose_scan_work(db_path)
+
+    assert plan["safe_to_apply"] is False
+    assert "does not match its saved chunk and scan ownership" in " ".join(plan["blockers"])
+
+
 def test_durable_pause_prevents_queued_scan_dispatch(tmp_path: Path) -> None:
     data_dir, db_path = ready_database(tmp_path)
     add_run(db_path, "f" * 32, "queued")

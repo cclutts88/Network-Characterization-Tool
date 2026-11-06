@@ -869,7 +869,8 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "function startActiveView(run)" in html
     assert 'id="scanBuilder" class="panel builder draft-loading" aria-busy="true" inert' in html
     assert ".builder.draft-loading{pointer-events:none;opacity:.72}" in html
-    assert "finally{$('scanBuilder').classList.remove('draft-loading');$('scanBuilder').removeAttribute('aria-busy');$('scanBuilder').removeAttribute('inert')}" in html
+    assert "function setScanDraftLoading(loading)" in html
+    assert "finally{setScanDraftLoading(false)}" in html
     assert "async function poll(runId=currentId,revision=activeViewRevision){if(!activeScanWorkspace()||!runId||revision!==activeViewRevision)return;const detailRevision=++activeDetailRequestRevision;try" in html
     assert "ownsView=detailRevision===activeDetailRequestRevision" in html
     assert "Previous scan ${run.status}. Its retained outcome is available in Scan History while the next scan continues." in html
@@ -3222,6 +3223,7 @@ def test_scan_workspace_loads_only_the_selected_task_and_stops_hidden_work():
     assert "async function ensureScanData(" in html
     assert "if(task==='profileManagementPanel'){await ensureScanData('profiles',loadProfiles);return}" in html
     assert "if(task==='queuePanel'){await syncActiveScanWorkspace();return}" in html
+    assert "if(task==='scanBuilder'&&!scanDataLoaded.has('draft'))setScanDraftLoading(true);else setScanDraftLoading(false)" in html
     assert "function stopHiddenScanWork()" in html
     assert "if(liveDiscoveryController){liveDiscoveryController.abort()" in html
     assert "if(scanDataLoaded.has('history'))await loadHistory(true)" in html

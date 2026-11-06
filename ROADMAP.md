@@ -20,6 +20,19 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Complete novice workflow requalification in progress (2026-11-06): exercise every
+visible NCT workspace, guide and supported mutation against an exact isolated Linux
+candidate, including scheduled scans, duplicate evidence, malformed imports,
+unreachable targets, FPING fallback, cancellation, recovery and emergency queue
+clearance. The first live pass found that Scan Profiles and Scheduled Scans inherited
+the New Scan draft-loading lock after ordinary navigation, scheduled multi-network
+name previews did not refresh while typing the Schedule name, and the unfinished-work
+self-check misclassified a live scheduled-chunk lease as unsupported. Correct these
+shared activation and recovery-state defects, then repeat the affected workflow while
+the backend observer checks for errors, stale ownership, hidden polling and duplicate
+requests. Do not package the candidate until the novice and independent reviewer clear
+the repaired flow and the complete Linux regression suite passes again.
+
 Evidence-retirement confirmation parsing tightened in development (2026-11-06): the
 complete regression suite found that a changed final base64url character could, for
 some signatures, decode to the same signed bytes because unused encoding bits were not

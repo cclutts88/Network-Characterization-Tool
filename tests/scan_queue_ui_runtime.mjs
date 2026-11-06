@@ -13,7 +13,11 @@ function handler(name) {
 function functionBlock(name, nextName) {
   const start = source.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `Could not find ${name} in app/ui.py`);
-  const end = source.indexOf(`\nfunction ${nextName}(`, start);
+  const candidates = [
+    source.indexOf(`\nfunction ${nextName}(`, start),
+    source.indexOf(`\nasync function ${nextName}(`, start),
+  ].filter(index => index > start);
+  const end = candidates.length ? Math.min(...candidates) : -1;
   assert.notEqual(end, -1, `Could not find function after ${name} in app/ui.py`);
   return source.slice(start, end);
 }
@@ -382,6 +386,30 @@ await eval(`(async () => {
   assert.equal(scanDataLoaded.has('retryable'),true,'the successful retry must be cached');
   await ensureScanData('retryable',loader);
   assert.equal(attempts,2,'a successful task read should be reused on return');
+})()`);
+
+await eval(`(async () => {
+  const attributes=new Set(['aria-busy','inert']);
+  const classes=new Set(['panel','builder','draft-loading']);
+  const builder={
+    classList:{toggle(name,enabled){if(enabled)classes.add(name);else classes.delete(name)}},
+    setAttribute(name){attributes.add(name)},
+    removeAttribute(name){attributes.delete(name)},
+  };
+  const $=id=>{assert.equal(id,'scanBuilder');return builder};
+  ${functionBlock("setScanDraftLoading", "loadDraft")}
+  let scanWorkspaceInitialized=true,scanActivationRevision=1,task='profileManagementPanel',profilesLoaded=0;
+  const currentScanTask=()=>task;
+  const stopHiddenScanWork=()=>{};
+  const scanDataLoaded=new Set(),scanDataLoading=new Map();
+  const ensureScanData=async(key,loader)=>{await loader();scanDataLoaded.add(key);return true};
+  const loadProfiles=async()=>{profilesLoaded+=1};
+  ${handler("activateScanTask")}
+  await activateScanTask();
+  assert.equal(profilesLoaded,1);
+  assert.equal(classes.has('draft-loading'),false,'Scan Profiles must not inherit New Scan draft loading');
+  assert.equal(attributes.has('inert'),false,'Scan Profiles must remain clickable after task navigation');
+  assert.equal(attributes.has('aria-busy'),false);
 })()`);
 
 await eval(`(async () => {
