@@ -601,6 +601,13 @@ def test_terminal_publication_preserves_a_newer_saved_fallback_decision(tmp_path
         authorization_note="Approved immediately before cancellation closed the run",
         db_path=db_path,
     )
+    poc.request_scan_cancellation(
+        manifest["run_id"],
+        requested_by="tester",
+        cause="operator",
+        detail="Stop the approved fallback",
+        db_path=db_path,
+    )
     stale_terminal.update(
         status="cancelled",
         completed_at="2026-11-05T12:00:00.000Z",
@@ -614,6 +621,8 @@ def test_terminal_publication_preserves_a_newer_saved_fallback_decision(tmp_path
     assert completed["fallback_decided_by"] == "tester"
     assert completed["fallback_authorization_note"].startswith("Approved immediately")
     assert completed["fallback_decided_at"]
+    assert poc.scan_cancellation_requested(manifest["run_id"], db_path) is False
+    assert completed["cancellation_acknowledged_at"]
 
 
 def test_scheduled_terminal_preserves_a_newer_saved_fallback_decision(tmp_path):
@@ -629,6 +638,13 @@ def test_scheduled_terminal_preserves_a_newer_saved_fallback_decision(tmp_path):
         decision="decline",
         decided_by="scheduler.owner",
         authorization_note="Finish scheduled evidence without broader contact",
+        db_path=db_path,
+    )
+    poc.request_scan_cancellation(
+        manifest["run_id"],
+        requested_by="scheduler.owner",
+        cause="operator",
+        detail="Stop this scheduled chunk",
         db_path=db_path,
     )
     stale_terminal.update(
@@ -648,6 +664,8 @@ def test_scheduled_terminal_preserves_a_newer_saved_fallback_decision(tmp_path):
     assert completed["fallback_decision"] == "decline"
     assert completed["fallback_decided_by"] == "scheduler.owner"
     assert completed["fallback_authorization_note"].startswith("Finish scheduled")
+    assert poc.scan_cancellation_requested(manifest["run_id"], db_path) is False
+    assert completed["cancellation_acknowledged_at"]
 
 
 def test_worker_releases_in_memory_slot_when_stale_fence_blocks_error_publication(

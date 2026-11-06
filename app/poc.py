@@ -3929,6 +3929,13 @@ def publish_scheduled_scan_terminal(
             or isinstance(manifest.get("artifact_registry"), dict)
         ):
             record_automated_nmap_intent(db, manifest["run_id"])
+        if status == "cancelled":
+            db.execute(
+                """UPDATE scan_run_control SET cancellation_acknowledged_at = ?
+                     WHERE run_id = ? AND cancellation_requested_at IS NOT NULL
+                       AND cancellation_acknowledged_at IS NULL""",
+                (manifest["completed_at"], manifest["run_id"]),
+            )
         occurrence_state = publish_chunk_terminal_on_connection(
             db,
             occurrence_id=str(claim["occurrence_id"]),
@@ -3986,6 +3993,13 @@ def publish_scan_terminal(manifest: dict, *, db_path: Path = DB_PATH) -> None:
             or isinstance(manifest.get("artifact_registry"), dict)
         ):
             record_automated_nmap_intent(db, manifest["run_id"])
+        if manifest["status"] == "cancelled":
+            db.execute(
+                """UPDATE scan_run_control SET cancellation_acknowledged_at = ?
+                     WHERE run_id = ? AND cancellation_requested_at IS NOT NULL
+                       AND cancellation_acknowledged_at IS NULL""",
+                (manifest["completed_at"], manifest["run_id"]),
+            )
         release_work_lease_on_connection(
             db, execution_claim, detail=f"Scan ended {manifest['status']}"
         )

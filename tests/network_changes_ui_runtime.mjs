@@ -51,7 +51,7 @@ assert.doesNotMatch(html, /No source-reported host, port, service, product, vers
 
 await eval([
   "(async () => {",
-  "let analysisWorkspaceReady=true,analysisActivationRevision=0,preparedComparisonDeepLink='';",
+  "let analysisWorkspaceReady=true,analysisActivationRevision=0,analysisActivationPromise=null,analysisActivationTask='',preparedComparisonDeepLink='';",
   "const analysisLoadedTasks=new Set(),automatedItems=[{selection_run_id:'run-a'},{selection_run_id:'run-b'}];",
   "const nodes={comparisonBaseline:{value:''},comparisonCurrent:{value:''},networkChangesPanel:{open:false,scrollIntoView(){this.scrolled=true}}};",
   "const $=id=>nodes[id],location={hash:'#networkChangesPanel',search:'?run=run-b&compare=run-b'};",
@@ -106,7 +106,7 @@ await eval([
 
 await eval([
   "(async () => {",
-  "let analysisWorkspaceReady=true,analysisActivationRevision=0,preparedComparisonDeepLink='',location={hash:'#networkOutliersPanel',search:''};",
+  "let analysisWorkspaceReady=true,analysisActivationRevision=0,analysisActivationPromise=null,analysisActivationTask='',preparedComparisonDeepLink='',location={hash:'#networkOutliersPanel',search:''};",
   "const analysisLoadedTasks=new Set(),automatedItems=[],$=()=>({});",
   "let overviewLoads=0,outlierLoads=0;",
   "const loadNetworkOverview=async()=>{overviewLoads+=1;outlierLoads+=1;return true},loadNetworkOutliers=async()=>{outlierLoads+=1;return true};",
@@ -117,6 +117,26 @@ await eval([
   "await activateAnalysisTask();",
   "assert.equal(overviewLoads,1);assert.equal(outlierLoads,1,'initial LFA activation must not issue a second outlier read after overview loading');",
   "assert.equal(analysisLoadedTasks.has('networkOverview'),true);",
+  "})()",
+].join("\n"));
+
+await eval([
+  "(async () => {",
+  "let analysisWorkspaceReady=true,analysisActivationRevision=0,analysisActivationPromise=null,analysisActivationTask='',preparedComparisonDeepLink='',location={hash:'#networkChangesPanel',search:''};",
+  "const analysisLoadedTasks=new Set(),automatedItems=[],$=()=>({});",
+  "let candidateLoads=0,processedLoads=0,releaseCandidates,releaseScopes;",
+  "const loadComparisonCandidates=()=>{candidateLoads+=1;return new Promise(resolve=>{releaseCandidates=()=>resolve(true)})};",
+  "const loadProcessedEvidenceScopes=()=>{processedLoads+=1;return new Promise(resolve=>{releaseScopes=()=>resolve(true)})};",
+  "const loadNetworkOverview=async()=>true,loadNetworkOutliers=async()=>true,loadNmapAssignments=async()=>true,openRun=async()=>true;",
+  "const focusRequestedEvidence=()=>{},stopHiddenAnalysisWork=()=>{},prepareRunComparison=()=>false,setStatus=()=>{};",
+  sourceFunction("currentAnalysisTask"),
+  sourceFunction("activateAnalysisTask", true),
+  sourceFunction("requestAnalysisTaskActivation", true),
+  "const first=requestAnalysisTaskActivation(),second=requestAnalysisTaskActivation();",
+  "assert.equal(candidateLoads,1,'same-task activation must reuse the pending comparison request');",
+  "assert.equal(processedLoads,1,'same-task activation must reuse the pending scope request');",
+  "releaseCandidates();releaseScopes();await Promise.all([first,second]);",
+  "assert.equal(analysisLoadedTasks.has('networkChangesPanel'),true);",
   "})()",
 ].join("\n"));
 

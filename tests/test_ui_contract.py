@@ -214,6 +214,10 @@ def test_active_scan_exposes_read_only_self_check_and_confirmed_resume():
     assert 'id="emergencyStopClear"' in html
     assert 'data-guide-context="scan-queue-self-check">Emergency Stop' in html
     assert 'id="emergencyStopClearForm"' in html
+    assert 'id="emergencyLocalOperatorNote"' in html
+    assert "credentials.classList.toggle('hidden',!authenticationEnabled)" in html
+    assert "item.last_run_status==='completed_without_nmap'" in html
+    assert "The latest scan chunk finished after the operator declined full Nmap fallback" in html
     assert "/api/system/scan-work-recovery/emergency-stop-clear" in html
     assert "pauses saved schedules" in html
     assert "create and independently verify a complete backup" in html
@@ -847,7 +851,7 @@ def test_scan_builder_is_one_page_with_requested_actions():
     assert "changed_by:auditActor()" in html
     assert "/api/safety/scan-summary" in html
     assert "Pre-launch scope &amp; safety check" in html
-    assert "sessionAnalyst.role==='admin'&&data.authentication_enabled" in html
+    assert "sessionAnalyst.role==='admin'&&authenticationEnabled" in html
     assert 'id="safetyEffective"' in html
     assert "Preview is advisory; NCT rechecks before active contact" in html
     assert "Pause and require operator approval before Nmap" in html
@@ -1563,6 +1567,29 @@ def test_nmap_analysis_labels_direct_and_correlated_mac_provenance():
     assert "loadAuthenticatedAnalyst" in html
     assert "Bound to the signed-in analyst" in html
     assert "authenticatedAnalyst?.username" in html
+
+
+def test_device_upload_keeps_result_visible_and_history_guide_titles_concise():
+    html = device_config_page().body.decode()
+    assert 'id="uploadResultStatus"' in html
+    assert "It is now in Device Collection History" in html
+    assert "Open collected configurations for ${label}" in html
+    assert "Open configuration record from ${formatTime(run.completed_at||run.created_at)}" in html
+    assert "changed field requires a fresh command preview" in html
+    assert "Reopen NCT at its approved HTTPS address only when the page reports an insecure connection" in html
+    assert "If this button is disabled, reopen NCT" not in SHELL_SCRIPT
+
+
+def test_offline_reference_workspace_uses_the_shell_page_heading_once():
+    html = exploit_references_page().body.decode()
+    assert "Offline exploit references" not in html
+    assert "Exploit-DB reference database" in html
+
+
+def test_reach_guide_matches_the_visible_evidence_first_reading_order():
+    assert "first confirm the traffic and likely path" in SHELL_SCRIPT
+    assert "only then use the Supported outcome and confidence as the conclusion" in SHELL_SCRIPT
+    assert "first the supported outcome and confidence" not in SHELL_SCRIPT
 
 
 def test_hunting_view_has_categories_combined_filters_and_change_analysis():
@@ -3355,6 +3382,7 @@ def test_shared_shell_loads_only_the_selected_task_and_stops_hidden_polling():
     assert "function stopHiddenScanWork" in scan
     assert "window.addEventListener('nct:taskchange',requestScanTaskActivation)" in scan
     assert "function activateAnalysisTask" in analysis
+    assert "analysisActivationPromise&&analysisActivationTask===requestedTask" in analysis
     assert "function stopHiddenAnalysisWork" in analysis
     assert "if(currentAnalysisTask()!=='xmlImport')return false;const request=++nmapAssignmentRequest" in analysis
     assert "request!==nmapAssignmentRequest||currentAnalysisTask()!=='xmlImport'" in analysis

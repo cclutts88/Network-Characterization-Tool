@@ -20,6 +20,16 @@ paths, novice browser review, backend observation and independent quality cleara
 An addition is not complete if any previously supported workflow becomes unreliable,
 confusing or unusable.
 
+Linux qualification environment requirement recorded (2026-11-06): all source-level
+Python qualification must run in the supported Debian Bookworm Python 3.12 container,
+and browser/runtime JavaScript checks must run in the Debian Bookworm Node 22
+container. Host-Windows results may help diagnose a problem but are not release
+evidence. Every reported test result must identify its Linux image and command class;
+focused checks, the complete suite and exact-candidate checks remain distinct gates.
+The release application image may still be tested as the exact built candidate, but a
+minimal or mismatched convenience image cannot substitute for the source-test
+environment. This is a permanent requirement for subsequent NCT changes.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
@@ -32,6 +42,32 @@ shared activation and recovery-state defects, then repeat the affected workflow 
 the backend observer checks for errors, stale ownership, hidden polling and duplicate
 requests. Do not package the candidate until the novice and independent reviewer clear
 the repaired flow and the complete Linux regression suite passes again.
+
+Novice/browser stabilization corrections in progress (2026-11-06): the isolated
+R18 journey verified direct page activation, profile creation/deletion, ordered
+multi-network schedules, scheduled restart handoff, fallback approve and decline,
+manual and batch scanning, pending cancellation, active stop, device-contact failure,
+retained evidence integrity and downstream analysis. The pass also found several
+operator-facing defects: a successful device upload was not confirmed in the upload
+panel, Device History exposed an overlong contextual-guide title, Offline Exploit
+References repeated its page title, Reach guidance described its visible order
+incorrectly, and the SSH start guide over-attributed disabled controls to HTTPS. Those
+surfaces now report their real state in plain language. A cancelled scan's durable
+cancellation request is now acknowledged atomically with terminal publication so it
+cannot remain falsely requested forever. Repeated activation of the same Analyze task
+now shares its in-flight read instead of issuing duplicate network and scope requests.
+Active and scheduled fallback outcomes use the visible labels **Waiting for fallback
+approval** and **Finished without Nmap** instead of raw internal state. The Emergency
+Stop form still requires fresh Administrator verification when authentication is
+enabled, while an explicitly authentication-disabled isolated build uses its existing
+local Administrator role without presenting unusable password fields. The Debian
+Python 3.12 complete application suite passes 2,750 checks with 25 skipped, and all 24
+Debian Node 22 browser-runtime scripts pass. Exact-image novice repetition and
+independent review remain required before packaging. Backend observation also measured
+approximately 109 local status reads per
+minute while an Active Scan waits for fallback; this is bounded to the visible page
+and is not a correctness blocker, but later efficiency work should back off held-state
+polling or combine status reads without weakening operator feedback.
 
 Evidence-retirement confirmation parsing tightened in development (2026-11-06): the
 complete regression suite found that a changed final base64url character could, for

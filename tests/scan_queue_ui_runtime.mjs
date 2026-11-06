@@ -23,6 +23,17 @@ function functionBlock(name, nextName) {
 }
 
 await eval(`(() => {
+  let activeCollectionEnabled=true;
+  ${functionBlock("scheduleWorkState", "scheduleTriggerLabel")}
+  ${functionBlock("scanRunStateLabel", "scanRunStateClass")}
+  const occurrence=scheduleWorkState({latest_occurrence:{state:'complete'},last_run_status:'completed_without_nmap'});
+  assert.equal(occurrence.label,'Finished without Nmap');
+  assert.match(occurrence.detail,/declined full Nmap fallback/i);
+  assert.equal(scanRunStateLabel({status:'awaiting_fallback_approval'}),'Waiting for fallback approval');
+  assert.equal(scanRunStateLabel({status:'completed_without_nmap'}),'Finished without Nmap');
+})()`);
+
+await eval(`(() => {
   const controls=new Map();
   const $=id=>{if(!controls.has(id))controls.set(id,{textContent:'',className:''});return controls.get(id)};
   ${functionBlock("renderLiveDiscoveryIdle", "renderLiveDiscoveryStarting")}
