@@ -548,6 +548,20 @@ encounter and retained the active matching encounter and original source bytes. 
 five focused updater/guard checks pass with one expected platform skip. Full-suite and
 renewed Independent Reviewer gates remain required before this isolated candidate may be
 integrated; no Range, package or `main` checkout has changed.
+
+Cross-evidence retirement development activation completed (2026-11-06): the final
+isolated candidate passed 240 focused retirement checks with two expected skips and the
+complete application suite with 2,715 passed and 25 expected skips. Compilation and diff
+hygiene passed. The real Docker/TLS recovery rehearsal above passed against the exact
+immutable candidate image. The Independent Reviewer inspected the exact commit and image,
+independently passed 16 focused recovery and retirement-control checks, and returned
+CLEAR. The cleared change is integrated on `foundation/evidence-engine-v2`; retirement
+now remains independently protected across startup, update, restore and ordinary reads,
+and signed-in analyst or administrator roles can use the guarded Evidence Library
+preview, exact confirmation and metadata-only audit. This is development-ready only:
+offline package qualification and actual Range acceptance remain separate gates, and
+`main` is unchanged.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
