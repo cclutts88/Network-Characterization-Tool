@@ -31,7 +31,8 @@ from app.device_observations import init_device_observation_storage
 from app.device_observations import assign_device_scope, correct_device_scope
 from app.network_scopes import archive_network_scope, create_network_scope
 from app.network_semantics import init_network_semantics_storage, set_external_wan_gateway
-from app.evidence_retirement import init_evidence_retirement_storage
+from app.evidence_retirement import init_evidence_retirement_storage, retire_evidence
+from app.evidence_retirement_sources import DEVICE_COLLECTION, device_collection_adapter
 
 
 CONFIG = b"""===== show running-config =====
@@ -237,6 +238,44 @@ def test_warm_cache_invalidates_after_authority_deletion(tmp_path, monkeypatch):
     assert len(main._latest_device_reachability_evidence()) == 1
     tombstone_device_collection(db_path, run_id)
     assert main._latest_device_reachability_evidence() == []
+    assert main._DEVICE_ANALYSIS_CACHE.status()["misses"] == 2
+
+
+def test_current_device_cache_falls_back_after_newest_collection_is_retired(
+    tmp_path, monkeypatch,
+):
+    db_path, config_dir, active_id, _evidence = _ready_device(
+        tmp_path,
+        run_id="a" * 32,
+        address="192.0.2.40",
+        name="Active older router",
+    )
+    _db_path, _config_dir, retired_id, _evidence = _ready_device(
+        tmp_path,
+        run_id="b" * 32,
+        address="192.0.2.40",
+        name="Newest router to retire",
+    )
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(device_analysis, "DB_PATH", db_path)
+    monkeypatch.setattr(device_analysis, "CONFIG_DIR", config_dir)
+    main._DEVICE_ANALYSIS_CACHE.clear()
+
+    newest = main._latest_device_reachability_evidence()
+    assert [item["run_id"] for item in newest] == [retired_id]
+
+    retire_evidence(
+        db_path,
+        source_family=DEVICE_COLLECTION,
+        encounter_id=retired_id,
+        actor="device-cache-test",
+        reason="exclude the incorrect newest device collection",
+        adapter=device_collection_adapter(),
+    )
+
+    fallback = main._latest_device_reachability_evidence()
+    assert [item["run_id"] for item in fallback] == [active_id]
     assert main._DEVICE_ANALYSIS_CACHE.status()["misses"] == 2
 
 

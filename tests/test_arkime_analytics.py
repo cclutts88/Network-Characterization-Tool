@@ -17,7 +17,8 @@ from app.arkime_evidence import import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
 from app.database import connect_database
 from app.evidence_retirement import (
-    RetiredEvidenceDependency, init_evidence_retirement_storage, retire_evidence,
+    EvidenceRetirementError, RetiredEvidenceDependency,
+    init_evidence_retirement_storage, retire_evidence,
 )
 from app.evidence_retirement_sources import (
     ARKIME_SESSIONS_IMPORT, adapter_for_source,
@@ -1058,6 +1059,16 @@ def test_hunt_passive_context_route_is_independent_and_rejects_bad_sources(
         rejected = client.get(
             "/api/hunting/passive-context", params={"import_id": summary["import_id"]},
         )
+        retire_evidence(
+            db, source_family=ARKIME_SESSIONS_IMPORT,
+            encounter_id=sessions["import_id"], actor="analyst",
+            reason="remove incorrect passive Hunt source",
+            adapter=adapter_for_source(ARKIME_SESSIONS_IMPORT),
+        )
+        retired = client.get(
+            "/api/hunting/passive-context",
+            params={"import_id": sessions["import_id"]},
+        )
         after = client.get("/api/hunting/network").json()
 
     assert valid.status_code == 200
@@ -1066,8 +1077,30 @@ def test_hunt_passive_context_route_is_independent_and_rejects_bad_sources(
     assert missing.status_code == 404
     assert rejected.status_code == 422
     assert "Sessions JSON/API source" in rejected.json()["detail"]
+    assert retired.status_code == 409
+    assert "retired" in retired.json()["detail"]
     assert before == after
     assert len(network_calls) == 2
+
+
+def test_hunt_passive_context_reports_missing_retirement_authority(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(
+        main,
+        "build_hunt_arkime_context",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            EvidenceRetirementError("retirement authority is unavailable")
+        ),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/api/hunting/passive-context", params={"import_id": "source"},
+        )
+
+    assert response.status_code == 503
+    assert "authority is unavailable" in response.json()["detail"]
 
 
 def test_traffic_analysis_route_reports_active_context_candidate_bound(

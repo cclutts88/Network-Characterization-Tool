@@ -406,7 +406,7 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
     for selector in (
         ".finding-summary-row th",
         ".finding-summary-row td",
-        ".service-pair-transport",
+        ".finding-summary-continuation td",
         ".service-exposure-group",
         ".lfa-threshold-control",
         ".progress-track",
@@ -429,7 +429,7 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
         ".contract",
     ):
         assert selector in SHELL_SCRIPT
-    assert ":is(.finding-summary-row th,.finding-summary-row td,.service-pair-transport,.service-exposure-group,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
+    assert ":is(.finding-summary-row th,.finding-summary-row td,.finding-summary-continuation td,.service-exposure-group,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
     assert ":is(.nav a,.source-links a,.reach-shortcut){background:var(--nct-control)!important" in SHELL_SCRIPT
     assert ":is(input,select,textarea,option,th){background:var(--nct-background)!important" in SHELL_SCRIPT
     assert ":is(input[type=checkbox],input[type=radio],input[type=range]){accent-color:var(--nct-accent)}" in SHELL_SCRIPT
@@ -464,7 +464,7 @@ def test_operator_guide_typography_stays_subordinate_and_readable():
 
 def test_hunt_system_summary_rows_use_theme_palette_not_legacy_blue():
     html = hunting_page().body.decode()
-    assert ".finding-summary-row :is(th,td){background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
+    assert ".finding-summary-row :is(th,td),.finding-summary-continuation td{background:color-mix(in srgb,var(--panel) 68%,var(--bg))}" in html
     assert ".finding-summary-row td{background:#0c1922}" not in html
     assert html.count('data-nct-table-mode="contained"') == 2
     assert "body.nct-shell .table-wrap[data-nct-table-mode=contained]{max-height:none!important;overflow-x:auto!important;overflow-y:visible!important}" in SHELL_SCRIPT
@@ -1527,10 +1527,14 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert 'id="huntQuickSearch" class="hunt-quick-search-control"' in html
     assert html.index('id="huntQuickSearch"') < html.index('id="systemPageSize"')
     assert html.index('id="systemPageSize"') < html.index('id="systemPagePrevious"')
-    assert "service-pair-grid" in html
-    assert "grid-template-columns:minmax(110px,.65fr) minmax(220px,1.35fr)" in html
-    assert "column-gap:16px;row-gap:6px;align-items:start" in html
-    assert ".service-pair-grid>*{min-width:0;padding:0;border:0;background:transparent" in html
+    assert "function summaryServiceCells(value,hostHeaderId)" in html
+    assert 'id="hunt-heading-port"' in html
+    assert 'id="hunt-heading-service"' in html
+    assert 'scope="row" rowspan="${rowspan}"' in html
+    assert 'headers="hunt-heading-port ${hostHeaderId}"' in html
+    assert 'headers="hunt-heading-service ${hostHeaderId}"' in html
+    assert 'class="finding-summary-continuation" data-inherited-columns="6"' in html
+    assert 'colspan="2"' not in html
     assert ">◆ nonstandard port</span>" not in html
     assert ">◆ ${transport}</code>" not in html
     assert "Loading the newest completed scan for each network scope" in html
@@ -1545,8 +1549,8 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "after all active filters" in html
     assert 'id="hostRows"' not in html
     assert 'id="systemsPanel" data-workspace-card="systems"' in html
-    assert '<th title="The observed port and protocol. Configuration-only findings say Device configuration instead of showing a port.">Port</th>' in html
-    assert '>Service / product fingerprint</th>' in html
+    assert '<th id="hunt-heading-port" title="The observed port and protocol. Configuration-only findings say Device configuration instead of showing a port.">Port</th>' in html
+    assert '<th id="hunt-heading-service" title="The service name Nmap reported, followed by any detected product and version fingerprint.">Service / product fingerprint</th>' in html
     assert "Port / source" not in html
     assert 'id="capabilityView" role="region" aria-label="Hunt capability evidence"' in html
     assert 'href="/analysis#networkOverview">Open complete host inventory</a>' in html
@@ -1606,17 +1610,19 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert "renderFindingSummaries(visible.flat())" in html
     assert "matching=(current.findings||[]).filter" in html
     assert "groups=findingGroups(matching),visible=systemPageSlice(groups)" in html
-    assert "group.map((item,index)=>findingRowMarkup(item,index,group.length))" in html
+    assert "group.map((item,index)=>findingRowMarkup(item,index,group.length,groupOrdinal))" in html
+    assert 'headers="hunt-heading-dataset ${hostHeaderId}"' in html
+    assert 'headers="hunt-heading-cve ${hostHeaderId}"' in html
     assert 'data-host-continuation="true"' in html
     assert "matching service${groupSize===1?'':'s'} on this host" in html
     assert "Hunt rows per page" in SHELL_SCRIPT
     assert "Filters apply to the complete loaded evidence before NCT chooses the page" in SHELL_SCRIPT
     assert "function anyHuntFilterActive()" in html
-    assert ".finding-summary-row.hidden-row{display:none}" in html
+    assert ".finding-summary-row.hidden-row,.finding-summary-continuation.hidden-row{display:none}" in html
     assert "content-visibility:auto" in html
     assert "finding${Number(item.finding_count||0)===1?'':'s'}" in html
     assert "capability classification${group.length===1?'':'s'} across" in html
-    assert "Ports and service fingerprints stay aligned inside this host group." in html
+    assert "Each port and service uses the matching table columns." in html
     assert "Combined view · one entry per IP with all ports visible." in html
     assert "Filtered view · individual matching findings kept together by host." in html
     assert "function osIdentity(item)" in html
@@ -1683,7 +1689,7 @@ def test_hunting_view_has_categories_combined_filters_and_change_analysis():
     assert ".finding-match-slot,.finding-host-match-slot,.host-cve-slot{min-width:0;max-width:100%}" in html
     assert "#capabilityView table{min-width:1440px;table-layout:fixed}" in html
     assert "#capabilityView th:nth-child(7),#capabilityView td:nth-child(7){width:360px}" in html
-    assert "function findingRowMarkup(item,groupIndex=0,groupSize=1)" in html
+    assert "function findingRowMarkup(item,groupIndex=0,groupSize=1,groupOrdinal=0)" in html
     assert "function findingGroupKey(item,index)" in html
     assert "configureCveFilters" in html
     assert "applySearchSploitFilters" in html
@@ -3325,11 +3331,16 @@ def test_operator_readme_keeps_retirement_foundation_distinct_from_current_contr
     assert "ordinary Arkime lists, coverage, analysis, Hunt comparisons" in html
     assert "retired DHCP/DNS hostname uploads no longer appear" in html
     assert "saved SearchSploit candidate views exclude retired Nmap runs" in html
-    assert "Map topology also excludes retired automated scans" in html
+    assert "Map topology applies the same rule" in html
     assert "including when an older topology was cached" in html
-    assert "Current Network and Hunt source-group selection" in html
+    assert "Current Network and network-wide Hunt exclude retired automated scans" in html
+    assert "Map stored-file listing and other remaining routes" in html
+    assert "Retired scans, imported topology encounters, and device collections" in SHELL_SCRIPT
+    assert "Retired scan groups and device collections do not contribute" in SHELL_SCRIPT
     assert "Map stored-file listing" in html
-    assert "An active same-content scan can still use its own verified result link" in html
+    assert "Same evidence, separate records" in html
+    assert "If two separately saved records contain the same evidence, retiring one leaves the other available" in html
+    assert "Retirement does not delete either original file" in html
     assert "Existing analyst-approved hostname decisions and Exploit-DB" in html
     assert "Exploit-DB reference maintenance remain separate" in html
     assert "no evidence is physically removed" in html

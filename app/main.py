@@ -162,9 +162,11 @@ from app.evidence_retirement import (
     EvidenceRetirementError,
     RetiredEvidenceDependency,
     init_evidence_retirement_storage,
+    require_active_encounter,
     require_active_registered_content,
+    retirement_cache_token,
 )
-from app.evidence_retirement_sources import NMAP_IMPORT
+from app.evidence_retirement_sources import NMAP_IMPORT, NMAP_SCAN_RUN
 from app.active_collection import (
     active_collection_enabled,
     active_collection_status,
@@ -4792,6 +4794,61 @@ def _bounded_compare(*args, **kwargs) -> dict:
     return result
 
 
+def _require_active_hunting_run_ids(run_ids: list[str]) -> None:
+    """Fail closed when any exact automated-scan encounter is retired."""
+    exact_run_ids = sorted(set(str(item) for item in run_ids if item))
+    if not exact_run_ids:
+        return
+    try:
+        with connect_database(DB_PATH, read_only=True) as db:
+            db.execute("BEGIN")
+            for run_id in exact_run_ids:
+                require_active_encounter(
+                    db,
+                    source_family=NMAP_SCAN_RUN,
+                    encounter_id=run_id,
+                )
+    except RetiredEvidenceDependency as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="This scan group contains retired evidence and is unavailable in Hunt",
+        ) from exc
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=503, detail="Evidence retirement authority is unavailable"
+        ) from exc
+
+
+def _require_active_hunting_groups(*groups: list[dict]) -> None:
+    _require_active_hunting_run_ids([
+        str(item.get("run_id") or "")
+        for group in groups
+        for item in group
+    ])
+
+
+def _hunting_retirement_token() -> str:
+    try:
+        return retirement_cache_token(DB_PATH)
+    except (EvidenceRetirementError, sqlite3.Error) as exc:
+        raise HTTPException(
+            status_code=503, detail="Evidence retirement authority is unavailable"
+        ) from exc
+
+
+def _require_stable_hunting_retirement_token(expected: str) -> None:
+    if _hunting_retirement_token() != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Retained evidence changed while Hunt was calculating. "
+                "Retry the request."
+            ),
+        )
+
+
 def _hunting_group(selected_id: str) -> list[dict]:
     manifests = list_scan_run_plans(limit=5000)
     group = next(
@@ -4804,12 +4861,34 @@ def _hunting_group(selected_id: str) -> list[dict]:
     )
     if group is None:
         raise HTTPException(status_code=404, detail="Scan result was not found")
+    if not _hunting_group_is_complete(group):
+        raise HTTPException(
+            status_code=409,
+            detail="This multipart scan does not retain every expected completed chunk",
+        )
+    _require_active_hunting_groups(group)
     if not all((run_directory(item["run_id"]) / "scan.xml").is_file() for item in group):
         raise HTTPException(
             status_code=409,
             detail="This scan does not retain completed XML for every chunk",
         )
     return group
+
+
+def _hunting_group_is_complete(group: list[dict]) -> bool:
+    if not group:
+        return False
+    try:
+        expected = {int(item.get("chunk_count") or 1) for item in group}
+        numbers = [int(item.get("chunk_number") or 1) for item in group]
+    except (TypeError, ValueError):
+        return False
+    return (
+        len(expected) == 1
+        and expected.pop() == len(group)
+        and sorted(numbers) == list(range(1, len(group) + 1))
+        and len(set(numbers)) == len(numbers)
+    )
 
 
 def _hunting_scope_tokens(group: list[dict]) -> tuple[str, ...]:
@@ -4876,7 +4955,7 @@ def _latest_hunting_groups(
         ).is_file()
     groups = [
         group for group in group_run_manifests(manifests)
-        if group_is_comparable(group)
+        if group_is_comparable(group) and _hunting_group_is_complete(group)
     ]
     groups.sort(
         key=lambda group: describe_run_group(group).get("completed_at")
@@ -4987,11 +5066,23 @@ def _latest_network_evidence() -> dict:
             result["source_revision"] = context["source_revision"]
         return result
 
-    return _NETWORK_EVIDENCE_CACHE.get(_capture_network_evidence_snapshot, build)
+    try:
+        return _NETWORK_EVIDENCE_CACHE.get(_capture_network_evidence_snapshot, build)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Current evidence retirement authority is unavailable: {exc}",
+        ) from exc
+    except NetworkEvidenceSourceChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Current retained evidence changed while this view was built. Retry the request.",
+        ) from exc
 
 
 @app.get("/api/hunting/network")
 def analyze_hunting_network() -> dict:
+    retirement_token = _hunting_retirement_token()
     result = {
         **_latest_network_evidence(),
         "status": "hunting_network_complete",
@@ -5007,6 +5098,8 @@ def analyze_hunting_network() -> dict:
         saved_networks=list_saved_networks(DB_PATH),
         device_analyses=_latest_device_reachability_evidence(),
     )
+    _require_active_hunting_run_ids(run_ids)
+    _require_stable_hunting_retirement_token(retirement_token)
     return result
 
 
@@ -5021,6 +5114,15 @@ def analyze_hunting_passive_context(
         return build_hunt_arkime_context(
             DB_PATH, import_id, limit=limit, offset=offset,
         )
+    except RetiredEvidenceDependency as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="This Arkime source was retired and is unavailable in Hunt",
+        ) from exc
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503, detail="Evidence retirement authority is unavailable"
+        ) from exc
     except (KeyError, ArkimeAnalyticsError) as exc:
         raise _arkime_error(exc) from exc
 
@@ -5623,6 +5725,11 @@ def _latest_device_reachability_evidence() -> list[dict]:
                 "History if the issue remains."
             ),
         ) from exc
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Current device retirement authority is unavailable: {exc}",
+        ) from exc
     except NetworkEvidenceSourceChanged as exc:
         raise HTTPException(
             status_code=409,
@@ -6082,6 +6189,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
     before_saved = _prepared_scan_group_or_http(before)
     after_saved = _prepared_scan_group_or_http(after)
     before_group, after_group = before_saved["manifests"], after_saved["manifests"]
+    _require_active_hunting_groups(before_group, after_group)
     before_description, after_description = before_saved["group"], after_saved["group"]
     before_result = build_hunting_analysis(
         before_saved["analysis"],
@@ -6104,7 +6212,7 @@ def compare_hunting_scans(before: str, after: str) -> dict:
     warnings = coverage_warnings(
         representative_coverage(before_group), representative_coverage(after_group)
     )
-    return {
+    result = {
         **compare_hunting_results(before_result, after_result),
         "coverage_compatible": not warnings,
         "coverage_warnings": warnings,
@@ -6113,12 +6221,15 @@ def compare_hunting_scans(before: str, after: str) -> dict:
             "after": after_saved["provenance"],
         },
     }
+    _require_active_hunting_groups(before_group, after_group)
+    return result
 
 
 @app.get("/api/hunting/{run_id}")
 def analyze_hunting_scan(run_id: str) -> dict:
     from app.network_map import build_topology
 
+    retirement_token = _hunting_retirement_token()
     group = _hunting_group(run_id)
     description = describe_run_group(group)
     result = correlate_hunting_identity(build_hunting_analysis(
@@ -6138,6 +6249,8 @@ def analyze_hunting_scan(run_id: str) -> dict:
         saved_networks=list_saved_networks(DB_PATH),
         device_analyses=_latest_device_reachability_evidence(),
     )
+    _require_active_hunting_groups(group)
+    _require_stable_hunting_retirement_token(retirement_token)
     return result
 
 

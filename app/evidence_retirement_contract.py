@@ -82,12 +82,17 @@ ROUTE_COVERAGE: dict[str, frozenset[str]] = {
     source.source_family: frozenset() for source in SOURCE_CONTRACTS
 }
 ROUTE_COVERAGE.update({
-    "nmap_scan_run": frozenset({"evidence-library", "map-topology"}),
+    "nmap_scan_run": frozenset({
+        "evidence-library", "current-network", "hunt", "map-topology",
+    }),
     "nmap_import": frozenset({
         "evidence-library", "source-history", "raw-evidence-download",
-        "operator-exports", "map-topology",
+        "operator-exports", "current-network", "hunt", "map-topology",
     }),
-    "device_collection": frozenset({"evidence-library", "map-topology"}),
+    "device_collection": frozenset({
+        "evidence-library", "current-network", "hunt", "map-topology",
+    }),
+    "arkime_sessions_import": frozenset({"hunt"}),
 })
 
 

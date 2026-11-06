@@ -12,6 +12,8 @@ import sqlite3
 from pathlib import Path
 
 from app.database import connect_database, execute_sql_script_statements
+from app.evidence_retirement import active_encounter_sql, require_retirement_authority
+from app.evidence_retirement_sources import DEVICE_COLLECTION
 from app.derived_contracts import (
     DEVICE_SUMMARY_FAMILY,
     DEVICE_SUMMARY_PARAMETERS,
@@ -394,6 +396,8 @@ def select_latest_device_evidence(
 ) -> tuple[list[dict], dict]:
     """Select every device's newest completed supported evidence without writes."""
     with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        require_retirement_authority(db)
         required_tables = (
             "device_evidence_catalog", "device_evidence_catalog_dirty",
             "device_collection_authority", "pipeline_jobs",
@@ -411,8 +415,11 @@ def select_latest_device_evidence(
                 "to reconcile the disposable selector"
             )
         expected_parameters = _canonical_json(dict(DEVICE_SUMMARY_PARAMETERS))
+        active_clause, active_parameters = active_encounter_sql(
+            DEVICE_COLLECTION, "catalog.run_id",
+        )
         rows = db.execute(
-            """WITH latest_jobs AS (
+            f"""WITH latest_jobs AS (
                    SELECT jobs.*,
                           ROW_NUMBER() OVER (
                               PARTITION BY jobs.source_run_id
@@ -499,6 +506,7 @@ def select_latest_device_evidence(
                      AND results.analysis_version = ?
                      AND results.payload_schema_version = ?
                      AND results.parameters_json = ?
+                     AND {active_clause}
                )
                SELECT * FROM eligible WHERE device_rank = 1
                ORDER BY COALESCE(completed_at, created_at, '') DESC, run_id DESC""",
@@ -508,6 +516,7 @@ def select_latest_device_evidence(
                 int(DEVICE_SUMMARY_SCHEMA_VERSION), expected_parameters,
                 DEVICE_SUMMARY_FAMILY, str(DEVICE_SUMMARY_VERSION),
                 int(DEVICE_SUMMARY_SCHEMA_VERSION), expected_parameters,
+                *active_parameters,
             ),
         ).fetchall()
         result_ids = [str(row[40]) for row in rows]

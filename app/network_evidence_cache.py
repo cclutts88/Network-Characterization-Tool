@@ -291,8 +291,8 @@ def _table_rows(
     }
 
 
-def select_map_scan_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
-    """Select the exact automated scan rows consumed by Map."""
+def select_active_scan_rows(db: sqlite3.Connection, limit: int) -> dict:
+    """Select active automated scan rows before applying a bounded source limit."""
     require_retirement_authority(db)
     return _table_rows(
         db,
@@ -305,6 +305,11 @@ def select_map_scan_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
         order_by="created_at DESC, rowid DESC",
         limit=limit,
     )
+
+
+def select_map_scan_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
+    """Select the exact automated scan rows consumed by Map."""
+    return select_active_scan_rows(db, limit)
 
 
 def select_map_import_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
@@ -499,41 +504,25 @@ def capture_network_evidence_snapshot(
     """Capture the exact dependencies and the group context built from that snapshot."""
     retirement_token: str | None = None
     retired_device_run_ids: frozenset[str] = frozenset()
-    if map_only:
-        try:
-            with connect_database(db_path, read_only=True) as db:
-                db.execute("BEGIN")
-                retirement_token = retirement_cache_token_on_connection(db)
-                require_artifact_observation_authority(db)
-                retired_device_run_ids = retired_encounter_ids(
-                    db, source_family=DEVICE_COLLECTION,
-                )
-        except EvidenceRetirementError:
-            raise
-        except sqlite3.Error as exc:
-            raise EvidenceRetirementError(
-                "retirement authority is unavailable"
-            ) from exc
-    try:
-        database = stable_path_identity(db_path)
-    except OSError as exc:
-        return _uncacheable_snapshot(
-            [], str(exc), retirement_token=retirement_token,
-        )
-
     scan_rows = None
     manifest_index = None
-    if map_only:
-        groups: list[list[dict]] = []
-    else:
-        try:
-            with connect_database(db_path, read_only=True) as db:
-                db.execute("BEGIN")
-                scan_rows = _table_rows(
-                    db, "scan_runs", order_by="created_at DESC, rowid DESC", limit=5000
-                )
-                scan_columns = scan_rows["columns"]
-                manifest_index = scan_columns.index("manifest_json")
+    raw_manifests: list[dict] = []
+    queued_ids: list[str] = []
+    try:
+        # The retirement token, automated-scan selection, topology selection and
+        # retired-device set must come from one SQLite read snapshot.  Otherwise a
+        # retirement committed between selectors could pair stale groups with a
+        # newer token and make an unverifiable build look current.
+        with connect_database(db_path, read_only=True) as db:
+            db.execute("BEGIN")
+            retirement_token = retirement_cache_token_on_connection(db)
+            require_artifact_observation_authority(db)
+            retired_device_run_ids = retired_encounter_ids(
+                db, source_family=DEVICE_COLLECTION,
+            )
+            if not map_only:
+                scan_rows = select_active_scan_rows(db, 5000)
+                manifest_index = scan_rows["columns"].index("manifest_json")
                 raw_manifests = [
                     json.loads(row[manifest_index]) for row in scan_rows["rows"]
                 ]
@@ -543,13 +532,25 @@ def capture_network_evidence_snapshot(
                         "SELECT run_id FROM scan_runs WHERE status = 'queued' ORDER BY rowid"
                     ).fetchall()
                 ]
-        except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
-            return _uncacheable_snapshot(
-                [], f"Scan selection cannot be fingerprinted: {exc}"
-            )
+            topology_scan_rows = select_map_scan_rows(db)
+    except EvidenceRetirementError:
+        raise
+    except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
+        raise EvidenceRetirementError(
+            f"retirement-backed source selection is unavailable: {exc}"
+        ) from exc
 
+    if map_only:
+        groups: list[list[dict]] = []
+    else:
         manifests = prepare_manifests(raw_manifests, queued_ids)
         groups = select_groups(manifests)
+    try:
+        database = stable_path_identity(db_path)
+    except OSError as exc:
+        return _uncacheable_snapshot(
+            groups, str(exc), retirement_token=retirement_token,
+        )
     selected_ids = {
         str(manifest.get("run_id"))
         for group in groups
@@ -557,13 +558,6 @@ def capture_network_evidence_snapshot(
         if manifest.get("run_id")
     }
     try:
-        with connect_database(db_path, read_only=True) as db:
-            db.execute("BEGIN")
-            retirement_token = retirement_cache_token_on_connection(db)
-            retired_device_run_ids = retired_encounter_ids(
-                db, source_family=DEVICE_COLLECTION,
-            )
-            topology_scan_rows = select_map_scan_rows(db)
         topology_manifest_index = topology_scan_rows["columns"].index("manifest_json")
         topology_manifests = [
             json.loads(row[topology_manifest_index])

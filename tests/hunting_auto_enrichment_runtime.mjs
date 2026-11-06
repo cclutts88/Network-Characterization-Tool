@@ -258,36 +258,42 @@ await eval(`(() => {
   ${syncHandler("findingGroupKey")}
   ${syncHandler("findingGroups")}
   ${syncHandler("findingRowMarkup")}
-  ${syncHandler("servicePairGrid")}
+  ${syncHandler("summaryServiceCells")}
   ${syncHandler("renderFindingSummaries")}
   ${syncHandler("systemPageSlice")}
   const findings=[
     {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Web',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:80,service:'http',product:'nginx',version:'1.24',match_basis:['port']},
     {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Web',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:80,service:'http',product:'Apache',version:'2.4',match_basis:['product']},
     {host_key:'scope-a|10.0.0.10',ip:'10.0.0.10',hostname:'web',subnet:'10.0.0.0/24',device_type:'server',category:'Remote',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:22,service:'ssh',product:'OpenSSH',version:'9',match_basis:['service']},
+    {host_key:'scope-a|10.0.0.20',ip:'10.0.0.20',hostname:'dns',subnet:'10.0.0.0/24',device_type:'server',category:'Name Resolution',evidence_states:['observed'],evidence_kind:'nmap',protocol:'udp',port:53,service:'domain',product:'BIND',version:'9',match_basis:['service']},
+    {host_key:'scope-a|10.0.0.20',ip:'10.0.0.20',hostname:'dns',subnet:'10.0.0.0/24',device_type:'server',category:'Remote',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:22,service:'ssh',product:'OpenSSH',version:'9',match_basis:['service']},
     {ip:'10.0.0.99',hostname:'legacy',category:'Legacy A',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:1,service:'tcpmux'},
     {ip:'10.0.0.99',hostname:'legacy',category:'Legacy B',evidence_states:['observed'],evidence_kind:'nmap',protocol:'tcp',port:2,service:'compressnet'}
   ];
   const summary=renderFindingSummaries(findings);
-  assert.equal((summary.match(/<tr class="finding-summary-row"/g)||[]).length,3,'unkeyed retained rows must remain separate rather than merging by IP or hostname');
-  for(const row of summary.split('<tr class="finding-summary-row"').slice(1)){
-    assert.equal((row.match(/<th /g)||[]).length,1,'every combined row keeps one visible host heading');
-    assert.equal((row.match(/<td(?: |>)?/g)||[]).length,6,'the aligned service cell spans two of the eight visible headings');
-    assert.match(row,/colspan="2"/);
-  }
+  assert.equal((summary.match(/<tr class="finding-summary-row"/g)||[]).length,4,'unkeyed retained rows must remain separate rather than merging by IP or hostname');
+  assert.equal((summary.match(/<tr class="finding-summary-continuation" data-inherited-columns="6">/g)||[]).length,3,'each additional service becomes a real continuation row under the same host');
+  assert.equal((summary.match(/<th /g)||[]).length,4,'every combined host group keeps one visible host heading');
+  assert.doesNotMatch(summary,/colspan="2"/,'port and service must use the real table columns rather than a nested grid');
+  assert.match(summary,/id="hunt-summary-host-0" scope="row" rowspan="3"/,'the first multi-service host context spans all three service rows');
+  assert.match(summary,/id="hunt-summary-host-1" scope="row" rowspan="2"/,'the second multi-service host context spans both service rows');
+  assert.match(summary,/headers="hunt-heading-port hunt-summary-host-0"/,'continuation port cells name both their column and exact host header');
+  assert.match(summary,/headers="hunt-heading-service hunt-summary-host-1"/,'a later host group cannot inherit the preceding host header');
   assert.match(summary,/nginx/);
   assert.match(summary,/Apache/,'different product facts on the same port must both remain visible');
   assert.equal((summary.match(/80\\/tcp/g)||[]).length,2,'each retained same-port fingerprint keeps one aligned transport row');
-  assert.match(summary,/Ports and service fingerprints stay aligned/);
+  assert.match(summary,/Each port and service uses the matching table columns/);
   assert.match(summary,/data-hostkey="scope-a\|10\.0\.0\.10"/);
   const groups=findingGroups(findings),firstPage=systemPageSlice(groups);
   assert.equal(firstPage.length,1);
   assert.equal(firstPage[0].length,3,'all separate-port services for the first Hunt IP remain in one paged host group');
-  assert.match(pager.systemPageSummary.textContent,/host groups 1–1 of 3/);
+  assert.match(pager.systemPageSummary.textContent,/host groups 1–1 of 4/);
   const detailed=findingRowMarkup(findings[0]);
   assert.equal((detailed.match(/<th /g)||[]).length,1,'every filtered row keeps one visible host heading');
   assert.equal(detailed.split('<td').length-1,7,'every standalone filtered row still covers the eight visible headings');
   assert.match(detailed,/finding-match-slot/);
+  assert.match(detailed,/id="hunt-finding-host-0" scope="row"/);
+  assert.match(detailed,/headers="hunt-heading-service hunt-finding-host-0"/);
   assert.ok(detailed.indexOf('finding-match-slot')>detailed.indexOf('nginx'),'the CVE cell must follow the service and product cell');
   const groupedDetailed=firstPage[0].map((item,index)=>findingRowMarkup(item,index,firstPage[0].length)).join('');
   assert.equal((groupedDetailed.match(/class="finding-row /g)||[]).length,3,'filtered services remain on separate table lines');

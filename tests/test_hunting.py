@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.hunting import (
@@ -13,6 +15,12 @@ from app.hunting import (
 )
 from app.main import _hunting_subnets, app
 from app.database import connect_database
+from app.evidence_retirement import (
+    EvidenceRetirementAdapter,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, NMAP_IMPORT, NMAP_SCAN_RUN
 from app.identity import enrich_analysis_macs
 from app.poc import init_poc_storage
 
@@ -36,6 +44,233 @@ def port(number: int, service: str, product: str = "", version: str = "") -> dic
         "product": product,
         "version": version,
     }
+
+
+def test_direct_hunt_refuses_a_group_containing_retired_scan_evidence(
+    tmp_path, monkeypatch,
+):
+    import app.main as main
+
+    db_path = tmp_path / "analyzer.db"
+    run_id = "retired-hunt-run"
+    manifest = {
+        "run_id": run_id,
+        "created_at": "2026-11-05T12:00:00Z",
+        "completed_at": "2026-11-05T12:01:00Z",
+        "status": "completed",
+        "chunk_count": 1,
+        "chunk_number": 1,
+        "targets": ["192.0.2.0/24"],
+    }
+    init_poc_storage(db_path)
+    init_evidence_retirement_storage(db_path)
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "scan.xml").write_text("<nmaprun/>", encoding="utf-8")
+    retire_evidence(
+        db_path,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=run_id,
+        actor="hunt-retirement-test",
+        reason="exclude incorrect Hunt source",
+        adapter=EvidenceRetirementAdapter(
+            lambda _db, value: {"encounter_id": value},
+            lambda _db, _value: None,
+        ),
+    )
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "list_scan_run_plans", lambda limit=5000: [manifest])
+    monkeypatch.setattr(main, "run_directory", lambda _run_id: run_dir)
+
+    with pytest.raises(HTTPException) as error:
+        main._hunting_group(run_id)
+
+    assert error.value.status_code == 409
+    assert "retired evidence" in str(error.value.detail)
+
+
+def test_direct_hunt_withholds_result_when_scan_is_retired_during_analysis(
+    tmp_path, monkeypatch,
+):
+    import app.main as main
+
+    db_path = tmp_path / "analyzer.db"
+    run_id = "hunt-analysis-retirement-race"
+    manifest = {
+        "run_id": run_id,
+        "created_at": "2026-11-05T12:00:00Z",
+        "completed_at": "2026-11-05T12:01:00Z",
+        "status": "completed",
+        "chunk_count": 1,
+        "chunk_number": 1,
+        "targets": ["192.0.2.0/24"],
+    }
+    init_poc_storage(db_path)
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "_hunting_group", lambda _run_id: [manifest])
+    monkeypatch.setattr(main, "_run_group_analysis_with_overrides", lambda _group: {})
+
+    def build_then_retire(*_args, **_kwargs):
+        retire_evidence(
+            db_path,
+            source_family=NMAP_SCAN_RUN,
+            encounter_id=run_id,
+            actor="hunt-retirement-test",
+            reason="retire while direct Hunt is calculating",
+            adapter=EvidenceRetirementAdapter(
+                lambda _db, value: {"encounter_id": value},
+                lambda _db, _value: None,
+            ),
+        )
+        return {"source": {}, "hosts": [], "findings": []}
+
+    monkeypatch.setattr(main, "build_hunting_analysis", build_then_retire)
+    monkeypatch.setattr(main, "correlate_hunting_identity", lambda result, *_a, **_k: result)
+    monkeypatch.setattr("app.network_map.build_topology", lambda: {"nodes": []})
+    monkeypatch.setattr(main, "load_retained_searchsploit_candidates", lambda *_a, **_k: [])
+    monkeypatch.setattr(main, "classify_searchsploit_exposure", lambda *_a, **_k: {})
+    monkeypatch.setattr(main, "list_saved_networks", lambda *_a, **_k: [])
+    monkeypatch.setattr(main, "_latest_device_reachability_evidence", lambda: [])
+
+    with pytest.raises(HTTPException) as error:
+        main.analyze_hunting_scan(run_id)
+
+    assert error.value.status_code == 409
+    assert "retired evidence" in str(error.value.detail)
+
+
+def test_hunt_comparison_withholds_result_when_scan_is_retired_during_compare(
+    tmp_path, monkeypatch,
+):
+    import app.main as main
+
+    db_path = tmp_path / "analyzer.db"
+    before_id = "hunt-compare-before"
+    after_id = "hunt-compare-after"
+    init_poc_storage(db_path)
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+
+    def saved(run_id, completed_at):
+        manifest = {
+            "run_id": run_id,
+            "created_at": completed_at,
+            "completed_at": completed_at,
+            "status": "completed",
+            "chunk_count": 1,
+            "chunk_number": 1,
+            "targets": ["192.0.2.0/24"],
+        }
+        return {
+            "manifests": [manifest],
+            "group": {
+                "group_id": f"run:{run_id}",
+                "run_ids": [run_id],
+                "created_at": completed_at,
+                "completed_at": completed_at,
+                "display_name": run_id,
+                "scope": {"targets": ["192.0.2.0/24"]},
+            },
+            "analysis": {},
+            "provenance": {"children": []},
+        }
+
+    retained = {
+        before_id: saved(before_id, "2026-11-05T12:00:00Z"),
+        after_id: saved(after_id, "2026-11-05T13:00:00Z"),
+    }
+    monkeypatch.setattr(
+        main, "_prepared_scan_group_or_http", lambda run_id: retained[run_id],
+    )
+    monkeypatch.setattr(main, "build_hunting_analysis", lambda *_a, **_k: {})
+    monkeypatch.setattr(main, "coverage_warnings", lambda *_a, **_k: [])
+
+    def compare_then_retire(*_args, **_kwargs):
+        retire_evidence(
+            db_path,
+            source_family=NMAP_SCAN_RUN,
+            encounter_id=after_id,
+            actor="hunt-retirement-test",
+            reason="retire while Hunt comparison is calculating",
+            adapter=EvidenceRetirementAdapter(
+                lambda _db, value: {"encounter_id": value},
+                lambda _db, _value: None,
+            ),
+        )
+        return {"summary": {}}
+
+    monkeypatch.setattr(main, "compare_hunting_results", compare_then_retire)
+
+    with pytest.raises(HTTPException) as error:
+        main.compare_hunting_scans(before_id, after_id)
+
+    assert error.value.status_code == 409
+    assert "retired evidence" in str(error.value.detail)
+
+
+@pytest.mark.parametrize("source_family", [NMAP_IMPORT, DEVICE_COLLECTION])
+def test_network_hunt_withholds_cross_source_retirement_during_enrichment(
+    tmp_path, monkeypatch, source_family,
+):
+    import app.main as main
+
+    db_path = tmp_path / "analyzer.db"
+    encounter_id = f"{source_family}-hunt-race"
+    init_poc_storage(db_path)
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+
+    def build_then_retire():
+        retire_evidence(
+            db_path,
+            source_family=source_family,
+            encounter_id=encounter_id,
+            actor="hunt-retirement-test",
+            reason="retire correlated evidence while Hunt is calculating",
+            adapter=EvidenceRetirementAdapter(
+                lambda _db, value: {"encounter_id": value},
+                lambda _db, _value: None,
+            ),
+        )
+        return {
+            "hosts": [], "findings": [], "warnings": [],
+            "source": {"scope_summaries": []},
+        }
+
+    monkeypatch.setattr(main, "_latest_network_evidence", build_then_retire)
+    monkeypatch.setattr(main, "load_retained_searchsploit_candidates", lambda *_a: [])
+    monkeypatch.setattr(main, "classify_searchsploit_exposure", lambda *_a, **_k: {})
+    monkeypatch.setattr(main, "list_saved_networks", lambda *_a, **_k: [])
+    monkeypatch.setattr(main, "_latest_device_reachability_evidence", lambda: [])
+
+    with pytest.raises(HTTPException) as error:
+        main.analyze_hunting_network()
+
+    assert error.value.status_code == 409
+    assert "changed while Hunt was calculating" in str(error.value.detail)
+
+
+def test_current_hunt_skips_incomplete_multipart_groups(tmp_path, monkeypatch):
+    import app.main as main
+
+    run_id = "c" * 32
+    run_dir = tmp_path / run_id
+    run_dir.mkdir()
+    (run_dir / "scan.xml").write_text("<nmaprun/>", encoding="utf-8")
+    monkeypatch.setattr(main, "run_directory", lambda _run_id: run_dir)
+    manifests = [{
+        "run_id": run_id,
+        "created_at": "2026-11-05T12:00:00Z",
+        "completed_at": "2026-11-05T12:01:00Z",
+        "status": "completed",
+        "schedule_batch_id": "missing-second-chunk",
+        "chunk_count": 2,
+        "chunk_number": 1,
+        "_comparison_xml_available": True,
+    }]
+
+    assert main._latest_hunting_groups(manifests) == []
 
 
 def test_category_rules_support_nonstandard_ports_and_multiple_categories():

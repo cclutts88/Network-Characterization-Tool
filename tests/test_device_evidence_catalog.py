@@ -27,6 +27,7 @@ from app.device_evidence_catalog import (
     reconcile_device_evidence_catalog,
     select_latest_device_evidence,
 )
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.pipeline_intake import DEVICE_SUMMARY_JOB_TYPE
 
 
@@ -44,6 +45,7 @@ def _setup(tmp_path):
     config_dir.mkdir()
     init_device_collection_authority_storage(db_path)
     init_derived_job_storage(db_path)
+    init_evidence_retirement_storage(db_path)
     return db_path, config_dir
 
 

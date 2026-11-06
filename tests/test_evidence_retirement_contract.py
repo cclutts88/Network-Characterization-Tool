@@ -50,7 +50,7 @@ def test_nmap_import_shared_content_gateway_claims_only_completed_routes():
     assert {
         "source-history", "raw-evidence-download", "operator-exports",
     } <= ROUTE_COVERAGE["nmap_import"]
-    assert "current-network" not in ROUTE_COVERAGE["nmap_import"]
+    assert "current-network" in ROUTE_COVERAGE["nmap_import"]
     assert "map" not in ROUTE_COVERAGE["nmap_import"]
 
 
@@ -58,4 +58,13 @@ def test_map_topology_is_claimed_without_overclaiming_the_complete_map_workspace
     for source_family in ("nmap_scan_run", "nmap_import", "device_collection"):
         assert "map-topology" in ROUTE_COVERAGE[source_family]
         assert "map" not in ROUTE_COVERAGE[source_family]
+
+
+def test_current_network_and_hunt_claim_only_integrated_source_families():
+    for source_family in ("nmap_scan_run", "nmap_import", "device_collection"):
+        assert {"current-network", "hunt"} <= ROUTE_COVERAGE[source_family]
+    assert "hunt" in ROUTE_COVERAGE["arkime_sessions_import"]
+    for source_family in ("arkime_summary_import", "hostname_evidence_upload"):
+        assert "current-network" not in ROUTE_COVERAGE[source_family]
+        assert "hunt" not in ROUTE_COVERAGE[source_family]
 

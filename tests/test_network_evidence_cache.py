@@ -31,6 +31,7 @@ from app.network_evidence_cache import (
     NetworkEvidenceSourceChanged,
     NetworkEvidenceSnapshot,
     capture_network_evidence_snapshot,
+    select_active_scan_rows,
     select_map_configuration_file,
     select_map_configuration_records,
     select_map_import_rows,
@@ -221,15 +222,9 @@ def test_uncacheable_snapshot_never_creates_or_reuses_an_entry():
     assert cache.status()["entry_count"] == 0
 
 
-def test_missing_database_snapshot_preserves_builder_context_contract(tmp_path):
-    snapshot = _capture(tmp_path / "missing.db", tmp_path / "device-configs")
-    assert snapshot.key is None
-    assert snapshot.context == {
-        "groups": [],
-        "oui": {"available": False, "paths": []},
-        "source_revision": None,
-        "retirement_token": None,
-    }
+def test_missing_database_snapshot_fails_closed_without_retirement_authority(tmp_path):
+    with pytest.raises(EvidenceRetirementError, match="unavailable"):
+        _capture(tmp_path / "missing.db", tmp_path / "device-configs")
 
 
 def _init_descriptor_database(db_path: Path) -> None:
@@ -314,11 +309,101 @@ def test_map_scan_selector_filters_retired_rows_before_source_limit(tmp_path):
 
     with connect_database(db_path, read_only=True) as db:
         rows = select_map_scan_rows(db, limit=200)
+        current_rows = select_active_scan_rows(db, limit=200)
 
     run_ids = [row[rows["columns"].index("run_id")] for row in rows["rows"]]
     assert len(run_ids) == 200
     assert "run-201" not in run_ids
     assert "run-001" in run_ids
+    assert current_rows == rows
+
+
+def test_current_network_snapshot_excludes_retired_scan_before_grouping(tmp_path):
+    db_path = tmp_path / "current-selector.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    active_id = "current-active"
+    retired_id = "current-retired"
+    with connect_database(db_path) as db:
+        db.executemany(
+            "INSERT INTO scan_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+                _scan_row(active_id, "2026-11-05T10:00:00Z"),
+                _scan_row(retired_id, "2026-11-05T11:00:00Z"),
+            ],
+        )
+    _simple_retire(db_path, NMAP_SCAN_RUN, retired_id)
+
+    snapshot = capture_network_evidence_snapshot(
+        db_path=db_path,
+        config_dir=config_dir,
+        run_directory=lambda run_id: tmp_path / "runs" / run_id,
+        prepare_manifests=lambda manifests, _queued: manifests,
+        select_groups=lambda manifests: [[item] for item in manifests],
+    )
+
+    selected = [
+        item["run_id"]
+        for group in snapshot.context["groups"]
+        for item in group
+    ]
+    assert selected == [active_id]
+    assert snapshot.context["retirement_token"]
+
+
+def test_current_network_snapshot_fails_closed_without_retirement_authority(tmp_path):
+    db_path = tmp_path / "missing-retirement-authority.db"
+    init_poc_storage(db_path)
+
+    with pytest.raises(EvidenceRetirementError, match="authority is unavailable"):
+        capture_network_evidence_snapshot(
+            db_path=db_path,
+            config_dir=tmp_path / "device-configs",
+            run_directory=lambda run_id: tmp_path / "runs" / run_id,
+            prepare_manifests=lambda manifests, _queued: manifests,
+            select_groups=lambda manifests: [[item] for item in manifests],
+        )
+
+
+def test_uncacheable_current_network_discards_group_retired_during_build(
+    tmp_path, monkeypatch,
+):
+    db_path = tmp_path / "current-retirement-race.db"
+    run_id = "current-retirement-race"
+    _init_descriptor_database(db_path)
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO scan_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            _scan_row(run_id, "2026-11-05T12:00:00Z"),
+        )
+    monkeypatch.setattr(
+        "app.network_evidence_cache.stable_path_identity",
+        lambda _path: (_ for _ in ()).throw(OSError("injected fingerprint refusal")),
+    )
+    cache = NetworkEvidenceCache()
+    builds: list[list[str]] = []
+
+    def snapshot():
+        return capture_network_evidence_snapshot(
+            db_path=db_path,
+            config_dir=tmp_path / "device-configs",
+            run_directory=lambda value: tmp_path / "runs" / value,
+            prepare_manifests=lambda manifests, _queued: manifests,
+            select_groups=lambda manifests: [[item] for item in manifests],
+        )
+
+    def build(context):
+        selected = [
+            item["run_id"] for group in context["groups"] for item in group
+        ]
+        builds.append(selected)
+        if selected:
+            _simple_retire(db_path, NMAP_SCAN_RUN, run_id)
+        return {"run_ids": selected}
+
+    assert cache.get(snapshot, build) == {"run_ids": []}
+    assert builds == [[run_id], []]
+    assert cache.status()["entry_count"] == 0
 
 
 def test_map_import_selector_uses_active_sibling_and_preserves_true_legacy(tmp_path):
@@ -797,6 +882,7 @@ def test_analyze_hunt_and_reach_share_only_the_base_model(monkeypatch):
         lambda _groups: builds.append("base") or base,
     )
     monkeypatch.setattr(main, "reset_oui_database_cache", lambda: None)
+    monkeypatch.setattr(main, "_hunting_retirement_token", lambda: "stable")
     monkeypatch.setattr(main, "list_saved_networks", lambda _path: [])
     monkeypatch.setattr(main, "_latest_device_reachability_evidence", lambda: [])
     monkeypatch.setattr(

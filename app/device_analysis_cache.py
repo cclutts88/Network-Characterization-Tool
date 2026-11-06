@@ -18,6 +18,7 @@ from app.device_collection_authority import (
 from app.device_configs import COLLECTION_ARTIFACT_RE, UPLOADED_ARTIFACT_RE
 from app.device_evidence_catalog import select_latest_device_evidence
 from app.device_observations import DEVICE_INTERFACE_JOB_TYPE
+from app.evidence_retirement import retirement_cache_token_on_connection
 from app.network_evidence_cache import NetworkEvidenceSnapshot, stable_path_identity
 from app.network_semantics import EXTERNAL_WAN_ROLES
 from app.pipeline_intake import COLLECTED_DEVICE_INTENT, MANUAL_DEVICE_INTENT
@@ -329,6 +330,7 @@ def _selected_database_rows(
         )
     ]
     return {
+        "retirement_token": retirement_cache_token_on_connection(db),
         "authority_evidence": authority_evidence,
         "authority_inputs": authority_inputs,
         "admission_intents": intents,

@@ -312,6 +312,38 @@ passed, 25 skipped), and the Independent Reviewer returned CLEAR after independe
 passing nine focused cases. This claim covers Map topology only; Current Network, Hunt
 and Map stored-file listing remain explicit follow-on gates.
 
+Cross-evidence retirement active-source Gate C Current Network and Hunt slice started
+(2026-11-05): move automated-scan retirement ahead of the 5,000-row current-evidence
+limit and multipart grouping so a retired run cannot remain the newest source or leave
+an incomplete group looking current. Direct Hunt opens must refuse any group containing
+a retired run, cached network-wide results must remain bound to the retirement lineage,
+and current device selection must skip a retired newest collection and fall back to the
+newest complete active collection for that device. Current Network and Hunt may continue
+to use retirement-filtered Map topology for manual-import and configuration correlation;
+this gate does not claim Map's separate stored-file inventory or the later operator
+retirement controls.
+
+Cross-evidence retirement active-source Gate C Current Network and Hunt slice completed
+(2026-11-05): Current Network now reads scan selection, manual-import topology, device
+selection and retirement authority from one consistent snapshot, filters retired scan
+runs before its row limit and multipart grouping, and binds reusable results to the
+retirement lineage. A changed or unavailable authority withholds the result rather than
+serving a tokenless or stale view. Current device selection skips a retired newest
+collection and falls back to the newest complete active collection for that device.
+Direct and network-wide Hunt recheck their complete selected source set before and after
+cross-source correlation, saved-candidate enrichment and response publication, so a
+retirement racing any of those stages cannot leak a mixed result. Passive Arkime Hunt
+returns controlled unavailable or retired-source responses instead of an internal error.
+The Hunt table now uses its real Port and Service columns for every host and explicitly
+associates continuation cells with the correct host and column for assistive technology.
+The Operator Guide explains same-content siblings in plain language. Focused Python
+verification passed 224 checks, the Hunt browser-script regression passed with two
+multi-service hosts, the complete host-capable application suite passed 2,655 checks
+with 25 skipped, live browser review passed with the Guide open and closed, the novice
+operator returned PASS, and the Independent Reviewer returned CLEAR. This gate still
+does not enable operator retirement controls or claim Map's separate stored-file list;
+those remain explicit follow-on work before the cross-evidence lifecycle is complete.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
