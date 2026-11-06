@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 
 import pytest
 
@@ -16,8 +17,10 @@ import app.retirement_guard as guard
 from app.retirement_guard import (
     RetirementGuardError,
     check_retirement_guard,
+    check_retirement_guard_head,
     mark_retirement_restore_hold,
     provision_retirement_guard,
+    reconcile_retirement_restore,
 )
 
 
@@ -84,6 +87,132 @@ def test_fresh_admission_and_split_commit_advance_are_safe(tmp_path):
     assert advanced.ready and advanced.revision == 1
     mirrored = guard._read_receipt(next((guard_dir / "events").iterdir()))
     assert mirrored["event_digest"] == event["event_digest"]
+
+
+def test_normal_initial_binding_interruption_resumes_on_same_database(
+    tmp_path, monkeypatch,
+):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    original_atomic = guard._atomic_receipt
+
+    class Crash(BaseException):
+        pass
+
+    def interrupt_before_high_water(path, body):
+        if path.name == guard.HIGH_WATER_FILE:
+            raise Crash()
+        return original_atomic(path, body)
+
+    monkeypatch.setattr(guard, "_atomic_receipt", interrupt_before_high_water)
+    with pytest.raises(Crash):
+        check_retirement_guard(
+            db_path, data_dir=data, guard_dir=guard_dir,
+            data_identity=DATA_IDENTITY,
+        )
+    assert (guard_dir / guard.INITIAL_BIND_FILE).is_file()
+    assert (guard_dir / guard.BINDING_FILE).is_file()
+    assert not (guard_dir / guard.HIGH_WATER_FILE).exists()
+    assert not (guard_dir / guard.HOLD_FILE).exists()
+
+    monkeypatch.setattr(guard, "_atomic_receipt", original_atomic)
+    resumed = check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir,
+        data_identity=DATA_IDENTITY,
+    )
+    assert resumed.ready and resumed.revision == 0
+
+
+def test_restore_recovers_an_interrupted_normal_initial_binding(
+    tmp_path, monkeypatch,
+):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    original_atomic = guard._atomic_receipt
+
+    class Crash(BaseException):
+        pass
+
+    def interrupt_before_high_water(path, body):
+        if path.name == guard.HIGH_WATER_FILE:
+            raise Crash()
+        return original_atomic(path, body)
+
+    monkeypatch.setattr(guard, "_atomic_receipt", interrupt_before_high_water)
+    with pytest.raises(Crash):
+        check_retirement_guard(
+            db_path, data_dir=data, guard_dir=guard_dir,
+            data_identity=DATA_IDENTITY,
+        )
+    initial = guard._read_receipt(guard_dir / guard.INITIAL_BIND_FILE)
+    partial = guard._read_receipt(guard_dir / guard.BINDING_FILE)
+    assert partial["lineage_id"] == initial["lineage_id"]
+
+    restored = data / "restored-v9.db"
+    with connect_database(restored) as db:
+        db.execute(
+            "CREATE TABLE nct_schema_state(singleton INTEGER PRIMARY KEY,schema_version INTEGER)"
+        )
+        db.execute("INSERT INTO nct_schema_state VALUES (1,9)")
+        db.execute(
+            "CREATE TABLE nct_schema_migrations(migration_id TEXT PRIMARY KEY,status TEXT)"
+        )
+        db.execute(
+            "INSERT INTO nct_schema_migrations VALUES "
+            "('nct-evidence-retirement-v9','completed')"
+        )
+    init_evidence_retirement_storage(restored)
+    with connect_database(restored, read_only=True) as db:
+        restored_lineage = db.execute(
+            "SELECT lineage_id FROM evidence_retirement_lineage"
+        ).fetchone()[0]
+    assert restored_lineage != initial["lineage_id"]
+    monkeypatch.setattr(guard, "_atomic_receipt", original_atomic)
+    mark_retirement_restore_hold(
+        guard_dir, data_identity=DATA_IDENTITY,
+        operation_id="restore-interrupted-bind", detail="verified backup restored",
+    )
+    status = reconcile_retirement_restore(
+        restored,
+        data_dir=data,
+        guard_dir=guard_dir,
+        data_identity=DATA_IDENTITY,
+        operation_id="restore-interrupted-bind",
+    )
+    assert status.ready and status.lineage_id == restored_lineage
+    rebound = guard._read_receipt(guard_dir / guard.BINDING_FILE)
+    assert rebound["lineage_id"] == restored_lineage
+    assert (guard_dir / guard.VIRGIN_RESTORE_FILE).is_file()
+
+
+def test_bounded_live_head_check_detects_unadvanced_event_and_accepts_advanced_head(
+    tmp_path,
+):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).ready
+    _retire(db_path, "encounter-a")
+    held = check_retirement_guard_head(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    )
+    assert not held.ready
+    assert "head" in held.reason
+
+    # A real post-commit guard failure persists its hold; use an independently
+    # provisioned fixture to prove the normal advanced-head read path.
+    advanced = tmp_path / "advanced"
+    advanced.mkdir()
+    db_path, data, guard_dir = _foundation(advanced)
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).ready
+    _retire(db_path, "encounter-a")
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).revision == 1
+    ready = check_retirement_guard_head(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    )
+    assert ready.ready and ready.revision == 1
 
 
 def test_crash_after_event_mirror_before_high_water_resumes_safely(tmp_path):
@@ -281,6 +410,204 @@ def test_restore_hold_is_written_before_data_reconciliation(tmp_path):
     )
     assert not status.ready and "restore" in status.reason
     assert list((guard_dir / "audit").glob("*-hold-*.json"))
+
+
+def test_restore_reconciliation_reapplies_protected_tail_before_releasing_hold(
+    tmp_path,
+):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).ready
+    backup = tmp_path / "before-retirement.db"
+    with connect_database(db_path, read_only=True) as source, connect_database(backup) as target:
+        source.backup(target)
+    event = _retire(db_path, "encounter-a")
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).revision == 1
+    shutil.copy2(backup, db_path)
+    mark_retirement_restore_hold(
+        guard_dir, data_identity=DATA_IDENTITY,
+        operation_id="restore-tail", detail="before swapping restored data",
+    )
+    status = reconcile_retirement_restore(
+        db_path,
+        data_dir=data,
+        guard_dir=guard_dir,
+        data_identity=DATA_IDENTITY,
+        operation_id="restore-tail",
+    )
+    assert status.ready and status.revision == 1
+    with connect_database(db_path, read_only=True) as db:
+        row = db.execute(
+            "SELECT event_digest,sealed FROM evidence_retirement_events WHERE revision=1"
+        ).fetchone()
+    assert row == (event["event_digest"], 1)
+    assert not (guard_dir / guard.HOLD_FILE).exists()
+    assert list((guard_dir / "audit").glob("*-restore-reconciled-*.json"))
+    # Model a host interruption after the hold was cleared but before the
+    # restored application started. Re-entering the exact operation consumes
+    # the durable reconciliation receipt and remains safe and ready.
+    retried = reconcile_retirement_restore(
+        db_path,
+        data_dir=data,
+        guard_dir=guard_dir,
+        data_identity=DATA_IDENTITY,
+        operation_id="restore-tail",
+    )
+    assert retried.ready and retried.revision == 1
+    assert len(list((guard_dir / guard.RECONCILIATION_DIR).glob("*.json"))) == 1
+
+
+def test_first_upgrade_virgin_guard_recovery_is_operation_bound_and_retry_safe(
+    tmp_path, monkeypatch,
+):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    with connect_database(db_path) as db:
+        db.execute(
+            "CREATE TABLE nct_schema_state(singleton INTEGER PRIMARY KEY,schema_version INTEGER)"
+        )
+        db.execute("INSERT INTO nct_schema_state VALUES (1,9)")
+        db.execute(
+            "CREATE TABLE nct_schema_migrations(migration_id TEXT PRIMARY KEY,status TEXT)"
+        )
+        db.execute(
+            "INSERT INTO nct_schema_migrations VALUES "
+            "('nct-evidence-retirement-v9','completed')"
+        )
+    mark_retirement_restore_hold(
+        guard_dir, data_identity=DATA_IDENTITY,
+        operation_id="first-v8-upgrade", detail="verified v8 backup restored",
+    )
+    original_atomic = guard._atomic_receipt
+
+    class Crash(BaseException):
+        pass
+
+    def interrupt_between_binding_files(path, body):
+        if path.name == guard.HIGH_WATER_FILE:
+            raise Crash()
+        return original_atomic(path, body)
+
+    monkeypatch.setattr(guard, "_atomic_receipt", interrupt_between_binding_files)
+    with pytest.raises(Crash):
+        reconcile_retirement_restore(
+            db_path,
+            data_dir=data,
+            guard_dir=guard_dir,
+            data_identity=DATA_IDENTITY,
+            operation_id="first-v8-upgrade",
+        )
+    assert (guard_dir / guard.VIRGIN_RESTORE_FILE).is_file()
+    assert (guard_dir / guard.BINDING_FILE).is_file()
+    assert not (guard_dir / guard.HIGH_WATER_FILE).exists()
+    assert (guard_dir / guard.HOLD_FILE).is_file()
+
+    monkeypatch.setattr(guard, "_atomic_receipt", original_atomic)
+    status = reconcile_retirement_restore(
+        db_path,
+        data_dir=data,
+        guard_dir=guard_dir,
+        data_identity=DATA_IDENTITY,
+        operation_id="first-v8-upgrade",
+    )
+    assert status.ready and status.revision == 0 and status.event_digest == "root"
+    assert not (guard_dir / guard.HOLD_FILE).exists()
+    with pytest.raises(RetirementGuardError, match="another operation|hold is missing"):
+        reconcile_retirement_restore(
+            db_path,
+            data_dir=data,
+            guard_dir=guard_dir,
+            data_identity=DATA_IDENTITY,
+            operation_id="different-upgrade",
+        )
+
+
+def test_pre_v9_restore_adopts_protected_lineage_after_exact_migration(tmp_path):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).ready
+    event = _retire(db_path, "encounter-a")
+    protected = check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    )
+    assert protected.revision == 1
+
+    # Model the exact v9 migration of a verified pre-v9 backup: the migration
+    # created a new empty lineage, but the protected host authority owns the
+    # lineage and retired tail that must win before any runtime can restart.
+    restored = data / "restored-pre-v9.db"
+    with connect_database(restored) as db:
+        db.execute(
+            "CREATE TABLE source_encounters("
+            "encounter_id TEXT PRIMARY KEY,observation_id TEXT UNIQUE)"
+        )
+        db.execute(
+            "INSERT INTO source_encounters VALUES ('encounter-a','observation-a')"
+        )
+        db.execute(
+            "CREATE TABLE nct_schema_state(singleton INTEGER PRIMARY KEY,schema_version INTEGER)"
+        )
+        db.execute("INSERT INTO nct_schema_state VALUES (1,9)")
+        db.execute(
+            "CREATE TABLE nct_schema_migrations(migration_id TEXT PRIMARY KEY,status TEXT)"
+        )
+        db.execute(
+            "INSERT INTO nct_schema_migrations VALUES "
+            "('nct-evidence-retirement-v9','completed')"
+        )
+    init_evidence_retirement_storage(restored)
+    with connect_database(restored, read_only=True) as db:
+        random_lineage = db.execute(
+            "SELECT lineage_id FROM evidence_retirement_lineage"
+        ).fetchone()[0]
+    assert random_lineage != protected.lineage_id
+
+    mark_retirement_restore_hold(
+        guard_dir, data_identity=DATA_IDENTITY,
+        operation_id="restore-pre-v9", detail="verified pre-v9 backup",
+    )
+    status = reconcile_retirement_restore(
+        restored,
+        data_dir=data,
+        guard_dir=guard_dir,
+        data_identity=DATA_IDENTITY,
+        operation_id="restore-pre-v9",
+    )
+    assert status.ready and status.revision == 1
+    with connect_database(restored) as db:
+        assert db.execute(
+            "SELECT lineage_id FROM evidence_retirement_lineage"
+        ).fetchone()[0] == protected.lineage_id
+        assert db.execute(
+            "SELECT event_digest FROM evidence_retirement_events WHERE revision=1"
+        ).fetchone()[0] == event["event_digest"]
+        with pytest.raises(sqlite3.DatabaseError, match="immutable"):
+            db.execute(
+                "UPDATE evidence_retirement_lineage SET lineage_id='changed'"
+            )
+
+
+def test_restore_reconciliation_refuses_wrong_operation_and_keeps_hold(tmp_path):
+    db_path, data, guard_dir = _foundation(tmp_path)
+    assert check_retirement_guard(
+        db_path, data_dir=data, guard_dir=guard_dir, data_identity=DATA_IDENTITY,
+    ).ready
+    mark_retirement_restore_hold(
+        guard_dir, data_identity=DATA_IDENTITY,
+        operation_id="restore-one", detail="before swap",
+    )
+    with pytest.raises(RetirementGuardError, match="another operation"):
+        reconcile_retirement_restore(
+            db_path,
+            data_dir=data,
+            guard_dir=guard_dir,
+            data_identity=DATA_IDENTITY,
+            operation_id="restore-two",
+        )
+    assert (guard_dir / guard.HOLD_FILE).exists()
 
 
 def test_guard_refuses_data_nested_storage_and_wrong_identity(tmp_path):

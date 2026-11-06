@@ -41,9 +41,17 @@ from app.evidence_retirement import (
     EvidenceRetirementError,
     RetiredEvidenceDependency,
     require_artifact_observation_authority,
+    require_active_encounter,
+    retired_encounter_ids,
     require_retirement_authority,
+    retirement_cache_token,
+    retirement_cache_token_on_connection,
 )
-from app.evidence_retirement_sources import NMAP_IMPORT
+from app.evidence_retirement_sources import (
+    DEVICE_COLLECTION,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+)
 from app.artifacts import init_artifact_storage, register_finalized_files
 from app.scan_profiles import (
     BUILTIN_PROFILE_VERSION,
@@ -4395,8 +4403,15 @@ def list_scan_run_plans(db_path: Path = DB_PATH, limit: int = 50, *, offset: int
         # Lightweight history never opens scan XML or enumerates artifacts.
         expression = SCAN_HISTORY_METADATA_EXPRESSION if metadata_only else "manifest_json"
         rows = db.execute(
-            f"SELECT {expression} FROM scan_runs ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
-            (limit, offset),
+            f"""SELECT {expression} FROM scan_runs
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM evidence_retirement_events retired
+                     WHERE retired.source_family=?
+                       AND retired.encounter_id=scan_runs.run_id
+                       AND retired.sealed=1
+                )
+                ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?""",
+            (NMAP_SCAN_RUN, limit, offset),
         ).fetchall()
     if metadata_only:
         return [json.loads(row[0]) for row in rows]
@@ -4435,8 +4450,11 @@ def list_all_scan_history_metadata(db_path: Path = DB_PATH) -> list[dict]:
             db.execute("BEGIN")
             rows = db.execute(
                 f"SELECT {SCAN_HISTORY_METADATA_EXPRESSION} FROM scan_runs "
+                "WHERE NOT EXISTS (SELECT 1 FROM evidence_retirement_events retired "
+                "WHERE retired.source_family=? AND retired.encounter_id=scan_runs.run_id "
+                "AND retired.sealed=1) "
                 "ORDER BY created_at DESC, rowid DESC"
-            ).fetchall()
+            , (NMAP_SCAN_RUN,)).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return []
@@ -4459,8 +4477,11 @@ def list_scan_history_metadata_by_ids(
             db.execute("BEGIN")
             rows = db.execute(
                 f"SELECT run_id, {SCAN_HISTORY_METADATA_EXPRESSION} FROM scan_runs "
-                f"WHERE run_id IN ({placeholders})",
-                tuple(run_ids),
+                f"WHERE run_id IN ({placeholders}) AND NOT EXISTS ("
+                "SELECT 1 FROM evidence_retirement_events retired "
+                "WHERE retired.source_family=? AND retired.encounter_id=scan_runs.run_id "
+                "AND retired.sealed=1)",
+                (*run_ids, NMAP_SCAN_RUN),
             ).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
@@ -5133,8 +5154,61 @@ def _stored_file_record(path: Path, url: str | None = None) -> dict:
 
 
 def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
-                      limit: int = 300) -> dict:
+                      limit: int = 300, *, _retry_on_change: bool = True) -> dict:
     """Return a logical, download-oriented view of saved scan/config locations."""
+    with connect_database(db_path, read_only=True) as authority:
+        authority.execute("BEGIN")
+        require_retirement_authority(authority)
+        require_artifact_observation_authority(authority)
+        retirement_token = retirement_cache_token_on_connection(authority)
+        retired_scans = retired_encounter_ids(
+            authority, source_family=NMAP_SCAN_RUN,
+        )
+        retired_devices = retired_encounter_ids(
+            authority, source_family=DEVICE_COLLECTION,
+        )
+        rows = authority.execute(
+            """SELECT i.sha256,
+                      COALESCE(
+                          (SELECT observation.original_filename
+                             FROM artifact_observations observation
+                            WHERE observation.source_kind='nmap_import'
+                              AND observation.sha256=i.sha256
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                    FROM evidence_retirement_events retired
+                                   WHERE retired.source_family=?
+                                     AND retired.encounter_id=observation.observation_id
+                                     AND retired.sealed=1
+                              )
+                            ORDER BY observation.observed_at DESC,
+                                     observation.observation_id DESC
+                            LIMIT 1),
+                          i.filename
+                      ) AS active_filename,
+                      i.imported_at
+                 FROM imports i
+                WHERE NOT EXISTS (
+                          SELECT 1 FROM artifact_observations registered
+                           WHERE registered.source_kind='nmap_import'
+                             AND registered.sha256=i.sha256
+                      )
+                   OR EXISTS (
+                          SELECT 1 FROM artifact_observations active
+                           WHERE active.source_kind='nmap_import'
+                             AND active.sha256=i.sha256
+                             AND NOT EXISTS (
+                                 SELECT 1
+                                   FROM evidence_retirement_events retired
+                                  WHERE retired.source_family=?
+                                    AND retired.encounter_id=active.observation_id
+                                    AND retired.sealed=1
+                             )
+                      )
+                ORDER BY i.imported_at DESC
+                LIMIT ?""",
+            (NMAP_IMPORT, NMAP_IMPORT, limit),
+        ).fetchall()
     locations: list[dict] = [
         {"id": "folder:scan-runs", "category": "scan", "label": "Automated scan results", "folder": RUNS_DIR_NAME, "files": []},
         {"id": "folder:device-configs", "category": "device", "label": "Network-device configurations", "folder": "device-configs", "files": []},
@@ -5143,7 +5217,7 @@ def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
     by_id = {item["id"]: item for item in locations}
     scan_root = scan_data_root(data_dir)
     if scan_root.exists():
-        for run_dir in sorted((item for item in scan_root.iterdir() if item.is_dir() and RUN_ID_RE.fullmatch(item.name)), key=lambda item: item.stat().st_mtime, reverse=True):
+        for run_dir in sorted((item for item in scan_root.iterdir() if item.is_dir() and RUN_ID_RE.fullmatch(item.name) and item.name not in retired_scans), key=lambda item: item.stat().st_mtime, reverse=True):
             try:
                 manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -5157,7 +5231,7 @@ def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
             locations.append(location)
     config_root = (data_dir / "device-configs").resolve()
     if config_root.exists():
-        for run_dir in sorted((item for item in config_root.iterdir() if item.is_dir() and RUN_ID_RE.fullmatch(item.name)), key=lambda item: item.stat().st_mtime, reverse=True):
+        for run_dir in sorted((item for item in config_root.iterdir() if item.is_dir() and RUN_ID_RE.fullmatch(item.name) and item.name not in retired_devices), key=lambda item: item.stat().st_mtime, reverse=True):
             try:
                 manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -5167,15 +5241,19 @@ def list_stored_files(data_dir: Path = DATA_DIR, db_path: Path = DB_PATH,
                 if child.is_file() and (child.name == "manifest.json" or child.name.startswith("uploaded-") or child.name in {"stdout.txt", "stderr.txt", "accountability.pcap", "capture-stderr.txt"}):
                     location["files"].append(_stored_file_record(child, f"/api/device-configs/{run_dir.name}/files/{child.name}"))
             locations.append(location)
-    db = connect_database(db_path)
-    try:
-        rows = db.execute("SELECT sha256, filename, imported_at FROM imports ORDER BY imported_at DESC LIMIT ?", (limit,)).fetchall()
-    except sqlite3.Error:
-        rows = []
-    finally:
-        db.close()
     for sha256, filename, imported_at in rows:
         locations.append({"id": f"import:{sha256}", "category": "import", "label": filename, "folder": "imports", "created_at": imported_at, "files": [{"name": filename, "download_url": f"/api/imports/{sha256}"}]})
+    if retirement_cache_token(db_path) != retirement_token:
+        if _retry_on_change:
+            return list_stored_files(
+                data_dir=data_dir,
+                db_path=db_path,
+                limit=limit,
+                _retry_on_change=False,
+            )
+        raise EvidenceRetirementError(
+            "Evidence retirement changed while stored files were being listed"
+        )
     return {"locations": locations[:limit], "roots": locations[:3]}
 
 
@@ -8495,7 +8573,21 @@ def scan_run_audit(run_id: str, limit: int = Query(default=200, ge=1, le=1000)) 
 
 @router.get("/stored-files")
 def stored_files(limit: int = Query(default=300, ge=1, le=500)) -> dict:
-    return list_stored_files(limit=limit)
+    try:
+        return list_stored_files(limit=limit)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Stored files are unavailable because retirement authority could not "
+                "be verified. No evidence was changed."
+            ),
+        ) from exc
+    except (sqlite3.Error, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Stored files are unavailable. No evidence was changed.",
+        ) from exc
 
 
 @router.get("/scan-runs/interfaces")
@@ -8607,6 +8699,15 @@ def scan_run_detail(run_id: str) -> dict:
     manifest = get_scan_run_plan(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
+    try:
+        with connect_database(DB_PATH, read_only=True) as db:
+            require_active_encounter(
+                db, source_family=NMAP_SCAN_RUN, encounter_id=run_id,
+            )
+    except RetiredEvidenceDependency:
+        raise HTTPException(status_code=404, detail="Scan run not found") from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return manifest
 
 
@@ -8615,6 +8716,15 @@ def scan_run_artifacts(run_id: str) -> list[dict]:
     manifest = get_scan_run_plan(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
+    try:
+        with connect_database(DB_PATH, read_only=True) as db:
+            require_active_encounter(
+                db, source_family=NMAP_SCAN_RUN, encounter_id=run_id,
+            )
+    except RetiredEvidenceDependency:
+        raise HTTPException(status_code=404, detail="Scan run not found") from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return manifest.get("artifacts", [])
 
 
@@ -8623,6 +8733,18 @@ def download_scan_artifact(run_id: str, artifact_name: str) -> FileResponse:
     manifest = get_scan_run_plan(run_id)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Scan run not found")
+    try:
+        with connect_database(DB_PATH, read_only=True) as db:
+            require_active_encounter(
+                db, source_family=NMAP_SCAN_RUN, encounter_id=run_id,
+            )
+    except RetiredEvidenceDependency:
+        raise HTTPException(status_code=404, detail="Artifact not found") from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Scan evidence authority is unavailable; no artifact was returned.",
+        ) from exc
     try:
         path, media_type = artifact_path(manifest, artifact_name)
     except (ValueError, FileNotFoundError) as exc:

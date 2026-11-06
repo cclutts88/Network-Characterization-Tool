@@ -372,7 +372,95 @@ run passed 2,656 tests with 25 expected skips and one existing dependency deprec
 warning. The independent reviewer remains CLEAR — DOCUMENTED DEVIATION for proceeding
 to exact image/package qualification. No Range, sealed package or `main` change is
 claimed by this source gate.
+Cross-evidence retirement completion started in an isolated development branch
+(2026-11-05): add one common preview-and-confirm operator workflow for every supported
+exact evidence encounter, require a recorded reason and signed-in actor, show the
+ordinary-work impact before confirmation, refuse in-progress sources and retain the
+immutable audit receipt without deleting source bytes. Extend Evidence Library as the
+common lifecycle surface for Nmap scans and imports, device collections, Arkime Sessions
+and Summary imports, and retained hostname uploads while leaving source-specific analysis
+in its existing workspace. Complete Map's separate stored-file gate by filtering retired
+scan and device encounters and withholding shared Nmap content only when every registered
+same-content encounter is retired; true legacy imports remain visible until backfill.
+The implementation remains isolated from the Range-readiness package and may be included
+only after focused, full-suite, browser, novice and independent-review clearance.
 
+Cross-evidence retirement completion safety prerequisites implemented for independent
+review (2026-11-06): operator controls remain source-latched unavailable while the
+protected lifecycle is qualified. Production startup now requires a separately mounted,
+host-retained retirement authority and rechecks its exact protected revision on every
+ordinary request instead of trusting startup memory. Upgrade and restore prepare that
+independent authority without opening or changing the live database before a verified
+cold backup exists. Candidate startup performs the exact versioned database migration,
+and rollback reconciliation supports both protected version-9 backups and exact older
+backups after migration. A restored older runtime is kept stopped, including after a
+host restart, until it proves support for the exact protected bind source, bind type,
+read/write mode and authority identity. A retirement that commits but cannot advance
+the independent authority returns an explicit committed-but-held result and leaves
+ordinary evidence views withheld for reconciliation rather than reporting an ambiguous
+failure.
+
+The confirmation design is bound to one signed-in actor, exact source family and
+encounter, protected revision, immutable identity digest and the exact previewed impact;
+confirmation revalidates all of those values while holding the final write transaction.
+Authentication-disabled operation cannot expose retirement controls. The immutable
+audit remains a bounded metadata receipt with no source bytes or ordinary analysis,
+selection or download shortcut. Ordinary scan and device history/detail paths, raw
+downloads, Evidence Library, ingestion and workers, derived analysis, Current Network,
+Changes Over Time, Hunt, Reach, Map topology, Map's separate stored-file list, exports,
+caches and saved exposure reports now apply the same fail-closed retirement authority.
+Map keeps shared Nmap content visible while any registered same-content encounter is
+active. Saved exposure reports use the existing sealed schema and carry a conservative
+authority token inside their report envelope; publication is atomic and a later
+retirement withholds the saved view, including topology inputs that cannot be reduced to
+one source encounter. Route-level race tests cover Reach and Changes Over Time as well
+as direct source history and downloads.
+
+This is a review candidate, not a completion or deployment claim. The operator control
+script remains deliberately unlinked and the compile-time availability latch remains
+off until the focused suite, full suite, isolated browser review and Independent Reviewer
+all clear the protected startup/upgrade/restore behavior and the complete ordinary-route
+matrix. No Range package includes this work yet.
+
+Independent-review corrections applied to the isolated candidate (2026-11-06): the
+ordinary-route coverage declaration is now maintained explicitly rather than copied from
+the obligation list. The ordinary ingestion-status view excludes retired Nmap imports,
+automated scans and device collections, with direct route checks for all three source
+families. Calculation-contract status is explicitly bounded as administrator-only audit
+metadata: it contains no saved result body, source link, analysis action, selection or
+download, and is not claimed as an ordinary projection. Restore reconciliation now writes
+an operation-bound durable receipt before removing its hold, records the verified restore
+stage in the host journal and safely resumes the same operation after an interruption
+between reconciliation and application start. The older pre-guard runtime intentionally
+remains stopped after a protected restore; retained-data recovery into a compatible
+runtime is a separate acceptance obligation and is not being misreported as qualified by
+this candidate. Operator controls remain unavailable pending renewed independent review.
+
+First-upgrade recovery correction applied after renewed review (2026-11-06): creating
+a stopped replacement container is now recorded separately from starting code that may
+write retained data. A create-time refusal restarts the unchanged version-8 source and
+leaves the newly provisioned retirement authority safely unbound. If candidate start was
+attempted but failed before its first authority binding, restoration uses only the exact
+verified backup operation to migrate the restored empty ledger, records an operation-bound
+one-time binding intent and completes both protected root receipts idempotently. An
+interruption between those receipt writes resumes the same operation; another operation,
+a partial binding without the intent, any protected event or any non-empty/inexact version-9
+ledger is refused. The incompatible older runtime still stays stopped after this migrated
+restore, while the recovered data and independent authority remain ready for the separately
+qualified compatible recovery path. Exact version-8 create-failure, early-start-failure and
+mid-binding-interruption checks pass. Controls remain unavailable pending reviewer clearance.
+
+Normal first-binding interruption correction applied after renewed review (2026-11-06):
+the candidate's first protected authority binding now begins with a durable intent and
+ends with a completion receipt. If the process stops after writing only the binding,
+the same candidate can finish the exact expected high-water authority on restart. If the
+verified update is instead restored, that one operation may supersede only its own
+incomplete binding when the completion receipt and high-water authority are both absent,
+the protected ledger remains empty and the restored version-9 lineage is exact. A
+completed authority, another operation, unexpected lineage or any protected event still
+fails closed. Focused checks cover same-database restart, exact version-8 update restore
+after a real first-binding interruption and refusal to recreate later-missing authority.
+Controls remain unavailable pending reviewer clearance.
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

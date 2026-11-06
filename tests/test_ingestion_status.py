@@ -10,7 +10,18 @@ from app.database import connect_database
 from app.device_observations import assign_device_scope
 from app.evidence_scope_assignments import correct_artifact_scope
 from app.evidence_scope_assignments import assign_artifact_scope
-from app.evidence_retirement import init_evidence_retirement_storage
+from app.evidence_retirement import (
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import (
+    DEVICE_COLLECTION,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+    device_collection_adapter,
+    nmap_import_adapter,
+    nmap_scan_run_adapter,
+)
 from app.ingestion_status import list_ingestion_status
 from app.main import app
 from app.network_scopes import create_network_scope
@@ -46,6 +57,70 @@ def test_missing_database_is_a_bounded_empty_snapshot(tmp_path):
         },
         "snapshot": "read-only metadata transaction",
     }
+
+
+def test_ingestion_status_route_excludes_a_retired_manual_nmap_encounter(
+    tmp_path, monkeypatch,
+):
+    db_path = _database(tmp_path)
+    observation = register_artifact_bytes(
+        db_path=db_path,
+        content=XML,
+        source_kind="nmap_import",
+        source_ref="upload:retired",
+        original_filename="retired.xml",
+        actor="analyst",
+        pipeline_policy_version=NMAP_INGESTION_POLICY_VERSION,
+    )
+    assert list_ingestion_status(db_path)["total"] == 1
+    retire_evidence(
+        db_path,
+        source_family=NMAP_IMPORT,
+        encounter_id=observation["observation_id"],
+        actor="administrator",
+        reason="superseded test evidence",
+        adapter=nmap_import_adapter(),
+    )
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    with TestClient(app) as client:
+        response = client.get("/api/system/ingestion-status")
+    assert response.status_code == 200
+    assert response.json()["total"] == 0
+    assert response.json()["items"] == []
+
+
+def test_ingestion_status_excludes_retired_scan_and_device_encounters(
+    tmp_path, monkeypatch,
+):
+    scan_root = tmp_path / "scan"
+    scan_root.mkdir()
+    scan_db, scan, _, _ = completed_automated_run(scan_root)
+    retire_evidence(
+        scan_db,
+        source_family=NMAP_SCAN_RUN,
+        encounter_id=scan["run_id"],
+        actor="administrator",
+        reason="superseded test scan",
+        adapter=nmap_scan_run_adapter(),
+    )
+    assert list_ingestion_status(scan_db)["total"] == 0
+
+    device_root = tmp_path / "device"
+    device_root.mkdir()
+    device_db, run_id = _complete_summary(
+        device_root,
+        monkeypatch,
+        "interface Ethernet0\n ip address 10.99.0.1 255.255.255.0\n",
+    )
+    retire_evidence(
+        device_db,
+        source_family=DEVICE_COLLECTION,
+        encounter_id=run_id,
+        actor="administrator",
+        reason="superseded test collection",
+        adapter=device_collection_adapter(),
+    )
+    assert list_ingestion_status(device_db)["total"] == 0
 
 
 def test_duplicate_manual_encounters_stay_separate_and_history_is_not_adopted(tmp_path):

@@ -9,6 +9,7 @@ from app.retirement_guard import (
     check_retirement_guard,
     mark_retirement_restore_hold,
     provision_retirement_guard,
+    reconcile_retirement_restore,
 )
 
 
@@ -32,6 +33,13 @@ def _parser() -> argparse.ArgumentParser:
     hold.add_argument("--data-identity", required=True)
     hold.add_argument("--operation-id", required=True)
     hold.add_argument("--detail", required=True)
+
+    reconcile = commands.add_parser("reconcile-restore")
+    reconcile.add_argument("--db", type=Path, required=True)
+    reconcile.add_argument("--data-dir", type=Path, required=True)
+    reconcile.add_argument("--guard-dir", type=Path, required=True)
+    reconcile.add_argument("--data-identity", required=True)
+    reconcile.add_argument("--operation-id", required=True)
     return parser
 
 
@@ -52,12 +60,20 @@ def main(argv: list[str] | None = None) -> int:
             guard_dir=args.guard_dir,
             data_identity=args.data_identity,
         )
-    else:
+    elif args.command == "mark-restore-hold":
         status = mark_retirement_restore_hold(
             args.guard_dir,
             data_identity=args.data_identity,
             operation_id=args.operation_id,
             detail=args.detail,
+        )
+    else:
+        status = reconcile_retirement_restore(
+            args.db,
+            data_dir=args.data_dir,
+            guard_dir=args.guard_dir,
+            data_identity=args.data_identity,
+            operation_id=args.operation_id,
         )
     print(json.dumps(status.__dict__, sort_keys=True))
     return 0 if status.ready else 2

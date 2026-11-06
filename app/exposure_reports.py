@@ -5,6 +5,13 @@ import json
 from pathlib import Path
 
 from app.database import connect_database, initialize_once_per_database
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    require_active_encounter,
+    require_retirement_authority,
+    require_retirement_authority_token,
+    retirement_authority_token,
+)
 
 
 @initialize_once_per_database
@@ -70,9 +77,30 @@ def save_exposure_report(
     generated_by: str,
     port_snapshot: list[str],
     report: dict,
+    source_dependencies: list[dict] | None = None,
+    authority_token: dict | None = None,
 ) -> None:
     init_exposure_report_storage(db_path)
     with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        if authority_token is None:
+            raise RetiredEvidenceDependency(
+                "a saved exposure report requires an exact retirement authority token"
+            )
+        require_retirement_authority_token(db, authority_token)
+        dependencies = source_dependencies or []
+        for dependency in dependencies:
+            require_active_encounter(
+                db,
+                source_family=str(dependency["source_family"]),
+                encounter_id=str(dependency["encounter_id"]),
+            )
+        stored_report = {
+            "contract": "nct-reach-exposure-report-v2",
+            "report": report,
+            "retirement_authority": authority_token,
+            "source_dependencies": dependencies,
+        }
         db.execute(
             """
             INSERT INTO reach_exposure_reports (
@@ -94,12 +122,20 @@ def save_exposure_report(
                 report["generated_at"],
                 generated_by,
                 json.dumps(port_snapshot, separators=(",", ":")),
-                json.dumps(report, separators=(",", ":")),
+                json.dumps(stored_report, separators=(",", ":")),
             ),
         )
+        require_retirement_authority_token(db, authority_token)
+        db.commit()
 
 
 def _row_to_record(row: tuple) -> dict:
+    stored = json.loads(row[6])
+    protected = (
+        stored if isinstance(stored, dict)
+        and stored.get("contract") == "nct-reach-exposure-report-v2"
+        else None
+    )
     return {
         "saved_network_id": row[0],
         "target_name": row[1],
@@ -107,34 +143,73 @@ def _row_to_record(row: tuple) -> dict:
         "generated_at": row[3],
         "generated_by": row[4],
         "port_snapshot": json.loads(row[5]),
-        "report": json.loads(row[6]),
+        "report": protected.get("report") if protected else stored,
+        "source_dependencies": protected.get("source_dependencies") if protected else None,
+        "retirement_authority": protected.get("retirement_authority") if protected else None,
     }
 
 
-def get_exposure_report(db_path: Path, saved_network_id: str) -> dict | None:
+def _active_report(db, record: dict) -> bool:
+    require_retirement_authority(db)
+    dependencies = record.get("source_dependencies")
+    # Older reports did not freeze their exact source encounters. Keep the saved
+    # row for audit, but never expose its embedded evidence after retirement
+    # becomes authoritative because safe dependency filtering is impossible.
+    if dependencies is None:
+        return False
+    if record.get("retirement_authority") != retirement_authority_token(db):
+        return False
+    for dependency in dependencies:
+        try:
+            require_active_encounter(
+                db,
+                source_family=str(dependency["source_family"]),
+                encounter_id=str(dependency["encounter_id"]),
+            )
+        except RetiredEvidenceDependency:
+            return False
+    return True
+
+
+def get_exposure_report(
+    db_path: Path, saved_network_id: str, *, active_only: bool = False,
+) -> dict | None:
     with connect_database(db_path) as db:
         row = db.execute(
             """
             SELECT saved_network_id, target_name, target_cidr, generated_at,
-                   generated_by, port_snapshot_json, report_json
+                   generated_by, port_snapshot_json, report_json,
+                   NULL
             FROM reach_exposure_reports
             WHERE saved_network_id = ?
             """,
             (saved_network_id,),
         ).fetchone()
-    return _row_to_record(row) if row else None
+        record = _row_to_record(row) if row else None
+        if active_only and record is not None and not _active_report(db, record):
+            return None
+    return record
 
 
-def _all_exposure_reports(db_path: Path) -> dict[str, dict]:
+def _all_exposure_reports(
+    db_path: Path, *, active_only: bool = False,
+) -> dict[str, dict]:
     with connect_database(db_path) as db:
         rows = db.execute(
             """
             SELECT saved_network_id, target_name, target_cidr, generated_at,
-                   generated_by, port_snapshot_json, report_json
+                   generated_by, port_snapshot_json, report_json,
+                   NULL
             FROM reach_exposure_reports
             """
         ).fetchall()
-    return {row[0]: _row_to_record(row) for row in rows}
+        records = {row[0]: _row_to_record(row) for row in rows}
+        if active_only:
+            records = {
+                key: record for key, record in records.items()
+                if _active_report(db, record)
+            }
+    return records
 
 
 def exposure_report_status(record: dict, current_snapshot: list[str]) -> dict:
@@ -155,9 +230,11 @@ def list_exposure_report_summaries(
     db_path: Path,
     saved_networks: list[dict],
     hunting: dict,
+    *,
+    active_only: bool = False,
 ) -> list[dict]:
     summaries: list[dict] = []
-    retained_reports = _all_exposure_reports(db_path)
+    retained_reports = _all_exposure_reports(db_path, active_only=active_only)
     for network in saved_networks:
         saved_network_id = str(network.get("saved_network_id") or "")
         base = {

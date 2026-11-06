@@ -15,6 +15,21 @@ import pytest
 pytest.importorskip("fcntl")
 from fastapi.testclient import TestClient
 
+from app import schema_compatibility as schema
+from app.evidence_retirement import init_evidence_retirement_storage
+import app.retirement_guard as guard_module
+from app.retirement_guard import (
+    BINDING_FILE,
+    HIGH_WATER_FILE,
+    HOLD_FILE,
+    PROVISIONING_FILE,
+    check_retirement_guard,
+    mark_retirement_restore_hold,
+    provision_retirement_guard,
+    reconcile_retirement_restore,
+)
+from app.scan_history_index import init_scan_history_index_storage
+
 spec = importlib.util.spec_from_file_location("update_host", Path(__file__).parents[1] / "scripts/nct_update_host.py")
 host_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host_module)
@@ -156,6 +171,18 @@ class StorageHost(host_module.Host):
         with sqlite3.connect(self.data / "analyzer.db") as db:
             db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
+    def provision_retirement_guard(self, image):
+        return {"contract": "nct-retirement-guard-v1"}
+
+    def mark_retirement_restore_hold(self, image, operation_id):
+        return {"state": "hold", "operation_id": operation_id}
+
+    def reconcile_retirement_restore(self, image, operation_id):
+        return {"state": "ready", "revision": 0, "event_digest": "root"}
+
+    def runtime_supports_retirement_guard(self, target):
+        return True
+
     def verify_health(self, state, original=False):
         if getattr(self, "fail_candidate", False) and not original:
             (self.data / "evidence.xml").write_text("candidate damaged bytes")
@@ -163,10 +190,126 @@ class StorageHost(host_module.Host):
         return {"status": "ok"}
 
 
-def planned_host(tmp_path):
+class VirginGuardHost(StorageHost):
+    """Exercise the real independent provisioner before any runtime can bind it."""
+
+    def provision_retirement_guard(self, image):
+        return provision_retirement_guard(
+            self.retirement_guard,
+            installation_id=self.config["container"],
+            data_identity=self.retirement_data_identity,
+        )
+
+    def mark_retirement_restore_hold(self, image, operation_id):
+        raise AssertionError("a candidate that never started cannot require restore")
+
+    def reconcile_retirement_restore(self, image, operation_id):
+        raise AssertionError("a candidate that never started cannot require reconcile")
+
+
+class EarlyStartVirginGuardHost(VirginGuardHost):
+    """Run the exact v8-to-v9 and guard reconciliation after early start failure."""
+
+    def mark_retirement_restore_hold(self, image, operation_id):
+        return mark_retirement_restore_hold(
+            self.retirement_guard,
+            data_identity=self.retirement_data_identity,
+            operation_id=operation_id,
+            detail="before replacing live evidence with a verified backup",
+        ).__dict__
+
+    def reconcile_retirement_restore(self, image, operation_id):
+        db_path = self.data / "analyzer.db"
+        attempt = schema.begin_schema_migration(db_path)
+        init_evidence_retirement_storage(db_path)
+        schema.complete_schema_migration(db_path, attempt)
+        return reconcile_retirement_restore(
+            db_path,
+            data_dir=self.data,
+            guard_dir=self.retirement_guard,
+            data_identity=self.retirement_data_identity,
+            operation_id=operation_id,
+        ).__dict__
+
+    def runtime_supports_retirement_guard(self, target):
+        return False
+
+
+class FirstBindInterruptedHost(EarlyStartVirginGuardHost):
+    """Model candidate startup dying during its normal first guard binding."""
+
+    def verify_health(self, state, original=False):
+        if not original and not getattr(self, "first_bind_attempted", False):
+            self.first_bind_attempted = True
+            db_path = self.data / "analyzer.db"
+            attempt = schema.begin_schema_migration(db_path)
+            init_evidence_retirement_storage(db_path)
+            schema.complete_schema_migration(db_path, attempt)
+            try:
+                check_retirement_guard(
+                    db_path,
+                    data_dir=self.data,
+                    guard_dir=self.retirement_guard,
+                    data_identity=self.retirement_data_identity,
+                )
+            except BaseException as exc:
+                raise ValueError(
+                    "candidate disappeared during first retirement binding"
+                ) from exc
+        return super().verify_health(state, original=original)
+
+
+def _replace_database_with_exact_v8(path: Path) -> None:
+    path.unlink()
+    with sqlite3.connect(path) as db:
+        db.executescript(
+            (Path(__file__).parent / "fixtures/phase5_r1_schema.sql").read_text()
+        )
+        v7_fingerprint = schema.schema_fingerprint(db)
+        for version, identity in enumerate(schema.MIGRATION_PLAN[:7], 1):
+            db.execute(
+                "INSERT INTO nct_schema_migrations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    identity, version, "v8-updater-fixture", "fixture", "completed", 1,
+                    "fixture", "fixture", "fixture", v7_fingerprint,
+                    v7_fingerprint, None,
+                ),
+            )
+        db.execute(schema.HISTORY_INTENT_DDL)
+        db.execute(
+            "INSERT INTO nct_schema_state VALUES (1,7,7,?,?,?,?,?,?)",
+            (
+                schema.DATA_LAYOUT_CONTRACT,
+                schema.migration_plan_digest(schema.MIGRATION_PLAN[:7]),
+                v7_fingerprint, "v8-updater-fixture", "fixture", "fixture",
+            ),
+        )
+    init_scan_history_index_storage.__wrapped__(path)
+    with sqlite3.connect(path) as db:
+        v8_fingerprint = schema.schema_fingerprint(db)
+        db.execute(
+            "INSERT INTO nct_schema_migrations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                schema.HISTORY_RULES_MIGRATION_ID, 8, "v8-updater-fixture", "fixture",
+                "completed", 1, "fixture", "fixture", "fixture",
+                v7_fingerprint, v8_fingerprint, None,
+            ),
+        )
+        db.execute(
+            """UPDATE nct_schema_state
+                  SET schema_contract_version=8,schema_version=8,
+                      migration_plan_digest=?,schema_fingerprint=?""",
+            (
+                schema.migration_plan_digest(schema.MIGRATION_PLAN[:8]),
+                v8_fingerprint,
+            ),
+        )
+
+
+def planned_host(tmp_path, host_class=StorageHost):
     config = configuration(tmp_path)
     engine = Engine(config)
-    host = StorageHost(config, engine)
+    host = host_class(config, engine)
     folder = host.root / ("1" * 32)
     (folder / "release").mkdir(parents=True)
     image = folder / "release/image.tar"
@@ -178,6 +321,43 @@ def planned_host(tmp_path):
         "plan_digest": "d" * 64}
     host.phase(state, "validated")
     return host, engine
+
+
+def test_candidate_replacement_always_receives_required_protected_guard(tmp_path):
+    host, _engine = planned_host(tmp_path)
+    replacement = host.replacement(host.read())
+    environment = {
+        item.split("=", 1)[0]: item.split("=", 1)[1]
+        for item in replacement["Env"] if "=" in item
+    }
+    assert environment["NCT_RETIREMENT_GUARD_MODE"] == "required"
+    assert environment["NCT_RETIREMENT_GUARD_DIR"] == "/run/nct-retirement-guard"
+    assert environment["NCT_RETIREMENT_DATA_IDENTITY"] == host.retirement_data_identity
+    assert any(
+        item == f"{host.retirement_guard}:/run/nct-retirement-guard:rw"
+        for item in replacement["HostConfig"]["Binds"]
+    )
+
+
+def test_runtime_guard_support_requires_exact_host_bind_source_type_and_mode(tmp_path):
+    host, _engine = planned_host(tmp_path)
+    target = {
+        "Config": {"Env": [
+            "NCT_RETIREMENT_GUARD_MODE=required",
+            "NCT_RETIREMENT_GUARD_DIR=/run/nct-retirement-guard",
+            "NCT_RETIREMENT_DATA_IDENTITY=" + host.retirement_data_identity,
+        ]},
+        "Mounts": [{
+            "Type": "bind", "Source": str(host.retirement_guard),
+            "Destination": "/run/nct-retirement-guard", "RW": True,
+        }],
+    }
+    assert host_module.Host.runtime_supports_retirement_guard(host, target)
+    target["Mounts"][0]["Source"] = str(tmp_path / "wrong")
+    assert not host_module.Host.runtime_supports_retirement_guard(host, target)
+    target["Mounts"][0]["Source"] = str(host.retirement_guard)
+    target["Mounts"][0]["Type"] = "volume"
+    assert not host_module.Host.runtime_supports_retirement_guard(host, target)
 
 
 def test_handoff_is_expiring_one_use_and_not_a_console_session(tmp_path):
@@ -220,6 +400,114 @@ def test_real_backup_and_failed_candidate_restore_preserve_both_versions(tmp_pat
     assert Path(state["quarantine_path"]).joinpath("evidence.xml").read_text() == "candidate damaged bytes"
     assert engine.inspect("nct")["Id"] == "old"
     assert engine.inspect("old")["HostConfig"]["RestartPolicy"] == {"Name": "on-failure", "MaximumRetryCount": 4}
+
+
+def test_first_v8_upgrade_create_failure_restarts_without_binding_virgin_guard(
+    tmp_path, monkeypatch,
+):
+    host, engine = planned_host(tmp_path, VirginGuardHost)
+    _replace_database_with_exact_v8(host.data / "analyzer.db")
+
+    def fail_before_candidate_exists(*_args, **_kwargs):
+        raise ValueError("simulated container create refusal")
+
+    monkeypatch.setattr(engine, "create", fail_before_candidate_exists)
+    host.apply("d" * 64, "analyst")
+
+    state = host.read()
+    assert state["phase"] == "awaiting_restore_sign_in"
+    assert state["candidate_may_have_written"] is False
+    assert state["completion_kind"] == "original_reconciliation"
+    assert state["recovery_outcome"] == {
+        "backup_swapped": False,
+        "later_evidence_preserved": False,
+    }
+    assert engine.inspect("old")["State"]["Running"] is True
+    assert schema.schema_state(host.data / "analyzer.db")["schema_version"] == 8
+    assert (host.retirement_guard / PROVISIONING_FILE).is_file()
+    assert not (host.retirement_guard / BINDING_FILE).exists()
+    assert not (host.retirement_guard / HIGH_WATER_FILE).exists()
+    assert not (host.retirement_guard / HOLD_FILE).exists()
+    assert not state.get("quarantine_path")
+
+
+def test_first_v8_upgrade_early_start_failure_recovers_virgin_guard_and_stays_fenced(
+    tmp_path, monkeypatch,
+):
+    host, engine = planned_host(tmp_path, EarlyStartVirginGuardHost)
+    _replace_database_with_exact_v8(host.data / "analyzer.db")
+    original_command = engine.command
+
+    def fail_before_candidate_start(*arguments):
+        if arguments == ("start", "new"):
+            raise ValueError("simulated early candidate start refusal")
+        return original_command(*arguments)
+
+    monkeypatch.setattr(engine, "command", fail_before_candidate_start)
+    host.apply("d" * 64, "analyst")
+
+    state = host.read()
+    assert state["phase"] == "interrupted"
+    assert state["candidate_may_have_written"] is True
+    assert "restart policy remains disabled" in state["detail"]
+    assert (host.data / "evidence.xml").read_text() == "original exact bytes"
+    assert schema.schema_state(host.data / "analyzer.db")["schema_version"] == 9
+    status = check_retirement_guard(
+        host.data / "analyzer.db",
+        data_dir=host.data,
+        guard_dir=host.retirement_guard,
+        data_identity=host.retirement_data_identity,
+    )
+    assert status.ready and status.revision == 0
+    assert not (host.retirement_guard / HOLD_FILE).exists()
+    assert (host.retirement_guard / BINDING_FILE).is_file()
+    assert (host.retirement_guard / HIGH_WATER_FILE).is_file()
+    assert (host.retirement_guard / "virgin-restore-binding.json").is_file()
+    assert engine.inspect("old")["State"]["Running"] is False
+    assert engine.inspect("old")["HostConfig"]["RestartPolicy"]["Name"] == "no"
+
+
+def test_first_v8_candidate_binding_crash_restores_through_journaled_partial_root(
+    tmp_path, monkeypatch,
+):
+    host, engine = planned_host(tmp_path, FirstBindInterruptedHost)
+    _replace_database_with_exact_v8(host.data / "analyzer.db")
+    original_atomic = guard_module._atomic_receipt
+    interrupted = False
+
+    class Crash(BaseException):
+        pass
+
+    def interrupt_first_high_water(path, body):
+        nonlocal interrupted
+        if path.name == HIGH_WATER_FILE and not interrupted:
+            interrupted = True
+            raise Crash()
+        return original_atomic(path, body)
+
+    monkeypatch.setattr(
+        guard_module, "_atomic_receipt", interrupt_first_high_water,
+    )
+    host.apply("d" * 64, "analyst")
+
+    state = host.read()
+    assert interrupted
+    assert state["phase"] == "interrupted"
+    assert state["candidate_may_have_written"] is True
+    assert "restart policy remains disabled" in state["detail"]
+    status = check_retirement_guard(
+        host.data / "analyzer.db",
+        data_dir=host.data,
+        guard_dir=host.retirement_guard,
+        data_identity=host.retirement_data_identity,
+    )
+    assert status.ready and status.revision == 0
+    assert (host.retirement_guard / guard_module.INITIAL_BIND_FILE).is_file()
+    assert (host.retirement_guard / guard_module.VIRGIN_RESTORE_FILE).is_file()
+    assert not (host.retirement_guard / HOLD_FILE).exists()
+    assert (host.data / "evidence.xml").read_text() == "original exact bytes"
+    assert engine.inspect("old")["State"]["Running"] is False
+    assert engine.inspect("old")["HostConfig"]["RestartPolicy"]["Name"] == "no"
 
 
 def test_success_waits_for_real_sign_in_and_does_not_start_old_image(tmp_path):
@@ -559,6 +847,46 @@ def test_interrupted_restore_reconciles_exact_folder_identities(tmp_path, monkey
     assert Path(resumed.read()["quarantine_path"]).exists()
 
 
+def test_interruption_after_retirement_reconciliation_resumes_before_app_start(
+    tmp_path, monkeypatch,
+):
+    host, engine = planned_host(tmp_path)
+    host.apply("d" * 64, "analyst")
+    reconciliations = []
+    original_reconcile = StorageHost.reconcile_retirement_restore
+
+    def record_reconciliation(self, image, operation_id):
+        reconciliations.append(operation_id)
+        return original_reconcile(self, image, operation_id)
+
+    monkeypatch.setattr(
+        StorageHost, "reconcile_retirement_restore", record_reconciliation,
+    )
+    original_command = engine.command
+
+    class Crash(BaseException):
+        pass
+
+    crashed = False
+
+    def interrupt_before_start(*arguments):
+        nonlocal crashed
+        if arguments[0] == "start" and not crashed:
+            crashed = True
+            raise Crash()
+        return original_command(*arguments)
+
+    monkeypatch.setattr(engine, "command", interrupt_before_start)
+    with pytest.raises(Crash):
+        host.rollback("analyst")
+
+    resumed = StorageHost(host.config, engine, reconcile=True)
+    resumed.rollback("analyst")
+    assert reconciliations == [host.read()["id"], host.read()["id"]]
+    assert resumed.read()["phase"] == "awaiting_restore_sign_in"
+    assert engine.inspect("old")["State"]["Running"] is True
+
+
 def test_unexplained_missing_data_is_never_treated_as_a_journaled_gap(tmp_path):
     host, engine = planned_host(tmp_path)
     host.apply("d" * 64, "analyst")
@@ -576,6 +904,17 @@ def test_failed_restored_readiness_fences_original_container(tmp_path):
         host.rollback("analyst")
     assert not engine.inspect("old")["State"]["Running"]
     assert engine.inspect("old")["HostConfig"]["RestartPolicy"]["Name"] == "no"
+
+
+def test_restore_never_restarts_an_older_runtime_without_exact_guard_mount(tmp_path):
+    host, engine = planned_host(tmp_path)
+    host.apply("d" * 64, "analyst")
+    host.runtime_supports_retirement_guard = lambda _target: False
+    with pytest.raises(ValueError, match="restart policy remains disabled"):
+        host.rollback("analyst")
+    original = engine.inspect("old")
+    assert original["State"]["Running"] is False
+    assert original["HostConfig"]["RestartPolicy"]["Name"] == "no"
 
 
 def test_repeated_verification_removes_only_disposable_copies(tmp_path):

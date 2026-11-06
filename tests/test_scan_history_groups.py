@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,21 @@ from app.scan_history import (
     scan_history_group_page,
     scan_history_memberships,
 )
+from app.evidence_retirement import init_evidence_retirement_storage
+
+
+@pytest.fixture(autouse=True)
+def _retirement_authority_for_index_tests(monkeypatch):
+    import app.poc as poc
+
+    original = poc.init_poc_storage
+
+    def initialized(db_path):
+        result = original(db_path)
+        init_evidence_retirement_storage(db_path)
+        return result
+
+    monkeypatch.setattr(poc, "init_poc_storage", initialized)
 
 
 def scan_run(

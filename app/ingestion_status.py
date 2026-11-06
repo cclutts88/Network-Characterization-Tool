@@ -8,6 +8,12 @@ from urllib.parse import quote
 
 from app.database import connect_database
 from app.device_observations import DEVICE_INTERFACE_JOB_TYPE
+from app.evidence_retirement import active_encounter_sql
+from app.evidence_retirement_sources import (
+    DEVICE_COLLECTION,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+)
 from app.pipeline_intake import (
     AUTOMATED_NMAP_INTENT,
     AUTOMATED_NMAP_SOURCE,
@@ -29,6 +35,37 @@ _SOURCE_LABELS = {
     MANUAL_DEVICE_SOURCE: "Uploaded device configuration",
     COLLECTED_DEVICE_SOURCE: "Collected device configuration",
 }
+
+
+def _active_marker_sql(alias: str = "marker") -> tuple[str, tuple[str, ...]]:
+    """Limit the ordinary status page to active supported encounters."""
+    scan_active, scan_values = active_encounter_sql(
+        NMAP_SCAN_RUN, f"{alias}.source_id",
+    )
+    import_active, import_values = active_encounter_sql(
+        NMAP_IMPORT, f"{alias}.source_id",
+    )
+    device_active, device_values = active_encounter_sql(
+        DEVICE_COLLECTION, f"{alias}.source_id",
+    )
+    supported = (
+        MANUAL_NMAP_SOURCE,
+        AUTOMATED_NMAP_SOURCE,
+        MANUAL_DEVICE_SOURCE,
+        COLLECTED_DEVICE_SOURCE,
+    )
+    return (
+        "((" + f"{alias}.source_kind NOT IN (?,?,?,?)" + ") OR "
+        f"({alias}.source_kind=? AND {import_active}) OR "
+        f"({alias}.source_kind=? AND {scan_active}) OR "
+        f"({alias}.source_kind IN (?,?) AND {device_active}))",
+        (
+            *supported,
+            MANUAL_NMAP_SOURCE, *import_values,
+            AUTOMATED_NMAP_SOURCE, *scan_values,
+            MANUAL_DEVICE_SOURCE, COLLECTED_DEVICE_SOURCE, *device_values,
+        ),
+    )
 
 
 def _table(db: sqlite3.Connection, name: str) -> bool:
@@ -571,28 +608,40 @@ def _item(
 
 
 def _historical_counts(db: sqlite3.Connection) -> dict:
+    import_active, import_values = active_encounter_sql(
+        NMAP_IMPORT, "observation.observation_id",
+    )
+    scan_active, scan_values = active_encounter_sql(
+        NMAP_SCAN_RUN, "run.run_id",
+    )
+    device_active, device_values = active_encounter_sql(
+        DEVICE_COLLECTION, "authority.run_id",
+    )
     counts = {"manual_nmap": 0, "automated_nmap": 0, "device": 0}
     if _table(db, "artifact_observations"):
         counts["manual_nmap"] = int(db.execute(
-            """SELECT COUNT(*) FROM artifact_observations observation
+            f"""SELECT COUNT(*) FROM artifact_observations observation
                WHERE observation.source_kind = 'nmap_import'
                  AND NOT EXISTS (SELECT 1 FROM pipeline_intake_sources marker
-                   WHERE marker.source_kind = ? AND marker.source_id = observation.observation_id)""",
-            (MANUAL_NMAP_SOURCE,),
+                   WHERE marker.source_kind = ? AND marker.source_id = observation.observation_id)
+                 AND {import_active}""",
+            (MANUAL_NMAP_SOURCE, *import_values),
         ).fetchone()[0])
     if _table(db, "scan_runs"):
         counts["automated_nmap"] = int(db.execute(
-            """SELECT COUNT(*) FROM scan_runs run WHERE run.status = 'completed'
+            f"""SELECT COUNT(*) FROM scan_runs run WHERE run.status = 'completed'
                  AND NOT EXISTS (SELECT 1 FROM pipeline_intake_sources marker
-                   WHERE marker.source_kind = ? AND marker.source_id = run.run_id)""",
-            (AUTOMATED_NMAP_SOURCE,),
+                   WHERE marker.source_kind = ? AND marker.source_id = run.run_id)
+                 AND {scan_active}""",
+            (AUTOMATED_NMAP_SOURCE, *scan_values),
         ).fetchone()[0])
     if _table(db, "device_collection_authority"):
         counts["device"] = int(db.execute(
-            """SELECT COUNT(*) FROM device_collection_authority authority
+            f"""SELECT COUNT(*) FROM device_collection_authority authority
                WHERE NOT EXISTS (SELECT 1 FROM pipeline_intake_sources marker
-                 WHERE marker.source_kind IN (?, ?) AND marker.source_id = authority.run_id)""",
-            (MANUAL_DEVICE_SOURCE, COLLECTED_DEVICE_SOURCE),
+                 WHERE marker.source_kind IN (?, ?) AND marker.source_id = authority.run_id)
+                 AND {device_active}""",
+            (MANUAL_DEVICE_SOURCE, COLLECTED_DEVICE_SOURCE, *device_values),
         ).fetchone()[0])
     counts["total"] = sum(counts.values())
     return counts
@@ -615,12 +664,17 @@ def list_ingestion_status(db_path: Path, *, limit: int = 25, offset: int = 0) ->
         db.execute("BEGIN")
         if not _table(db, "pipeline_intake_sources"):
             return empty
-        total = int(db.execute("SELECT COUNT(*) FROM pipeline_intake_sources").fetchone()[0])
+        active_marker, active_values = _active_marker_sql()
+        total = int(db.execute(
+            f"SELECT COUNT(*) FROM pipeline_intake_sources marker WHERE {active_marker}",
+            active_values,
+        ).fetchone()[0])
         markers = db.execute(
-            """SELECT source_kind, source_id, policy_version, marked_by, marked_at
-               FROM pipeline_intake_sources
+            f"""SELECT source_kind, source_id, policy_version, marked_by, marked_at
+               FROM pipeline_intake_sources marker
+               WHERE {active_marker}
                ORDER BY marked_at DESC, source_kind, source_id LIMIT ? OFFSET ?""",
-            (limit, offset),
+            (*active_values, limit, offset),
         ).fetchall()
         builders = {
             MANUAL_NMAP_SOURCE: _manual_nmap,

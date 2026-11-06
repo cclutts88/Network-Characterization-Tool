@@ -10,6 +10,7 @@ import pytest
 
 TEST_DATA_DIR = Path(tempfile.gettempdir()) / f"nmap-analyzer-tests-{uuid.uuid4().hex}"
 os.environ["ANALYZER_DATA_DIR"] = str(TEST_DATA_DIR)
+os.environ["NCT_RETIREMENT_GUARD_MODE"] = "disabled"
 
 
 @pytest.fixture(autouse=True)

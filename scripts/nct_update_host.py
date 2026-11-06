@@ -371,6 +371,17 @@ class Host:
         self.data = Path(config["data_dir"])
         if self.data.is_symlink() or not self.data.is_absolute() or self.data == self.root or self.data in self.root.parents or self.root in self.data.parents:
             raise ValueError("Recovery state must be outside the exact evidence directory")
+        self.retirement_guard = Path(
+            config.get("retirement_guard_dir", self.root.parent / "retirement-guard")
+        ).absolute()
+        if (
+            not self.retirement_guard.is_absolute()
+            or self.retirement_guard == self.data
+            or self.retirement_guard in self.data.parents
+            or self.data in self.retirement_guard.parents
+        ):
+            raise ValueError("Retirement guard storage must be outside evidence data")
+        self.retirement_data_identity = "bind:" + str(self.data.resolve())
         self.engine = engine or Docker()
         self.mutex = threading.Lock()
         self.worker_guard = threading.Lock()
@@ -591,6 +602,113 @@ class Host:
                     raise ValueError("Maintenance helper stopped but restart-policy verification failed; handoff refused") from fence_error
                 self.engine.command("rm", helper["Id"])
             save(receipt, {"name": name, "image": image, "phase": "stopped"})
+
+    def retirement_helper(self, image, command, *, include_data=False, data_readonly=False):
+        self.retirement_guard.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.retirement_guard, 0o700)
+        options = ["--read-only", "--mount", (
+            f"type=bind,src={self.retirement_guard},dst=/retirement-guard"
+        )]
+        if include_data:
+            suffix = ",readonly" if data_readonly else ""
+            options += [
+                "--mount", f"type=bind,src={self.data},dst=/data{suffix}",
+            ]
+        return self.run_helper(image, options, command)
+
+    def provision_retirement_guard(self, image):
+        """Provision only independent host authority; never open live evidence."""
+        provisioning = self.retirement_guard / "provisioning.json"
+        if not provisioning.exists():
+            if any(self.retirement_guard.iterdir()):
+                raise ValueError("Unrecognized retirement guard state blocks update")
+            self.retirement_helper(
+                image,
+                [
+                    "-m", "app.retirement_guard_cli", "provision",
+                    "--guard-dir", "/retirement-guard",
+                    "--installation-id", self.config["container"],
+                    "--data-identity", self.retirement_data_identity,
+                ],
+            )
+        return json.loads(provisioning.read_text(encoding="utf-8"))
+
+    def migrate_restored_retirement_schema(self, image):
+        """Apply the candidate's exact migration after a verified backup swap."""
+        self.retirement_helper(
+            image,
+            [
+                "-c",
+                "from pathlib import Path; "
+                "from app.schema_compatibility import begin_schema_migration,complete_schema_migration; "
+                "p=Path('/data/analyzer.db'); a=begin_schema_migration(p); "
+                "complete_schema_migration(p,a)",
+            ],
+            include_data=True,
+        )
+
+    def check_retirement_guard(self, image):
+        status = self.retirement_helper(
+            image,
+            [
+                "-m", "app.retirement_guard_cli", "check",
+                "--db", "/data/analyzer.db", "--data-dir", "/data",
+                "--guard-dir", "/retirement-guard",
+                "--data-identity", self.retirement_data_identity,
+            ],
+            include_data=True,
+        )
+        return json.loads(status)
+
+    def mark_retirement_restore_hold(self, image, operation_id):
+        return json.loads(self.retirement_helper(
+            image,
+            [
+                "-m", "app.retirement_guard_cli", "mark-restore-hold",
+                "--guard-dir", "/retirement-guard",
+                "--data-identity", self.retirement_data_identity,
+                "--operation-id", operation_id,
+                "--detail", "before replacing live evidence with a verified backup",
+            ],
+        ))
+
+    def reconcile_retirement_restore(self, image, operation_id):
+        self.migrate_restored_retirement_schema(image)
+        status = json.loads(self.retirement_helper(
+            image,
+            [
+                "-m", "app.retirement_guard_cli", "reconcile-restore",
+                "--db", "/data/analyzer.db", "--data-dir", "/data",
+                "--guard-dir", "/retirement-guard",
+                "--data-identity", self.retirement_data_identity,
+                "--operation-id", operation_id,
+            ],
+            include_data=True,
+        ))
+        if status.get("state") != "ready":
+            raise ValueError("Restored retirement authority did not become ready")
+        return status
+
+    def runtime_supports_retirement_guard(self, target):
+        env = dict(
+            item.split("=", 1) for item in target["Config"].get("Env", [])
+            if "=" in item
+        )
+        mounted = any(
+            item.get("Type") == "bind"
+            and Path(str(item.get("Source") or "")).resolve()
+            == self.retirement_guard.resolve()
+            and
+            item.get("Destination") == "/run/nct-retirement-guard"
+            and item.get("RW") is True
+            for item in target.get("Mounts", [])
+        )
+        return (
+            env.get("NCT_RETIREMENT_GUARD_MODE") == "required"
+            and env.get("NCT_RETIREMENT_GUARD_DIR") == "/run/nct-retirement-guard"
+            and env.get("NCT_RETIREMENT_DATA_IDENTITY") == self.retirement_data_identity
+            and mounted
+        )
 
     def diagnose(self):
         target = self.target()
@@ -940,11 +1058,26 @@ class Host:
         config.pop("Domainname", None)
         config["Image"] = state["candidate_image_id"]
         config["Labels"] = {**(config.get("Labels") or {}), "org.nct.update-operation": state["id"]}
-        config["Env"] = [item for item in config.get("Env", []) if not item.startswith(("NCT_BUILD_ID=", "NCT_BUILD_COMMIT=", "NCT_APP_VERSION="))]
+        config["Env"] = [item for item in config.get("Env", []) if not item.startswith((
+            "NCT_BUILD_ID=", "NCT_BUILD_COMMIT=", "NCT_APP_VERSION=",
+            "NCT_RETIREMENT_GUARD_MODE=", "NCT_RETIREMENT_GUARD_DIR=",
+            "NCT_RETIREMENT_DATA_IDENTITY=",
+        ))]
+        config["Env"] += [
+            "NCT_RETIREMENT_GUARD_MODE=required",
+            "NCT_RETIREMENT_GUARD_DIR=/run/nct-retirement-guard",
+            "NCT_RETIREMENT_DATA_IDENTITY=" + self.retirement_data_identity,
+        ]
         host = copy.deepcopy(original["HostConfig"])
         if host.get("AutoRemove") or host.get("NetworkMode", "").startswith("container:") or host.get("VolumesFrom"):
             raise ValueError("Shared-container or auto-remove deployment requires a qualified adapter")
         host["RestartPolicy"] = {"Name": "no", "MaximumRetryCount": 0}
+        binds = [
+            item for item in (host.get("Binds") or [])
+            if ":/run/nct-retirement-guard" not in item
+        ]
+        binds.append(f"{self.retirement_guard}:/run/nct-retirement-guard:rw")
+        host["Binds"] = binds
         config["HostConfig"] = host
         return config
 
@@ -1004,9 +1137,18 @@ class Host:
                 self.checkpoint(state["original"]["Image"])
                 self.helper(state["original"]["Image"], "active")
                 self.compatibility(state)
+                # Provision independent authority before backup without opening or
+                # changing the live database. The candidate performs the exact
+                # schema migration and binds that authority only after the verified
+                # cold backup exists.
+                self.provision_retirement_guard(state["candidate_image_id"])
                 self.backup(state)
                 self.phase(state, "backup_verified", detail="Cold backup was independently restored and matched. Replacing NCT.")
-                self.phase(state, "replace_intent", candidate_may_have_written=True)
+                # Creating a stopped container cannot touch the retained data bind.
+                # Keep this exact pre-write state so a create failure can restart
+                # the unchanged older runtime without inventing a restore hold for
+                # a newly provisioned, not-yet-bound retirement guard.
+                self.phase(state, "replace_intent", candidate_may_have_written=False)
                 self.activity(state, "install", "Installing the checked release — collection remains paused", force=True)
                 self.hold_collection(state)
                 rollback_name = "nct-rollback-" + state["id"]
@@ -1014,6 +1156,9 @@ class Host:
                 candidate = self.engine.create(self.config["container"], self.replacement(state))
                 self.phase(state, "candidate_created", candidate_id=candidate)
                 self.activity(state, "start", "Starting and checking the installed release", force=True)
+                # From this durable intent onward, Docker start may execute candidate
+                # code against /data even if the host command later reports failure.
+                self.phase(state, "candidate_start_intent", candidate_may_have_written=True)
                 os.close(lock)
                 lock = None
                 self.engine.command("start", candidate)
@@ -1075,6 +1220,9 @@ class Host:
                 raise ValueError("No verified pre-update backup; old image will remain stopped")
             before = json.loads((self.root / state["id"] / "before.json").read_text())
             if not state.get("swap"):
+                self.mark_retirement_restore_hold(
+                    state["candidate_image_id"], state["id"],
+                )
                 if not self.data.is_dir() or self.data.is_symlink():
                     raise ValueError("Evidence folder disappeared without a journaled restore")
                 restored = self.extract_backup(state, "restored")
@@ -1087,7 +1235,21 @@ class Host:
                         "data_identity": file_identity(self.data), "restored_identity": file_identity(restored)}
                 state.setdefault("preserved_paths", []).append(str(quarantine))
                 self.phase(state, "restore_swap_intent", swap=swap, quarantine_path=str(quarantine))
-            self.reconcile_swap(state, before)
+            self.reconcile_swap(
+                state,
+                before,
+                verify_snapshot=not state.get("restore_data_verified", False),
+            )
+            retirement = self.reconcile_retirement_restore(
+                state["candidate_image_id"], state["id"],
+            )
+            self.phase(
+                state,
+                "restore_retirement_reconciled",
+                restore_data_verified=True,
+                retirement_restore_reconciled=True,
+                retirement=retirement,
+            )
             state["recovery_outcome"] = {"backup_swapped": True, "later_evidence_preserved": True}
         else:
             self.helper(original["Image"], "snapshot")
@@ -1103,6 +1265,12 @@ class Host:
             os.close(lock[0])
             lock[0] = None
         self.hold_collection(state)
+        refreshed_original = self.engine.inspect(original["Id"])
+        if restoring and not self.runtime_supports_retirement_guard(refreshed_original):
+            raise ValueError(
+                "The restored image cannot enforce protected retirement state or the "
+                "migrated schema; its restart policy remains disabled and it stays stopped"
+            )
         try:
             self.engine.command("start", original["Id"])
             self.verify_health(state, original=True)
@@ -1113,7 +1281,7 @@ class Host:
         self.phase(state, "awaiting_restore_sign_in", evidence_verified=True,
             detail=("NCT is running from the verified backup. Later evidence remains preserved separately. " if restoring else "The original installation restarted without a backup data swap. " + ("Earlier replacement-write history is unknown; retain administrator review. " if outcome == "original_restart_unknown_history" else "")) + "Verify an existing NCT account before finishing.")
 
-    def reconcile_swap(self, state, before):
+    def reconcile_swap(self, state, before, *, verify_snapshot=True):
         swap = state["swap"]
         restored, quarantine = Path(swap["restored_path"]), Path(swap["quarantine_path"])
         if restored != self.data.parent / ("nct-restored-" + state["id"]) or quarantine != self.data.parent / ("nct-preserved-" + state["id"]):
@@ -1132,9 +1300,9 @@ class Host:
             data_id, restored_id = new_id, None
         if (data_id, restored_id, quarantine_id) != (new_id, None, old_id):
             raise ValueError("Saved restore folder identities do not match the actual swap state")
-        if self.helper(state["original"]["Image"], "snapshot") != before:
+        if verify_snapshot and self.helper(state["original"]["Image"], "snapshot") != before:
             raise ValueError("Restored evidence changed after the recorded swap; old image remains stopped")
-        self.phase(state, "restore_data_verified")
+        self.phase(state, "restore_data_verified", restore_data_verified=True)
 
     def target_by_original(self, state):
         # Reuse the same shared-writer checks after rename without guessing a new ID.

@@ -105,6 +105,30 @@ def _canonical_text(value: object, name: str, *, maximum: int = 500) -> str:
     return text
 
 
+def _retirement_impact(
+    source_family: str,
+    encounter_id: str,
+    *,
+    authority_revision: int,
+    identity_count: int,
+    identity_snapshot_sha256: str,
+) -> list[str]:
+    return [
+        (
+            f"This exact {source_family} encounter {encounter_id} will leave ordinary "
+            "selectors and future analysis."
+        ),
+        (
+            f"The decision is based on authority revision {authority_revision} and "
+            f"{identity_count} protected exact identities "
+            f"({identity_snapshot_sha256[:12]})."
+        ),
+        "Any active same-content sibling remains independently available.",
+        "Original source bytes and the immutable retirement receipt are retained.",
+        "This action does not contact the network and does not physically delete files.",
+    ]
+
+
 def _identity_snapshot(
     source_family: str, encounter_id: str, identities: Mapping[str, str],
 ) -> tuple[dict[str, str], str, str]:
@@ -339,6 +363,9 @@ def retire_evidence(
     actor: str,
     reason: str,
     adapter: EvidenceRetirementAdapter,
+    expected_authority_revision: int | None = None,
+    expected_identity_snapshot_sha256: str | None = None,
+    expected_impact_sha256: str | None = None,
 ) -> dict[str, object]:
     """Retire one source encounter atomically without deleting retained evidence."""
     source_family = _canonical_text(source_family, "source family", maximum=100)
@@ -373,6 +400,35 @@ def retire_evidence(
             "SELECT revision,event_digest FROM evidence_retirement_events "
             "WHERE sealed=1 ORDER BY revision DESC LIMIT 1"
         ).fetchone()
+        authority_revision = int(head[0]) if head else 0
+        if (
+            expected_authority_revision is not None
+            and int(expected_authority_revision) != authority_revision
+        ):
+            raise EvidenceRetirementBlocked(
+                "Retirement authority changed after review; review the source again"
+            )
+        if (
+            expected_identity_snapshot_sha256 is not None
+            and expected_identity_snapshot_sha256 != snapshot_sha256
+        ):
+            raise EvidenceRetirementBlocked(
+                "Exact source identity changed after review; review the source again"
+            )
+        impact = _retirement_impact(
+            source_family,
+            encounter_id,
+            authority_revision=authority_revision,
+            identity_count=len(identities),
+            identity_snapshot_sha256=snapshot_sha256,
+        )
+        if (
+            expected_impact_sha256 is not None
+            and expected_impact_sha256 != _digest(impact)
+        ):
+            raise EvidenceRetirementBlocked(
+                "Retirement impact changed after review; review the source again"
+            )
         previous_digest = head[1] if head else "root"
         event_id = uuid.uuid4().hex
         body = {
@@ -425,6 +481,100 @@ def retire_evidence(
     }
 
 
+def preview_evidence_retirement(
+    db_path: Path,
+    *,
+    source_family: str,
+    encounter_id: str,
+    adapter: EvidenceRetirementAdapter,
+    actor: str,
+) -> dict[str, object]:
+    """Review one exact encounter without changing its source or audit history.
+
+    The final retirement repeats every check under the write lock.  This preview is
+    therefore operator guidance, not an authorization token or a stale promise that
+    an in-progress source will still be eligible when confirmation is submitted.
+    """
+    source_family = _canonical_text(source_family, "source family", maximum=100)
+    encounter_id = _canonical_text(encounter_id, "encounter id", maximum=500)
+    actor = _canonical_text(actor, "actor", maximum=200)
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        require_retirement_authority(db)
+        record = retirement_record(
+            db, source_family=source_family, encounter_id=encounter_id,
+        )
+        if record is not None:
+            raise EvidenceAlreadyRetired(
+                f"evidence encounter is already retired at revision {record['revision']}"
+            )
+        blocked = adapter.active_work_detail(db, encounter_id)
+        if blocked:
+            raise EvidenceRetirementBlocked(str(blocked))
+        identities, _snapshot, snapshot_sha256 = _identity_snapshot(
+            source_family,
+            encounter_id,
+            adapter.resolve_identities(db, encounter_id),
+        )
+        head = db.execute(
+            "SELECT revision FROM evidence_retirement_events "
+            "WHERE sealed=1 ORDER BY revision DESC LIMIT 1"
+        ).fetchone()
+        authority_revision = int(head[0]) if head else 0
+    impact = _retirement_impact(
+        source_family,
+        encounter_id,
+        authority_revision=authority_revision,
+        identity_count=len(identities),
+        identity_snapshot_sha256=snapshot_sha256,
+    )
+    confirmation = (
+        f"RETIRE {source_family} {encounter_id} AT {authority_revision} "
+        f"{snapshot_sha256[:12]}"
+    )
+    return {
+        "source_family": source_family,
+        "encounter_id": encounter_id,
+        "actor": actor,
+        "authority_revision": authority_revision,
+        "identity_count": len(identities),
+        "identity_snapshot_sha256": snapshot_sha256,
+        "confirmation": confirmation,
+        "impact": impact,
+    }
+
+
+def list_retirement_records(
+    db_path: Path, *, limit: int = 100, offset: int = 0,
+) -> dict[str, object]:
+    """Return the append-only operator audit without exposing identity snapshots."""
+    if not 1 <= int(limit) <= 500 or int(offset) < 0:
+        raise EvidenceRetirementError("Invalid retirement audit page range")
+    with connect_database(db_path, read_only=True) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        require_retirement_authority(db)
+        total = int(db.execute(
+            "SELECT COUNT(*) FROM evidence_retirement_events WHERE sealed=1"
+        ).fetchone()[0])
+        rows = [dict(row) for row in db.execute(
+            """SELECT revision,event_id,source_family,encounter_id,actor,reason,
+                      retired_at,event_digest,identity_count
+                   FROM evidence_retirement_events
+                  WHERE sealed=1
+                  ORDER BY revision DESC
+                  LIMIT ? OFFSET ?""",
+            (int(limit), int(offset)),
+        )]
+    return {
+        "items": rows,
+        "total": total,
+        "limit": int(limit),
+        "offset": int(offset),
+        "has_more": int(offset) + len(rows) < total,
+    }
+
+
 def is_evidence_retired(
     connection: sqlite3.Connection, *, source_family: str, encounter_id: str,
 ) -> bool:
@@ -473,6 +623,38 @@ def require_retirement_authority(connection: sqlite3.Connection) -> None:
         raise
     if lineage is None:
         raise EvidenceRetirementError("retirement lineage is missing")
+
+
+def retirement_authority_token(connection: sqlite3.Connection) -> dict[str, object]:
+    """Return the exact sealed authority head for one database snapshot."""
+    require_retirement_authority(connection)
+    lineage = connection.execute(
+        "SELECT lineage_id FROM evidence_retirement_lineage WHERE singleton=1"
+    ).fetchone()
+    head = connection.execute(
+        """SELECT revision,event_digest FROM evidence_retirement_events
+            WHERE sealed=1 ORDER BY revision DESC LIMIT 1"""
+    ).fetchone()
+    return {
+        "lineage_id": str(lineage[0]),
+        "revision": int(head[0]) if head else 0,
+        "event_digest": str(head[1]) if head else "root",
+    }
+
+
+def require_retirement_authority_token(
+    connection: sqlite3.Connection, expected: Mapping[str, object],
+) -> None:
+    actual = retirement_authority_token(connection)
+    normalized = {
+        "lineage_id": str(expected.get("lineage_id") or ""),
+        "revision": int(expected.get("revision") or 0),
+        "event_digest": str(expected.get("event_digest") or ""),
+    }
+    if actual != normalized:
+        raise RetiredEvidenceDependency(
+            "retirement authority changed while the derived result was built"
+        )
 
 
 def require_active_encounter(

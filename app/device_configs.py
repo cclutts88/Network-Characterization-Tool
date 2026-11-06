@@ -31,6 +31,13 @@ from app.auth import auth_enabled
 from app.active_collection import require_active_collection
 from app.database import connect_database
 from app.evidence_maintenance import guarded_evidence_mutation
+from app.evidence_retirement import (
+    EvidenceRetirementError,
+    RetiredEvidenceDependency,
+    require_active_encounter,
+    retired_encounter_ids,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION
 from app.artifacts import (
     init_artifact_storage,
     link_artifact,
@@ -4831,12 +4838,25 @@ def history(limit: int = Query(default=25, ge=1, le=100), offset: int = 0) -> li
         raise HTTPException(status_code=422, detail="History offset must not be negative")
     if not CONFIG_DIR.exists():
         return []
+    try:
+        with connect_database(DB_PATH, read_only=True) as retirement_db:
+            retired_collection_ids = retired_encounter_ids(
+                retirement_db,
+                source_family=DEVICE_COLLECTION,
+            )
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Device evidence authority is unavailable.",
+        ) from exc
     records: list[dict] = []
     skipped = 0
     for path in sorted(CONFIG_DIR.glob("*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             value = json.loads(path.read_text())
             if value.get("operation") == "ssh_preflight":
+                continue
+            if str(value.get("run_id") or "") in retired_collection_ids:
                 continue
             authority = get_device_collection_authority(DB_PATH, str(value.get("run_id") or ""))
             if authority is not None and authority["state"] == "deleted":
@@ -5162,6 +5182,22 @@ def download_artifact(run_id: str, filename: str) -> FileResponse:
     )
     if not RUN_ID_RE.fullmatch(run_id) or not allowed_name:
         raise HTTPException(status_code=404, detail="Collection artifact was not found")
+    try:
+        with connect_database(DB_PATH, read_only=True) as db:
+            require_active_encounter(
+                db, source_family=DEVICE_COLLECTION, encounter_id=run_id,
+            )
+    except RetiredEvidenceDependency:
+        raise HTTPException(
+            status_code=404, detail="Collection artifact was not found"
+        ) from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Device evidence authority is unavailable; no artifact was returned."
+            ),
+        ) from exc
     manifest_path = CONFIG_DIR / run_id / "manifest.json"
     try:
         manifest = (
@@ -5209,6 +5245,21 @@ def collection_detail(run_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Device collection was deleted") from None
     except (DeviceCollectionIncomplete, DeviceCollectionIntegrityError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    try:
+        with connect_database(DB_PATH, read_only=True) as retirement_db:
+            require_active_encounter(
+                retirement_db,
+                source_family=DEVICE_COLLECTION,
+                encounter_id=run_id,
+            )
+    except RetiredEvidenceDependency:
+        raise HTTPException(
+            status_code=404, detail="Device collection was not found"
+        ) from None
+    except EvidenceRetirementError as exc:
+        raise HTTPException(
+            status_code=503, detail="Device evidence authority is unavailable."
+        ) from exc
     value.pop("key_path", None)
     value["artifacts"] = artifact_records(run_id, run_dir)
     return value

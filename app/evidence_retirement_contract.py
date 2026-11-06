@@ -75,25 +75,101 @@ PROJECTION_ROUTES = (
 )
 
 
-# Foundation state: no route is claimed until the corresponding integration and
-# regression tests exist.  This mapping is deliberately exhaustive and is updated
-# in the same change that implements each route.
-ROUTE_COVERAGE: dict[str, frozenset[str]] = {
-    source.source_family: frozenset() for source in SOURCE_CONTRACTS
-}
-ROUTE_COVERAGE.update({
+# Source-specific obligations avoid pretending that every evidence family feeds
+# every projection. A release may enable retirement controls only when coverage is
+# exactly equal to these applicable routes and each claim has a focused test.
+APPLICABLE_ROUTES: dict[str, frozenset[str]] = {
     "nmap_scan_run": frozenset({
-        "evidence-library", "current-network", "hunt", "map-topology",
+        "source-history", "raw-evidence-download", "evidence-library",
+        "ingestion-status", "background-admission",
+        "background-retry", "prepared-nmap-analysis", "searchsploit-enrichment",
+        "exposure-reports", "current-network", "changes-over-time", "hunt",
+        "reach", "map-topology", "map", "operator-exports", "cache-revisions",
     }),
     "nmap_import": frozenset({
-        "evidence-library", "source-history", "raw-evidence-download",
-        "operator-exports", "current-network", "hunt", "map-topology",
+        "evidence-library", "source-history", "raw-evidence-download", "ingestion-status",
+        "prepared-nmap-analysis", "exposure-reports", "operator-exports",
+        "current-network", "hunt", "reach", "map-topology", "map",
+        "cache-revisions",
     }),
     "device_collection": frozenset({
-        "evidence-library", "current-network", "hunt", "map-topology",
+        "source-history", "raw-evidence-download", "evidence-library",
+        "ingestion-status", "background-admission",
+        "background-retry", "device-analysis", "exposure-reports",
+        "current-network", "network-devices", "changes-over-time", "hunt",
+        "reach", "map-topology", "map", "operator-exports", "cache-revisions",
     }),
-    "arkime_sessions_import": frozenset({"hunt"}),
-})
+    "arkime_sessions_import": frozenset({
+        "source-history", "raw-evidence-download",
+        "background-admission", "background-retry",
+        "arkime-coverage", "arkime-analytics", "arkime-history", "hunt",
+        "operator-exports", "cache-revisions",
+    }),
+    "arkime_summary_import": frozenset({
+        "source-history", "raw-evidence-download",
+        "arkime-coverage", "arkime-analytics", "arkime-history",
+        "operator-exports", "cache-revisions",
+    }),
+    "hostname_evidence_upload": frozenset({
+        "source-history", "raw-evidence-download",
+        "current-network", "hunt", "map-topology", "map", "operator-exports",
+        "cache-revisions",
+    }),
+}
+
+
+# Calculation-contract status is an administrator-only, metadata-only audit of
+# immutable result format/version records. It exposes no result payload, source
+# bytes, ordinary analysis link, selection action, or download. Results derived
+# from retired sources may remain in this bounded audit because it is not an
+# ordinary evidence projection.
+AUDIT_ONLY_ROUTES: dict[str, str] = {
+    "derived-result-status": (
+        "administrator-only calculation contract metadata; no payload, source "
+        "link, selection action, analysis action, or download"
+    ),
+}
+
+
+# Independently maintained implementation claims. Do not derive this mapping
+# from APPLICABLE_ROUTES: reviewers must see an explicit omission whenever an
+# ordinary consumer has not been qualified.
+ROUTE_COVERAGE: dict[str, frozenset[str]] = {
+    "nmap_scan_run": frozenset({
+        "source-history", "raw-evidence-download", "evidence-library",
+        "ingestion-status", "background-admission", "background-retry",
+        "prepared-nmap-analysis", "searchsploit-enrichment", "exposure-reports",
+        "current-network", "changes-over-time", "hunt", "reach",
+        "map-topology", "map", "operator-exports", "cache-revisions",
+    }),
+    "nmap_import": frozenset({
+        "evidence-library", "source-history", "raw-evidence-download", "ingestion-status",
+        "prepared-nmap-analysis", "exposure-reports", "operator-exports",
+        "current-network", "hunt", "reach", "map-topology", "map",
+        "cache-revisions",
+    }),
+    "device_collection": frozenset({
+        "source-history", "raw-evidence-download", "evidence-library",
+        "ingestion-status", "background-admission", "background-retry",
+        "device-analysis", "exposure-reports", "current-network",
+        "network-devices", "changes-over-time", "hunt", "reach",
+        "map-topology", "map", "operator-exports", "cache-revisions",
+    }),
+    "arkime_sessions_import": frozenset({
+        "source-history", "raw-evidence-download", "background-admission",
+        "background-retry", "arkime-coverage", "arkime-analytics",
+        "arkime-history", "hunt", "operator-exports", "cache-revisions",
+    }),
+    "arkime_summary_import": frozenset({
+        "source-history", "raw-evidence-download", "arkime-coverage",
+        "arkime-analytics", "arkime-history", "operator-exports",
+        "cache-revisions",
+    }),
+    "hostname_evidence_upload": frozenset({
+        "source-history", "raw-evidence-download", "current-network", "hunt",
+        "map-topology", "map", "operator-exports", "cache-revisions",
+    }),
+}
 
 
 def source_contract(source_family: str) -> RetirementSourceContract:

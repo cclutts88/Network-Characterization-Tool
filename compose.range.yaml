@@ -13,6 +13,9 @@ services:
       NCT_COOKIE_SECURE: "1"
       NCT_BOOTSTRAP_ADMIN: ${NCT_BOOTSTRAP_ADMIN:-}
       NCT_BOOTSTRAP_PASSWORD_FILE: ${NCT_BOOTSTRAP_PASSWORD_FILE:-}
+      NCT_RETIREMENT_GUARD_MODE: required
+      NCT_RETIREMENT_GUARD_DIR: /run/nct-retirement-guard
+      NCT_RETIREMENT_DATA_IDENTITY: ${NCT_RETIREMENT_DATA_IDENTITY}
     command:
       - uvicorn
       - app.main:app
@@ -33,3 +36,4 @@ services:
       - ${NCT_TLS_ROOT}/tls/nct-server.crt:/run/tls/nct-server.crt:ro
       - ${NCT_TLS_ROOT}/tls/nct-server.key:/run/tls/nct-server.key:ro
       - ${NCT_BOOTSTRAP_DIR}:/run/nct-bootstrap:ro
+      - ${NCT_RETIREMENT_GUARD_DIR}:/run/nct-retirement-guard:rw

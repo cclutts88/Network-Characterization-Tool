@@ -18,6 +18,8 @@ STATE_DIR="$PERSIST_ROOT/deployment"
 TLS_ROOT="$PERSIST_ROOT/tls-material"
 BOOTSTRAP_DIR="$STATE_DIR/bootstrap"
 BOOTSTRAP_PASSWORD="$BOOTSTRAP_DIR/initial-password.txt"
+RETIREMENT_GUARD_DIR="$PERSIST_ROOT/retirement-guard"
+RETIREMENT_DATA_IDENTITY="bind:$DATA_DIR"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 verify_archive_checksum() {
@@ -56,8 +58,18 @@ fi
 
 docker load -i "$ARCHIVE"
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "The expected NCT image was not loaded."
-mkdir -p "$DATA_DIR" "$BOOTSTRAP_DIR"
-chmod 700 "$PERSIST_ROOT" "$DATA_DIR" "$STATE_DIR" "$BOOTSTRAP_DIR"
+mkdir -p "$DATA_DIR" "$BOOTSTRAP_DIR" "$RETIREMENT_GUARD_DIR"
+chmod 700 "$PERSIST_ROOT" "$DATA_DIR" "$STATE_DIR" "$BOOTSTRAP_DIR" "$RETIREMENT_GUARD_DIR"
+if [ ! -f "$RETIREMENT_GUARD_DIR/provisioning.json" ]; then
+    [ -z "$(find "$RETIREMENT_GUARD_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+        die "Unrecognized retirement guard state blocks startup."
+    docker run --rm --read-only --network none \
+        -v "$RETIREMENT_GUARD_DIR:/retirement-guard:rw" "$IMAGE" \
+        python -m app.retirement_guard_cli provision \
+        --guard-dir /retirement-guard --installation-id "$CONTAINER" \
+        --data-identity "$RETIREMENT_DATA_IDENTITY" >/dev/null ||
+        die "Protected retirement authority could not be provisioned."
+fi
 if [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] && [ ! -f "$TLS_ROOT/tls/nct-server.key" ]; then
     sh "$WORKDIR/scripts/setup-lab-https.sh" "$RANGE_IP" "$TLS_ROOT"
 elif [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] || [ ! -f "$TLS_ROOT/tls/nct-server.key" ]; then
@@ -93,6 +105,8 @@ export NCT_HTTPS_PORT="$HOST_PORT"
 export NCT_DATA_DIR="$DATA_DIR"
 export NCT_TLS_ROOT="$TLS_ROOT"
 export NCT_BOOTSTRAP_DIR="$BOOTSTRAP_DIR"
+export NCT_RETIREMENT_GUARD_DIR="$RETIREMENT_GUARD_DIR"
+export NCT_RETIREMENT_DATA_IDENTITY="$RETIREMENT_DATA_IDENTITY"
 
 printf '%s\n' "Starting NCT with Docker Compose..."
 if [ "$account_count" -eq 0 ]; then

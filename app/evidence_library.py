@@ -258,7 +258,7 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
                 clauses.append(clause); args.append(value)
         if q:
             clauses.append("instr(lower(title||' '||network||' '||source_id),lower(?))>0"); args.append(q)
-        cte = f"WITH sources AS ({union}), catalog AS (SELECT e.id,e.kind,e.source_id,e.saved_at,e.title,e.actor,e.network,COALESCE({assignment},e.scope_id) scope_id,e.status FROM sources e)"
+        cte = f"WITH sources AS ({union}), catalog AS (SELECT e.id,e.kind,e.source_id,e.saved_at,e.title,e.actor,e.network,COALESCE({assignment},e.scope_id) scope_id,e.status,e.observation_id FROM sources e)"
         conditions = " WHERE "+' AND '.join(clauses) if clauses else ""
         retirement_args = [
             *scan_active_parameters,
@@ -292,6 +292,15 @@ def list_evidence(db_path, root, *, q="", kind="", scope="", analyst="", start="
             assignments = [tuple(r) for r in db.execute('SELECT * FROM device_scope_assignments WHERE run_id=? ORDER BY authority_revision,revision',(run,))] if 'device_scope_assignments' in tables else []
             snapshots[run] = (dict(authority) if authority else None,assignments)
     for row in rows:
+        row['source_family'] = {
+            'scan': NMAP_SCAN_RUN,
+            'import': NMAP_IMPORT,
+            'device': DEVICE_COLLECTION,
+        }[row['kind']]
+        row['encounter_id'] = (
+            row['observation_id'] if row['kind'] == 'import' else row['source_id']
+        )
+        row['retire_eligible'] = bool(row['encounter_id'])
         row['scope_name'] = scopes.get(row['scope_id'],row['scope_id']) or 'Unknown / unassigned'
         row['actor'] = row['actor'] or 'Unknown'
         row['saved_at'] = row['saved_at'] or 'Unknown'

@@ -159,14 +159,40 @@ from app.schema_compatibility import (
     fail_schema_migration,
 )
 from app.evidence_retirement import (
+    EvidenceAlreadyRetired,
+    EvidenceRetirementBlocked,
     EvidenceRetirementError,
     RetiredEvidenceDependency,
     init_evidence_retirement_storage,
+    list_retirement_records,
+    preview_evidence_retirement,
     require_active_encounter,
+    retirement_authority_token,
     require_active_registered_content,
+    retire_evidence,
     retirement_cache_token,
 )
-from app.evidence_retirement_sources import NMAP_IMPORT, NMAP_SCAN_RUN
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT,
+    ARKIME_SUMMARY_IMPORT,
+    DEVICE_COLLECTION,
+    HOSTNAME_EVIDENCE_UPLOAD,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+    adapter_for_source,
+)
+from app.retirement_runtime import (
+    RetirementRuntimeError,
+    require_retirement_controls_ready,
+    require_retirement_startup_ready,
+    retirement_commit_window,
+    retirement_controls_available,
+    retirement_runtime_status,
+    runtime_config as retirement_runtime_config,
+    validate_retirement_projection_runtime,
+    validate_retirement_runtime,
+)
+from app.retirement_review import issue_review_token, verify_review_token
 from app.active_collection import (
     active_collection_enabled,
     active_collection_status,
@@ -877,6 +903,26 @@ class DeviceScopeCorrectionRequest(BaseModel):
     destination_scope_id: str = Field(min_length=1, max_length=200)
     reason: str = Field(min_length=1, max_length=500)
     whole_collection_confirmed: bool
+
+
+class EvidenceRetirementReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_family: Literal[
+        "nmap_scan_run",
+        "nmap_import",
+        "device_collection",
+        "arkime_sessions_import",
+        "arkime_summary_import",
+        "hostname_evidence_upload",
+    ]
+    encounter_id: str = Field(min_length=1, max_length=500)
+
+
+class EvidenceRetirementConfirmRequest(EvidenceRetirementReviewRequest):
+    reason: str = Field(min_length=3, max_length=500)
+    confirmation: str = Field(min_length=1, max_length=700)
+    review_token: str = Field(min_length=20, max_length=4096)
 
 
 class AnalystUserRequest(BaseModel):
@@ -1780,6 +1826,7 @@ async def lifespan(_: FastAPI):
         init_storage_health_storage(DB_PATH)
         init_evidence_retirement_storage(DB_PATH)
         complete_schema_migration(DB_PATH, schema_migration)
+        require_retirement_startup_ready(DB_PATH, DATA_DIR)
         from app.evidence_library import rebuild_device_index
         rebuild_device_index(DB_PATH, CONFIG_DIR)
         compaction_recovery = recover_incomplete_compactions(DB_PATH)
@@ -1899,6 +1946,53 @@ async def evidence_maintenance_response(request: Request, exc: EvidenceMaintenan
     return JSONResponse({"detail": str(exc)}, status_code=409)
 
 
+def _retirement_projection_hold(request: Request) -> JSONResponse | None:
+    """Keep required-mode evidence APIs closed after protected-state failure."""
+    path = request.url.path
+    recovery_paths = {
+        "/api/auth/login",
+        "/api/auth/logout",
+        "/api/auth/me",
+        "/api/updates/launch",
+        "/api/system/runtime-health",
+    }
+    if not path.startswith("/api/") or path in recovery_paths:
+        return None
+    try:
+        config = retirement_runtime_config()
+    except RetirementRuntimeError as exc:
+        status = None
+        reason = str(exc)
+    else:
+        if config.mode != "required":
+            return None
+        try:
+            # Startup admission alone is not enough: a host restore, protected
+            # receipt failure, or out-of-band database replacement can happen
+            # while this process is still alive. Revalidate the independent
+            # authority before every ordinary evidence API request.
+            status = validate_retirement_projection_runtime(DB_PATH, DATA_DIR)
+        except (
+            RetirementRuntimeError, EvidenceRetirementError, sqlite3.Error,
+            OSError, ValueError,
+        ) as exc:
+            status = None
+            reason = str(exc)
+        else:
+            reason = status.reason
+            if status.ready:
+                return None
+    return JSONResponse(
+        {
+            "detail": (
+                "Evidence views are paused because protected retirement state could "
+                f"not be verified: {reason}"
+            )
+        },
+        status_code=503,
+    )
+
+
 @app.middleware("http")
 async def local_authentication_guard(request: Request, call_next):
     request.state.analyst = None
@@ -1907,6 +2001,9 @@ async def local_authentication_guard(request: Request, call_next):
         if origin and origin.rstrip("/").split("://", 1)[-1] != request.headers.get("host"):
             return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
     if not auth_enabled():
+        held = _retirement_projection_hold(request)
+        if held is not None:
+            return held
         return await call_next(request)
     public_paths = {
         "/health",
@@ -1927,6 +2024,9 @@ async def local_authentication_guard(request: Request, call_next):
             return RedirectResponse(f"/login?next={destination}", status_code=303)
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
     request.state.analyst = analyst
+    held = _retirement_projection_hold(request)
+    if held is not None:
+        return held
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         personal_default_change = (
             request.url.path == "/api/workspaces/layouts/default/clear"
@@ -1957,6 +2057,16 @@ def require_saved_analysis_operator(request: Request) -> str:
     return "local-operator"
 
 
+def require_retirement_operator(request: Request) -> str:
+    """Retirement always needs an attributable signed-in analyst or administrator."""
+    if not auth_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="Evidence retirement requires signed-in local authentication",
+        )
+    return require_saved_analysis_operator(request)
+
+
 @app.get("/settings/system-health", response_class=HTMLResponse)
 def system_health_page(request: Request) -> HTMLResponse:
     require_storage_admin(request)
@@ -1983,6 +2093,7 @@ def evidence_library_workspace():
 
 @app.get("/api/evidence-library")
 def evidence_library_catalog(
+    request: Request,
     q: str = Query(default="", max_length=200), kind: str = "",
     scope: str = Query(default="", max_length=100),
     analyst: str = Query(default="", max_length=100), start: str = "", end: str = "",
@@ -1992,14 +2103,191 @@ def evidence_library_catalog(
     from app.evidence_library import list_evidence
     from app.evidence_retirement import EvidenceRetirementError
     try:
-        return list_evidence(DB_PATH, CONFIG_DIR, q=q, kind=kind, scope=scope,
-                             analyst=analyst, start=start, end=end, limit=limit, after=after)
+        result = list_evidence(
+            DB_PATH,
+            CONFIG_DIR,
+            q=q,
+            kind=kind,
+            scope=scope,
+            analyst=analyst,
+            start=start,
+            end=end,
+            limit=limit,
+            after=after,
+        )
+        signed_in = request.state.analyst
+        guard_ready = (
+            retirement_controls_available()
+            and
+            retirement_runtime_config().mode == "required"
+            and retirement_runtime_status().ready
+        )
+        result["can_retire"] = bool(
+            guard_ready
+            and auth_enabled()
+            and signed_in
+            and signed_in.get("role") in {"analyst", "admin"}
+        )
+        return result
     except EvidenceRetirementError:
         raise HTTPException(status_code=503, detail="Evidence catalog retirement authority is unavailable. Review System Health and retry; no evidence was changed.") from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except (sqlite3.Error, OSError):
         raise HTTPException(status_code=503, detail="Evidence catalog unavailable. Review System Health and retry; no evidence was changed.") from None
+
+
+def _retirement_adapter(source_family: str):
+    return adapter_for_source(
+        source_family,
+        hostname_evidence_dir=(
+            HOSTNAME_EVIDENCE_DIR
+            if source_family == HOSTNAME_EVIDENCE_UPLOAD
+            else None
+        ),
+    )
+
+
+@app.post("/api/evidence-retirements/preview")
+def review_evidence_retirement(
+    payload: EvidenceRetirementReviewRequest, request: Request,
+) -> dict:
+    actor = require_retirement_operator(request)
+    try:
+        require_retirement_controls_ready()
+        review = preview_evidence_retirement(
+            DB_PATH,
+            source_family=payload.source_family,
+            encounter_id=payload.encounter_id,
+            adapter=_retirement_adapter(payload.source_family),
+            actor=actor,
+        )
+        return {**review, "review_token": issue_review_token(review, actor=actor)}
+    except EvidenceAlreadyRetired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except EvidenceRetirementBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RetirementRuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Evidence retirement controls are unavailable: {exc}",
+        ) from exc
+    except (sqlite3.Error, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Retirement review is unavailable. No evidence was changed.",
+        ) from exc
+
+
+@app.post("/api/evidence-retirements")
+def confirm_evidence_retirement(
+    payload: EvidenceRetirementConfirmRequest, request: Request,
+) -> dict:
+    actor = require_retirement_operator(request)
+    try:
+        require_retirement_controls_ready()
+        reviewed = verify_review_token(
+            payload.review_token,
+            actor=actor,
+            source_family=payload.source_family,
+            encounter_id=payload.encounter_id,
+        )
+        expected_confirmation = (
+            f"RETIRE {payload.source_family} {payload.encounter_id} AT "
+            f"{reviewed['authority_revision']} "
+            f"{str(reviewed['identity_snapshot_sha256'])[:12]}"
+        )
+        if payload.confirmation != expected_confirmation:
+            raise EvidenceRetirementError(
+                "Confirmation did not match the exact encounter shown in the review"
+            )
+        with retirement_commit_window():
+            precommit_guard = validate_retirement_projection_runtime(
+                DB_PATH, DATA_DIR,
+            )
+            if not precommit_guard.ready:
+                raise RetirementRuntimeError(precommit_guard.reason)
+            event = retire_evidence(
+                DB_PATH,
+                source_family=payload.source_family,
+                encounter_id=payload.encounter_id,
+                actor=actor,
+                reason=payload.reason,
+                adapter=_retirement_adapter(payload.source_family),
+                expected_authority_revision=int(reviewed["authority_revision"]),
+                expected_identity_snapshot_sha256=str(
+                    reviewed["identity_snapshot_sha256"]
+                ),
+                expected_impact_sha256=str(reviewed["impact_sha256"]),
+            )
+            guard_status = validate_retirement_runtime(DB_PATH, DATA_DIR)
+        if not guard_status.ready:
+            return JSONResponse(
+                {
+                    "status": "retired-held",
+                    "committed": True,
+                    "revision": event["revision"],
+                    "source_family": payload.source_family,
+                    "encounter_id": payload.encounter_id,
+                    "retired_at": event["retired_at"],
+                    "detail": (
+                        "The retirement receipt committed, but its independent protected "
+                        "copy could not be verified. Evidence views are paused for host "
+                        "reconciliation; do not repeat this retirement."
+                    ),
+                    "hold_reason": guard_status.reason,
+                },
+                status_code=503,
+            )
+        return {
+            "status": "retired",
+            "revision": event["revision"],
+            "source_family": payload.source_family,
+            "encounter_id": payload.encounter_id,
+            "retired_at": event["retired_at"],
+            "guard_revision": guard_status.revision,
+        }
+    except EvidenceAlreadyRetired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except EvidenceRetirementBlocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RetirementRuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Evidence retirement controls are unavailable: {exc}",
+        ) from exc
+    except (sqlite3.Error, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Retirement could not be recorded. No source files were deleted.",
+        ) from exc
+
+
+@app.get("/api/evidence-retirements")
+def evidence_retirement_audit(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_retirement_operator(request)
+    try:
+        require_retirement_controls_ready()
+        return list_retirement_records(DB_PATH, limit=limit, offset=offset)
+    except EvidenceRetirementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RetirementRuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Retirement audit is unavailable: {exc}",
+        ) from exc
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=503, detail="Retirement audit is unavailable"
+        ) from exc
 
 
 @app.post("/api/updates/launch")
@@ -3831,6 +4119,13 @@ def analyst_view_preferences_script() -> Response:
     return view_preferences_script()
 
 
+@app.get("/assets/nct-evidence-retirement.js", include_in_schema=False)
+def evidence_retirement_script() -> Response:
+    from app.evidence_retirement_ui import retirement_script
+
+    return retirement_script()
+
+
 @app.get("/assets/arkime-betrayed-owl.png", include_in_schema=False)
 def arkime_betrayed_owl() -> FileResponse:
     return FileResponse(
@@ -4838,12 +5133,14 @@ def _hunting_retirement_token() -> str:
         ) from exc
 
 
-def _require_stable_hunting_retirement_token(expected: str) -> None:
+def _require_stable_hunting_retirement_token(
+    expected: str, *, operation: str = "Hunt",
+) -> None:
     if _hunting_retirement_token() != expected:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Retained evidence changed while Hunt was calculating. "
+                f"Retained evidence changed while {operation} was calculating. "
                 "Retry the request."
             ),
         )
@@ -5400,6 +5697,7 @@ def analyze_current_network_changes(
     revision: str | None = Query(default=None, max_length=64),
 ) -> dict:
     """Compare prepared saved results without parsing or publishing on read."""
+    retirement_token = _hunting_retirement_token()
     try:
         metadata = list_prepared_scan_group_metadata(DB_PATH)
     except RetainedScanAnalysisUnavailable as exc:
@@ -5536,7 +5834,7 @@ def analyze_current_network_changes(
             },
             **comparison,
         })
-    return {
+    result = {
         "status": "network_changes_complete",
         "scope_count": total_scopes,
         "page_scope_count": len(scopes),
@@ -5557,6 +5855,10 @@ def analyze_current_network_changes(
             "selection_revision": selection_revision,
         },
     }
+    _require_stable_hunting_retirement_token(
+        retirement_token, operation="Changes Over Time",
+    )
+    return result
 
 
 NETWORK_CONTROL_ROUTE_LIMIT = 50
@@ -5918,9 +6220,10 @@ def delete_external_wan_gateway_semantic(
 
 @app.get("/api/reachability/context")
 def reachability_context() -> dict:
+    retirement_token = _hunting_retirement_token()
     hunting = _latest_network_evidence()
     devices = _latest_device_reachability_evidence()
-    return {
+    result = {
         "status": "reachability_context_complete",
         "saved_networks": list_saved_networks(DB_PATH),
         "hosts": hunting.get("hosts") or [],
@@ -5951,6 +6254,8 @@ def reachability_context() -> dict:
             in {"router", "firewall"}
         ],
     }
+    _require_stable_hunting_retirement_token(retirement_token, operation="Reach")
+    return result
 
 
 @app.get("/api/reachability/policy-context/{run_id}")
@@ -5959,6 +6264,7 @@ def reachability_policy_context(
     traffic_target: Literal["forwarded", "router_local"] = "forwarded",
     interface_name: str | None = None,
 ) -> dict:
+    retirement_token = _hunting_retirement_token()
     try:
         selected = next(
             item for item in _latest_device_reachability_evidence()
@@ -5966,16 +6272,19 @@ def reachability_policy_context(
         )
     except StopIteration:
         raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
-    return {
+    result = {
         "status": "reachability_policy_context_complete",
         **policy_rule_context(
             selected, traffic_target=traffic_target, interface_name=interface_name,
         ),
     }
+    _require_stable_hunting_retirement_token(retirement_token, operation="Reach")
+    return result
 
 
 @app.post("/api/reachability/policy-template")
 def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict:
+    retirement_token = _hunting_retirement_token()
     try:
         devices = _latest_device_reachability_evidence()
         selected = next(
@@ -5986,7 +6295,7 @@ def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict
                 str((item.get("device") or {}).get("name") or ""),
             }
         )
-        return {
+        result = {
             "status": "reachability_policy_template_complete",
             **build_vendor_policy_rule(
                 analysis=selected,
@@ -6002,6 +6311,10 @@ def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict
                 traffic_target=query.traffic_target,
             ),
         }
+        _require_stable_hunting_retirement_token(
+            retirement_token, operation="Reach",
+        )
+        return result
     except StopIteration:
         raise HTTPException(status_code=404, detail="Retained device policy evidence was not found") from None
     except ValueError as exc:
@@ -6010,6 +6323,7 @@ def reachability_policy_template(query: ReachabilityPolicyTemplateQuery) -> dict
 
 @app.post("/api/reachability/evaluate")
 def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
+    retirement_token = _hunting_retirement_token()
     try:
         values = {
             "source_text": query.source,
@@ -6026,21 +6340,53 @@ def evaluate_retained_reachability(query: ReachabilityQuery) -> dict:
         if "/" in destination:
             parsed = ipaddress.ip_network(destination, strict=False)
             if parsed.version == 4 and parsed.num_addresses > 1:
-                return evaluate_reachability_range(**values)
-        return evaluate_reachability(**values)
+                result = evaluate_reachability_range(**values)
+                _require_stable_hunting_retirement_token(
+                    retirement_token, operation="Reach",
+                )
+                return result
+        result = evaluate_reachability(**values)
+        _require_stable_hunting_retirement_token(
+            retirement_token, operation="Reach",
+        )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.post("/api/reachability/exposure-report")
 def generate_source_exposure_report() -> dict:
+    retirement_token = _hunting_retirement_token()
     hunting = _latest_network_evidence()
-    return build_source_exposure_report(
+    result = build_source_exposure_report(
         hunting=hunting,
         saved_networks=list_saved_networks(DB_PATH),
         device_analyses=_latest_device_reachability_evidence(),
         searchsploit=enrich_hunting_with_searchsploit(hunting),
     )
+    _require_stable_hunting_retirement_token(retirement_token, operation="Reach")
+    return result
+
+
+def _exposure_report_dependencies(
+    hunting: dict, device_analyses: list[dict],
+) -> list[dict]:
+    """Freeze the exact encounter identities that make a saved report readable."""
+    identities = {
+        (NMAP_SCAN_RUN, str(run_id))
+        for scope in (hunting.get("source") or {}).get("scope_summaries") or []
+        for run_id in scope.get("run_ids") or []
+        if run_id
+    }
+    identities.update({
+        (DEVICE_COLLECTION, str(item.get("run_id")))
+        for item in device_analyses
+        if item.get("run_id")
+    })
+    return [
+        {"source_family": family, "encounter_id": encounter_id}
+        for family, encounter_id in sorted(identities)
+    ]
 
 
 def _saved_network_for_report(saved_network_id: str) -> tuple[dict, list[dict]]:
@@ -6056,38 +6402,50 @@ def _saved_network_for_report(saved_network_id: str) -> tuple[dict, list[dict]]:
 
 @app.get("/api/reachability/exposure-reports")
 def list_retained_exposure_reports() -> dict:
+    retirement_token = _hunting_retirement_token()
     hunting = _latest_network_evidence()
     networks = list_saved_networks(DB_PATH)
-    return {
+    result = {
         "status": "exposure_report_catalog_complete",
-        "reports": list_exposure_report_summaries(DB_PATH, networks, hunting),
+        "reports": list_exposure_report_summaries(
+            DB_PATH, networks, hunting, active_only=True,
+        ),
         "disclaimer": "Freshness compares retained observed ports and sends no network traffic.",
     }
+    _require_stable_hunting_retirement_token(retirement_token, operation="Reach")
+    return result
 
 
 @app.get("/api/reachability/exposure-reports/{saved_network_id}")
 def get_retained_exposure_report(saved_network_id: str) -> dict:
+    retirement_token = _hunting_retirement_token()
     network, _ = _saved_network_for_report(saved_network_id)
-    record = get_exposure_report(DB_PATH, saved_network_id)
+    record = get_exposure_report(DB_PATH, saved_network_id, active_only=True)
     if record is None:
         raise HTTPException(status_code=404, detail="No exposure report has been generated for this Saved Network")
     current = exposure_port_snapshot(_latest_network_evidence(), network["cidr"])
-    return {
+    result = {
         "status": "retained_exposure_report_complete",
         "summary": exposure_report_status(record, current),
         "report": record["report"],
     }
+    _require_stable_hunting_retirement_token(retirement_token, operation="Reach")
+    return result
 
 
 @app.post("/api/reachability/exposure-reports/{saved_network_id}")
 def generate_retained_exposure_report(saved_network_id: str, request: Request) -> dict:
     target, networks = _saved_network_for_report(saved_network_id)
+    with connect_database(DB_PATH, read_only=True) as retirement_db:
+        retirement_db.execute("BEGIN")
+        report_authority_token = retirement_authority_token(retirement_db)
     hunting = _latest_network_evidence()
+    device_analyses = _latest_device_reachability_evidence()
     try:
         report = build_source_exposure_report(
             hunting=hunting,
             saved_networks=networks,
-            device_analyses=_latest_device_reachability_evidence(),
+            device_analyses=device_analyses,
             searchsploit=enrich_hunting_with_searchsploit(hunting),
             target_network=target,
         )
@@ -6095,17 +6453,27 @@ def generate_retained_exposure_report(saved_network_id: str, request: Request) -
         raise HTTPException(status_code=422, detail=str(exc)) from None
     analyst = request.state.analyst
     generated_by = analyst["username"] if analyst else "local operator"
-    save_exposure_report(
-        DB_PATH,
-        saved_network=target,
-        generated_by=generated_by,
-        port_snapshot=exposure_port_snapshot(hunting, target["cidr"]),
-        report=report,
-    )
+    try:
+        save_exposure_report(
+            DB_PATH,
+            saved_network=target,
+            generated_by=generated_by,
+            port_snapshot=exposure_port_snapshot(hunting, target["cidr"]),
+            report=report,
+            source_dependencies=_exposure_report_dependencies(
+                hunting, device_analyses,
+            ),
+            authority_token=report_authority_token,
+        )
+    except (EvidenceRetirementError, RetiredEvidenceDependency) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Retained evidence changed while this report was built. Retry the request.",
+        ) from exc
     return {
         "status": "retained_exposure_report_generated",
         "summary": exposure_report_status(
-            get_exposure_report(DB_PATH, saved_network_id),
+            get_exposure_report(DB_PATH, saved_network_id, active_only=True),
             exposure_port_snapshot(hunting, target["cidr"]),
         ),
         "report": report,
@@ -6114,8 +6482,9 @@ def generate_retained_exposure_report(saved_network_id: str, request: Request) -
 
 @app.post("/api/reachability/simulate-policy")
 def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict:
+    retirement_token = _hunting_retirement_token()
     try:
-        return simulate_proposed_policy_control(
+        result = simulate_proposed_policy_control(
             source_text=query.source,
             destination_text=query.destination,
             protocol=query.protocol,
@@ -6133,14 +6502,19 @@ def simulate_retained_policy_control(query: ReachabilitySimulationQuery) -> dict
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
         )
+        _require_stable_hunting_retirement_token(
+            retirement_token, operation="Reach",
+        )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.post("/api/reachability/simulate-route")
 def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> dict:
+    retirement_token = _hunting_retirement_token()
     try:
-        return simulate_proposed_route_control(
+        result = simulate_proposed_route_control(
             source_text=query.source,
             destination_text=query.destination,
             protocol=query.protocol,
@@ -6158,14 +6532,19 @@ def simulate_retained_route_control(query: ReachabilityRouteSimulationQuery) -> 
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
         )
+        _require_stable_hunting_retirement_token(
+            retirement_token, operation="Reach",
+        )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @app.post("/api/reachability/simulate-change-scenario")
 def simulate_retained_change_scenario(query: ReachabilityChangeScenarioQuery) -> dict:
+    retirement_token = _hunting_retirement_token()
     try:
-        return simulate_proposed_change_scenario(
+        result = simulate_proposed_change_scenario(
             source_text=query.source,
             destination_text=query.destination,
             protocol=query.protocol,
@@ -6178,6 +6557,10 @@ def simulate_retained_change_scenario(query: ReachabilityChangeScenarioQuery) ->
             saved_networks=list_saved_networks(DB_PATH),
             device_analyses=_latest_device_reachability_evidence(),
         )
+        _require_stable_hunting_retirement_token(
+            retirement_token, operation="Reach",
+        )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 

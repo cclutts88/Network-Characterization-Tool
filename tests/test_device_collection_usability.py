@@ -42,6 +42,7 @@ object network WEB_SERVER
 
 def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatch):
     from app import device_configs
+    from app.evidence_retirement import init_evidence_retirement_storage
     from app.network_scopes import create_network_scope, update_network_scope
 
     config_dir = tmp_path / "device-configs"
@@ -50,6 +51,7 @@ def test_uploaded_collection_does_not_require_a_reason_note(tmp_path, monkeypatc
     scope = create_network_scope(
         device_configs.DB_PATH, label="Device lab", created_by="analyst"
     )
+    init_evidence_retirement_storage(device_configs.DB_PATH)
     with TestClient(app) as client:
         response = client.post(
             "/api/device-configs/upload",

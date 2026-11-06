@@ -376,23 +376,58 @@ def scan_history_catalog_page(
         rows = db.execute(
             """
             SELECT group_id, kind, name, cidr, description, category, tags_json,
-                   scan_count,
+                   (SELECT COUNT(*) FROM scan_history_memberships active_count
+                     WHERE active_count.group_id=g.group_id
+                       AND NOT EXISTS (
+                           SELECT 1 FROM evidence_retirement_events retired
+                            WHERE retired.source_family='nmap_scan_run'
+                              AND retired.encounter_id=active_count.run_id
+                              AND retired.sealed=1
+                       )),
                    (SELECT m.latest_scan_at
                                FROM scan_history_memberships m
                               WHERE m.group_id = g.group_id
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM evidence_retirement_events retired
+                                     WHERE retired.source_family='nmap_scan_run'
+                                       AND retired.encounter_id=m.run_id
+                                       AND retired.sealed=1
+                                )
                               ORDER BY m.latest_scan_at DESC, m.created_at DESC,
                                        m.run_id DESC LIMIT 1),
                    (SELECT m.latest_scan_name
                                FROM scan_history_memberships m
                               WHERE m.group_id = g.group_id
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM evidence_retirement_events retired
+                                     WHERE retired.source_family='nmap_scan_run'
+                                       AND retired.encounter_id=m.run_id
+                                       AND retired.sealed=1
+                                )
                               ORDER BY m.latest_scan_at DESC, m.created_at DESC,
                                        m.run_id DESC LIMIT 1),
                    (SELECT m.host_count
                                FROM scan_history_memberships m
                               WHERE m.group_id = g.group_id
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM evidence_retirement_events retired
+                                     WHERE retired.source_family='nmap_scan_run'
+                                       AND retired.encounter_id=m.run_id
+                                       AND retired.sealed=1
+                                )
                               ORDER BY m.latest_scan_at DESC, m.created_at DESC,
                                        m.run_id DESC LIMIT 1)
               FROM scan_history_groups g
+             WHERE EXISTS (
+                   SELECT 1 FROM scan_history_memberships active
+                    WHERE active.group_id=g.group_id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM evidence_retirement_events retired
+                           WHERE retired.source_family='nmap_scan_run'
+                             AND retired.encounter_id=active.run_id
+                             AND retired.sealed=1
+                      )
+             )
             """,
         ).fetchall()
     groups = [
@@ -457,8 +492,25 @@ def scan_history_group_page_from_index(
         db.execute("BEGIN")
         group = db.execute(
             """SELECT group_id, kind, name, cidr, description, category, tags_json,
-                      scan_count
-                 FROM scan_history_groups WHERE group_id = ?""",
+                      (SELECT COUNT(*) FROM scan_history_memberships active_count
+                        WHERE active_count.group_id=scan_history_groups.group_id
+                          AND NOT EXISTS (
+                              SELECT 1 FROM evidence_retirement_events retired
+                               WHERE retired.source_family='nmap_scan_run'
+                                 AND retired.encounter_id=active_count.run_id
+                                 AND retired.sealed=1
+                          ))
+                 FROM scan_history_groups WHERE group_id = ?
+                   AND EXISTS (
+                       SELECT 1 FROM scan_history_memberships active
+                        WHERE active.group_id=scan_history_groups.group_id
+                          AND NOT EXISTS (
+                              SELECT 1 FROM evidence_retirement_events retired
+                               WHERE retired.source_family='nmap_scan_run'
+                                 AND retired.encounter_id=active.run_id
+                                 AND retired.sealed=1
+                          )
+                   )""",
             (group_id,),
         ).fetchone()
         if group is None:
@@ -475,6 +527,12 @@ def scan_history_group_page_from_index(
               FROM scan_history_memberships m
               JOIN scan_runs r ON r.run_id = m.run_id
              WHERE m.group_id = ?{cursor_sql}
+               AND NOT EXISTS (
+                   SELECT 1 FROM evidence_retirement_events retired
+                    WHERE retired.source_family='nmap_scan_run'
+                      AND retired.encounter_id=m.run_id
+                      AND retired.sealed=1
+               )
              ORDER BY m.created_at DESC, m.run_id DESC
              LIMIT ?
             """,

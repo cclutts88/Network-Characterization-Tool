@@ -16,6 +16,7 @@ from app.device_collection_authority import (
     get_device_collection_authority,
 )
 from app.host_identities import apply_analysis_host_identities, apply_topology_host_identities, select_host_identity
+from app.evidence_retirement import init_evidence_retirement_storage
 
 
 def collection(tmp_path, text=None):
@@ -286,6 +287,9 @@ def test_uncached_summary_parser_preserves_command_history_line_numbers(tmp_path
 
 def test_device_history_defers_artifact_lookup(tmp_path, monkeypatch):
     run_id, root, _ = collection(tmp_path)
+    db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, 'CONFIG_DIR', root)
     def forbidden(*args):
         pytest.fail('History must not enumerate evidence')
@@ -408,6 +412,9 @@ def test_history_pagination_reaches_older_device_records(tmp_path, monkeypatch):
         folder.mkdir(parents=True)
         (folder/'manifest.json').write_text(json.dumps({'run_id': folder.name, 'operation': 'manual_upload'}))
     monkeypatch.setattr(device_configs, 'CONFIG_DIR', root)
+    db_path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(db_path)
+    monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     pages = [device_configs.history(limit=25, offset=offset) for offset in range(0, 125, 25)]
     assert [len(page) for page in pages] == [25, 25, 25, 25, 10]
     assert len({row['run_id'] for page in pages for row in page}) == 110
@@ -416,6 +423,7 @@ def test_history_pagination_reaches_older_device_records(tmp_path, monkeypatch):
 def test_scan_history_does_not_parse_xml_and_pages_beyond_old_limit(tmp_path, monkeypatch):
     path = tmp_path/'test.db'
     poc.init_poc_storage(path)
+    init_evidence_retirement_storage(path)
     with connect_database(path) as db:
         for index in range(205):
             record = {'run_id': f'{index:032x}', 'created_at': str(index).zfill(5), 'status': 'completed', 'commands': ['large evidence'], 'artifacts': [{'name': 'xml'}]}

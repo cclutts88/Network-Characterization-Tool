@@ -1,6 +1,8 @@
 from dataclasses import replace
 import json
 
+from fastapi.testclient import TestClient
+
 from app.database import connect_database
 from app.derived_contracts import (
     DEVICE_SUMMARY_FAMILY,
@@ -17,6 +19,7 @@ from app.derived_results import (
     prepare_derived_result,
     publish_derived_result,
 )
+from app.main import app
 
 
 def publish_contract_result(db_path, family, *, suffix="a", generated_at=None):
@@ -53,6 +56,26 @@ def test_supported_families_are_current_under_their_exact_contract(tmp_path):
     assert result["page_counts"] == {"CURRENT": 3, "STALE": 0, "UNKNOWN": 0}
     assert {item["family"] for item in result["items"]} == set(families)
     assert all(item["state"] == "CURRENT" for item in result["items"])
+
+
+def test_analysis_status_route_is_metadata_only_audit_without_result_access(
+    tmp_path, monkeypatch,
+):
+    db_path = tmp_path / "nct.db"
+    publish_contract_result(db_path, NMAP_BASE_ANALYSIS_FAMILY)
+    monkeypatch.setattr("app.main.DB_PATH", db_path)
+    with TestClient(app) as client:
+        response = client.get("/api/system/analysis-status")
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert set(item) == {
+        "result_id", "family", "label", "state", "reasons",
+        "analysis_version", "payload_schema_version", "generated_at", "expected",
+    }
+    assert not any(
+        key in item
+        for key in ("result_json", "payload", "source_url", "download_url", "analysis_url")
+    )
 
 
 def test_version_schema_and_settings_mismatches_are_independently_stale():

@@ -26,6 +26,10 @@ PROVISIONING_FILE = "provisioning.json"
 BINDING_FILE = "lineage-binding.json"
 HIGH_WATER_FILE = "high-water.json"
 HOLD_FILE = "projection-hold.json"
+RECONCILIATION_DIR = "restore-reconciliations"
+VIRGIN_RESTORE_FILE = "virgin-restore-binding.json"
+INITIAL_BIND_FILE = "initial-binding.json"
+INITIAL_BIND_COMPLETE_FILE = "initial-binding-complete.json"
 
 
 class RetirementGuardError(RuntimeError):
@@ -366,6 +370,302 @@ def _read_high_water(guard_dir: Path, provisioning: dict) -> dict | None:
     return value
 
 
+def _initial_binding_expectation(provisioning: dict, desired: dict) -> dict:
+    return {
+        "contract": GUARD_CONTRACT,
+        "state": "initial-binding",
+        "installation_id": provisioning["installation_id"],
+        "data_identity": provisioning["data_identity"],
+        **desired,
+    }
+
+
+def _read_initial_binding_intent(
+    guard_dir: Path, provisioning: dict,
+) -> dict | None:
+    path = guard_dir / INITIAL_BIND_FILE
+    if not path.exists():
+        return None
+    value = _read_receipt(path)
+    expected = {
+        "contract": GUARD_CONTRACT,
+        "state": "initial-binding",
+        "installation_id": provisioning["installation_id"],
+        "data_identity": provisioning["data_identity"],
+    }
+    if any(value.get(key) != item for key, item in expected.items()):
+        raise RetirementGuardError("initial retirement binding intent changed")
+    if (
+        not isinstance(value.get("lineage_id"), str)
+        or value.get("revision") != 0
+        or value.get("event_digest") != "root"
+    ):
+        raise RetirementGuardError("initial retirement binding intent is invalid")
+    return value
+
+
+def _read_initial_binding_completion(
+    guard_dir: Path, provisioning: dict,
+) -> dict | None:
+    path = guard_dir / INITIAL_BIND_COMPLETE_FILE
+    if not path.exists():
+        return None
+    value = _read_receipt(path)
+    expected = {
+        "contract": GUARD_CONTRACT,
+        "state": "initial-binding-complete",
+        "installation_id": provisioning["installation_id"],
+        "data_identity": provisioning["data_identity"],
+    }
+    if any(value.get(key) != item for key, item in expected.items()):
+        raise RetirementGuardError("initial retirement completion receipt changed")
+    if (
+        not isinstance(value.get("lineage_id"), str)
+        or value.get("revision") != 0
+        or value.get("event_digest") != "root"
+    ):
+        raise RetirementGuardError("initial retirement completion receipt is invalid")
+    return value
+
+
+def _read_virgin_restore_intent(
+    guard_dir: Path, provisioning: dict,
+) -> dict | None:
+    path = guard_dir / VIRGIN_RESTORE_FILE
+    if not path.exists():
+        return None
+    value = _read_receipt(path)
+    expected = {
+        "contract": GUARD_CONTRACT,
+        "state": "virgin-restore-binding",
+        "installation_id": provisioning["installation_id"],
+        "data_identity": provisioning["data_identity"],
+    }
+    if any(value.get(key) != item for key, item in expected.items()):
+        raise RetirementGuardError("virgin restore binding intent changed")
+    if (
+        not isinstance(value.get("operation_id"), str)
+        or not value["operation_id"]
+        or not isinstance(value.get("lineage_id"), str)
+        or value.get("revision") != 0
+        or value.get("event_digest") != "root"
+    ):
+        raise RetirementGuardError("virgin restore binding intent is invalid")
+    return value
+
+
+def _complete_initial_binding(
+    guard_dir: Path,
+    provisioning: dict,
+    desired: dict,
+    *,
+    binding: dict | None,
+    high_water: dict | None,
+) -> tuple[dict, dict]:
+    """Publish the initial root through a durable, restart-safe intent."""
+    if desired["revision"] != 0 or desired["event_digest"] != "root":
+        raise RetirementGuardError(
+            "initial retirement binding requires an empty lineage"
+        )
+    if _mirrored_event_paths(guard_dir):
+        raise RetirementGuardError(
+            "initial retirement binding cannot replace protected events"
+        )
+    intent = _read_initial_binding_intent(guard_dir, provisioning)
+    completion = _read_initial_binding_completion(guard_dir, provisioning)
+    expected = _initial_binding_expectation(provisioning, desired)
+    if intent is None:
+        if binding is not None or high_water is not None:
+            raise RetirementGuardError(
+                "partial retirement binding has no initial intent"
+            )
+        _atomic_receipt(
+            guard_dir / INITIAL_BIND_FILE,
+            {**expected, "recorded_at": _now()},
+        )
+    elif any(intent.get(key) != value for key, value in expected.items()):
+        raise RetirementGuardError(
+            "initial retirement binding intent does not match the database"
+        )
+    if completion is not None:
+        completed_expected = {
+            **expected,
+            "state": "initial-binding-complete",
+        }
+        if any(
+            completion.get(key) != value
+            for key, value in completed_expected.items()
+        ):
+            raise RetirementGuardError(
+                "initial retirement completion does not match the database"
+            )
+        if binding is None or high_water is None:
+            raise RetirementGuardError(
+                "completed retirement authority is now incomplete"
+            )
+    if binding is None:
+        if high_water is not None:
+            raise RetirementGuardError(
+                "retirement high-water exists without its initial binding"
+            )
+        _atomic_receipt(
+            guard_dir / BINDING_FILE,
+            _binding_body(provisioning, desired["lineage_id"]),
+        )
+    elif binding.get("lineage_id") != desired["lineage_id"]:
+        raise RetirementGuardError("initial retirement binding lineage changed")
+    if high_water is None:
+        _atomic_receipt(
+            guard_dir / HIGH_WATER_FILE,
+            _high_water_body(provisioning, desired),
+        )
+    elif any(high_water.get(key) != value for key, value in desired.items()):
+        raise RetirementGuardError("initial retirement high-water changed")
+    binding = _read_binding(guard_dir, provisioning)
+    high_water = _read_high_water(guard_dir, provisioning)
+    if binding is None or high_water is None:
+        raise RetirementGuardError("initial retirement binding did not complete")
+    if completion is None:
+        _atomic_receipt(
+            guard_dir / INITIAL_BIND_COMPLETE_FILE,
+            {
+                **expected,
+                "state": "initial-binding-complete",
+                "recorded_at": _now(),
+            },
+        )
+    return binding, high_water
+
+
+def _recover_virgin_restore_binding(
+    guard_dir: Path,
+    provisioning: dict,
+    *,
+    db_path: Path,
+    operation_id: str,
+    binding: dict | None,
+    high_water: dict | None,
+) -> tuple[dict, dict]:
+    """Finish the one safe unbound first-upgrade restore, idempotently.
+
+    The host can provision authority before its verified cold backup while the
+    source database is still v8. If the first candidate starts but fails before
+    startup binds that authority, restore migration produces a new, empty v9
+    lineage under the exact operation hold. This receipt makes the two-file
+    binding write restart-safe without allowing an existing protected lineage to
+    be reset.
+    """
+    intent_path = guard_dir / VIRGIN_RESTORE_FILE
+    if _mirrored_event_paths(guard_dir):
+        raise RetirementGuardError(
+            "a virgin restore cannot replace protected retirement events"
+        )
+    with connect_database(db_path, read_only=True) as db:
+        lineage_id, events = _event_receipts(db)
+        schema = db.execute(
+            "SELECT schema_version FROM nct_schema_state WHERE singleton=1"
+        ).fetchone()
+        migration = db.execute(
+            """SELECT status FROM nct_schema_migrations
+                 WHERE migration_id='nct-evidence-retirement-v9'"""
+        ).fetchone()
+        identity_count = int(db.execute(
+            "SELECT COUNT(*) FROM evidence_retirement_identities"
+        ).fetchone()[0])
+        lineage_count = int(db.execute(
+            "SELECT COUNT(*) FROM evidence_retirement_lineage"
+        ).fetchone()[0])
+        trigger = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='evidence_retirement_lineage_no_update'"
+        ).fetchone()
+    if (
+        events
+        or schema is None or int(schema[0]) != 9
+        or migration is None or migration[0] != "completed"
+        or identity_count != 0 or lineage_count != 1
+        or trigger is None or not str(trigger[0]).strip()
+    ):
+        raise RetirementGuardError(
+            "unbound retirement authority requires an exact empty v9 restore"
+        )
+    desired = _head(lineage_id, events)
+    expected = {
+        "contract": GUARD_CONTRACT,
+        "state": "virgin-restore-binding",
+        "operation_id": operation_id,
+        "installation_id": provisioning["installation_id"],
+        "data_identity": provisioning["data_identity"],
+        **desired,
+    }
+    initial_intent = _read_initial_binding_intent(guard_dir, provisioning)
+    initial_completion = _read_initial_binding_completion(
+        guard_dir, provisioning,
+    )
+    intent = _read_virgin_restore_intent(guard_dir, provisioning)
+    restore_intent_exists = intent is not None
+    if intent is not None:
+        if any(intent.get(key) != value for key, value in expected.items()):
+            raise RetirementGuardError(
+                "virgin restore binding belongs to another operation"
+            )
+    else:
+        if high_water is not None or initial_completion is not None:
+            raise RetirementGuardError(
+                "completed retirement authority cannot use virgin recovery"
+            )
+        if binding is not None and (
+            initial_intent is None
+            or binding.get("lineage_id") != initial_intent.get("lineage_id")
+        ):
+            raise RetirementGuardError(
+                "partial retirement binding has no matching initial intent"
+            )
+        intent = {**expected, "recorded_at": _now()}
+        _atomic_receipt(intent_path, intent)
+        restore_intent_exists = True
+
+    if binding is None:
+        _atomic_receipt(
+            guard_dir / BINDING_FILE,
+            _binding_body(provisioning, lineage_id),
+        )
+    elif binding.get("lineage_id") != lineage_id:
+        if (
+            not restore_intent_exists
+            or initial_intent is None
+            or initial_completion is not None
+            or high_water is not None
+            or binding.get("lineage_id") != initial_intent.get("lineage_id")
+        ):
+            raise RetirementGuardError("virgin restore binding lineage changed")
+        # The one-time initial root was never completed: its durable intent and
+        # missing high-water prove the binding-only receipt is an interrupted
+        # publication, not protected authority. The exact restore operation may
+        # now replace it with the verified empty restored lineage.
+        _atomic_receipt(
+            guard_dir / BINDING_FILE,
+            _binding_body(provisioning, lineage_id),
+        )
+    if high_water is None:
+        _atomic_receipt(
+            guard_dir / HIGH_WATER_FILE,
+            _high_water_body(provisioning, desired),
+        )
+    elif any(high_water.get(key) != value for key, value in desired.items()):
+        raise RetirementGuardError("virgin restore high-water changed")
+    binding = _read_binding(guard_dir, provisioning)
+    high_water = _read_high_water(guard_dir, provisioning)
+    if binding is None or high_water is None:
+        raise RetirementGuardError("virgin restore binding did not complete")
+    if not any((guard_dir / "audit").glob("*-virgin-restore-bound-*.json")):
+        _atomic_receipt(
+            _audit_path(guard_dir, "virgin-restore-bound"),
+            {**expected, "recorded_at": _now()},
+        )
+    return binding, high_water
+
+
 def _event_path(guard_dir: Path, event: dict) -> Path:
     return guard_dir / "events" / (
         f"{int(event['revision']):020d}-{event['event_digest']}.json"
@@ -444,12 +744,42 @@ def _audit_path(guard_dir: Path, kind: str) -> Path:
     return guard_dir / "audit" / f"{_now().replace(':', '')}-{kind}-{uuid.uuid4().hex}.json"
 
 
-def _hold_locked(guard_dir: Path, *, reason: str, detail: str) -> RetirementGuardStatus:
+def _restore_reconciliation_path(guard_dir: Path, operation_id: str) -> Path:
+    operation_digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
+    return guard_dir / RECONCILIATION_DIR / f"{operation_digest}.json"
+
+
+def _validate_restore_reconciliation(
+    receipt: dict,
+    *,
+    operation_id: str,
+    data_identity: str,
+    high_water: dict,
+) -> None:
+    expected = {
+        "contract": GUARD_CONTRACT,
+        "state": "restore-reconciled",
+        "operation_id": operation_id,
+        "data_identity": data_identity,
+        "lineage_id": high_water["lineage_id"],
+        "revision": high_water["revision"],
+        "event_digest": high_water["event_digest"],
+    }
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        raise RetirementGuardError(
+            "retirement restore reconciliation receipt does not match this operation"
+        )
+
+
+def _hold_locked(
+    guard_dir: Path, *, reason: str, detail: str, operation_id: str | None = None,
+) -> RetirementGuardStatus:
     body = {
         "contract": GUARD_CONTRACT,
         "state": "hold",
         "reason": reason,
         "detail": detail[:1000],
+        "operation_id": operation_id,
         "recorded_at": _now(),
     }
     hold_path = guard_dir / HOLD_FILE
@@ -472,7 +802,225 @@ def mark_retirement_restore_hold(
             guard,
             reason="restore requires retirement reconciliation",
             detail=f"{operation_id}: {detail}",
+            operation_id=operation_id,
         )
+
+
+def reconcile_retirement_restore(
+    db_path: Path,
+    *,
+    data_dir: Path,
+    guard_dir: Path,
+    data_identity: str,
+    operation_id: str,
+) -> RetirementGuardStatus:
+    """Reapply protected tail receipts to a restored database, then release its hold.
+
+    Only the exact host-recorded restore operation may use this path. The restored
+    database must be the same lineage and a verified prefix of the independent
+    mirrored chain. No source bytes are copied or deleted.
+    """
+    guard = guard_dir.absolute()
+    operation_id = str(operation_id or "").strip()
+    if not operation_id:
+        raise RetirementGuardError("restore operation identity is required")
+    _separate_paths(data_dir, guard)
+    _secure_directory(guard)
+    with _guard_lock(guard):
+        provisioning = _provisioning(guard, data_identity)
+        _secure_directory(guard / "events")
+        _secure_directory(guard / "audit")
+        (guard / RECONCILIATION_DIR).mkdir(mode=0o700, exist_ok=True)
+        _secure_directory(guard / RECONCILIATION_DIR)
+        hold_path = guard / HOLD_FILE
+        reconciliation_path = _restore_reconciliation_path(guard, operation_id)
+        reconciliation = (
+            _read_receipt(reconciliation_path)
+            if reconciliation_path.exists() else None
+        )
+        if hold_path.exists():
+            hold = _read_receipt(hold_path)
+            if (
+                hold.get("reason") != "restore requires retirement reconciliation"
+                or hold.get("operation_id") != operation_id
+            ):
+                raise RetirementGuardError(
+                    "retirement restore hold belongs to another operation"
+                )
+        elif reconciliation is None:
+            raise RetirementGuardError("retirement restore hold is missing")
+        binding = _read_binding(guard, provisioning)
+        high_water = _read_high_water(guard, provisioning)
+        if binding is None or high_water is None:
+            if reconciliation is not None or not hold_path.exists():
+                raise RetirementGuardError(
+                    "retirement guard binding is incomplete"
+                )
+            binding, high_water = _recover_virgin_restore_binding(
+                guard,
+                provisioning,
+                db_path=db_path,
+                operation_id=operation_id,
+                binding=binding,
+                high_water=high_water,
+            )
+        if reconciliation is not None:
+            _validate_restore_reconciliation(
+                reconciliation,
+                operation_id=operation_id,
+                data_identity=data_identity,
+                high_water=high_water,
+            )
+        mirrored_paths = _mirrored_event_paths(guard)
+        mirrored = [_read_receipt(path) for path in mirrored_paths]
+        mirrored.sort(key=lambda item: int(item.get("revision", -1)))
+        with connect_database(db_path) as db:
+            lineage_id, current = _event_receipts(db)
+            # A verified pre-v9 backup has no retirement lineage. The candidate's
+            # exact v9 migration creates an empty lineage before this function is
+            # called, but that new random identity cannot replace the independently
+            # protected lineage. Adopt the protected identity only while the new
+            # ledger is provably empty and the exact completed v9 migration exists.
+            if lineage_id != binding["lineage_id"] and not current:
+                schema = db.execute(
+                    "SELECT schema_version FROM nct_schema_state WHERE singleton=1"
+                ).fetchone()
+                migration = db.execute(
+                    """SELECT status FROM nct_schema_migrations
+                        WHERE migration_id='nct-evidence-retirement-v9'"""
+                ).fetchone()
+                identity_count = int(db.execute(
+                    "SELECT COUNT(*) FROM evidence_retirement_identities"
+                ).fetchone()[0])
+                lineage_count = int(db.execute(
+                    "SELECT COUNT(*) FROM evidence_retirement_lineage"
+                ).fetchone()[0])
+                trigger = db.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                    "AND name='evidence_retirement_lineage_no_update'"
+                ).fetchone()
+                if (
+                    schema is None or int(schema[0]) != 9
+                    or migration is None or migration[0] != "completed"
+                    or identity_count != 0 or lineage_count != 1
+                    or trigger is None or not str(trigger[0]).strip()
+                ):
+                    raise RetirementGuardError(
+                        "restored retirement lineage does not match the guard"
+                    )
+                db.execute("BEGIN IMMEDIATE")
+                db.execute("DROP TRIGGER evidence_retirement_lineage_no_update")
+                db.execute(
+                    "UPDATE evidence_retirement_lineage SET lineage_id=? "
+                    "WHERE singleton=1 AND lineage_id=?",
+                    (binding["lineage_id"], lineage_id),
+                )
+                db.execute(str(trigger[0]))
+                db.commit()
+                lineage_id, current = _event_receipts(db)
+            if lineage_id != binding["lineage_id"] or lineage_id != high_water["lineage_id"]:
+                raise RetirementGuardError("restored retirement lineage does not match the guard")
+            current_head = _head(lineage_id, current)
+            if current_head["revision"] > high_water["revision"]:
+                raise RetirementGuardError("restored retirement state is ahead of protected state")
+            for event in current:
+                if not any(
+                    int(item.get("revision", -1)) == int(event["revision"])
+                    and item.get("event_digest") == event["event_digest"]
+                    for item in mirrored
+                ) and int(event["revision"]) <= int(high_water["revision"]):
+                    raise RetirementGuardError("restored retirement chain diverges from protected state")
+            missing = [
+                item for item in mirrored
+                if int(current_head["revision"]) < int(item.get("revision", -1))
+                <= int(high_water["revision"])
+            ]
+            if missing:
+                db.execute("BEGIN IMMEDIATE")
+                previous = current_head["event_digest"]
+                expected_revision = int(current_head["revision"]) + 1
+                for item in missing:
+                    revision = int(item["revision"])
+                    snapshot = item.get("identity_snapshot")
+                    identities = snapshot.get("identities") if isinstance(snapshot, dict) else None
+                    if (
+                        revision != expected_revision
+                        or item.get("previous_event_digest") != previous
+                        or not isinstance(identities, dict)
+                    ):
+                        raise RetirementGuardError("protected retirement tail is not contiguous")
+                    snapshot_json = _canonical(snapshot)
+                    db.execute(
+                        """INSERT INTO evidence_retirement_events(
+                               revision,event_id,lineage_id,source_family,encounter_id,
+                               identity_snapshot_json,identity_snapshot_sha256,
+                               previous_event_digest,event_digest,identity_count,sealed,
+                               actor,reason,retired_at
+                           ) VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?,?)""",
+                        (
+                            revision, item["event_id"], item["lineage_id"],
+                            item["source_family"], item["encounter_id"], snapshot_json,
+                            item["identity_snapshot_sha256"], item["previous_event_digest"],
+                            item["event_digest"], int(item["identity_count"]),
+                            item["actor"], item["reason"], item["retired_at"],
+                        ),
+                    )
+                    db.executemany(
+                        """INSERT INTO evidence_retirement_identities(
+                               revision,source_family,encounter_id,
+                               identity_namespace,identity_value
+                           ) VALUES (?,?,?,?,?)""",
+                        [
+                            (
+                                revision, item["source_family"], item["encounter_id"],
+                                namespace, value,
+                            )
+                            for namespace, value in sorted(identities.items())
+                        ],
+                    )
+                    db.execute(
+                        "UPDATE evidence_retirement_events SET sealed=1 WHERE revision=?",
+                        (revision,),
+                    )
+                    previous = item["event_digest"]
+                    expected_revision += 1
+                db.commit()
+            lineage_id, restored = _event_receipts(db)
+            if _head(lineage_id, restored) != {
+                "lineage_id": high_water["lineage_id"],
+                "revision": high_water["revision"],
+                "event_digest": high_water["event_digest"],
+            }:
+                raise RetirementGuardError("restored retirement state did not reconcile")
+        audit = {
+            "contract": GUARD_CONTRACT,
+            "state": "restore-reconciled",
+            "operation_id": operation_id,
+            "data_identity": data_identity,
+            "lineage_id": high_water["lineage_id"],
+            "revision": high_water["revision"],
+            "event_digest": high_water["event_digest"],
+            "recorded_at": _now(),
+        }
+        if reconciliation is None:
+            # This operation-bound receipt is the durable restart fence. It must
+            # exist before the hold can be removed so a crash in that window is
+            # an idempotent retry, never an unguarded or unrecoverable restore.
+            _atomic_receipt(reconciliation_path, audit)
+            _atomic_receipt(_audit_path(guard, "restore-reconciled"), audit)
+        if hold_path.exists():
+            hold_path.unlink()
+        directory = os.open(guard, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    return check_retirement_guard(
+        db_path,
+        data_dir=data_dir,
+        guard_dir=guard,
+        data_identity=data_identity,
+    )
 
 
 def check_retirement_guard(
@@ -500,23 +1048,64 @@ def check_retirement_guard(
             desired = _head(lineage_id, events)
             binding = _read_binding(guard, provisioning)
             current = _read_high_water(guard, provisioning)
-            if binding is None:
-                if current is not None or _mirrored_event_paths(guard):
+            initial_intent = _read_initial_binding_intent(guard, provisioning)
+            initial_completion = _read_initial_binding_completion(
+                guard, provisioning,
+            )
+            virgin_restore = _read_virgin_restore_intent(guard, provisioning)
+            initial_superseded = (
+                initial_intent is not None
+                and initial_completion is None
+                and virgin_restore is not None
+                and virgin_restore.get("lineage_id") == desired["lineage_id"]
+            )
+            if initial_completion is not None and binding is None:
+                return _hold_locked(
+                    guard,
+                    reason="retirement lineage binding is missing",
+                    detail="The completed one-time binding receipt is no longer present.",
+                )
+            if initial_completion is not None and current is None:
+                return _hold_locked(
+                    guard,
+                    reason="retirement high-water receipt is missing",
+                    detail="The completed one-time high-water receipt is no longer present.",
+                )
+            if (
+                binding is None
+                or current is None
+                or initial_intent is not None
+                and initial_completion is None
+                and not initial_superseded
+            ):
+                if (
+                    desired["revision"] != 0
+                    or _mirrored_event_paths(guard)
+                ):
+                    reason = (
+                        "retirement initial binding is incomplete"
+                        if binding is not None or initial_intent is not None
+                        else "retirement initial binding is missing"
+                    )
                     return _hold_locked(
                         guard,
-                        reason="retirement lineage binding is missing",
-                        detail="Protected retirement state exists without its one-time binding.",
+                        reason=reason,
+                        detail="Protected retirement state exists before the root binding completed.",
                     )
-                if desired["revision"] != 0:
+                try:
+                    binding, current = _complete_initial_binding(
+                        guard,
+                        provisioning,
+                        desired,
+                        binding=binding,
+                        high_water=current,
+                    )
+                except RetirementGuardError as exc:
                     return _hold_locked(
                         guard,
-                        reason="retirement lineage binding is missing",
-                        detail="The database already contains retirement events.",
+                        reason="retirement initial binding is incomplete",
+                        detail=str(exc),
                     )
-                binding = _binding_body(provisioning, lineage_id)
-                _atomic_receipt(guard / BINDING_FILE, binding)
-                current = _high_water_body(provisioning, desired)
-                _atomic_receipt(guard / HIGH_WATER_FILE, current)
             if binding["lineage_id"] != desired["lineage_id"]:
                 return _hold_locked(
                     guard,
@@ -568,6 +1157,116 @@ def check_retirement_guard(
                 with _guard_lock(guard):
                     return _hold_locked(
                         guard, reason="retirement guard validation failed", detail=str(exc),
+                    )
+        except Exception:
+            pass
+        return RetirementGuardStatus(
+            "hold", f"retirement guard unavailable: {exc}", None, None, None,
+        )
+
+
+def check_retirement_guard_head(
+    db_path: Path, *, data_dir: Path, guard_dir: Path, data_identity: str,
+) -> RetirementGuardStatus:
+    """Verify the live database head against protected state without advancing it.
+
+    Startup and the retirement write path perform the full event-chain and mirror
+    validation. Ordinary API requests use this bounded O(1) check so an out-of-band
+    restore or protected-state failure is noticed immediately without rescanning the
+    complete immutable history for every page request.
+    """
+    guard = guard_dir.absolute()
+    authority_validated = False
+    try:
+        _, guard = _separate_paths(data_dir, guard_dir)
+        _secure_directory(guard)
+        with _guard_lock(guard):
+            provisioning = _provisioning(guard, data_identity)
+            _secure_directory(guard / "events")
+            _secure_directory(guard / "audit")
+            authority_validated = True
+            if (guard / HOLD_FILE).exists():
+                hold = _read_receipt(guard / HOLD_FILE)
+                return RetirementGuardStatus(
+                    "hold", str(hold.get("reason") or "retirement hold"),
+                    None, None, None,
+                )
+            with connect_database(db_path, read_only=True) as db:
+                lineage = db.execute(
+                    "SELECT lineage_id FROM evidence_retirement_lineage WHERE singleton=1"
+                ).fetchone()
+                if lineage is None:
+                    raise RetirementGuardError("retirement lineage is missing")
+                latest = db.execute(
+                    """SELECT revision,event_digest FROM evidence_retirement_events
+                         WHERE sealed=1 ORDER BY revision DESC LIMIT 1"""
+                ).fetchone()
+            desired = {
+                "lineage_id": str(lineage[0]),
+                "revision": int(latest[0]) if latest else 0,
+                "event_digest": str(latest[1]) if latest else "root",
+            }
+            binding = _read_binding(guard, provisioning)
+            current = _read_high_water(guard, provisioning)
+            if binding is None or current is None:
+                return _hold_locked(
+                    guard,
+                    reason="protected retirement authority is incomplete",
+                    detail="The lineage binding or high-water receipt is missing.",
+                )
+            if binding["lineage_id"] != desired["lineage_id"]:
+                return _hold_locked(
+                    guard,
+                    reason="retirement lineage does not match the guard",
+                    detail="The live data and one-time lineage binding differ.",
+                )
+            if (
+                current["lineage_id"] != desired["lineage_id"]
+                or int(current["revision"]) != desired["revision"]
+                or current["event_digest"] != desired["event_digest"]
+            ):
+                return _hold_locked(
+                    guard,
+                    reason="live retirement head does not match protected state",
+                    detail=(
+                        "The running database and independent high-water receipt differ; "
+                        "projection reads require host reconciliation."
+                    ),
+                )
+            if desired["revision"] > 0:
+                head_paths = list(
+                    (guard / "events").glob(f"{desired['revision']:020d}-*.json")
+                )
+                if len(head_paths) != 1:
+                    return _hold_locked(
+                        guard,
+                        reason="protected retirement event head is incomplete",
+                        detail="The mirrored head receipt is missing or ambiguous.",
+                    )
+                event = _read_receipt(head_paths[0])
+                if (
+                    event.get("lineage_id") != desired["lineage_id"]
+                    or int(event.get("revision") or -1) != desired["revision"]
+                    or event.get("event_digest") != desired["event_digest"]
+                ):
+                    return _hold_locked(
+                        guard,
+                        reason="protected retirement event head is inconsistent",
+                        detail="The mirrored head receipt does not match the high-water receipt.",
+                    )
+            return RetirementGuardStatus(
+                "ready", "retirement guard head matches the live database",
+                desired["lineage_id"], desired["revision"], desired["event_digest"],
+            )
+    except (RetirementGuardError, OSError, sqlite3.Error, ValueError) as exc:
+        try:
+            if authority_validated:
+                _secure_directory(guard)
+                with _guard_lock(guard):
+                    return _hold_locked(
+                        guard,
+                        reason="retirement guard head validation failed",
+                        detail=str(exc),
                     )
         except Exception:
             pass

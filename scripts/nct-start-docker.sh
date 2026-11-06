@@ -19,6 +19,8 @@ STATE_DIR="$PERSIST_ROOT/deployment"
 TLS_ROOT="$PERSIST_ROOT/tls-material"
 BOOTSTRAP_PASSWORD="$STATE_DIR/bootstrap/initial-password.txt"
 FRESH_RESUME_RECEIPT="$STATE_DIR/bootstrap/fresh-resume.json"
+RETIREMENT_GUARD_DIR="$PERSIST_ROOT/retirement-guard"
+RETIREMENT_DATA_IDENTITY="bind:$DATA_DIR"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 verify_archive_checksum() {
@@ -71,8 +73,18 @@ else
 fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "The expected NCT image was not loaded."
 IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE")
-mkdir -p "$DATA_DIR" "$STATE_DIR/bootstrap"
-chmod 700 "$PERSIST_ROOT" "$DATA_DIR" "$STATE_DIR" "$STATE_DIR/bootstrap"
+mkdir -p "$DATA_DIR" "$STATE_DIR/bootstrap" "$RETIREMENT_GUARD_DIR"
+chmod 700 "$PERSIST_ROOT" "$DATA_DIR" "$STATE_DIR" "$STATE_DIR/bootstrap" "$RETIREMENT_GUARD_DIR"
+if [ ! -f "$RETIREMENT_GUARD_DIR/provisioning.json" ]; then
+    [ -z "$(find "$RETIREMENT_GUARD_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+        die "Unrecognized retirement guard state blocks startup."
+    docker run --rm --read-only --network none \
+        -v "$RETIREMENT_GUARD_DIR:/retirement-guard:rw" "$IMAGE" \
+        python -m app.retirement_guard_cli provision \
+        --guard-dir /retirement-guard --installation-id "$CONTAINER" \
+        --data-identity "$RETIREMENT_DATA_IDENTITY" >/dev/null ||
+        die "Protected retirement authority could not be provisioned."
+fi
 if [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] && [ ! -f "$TLS_ROOT/tls/nct-server.key" ]; then
     sh "$WORKDIR/scripts/setup-lab-https.sh" "$RANGE_IP" "$TLS_ROOT"
 elif [ ! -f "$TLS_ROOT/tls/nct-server.crt" ] || [ ! -f "$TLS_ROOT/tls/nct-server.key" ]; then
@@ -154,7 +166,11 @@ start_container() {
         -v "$DATA_DIR:/data:Z" \
         -v "$TLS_ROOT/tls/nct-server.crt:/run/tls/nct-server.crt:ro" \
         -v "$TLS_ROOT/tls/nct-server.key:/run/tls/nct-server.key:ro" \
-        -e NCT_AUTH_MODE=local -e NCT_SESSION_HOURS=12 -e NCT_COOKIE_SECURE=1
+        -v "$RETIREMENT_GUARD_DIR:/run/nct-retirement-guard:rw" \
+        -e NCT_AUTH_MODE=local -e NCT_SESSION_HOURS=12 -e NCT_COOKIE_SECURE=1 \
+        -e NCT_RETIREMENT_GUARD_MODE=required \
+        -e NCT_RETIREMENT_GUARD_DIR=/run/nct-retirement-guard \
+        -e NCT_RETIREMENT_DATA_IDENTITY="$RETIREMENT_DATA_IDENTITY"
     if [ "$bootstrap" = "yes" ]; then
         set -- "$@" \
             -v "$BOOTSTRAP_PASSWORD:/run/secrets/nct_bootstrap_password:ro" \
