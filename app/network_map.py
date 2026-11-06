@@ -8,10 +8,15 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.database import connect_database
 from app.device_configs import CONFIG_DIR, active_configuration_text
+from app.evidence_retirement import (
+    EvidenceRetirementError,
+    retired_encounter_ids,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION
 from app.mac_enrichment import (
     lookup_oui_vendor,
     normalize_mac,
@@ -23,6 +28,7 @@ from app.mission_environment import list_active_special_device_roles
 from app.network_evidence_cache import (
     MAX_MAP_CONFIG_BYTES,
     NetworkEvidenceCache,
+    NetworkEvidenceSourceChanged,
     capture_network_evidence_snapshot,
     select_map_configuration_file,
     select_map_configuration_records,
@@ -1488,7 +1494,16 @@ def configuration_interface_ips(interfaces: list[dict]) -> list[str]:
 
 def configuration_devices(nodes: dict[str, dict], edges: dict[tuple[str, str, str], dict],
                           warnings: list[str]) -> int:
-    manifests, _selection_error = select_map_configuration_records(CONFIG_DIR)
+    with connect_database(DB_PATH, read_only=True) as db:
+        db.execute("BEGIN")
+        retired_run_ids = retired_encounter_ids(
+            db, source_family=DEVICE_COLLECTION,
+        )
+    manifests, selection_error = select_map_configuration_records(
+        CONFIG_DIR, retired_run_ids=retired_run_ids,
+    )
+    if selection_error:
+        warnings.append(selection_error)
     parsed_devices: set[str] = set()
     aliases: dict[str, str] = {}
     count = 0
@@ -2301,4 +2316,7 @@ def build_topology() -> dict:
 
 @router.get("")
 def topology() -> dict:
-    return build_topology()
+    try:
+        return build_topology()
+    except (EvidenceRetirementError, NetworkEvidenceSourceChanged) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None

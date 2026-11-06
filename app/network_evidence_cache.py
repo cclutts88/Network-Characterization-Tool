@@ -10,6 +10,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.database import connect_database
+from app.evidence_retirement import (
+    EvidenceRetirementError,
+    require_artifact_observation_authority,
+    require_retirement_authority,
+    retired_encounter_ids,
+    retirement_cache_token_on_connection,
+)
+from app.evidence_retirement_sources import (
+    DEVICE_COLLECTION,
+    NMAP_IMPORT,
+    NMAP_SCAN_RUN,
+)
 from app.derived_contracts import (
     NMAP_BASE_ANALYSIS_FAMILY,
     NMAP_BASE_ANALYSIS_VERSION,
@@ -40,6 +52,7 @@ class NetworkEvidenceSnapshot:
 
 def _uncacheable_snapshot(
     groups: list[list[dict]], reason: str,
+    *, retirement_token: str | None = None,
 ) -> NetworkEvidenceSnapshot:
     """Keep the builder context contract even when exact reuse is unavailable."""
     return NetworkEvidenceSnapshot(
@@ -48,6 +61,7 @@ def _uncacheable_snapshot(
             "groups": groups,
             "oui": {"available": False, "paths": []},
             "source_revision": None,
+            "retirement_token": retirement_token,
         },
         reason,
     )
@@ -165,12 +179,47 @@ class NetworkEvidenceCache:
             if snapshot.key is None:
                 # Unverifiable legacy or changing inputs retain the existing behavior,
                 # but never create or consume a weak cache entry.
-                return json.loads(_serialize(builder(snapshot.context)))
+                result_json = _serialize(builder(snapshot.context))
+                retirement_token = (
+                    snapshot.context.get("retirement_token")
+                    if isinstance(snapshot.context, dict) else None
+                )
+                if retirement_token is None:
+                    return json.loads(result_json)
+                after = snapshot_provider()
+                after_token = (
+                    after.context.get("retirement_token")
+                    if isinstance(after.context, dict) else None
+                )
+                if after_token == retirement_token:
+                    return json.loads(result_json)
+                attempts += 1
+                if attempts > retry_on_change:
+                    raise NetworkEvidenceSourceChanged(
+                        "Evidence retirement changed while the current view was built; retry the request"
+                    )
+                continue
 
             with self._lock:
-                if self._entry_key == snapshot.key and self._entry_json is not None:
+                cached = (
+                    self._entry_json
+                    if self._entry_key == snapshot.key
+                    and self._entry_json is not None
+                    else None
+                )
+            if cached is not None:
+                after = snapshot_provider()
+                if after.key != snapshot.key:
+                    attempts += 1
+                    if attempts > retry_on_change:
+                        raise NetworkEvidenceSourceChanged(
+                            "Retained network evidence changed while a cached view was checked; retry the request"
+                        )
+                    continue
+                with self._lock:
                     self._hits += 1
-                    return json.loads(self._entry_json)
+                return json.loads(cached)
+            with self._lock:
                 flight = self._flights.get(snapshot.key)
                 if flight is None:
                     flight = _Flight(threading.Event())
@@ -244,16 +293,76 @@ def _table_rows(
 
 def select_map_scan_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
     """Select the exact automated scan rows consumed by Map."""
+    require_retirement_authority(db)
     return _table_rows(
-        db, "scan_runs", order_by="created_at DESC, rowid DESC", limit=limit,
+        db,
+        "scan_runs",
+        where=(
+            "NOT EXISTS (SELECT 1 FROM evidence_retirement_events retired "
+            "WHERE retired.source_family='nmap_scan_run' "
+            "AND retired.encounter_id=scan_runs.run_id AND retired.sealed=1)"
+        ),
+        order_by="created_at DESC, rowid DESC",
+        limit=limit,
     )
 
 
 def select_map_import_rows(db: sqlite3.Connection, limit: int = 200) -> dict:
     """Select the exact manual import rows consumed by Map."""
-    return _table_rows(
-        db, "imports", order_by="imported_at DESC, rowid DESC", limit=limit,
-    )
+    require_retirement_authority(db)
+    require_artifact_observation_authority(db)
+    columns = [row[1] for row in db.execute("PRAGMA table_info(imports)").fetchall()]
+    if not columns:
+        raise sqlite3.OperationalError("Required table is unavailable: imports")
+    selected = []
+    for column in columns:
+        if column == "filename":
+            selected.append("COALESCE(active.original_filename,i.filename) AS filename")
+        elif column == "imported_at":
+            selected.append("COALESCE(active.observed_at,i.imported_at) AS imported_at")
+        elif column == "metadata_json":
+            selected.append(
+                "CASE WHEN active.observation_id IS NULL THEN i.metadata_json "
+                "ELSE '{}' END AS metadata_json"
+            )
+        else:
+            selected.append(f"i.{column}")
+    rows = db.execute(
+        f"""WITH registered AS (
+                SELECT observation.*,
+                       EXISTS (
+                           SELECT 1 FROM evidence_retirement_events retired
+                            WHERE retired.source_family=?
+                              AND retired.encounter_id=observation.observation_id
+                              AND retired.sealed=1
+                       ) retired
+                  FROM artifact_observations observation
+                 WHERE observation.source_kind=?
+            ), active_ranked AS (
+                SELECT registered.*,
+                       row_number() OVER (
+                           PARTITION BY registered.sha256
+                           ORDER BY registered.observed_at DESC,
+                                    registered.observation_id
+                       ) active_rank
+                  FROM registered WHERE retired=0
+            ), registered_content AS (
+                SELECT sha256,count(*) encounter_count
+                  FROM registered GROUP BY sha256
+            )
+            SELECT i.rowid,{','.join(selected)}
+              FROM imports i
+              LEFT JOIN active_ranked active
+                ON active.sha256=i.sha256 AND active.active_rank=1
+              LEFT JOIN registered_content
+                ON registered_content.sha256=i.sha256
+             WHERE registered_content.sha256 IS NULL
+                OR active.observation_id IS NOT NULL
+             ORDER BY COALESCE(active.observed_at,i.imported_at) DESC,i.rowid DESC
+             LIMIT ?""",
+        (NMAP_IMPORT, NMAP_IMPORT, int(limit)),
+    ).fetchall()
+    return {"columns": ["rowid", *columns], "rows": [list(row) for row in rows]}
 
 
 def _scan_artifact_rows(db: sqlite3.Connection, run_ids: set[str]) -> list[list]:
@@ -300,6 +409,7 @@ def select_map_configuration_file(run_dir: Path) -> Path | None:
 
 def select_map_configuration_records(
     config_dir: Path, limit: int = 300,
+    *, retired_run_ids: frozenset[str] = frozenset(),
 ) -> tuple[list[tuple[Path, dict]], str | None]:
     """Select Map manifests with one deterministic order shared by build and cache."""
     if not config_dir.exists():
@@ -311,6 +421,16 @@ def select_map_configuration_records(
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             error = error or f"Device manifest is not stable and readable: {exc}"
+            continue
+        directory_run_id = path.parent.name
+        manifest_run_id = str(value.get("run_id") or directory_run_id)
+        if value.get("run_id") and manifest_run_id != directory_run_id:
+            error = error or (
+                f"Device manifest run identity does not match its retained directory: "
+                f"{directory_run_id}"
+            )
+            continue
+        if manifest_run_id in retired_run_ids:
             continue
         records.append((path, value))
     records.sort(
@@ -324,17 +444,19 @@ def select_map_configuration_records(
     return records[:limit], error
 
 
-def _configuration_inputs(config_dir: Path) -> tuple[list[dict], str | None]:
-    selected, error = select_map_configuration_records(config_dir)
+def _configuration_inputs(
+    config_dir: Path, retired_run_ids: frozenset[str],
+) -> tuple[list[dict], str | None, str | None]:
+    selected, warning = select_map_configuration_records(
+        config_dir, retired_run_ids=retired_run_ids,
+    )
     records: list[tuple[Path, dict, dict]] = []
     for path, value in selected:
         try:
             identity = stable_file_identity(path)
         except OSError as exc:
-            return [], f"Device manifest is not stable and readable: {exc}"
+            return [], warning, f"Device manifest is not stable and readable: {exc}"
         records.append((path, value, identity))
-    if error:
-        return [], error
     described: list[dict] = []
     for path, manifest, manifest_identity in records:
         operation = manifest.get("operation")
@@ -349,20 +471,20 @@ def _configuration_inputs(config_dir: Path) -> tuple[list[dict], str | None]:
         if str(manifest.get("status") or "").casefold() not in {
             "completed", "uploaded", "failed",
         }:
-            return [], f"Device collection {path.parent.name} is still changing"
+            return [], warning, f"Device collection {path.parent.name} is still changing"
         evidence_path = select_map_configuration_file(path.parent)
         if evidence_path is None:
-            return [], f"Device collection {path.parent.name} has no stable selected evidence"
+            return [], warning, f"Device collection {path.parent.name} has no stable selected evidence"
         try:
             selected_identity = stable_file_identity(evidence_path)
         except OSError as exc:
-            return [], str(exc)
+            return [], warning, str(exc)
         described.append({
             "manifest": manifest_identity,
             "eligible": True,
             "selected_evidence": selected_identity,
         })
-    return described, None
+    return described, warning, None
 
 
 def capture_network_evidence_snapshot(
@@ -375,10 +497,29 @@ def capture_network_evidence_snapshot(
     map_only: bool = False,
 ) -> NetworkEvidenceSnapshot:
     """Capture the exact dependencies and the group context built from that snapshot."""
+    retirement_token: str | None = None
+    retired_device_run_ids: frozenset[str] = frozenset()
+    if map_only:
+        try:
+            with connect_database(db_path, read_only=True) as db:
+                db.execute("BEGIN")
+                retirement_token = retirement_cache_token_on_connection(db)
+                require_artifact_observation_authority(db)
+                retired_device_run_ids = retired_encounter_ids(
+                    db, source_family=DEVICE_COLLECTION,
+                )
+        except EvidenceRetirementError:
+            raise
+        except sqlite3.Error as exc:
+            raise EvidenceRetirementError(
+                "retirement authority is unavailable"
+            ) from exc
     try:
         database = stable_path_identity(db_path)
     except OSError as exc:
-        return _uncacheable_snapshot([], str(exc))
+        return _uncacheable_snapshot(
+            [], str(exc), retirement_token=retirement_token,
+        )
 
     scan_rows = None
     manifest_index = None
@@ -418,15 +559,22 @@ def capture_network_evidence_snapshot(
     try:
         with connect_database(db_path, read_only=True) as db:
             db.execute("BEGIN")
+            retirement_token = retirement_cache_token_on_connection(db)
+            retired_device_run_ids = retired_encounter_ids(
+                db, source_family=DEVICE_COLLECTION,
+            )
             topology_scan_rows = select_map_scan_rows(db)
         topology_manifest_index = topology_scan_rows["columns"].index("manifest_json")
         topology_manifests = [
             json.loads(row[topology_manifest_index])
             for row in topology_scan_rows["rows"]
         ]
+    except EvidenceRetirementError:
+        raise
     except (sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
         return _uncacheable_snapshot(
-            groups, f"Map scan selection cannot be fingerprinted: {exc}"
+            groups, f"Map scan selection cannot be fingerprinted: {exc}",
+            retirement_token=retirement_token,
         )
     topology_ids = {
         str(manifest.get("run_id")) for manifest in topology_manifests
@@ -468,7 +616,8 @@ def capture_network_evidence_snapshot(
             )
     except sqlite3.Error as exc:
         return _uncacheable_snapshot(
-            groups, f"Mutable context cannot be fingerprinted: {exc}"
+            groups, f"Mutable context cannot be fingerprinted: {exc}",
+            retirement_token=retirement_token,
         )
 
     artifact_by_run: dict[str, list[list]] = {}
@@ -481,10 +630,13 @@ def capture_network_evidence_snapshot(
         try:
             identity = stable_file_identity(canonical_path)
         except OSError as exc:
-            return _uncacheable_snapshot(groups, str(exc))
+            return _uncacheable_snapshot(
+                groups, str(exc), retirement_token=retirement_token,
+            )
         if identity["sha256"] != digest or identity["size"] != size_bytes:
             return _uncacheable_snapshot(
-                groups, f"Canonical Nmap artifact does not match registry: {digest}"
+                groups, f"Canonical Nmap artifact does not match registry: {digest}",
+                retirement_token=retirement_token,
             )
         canonical_by_digest[digest] = identity
 
@@ -493,7 +645,8 @@ def capture_network_evidence_snapshot(
         rows = artifact_by_run.get(run_id, [])
         if len(rows) > 1:
             return _uncacheable_snapshot(
-                groups, f"Scan {run_id} has ambiguous registered XML"
+                groups, f"Scan {run_id} has ambiguous registered XML",
+                retirement_token=retirement_token,
             )
         path = run_directory(run_id) / "scan.xml"
         if not path.is_file():
@@ -502,10 +655,13 @@ def capture_network_evidence_snapshot(
         try:
             local = stable_file_identity(path)
         except OSError as exc:
-            return _uncacheable_snapshot(groups, str(exc))
+            return _uncacheable_snapshot(
+                groups, str(exc), retirement_token=retirement_token,
+            )
         if rows and (local["sha256"], local["size"]) != (str(rows[0][1]), int(rows[0][4])):
             return _uncacheable_snapshot(
-                groups, f"Run-local Nmap XML does not match registry: {run_id}"
+                groups, f"Run-local Nmap XML does not match registry: {run_id}",
+                retirement_token=retirement_token,
             )
         nmap_inputs.append({
             "run_id": run_id,
@@ -514,9 +670,13 @@ def capture_network_evidence_snapshot(
             "registry": rows,
         })
 
-    configuration_inputs, config_error = _configuration_inputs(config_dir)
+    configuration_inputs, config_warning, config_error = _configuration_inputs(
+        config_dir, retired_device_run_ids,
+    )
     if config_error:
-        return _uncacheable_snapshot(groups, config_error)
+        return _uncacheable_snapshot(
+            groups, config_error, retirement_token=retirement_token,
+        )
 
     oui_identities: list[dict] = []
     for path in oui_search_paths():
@@ -525,7 +685,9 @@ def capture_network_evidence_snapshot(
         try:
             oui_identities.append(stable_file_identity(path))
         except OSError as exc:
-            return _uncacheable_snapshot(groups, str(exc))
+            return _uncacheable_snapshot(
+                groups, str(exc), retirement_token=retirement_token,
+            )
     oui_identity = {
         "available": bool(oui_identities),
         "paths": oui_identities,
@@ -548,6 +710,7 @@ def capture_network_evidence_snapshot(
     }
     descriptor = {
         "contract": contract,
+        "retirement_token": retirement_token,
         "database": {
             "path": database["path"],
             "device": database["device"],
@@ -577,6 +740,7 @@ def capture_network_evidence_snapshot(
             ],
         },
         "configuration_inputs": configuration_inputs,
+        "configuration_selection_warning": config_warning,
         "mutable_context": mutable,
         "oui": oui_identity,
     }
@@ -585,5 +749,6 @@ def capture_network_evidence_snapshot(
         "groups": groups,
         "oui": oui_identity,
         "source_revision": revision,
+        "retirement_token": retirement_token,
     }
     return NetworkEvidenceSnapshot(revision, context)

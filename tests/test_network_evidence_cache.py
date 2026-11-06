@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -10,8 +11,19 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.artifacts import init_artifact_storage, register_artifact_file
+from app.artifacts import (
+    init_artifact_storage,
+    register_artifact_bytes,
+    register_artifact_file,
+)
 from app.database import connect_database
+from app.evidence_retirement import (
+    EvidenceRetirementAdapter,
+    EvidenceRetirementError,
+    init_evidence_retirement_storage,
+    retire_evidence,
+)
+from app.evidence_retirement_sources import DEVICE_COLLECTION, NMAP_IMPORT, NMAP_SCAN_RUN
 from app.host_identities import init_host_identity_storage
 from app.identity_overrides import init_os_override_storage
 from app.network_evidence_cache import (
@@ -107,6 +119,48 @@ def test_changed_source_during_build_is_discarded_and_retried():
     assert builds == ["before", "after"]
 
 
+def test_changed_source_before_cached_return_is_rechecked_and_rebuilt():
+    cache = NetworkEvidenceCache()
+    state = {"key": "before", "calls": 0}
+    builds = []
+
+    def snapshot():
+        state["calls"] += 1
+        if state["calls"] == 4:
+            state["key"] = "after"
+        return NetworkEvidenceSnapshot(state["key"], {"key": state["key"]})
+
+    def build(context):
+        builds.append(context["key"])
+        return {"built_from": context["key"]}
+
+    assert cache.get(snapshot, build) == {"built_from": "before"}
+    assert cache.get(snapshot, build) == {"built_from": "after"}
+    assert builds == ["before", "after"]
+
+
+def test_uncacheable_build_retries_when_retirement_changes():
+    cache = NetworkEvidenceCache()
+    state = {"token": "one"}
+    builds = []
+
+    def snapshot():
+        return NetworkEvidenceSnapshot(
+            None,
+            {"retirement_token": state["token"]},
+            "unverifiable source",
+        )
+
+    def build(context):
+        builds.append(context["retirement_token"])
+        if context["retirement_token"] == "one":
+            state["token"] = "two"
+        return {"built_from": context["retirement_token"]}
+
+    assert cache.get(snapshot, build) == {"built_from": "two"}
+    assert builds == ["one", "two"]
+
+
 def test_sustained_source_churn_fails_without_publishing_stale_data():
     cache = NetworkEvidenceCache()
     revision = 0
@@ -174,12 +228,14 @@ def test_missing_database_snapshot_preserves_builder_context_contract(tmp_path):
         "groups": [],
         "oui": {"available": False, "paths": []},
         "source_revision": None,
+        "retirement_token": None,
     }
 
 
 def _init_descriptor_database(db_path: Path) -> None:
     init_poc_storage(db_path)
     init_artifact_storage(db_path)
+    init_evidence_retirement_storage(db_path)
     init_host_identity_storage(db_path)
     init_os_override_storage(db_path)
     init_saved_network_storage(db_path)
@@ -204,6 +260,188 @@ def _capture(db_path: Path, config_dir: Path) -> NetworkEvidenceSnapshot:
         prepare_manifests=lambda manifests, _queued: manifests,
         select_groups=lambda _manifests: [],
     )
+
+
+def _simple_retire(db_path: Path, source_family: str, encounter_id: str) -> None:
+    retire_evidence(
+        db_path,
+        source_family=source_family,
+        encounter_id=encounter_id,
+        actor="map-retirement-test",
+        reason="exclude this retained source from map topology",
+        adapter=EvidenceRetirementAdapter(
+            lambda _db, value: {"encounter_id": value},
+            lambda _db, _value: None,
+        ),
+    )
+
+
+def _scan_row(run_id: str, created_at: str) -> tuple:
+    return (
+        run_id,
+        created_at,
+        "completed",
+        "operator",
+        "map retirement test",
+        "host",
+        "eth0",
+        "safe",
+        json.dumps(
+            {
+                "run_id": run_id,
+                "created_at": created_at,
+                "completed_at": created_at,
+                "status": "completed",
+                "targets": ["192.0.2.0/24"],
+            },
+            sort_keys=True,
+        ),
+    )
+
+
+def test_map_scan_selector_filters_retired_rows_before_source_limit(tmp_path):
+    db_path = tmp_path / "scan-selector.db"
+    _init_descriptor_database(db_path)
+    with connect_database(db_path) as db:
+        db.executemany(
+            "INSERT INTO scan_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+                _scan_row(f"run-{number:03d}", f"2026-11-05T00:{number:03d}:00Z")
+                for number in range(1, 202)
+            ],
+        )
+    _simple_retire(db_path, NMAP_SCAN_RUN, "run-201")
+
+    with connect_database(db_path, read_only=True) as db:
+        rows = select_map_scan_rows(db, limit=200)
+
+    run_ids = [row[rows["columns"].index("run_id")] for row in rows["rows"]]
+    assert len(run_ids) == 200
+    assert "run-201" not in run_ids
+    assert "run-001" in run_ids
+
+
+def test_map_import_selector_uses_active_sibling_and_preserves_true_legacy(tmp_path):
+    db_path = tmp_path / "import-selector.db"
+    _init_descriptor_database(db_path)
+    artifact_root = tmp_path / "artifacts"
+    content = b"<nmaprun id='same-content'/>"
+    observations = [
+        register_artifact_bytes(
+            db_path=db_path,
+            artifact_root=artifact_root,
+            content=content,
+            source_kind=NMAP_IMPORT,
+            source_ref=f"upload:{index}",
+            original_filename=filename,
+            actor=f"analyst-{index}",
+            observed_at=observed_at,
+        )
+        for index, filename, observed_at in (
+            (1, "older-active.xml", "2026-11-05T10:00:00Z"),
+            (2, "newest-retired.xml", "2026-11-05T11:00:00Z"),
+        )
+    ]
+    digest = hashlib.sha256(content).hexdigest()
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO imports VALUES (?,?,?,?,?,?)",
+            (
+                digest,
+                "retired-metadata.xml",
+                observations[0]["canonical_path"],
+                "2026-11-05T09:00:00Z",
+                '{"hosts":[]}',
+                '{"scope_id":"must-not-leak"}',
+            ),
+        )
+        db.execute(
+            "INSERT INTO imports VALUES (?,?,?,?,?,?)",
+            (
+                "f" * 64,
+                "legacy.xml",
+                str(tmp_path / "legacy.xml"),
+                "2026-01-01T00:00:00Z",
+                '{"hosts":[]}',
+                '{"display_name":"Legacy"}',
+            ),
+        )
+    _simple_retire(db_path, NMAP_IMPORT, observations[1]["observation_id"])
+
+    with connect_database(db_path, read_only=True) as db:
+        first = select_map_import_rows(db)
+    filename_index = first["columns"].index("filename")
+    metadata_index = first["columns"].index("metadata_json")
+    by_filename = {row[filename_index]: row for row in first["rows"]}
+    assert "older-active.xml" in by_filename
+    assert by_filename["older-active.xml"][metadata_index] == "{}"
+    assert "legacy.xml" in by_filename
+
+    _simple_retire(db_path, NMAP_IMPORT, observations[0]["observation_id"])
+    with connect_database(db_path, read_only=True) as db:
+        final = select_map_import_rows(db)
+    assert [row[filename_index] for row in final["rows"]] == ["legacy.xml"]
+
+
+@pytest.mark.parametrize("missing_table", [
+    "evidence_retirement_events",
+    "artifact_observations",
+])
+def test_map_selectors_fail_closed_when_authority_is_missing(tmp_path, missing_table):
+    db_path = tmp_path / f"missing-{missing_table}.db"
+    _init_descriptor_database(db_path)
+    with connect_database(db_path) as db:
+        db.execute(f"DROP TABLE {missing_table}")
+
+    with connect_database(db_path, read_only=True) as db:
+        with pytest.raises(EvidenceRetirementError, match="authority is unavailable"):
+            if missing_table == "artifact_observations":
+                select_map_import_rows(db)
+            else:
+                select_map_scan_rows(db)
+
+
+def test_map_device_selector_filters_retired_and_rejects_identity_mismatch(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    for run_id, created_at in (
+        ("older-active", "2026-11-05T10:00:00Z"),
+        ("newest-retired", "2026-11-05T11:00:00Z"),
+    ):
+        run_dir = config_dir / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "operation": "manual_upload",
+                    "status": "uploaded",
+                    "created_at": created_at,
+                }
+            ),
+            encoding="utf-8",
+        )
+    mismatch_dir = config_dir / "canonical-directory"
+    mismatch_dir.mkdir()
+    (mismatch_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "different-run",
+                "operation": "manual_upload",
+                "status": "uploaded",
+                "created_at": "2026-11-05T12:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    records, error = select_map_configuration_records(
+        config_dir,
+        limit=1,
+        retired_run_ids=frozenset({"newest-retired"}),
+    )
+
+    assert [path.parent.name for path, _manifest in records] == ["older-active"]
+    assert "does not match its retained directory" in error
 
 
 def test_exact_database_rows_invalidate_without_timestamp_or_length_changes(tmp_path):
@@ -591,7 +829,7 @@ def test_real_empty_model_hits_then_exact_context_change_rebuilds(tmp_path, monk
 
     db_path = tmp_path / "analyzer.db"
     config_dir = tmp_path / "device-configs"
-    runs_dir = tmp_path / "runs"
+    runs_dir = tmp_path / network_map.RUNS_DIR_NAME
     runs_dir.mkdir()
     _init_descriptor_database(db_path)
     monkeypatch.setattr(main, "DB_PATH", db_path)
@@ -626,6 +864,258 @@ def test_real_empty_model_hits_then_exact_context_change_rebuilds(tmp_path, monk
     assert third["source"]["scan_count"] == 0
     assert third["source_revision"] != first["source_revision"]
     assert builds == ["topology", "topology"]
+
+
+def test_real_map_topology_excludes_retired_sources_and_keeps_active_sibling(
+    tmp_path, monkeypatch,
+):
+    import app.network_map as network_map
+
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    runs_dir = tmp_path / network_map.RUNS_DIR_NAME
+    runs_dir.mkdir()
+    _init_descriptor_database(db_path)
+    monkeypatch.setattr(network_map, "DB_PATH", db_path)
+    monkeypatch.setattr(network_map, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(network_map, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(network_map, "reset_oui_database_cache", lambda: None)
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+
+    scan_id = "scan-map-retirement"
+    scan_dir = runs_dir / scan_id
+    scan_dir.mkdir()
+    scan_dir.joinpath("scan.xml").write_text(
+        "<nmaprun scanner='nmap' start='100'><host><status state='up'/>"
+        "<address addr='192.0.2.10' addrtype='ipv4'/></host>"
+        "<runstats><finished time='101' exit='success'/>"
+        "<hosts up='1' down='0' total='1'/></runstats></nmaprun>",
+        encoding="utf-8",
+    )
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO scan_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            _scan_row(scan_id, "2026-11-05T09:00:00Z"),
+        )
+
+    import_content = b"<nmaprun id='map-import'/>"
+    import_observations = [
+        register_artifact_bytes(
+            db_path=db_path,
+            artifact_root=tmp_path / "artifacts",
+            content=import_content,
+            source_kind=NMAP_IMPORT,
+            source_ref=f"map-upload:{index}",
+            original_filename=filename,
+            actor="map-test",
+            observed_at=observed_at,
+        )
+        for index, filename, observed_at in (
+            (1, "map-import-older.xml", "2026-11-05T10:00:00Z"),
+            (2, "map-import-newer.xml", "2026-11-05T11:00:00Z"),
+        )
+    ]
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO imports VALUES (?,?,?,?,?,?)",
+            (
+                import_observations[0]["sha256"],
+                "retired-import-metadata.xml",
+                import_observations[0]["canonical_path"],
+                "2026-11-05T08:00:00Z",
+                json.dumps(
+                    {"hosts": [{"ip": "192.0.2.20", "status": "up", "ports": []}]}
+                ),
+                "{}",
+            ),
+        )
+
+    device_id = "device-map-retirement"
+    device_dir = config_dir / device_id
+    device_dir.mkdir(parents=True)
+    device_dir.joinpath("manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": device_id,
+                "operation": "manual_upload",
+                "status": "uploaded",
+                "created_at": "2026-11-05T12:00:00Z",
+                "vendor": "generic",
+                "device_type": "router",
+                "device_address": "192.0.2.30",
+            }
+        ),
+        encoding="utf-8",
+    )
+    device_dir.joinpath("uploaded-router.txt").write_text(
+        "interface eth0\n ip address 192.0.2.30 255.255.255.0\n",
+        encoding="utf-8",
+    )
+    mismatch_dir = config_dir / "wrong-device-directory"
+    mismatch_dir.mkdir()
+    mismatch_dir.joinpath("manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "different-device-run",
+                "operation": "manual_upload",
+                "status": "uploaded",
+                "created_at": "2026-11-05T13:00:00Z",
+                "device_address": "192.0.2.99",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    before = network_map.build_topology()
+    before_ips = {node.get("ip") for node in before["nodes"]}
+    assert {"192.0.2.10", "192.0.2.20", "192.0.2.30"} <= before_ips
+    assert "192.0.2.99" not in before_ips
+    assert any(
+        "does not match its retained directory" in warning
+        for warning in before["warnings"]
+    )
+
+    _simple_retire(db_path, NMAP_SCAN_RUN, scan_id)
+    _simple_retire(db_path, DEVICE_COLLECTION, device_id)
+    _simple_retire(
+        db_path, NMAP_IMPORT, import_observations[1]["observation_id"],
+    )
+    with_active_sibling = network_map.build_topology()
+    sibling_ips = {node.get("ip") for node in with_active_sibling["nodes"]}
+    assert "192.0.2.10" not in sibling_ips
+    assert "192.0.2.30" not in sibling_ips
+    assert "192.0.2.20" in sibling_ips
+
+    _simple_retire(
+        db_path, NMAP_IMPORT, import_observations[0]["observation_id"],
+    )
+    after = network_map.build_topology()
+    after_ips = {node.get("ip") for node in after["nodes"]}
+    assert not {"192.0.2.10", "192.0.2.20", "192.0.2.30"} & after_ips
+
+
+def test_map_discards_topology_when_retirement_happens_during_build(
+    tmp_path, monkeypatch,
+):
+    import app.network_map as network_map
+
+    db_path = tmp_path / "analyzer.db"
+    config_dir = tmp_path / "device-configs"
+    _init_descriptor_database(db_path)
+    observation = register_artifact_bytes(
+        db_path=db_path,
+        artifact_root=tmp_path / "artifacts",
+        content=b"<nmaprun id='retirement-race'/>",
+        source_kind=NMAP_IMPORT,
+        source_ref="map-retirement-race",
+        original_filename="race.xml",
+        actor="map-test",
+        observed_at="2026-11-05T13:00:00Z",
+    )
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO imports VALUES (?,?,?,?,?,?)",
+            (
+                observation["sha256"],
+                "race.xml",
+                observation["canonical_path"],
+                "2026-11-05T13:00:00Z",
+                json.dumps(
+                    {"hosts": [{"ip": "198.51.100.40", "status": "up", "ports": []}]}
+                ),
+                "{}",
+            ),
+        )
+    monkeypatch.setattr(network_map, "DB_PATH", db_path)
+    monkeypatch.setattr(network_map, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(network_map, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(network_map, "reset_oui_database_cache", lambda: None)
+    monkeypatch.setattr(
+        "app.network_evidence_cache.stable_path_identity",
+        lambda _path: (_ for _ in ()).throw(OSError("injected fingerprint refusal")),
+    )
+    original_imported_hosts = network_map.imported_hosts
+    calls = 0
+
+    def retire_after_first_import(nodes, edges, warnings):
+        nonlocal calls
+        calls += 1
+        count = original_imported_hosts(nodes, edges, warnings)
+        if calls == 1:
+            _simple_retire(
+                db_path, NMAP_IMPORT, observation["observation_id"],
+            )
+        return count
+
+    monkeypatch.setattr(network_map, "imported_hosts", retire_after_first_import)
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+
+    topology = network_map.build_topology()
+
+    assert calls == 2
+    assert network_map._MAP_TOPOLOGY_CACHE.status()["entry_count"] == 0
+    assert "198.51.100.40" not in {
+        node.get("ip") for node in topology["nodes"]
+    }
+
+
+def test_uncacheable_map_withholds_result_when_import_authority_disappears(
+    tmp_path, monkeypatch,
+):
+    import app.network_map as network_map
+
+    db_path = tmp_path / "analyzer.db"
+    _init_descriptor_database(db_path)
+    observation = register_artifact_bytes(
+        db_path=db_path,
+        artifact_root=tmp_path / "artifacts",
+        content=b"<nmaprun id='authority-race'/>",
+        source_kind=NMAP_IMPORT,
+        source_ref="map-authority-race",
+        original_filename="authority.xml",
+        actor="map-test",
+        observed_at="2026-11-05T14:00:00Z",
+    )
+    with connect_database(db_path) as db:
+        db.execute(
+            "INSERT INTO imports VALUES (?,?,?,?,?,?)",
+            (
+                observation["sha256"],
+                "authority.xml",
+                observation["canonical_path"],
+                "2026-11-05T14:00:00Z",
+                json.dumps(
+                    {"hosts": [{"ip": "203.0.113.50", "status": "up", "ports": []}]}
+                ),
+                "{}",
+            ),
+        )
+    monkeypatch.setattr(network_map, "DB_PATH", db_path)
+    monkeypatch.setattr(network_map, "CONFIG_DIR", tmp_path / "device-configs")
+    monkeypatch.setattr(network_map, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(network_map, "reset_oui_database_cache", lambda: None)
+    monkeypatch.setattr(
+        "app.network_evidence_cache.stable_path_identity",
+        lambda _path: (_ for _ in ()).throw(OSError("injected fingerprint refusal")),
+    )
+    original_imported_hosts = network_map.imported_hosts
+    dropped = False
+
+    def drop_authority_after_import(nodes, edges, warnings):
+        nonlocal dropped
+        count = original_imported_hosts(nodes, edges, warnings)
+        if not dropped:
+            dropped = True
+            with connect_database(db_path) as db:
+                db.execute("DROP TABLE artifact_observations")
+        return count
+
+    monkeypatch.setattr(network_map, "imported_hosts", drop_authority_after_import)
+    network_map._MAP_TOPOLOGY_CACHE.clear()
+
+    with pytest.raises(EvidenceRetirementError, match="authority is unavailable"):
+        network_map.build_topology()
+    assert network_map._MAP_TOPOLOGY_CACHE.status()["entry_count"] == 0
 
 
 def test_combined_scan_companion_xml_reaches_paged_inventory(tmp_path, monkeypatch):

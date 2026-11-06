@@ -311,19 +311,24 @@ def init_evidence_retirement_storage(db_path: Path) -> None:
         db.commit()
 
 
+def retirement_cache_token_on_connection(connection: sqlite3.Connection) -> str:
+    """Return the retirement lineage head from the caller's read snapshot."""
+    require_retirement_authority(connection)
+    lineage = connection.execute(
+        "SELECT lineage_id FROM evidence_retirement_lineage WHERE singleton=1"
+    ).fetchone()
+    head = connection.execute(
+        "SELECT revision,event_digest FROM evidence_retirement_events "
+        "WHERE sealed=1 ORDER BY revision DESC LIMIT 1"
+    ).fetchone()
+    return f"{lineage[0]}:{head[0] if head else 0}:{head[1] if head else 'root'}"
+
+
 def retirement_cache_token(db_path: Path) -> str:
     """Return a branch-safe token for selectors and derived-result caches."""
     with connect_database(db_path, read_only=True) as db:
-        lineage = db.execute(
-            "SELECT lineage_id FROM evidence_retirement_lineage WHERE singleton=1"
-        ).fetchone()
-        if lineage is None:
-            raise EvidenceRetirementError("retirement lineage is missing")
-        head = db.execute(
-            "SELECT revision,event_digest FROM evidence_retirement_events "
-            "WHERE sealed=1 ORDER BY revision DESC LIMIT 1"
-        ).fetchone()
-    return f"{lineage[0]}:{head[0] if head else 0}:{head[1] if head else 'root'}"
+        db.execute("BEGIN")
+        return retirement_cache_token_on_connection(db)
 
 
 def retire_evidence(
@@ -497,6 +502,21 @@ def require_artifact_observation_authority(
                 "artifact observation authority is unavailable"
             ) from exc
         raise
+
+
+def retired_encounter_ids(
+    connection: sqlite3.Connection, *, source_family: str,
+) -> frozenset[str]:
+    """Return sealed retired encounter identities from one authoritative snapshot."""
+    require_retirement_authority(connection)
+    return frozenset(
+        str(row[0])
+        for row in connection.execute(
+            "SELECT encounter_id FROM evidence_retirement_events "
+            "WHERE source_family=? AND sealed=1 ORDER BY encounter_id",
+            (source_family,),
+        ).fetchall()
+    )
 
 
 def require_active_registered_content(

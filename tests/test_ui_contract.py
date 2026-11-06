@@ -3325,7 +3325,13 @@ def test_operator_readme_keeps_retirement_foundation_distinct_from_current_contr
     assert "ordinary Arkime lists, coverage, analysis, Hunt comparisons" in html
     assert "retired DHCP/DNS hostname uploads no longer appear" in html
     assert "saved SearchSploit candidate views exclude retired Nmap runs" in html
+    assert "Map topology also excludes retired automated scans" in html
+    assert "including when an older topology was cached" in html
+    assert "Current Network and Hunt source-group selection" in html
+    assert "Map stored-file listing" in html
     assert "An active same-content scan can still use its own verified result link" in html
     assert "Existing analyst-approved hostname decisions and Exploit-DB" in html
     assert "Exploit-DB reference maintenance remain separate" in html
     assert "no evidence is physically removed" in html
+    assert "Retired automated scans, manual-import encounters, and device collections" in SHELL_SCRIPT
+    assert "do not contribute to topology" in SHELL_SCRIPT

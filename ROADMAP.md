@@ -285,6 +285,33 @@ verification passed (25 passed, 1 skipped; then 192 passed, 1 skipped), and the 
 application suite passed (2,632 passed, 25 skipped). The Independent Reviewer returned
 CLEAR — DOCUMENTED DEVIATION after independently passing all 10 gateway tests.
 
+Cross-evidence retirement active-source Gate C Map-topology slice started
+(2026-11-05): apply the same active-source selection to the topology build and its cache
+snapshot for automated Nmap, shared manual-import content and device collections. The
+selector must filter before source limits, use active upload metadata while preserving
+true legacy imports, bind device manifests to their canonical run-directory identity,
+include retirement lineage in the cache identity, fail closed when authority is
+incomplete, and recheck retirement before returning either cached or uncached topology.
+Current Network and Hunt remain a separate combined gate because they independently
+select multipart scan groups; Map stored-file listing also remains separate. The
+Independent Reviewer returned CLEAR on this bounded architecture.
+
+Cross-evidence retirement active-source Gate C Map-topology slice completed
+(2026-11-05): Map topology now filters retired automated Nmap runs, shared manual
+imports and device collections before bounded source limits. Shared imports use the
+newest active encounter metadata, retain true legacy content until backfill, and
+disappear only when all registered identical encounters are retired. Device manifests
+must match their canonical retained run directory; mismatches are excluded with a
+visible warning while valid topology remains available. Retirement lineage and both
+retirement/import-observation authorities are checked before cacheable and uncached
+builds, then rechecked before returning either new or previously cached topology. A
+source retired during calculation is discarded and rebuilt; lost authority withholds
+the result. Focused verification passed (40 passed, 1 skipped), the broader Map and UI
+slice passed (137 passed, 1 skipped), the complete application suite passed (2,643
+passed, 25 skipped), and the Independent Reviewer returned CLEAR after independently
+passing nine focused cases. This claim covers Map topology only; Current Network, Hunt
+and Map stored-file listing remain explicit follow-on gates.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

@@ -68,6 +68,7 @@ PROJECTION_ROUTES = (
     "changes-over-time",
     "hunt",
     "reach",
+    "map-topology",
     "map",
     "operator-exports",
     "cache-revisions",
@@ -81,12 +82,12 @@ ROUTE_COVERAGE: dict[str, frozenset[str]] = {
     source.source_family: frozenset() for source in SOURCE_CONTRACTS
 }
 ROUTE_COVERAGE.update({
-    "nmap_scan_run": frozenset({"evidence-library"}),
+    "nmap_scan_run": frozenset({"evidence-library", "map-topology"}),
     "nmap_import": frozenset({
         "evidence-library", "source-history", "raw-evidence-download",
-        "operator-exports",
+        "operator-exports", "map-topology",
     }),
-    "device_collection": frozenset({"evidence-library"}),
+    "device_collection": frozenset({"evidence-library", "map-topology"}),
 })
 
 

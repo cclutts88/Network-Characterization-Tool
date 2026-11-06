@@ -53,3 +53,9 @@ def test_nmap_import_shared_content_gateway_claims_only_completed_routes():
     assert "current-network" not in ROUTE_COVERAGE["nmap_import"]
     assert "map" not in ROUTE_COVERAGE["nmap_import"]
 
+
+def test_map_topology_is_claimed_without_overclaiming_the_complete_map_workspace():
+    for source_family in ("nmap_scan_run", "nmap_import", "device_collection"):
+        assert "map-topology" in ROUTE_COVERAGE[source_family]
+        assert "map" not in ROUTE_COVERAGE[source_family]
+
