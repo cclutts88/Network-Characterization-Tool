@@ -75,6 +75,26 @@ def test_switch_ports_merge_with_routed_interfaces():
     assert merged[1]["switching"]["mode"] == "trunk"
 
 
+def test_cisco_interface_brief_heading_is_not_invented_as_a_switch_interface():
+    result = parse_switch_evidence(
+        """===== show running-config =====
+interface GigabitEthernet0/0
+ description uplink
+ ip address 192.0.2.1 255.255.255.0
+===== show ip interface brief =====
+Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/0     192.0.2.1       YES manual up                    up
+Loopback0              198.51.100.1    YES manual up                    up
+""",
+        ["show running-config", "show ip interface brief"],
+    )
+
+    assert "IP-Address" not in {
+        item["interface"] for item in result["ports"]
+    }
+    assert result["ports"] == []
+
+
 def test_unlabeled_cli_output_does_not_claim_per_command_success():
     result = parse_switch_evidence("combined CLI output", ["show vlan brief"])
 

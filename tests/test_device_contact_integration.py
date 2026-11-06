@@ -88,11 +88,19 @@ def _isolate_http_device_storage(
     return db_path, config_dir
 
 
-def _capture_stub(interface: str, work_dir: Path):
+def _capture_stub(
+    interface: str,
+    work_dir: Path,
+    device_address: str,
+    ssh_port: int,
+):
     work_dir.mkdir(parents=True, exist_ok=True)
     (work_dir / "accountability.pcap").write_bytes(b"P" * 96)
     (work_dir / "capture-stderr.txt").write_text("capture test\n")
-    return _FakeProcess(), None, ["tcpdump", "-i", interface]
+    return _FakeProcess(), None, [
+        "tcpdump", "-i", interface,
+        "host", device_address, "and", "tcp", "port", str(ssh_port),
+    ]
 
 
 def _fence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

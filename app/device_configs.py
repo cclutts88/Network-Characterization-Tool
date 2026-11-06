@@ -1334,8 +1334,18 @@ def build_plan(plan: DeviceConfigPlan) -> dict:
         "Start accountability capture",
         "NCT host",
         "system command",
-        shlex.join(capture_argv(plan.accountability_interface, run_dir / "accountability.pcap")),
-        "Starts before the SSH connection and is stopped after the session closes.",
+        shlex.join(
+            capture_argv(
+                plan.accountability_interface,
+                run_dir / "accountability.pcap",
+                plan.device_address,
+                plan.ssh_port,
+            )
+        ),
+        (
+            "Starts before the SSH connection, records only traffic between NCT and "
+            "this certified device SSH endpoint, and stops after the session closes."
+        ),
     )
     if interactive:
         control_path = Path("<runtime-ssh-control-socket>")
@@ -1605,16 +1615,33 @@ def validate_runtime_interface(interface: str) -> None:
         )
 
 
-def capture_argv(interface: str, output_path: Path) -> list[str]:
+def capture_argv(
+    interface: str,
+    output_path: Path,
+    device_address: str,
+    ssh_port: int,
+) -> list[str]:
+    """Capture only the certified SSH conversation, never unrelated NCT API traffic."""
     return [
         "tcpdump", "-i", interface, "-p", "-nn", "-U", "-s", "0",
         "-w", str(output_path),
+        "host", device_address, "and", "tcp", "port", str(ssh_port),
     ]
 
 
-def start_accountability_capture(interface: str, run_dir: Path) -> tuple[object, object, list[str]]:
+def start_accountability_capture(
+    interface: str,
+    run_dir: Path,
+    device_address: str,
+    ssh_port: int,
+) -> tuple[object, object, list[str]]:
     validate_runtime_interface(interface)
-    args = capture_argv(interface, run_dir / "accountability.pcap")
+    args = capture_argv(
+        interface,
+        run_dir / "accountability.pcap",
+        device_address,
+        ssh_port,
+    )
     stderr_handle = (run_dir / "capture-stderr.txt").open("wb")
     try:
         process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=stderr_handle)
@@ -3886,7 +3913,12 @@ def start_interactive_session(plan: DeviceConfigPlan, request: Request) -> dict:
     master_process: subprocess.Popen[bytes] | None = None
     try:
         publish_device_contact_starting(run_dir, manifest, fence)
-        capture_process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, work_dir)
+        capture_process, capture_stderr, _ = start_accountability_capture(
+            plan.accountability_interface,
+            work_dir,
+            plan.device_address,
+            plan.ssh_port,
+        )
         fence.register_process(capture_process)
         control_dir = Path(tempfile.mkdtemp(prefix=f"nct-ssh-{preview_data['run_id'][:12]}-", dir="/tmp"))
         control_dir.chmod(0o700)
@@ -4412,7 +4444,12 @@ def preflight(plan: DeviceConfigPlan, request: Request) -> dict:
     try:
         publish_device_contact_starting(run_dir, manifest, fence)
         manifest["status"] = "running"
-        process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, work_dir)
+        process, capture_stderr, _ = start_accountability_capture(
+            plan.accountability_interface,
+            work_dir,
+            plan.device_address,
+            plan.ssh_port,
+        )
         fence.register_process(process)
         publish_device_contact_active(run_dir, manifest, fence)
         try:
@@ -4539,7 +4576,12 @@ def execute(plan: DeviceConfigPlan, request: Request) -> dict:
     try:
         publish_device_contact_starting(run_dir, manifest, fence)
         manifest["status"] = "running"
-        process, capture_stderr, _ = start_accountability_capture(plan.accountability_interface, work_dir)
+        process, capture_stderr, _ = start_accountability_capture(
+            plan.accountability_interface,
+            work_dir,
+            plan.device_address,
+            plan.ssh_port,
+        )
         fence.register_process(process)
         publish_device_contact_active(run_dir, manifest, fence)
         try:

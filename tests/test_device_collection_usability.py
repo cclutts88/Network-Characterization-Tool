@@ -170,6 +170,48 @@ def test_structured_collection_summary_parses_review_sections(tmp_path):
     assert result["commands"] == ["show running-config", "show ip route"]
 
 
+def test_custom_command_analysis_keeps_only_real_cisco_interfaces(tmp_path):
+    config_dir = tmp_path / "device-configs"
+    run_dir = make_collection(config_dir, "8" * 32)
+    commands = [
+        "show running-config",
+        "show ip interface brief",
+        "show ip route",
+        "show clock",
+    ]
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    manifest["commands"] = commands
+    (run_dir / "manifest.json").write_text(json.dumps(manifest))
+    (run_dir / "uploaded-router-config.txt").write_text(
+        """===== show running-config =====
+interface GigabitEthernet0/0
+ ip address 192.0.2.1 255.255.255.0
+interface Loopback0
+ ip address 198.51.100.1 255.255.255.255
+===== show ip interface brief =====
+Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/0     192.0.2.1       YES manual up                    up
+Loopback0              198.51.100.1    YES manual up                    up
+===== show ip route =====
+S* 0.0.0.0/0 [1/0] via 192.0.2.254
+===== show clock =====
+14:21:07.123 UTC Thu Nov 6 2026
+"""
+    )
+
+    result = device_collection_summary("8" * 32, config_dir=config_dir)
+
+    assert [item["name"] for item in result["interfaces"]] == [
+        "GigabitEthernet0/0",
+        "Loopback0",
+    ]
+    assert result["counts"]["interfaces"] == 2
+    assert next(
+        item for item in result["command_results"]
+        if item["command"] == "show clock"
+    )["status"] == "completed"
+
+
 def test_collection_summary_parses_cisco_show_access_lists_output(tmp_path):
     config_dir = tmp_path / "device-configs"
     run_dir = make_collection(config_dir, "a" * 32)

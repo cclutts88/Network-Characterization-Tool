@@ -61,7 +61,7 @@ approval** and **Finished without Nmap** instead of raw internal state. The Emer
 Stop form still requires fresh Administrator verification when authentication is
 enabled, while an explicitly authentication-disabled isolated build uses its existing
 local Administrator role without presenting unusable password fields. The Debian
-Python 3.12 complete application suite passes 2,750 checks with 25 skipped, and all 24
+Python 3.12 complete application suite passes 2,752 checks with 25 skipped, and all 24
 Debian Node 22 browser-runtime scripts pass. The R19 exact-image novice repetition
 halted the gate because authentication-disabled local installs hid the credential
 fields but the request model still rejected their intentionally empty values; the UI
@@ -77,10 +77,39 @@ workers stopped and reconciled the queue; passive pulls, device contact, local
 processing and storage maintenance retain their independent recovery holds. The result
 states whether new scans can start. This correction must pass the exact-image
 Emergency Stop and follow-up scan case before the novice and independent-review gates
-can clear. Backend observation also measured approximately 109 local status reads per
+can clear. R21 exact-image acceptance passed: Emergency Stop released only the scan
+hold, a new safe scan left Pending and became Active, normal Stop cancelled it, its
+cancellation request was durably acknowledged, no scanner process or capacity owner
+remained, and previously completed evidence reopened verified. The backend observer
+rehashes every retained file without a mismatch and found no database error, lock,
+foreign-key problem or server failure. Backend observation also measured approximately 109 local status reads per
 minute while an Active Scan waits for fallback; this is bounded to the visible page
 and is not a correctness blocker, but later efficiency work should back off held-state
 polling or combine status reads without weakening operator feedback.
+
+Device custom-command end-to-end qualification was reopened and halted (2026-11-06): on the exact
+R21 Linux candidate, a novice operator created and applied a reusable Cisco Router
+profile containing the additional read-only `show clock` command, reviewed the exact
+ordered SSH plan, and completed contact with the disposable authorized lab router.
+Collection `06c4d9a3461f4a628d3a805e80b77409` retained a labeled `show clock` output
+section and its accountability packet capture. Device Analysis then generated the
+Per-command collection status section, reported the exact command as Completed with a
+retained-output explanation, and populated interface and route sections. The deeper
+evidence check then found two release blockers: the unfiltered accountability capture
+had also retained the browser-to-NCT password submission, and the Cisco interface
+summary heading was incorrectly presented as an interface named `IP-Address`. R21 is
+therefore not a cleared candidate. Development now restricts packet accountability to
+the exact certified device IPv4 address and SSH port, resets command-boundary parser
+context, and rejects the Cisco interface-summary heading. A fresh exact Linux candidate
+must repeat the live command, prove that the disposable credential is absent from all
+retained and canonical bytes, show only the two real fixture interfaces, and receive
+independent-review clearance before this gate can return to complete.
+Graphite and Sage checks at 950 by 760 pixels retained aligned headers, normal Guide
+typography and no page overflow. Non-blocking usability follow-up remains: translate
+raw command-status identifiers into operator language, give the per-command table a
+specific Guide topic, and retain the suggested scope label in Collection History
+instead of falling back to its internal identifier. These do not affect command
+execution, retained evidence or analysis generation.
 
 Evidence-retirement confirmation parsing tightened in development (2026-11-06): the
 complete regression suite found that a changed final base64url character could, for

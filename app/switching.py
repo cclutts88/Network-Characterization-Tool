@@ -167,6 +167,21 @@ def parse_switch_evidence(text: str, commands: list[str] | None = None) -> dict:
         if not line:
             continue
 
+        # Command boundaries must not carry interface context into the next
+        # output block. Cisco's interface-summary column heading also starts
+        # with "Interface"; it is not a configuration stanza for a port named
+        # ``IP-Address``.
+        if line.startswith("====="):
+            current_interface = None
+            continue
+        if re.match(
+            r"^Interface\s+IP-Address\s+OK\?\s+Method\s+Status\s+Protocol\s*$",
+            line,
+            re.I,
+        ):
+            current_interface = None
+            continue
+
         header = re.match(r"^interface\s+(%s)\b" % IFACE_TOKEN, line, re.I)
         name_header = re.match(r"^Name:\s*(%s)\s*$" % IFACE_TOKEN, line, re.I)
         if header or name_header:

@@ -875,6 +875,12 @@ def test_interactive_device_preview_starts_with_plain_ssh_and_never_contains_a_p
     assert "BatchMode=yes" not in data["ssh_command"]
     assert data["authentication_mode"] == "password_prompt"
     assert "password" not in data["ssh_command"].lower()
+    capture = next(
+        step for step in data["execution_steps"]
+        if step["phase"] == "Start accountability capture"
+    )
+    assert "host 192.0.2.1 and tcp port 22" in capture["command"]
+    assert "certified device SSH endpoint" in capture["detail"]
 
 
 def test_device_name_labels_the_ip_without_changing_the_ssh_target():
