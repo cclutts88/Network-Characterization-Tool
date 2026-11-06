@@ -69,7 +69,8 @@ def staged(tmp_path):
     root = tmp_path / "stage"
     root.mkdir()
     sources = json.loads((SCRIPTS / "nct-package-sources.json").read_text())
-    (root / "release.json").write_text(json.dumps({"commit": "a" * 40, "supported_sources": sources, "images": {"app": "exact-id"}}))
+    (root / "release.json").write_text(json.dumps({"commit": "a" * 40, "supported_sources": sources, "images": {"app": "exact-id"},
+        "existing_install_upgrade": {"route": "independent-recovery-console-first-v1", "application_delivery": "gui_update"}}))
     (root / "image.tar").write_bytes(b"exact image archive")
     package.write_manifest(root)
     return root
@@ -78,7 +79,10 @@ def staged(tmp_path):
 def evidence(root):
     release = json.loads((root / "release.json").read_text())
     result = {"result": "pass", "commit": release["commit"], "tested_manifest_sha256": package.verify_manifest(root)}
-    result["source_results"] = [{**result, "source_build": s["build_id"], "source_commit": s["commit"], "source_schema_version": s["schema_version"], "images": release["images"]} for s in release["supported_sources"]]
+    result["source_results"] = [{**result, "source_build": s["build_id"], "source_commit": s["commit"], "source_schema_version": s["schema_version"], "images": release["images"], "existing_install_upgrade": release.get("existing_install_upgrade"),
+        "source_identity_preserved_during_recovery_setup": True, "source_evidence_preserved_during_recovery_setup": True,
+        "independent_console_handoff_and_sign_in": True, "protected_restore_verified": True,
+        "compatible_recovery_result": s.get("compatible_recovery_result", "used")} for s in release["supported_sources"]]
     return result
 
 
@@ -187,7 +191,7 @@ def test_seal_rejects_changed_or_unaccepted_payload(tmp_path, change):
     assert not output.exists()
 
 
-@pytest.mark.parametrize("damage", ["missing", "duplicate", "image", "manifest", "commit", "version", "failed", "empty_registry", "missing_registry", "duplicate_registry"])
+@pytest.mark.parametrize("damage", ["missing", "duplicate", "image", "manifest", "commit", "version", "failed", "route", "restore", "recovery", "empty_registry", "missing_registry", "duplicate_registry"])
 def test_seal_requires_both_exact_source_acceptances(tmp_path, damage):
     root = staged(tmp_path)
     proof = evidence(root)
@@ -206,8 +210,12 @@ def test_seal_requires_both_exact_source_acceptances(tmp_path, damage):
         proof["source_results"].pop()
     elif damage == "duplicate":
         proof["source_results"].append(proof["source_results"][0])
+    elif damage == "restore":
+        proof["source_results"][0]["protected_restore_verified"] = False
+    elif damage == "recovery":
+        proof["source_results"][0]["compatible_recovery_result"] = "unknown"
     else:
-        key = {"image": "images", "manifest": "tested_manifest_sha256", "commit": "commit", "version": "source_schema_version", "failed": "result"}[damage]
+        key = {"image": "images", "manifest": "tested_manifest_sha256", "commit": "commit", "version": "source_schema_version", "failed": "result", "route": "existing_install_upgrade"}[damage]
         proof["source_results"][0][key] = "changed"
     receipt = tmp_path / "proof.json"
     receipt.write_text(json.dumps(proof))
@@ -325,7 +333,9 @@ def test_bootstrap_checks_before_loading_or_replacing_application():
     assert script.index("sha256sum -c PACKAGE-MANIFEST.sha256") < script.index("docker load")
     assert script.index("openssl verify -CAfile") < script.index("docker load")
     assert "certs/nct-lab-root.crt" in script
-    assert "NCT_PACKAGE_RUNTIME_CLONE" in script
+    assert "Preserving the current release and data through the brief checked restart" in script
+    assert "NCT_PACKAGE_RUNTIME_CLONE" not in script
+    assert "upload the enclosed nct-update tar.gz" in script
 
 
 def test_missing_container_cannot_adopt_nonempty_retained_data(tmp_path):

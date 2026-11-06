@@ -78,8 +78,10 @@ case "$NCT_PERSIST_ROOT" in /|/var|/var/lib|/etc|/root) die "Choose a dedicated 
 NCT_APP_PORT=${NCT_HTTPS_PORT:-8445}
 NCT_CONSOLE_PORT=${NCT_RECOVERY_PORT:-8446}
 export NCT_HTTPS_PORT="$NCT_APP_PORT"
+NCT_EXISTING_SOURCE=0
 "$NCT_RECOVERY_PYTHON" -c 'import sys; p=list(map(int,sys.argv[1:])); assert all(1<=v<=65535 for v in p) and len(set(p))==2' "$NCT_APP_PORT" "$NCT_CONSOLE_PORT" || die "Choose two different valid application and recovery ports."
 if docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
+    NCT_EXISTING_SOURCE=1
     NCT_DATA_TYPE=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}{{end}}{{end}}' "$NCT_TARGET_CONTAINER" )
     NCT_DATA_SOURCE=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$NCT_TARGET_CONTAINER" )
     [ "$NCT_DATA_TYPE" = bind ] && [ "$NCT_DATA_SOURCE" = "$NCT_PERSIST_ROOT/data" ] || die "Existing NCT evidence is not the qualified bind folder. Preserve it and use the documented migration procedure; this package does not reset it."
@@ -159,7 +161,7 @@ if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP
         fi
     elif docker inspect "$NCT_TARGET_CONTAINER" >/dev/null 2>&1; then
         [ "$NCT_SETUP_MODE" != fresh ] || die "An NCT container appeared during fresh setup; no upgrade was attempted."
-        NCT_PACKAGE_RUNTIME_CLONE="$NCT_PACKAGE_ROOT/scripts/nct-clone-release-runtime.py" sh "$NCT_PACKAGE_ROOT/scripts/nct-upgrade.sh" "$NCT_RANGE_IP" docker
+        progress "5/6" "Preserving the current release and data through the brief checked restart needed to add the independent recovery path."
     else
         progress "5/6" "Creating the new HTTPS application and Administrator account."
         NCT_SKIP_IMAGE_LOAD=1 sh "$NCT_PACKAGE_ROOT/scripts/nct-start-docker.sh" "$NCT_RANGE_IP" "${NCT_ADMIN_USER:-admin}"
@@ -167,7 +169,9 @@ if [ "$NCT_SETUP_MODE" = all ] || [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP
 fi
 NCT_EXPECTED_COMMIT=$("$NCT_RECOVERY_PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$NCT_PACKAGE_ROOT/release.json")
 NCT_ACTUAL_COMMIT=$(docker exec "$NCT_TARGET_CONTAINER" python -c 'from app.build_info import BUILD_COMMIT; print(BUILD_COMMIT)')
-[ "$NCT_ACTUAL_COMMIT" = "$NCT_EXPECTED_COMMIT" ] || die "The running application is not this exact release; recovery setup did not run."
+if [ "$NCT_EXISTING_SOURCE" = 0 ] || [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
+    [ "$NCT_ACTUAL_COMMIT" = "$NCT_EXPECTED_COMMIT" ] || die "The running application is not this exact release; recovery setup did not run."
+fi
 NCT_CONSOLE_ID=$(docker image inspect --format '{{.Id}}' "$NCT_CONSOLE_IMAGE")
 set --
 if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
@@ -185,6 +189,8 @@ fi
 progress "6/6" "NCT and its independent recovery service are installed."
 if [ "$NCT_SETUP_MODE" = fresh ] || [ "$NCT_SETUP_MODE" = resume-fresh ]; then
     printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT and sign in once with the new Administrator account to finish."
+elif [ "$NCT_EXISTING_SOURCE" = 1 ]; then
+    printf '%s\n' "The current application was not replaced. Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates, launch the recovery workspace, upload the enclosed nct-update tar.gz, and complete the guarded update there."
 else
     printf '%s\n' "Open https://$NCT_RANGE_IP:$NCT_APP_PORT/settings/updates and verify an existing account to finish."
 fi

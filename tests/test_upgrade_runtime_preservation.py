@@ -143,6 +143,10 @@ def test_failed_readiness_never_claims_acceptance_or_restarts_original():
 
 def test_upgrade_requires_preservation_before_stopping_and_restores_restart_policy():
     source = (SCRIPT.parent / "nct-upgrade.sh").read_text()
+    assert source.index("retirement_probe_status") < source.index('docker stop "$CONTAINER"')
+    assert "requires the independent recovery service for protected updates" in source
+    assert "target update policy could not be verified" in source
+    assert "target update policy returned an unknown result" in source
     assert source.index('"$RUNTIME_CLONE" --check') < source.index('docker stop "$CONTAINER"')
     assert 'NCT_UPGRADE_ACCOUNT_COUNT="$account_count" sh "$start_script"' not in source
     assert 'docker update --restart="$original_restart_policy" "$CONTAINER"' in source

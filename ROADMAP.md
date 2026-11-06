@@ -573,6 +573,36 @@ source before fresh-install and supported retained-upgrade acceptance, sealing a
 standard 48 MiB transfer set. The corrected package metadata, guide and contract checks
 pass 188 focused tests. No package or Range acceptance is claimed yet.
 
+Exact-package upgrade correction started (2026-11-06): the first supported-source
+rehearsal passed package integrity, runtime admission, cold backup and independent
+backup verification, then the new application correctly refused to start because the
+older saved container runtime did not yet contain the newly required independent
+retirement-guard mount and identity. Automatic rollback restored the exact disposable
+source and retained evidence. Correct the terminal/full-package adapter to provision
+the protected host authority before application replacement. The reconciled design
+now preserves the source application and data while the full-package installer adds
+the independent recovery helper and console; the included application update is then
+applied through that guarded browser workspace. The terminal updater fails closed
+before stopping the source when target policy cannot be identified or requires the
+independent recovery service. Re-run both supported upgrades with source identity and
+evidence preservation, browser update and existing-account verification, protected
+restore with later-file quarantine and explicit compatible-runtime recovery when the
+older source cannot enforce retirement state, plus helper upgrade, fresh
+installation and sealing. Do not distribute the staged package or relax retirement
+admission.
+
+Exact-package upgrade correction source gate completed (2026-11-06): the full-package
+existing-install route now installs and verifies the independent recovery path while
+leaving the source application, account and evidence in place. The terminal updater
+fails closed before source stop for a retirement-capable target. Package metadata,
+instructions and sealing receipts bind this recovery-console-first route, and both
+declared pre-guard sources require explicit compatible-runtime recovery after a
+protected restore. Focused package/upgrade tests pass 85 checks, the complete suite
+passes 2,718 tests with 25 expected skips, shell syntax and diff checks pass, and the
+independent reviewer returned CLEAR — DOCUMENTED DEVIATION. Exact image build,
+supported-source rehearsals, helper upgrade, fresh installation, sealing, transfer-part
+reconstruction and Range acceptance remain separate gates.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

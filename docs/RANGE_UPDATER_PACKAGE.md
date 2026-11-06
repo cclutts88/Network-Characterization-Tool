@@ -22,7 +22,11 @@ trusted release source. No software is downloaded during installation.
   `helper_upgrade_source`, use the separate helper/console upgrade below. Do not
   rerun the first-time installer over its saved state.
 - If there is no independent helper installed, use the first-time instructions
-  below for the explicitly supported sources. Other builds need a reviewed bridge.
+  below for the explicitly supported sources. The installer adds and verifies the
+  independent recovery path while preserving the running application, account and
+  evidence. It does not replace the application in the terminal. Afterward, open
+  Updates & Recovery and apply the included `nct-update-….tar.gz` there. Other
+  builds need a reviewed bridge.
 
 ### Existing Fresh-r2 application with Fresh-r3 helper and console
 
@@ -144,7 +148,7 @@ The ZIP contains the complete NCT payload, but does not contain vendor operating
 system packages. Installing that prerequisite and testing the real recovery service
 on the target host remain separate from local package acceptance.
 
-## Check first, then install
+## Add recovery first, then update the application in the browser
 
 Replace `NCT_HOST_IP` with the actual NCT host address. Enter the root shell first,
 then set any environment values below and run both commands in that same shell:
@@ -156,13 +160,20 @@ sh scripts/nct-install-range.sh NCT_HOST_IP
 
 Check mode verifies offline prerequisites, every packaged file, the existing data
 location, supported source release, ports and existing certificate trust before
-changing the application. The install command loads only the verified local images.
-For an existing instance it creates a cold backup, independently verifies the saved
-data, checks the source's exact schema on a disposable copy and upgrades NCT.
-The stopped original container remains available. The replacement preserves the
-original environment, mounts, startup command, ports and complete restart policy;
-its release identity comes from the new image. Retained originals have automatic
-restart disabled. It does not delete evidence, replace accounts or reset passwords.
+changing the application. The install command loads only the verified local images,
+briefly performs the checked restart needed to attach the recovery handoff, and
+installs the independent recovery helper and console. The same source application,
+account, evidence, data path, environment, mounts, startup command, ports and restart
+policy remain in place. It does not apply the new application image, delete evidence,
+replace accounts or reset passwords.
+
+When the terminal reports completion, open NCT → **Account and settings → Updates &
+Recovery → Open update and recovery workspace**. Upload the included
+`nct-update-….tar.gz`, review the identified source and saved-work checks, then apply
+it and verify the existing account. This recovery workspace performs the cold backup,
+schema check, application replacement, retained-evidence verification and protected
+restore if needed. The terminal updater deliberately refuses this retirement-capable
+release before stopping the source application; it is not a fallback update route.
 
 For a genuinely new installation the same command starts the account setup flow;
 it prompts for an administrator password. Do not paste a password into a command.
@@ -188,13 +199,12 @@ Before installing, an administrator must allow the application and recovery port
 from the authorized workstation and prepare trust in the issuing CA. The installer
 does not change firewall policy or disable certificate validation.
 
-After application acceptance, the trusted host installer enables the independent
-recovery service and proves its separate HTTPS endpoint is ready. Collection stays
-paused until you sign in to NCT, open **Account and settings → Updates & Recovery**,
-select **Open update and recovery workspace** and verify an existing NCT account.
-The helper verifies the exact build, saved evidence and readiness, activates normal
-background services through a final restart, and returns you to NCT. The console
-then stops; the small host launcher remains available for later recovery.
+After recovery setup, open **Account and settings → Updates & Recovery**, select
+**Open update and recovery workspace**, upload the included update, review it, apply
+it, and verify an existing NCT account. The helper verifies the exact source, saved
+evidence, backup and new readiness, activates normal background services through a
+final restart, and returns you to NCT. The console then stops; the small host launcher
+remains available for later recovery.
 The application address is `https://NCT_HOST_IP:8445` unless a custom port was
 selected. Enter the existing account under **3. Verify sign-in and finish**, then
 select **Verify sign-in**. Finish by confirming that recovery reports completion, NCT displays the new

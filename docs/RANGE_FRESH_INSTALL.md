@@ -152,8 +152,10 @@ host recovery helper lives under `/opt/nct-recovery` and its service is
 
 For an existing NCT installation, do not use fresh setup as an upgrade or reset.
 Open `release.json` and find the exact installed build and commit in
-`supported_sources`, then use the full ZIP's checked helper/console update route in
-`docs/RANGE_UPDATER_PACKAGE.md`. This package explicitly qualifies the mixed
+`supported_sources`, then use the full ZIP's checked recovery-console-first route in
+`docs/RANGE_UPDATER_PACKAGE.md`. That route preserves the source application while
+installing the independent recovery path, then applies the included GUI update from
+the browser. This package explicitly qualifies the mixed
 controller state named in `helper_upgrade_source`: the Fresh-r2 application with
 the exact Fresh-r3 helper and console. An untouched Fresh-r2 helper/console stack,
 an unlisted build, or any other state must be preserved and reviewed rather than

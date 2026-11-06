@@ -66,6 +66,7 @@ def main():
     if source_version == 8:
         initial[initial.index(args.source_image)] = "network-characterization-tool:0.16.0-range-test-20261025-phase5-r1"
     original_id = engine.command(*initial)
+    original_image_id = engine.inspect(original_id)["Image"]
     app_url, console_url = f"https://{gateway}:18159", f"https://{gateway}:18160"
     probe = Host({"state_dir": str(root / "probe"), "data_dir": str(data), "application_url": app_url,
         "ca_file": str(tls / "certs/nct-lab-root.crt")})
@@ -122,13 +123,35 @@ def main():
             if result.returncode:
                 print((root / "bootstrap.log").read_text()[-18000:], flush=True)
                 raise ValueError("Full package bootstrap failed")
-    assert request("/health")["build_commit"] == release["commit"]
+    assert request("/health")["build_commit"] == source["commit"]
+    preserved = engine.inspect(name)
+    assert preserved["Image"] == original_image_id
+    assert any(m["Source"] == str(data) and m["Destination"] == "/data" for m in preserved["Mounts"])
+    with browser.open(app_url + imported["download_url"], timeout=30) as response:
+        assert response.read() == xml
     handoff = request("/api/updates/launch", {})
     request("/api/exchange", {"code": handoff["url"].split("#handoff=")[1]}, console=True)
-    operation = request("/api/status", console=True)["operation"]
-    assert operation["phase"] == "awaiting_sign_in" and operation["backup_verified"] and operation["evidence_verified"]
+    update = package / release["gui_update"]["file"]
+    with update.open("rb") as stream:
+        with browser.open(urllib.request.Request(
+            console_url + "/api/upload", data=stream,
+            headers={"Content-Type": "application/octet-stream", "Content-Length": str(update.stat().st_size), "X-NCT-Recovery": "1"},
+        ), timeout=180) as response:
+            plan = json.load(response)
+    request("/api/apply", {"plan_digest": plan["plan_digest"]}, console=True)
+    for _ in range(180):
+        operation = request("/api/status", console=True)["operation"]
+        if operation["phase"] == "awaiting_sign_in":
+            break
+        if operation["phase"] in {"failed", "interrupted", "awaiting_restore_sign_in"}:
+            raise AssertionError(operation)
+        time.sleep(1)
+    else:
+        raise AssertionError(operation)
+    assert operation["backup_verified"] and operation["evidence_verified"]
     request("/api/verify-sign-in", {"username": "package-operator", "password": password}, console=True)
     assert request("/api/status", console=True)["operation"]["phase"] == "complete"
+    assert request("/health")["build_commit"] == release["commit"]
     current = engine.inspect(name)
     assert current["Image"] == json.loads(engine.command("image", "inspect", release["application_image"]))[0]["Id"]
     assert engine.inspect(console_name)["Image"] == json.loads(engine.command("image", "inspect", release["console_image"]))[0]["Id"]
@@ -142,6 +165,38 @@ def main():
     assert all(m["Destination"] not in {"/data", "/var/run/docker.sock"} for m in engine.inspect(console_name)["Mounts"])
     retained = json.loads(engine.command("exec", name, "python", "-c", "import json,sqlite3; d=sqlite3.connect('file:/data/analyzer.db?mode=ro',uri=True); print(json.dumps({'artifacts':d.execute('select count(*) from artifact_registry').fetchone()[0],'users':d.execute('select count(*) from analyst_users').fetchone()[0]}))"))
     assert retained["artifacts"] >= 1 and retained["users"] >= 1
+    rollback_handoff = request("/api/updates/launch", {})
+    request("/api/exchange", {"code": rollback_handoff["url"].split("#handoff=")[1]}, console=True)
+    later = data / "later-evidence.txt"
+    later.write_bytes(b"preserve after protected restore")
+    request("/api/rollback", {"confirm": "RESTORE"}, console=True)
+    compatible_restore = False
+    for _ in range(180):
+        restore_operation = request("/api/status", console=True)["operation"]
+        if restore_operation["phase"] == "awaiting_compatible_recovery":
+            compatible_restore = True
+            request("/api/resume-compatible", {"confirm": "START COMPATIBLE RECOVERY"}, console=True)
+        elif restore_operation["phase"] == "awaiting_restore_sign_in":
+            break
+        if restore_operation["phase"] in {"failed", "interrupted"}:
+            raise AssertionError(restore_operation)
+        time.sleep(1)
+    else:
+        raise AssertionError(restore_operation)
+    request("/api/verify-sign-in", {"username": "package-operator", "password": password}, console=True)
+    restored_operation = request("/api/status", console=True)["operation"]
+    assert restored_operation["phase"] == "restored"
+    assert request("/health")["build_commit"] == (release["commit"] if compatible_restore else source["commit"])
+    quarantine = Path(restored_operation["quarantine_path"])
+    assert (quarantine / "later-evidence.txt").read_bytes() == b"preserve after protected restore"
+    with browser.open(app_url + imported["download_url"], timeout=30) as response:
+        assert response.read() == xml
+    restored_runtime = engine.inspect(name)
+    if compatible_restore:
+        assert restored_runtime["Image"] == json.loads(engine.command("image", "inspect", release["application_image"]))[0]["Id"]
+        assert "NCT_RETIREMENT_GUARD_MODE=required" in restored_runtime["Config"]["Env"]
+        assert any(m["Destination"] == "/run/nct-retirement-guard" for m in restored_runtime["Mounts"])
+        assert restored_operation["compatible_recovery"]["build_commit"] == release["commit"]
     request("/api/close", {}, console=True)
     time.sleep(4)
     assert not engine.inspect(console_name)["State"]["Running"]
@@ -168,35 +223,33 @@ def main():
         raise ValueError("Isolated release failed readiness")
     restored = root / "restored-original"
     restored.mkdir()
-    archive_path = next((persist / "deployment/backups").glob("nct-data-*.tar.gz"))
+    restored_data = restored / "data"
+    restored_data.mkdir()
+    archive_path = Path(restored_operation["backup_path"])
     with tarfile.open(archive_path) as archive:
-        archive.extractall(restored, filter="data")
+        archive.extractall(restored_data, filter="data")
     restored_name = name + "-restored"
     engine.command("run", "-d", "--name", restored_name, "--network", "none", "-e", "NCT_AUTH_MODE=local", "-v", f"{restored / 'data'}:/data",
         args.source_image)
     isolated_ready(restored_name)
     engine.command("exec", restored_name, "python", "-c", "import sqlite3; d=sqlite3.connect('/data/analyzer.db'); assert d.execute('select schema_version from nct_schema_state').fetchone()[0]==" + str(source_version) + "; assert d.execute('select count(*) from artifact_registry').fetchone()[0]>=1; assert d.execute('select count(*) from analyst_users').fetchone()[0]>=1")
     engine.command("stop", restored_name)
-    fresh_name = name + "-fresh"
-    fresh_data = root / "fresh-data"
-    fresh_data.mkdir()
-    engine.command("run", "-d", "--name", fresh_name, "--network", "none", "-e", "NCT_AUTH_MODE=local",
-        "-e", "NCT_BOOTSTRAP_ADMIN=fresh-operator", "-e", "NCT_BOOTSTRAP_PASSWORD=" + secrets.token_urlsafe(20), "-v", f"{fresh_data}:/data", release["application_image"])
-    isolated_ready(fresh_name)
-    engine.command("stop", fresh_name)
-    engine.command("start", fresh_name)
-    isolated_ready(fresh_name)
-    engine.command("stop", fresh_name)
     receipt = {"result": "pass", "tested_manifest_sha256": tested, "commit": release["commit"], "build_id": release["build_id"],
         "source_build": source["build_id"], "source_commit": source["commit"], "source_schema_version": source_version,
         "source_migrated_from_schema7": source_version == 8,
         "images": release["images"], "full_shell_bootstrap": True,
+        "existing_install_upgrade": release["existing_install_upgrade"],
+        "source_identity_preserved_during_recovery_setup": True,
+        "source_evidence_preserved_during_recovery_setup": True,
         "issuing_ca_https_verified": True, "retained_account_and_evidence": True,
         "environment_mount_port_and_restart_policy_preserved": True, "protected_empty_bootstrap_mount_preserved": True,
-        "independent_console_handoff_and_sign_in": True, "console_stops_after_return": True,
+        "independent_console_handoff_and_sign_in": True, "protected_restore_verified": True,
+        "compatible_recovery_verified": compatible_restore,
+        "compatible_recovery_result": "used" if compatible_restore else "not-needed",
+        "console_stops_after_return": True,
         "stop_start_sign_in": True, "range_accepted": False, "real_systemd_boot_tested": False,
         "schema_version": 9, "old_image_refuses_schema9": True, "original_backup_booted": True,
-        "original_backup_schema_version": source_version, "fresh_schema9_stop_start": True,
+        "original_backup_schema_version": source_version,
         "test_substitutions": ["administrative fixture peer exclusion", "systemctl launches exact copied service process", "ss replaced; Docker performs actual port admission"]}
     (root / "acceptance.json").write_text(json.dumps(receipt, indent=2))
     print("PASS: full package upgraded exact previous release with retained evidence/accounts/config, enabled independent console using issuing CA, verified sign-in/stop/start and closed console.", flush=True)

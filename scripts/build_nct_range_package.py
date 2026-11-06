@@ -174,6 +174,12 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
         "known_deferred_work": KNOWN_DEFERRED_WORK,
         "retirement_complete": True,
         "range_accepted": False, "kubernetes_updater_available": False}
+    release["existing_install_upgrade"] = {
+        "route": "independent-recovery-console-first-v1",
+        "launcher": "scripts/nct-install-range.sh",
+        "installer_mode": "all",
+        "application_delivery": "gui_update",
+    }
     from build_nct_update import build
     r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
     # Terminal installer acceptance is not GUI-update acceptance.
@@ -200,6 +206,7 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
             "files": {name: digest(output / "scripts" / name) for name in ("nct_update_host.py", "nct_update_work.py", "nct-range-data-check.py")},
             "console_config_digest": "sha256:0606260094f4a81e4227c9809fa8e5c633ad99b88bfe2b3a18c7f3e9febfff7c"}
         release["terminal_install_qualified"] = False
+        release.pop("existing_install_upgrade", None)
         instructions = subprocess.check_output(["git", "-C", str(source), "show", commit + ":docs/RANGE_EVIDENCE_LIBRARY_UPDATE.md"])
         (output / "START-HERE.md").write_bytes(instructions)
         release["source_bindings"] = [b for b in bindings if b["package"] != "START-HERE.md"]
@@ -236,7 +243,23 @@ def seal(root, acceptance, output):
         seen = set()
         for proof in result.get("source_results", []):
             identity = (proof.get("source_build"), proof.get("source_commit"), proof.get("source_schema_version"))
-            if identity not in expected or identity in seen or proof.get("result") != "pass" or proof.get("commit") != release["commit"] or proof.get("tested_manifest_sha256") != tested or proof.get("images") != release["images"]:
+            source_contract = next((source for source in release["supported_sources"] if (
+                source["build_id"], source["commit"], source["schema_version"]
+            ) == identity), None)
+            helper_first = release.get("existing_install_upgrade")
+            required = (() if helper_first is None else (
+                "source_identity_preserved_during_recovery_setup",
+                "source_evidence_preserved_during_recovery_setup",
+                "independent_console_handoff_and_sign_in",
+                "protected_restore_verified",
+            ))
+            if (identity not in expected or identity in seen or proof.get("result") != "pass"
+                or proof.get("commit") != release["commit"]
+                or proof.get("tested_manifest_sha256") != tested
+                or proof.get("images") != release["images"]
+                or proof.get("existing_install_upgrade") != helper_first
+                or not all(proof.get(key) is True for key in required)
+                or (helper_first is not None and proof.get("compatible_recovery_result") != source_contract.get("compatible_recovery_result"))):
                 raise ValueError("Source acceptance is missing, duplicated or bound to different package/images")
             seen.add(identity)
         if seen != expected:

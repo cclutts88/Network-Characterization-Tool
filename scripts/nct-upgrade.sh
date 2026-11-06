@@ -160,6 +160,21 @@ fi
 say "Loading the verified release image..."
 docker load -i "$ARCHIVE" >/dev/null
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "The expected release image was not loaded."
+set +e
+retirement_probe=$(docker run --rm --network none --read-only "$IMAGE" python -c '
+from app.retirement_runtime import OPERATOR_CONTROLS_AVAILABLE
+print("retirement-required" if OPERATOR_CONTROLS_AVAILABLE else "legacy-terminal-compatible")
+')
+retirement_probe_status=$?
+set -e
+[ "$retirement_probe_status" -eq 0 ] || die "The target update policy could not be verified. The current application was not stopped."
+case "$retirement_probe" in
+    retirement-required)
+        die "This release requires the independent recovery service for protected updates. The current application was not stopped. Run the full-package installer to add the recovery console, then apply the enclosed update there."
+        ;;
+    legacy-terminal-compatible) ;;
+    *) die "The target update policy returned an unknown result. The current application was not stopped." ;;
+esac
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p "$BACKUP_DIR"
@@ -290,7 +305,6 @@ start_original_if_needed() {
         return 1
     fi
 }
-
 was_running=$(docker inspect --format '{{.State.Running}}' "$CONTAINER")
 rollback=""
 original_stopped=no
