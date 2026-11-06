@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 
 
@@ -145,13 +146,21 @@ def main():
     # operation before asking the same console to accept an application update.
     request("/api/verify-sign-in", {"username": "package-operator", "password": password}, console=True)
     assert request("/health")["build_commit"] == source["commit"]
+    # Recovery setup is now a completed operation. Reopen the workspace so the
+    # application update has a new, explicit handoff and review session.
+    handoff = request("/api/updates/launch", {})
+    request("/api/exchange", {"code": handoff["url"].split("#handoff=")[1]}, console=True)
     update = package / release["gui_update"]["file"]
-    with update.open("rb") as stream:
-        with browser.open(urllib.request.Request(
-            console_url + "/api/upload", data=stream,
-            headers={"Content-Type": "application/octet-stream", "Content-Length": str(update.stat().st_size), "X-NCT-Recovery": "1"},
-        ), timeout=180) as response:
-            plan = json.load(response)
+    try:
+        with update.open("rb") as stream:
+            with browser.open(urllib.request.Request(
+                console_url + "/api/upload", data=stream,
+                headers={"Content-Type": "application/octet-stream", "Content-Length": str(update.stat().st_size), "X-NCT-Recovery": "1"},
+            ), timeout=180) as response:
+                plan = json.load(response)
+    except urllib.error.HTTPError as exc:
+        print(f"Update upload failed ({exc.code}): {exc.read().decode(errors='replace')}", flush=True)
+        raise
     request("/api/apply", {"plan_digest": plan["plan_digest"]}, console=True)
     for _ in range(180):
         operation = request("/api/status", console=True)["operation"]

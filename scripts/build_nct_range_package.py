@@ -36,6 +36,14 @@ def digest(path):
     return value.hexdigest()
 
 
+def gui_update_sources(supported_sources):
+    """Bind the GUI update to every source the full package supports."""
+    return [
+        {"build_id": source["build_id"], "build_commit": source["commit"]}
+        for source in supported_sources
+    ]
+
+
 def command(*args):
     return subprocess.check_output(args).decode().strip()
 
@@ -182,8 +190,10 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
     }
     from build_nct_update import build
     r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}
-    # Terminal installer acceptance is not GUI-update acceptance.
-    sources = [R4_SOURCE] if existing_r4 else [{k: MIXED_FRESH_R2_R3_SOURCE[k] for k in ("build_id", "build_commit")}]
+    # Terminal installer acceptance is not GUI-update acceptance. The embedded
+    # update must accept every exact source admitted by this full package; a
+    # narrower update contract would make one advertised upgrade path fail.
+    sources = [R4_SOURCE] if existing_r4 else gui_update_sources(release["supported_sources"])
     update = build(image, sources, output / ("nct-update-" + build_id + ".tar.gz"))
     release["gui_update"] = {"file":Path(update["path"]).name,"sha256":update["sha256"]}
     release["helper_upgrade_source"] = dict(MIXED_FRESH_R2_R3_SOURCE)

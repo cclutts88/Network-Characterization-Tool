@@ -65,6 +65,16 @@ def test_release_declares_completed_retirement_contract():
     assert "it does not erase the" in guide
 
 
+def test_gui_update_accepts_every_supported_full_package_source():
+    supported = json.loads((SCRIPTS / "nct-package-sources.json").read_text())
+
+    assert package.gui_update_sources(supported) == [
+        {"build_id": source["build_id"], "build_commit": source["commit"]}
+        for source in supported
+    ]
+    assert len(package.gui_update_sources(supported)) == len(supported) == 2
+
+
 def staged(tmp_path):
     root = tmp_path / "stage"
     root.mkdir()

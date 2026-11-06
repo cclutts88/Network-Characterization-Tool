@@ -642,6 +642,23 @@ finish recovery setup first, confirm the source remains available, then reopen t
 workspace for the separate application update and its own final verification. This
 instruction change is included in the next exact package candidate; R5 remains unsealed.
 
+The first R6 rehearsal completed the initial recovery-setup verification, then the
+console correctly refused the application upload because the automated fixture reused
+the completed setup workspace rather than performing the documented reopen. The
+fixture now obtains a new NCT handoff and exchange for the separate application-update
+operation. The staged R6 payload and its already-correct operator instructions are
+unchanged; R6 remains unsealed until the rerun and remaining routes pass.
+
+The second R6 rehearsal reached the newly reopened application-update workspace and
+then exposed a package-contract mismatch: the full package advertised both approved
+schema-8 source builds, while its embedded GUI update admitted only the later Fresh-r2
+source. The recovery console correctly refused the Recovery-r1 upload before changing
+the application or retained evidence. The full-package writer now derives the GUI
+update's exact source list from the same supported-source registry used by the package,
+with a regression test requiring both contracts to remain equal. R6 is rejected and
+will not be sealed or distributed; the corrected payload requires a new exact candidate
+and the complete acceptance matrix.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
