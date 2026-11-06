@@ -3320,7 +3320,7 @@ def test_operator_readme_explains_scope_continuity_and_scoped_vlan_limits():
 def test_operator_readme_keeps_retirement_foundation_distinct_from_current_controls():
     html = how_nct_works_page().body.decode()
 
-    assert "Retirement foundation, not an operator control" in html
+    assert "Retirement integration, not yet an operator control" in html
     assert "one exact evidence encounter rather than shared file bytes" in html
-    assert "No page uses this storage yet, current delete behavior is unchanged" in html
+    assert "ordinary Arkime lists, coverage, analysis, Hunt comparisons" in html
     assert "no evidence is physically removed" in html

@@ -15,6 +15,10 @@ import sqlite3
 
 from app.database import connect_database
 from app.arkime_evidence import ARKIME_SOURCE_KIND
+from app.evidence_retirement import active_encounter_sql
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT, ARKIME_SUMMARY_IMPORT,
+)
 
 
 MAX_PAGE = 100
@@ -526,8 +530,8 @@ def list_arkime_coverage_windows(
         raise ArkimeCoverageError(f"limit must be between 1 and {MAX_PAGE}")
     if type(offset) is not int or offset < 0:
         raise ArkimeCoverageError("offset must be zero or greater")
-    where = " WHERE scope_id = ?" if scope_id else ""
-    parameters = (scope_id,) if scope_id else ()
+    scope_clause = " AND scope_id = ?" if scope_id else ""
+    scope_parameters = (scope_id,) if scope_id else ()
     try:
         with connect_database(Path(db_path), read_only=True) as db:
             db.row_factory = sqlite3.Row
@@ -541,11 +545,22 @@ def list_arkime_coverage_windows(
                 raise ArkimeCoverageError(
                     "Arkime coverage storage is unavailable; finish Arkime storage setup first"
                 )
+            session_active, session_parameters = active_encounter_sql(
+                ARKIME_SESSIONS_IMPORT, "arkime_imports.import_id",
+            )
+            summary_active, summary_parameters = active_encounter_sql(
+                ARKIME_SUMMARY_IMPORT, "arkime_summary_imports.import_id",
+            )
+            session_where = " WHERE " + session_active + scope_clause
+            summary_where = " WHERE " + summary_active + scope_clause
+            session_values = (*session_parameters, *scope_parameters)
+            summary_values = (*summary_parameters, *scope_parameters)
             session_count = 0 if "arkime_imports" not in tables else int(db.execute(
-                "SELECT COUNT(*) FROM arkime_imports" + where, parameters,
+                "SELECT COUNT(*) FROM arkime_imports" + session_where, session_values,
             ).fetchone()[0])
             summary_count = 0 if "arkime_summary_imports" not in tables else int(db.execute(
-                "SELECT COUNT(*) FROM arkime_summary_imports" + where, parameters,
+                "SELECT COUNT(*) FROM arkime_summary_imports" + summary_where,
+                summary_values,
             ).fetchone()[0])
             if session_count + summary_count > MAX_WINDOWS:
                 raise ArkimeCoverageError(
@@ -553,10 +568,11 @@ def list_arkime_coverage_windows(
                     "choose one Network Scope"
                 )
             sessions = [] if "arkime_imports" not in tables else db.execute(
-                "SELECT * FROM arkime_imports" + where, parameters,
+                "SELECT * FROM arkime_imports" + session_where, session_values,
             ).fetchall()
             summaries = [] if "arkime_summary_imports" not in tables else db.execute(
-                "SELECT * FROM arkime_summary_imports" + where, parameters,
+                "SELECT * FROM arkime_summary_imports" + summary_where,
+                summary_values,
             ).fetchall()
             import_ids = [row["import_id"] for row in sessions]
             observation_ids = [row["observation_id"] for row in sessions]

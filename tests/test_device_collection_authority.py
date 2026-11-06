@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.database import connect_database
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.device_collection_authority import (
     AUTHORITY_MARKER,
     DeviceCollectionDeleted,
@@ -30,6 +31,12 @@ ip route 0.0.0.0 0.0.0.0 192.0.2.1
 """
 
 
+def _database(tmp_path):
+    path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(path)
+    return path
+
+
 def _upload(client: TestClient, filename: str = "router.txt"):
     return client.post(
         "/api/device-configs/upload",
@@ -50,7 +57,7 @@ def test_new_uploads_use_active_authority_and_reuse_one_verified_result(
 ):
     from app import device_analysis, device_configs
 
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -125,7 +132,7 @@ def test_presentation_change_is_visible_but_semantic_change_is_rejected(
 ):
     from app import device_analysis, device_configs
 
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -181,7 +188,7 @@ def test_deletion_tombstone_blocks_analysis_and_can_retry_file_cleanup(
 ):
     from app import device_analysis, device_configs
 
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -258,7 +265,7 @@ def test_changed_registered_bytes_return_integrity_conflict_from_both_summary_ro
 ):
     from app import derived_jobs, device_analysis, device_configs
 
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -291,7 +298,7 @@ def test_failed_upload_is_tombstoned_and_cannot_fall_back_to_legacy(
 ):
     from app import device_configs
 
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)
@@ -344,7 +351,7 @@ def test_rejected_empty_upload_never_creates_authority(tmp_path, monkeypatch):
 
 
 def test_deleted_identity_cannot_be_reactivated(tmp_path):
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     run_id = "c" * 32
     begin_manual_upload_authority(db_path, run_id)
     tombstone_device_collection(db_path, run_id)
@@ -363,7 +370,7 @@ def test_active_authority_cannot_be_downgraded_or_rewritten_during_deletion(
 ):
     from app import device_configs
 
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     config_dir = tmp_path / "device-configs"
     monkeypatch.setattr(device_configs, "DB_PATH", db_path)
     monkeypatch.setattr(device_configs, "CONFIG_DIR", config_dir)

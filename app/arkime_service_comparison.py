@@ -10,6 +10,8 @@ import sqlite3
 from app.arkime_analytics import ArkimeAnalyticsError, _window_context, _parse_utc
 from app.arkime_evidence import MAX_ARKIME_SESSIONS
 from app.database import connect_database
+from app.evidence_retirement import RetiredEvidenceDependency, require_active_encounter
+from app.evidence_retirement_sources import ARKIME_SESSIONS_IMPORT
 from app.foundation_evidence import get_foundation_exact_service_states_snapshot
 
 MAX_CANDIDATE_SERVICES = 10_000
@@ -35,6 +37,10 @@ def compare_unobserved_services(db_path: Path, import_id: str, *, limit=25, offs
         with connect_database(db_path, read_only=True) as db:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN")
+            require_active_encounter(
+                db, source_family=ARKIME_SESSIONS_IMPORT,
+                encounter_id=import_id,
+            )
             record = db.execute("SELECT * FROM arkime_imports WHERE import_id=?", (import_id,)).fetchone()
             if record is None:
                 raise ArkimeAnalyticsError("This comparison requires a retained Sessions import; summary groups are unsupported")
@@ -113,6 +119,8 @@ def compare_unobserved_services(db_path: Path, import_id: str, *, limit=25, offs
                 result.append({"address": row["address"], "entity_id": row["entity_id"], "protocol": row["protocol"], "port": row["port"], "label": ("Traffic comparison unresolved: destination fields are missing in some receipts" if include_traffic and key[0] in uncertain_destinations else "No traffic recorded in this selected source" if include_traffic else "No destination traffic in this selected source"), "traffic_status": ("unresolved" if include_traffic and key[0] in uncertain_destinations else "not_recorded"), "retained_session_rows": None if include_traffic and key[0] in uncertain_destinations else 0, "first_packet": None, "last_packet": None, "span_milliseconds": None, "packet_count": {"total": None, "known_subtotal": None, "missing_rows": 0}, "byte_count": {"total": None, "known_subtotal": None, "missing_rows": 0}, "active_label": "Nmap reported open", "active_source": evidence["source"], "evidence_windows": _window_context(record, evidence), "selection_revision": selection["selection_revision"]})
             return {"contract": "arkime-service-utilization:1" if include_traffic else "arkime-unobserved-services:1", "import_id": import_id, "candidate_revision": revision, "scope": {"scope_id": record["scope_id"], "label": record["scope_label"], "version": record["scope_version"]}, "operator_sensor": record["operator_sensor"], "query_start": record["query_start"], "query_end": record["query_end"], "export_completeness": record["calculated_export_completeness"], "capture_coverage": record["capture_coverage"], "raw_url": f"/api/arkime/imports/{import_id}/raw", "note": NOTE, "rows": result, "checked_candidates": len(candidates), "pagination": {"offset": offset, "limit": limit, "candidate_total": total, "has_more": offset + len(candidates) < total}, "read_only": True}
     except (sqlite3.Error, ValueError) as exc:
+        if isinstance(exc, RetiredEvidenceDependency):
+            raise
         if isinstance(exc, ArkimeAnalyticsError):
             raise
         raise ArkimeAnalyticsError("Retained comparison is unavailable: " + str(exc)) from exc

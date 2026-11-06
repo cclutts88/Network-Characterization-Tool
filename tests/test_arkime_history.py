@@ -17,7 +17,18 @@ from app.arkime_history import (
     list_arkime_histories,
 )
 from app.database import connect_database
-from app.network_scopes import archive_network_scope, create_network_scope
+from app.evidence_retirement import (
+    RetiredEvidenceDependency, init_evidence_retirement_storage, retire_evidence,
+)
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT, adapter_for_source,
+)
+from app.network_scopes import archive_network_scope, create_network_scope as _create_network_scope
+
+
+def create_network_scope(db, **values):
+    init_evidence_retirement_storage(db)
+    return _create_network_scope(db, **values)
 
 
 @pytest.fixture
@@ -126,6 +137,117 @@ def test_history_deduplicates_exact_records_and_preserves_unknown_capture(
     assert filtered["unfiltered_path_total"] == 2
     assert filtered["pagination"]["total"] == 1
     assert filtered["paths"][0]["destination_port"] == 8443
+
+
+def test_retired_source_hides_saved_history_but_preserves_audit_rows(
+    configured, tmp_path,
+):
+    db = tmp_path / "retired-history.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    profile = _profile(db, scope["scope_id"])
+    run = _pull(db, profile["profile_id"], [_row("segment-a")])
+    built = build_arkime_history(db, run["run_id"], actor="analyst")
+
+    retire_evidence(
+        db, source_family=ARKIME_SESSIONS_IMPORT,
+        encounter_id=run["import_id"], actor="analyst",
+        reason="wrong retained capture", adapter=adapter_for_source(
+            ARKIME_SESSIONS_IMPORT,
+        ),
+    )
+
+    assert list_arkime_histories(db)["pagination"]["total"] == 0
+    with pytest.raises(RetiredEvidenceDependency):
+        get_arkime_history(db, built["result_id"])
+    with pytest.raises(RetiredEvidenceDependency):
+        get_arkime_history_record_exclusions(db, built["result_id"])
+    with pytest.raises(RetiredEvidenceDependency):
+        get_arkime_history_path_evidence(
+            db, built["result_id"], built["paths"][0]["path_key"],
+        )
+    with pytest.raises(RetiredEvidenceDependency):
+        build_arkime_history(db, run["run_id"], actor="analyst")
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM arkime_pull_runs"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM arkime_history_generations"
+        ).fetchone()[0] == 1
+
+
+def test_stream_selector_skips_retired_anchor_and_hides_retired_only_stream(
+    configured, tmp_path,
+):
+    db = tmp_path / "retired-stream-selector.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    profile = _profile(db, scope["scope_id"])
+    first = _pull(db, profile["profile_id"], [_row("segment-a")])
+    second = _pull(db, profile["profile_id"], [_row("segment-b")])
+    runs = {first["run_id"]: first, second["run_id"]: second}
+    selected = list_arkime_history_streams(db)["items"][0]["anchor_run_id"]
+    remaining = next(run_id for run_id in runs if run_id != selected)
+
+    retire_evidence(
+        db, source_family=ARKIME_SESSIONS_IMPORT,
+        encounter_id=runs[selected]["import_id"], actor="analyst",
+        reason="wrong latest capture", adapter=adapter_for_source(
+            ARKIME_SESSIONS_IMPORT,
+        ),
+    )
+
+    stream = list_arkime_history_streams(db)["items"][0]
+    assert stream["anchor_run_id"] == remaining
+    assert stream["pull_count"] == 1
+    assert stream["complete_pull_count"] == 1
+    with pytest.raises(RetiredEvidenceDependency):
+        build_arkime_history(db, selected, actor="analyst")
+
+    only_db = tmp_path / "retired-only-stream.db"
+    only_scope = create_network_scope(only_db, label="Only", created_by="admin")
+    only_profile = _profile(only_db, only_scope["scope_id"])
+    only = _pull(only_db, only_profile["profile_id"], [_row("only")])
+    retire_evidence(
+        only_db, source_family=ARKIME_SESSIONS_IMPORT,
+        encounter_id=only["import_id"], actor="analyst",
+        reason="wrong only capture", adapter=adapter_for_source(
+            ARKIME_SESSIONS_IMPORT,
+        ),
+    )
+    assert list_arkime_history_streams(only_db)["pagination"]["total"] == 0
+
+
+def test_retirement_between_history_snapshot_and_publish_blocks_generation(
+    configured, monkeypatch, tmp_path,
+):
+    db = tmp_path / "retired-history-race.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    profile = _profile(db, scope["scope_id"])
+    run = _pull(db, profile["profile_id"], [_row("segment-a")])
+    original_prepare = history_module.prepare_derived_result
+    retired = False
+
+    def retire_before_publish(*args, **kwargs):
+        nonlocal retired
+        prepared = original_prepare(*args, **kwargs)
+        if not retired:
+            retired = True
+            retire_evidence(
+                db, source_family=ARKIME_SESSIONS_IMPORT,
+                encounter_id=run["import_id"], actor="analyst",
+                reason="retired during calculation", adapter=adapter_for_source(
+                    ARKIME_SESSIONS_IMPORT,
+                ),
+            )
+        return prepared
+
+    monkeypatch.setattr(history_module, "prepare_derived_result", retire_before_publish)
+    with pytest.raises(ArkimeHistoryConflict, match="changed during calculation"):
+        build_arkime_history(db, run["run_id"], actor="analyst")
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM arkime_history_generations"
+        ).fetchone()[0] == 0
 
 
 def test_history_calculation_has_a_bounded_source_set(monkeypatch, tmp_path):

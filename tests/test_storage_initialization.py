@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from app.database import configure_database, connect_database, initialize_once_per_database
+from app.evidence_retirement import init_evidence_retirement_storage
 
 
 CASES = [
@@ -20,11 +21,17 @@ CASES = [
 ]
 
 
+def initialize_dependencies(module_name, path):
+    if module_name == 'arkime_history':
+        init_evidence_retirement_storage(path)
+
+
 @pytest.mark.parametrize('module,initializer,read', CASES, ids=[c[0] for c in CASES])
 def test_initialized_views_read_during_writer_without_schema_work(tmp_path, monkeypatch, module, initializer, read):
     module = importlib.import_module('app.' + module)
     path = tmp_path / 'analyzer.db'
     configure_database(path)
+    initialize_dependencies(module.__name__.removeprefix('app.'), path)
     getattr(module, initializer)(path)
     expected = read(module, path)
     with connect_database(path) as writer:
@@ -51,12 +58,14 @@ def test_initialized_views_read_during_writer_without_schema_work(tmp_path, monk
 def test_module_initializes_replaced_database(tmp_path, module, initializer, read):
     module = importlib.import_module('app.' + module)
     path = tmp_path / 'analyzer.db'
+    initialize_dependencies(module.__name__.removeprefix('app.'), path)
     getattr(module, initializer)(path)
     expected = read(module, path)
     replacement = tmp_path / 'replacement.db'
     with connect_database(replacement) as db:
         db.execute('CREATE TABLE replacement_marker (value TEXT)')
     replacement.replace(path)
+    initialize_dependencies(module.__name__.removeprefix('app.'), path)
     getattr(module, initializer)(path)
     assert read(module, path) == expected
 

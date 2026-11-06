@@ -10,6 +10,7 @@ from app.database import connect_database
 from app.device_observations import assign_device_scope
 from app.evidence_scope_assignments import correct_artifact_scope
 from app.evidence_scope_assignments import assign_artifact_scope
+from app.evidence_retirement import init_evidence_retirement_storage
 from app.ingestion_status import list_ingestion_status
 from app.main import app
 from app.network_scopes import create_network_scope
@@ -28,6 +29,12 @@ def _item(page, source_kind):
     return next(item for item in page["items"] if item["source_kind"] == source_kind)
 
 
+def _database(tmp_path):
+    path = tmp_path / "analyzer.db"
+    init_evidence_retirement_storage(path)
+    return path
+
+
 def test_missing_database_is_a_bounded_empty_snapshot(tmp_path):
     page = list_ingestion_status(tmp_path / "missing.db", limit=999, offset=-5)
     assert page == {
@@ -42,7 +49,7 @@ def test_missing_database_is_a_bounded_empty_snapshot(tmp_path):
 
 
 def test_duplicate_manual_encounters_stay_separate_and_history_is_not_adopted(tmp_path):
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     for position in range(2):
         register_artifact_bytes(
             db_path=db_path, content=XML, source_kind="nmap_import",
@@ -214,7 +221,7 @@ def test_status_read_does_not_change_pipeline_records(tmp_path):
 
 
 def test_admission_cannot_borrow_another_encounters_completed_job(tmp_path):
-    db_path = tmp_path / "analyzer.db"
+    db_path = _database(tmp_path)
     first = register_artifact_bytes(
         db_path=db_path, content=XML, source_kind="nmap_import",
         source_ref="first", original_filename="first.xml", actor="analyst",

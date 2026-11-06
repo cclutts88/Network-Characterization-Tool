@@ -27,6 +27,8 @@ from app.artifacts import (
 )
 from app.database import connect_database, initialize_once_per_database
 from app.evidence_maintenance import guarded_evidence_mutation
+from app.evidence_retirement import active_encounter_sql, require_active_encounter
+from app.evidence_retirement_sources import ARKIME_SESSIONS_IMPORT
 from app.network_scopes import init_network_scope_storage
 
 
@@ -686,8 +688,15 @@ def list_arkime_imports(
         raise ArkimeEvidenceError(f"limit must be between 1 and {MAX_PAGE}")
     if type(offset) is not int or offset < 0:
         raise ArkimeEvidenceError("offset must be zero or greater")
-    where = " WHERE scope_id = ?" if scope_id else ""
-    parameters = (scope_id,) if scope_id else ()
+    active, active_parameters = active_encounter_sql(
+        ARKIME_SESSIONS_IMPORT, "arkime_imports.import_id",
+    )
+    clauses = [active]
+    parameters: tuple[object, ...] = active_parameters
+    if scope_id:
+        clauses.append("scope_id = ?")
+        parameters += (scope_id,)
+    where = " WHERE " + " AND ".join(clauses)
     with connect_database(db_path, read_only=True) as db:
         db.row_factory = sqlite3.Row
         db.execute("BEGIN")
@@ -727,6 +736,9 @@ def get_arkime_import(
     with connect_database(db_path, read_only=True) as db:
         db.row_factory = sqlite3.Row
         db.execute("BEGIN")
+        require_active_encounter(
+            db, source_family=ARKIME_SESSIONS_IMPORT, encounter_id=import_id,
+        )
         record = db.execute(
             "SELECT * FROM arkime_imports WHERE import_id = ?", (import_id,)
         ).fetchone()
@@ -771,6 +783,9 @@ def get_arkime_import(
 def arkime_raw_source(db_path: Path, import_id: str) -> dict:
     with connect_database(db_path, read_only=True) as db:
         db.row_factory = sqlite3.Row
+        require_active_encounter(
+            db, source_family=ARKIME_SESSIONS_IMPORT, encounter_id=import_id,
+        )
         row = db.execute(
             """SELECT ai.observation_id, ao.source_kind, ao.source_ref,
                       ao.observed_at, ao.original_filename, ao.actor,

@@ -19,6 +19,12 @@ from app.arkime_evidence import (
     parse_arkime_sessions_json,
 )
 from app.database import connect_database
+from app.evidence_retirement import (
+    RetiredEvidenceDependency, init_evidence_retirement_storage, retire_evidence,
+)
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT, adapter_for_source,
+)
 from app.network_scopes import archive_network_scope, create_network_scope
 
 
@@ -45,6 +51,45 @@ def session_row(*, session_id="session-1", source="192.0.2.10", destination="198
     }
 
 
+def test_retired_import_is_hidden_but_same_content_sibling_remains(tmp_path):
+    db = tmp_path / "nct.db"
+    destination = scope(db)
+    first = ingest(db, destination)
+    second = ingest(db, destination)
+
+    retire_evidence(
+        db, source_family=ARKIME_SESSIONS_IMPORT,
+        encounter_id=first["import_id"], actor="analyst",
+        reason="wrong retained capture", adapter=adapter_for_source(
+            ARKIME_SESSIONS_IMPORT,
+        ),
+    )
+
+    listing = list_arkime_imports(db)
+    assert [item["import_id"] for item in listing["items"]] == [second["import_id"]]
+    with pytest.raises(RetiredEvidenceDependency):
+        get_arkime_import(db, first["import_id"])
+    with pytest.raises(RetiredEvidenceDependency):
+        arkime.arkime_raw_source(db, first["import_id"])
+    assert get_arkime_import(db, second["import_id"])["returned_count"] == 1
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM arkime_imports").fetchone()[0] == 2
+
+
+def test_arkime_storage_initializer_does_not_recreate_missing_retirement_ledger(
+    tmp_path,
+):
+    db = tmp_path / "missing-retirement-ledger.db"
+    init_arkime_evidence_storage(db)
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='evidence_retirement_events'"
+        ).fetchone() is None
+    with pytest.raises(sqlite3.OperationalError, match="evidence_retirement_events"):
+        list_arkime_imports(db)
+
+
 def export_bytes(rows=None, *, filtered=None, total=None):
     rows = [session_row()] if rows is None else rows
     body = {"data": rows}
@@ -56,6 +101,7 @@ def export_bytes(rows=None, *, filtered=None, total=None):
 
 
 def scope(db, label="Range enclave"):
+    init_evidence_retirement_storage(db)
     return create_network_scope(db, label=label, created_by="scope-admin")
 
 

@@ -20,6 +20,8 @@ from app.derived_results import (
     init_derived_result_storage, prepare_derived_result, publish_derived_result,
 )
 from app.database import connect_database, initialize_once_per_database
+from app.evidence_retirement import active_encounter_sql, require_active_encounter
+from app.evidence_retirement_sources import ARKIME_SESSIONS_IMPORT
 
 
 MAX_PAGE = 100
@@ -251,6 +253,9 @@ def _guard_stream_authority(db: sqlite3.Connection, stream: dict) -> None:
 def _candidate_rows(db: sqlite3.Connection, stream: dict) -> list[sqlite3.Row]:
     db.row_factory = sqlite3.Row
     where = " AND ".join(f"r.{field}=?" for field in STREAM_FIELDS)
+    active, active_parameters = active_encounter_sql(
+        ARKIME_SESSIONS_IMPORT, "ai.import_id",
+    )
     return db.execute(f"""
         SELECT r.*, ai.observation_id, ai.calculated_export_completeness,
                ai.operator_export_assessment, ai.capture_coverage,
@@ -274,9 +279,14 @@ def _candidate_rows(db: sqlite3.Connection, stream: dict) -> list[sqlite3.Row]:
           LEFT JOIN arkime_pull_profile_versions v
             ON v.profile_id=r.profile_id AND v.version=r.profile_version
          WHERE {where}
+           AND (ai.import_id IS NULL OR {active})
          ORDER BY r.queued_at, r.run_id
          LIMIT ?
-    """, (*tuple(stream[field] for field in STREAM_FIELDS), MAX_HISTORY_SOURCES + 1)).fetchall()
+    """, (
+        *tuple(stream[field] for field in STREAM_FIELDS),
+        *active_parameters,
+        MAX_HISTORY_SOURCES + 1,
+    )).fetchall()
 
 
 def _source_reason(row: sqlite3.Row) -> str | None:
@@ -538,6 +548,11 @@ def build_arkime_history(db_path: Path, anchor_run_id: str, *, actor: str) -> di
             anchor = db.execute("SELECT * FROM arkime_pull_runs WHERE run_id=?", (anchor_run_id,)).fetchone()
             if anchor is None:
                 raise KeyError("Arkime pull run not found")
+            if anchor["import_id"]:
+                require_active_encounter(
+                    db, source_family=ARKIME_SESSIONS_IMPORT,
+                    encounter_id=str(anchor["import_id"]),
+                )
             stream = _stream(anchor)
             stream_id = _stream_identity(stream)
             if stream["dataset_identity"] in {"unverified", "legacy-unverified"}:
@@ -750,11 +765,17 @@ def list_arkime_history_streams(
     limit = _page(limit, "limit", minimum=1, maximum=MAX_PAGE)
     offset = _page(offset, "offset", minimum=0)
     partitions = ",".join(f"r.{field}" for field in STREAM_FIELDS)
+    active, active_parameters = active_encounter_sql(
+        ARKIME_SESSIONS_IMPORT, "r.import_id",
+    )
+    eligible = f"(r.import_id IS NULL OR {active})"
     with connect_database(db_path, read_only=True) as db:
         db.row_factory = sqlite3.Row
         total = db.execute(f"""SELECT COUNT(*) FROM (
-            SELECT 1 FROM arkime_pull_runs r GROUP BY {partitions}
-        )""").fetchone()[0]
+            SELECT 1 FROM arkime_pull_runs r
+             WHERE {eligible}
+             GROUP BY {partitions}
+        )""", active_parameters).fetchone()[0]
         rows = db.execute(f"""WITH ranked AS (
             SELECT r.*, v.name AS profile_name,
                    ROW_NUMBER() OVER (
@@ -767,9 +788,11 @@ def list_arkime_history_streams(
               FROM arkime_pull_runs r
               JOIN arkime_pull_profile_versions v
                 ON v.profile_id=r.profile_id AND v.version=r.profile_version
+             WHERE {eligible}
         )
         SELECT * FROM ranked WHERE stream_rank=1
-         ORDER BY queued_at DESC, run_id DESC LIMIT ? OFFSET ?""", (limit, offset)).fetchall()
+         ORDER BY queued_at DESC, run_id DESC LIMIT ? OFFSET ?""",
+            (*active_parameters, limit, offset)).fetchall()
     streams = []
     for row in rows:
         stream = _stream(row)
@@ -799,14 +822,29 @@ def list_arkime_histories(
         or any(character not in "0123456789abcdef" for character in stream_identity.lower())
     ):
         raise ArkimeHistoryError("stream_identity must be a SHA-256 value")
-    where = " WHERE stream_identity=?" if stream_identity else ""
-    parameters = (stream_identity,) if stream_identity else ()
+    active = """NOT EXISTS (
+        SELECT 1 FROM arkime_history_sources source
+        JOIN evidence_retirement_events retired
+          ON retired.source_family=?
+         AND retired.encounter_id=source.import_id
+         AND retired.sealed=1
+        WHERE source.result_id=generation.result_id
+          AND source.disposition='included'
+    )"""
+    clauses = [active]
+    parameters: tuple[object, ...] = (ARKIME_SESSIONS_IMPORT,)
+    if stream_identity:
+        clauses.append("generation.stream_identity=?")
+        parameters += (stream_identity,)
+    where = " WHERE " + " AND ".join(clauses)
     with connect_database(db_path, read_only=True) as db:
         db.row_factory = sqlite3.Row
         total = db.execute(
-            f"SELECT COUNT(*) FROM arkime_history_generations{where}", parameters,
+            f"SELECT COUNT(*) FROM arkime_history_generations generation{where}",
+            parameters,
         ).fetchone()[0]
-        rows = db.execute(f"""SELECT * FROM arkime_history_generations{where}
+        rows = db.execute(f"""SELECT generation.*
+            FROM arkime_history_generations generation{where}
             ORDER BY generated_at DESC, result_id DESC LIMIT ? OFFSET ?""",
             (*parameters, limit, offset)).fetchall()
     return {
@@ -824,6 +862,22 @@ def _generation_dict(row: sqlite3.Row) -> dict:
                   "version": int(row["scope_version"])},
         "detail_url": f"/api/arkime/history/{row['result_id']}",
     }
+
+
+def _require_active_history_sources(
+    db: sqlite3.Connection, result_id: str,
+) -> None:
+    rows = db.execute(
+        """SELECT import_id FROM arkime_history_sources
+            WHERE result_id=? AND disposition='included'
+            ORDER BY import_id""",
+        (result_id,),
+    ).fetchall()
+    for source in rows:
+        require_active_encounter(
+            db, source_family=ARKIME_SESSIONS_IMPORT,
+            encounter_id=str(source[0]),
+        )
 
 
 def get_arkime_history(
@@ -857,6 +911,7 @@ def get_arkime_history(
         row = db.execute("SELECT * FROM arkime_history_generations WHERE result_id=?", (result_id,)).fetchone()
         if row is None:
             raise KeyError("Arkime communication history not found")
+        _require_active_history_sources(db, result_id)
         unfiltered_total = db.execute(
             "SELECT COUNT(*) FROM arkime_history_paths WHERE result_id=?", (result_id,),
         ).fetchone()[0]
@@ -915,6 +970,7 @@ def get_arkime_history_record_exclusions(
         ).fetchone()
         if exists is None:
             raise KeyError("Arkime communication history not found")
+        _require_active_history_sources(db, result_id)
         total = db.execute(
             "SELECT COUNT(*) FROM arkime_history_record_exclusions WHERE result_id=?",
             (result_id,),
@@ -952,6 +1008,13 @@ def get_arkime_history_path_evidence(
     offset = _page(offset, "offset", minimum=0)
     with connect_database(db_path, read_only=True) as db:
         db.row_factory = sqlite3.Row
+        history = db.execute(
+            "SELECT 1 FROM arkime_history_generations WHERE result_id=?",
+            (result_id,),
+        ).fetchone()
+        if history is None:
+            raise KeyError("Arkime communication history not found")
+        _require_active_history_sources(db, result_id)
         exists = db.execute("SELECT 1 FROM arkime_history_paths WHERE result_id=? AND path_key=?", (result_id, path_key)).fetchone()
         if exists is None:
             raise KeyError("Arkime communication path not found")

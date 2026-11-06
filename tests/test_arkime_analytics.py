@@ -16,13 +16,46 @@ from app.arkime_analytics import (
 from app.arkime_evidence import import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
 from app.database import connect_database
+from app.evidence_retirement import (
+    RetiredEvidenceDependency, init_evidence_retirement_storage, retire_evidence,
+)
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT, adapter_for_source,
+)
 from app.evidence_scope_assignments import assign_artifact_scope, correct_artifact_scope
 from app.foundation_evidence import get_foundation_scope_evidence
-from app.network_scopes import archive_network_scope, create_network_scope
+from app.network_scopes import archive_network_scope, create_network_scope as _create_network_scope
 
 
 START = "2030-01-01T00:00:00+00:00"
 END = "2030-01-01T02:00:00+00:00"
+
+
+def create_network_scope(db, **values):
+    init_evidence_retirement_storage(db)
+    return _create_network_scope(db, **values)
+
+
+def test_retired_sessions_source_cannot_feed_analytics_hunt_or_comparison(tmp_path):
+    from app.arkime_service_comparison import compare_unobserved_services
+
+    db = tmp_path / "retired-analytics.db"
+    scope = create_network_scope(db, label="One", created_by="admin")
+    imported = _import_sessions(db, scope)
+    retire_evidence(
+        db, source_family=ARKIME_SESSIONS_IMPORT,
+        encounter_id=imported["import_id"], actor="analyst",
+        reason="wrong retained capture", adapter=adapter_for_source(
+            ARKIME_SESSIONS_IMPORT,
+        ),
+    )
+
+    with pytest.raises(RetiredEvidenceDependency):
+        analyze_arkime_import(db, imported["import_id"])
+    with pytest.raises(RetiredEvidenceDependency):
+        build_hunt_arkime_context(db, imported["import_id"])
+    with pytest.raises(RetiredEvidenceDependency):
+        compare_unobserved_services(db, imported["import_id"])
 
 
 def test_unified_utilization_keeps_observed_and_nmap_only_services(tmp_path):

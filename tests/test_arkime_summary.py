@@ -18,6 +18,12 @@ from app.arkime_summary import (
     parse_arkime_summary_csv,
 )
 from app.database import connect_database
+from app.evidence_retirement import (
+    RetiredEvidenceDependency, init_evidence_retirement_storage, retire_evidence,
+)
+from app.evidence_retirement_sources import (
+    ARKIME_SUMMARY_IMPORT, adapter_for_source,
+)
 from app.network_scopes import archive_network_scope, create_network_scope
 
 
@@ -31,7 +37,35 @@ def csv_bytes(*rows: str) -> bytes:
 
 
 def network_scope(db, label="Range enclave"):
+    init_evidence_retirement_storage(db)
     return create_network_scope(db, label=label, created_by="scope-admin")
+
+
+def test_retired_summary_is_hidden_but_same_content_sibling_remains(tmp_path):
+    db = tmp_path / "nct.db"
+    scope_record = network_scope(db)
+    first = ingest(db, scope_record)
+    second = ingest(db, scope_record)
+
+    retire_evidence(
+        db, source_family=ARKIME_SUMMARY_IMPORT,
+        encounter_id=first["import_id"], actor="analyst",
+        reason="wrong retained summary", adapter=adapter_for_source(
+            ARKIME_SUMMARY_IMPORT,
+        ),
+    )
+
+    listing = list_arkime_summary_imports(db)
+    assert [item["import_id"] for item in listing["items"]] == [second["import_id"]]
+    with pytest.raises(RetiredEvidenceDependency):
+        get_arkime_summary_import(db, first["import_id"])
+    with pytest.raises(RetiredEvidenceDependency):
+        summary.arkime_summary_raw_source(db, first["import_id"])
+    assert get_arkime_summary_import(db, second["import_id"])["returned_count"] == 1
+    with connect_database(db, read_only=True) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM arkime_summary_imports"
+        ).fetchone()[0] == 2
 
 
 def ingest(db, scope_record, *, content=None, sensor="range summary sensor", **changes):

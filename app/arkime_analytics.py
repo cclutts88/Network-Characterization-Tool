@@ -10,6 +10,10 @@ import re
 import sqlite3
 
 from app.database import connect_database
+from app.evidence_retirement import require_active_encounter
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT, ARKIME_SUMMARY_IMPORT,
+)
 from app.foundation_evidence import get_foundation_exact_service_states_snapshot
 
 
@@ -1048,6 +1052,10 @@ def analyze_arkime_import(
             if session is None and summary is None:
                 raise KeyError("Arkime import not found")
             if session is not None:
+                require_active_encounter(
+                    db, source_family=ARKIME_SESSIONS_IMPORT,
+                    encounter_id=import_id,
+                )
                 rows = db.execute(
                     "SELECT * FROM arkime_session_receipts WHERE import_id=? "
                     "ORDER BY source_ordinal", (import_id,),
@@ -1071,6 +1079,10 @@ def analyze_arkime_import(
                 completeness = session["calculated_export_completeness"]
                 record = session
             else:
+                require_active_encounter(
+                    db, source_family=ARKIME_SUMMARY_IMPORT,
+                    encounter_id=import_id,
+                )
                 rows = db.execute(
                     "SELECT * FROM arkime_summary_receipts WHERE import_id=? "
                     "ORDER BY source_ordinal", (import_id,),

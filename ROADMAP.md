@@ -46,15 +46,17 @@ contradictory copies before combining any bytes.
 This removes the prior choice about which small files belong on the controller while
 preserving the 48 MiB pieces, sealed ZIP and non-installing join behavior. Twenty
 focused transfer checks pass, including missing, linked, wrong-transfer and
-contradictory identity records plus missing, linked and changed readmes. The broader
-package selection excluding the known schema regression passed another 118 checks.
+contradictory identity records plus missing, linked and changed readmes.
 Independent review initially halted the substring-based identity check; after the
 controller record and readme were bound byte-for-byte, it independently reproduced
-all 20 focused checks and returned CLEAR for this bounded transfer cleanup. The broader
-package gate still has six existing schema-9 historical migration test failures outside
-this transfer diff; therefore this refinement remains
-development-only and must not be used to claim a new qualified or Range-ready package
-until that gate is repaired and repeated. No package or Range was changed.
+all 20 focused checks and returned CLEAR for this bounded transfer cleanup. During the
+combined gate, six schema-9 historical migration cases exposed that in-progress Arkime
+retirement test setup was creating the ledger at the wrong schema stage. The primary
+agent removed that cross-version initialization, kept production fail-closed and made
+isolated fixtures create the ledger explicitly. All six cases now pass and the complete
+transfer, full-package and Range-operator gate passes 124 checks. This refinement is
+development-only: no package was created or qualified, no Range was changed and the
+later complete application/operator release gate is still required.
 
 Cross-evidence retirement contract added to the stabilization gate (2026-11-05):
 Nmap scans, device-configuration collections, Arkime captures and imported evidence
@@ -186,6 +188,28 @@ including eight explicit retirement race, retry and sibling regressions. The ind
 reviewer reproduced six focused cases and returned CLEAR. The remaining Arkime,
 hostname, Searchsploit, Inventory, Hunt, Reach, Map, comparison, export and cache surfaces
 are still in progress; no operator retirement control or Range package is ready.
+
+Cross-evidence retirement active-source Gate C Arkime slice completed in development
+(2026-11-05): ordinary Arkime Sessions and Summary import lists, detail and verified
+raw-source access, retained-window coverage, exact-source traffic analytics, Hunt
+context and saved-service utilization now require an active exact import encounter.
+Automatic communication-history calculation excludes retired imports, rechecks the
+same active source set inside the publication transaction and refuses a source retired
+between calculation and publication. Existing saved history that depends on a retired
+source is no longer reusable or exposed through ordinary history, exclusion or path-
+evidence views. The immutable Arkime import, connector pull, history generation and
+retirement receipts remain stored for the later audit presentation; retirement does
+not delete source bytes or rewrite history. A separate active import with identical
+bytes remains independently usable. All 129 focused Arkime import, summary, analytics,
+coverage and history checks pass, including same-content siblings, coverage removal,
+direct-open refusal, derived-view refusal, saved-history hiding and the publication
+race. The built-in How NCT Works guide now states the implemented boundary. Independent
+review initially halted three ordinary-history and fail-closed gaps. After correction,
+the reviewer independently reproduced the retirement-focused cases and returned CLEAR.
+The complete application regression suite passes 2,605 tests with 25 intentionally
+skipped checks. Hostname, Searchsploit, remaining cross-workspace selectors, operator
+controls and restore/startup enforcement are still in progress; no Range package is
+ready.
 
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file

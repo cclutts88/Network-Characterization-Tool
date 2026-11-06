@@ -14,7 +14,16 @@ from app.arkime_coverage import (
 from app.arkime_evidence import ARKIME_PARSER_VERSION, import_arkime_sessions_json
 from app.arkime_summary import SUMMARY_HEADERS, import_arkime_summary_csv
 from app.database import connect_database
-from app.network_scopes import create_network_scope
+from app.evidence_retirement import init_evidence_retirement_storage, retire_evidence
+from app.evidence_retirement_sources import (
+    ARKIME_SESSIONS_IMPORT, ARKIME_SUMMARY_IMPORT, adapter_for_source,
+)
+from app.network_scopes import create_network_scope as _create_network_scope
+
+
+def create_network_scope(db, **values):
+    init_evidence_retirement_storage(db)
+    return _create_network_scope(db, **values)
 
 
 def _sessions(start: str, end: str, suffix: str = "1") -> bytes:
@@ -32,6 +41,44 @@ def _sessions(start: str, end: str, suffix: str = "1") -> bytes:
             "network.bytes": 2048, "protocol": ["tls"], "vlan": [10],
         }],
     }, separators=(",", ":")).encode()
+
+
+def test_coverage_inventory_excludes_retired_sessions_and_summary_windows(tmp_path):
+    db = tmp_path / "coverage-retirement.db"
+    scope = create_network_scope(db, label="Range", created_by="admin")
+    session = _import_session(
+        db, scope, "2030-01-01T00:00:00+00:00",
+        "2030-01-01T01:00:00+00:00",
+    )
+    summary = import_arkime_summary_csv(
+        db,
+        content=(
+            ",".join(SUMMARY_HEADERS) + "\n"
+            "192.0.2.1,198.51.100.1,443,tcp,tls,10,1,2,3\n"
+        ).encode(),
+        original_filename="summary.csv", media_type="text/csv",
+        scope_id=scope["scope_id"],
+        operator_sensor="range-sensor",
+        query_start="2030-01-01T00:00:00+00:00",
+        query_end="2030-01-01T01:00:00+00:00",
+        bounding_mode="both", query_expression="vlan == 10",
+        summary_basis="all_matching_groups", top_n_limit=None,
+        operator_export_assessment="complete", capture_coverage="complete",
+        actor="analyst",
+    )
+    for family, import_id in (
+        (ARKIME_SESSIONS_IMPORT, session["import_id"]),
+        (ARKIME_SUMMARY_IMPORT, summary["import_id"]),
+    ):
+        retire_evidence(
+            db, source_family=family, encounter_id=import_id,
+            actor="analyst", reason="wrong source window",
+            adapter=adapter_for_source(family),
+        )
+
+    result = list_arkime_coverage_windows(db)
+    assert result["items"] == []
+    assert result["pagination"]["total"] == 0
 
 
 def _import_session(
