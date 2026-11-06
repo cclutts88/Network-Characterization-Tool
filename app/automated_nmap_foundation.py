@@ -226,35 +226,11 @@ def _assignment_state(db: sqlite3.Connection, evidence: dict) -> dict:
     }
 
 
-def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
-    """Return durable status using read-only queries and no parsing or schema work."""
-    with connect_database(db_path, read_only=True) as db:
-        evidence = _run_evidence(db, run_id)
-        assignment = _assignment_state(db, evidence)
-        admission_intent = admission_intent_on_connection(
-            db, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run_id,
-        )
-        historical_attempt = db.execute(
-            """SELECT status, started_at, finished_at, error, actor
-               FROM scan_foundation_processing_attempts
-               WHERE run_id = ? ORDER BY rowid DESC LIMIT 1""",
-            (run_id,),
-        ).fetchone()
-        from app.automated_nmap_scope_corrections import (
-            scope_handoff_correction_status_on_connection,
-        )
-        handoff_correction = scope_handoff_correction_status_on_connection(db, run_id)
-    from app.derived_jobs import nmap_scope_job_for_run
-
-    job = nmap_scope_job_for_run(db_path, run_id)
+def _foundation_status_payload(
+    evidence: dict, assignment: dict, admission_intent: dict,
+    historical_attempt, handoff_correction: dict, job: dict | None,
+) -> dict:
     attempt = job.get("latest_attempt") if job else None
-    if (
-        attempt is not None
-        and attempt["state"] == "completed"
-        and not assignment["processing_complete"]
-    ):
-        with connect_database(db_path, read_only=True) as db:
-            assignment = _assignment_state(db, evidence)
     state = "ineligible"
     if evidence["eligible"]:
         state = "ready"
@@ -294,6 +270,79 @@ def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
         "current_views_changed": False,
         "network_contact": False,
     }
+
+
+def get_automated_scan_foundation_status(db_path: Path, run_id: str) -> dict:
+    """Return durable status using read-only queries and no parsing or schema work."""
+    with connect_database(db_path, read_only=True) as db:
+        evidence = _run_evidence(db, run_id)
+        assignment = _assignment_state(db, evidence)
+        admission_intent = admission_intent_on_connection(
+            db, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run_id,
+        )
+        historical_attempt = db.execute(
+            """SELECT status, started_at, finished_at, error, actor
+               FROM scan_foundation_processing_attempts
+               WHERE run_id = ? ORDER BY rowid DESC LIMIT 1""",
+            (run_id,),
+        ).fetchone()
+        from app.automated_nmap_scope_corrections import (
+            scope_handoff_correction_status_on_connection,
+        )
+        handoff_correction = scope_handoff_correction_status_on_connection(db, run_id)
+    from app.derived_jobs import nmap_scope_job_for_run
+
+    job = nmap_scope_job_for_run(db_path, run_id)
+    attempt = job.get("latest_attempt") if job else None
+    if (
+        attempt is not None
+        and attempt["state"] == "completed"
+        and not assignment["processing_complete"]
+    ):
+        with connect_database(db_path, read_only=True) as db:
+            assignment = _assignment_state(db, evidence)
+    return _foundation_status_payload(
+        evidence, assignment, admission_intent, historical_attempt,
+        handoff_correction, job,
+    )
+
+
+def get_automated_scan_foundation_statuses(
+    db_path: Path, run_ids: list[str],
+) -> dict[str, dict]:
+    """Read history-row foundation status from one consistent database snapshot."""
+    unique_run_ids = list(dict.fromkeys(str(run_id) for run_id in run_ids if run_id))
+    if not unique_run_ids:
+        return {}
+    from app.automated_nmap_scope_corrections import (
+        scope_handoff_correction_status_on_connection,
+    )
+    from app.derived_jobs import nmap_scope_jobs_for_runs_on_connection
+
+    result: dict[str, dict] = {}
+    with connect_database(db_path, read_only=True) as db:
+        db.execute("BEGIN")
+        jobs = nmap_scope_jobs_for_runs_on_connection(db, unique_run_ids)
+        for run_id in unique_run_ids:
+            evidence = _run_evidence(db, run_id)
+            assignment = _assignment_state(db, evidence)
+            admission_intent = admission_intent_on_connection(
+                db, intent_kind=AUTOMATED_NMAP_INTENT, source_id=run_id,
+            )
+            historical_attempt = db.execute(
+                """SELECT status, started_at, finished_at, error, actor
+                   FROM scan_foundation_processing_attempts
+                   WHERE run_id = ? ORDER BY rowid DESC LIMIT 1""",
+                (run_id,),
+            ).fetchone()
+            handoff_correction = scope_handoff_correction_status_on_connection(
+                db, run_id,
+            )
+            result[run_id] = _foundation_status_payload(
+                evidence, assignment, admission_intent, historical_attempt,
+                handoff_correction, jobs.get(run_id),
+            )
+    return result
 
 
 def _ensure_inherited_assignment(db: sqlite3.Connection, evidence: dict, actor: str) -> str:

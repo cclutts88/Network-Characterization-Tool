@@ -12,6 +12,7 @@ from app.artifacts import get_artifact_observation, init_artifact_storage, regis
 from app.automated_nmap_foundation import (
     AutomatedNmapFoundationConflict,
     get_automated_scan_foundation_status,
+    get_automated_scan_foundation_statuses,
     init_automated_nmap_foundation_storage,
     process_automated_scan_foundation,
     recover_interrupted_automated_scan_foundation,
@@ -782,6 +783,39 @@ def test_grouped_history_keeps_retained_scope_beside_foundation_status(
     )
     assert retained["network_scope_context"]["scope_id"] == scope["scope_id"]
     assert retained["foundation_status"]["scope_id"] == scope["scope_id"]
+
+
+def test_history_foundation_statuses_share_one_consistent_database_snapshot(
+    tmp_path, monkeypatch,
+):
+    import app.automated_nmap_foundation as foundation
+
+    db_path, first, _, _ = scoped_run(tmp_path, label="First")
+    second_xml = XML.replace(b"192.0.2.10", b"198.51.100.10")
+    _, second, _, _ = scoped_run(
+        tmp_path, db_path=db_path, label="Second",
+        cidr="198.51.100.0/24", content=second_xml,
+    )
+    run_ids = [first["run_id"], second["run_id"]]
+    expected = {
+        run_id: get_automated_scan_foundation_status(db_path, run_id)
+        for run_id in run_ids
+    }
+    real_connect = foundation.connect_database
+    connections = 0
+
+    def counted_connect(*args, **kwargs):
+        nonlocal connections
+        connections += 1
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(foundation, "connect_database", counted_connect)
+    statuses = get_automated_scan_foundation_statuses(db_path, run_ids)
+
+    assert connections == 1
+    assert list(statuses) == run_ids
+    for run_id in run_ids:
+        assert statuses[run_id] == expected[run_id]
 
 
 def test_legacy_attempt_history_is_interrupted_at_cutover_then_frozen(tmp_path):

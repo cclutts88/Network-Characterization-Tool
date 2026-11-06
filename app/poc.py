@@ -121,7 +121,10 @@ from app.pipeline_intake import (
     mark_pipeline_source,
     record_automated_nmap_intent,
 )
-from app.automated_nmap_foundation import get_automated_scan_foundation_status
+from app.automated_nmap_foundation import (
+    get_automated_scan_foundation_status,
+    get_automated_scan_foundation_statuses,
+)
 from app.derived_jobs import scan_run_job_statuses, start_derived_job_worker
 from app.scan_history_index import (
     init_scan_history_index_storage,
@@ -8615,13 +8618,12 @@ SCAN_HISTORY_FIELDS = {
 
 def _enrich_scan_history_runs(runs: list[dict]) -> list[dict]:
     run_ids = [run["run_id"] for run in runs]
+    foundation_statuses = get_automated_scan_foundation_statuses(DB_PATH, run_ids)
     analysis_jobs = scan_run_job_statuses(DB_PATH, run_ids, DATA_DIR)
     return [
         {
             **{key: value for key, value in run.items() if key in SCAN_HISTORY_FIELDS},
-            "foundation_status": get_automated_scan_foundation_status(
-                DB_PATH, run["run_id"]
-            ),
+            "foundation_status": foundation_statuses[run["run_id"]],
             "analysis_job_status": analysis_jobs.get(run["run_id"], {}),
         }
         for run in runs

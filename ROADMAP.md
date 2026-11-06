@@ -745,6 +745,21 @@ qualified and ready to transfer for morning Range acceptance. It has not been in
 or accepted on either Range, is not mission-ready and is not available on stable
 `main`; those boundaries must remain visible during handoff.
 
+Post-package backend efficiency pass 1 completed (2026-11-06): the sealed R10 package and
+its transfer pieces remain frozen. Development after that package is reducing repeated
+read work without changing evidence, retirement or processing semantics. The first
+bounded slice replaces Scan History's per-row foundation-status database reopening
+with one read-only snapshot and one shared connection for the requested history rows.
+The existing single-run status contract remains available and produces the same result.
+Focused foundation and grouped-history validation passes 39 tests, including an exact
+two-run equivalence check that proves the batch path opens the foundation database only
+once. The current host-capable test environment passes the complete application suite:
+2,723 passed, 25 expected skips and one existing dependency warning. An older test
+image first failed unrelated package checks because it lacked host OpenSSL; the exact
+case and the changed-path tests pass in the current host-capable image. Independent
+quality review returned CLEAR. This post-package work is development-ready on the
+foundation branch only and requires a later package and Range gate before deployment.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

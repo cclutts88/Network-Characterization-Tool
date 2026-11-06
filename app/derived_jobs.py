@@ -2812,6 +2812,33 @@ def nmap_scope_job_for_run(db_path: Path, run_id: str) -> dict | None:
         return _job_dict(db, row) if row is not None else None
 
 
+def nmap_scope_jobs_for_runs_on_connection(
+    db: sqlite3.Connection, run_ids: list[str],
+) -> dict[str, dict]:
+    """Read the newest scoped-Nmap job for each run from one caller snapshot."""
+    unique_run_ids = list(dict.fromkeys(str(run_id) for run_id in run_ids if run_id))
+    if not unique_run_ids:
+        return {}
+    available = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_jobs'"
+    ).fetchone()
+    if available is None:
+        return {}
+    placeholders = ",".join("?" for _ in unique_run_ids)
+    rows = db.execute(
+        f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
+            WHERE job_type = ? AND source_run_id IN ({placeholders})
+            ORDER BY requested_at DESC, job_id DESC""",
+        (NMAP_SCOPE_JOB_TYPE, *unique_run_ids),
+    ).fetchall()
+    result: dict[str, dict] = {}
+    for row in rows:
+        run_id = str(row[2] or "")
+        if run_id and run_id not in result:
+            result[run_id] = _job_dict(db, row)
+    return result
+
+
 def device_summary_job_for_run(db_path: Path, run_id: str) -> dict | None:
     if not Path(db_path).is_file():
         return None
