@@ -52,7 +52,11 @@ refinement on 2026-11-06 so it does not delay the working Range build; retain it
 known usability item for the next visual pass. R13 is being qualified for the user's
 requested clean Range installation: remove only the prior NCT deployment at install
 time, retain no old NCT evidence or settings, and do not treat migration or upgrade as
-part of that target acceptance.
+part of that target acceptance. The first exact-package rehearsal also found that its
+disposable race-condition fixture still watched Docker's older short `inspect` command
+while the helper now uses the explicit `container inspect` form. Update the fixture to
+recognize both equivalent commands, then rebuild and repeat qualification so this
+test-only drift cannot hide the intended late-container refusal check.
 
 Range package transfer hardening completed in development (2026-11-05): the standard
 48 MiB transfer-set builder now gives each sealed package a visible checksum-derived

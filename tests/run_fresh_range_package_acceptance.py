@@ -61,7 +61,7 @@ def main():
     env.pop('PYTHONDONTWRITEBYTECODE',None)  # The trusted launcher must set this itself.
     late=root/'inject-late-container'
     docker_wrapper=bin_dir/'docker'
-    docker_wrapper.write_text("#!/usr/local/bin/python\nimport os,sys,subprocess\nfrom pathlib import Path\nactual='/usr/local/bin/docker'\nmarker=Path("+repr(str(late))+")\ncount=marker.with_suffix('.count')\nif marker.exists() and len(sys.argv)>2 and sys.argv[1]=='inspect' and sys.argv[-1]=="+repr(name)+":\n n=int(count.read_text())+1 if count.exists() else 1\n count.write_text(str(n))\n if n==4:\n  subprocess.run([actual,'create','--name',"+repr(name)+","+repr(release['application_image'])+"],check=True,stdout=subprocess.DEVNULL)\n  marker.unlink();count.unlink()\nos.execv(actual,[actual]+sys.argv[1:])\n")
+    docker_wrapper.write_text("#!/usr/local/bin/python\nimport os,sys,subprocess\nfrom pathlib import Path\nactual='/usr/local/bin/docker'\nmarker=Path("+repr(str(late))+")\ncount=marker.with_suffix('.count')\ninspect=(len(sys.argv)>2 and sys.argv[1]=='inspect') or (len(sys.argv)>3 and sys.argv[1:3]==['container','inspect'])\nif marker.exists() and inspect and sys.argv[-1]=="+repr(name)+":\n n=int(count.read_text())+1 if count.exists() else 1\n count.write_text(str(n))\n if n==4:\n  subprocess.run([actual,'create','--name',"+repr(name)+","+repr(release['application_image'])+"],check=True,stdout=subprocess.DEVNULL)\n  marker.unlink();count.unlink()\nos.execv(actual,[actual]+sys.argv[1:])\n")
     docker_wrapper.chmod(0o700)
     launcher=['sh',str(package/'scripts/nct-install-range.sh'),address]
     def check(expected):
