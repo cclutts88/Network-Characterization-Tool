@@ -59,7 +59,7 @@ def test_helper_tutorials_are_optional_resumable_and_highlight_exact_controls():
     assert "If this button is unavailable, read the visible page message" in SHELL_SCRIPT
     assert "No device contact is active, so the monitoring panel is hidden" in SHELL_SCRIPT
     assert "step.optionalTarget?step.unavailable" in SHELL_SCRIPT
-    assert "buttonTarget&&roomOnRight?rect.right+8:rect.left" in SHELL_SCRIPT
+    assert "if(roomOnRight){left=rect.right+8" in SHELL_SCRIPT
     assert "Turn off tutorials" in SHELL_SCRIPT
     assert "Progress is preserved" in SHELL_SCRIPT
     assert "Resume tutorial" in SHELL_SCRIPT
@@ -1285,6 +1285,8 @@ def test_device_preview_renders_one_ordered_vendor_specific_execution_plan():
     assert "selector:'#deviceRoleSelection'" in SHELL_SCRIPT
     assert "hold Ctrl while selecting the second role" in SHELL_SCRIPT
     assert "Selected role or Selected roles strip underneath" in SHELL_SCRIPT
+    assert "roomOnRight=rect.right+150<window.innerWidth" in SHELL_SCRIPT
+    assert "roomOnLeft=rect.left-150>sidebarRight" in SHELL_SCRIPT
     assert 'id="captureCommand"' not in html
     assert 'id="scp"' not in html
     assert 'id="cleanupPlan"' not in html

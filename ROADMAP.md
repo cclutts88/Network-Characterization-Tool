@@ -28,6 +28,10 @@ selected state plus a persistent plain-language summary beside the control, veri
 single and combined role selection with keyboard and mouse interaction, update the
 guided tutorial to highlight and explain the whole selection area, and repeat the
 applicable package, novice-operator and independent-review gates in a new candidate.
+The first novice narrow-screen check correctly halted release because the tutorial
+badge overlapped Vendor and its panel covered part of the role explanation. Include
+the explanation in the highlighted area, place the badge beside a target whenever
+screen space permits, and repeat the same narrow-screen check before qualification.
 
 Range package transfer hardening completed in development (2026-11-05): the standard
 48 MiB transfer-set builder now gives each sealed package a visible checksum-derived
