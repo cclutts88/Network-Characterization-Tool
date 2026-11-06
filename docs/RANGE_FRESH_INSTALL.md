@@ -170,3 +170,12 @@ A real host's service boot, browser trust and authorized network collection stil
 need acceptance on that Range. The package includes a separate recovery-console
 image; the console remains available independently when an application update
 fails. No credentials, analyst evidence or local preview data are bundled.
+
+## Known stability-release boundary
+
+This package keeps all evidence-retirement safeguards already built into NCT, but
+it does not claim that the cross-evidence retirement workflow is complete. The
+operator-facing retirement controls and retirement filtering in Map's separate
+stored-file list are deferred. `release.json` records these exact boundaries as
+`known_deferred_work` and sets `retirement_complete` to `false`. Do not describe
+this package as retirement-complete during transfer or Range acceptance.

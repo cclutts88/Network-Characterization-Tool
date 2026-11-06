@@ -25,6 +25,18 @@ MIXED_FRESH_R2_R3_SOURCE = {
     "console_image": "nct-recovery-console:0.16.0-range-test-20261104-fresh-r3",
     "console_image_id": "sha256:ce67db8397fa994d52a18eba2e64d89d43d40aa41c03a588e3907deaca3baed9",
 }
+KNOWN_DEFERRED_WORK = [
+    {
+        "id": "cross-evidence-retirement-operator-controls",
+        "status": "deferred",
+        "detail": "Operator-facing retirement controls are not included in this stability release.",
+    },
+    {
+        "id": "map-stored-file-retirement-filtering",
+        "status": "deferred",
+        "detail": "Map's separate stored-file list is not yet filtered by evidence retirement.",
+    },
+]
 
 
 def digest(path):
@@ -170,6 +182,8 @@ def stage(source, output, image, console, commit, build_id, existing_r4=False, f
         "branch": "foundation/evidence-engine-v2", "application_image": image, "console_image": console,
         "images": images, "source_bindings": bindings, "schema_gate": "exact-supported-v8-to-v9-disposable-image-gate",
         "supported_sources": json.loads((output / "scripts/nct-package-sources.json").read_text()),
+        "known_deferred_work": KNOWN_DEFERRED_WORK,
+        "retirement_complete": False,
         "range_accepted": False, "kubernetes_updater_available": False}
     from build_nct_update import build
     r3 = {"build_id":"0.16.0-range-test-20261029-recovery-r3", "build_commit":"03da1516face51403035e4292ac68cac9279dd65"}

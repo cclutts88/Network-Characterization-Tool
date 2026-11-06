@@ -344,6 +344,35 @@ operator returned PASS, and the Independent Reviewer returned CLEAR. This gate s
 does not enable operator retirement controls or claim Map's separate stored-file list;
 those remain explicit follow-on work before the cross-evidence lifecycle is complete.
 
+Cross-evidence retirement completion deferred by operator direction (2026-11-05):
+operator-facing retirement controls and Map's separate stored-file filtering are moved
+behind the immediate stability and Range-readiness work. All retirement safeguards that
+are already integrated remain active and must not be removed or bypassed. This is a
+sequencing decision, not a claim that retirement is complete: the package, guides and
+acceptance records must continue to identify the two deferred paths and any other
+unqualified retirement consumer. The Independent Reviewer returned
+CLEAR — DOCUMENTED DEVIATION for this boundary.
+
+Post-retirement-deferral Range-readiness qualification started (2026-11-05): qualify
+exact committed source `0a497e3` and any release-only follow-up commit without changing
+`main` or a Range. Build immutable application and independent recovery-console images,
+stage and seal one exact offline package, qualify a new empty-host installation and the
+observed retained-data upgrade source, prove cold backup and restore with accounts and
+evidence preserved, exercise the core Mission Environment → Nmap → device evidence →
+Analyze → Hunt → Reach → Map journey plus refusal, cancellation and recovery paths, and
+produce the standard verified transfer set with pieces no larger than 48 MiB. Local
+qualification remains distinct from controller transfer and actual Range acceptance.
+
+Stability-release source gate completed (2026-11-05): the offline package now records
+the two deferred retirement paths in its machine-readable release record, sets
+`retirement_complete` to false, and gives the same boundary in the fresh-install guide.
+The existing integrated retirement protections remain unchanged. Package, transfer and
+operator-instruction checks passed 125 tests. A clean single-path complete application
+run passed 2,656 tests with 25 expected skips and one existing dependency deprecation
+warning. The independent reviewer remains CLEAR — DOCUMENTED DEVIATION for proceeding
+to exact image/package qualification. No Range, sealed package or `main` change is
+claimed by this source gate.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did
