@@ -562,6 +562,17 @@ preview, exact confirmation and metadata-only audit. This is development-ready o
 offline package qualification and actual Range acceptance remain separate gates, and
 `main` is unchanged.
 
+Retirement-complete Range package qualification started (2026-11-06): supersede the
+earlier stability-release deferral metadata now that guarded operator retirement and
+Map stored-file filtering are independently cleared. The package contract now declares
+no deferred retirement work and sets `retirement_complete` to true; the fresh-install
+guide explains the required protected host authority, signed-in review, reason and exact
+confirmation. The first image-stamping attempt used an incorrect expanded commit string
+and was rejected before staging. Images must be rebuilt from the exact clean committed
+source before fresh-install and supported retained-upgrade acceptance, sealing and the
+standard 48 MiB transfer set. The corrected package metadata, guide and contract checks
+pass 188 focused tests. No package or Range acceptance is claimed yet.
+
 Functionality-freeze correction pass 1 completed (2026-11-05): the novice and
 backend observer found that direct Map > Files & Export navigation loaded retained file
 locations but not the topology required by its enabled export buttons. The buttons did

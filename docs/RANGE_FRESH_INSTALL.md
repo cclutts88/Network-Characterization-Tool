@@ -171,11 +171,12 @@ need acceptance on that Range. The package includes a separate recovery-console
 image; the console remains available independently when an application update
 fails. No credentials, analyst evidence or local preview data are bundled.
 
-## Known stability-release boundary
+## Protected evidence retirement
 
-This package keeps all evidence-retirement safeguards already built into NCT, but
-it does not claim that the cross-evidence retirement workflow is complete. The
-operator-facing retirement controls and retirement filtering in Map's separate
-stored-file list are deferred. `release.json` records these exact boundaries as
-`known_deferred_work` and sets `retirement_complete` to `false`. Do not describe
-this package as retirement-complete during transfer or Range acceptance.
+This package includes the completed cross-evidence retirement workflow and Map
+stored-file filtering. `release.json` has no deferred retirement work and sets
+`retirement_complete` to `true`. Retirement is still deliberately guarded: the
+independent host authority must be healthy, and a signed-in analyst or administrator
+must review the exact impact, record a reason and type the displayed confirmation.
+Retirement removes one retained encounter from ordinary use; it does not erase the
+original source bytes or provide an audit shortcut back to its download or analysis.

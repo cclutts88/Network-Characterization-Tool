@@ -57,22 +57,12 @@ def test_normalized_export_records_classic_and_containerd_load_identities(tmp_pa
         assert json.load(stream.extractfile("manifest.json"))[0] == entry
 
 
-def test_stability_release_declares_deferred_retirement_boundary():
-    assert package.KNOWN_DEFERRED_WORK == [
-        {
-            "id": "cross-evidence-retirement-operator-controls",
-            "status": "deferred",
-            "detail": "Operator-facing retirement controls are not included in this stability release.",
-        },
-        {
-            "id": "map-stored-file-retirement-filtering",
-            "status": "deferred",
-            "detail": "Map's separate stored-file list is not yet filtered by evidence retirement.",
-        },
-    ]
+def test_release_declares_completed_retirement_contract():
+    assert package.KNOWN_DEFERRED_WORK == []
     guide = (Path(__file__).parents[1] / "docs" / "RANGE_FRESH_INSTALL.md").read_text()
-    assert "retirement_complete` to `false`" in guide
-    assert "retirement-complete during transfer or Range acceptance" in guide
+    assert "retirement_complete` to `true`" in guide
+    assert "completed cross-evidence retirement workflow" in guide
+    assert "it does not erase the" in guide
 
 
 def staged(tmp_path):
