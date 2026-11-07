@@ -113,6 +113,14 @@ separate pinned Debian Bookworm Node 22 container for every browser-runtime scri
 hosted runner no longer silently substitutes its operating system, account permissions
 or Node release for NCT's supported qualification environments.
 
+The first corrected GitHub run then exposed one cross-filesystem test-order dependency
+(2026-11-06): the reviewed ingestion-boundary check found exactly the two permitted
+importers, but compared their unsorted directory enumeration order. Windows and the
+local container happened to return the expected order; GitHub's mounted Linux workspace
+returned the same two names in reverse order. The assertion now sorts the discovered
+names before enforcing the exact allowlist. This changes no application behavior or
+architecture boundary; it makes the boundary test deterministic across supported hosts.
+
 Novice/browser stabilization corrections in progress (2026-11-06): the isolated
 R18 journey verified direct page activation, profile creation/deletion, ordered
 multi-network schedules, scheduled restart handoff, fallback approve and decline,
