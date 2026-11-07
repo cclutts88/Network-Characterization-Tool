@@ -104,6 +104,12 @@ conflicting-output refusal, and confirmed that this roadmap preserves the real-h
 limits. R26 is cleared as a fresh-install-only transfer candidate. Actual controller
 boot, browser trust and acceptance remain required independently for each Range.
 
+GitHub Actions run `42331992554` independently reproduced both supported Linux gates
+for release-record commit `5de06dd4e95a24befaf2ad49e924ee56d73880b9`: Debian
+Bookworm Python qualification and Debian Bookworm Node runtime checks completed
+successfully. This remote result does not replace the two outstanding target-Range
+acceptance gates.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
