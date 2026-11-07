@@ -10,12 +10,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - run: python -m pip install -r requirements-dev.txt
-      - run: python -m pytest -q
-      - run: python -m compileall -q app
+      - name: Run supported Debian Python qualification
+        run: |
+          docker run --rm --user 0:0 \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            python:3.12-bookworm@sha256:4209fae09a3e20afd863e528bfddc235da5fd5977983e1996cd54cc9a72e6267 \
+            sh -lc 'pip install --quiet -r requirements.txt -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider && python -m compileall -q app'
+      - name: Run supported Debian browser-runtime checks
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            node:22-bookworm@sha256:7702d8aa4d5910871692af4480eb3ba86f23047a6417a44d857d06c95d060d3f \
+            sh -lc 'set -e; for file in tests/*.mjs; do node "$file"; done'

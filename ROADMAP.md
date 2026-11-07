@@ -101,6 +101,18 @@ not been deployed to either Range, promoted to `main`, or qualified as mission-r
 Live Arkime, positive VLAN evidence and updater apply/restore remain separate integration
 and deployment gates; they are not represented as passed by this stability run.
 
+GitHub qualification environment corrected after the first R25 push (2026-11-06):
+the legacy workflow ran the complete suite directly as the hosted runner's non-root
+account and also exposed its unrelated Node 24 runtime. Installer and recovery tests
+therefore failed at the runner's permission boundary, while the browser benchmark tried
+to use Node without the project's Playwright environment. This contradicted the
+documented Linux qualification contract and produced 35 environment failures after the
+supported Debian run had passed. GitHub Actions now executes the same pinned Debian
+Bookworm Python 3.12 container as root for the complete suite and compile check, then a
+separate pinned Debian Bookworm Node 22 container for every browser-runtime script. The
+hosted runner no longer silently substitutes its operating system, account permissions
+or Node release for NCT's supported qualification environments.
+
 Novice/browser stabilization corrections in progress (2026-11-06): the isolated
 R18 journey verified direct page activation, profile creation/deletion, ordered
 multi-network schedules, scheduled restart handoff, fallback approve and decline,
