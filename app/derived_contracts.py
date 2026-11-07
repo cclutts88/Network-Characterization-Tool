@@ -51,9 +51,9 @@ LEGACY_DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
     "max_summary_items": MAX_SUMMARY_ITEMS,
     "parser_bundle": "device-summary-parsers:1",
 })
-DEVICE_SUMMARY_VERSION = "device-collection-summary:2"
-DEVICE_SUMMARY_SCHEMA_VERSION = 2
-DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
+PREVIOUS_DEVICE_SUMMARY_VERSION = "device-collection-summary:2"
+PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION = 2
+PREVIOUS_DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
     "snapshot_contract": 1,
     "configuration_selection": "sorted-uploaded_then_sorted-collected_then-stdout",
     "raw_selection": "stdout_then_configuration-order",
@@ -63,6 +63,12 @@ DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
     "max_summary_items": MAX_SUMMARY_ITEMS,
     "parser_bundle": "device-summary-parsers:2",
     "command_history_contract": 2,
+})
+DEVICE_SUMMARY_VERSION = "device-collection-summary:3"
+DEVICE_SUMMARY_SCHEMA_VERSION = 2
+DEVICE_SUMMARY_PARAMETERS = MappingProxyType({
+    **PREVIOUS_DEVICE_SUMMARY_PARAMETERS,
+    "parser_bundle": "device-summary-parsers:3",
 })
 
 SEARCHSPLOIT_CANDIDATES_FAMILY = "nmap_searchsploit_candidates"

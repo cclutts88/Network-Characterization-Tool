@@ -332,6 +332,7 @@ from app.derived_jobs import (
     enqueue_nmap_base_job,
     init_derived_job_storage,
     list_derived_jobs,
+    recover_outdated_device_summary_jobs,
     recover_interrupted_derived_jobs,
     retry_derived_job,
     resume_derived_job_worker,
@@ -1857,6 +1858,7 @@ async def lifespan(_: FastAPI):
                 resume_scan_workers()
             if not local_processing_paused(DATA_DIR):
                 recover_missing_automated_nmap_intents(DB_PATH)
+                recover_outdated_device_summary_jobs(DB_PATH)
                 resume_derived_job_worker()
                 recover_interrupted_derived_jobs(DB_PATH)
                 start_derived_job_worker(DB_PATH, DATA_DIR)

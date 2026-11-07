@@ -120,6 +120,21 @@ specific Guide topic, and retain the suggested scope label in Collection History
 instead of falling back to its internal identifier. These do not affect command
 execution, retained evidence or analysis generation.
 
+Device parser-contract recovery gate in progress (2026-11-06): independent review of
+the R22 correction found that changing the parser without changing its saved-calculation
+identity could let an older warm result remain visible after a cold recalculation was
+corrected. The device-summary contract is now versioned again, older results remain
+readable as historical evidence, and startup queues the current local calculation for
+eligible active collections without contacting a device. Retired evidence is excluded
+before recovery, and one invalid historical collection is isolated and reported so it
+cannot roll back healthy recovery work or prevent NCT from starting. Focused Debian
+Python 3.12 regressions cover current-versus-previous results, retired sources,
+idempotent recovery and isolation of one invalid collection. The complete Debian
+Python 3.12 suite passes 2,757 checks with 25 intentional skips and the existing
+Starlette dependency warning; all 24 Debian Node 22 browser-runtime scripts pass.
+Independent review returned **CLEAR — DOCUMENTED DEVIATION** because exact-image
+repetition remains required before this correction is a release candidate.
+
 Planned device-credential boundary (recorded 2026-11-06): later automatic or scheduled
 network-device collection may use administrator-approved saved credentials, but those
 secrets must live in a dedicated encrypted credential store rather than device profiles,

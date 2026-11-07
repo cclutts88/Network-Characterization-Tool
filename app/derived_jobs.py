@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 import sqlite3
@@ -17,17 +18,23 @@ from app.derived_contracts import (
     DEVICE_SUMMARY_PARAMETERS,
     DEVICE_SUMMARY_SCHEMA_VERSION,
     DEVICE_SUMMARY_VERSION,
+    LEGACY_DEVICE_SUMMARY_VERSION,
     NMAP_BASE_ANALYSIS_FAMILY,
     NMAP_BASE_ANALYSIS_VERSION,
     NMAP_BASE_PARAMETERS,
     NMAP_BASE_PAYLOAD_SCHEMA_VERSION,
+    PREVIOUS_DEVICE_SUMMARY_VERSION,
     SEARCHSPLOIT_CANDIDATES_FAMILY,
     SEARCHSPLOIT_CANDIDATES_PARAMETERS,
     SEARCHSPLOIT_CANDIDATES_SCHEMA_VERSION,
     SEARCHSPLOIT_CANDIDATES_VERSION,
 )
 from app.derived_results import derived_result_identity, init_derived_result_storage
-from app.evidence_retirement import active_encounter_sql, require_active_encounter
+from app.evidence_retirement import (
+    RetiredEvidenceDependency,
+    active_encounter_sql,
+    require_active_encounter,
+)
 from app.evidence_retirement_sources import (
     DEVICE_COLLECTION,
     NMAP_IMPORT,
@@ -1150,6 +1157,88 @@ def _device_summary_snapshot(
     }
     frozen["job_key"] = _job_key(frozen)
     return frozen, contract
+
+
+def recover_outdated_device_summary_jobs(db_path: Path) -> list[str]:
+    """Queue the current parser for active collections completed by an older parser."""
+    init_derived_job_storage(db_path)
+    recovered: list[str] = []
+    with connect_database(db_path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        active_clause, active_parameters = active_encounter_sql(
+            DEVICE_COLLECTION, "authority.run_id",
+        )
+        rows = db.execute(
+            f"""SELECT DISTINCT authority.run_id, authority.selection_contract,
+                              COALESCE(observation.actor, 'nct-contract-reconciliation')
+                   FROM device_collection_authority authority
+                   JOIN artifact_observations observation
+                     ON observation.observation_id = authority.artifact_observation_id
+                   JOIN pipeline_jobs old_job
+                     ON old_job.source_run_id = authority.run_id
+                    AND old_job.job_type = ?
+                    AND old_job.target_family = ?
+                    AND old_job.target_analysis_version IN (?, ?)
+                   JOIN pipeline_job_attempts old_attempt
+                     ON old_attempt.job_id = old_job.job_id
+                    AND old_attempt.state = 'completed'
+                    AND old_attempt.output_kind = 'derived_result'
+                    AND old_attempt.output_id IS NOT NULL
+                  WHERE authority.state = 'active'
+                    AND {active_clause}
+                    AND NOT EXISTS (
+                        SELECT 1 FROM pipeline_jobs current_job
+                         WHERE current_job.source_run_id = authority.run_id
+                           AND current_job.job_type = ?
+                           AND current_job.target_family = ?
+                           AND current_job.target_analysis_version = ?
+                           AND current_job.target_payload_schema_version = ?
+                           AND current_job.target_parameters_json = ?
+                    )
+                  ORDER BY authority.run_id""",
+            (
+                DEVICE_SUMMARY_JOB_TYPE, DEVICE_SUMMARY_FAMILY,
+                LEGACY_DEVICE_SUMMARY_VERSION, PREVIOUS_DEVICE_SUMMARY_VERSION,
+                *active_parameters,
+                DEVICE_SUMMARY_JOB_TYPE, DEVICE_SUMMARY_FAMILY,
+                DEVICE_SUMMARY_VERSION, DEVICE_SUMMARY_SCHEMA_VERSION,
+                _canonical_json(dict(DEVICE_SUMMARY_PARAMETERS)),
+            ),
+        ).fetchall()
+        for run_id, selection_contract, requested_by in rows:
+            intent_kind = {
+                "manual-upload-single-file:1": MANUAL_DEVICE_INTENT,
+                "collected-device-multi-file:1": COLLECTED_DEVICE_INTENT,
+            }.get(str(selection_contract))
+            if intent_kind is None:
+                continue
+            db.execute("SAVEPOINT recover_device_summary")
+            try:
+                frozen, _contract = _device_summary_snapshot(
+                    db, str(run_id), intent_kind=intent_kind,
+                )
+                _enqueue_scope_snapshot(
+                    db,
+                    frozen,
+                    request_token=(
+                        f"automatic-device-summary-contract:{run_id}:"
+                        f"{DEVICE_SUMMARY_VERSION}"
+                    ),
+                    requested_by=str(requested_by or "nct-contract-reconciliation"),
+                    allow_retry=False,
+                )
+            except (RetiredEvidenceDependency, ValueError, KeyError) as exc:
+                db.execute("ROLLBACK TO SAVEPOINT recover_device_summary")
+                db.execute("RELEASE SAVEPOINT recover_device_summary")
+                logging.getLogger(__name__).warning(
+                    "Skipped device-summary contract recovery for run %s: %s",
+                    run_id,
+                    exc,
+                )
+                continue
+            db.execute("RELEASE SAVEPOINT recover_device_summary")
+            recovered.append(str(run_id))
+    return recovered
 
 
 def _device_observation_snapshot(
@@ -2851,8 +2940,17 @@ def device_summary_job_for_run(db_path: Path, run_id: str) -> dict | None:
         row = db.execute(
             f"""SELECT {_JOB_COLUMNS} FROM pipeline_jobs
                 WHERE job_type = ? AND source_run_id = ?
-                ORDER BY requested_at DESC, job_id DESC LIMIT 1""",
-            (DEVICE_SUMMARY_JOB_TYPE, run_id),
+                ORDER BY CASE
+                    WHEN target_family = ?
+                     AND target_analysis_version = ?
+                     AND target_payload_schema_version = ?
+                     AND target_parameters_json = ? THEN 0 ELSE 1 END,
+                    requested_at DESC, job_id DESC LIMIT 1""",
+            (
+                DEVICE_SUMMARY_JOB_TYPE, run_id, DEVICE_SUMMARY_FAMILY,
+                DEVICE_SUMMARY_VERSION, DEVICE_SUMMARY_SCHEMA_VERSION,
+                _canonical_json(dict(DEVICE_SUMMARY_PARAMETERS)),
+            ),
         ).fetchone()
         return _job_dict(db, row) if row is not None else None
 

@@ -35,6 +35,9 @@ from app.derived_contracts import (
     LEGACY_DEVICE_SUMMARY_PARAMETERS,
     LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
     LEGACY_DEVICE_SUMMARY_VERSION,
+    PREVIOUS_DEVICE_SUMMARY_PARAMETERS,
+    PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION,
+    PREVIOUS_DEVICE_SUMMARY_VERSION,
 )
 from app.database import configure_database, connect_database
 from app.nmap_base_analysis import scan_run_has_registered_nmap_xml
@@ -47,7 +50,7 @@ router = APIRouter(prefix="/api/device-analysis", tags=["device-analysis"])
 
 # Increment whenever retained device evidence parsing changes so previously
 # completed pulls are re-analyzed without requiring another network collection.
-DEVICE_SUMMARY_VERSION = 4
+DEVICE_SUMMARY_VERSION = 5
 _DEVICE_STORAGE_READY: set[str] = set()
 _DEVICE_STORAGE_LOCK = threading.RLock()
 
@@ -79,6 +82,11 @@ def _retained_device_summary_contract(db_path: Path, result_id: str) -> dict:
             LEGACY_DEVICE_SUMMARY_VERSION,
             LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
             json.dumps(dict(LEGACY_DEVICE_SUMMARY_PARAMETERS), sort_keys=True),
+        ),
+        (
+            PREVIOUS_DEVICE_SUMMARY_VERSION,
+            PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION,
+            json.dumps(dict(PREVIOUS_DEVICE_SUMMARY_PARAMETERS), sort_keys=True),
         ),
     }
     candidate = (

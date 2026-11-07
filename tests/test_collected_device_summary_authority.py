@@ -19,12 +19,18 @@ from app.device_evidence_catalog import (
 )
 from app.device_summary_result import analyze_collected_device_summary
 from app.derived_contracts import (
+    DEVICE_SUMMARY_PARAMETERS,
+    DEVICE_SUMMARY_SCHEMA_VERSION,
     DEVICE_SUMMARY_VERSION,
     LEGACY_DEVICE_SUMMARY_PARAMETERS,
     LEGACY_DEVICE_SUMMARY_SCHEMA_VERSION,
     LEGACY_DEVICE_SUMMARY_VERSION,
+    PREVIOUS_DEVICE_SUMMARY_PARAMETERS,
+    PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION,
+    PREVIOUS_DEVICE_SUMMARY_VERSION,
 )
-from app.evidence_retirement import init_evidence_retirement_storage
+from app.evidence_retirement import init_evidence_retirement_storage, retire_evidence
+from app.evidence_retirement_sources import DEVICE_COLLECTION, device_collection_adapter
 
 
 CONFIG = """===== show running-config =====
@@ -174,6 +180,178 @@ def test_read_only_analysis_can_open_completed_legacy_summary(
     assert loaded_manifest["run_id"] == run_id
 
 
+def test_corrected_parser_does_not_reuse_previous_summary_and_previous_stays_readable(
+    tmp_path, monkeypatch,
+):
+    from app import derived_jobs, device_analysis, device_summary_result, pipeline_intake
+
+    monkeypatch.setattr(derived_jobs, "start_derived_job_worker", lambda *_args: None)
+    db_path, config_dir, run_dir, manifest = finalized_collection(tmp_path, monkeypatch)
+    run_id = manifest["run_id"]
+    current_builder = device_summary_result._summary_payload
+
+    def prior_builder(snapshot):
+        payload = current_builder(snapshot)
+        payload["interfaces"] = [
+            *payload["interfaces"],
+            {"name": "IP-Address", "addresses": [], "source": "table heading"},
+        ]
+        payload["counts"]["interfaces"] = len(payload["interfaces"])
+        return payload
+
+    monkeypatch.setattr(device_summary_result, "_summary_payload", prior_builder)
+    previous = analyze_collected_device_summary(
+        db_path,
+        run_id,
+        run_dir,
+        analysis_version=PREVIOUS_DEVICE_SUMMARY_VERSION,
+        payload_schema_version=PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION,
+        parameters=dict(PREVIOUS_DEVICE_SUMMARY_PARAMETERS),
+    )
+    assert any(item["name"] == "IP-Address" for item in previous["payload"]["interfaces"])
+
+    monkeypatch.setattr(device_summary_result, "_summary_payload", current_builder)
+    current = analyze_collected_device_summary(db_path, run_id, run_dir)
+    assert current["result_id"] != previous["result_id"]
+    assert current["analysis_version"] == DEVICE_SUMMARY_VERSION
+    assert all(item["name"] != "IP-Address" for item in current["payload"]["interfaces"])
+
+    monkeypatch.setattr(
+        pipeline_intake, "get_admission_intent", lambda *_args, **_kwargs: {"marked": True}
+    )
+    monkeypatch.setattr(
+        derived_jobs,
+        "device_summary_job_for_run",
+        lambda *_args, **_kwargs: {
+            "latest_attempt": {
+                "state": "completed",
+                "output_kind": "derived_result",
+                "output_id": previous["result_id"],
+            }
+        },
+    )
+    legacy_summary, _loaded_manifest = device_analysis._device_summary_snapshot(
+        run_id, config_dir, db_path, read_only_verified=True,
+    )
+    assert any(item["name"] == "IP-Address" for item in legacy_summary["interfaces"])
+
+
+def test_startup_recovery_queues_current_summary_for_completed_previous_contract(
+    tmp_path, monkeypatch,
+):
+    from app import derived_jobs, device_summary_result, pipeline_intake
+
+    current_contract = {
+        "version": DEVICE_SUMMARY_VERSION,
+        "schema": DEVICE_SUMMARY_SCHEMA_VERSION,
+        "parameters": DEVICE_SUMMARY_PARAMETERS,
+    }
+    monkeypatch.setattr(derived_jobs, "start_derived_job_worker", lambda *_args: None)
+    for module in (pipeline_intake, derived_jobs, device_summary_result):
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_VERSION", PREVIOUS_DEVICE_SUMMARY_VERSION)
+        monkeypatch.setattr(
+            module, "DEVICE_SUMMARY_SCHEMA_VERSION", PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION,
+        )
+        monkeypatch.setattr(
+            module, "DEVICE_SUMMARY_PARAMETERS", PREVIOUS_DEVICE_SUMMARY_PARAMETERS,
+        )
+
+    db_path, _, _, manifest = finalized_collection(tmp_path, monkeypatch)
+    run_id = manifest["run_id"]
+    retired_run_id = "2" * 32
+    finalized_collection(tmp_path, monkeypatch, run_id=retired_run_id)
+    assert derived_jobs.dispatch_next_pipeline_intake(db_path) is True
+    assert derived_jobs.run_next_derived_job(db_path, tmp_path) is True
+    assert derived_jobs.dispatch_next_pipeline_intake(db_path) is True
+    assert derived_jobs.run_next_derived_job(db_path, tmp_path) is True
+    previous_job = derived_jobs.device_summary_job_for_run(db_path, run_id)
+    assert previous_job["target_analysis_version"] == PREVIOUS_DEVICE_SUMMARY_VERSION
+    assert previous_job["latest_attempt"]["state"] == "completed"
+    retired_previous_job = derived_jobs.device_summary_job_for_run(db_path, retired_run_id)
+    assert retired_previous_job["target_analysis_version"] == PREVIOUS_DEVICE_SUMMARY_VERSION
+    assert retired_previous_job["latest_attempt"]["state"] == "completed"
+    retire_evidence(
+        db_path,
+        source_family=DEVICE_COLLECTION,
+        encounter_id=retired_run_id,
+        actor="contract-recovery-test",
+        reason="prove retired historical evidence is not recalculated",
+        adapter=device_collection_adapter(),
+    )
+
+    for module in (pipeline_intake, derived_jobs, device_summary_result):
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_VERSION", current_contract["version"])
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_SCHEMA_VERSION", current_contract["schema"])
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_PARAMETERS", current_contract["parameters"])
+
+    assert derived_jobs.recover_outdated_device_summary_jobs(db_path) == [run_id]
+    queued = derived_jobs.device_summary_job_for_run(db_path, run_id)
+    assert queued["target_analysis_version"] == DEVICE_SUMMARY_VERSION
+    assert queued["latest_attempt"]["state"] == "queued"
+    assert derived_jobs.run_next_derived_job(db_path, tmp_path) is True
+    completed = derived_jobs.device_summary_job_for_run(db_path, run_id)
+    assert completed["target_analysis_version"] == DEVICE_SUMMARY_VERSION
+    assert completed["latest_attempt"]["state"] == "completed"
+    assert derived_jobs.recover_outdated_device_summary_jobs(db_path) == []
+    with connect_database(db_path, read_only=True) as db:
+        assert db.execute(
+            """SELECT COUNT(*) FROM pipeline_jobs
+                 WHERE source_run_id=? AND target_analysis_version=?""",
+            (retired_run_id, DEVICE_SUMMARY_VERSION),
+        ).fetchone()[0] == 0
+
+
+def test_startup_recovery_isolates_one_invalid_collection(
+    tmp_path, monkeypatch, caplog,
+):
+    from app import derived_jobs, device_summary_result, pipeline_intake
+
+    current_contract = {
+        "version": DEVICE_SUMMARY_VERSION,
+        "schema": DEVICE_SUMMARY_SCHEMA_VERSION,
+        "parameters": DEVICE_SUMMARY_PARAMETERS,
+    }
+    monkeypatch.setattr(derived_jobs, "start_derived_job_worker", lambda *_args: None)
+    for module in (pipeline_intake, derived_jobs, device_summary_result):
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_VERSION", PREVIOUS_DEVICE_SUMMARY_VERSION)
+        monkeypatch.setattr(
+            module, "DEVICE_SUMMARY_SCHEMA_VERSION", PREVIOUS_DEVICE_SUMMARY_SCHEMA_VERSION,
+        )
+        monkeypatch.setattr(
+            module, "DEVICE_SUMMARY_PARAMETERS", PREVIOUS_DEVICE_SUMMARY_PARAMETERS,
+        )
+
+    invalid_run_id = "0" * 32
+    valid_run_id = "1" * 32
+    db_path, _, _, _manifest = finalized_collection(
+        tmp_path, monkeypatch, run_id=invalid_run_id,
+    )
+    finalized_collection(tmp_path, monkeypatch, run_id=valid_run_id)
+    for _run_id in (invalid_run_id, valid_run_id):
+        assert derived_jobs.dispatch_next_pipeline_intake(db_path) is True
+        assert derived_jobs.run_next_derived_job(db_path, tmp_path) is True
+
+    for module in (pipeline_intake, derived_jobs, device_summary_result):
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_VERSION", current_contract["version"])
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_SCHEMA_VERSION", current_contract["schema"])
+        monkeypatch.setattr(module, "DEVICE_SUMMARY_PARAMETERS", current_contract["parameters"])
+
+    real_snapshot = derived_jobs._device_summary_snapshot
+
+    def one_invalid_snapshot(db, candidate_run_id, *, intent_kind):
+        if candidate_run_id == invalid_run_id:
+            raise ValueError("invalid retained authority for test")
+        return real_snapshot(db, candidate_run_id, intent_kind=intent_kind)
+
+    monkeypatch.setattr(derived_jobs, "_device_summary_snapshot", one_invalid_snapshot)
+    with caplog.at_level("WARNING"):
+        assert derived_jobs.recover_outdated_device_summary_jobs(db_path) == [valid_run_id]
+    assert invalid_run_id in caplog.text
+    queued = derived_jobs.device_summary_job_for_run(db_path, valid_run_id)
+    assert queued["target_analysis_version"] == DEVICE_SUMMARY_VERSION
+    assert queued["latest_attempt"]["state"] == "queued"
+
+
 def test_interactive_finalization_uses_same_verified_authority(tmp_path, monkeypatch):
     db_path = tmp_path / "analyzer.db"
     init_evidence_retirement_storage(db_path)
@@ -312,6 +490,7 @@ def test_changed_or_newly_preferred_file_is_an_integrity_conflict(tmp_path, monk
 def test_verification_failure_retries_locally_without_duplicate_observations(
     tmp_path, monkeypatch,
 ):
+    monkeypatch.setattr(jobs, "start_derived_job_worker", lambda *_args, **_kwargs: None)
     original_activate = device_configs.activate_collected_device_authority
     monkeypatch.setattr(
         device_configs,

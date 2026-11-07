@@ -73,6 +73,8 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "A dry run reports only" in html
     assert "Nmap scan — active network contact" in html
     assert "password is used only for the short-lived SSH session" in html
+    assert "queues a new local calculation from the retained source" in html
+    assert "keeping the older saved result as historical evidence" in html
     assert "preview lists every external command and where each action runs" in html
     assert "immutable device collection profile versions" in html
     assert "Device collection profiles and scope" in html
