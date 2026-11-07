@@ -486,6 +486,29 @@ def test_active_theme_controls_legacy_inner_surfaces_across_workspaces():
         ".contract",
     ):
         assert selector in SHELL_SCRIPT
+
+
+def test_new_saved_network_visibly_carries_reviewed_scope_without_required_note():
+    html = operator_page().body.decode()
+    guide = how_nct_works_page().body.decode()
+    assert "Initial note (optional); later changes require a reason" in html
+    assert "function applyNewSavedNetworkScopeDefault()" in html
+    assert "savedNetworkScopeTouched" in html
+    assert "savedNetworkScopeDefaulted" in html
+    assert "savedNetworkScopeDefaultSnapshot" in html
+    assert "savedNetworkEditorHasDraft" in html
+    assert "retainSavedNetworkScopeChoice" in html
+    assert "no longer in the available scope list" in html
+    assert "desiredScope!==snapshot.scope_id" in html
+    assert "default is frozen; clear the editor" in html
+    assert "NCT did not change your draft" in html
+    assert "use_reviewed_scope_default:useReviewedDefault" in html
+    assert "expected_collection_review_revision" in html
+    assert "Network Scope: ${active.label} — from reviewed Mission Environment" in html
+    assert "Clearing this existing association requires a reason" in html
+    assert "The first note is optional when accepting the reviewed Mission Environment scope" in SHELL_SCRIPT
+    assert "preselects the exact current reviewed Mission Environment scope" in guide
+    assert "Configuration-derived and historical one-click creation paths remain unassociated" in guide
     assert ":is(.finding-summary-row th,.finding-summary-row td,.finding-summary-continuation td,.service-exposure-group,.progress-track,.os-review-state){background:var(--nct-surface-subtle)!important" in SHELL_SCRIPT
     assert ":is(.nav a,.source-links a,.reach-shortcut){background:var(--nct-control)!important" in SHELL_SCRIPT
     assert ":is(input,select,textarea,option,th){background:var(--nct-background)!important" in SHELL_SCRIPT

@@ -344,6 +344,9 @@ class SavedNetworkContextSave(BaseModel):
     expected_association_id: str | None = Field(default=None, max_length=100)
     expected_revision: int | None = Field(default=None, ge=1)
     scope_reason: str = Field(default="", max_length=500)
+    use_reviewed_scope_default: bool = False
+    expected_collection_review_revision: int | None = Field(default=None, ge=1)
+    expected_scope_version: int | None = Field(default=None, ge=1)
 
     @field_validator(
         "saved_network_id", "expected_updated_at", "scope_id", "expected_association_id"
@@ -8270,6 +8273,10 @@ def save_saved_network_with_context(
         with connect_database(db_path) as db:
             db.execute("BEGIN IMMEDIATE")
             if request.saved_network_id is None:
+                if request.use_reviewed_scope_default and not request.scope_id:
+                    raise SavedNetworkScopeConflict(
+                        "Reload Saved Networks so the reviewed Mission Environment scope is shown before saving"
+                    )
                 if (
                     request.expected_updated_at is not None
                     or request.expected_association_id is not None
@@ -8291,6 +8298,10 @@ def save_saved_network_with_context(
                 )
                 current = None
             else:
+                if request.use_reviewed_scope_default:
+                    raise SavedNetworkScopeConflict(
+                        "The reviewed Mission Environment default applies only to a new Saved Network"
+                    )
                 saved_network_id = request.saved_network_id
                 current = current_scope_association_in_transaction(
                     db, saved_network_id
@@ -8319,7 +8330,32 @@ def save_saved_network_with_context(
                 )
             current_scope = current["scope_id"] if current else None
             if request.scope_id != current_scope:
-                if not request.scope_reason:
+                scope_reason = request.scope_reason
+                if request.use_reviewed_scope_default:
+                    if not request.scope_id:
+                        raise CollectionSafetySetupIncomplete(
+                            "Reload Saved Networks so the reviewed Mission Environment scope is shown before saving"
+                        )
+                    reviewed = require_collection_safety_ready_on_connection(
+                        db, expected_scope_id=request.scope_id,
+                    )
+                    review_revision = int(reviewed["review"].get("revision") or 0)
+                    scope_version = int(reviewed["scope"].get("version") or 0)
+                    if (
+                        request.expected_collection_review_revision != review_revision
+                        or request.expected_scope_version != scope_version
+                    ):
+                        raise CollectionSafetySetupIncomplete(
+                            "Mission Environment changed while this Saved Network was being prepared; reload and review the active scope again"
+                        )
+                    if not scope_reason:
+                        scope_reason = (
+                            "NCT generated: Initial association accepted from reviewed "
+                            f"Mission Environment scope {reviewed['scope']['label']} "
+                            f"[{reviewed['scope']['scope_id']}] v{scope_version}; "
+                            f"setup review r{review_revision}"
+                        )
+                elif not scope_reason:
                     raise ValueError(
                         "Enter why the Network Scope is being assigned, changed, or cleared"
                     )
@@ -8332,7 +8368,7 @@ def save_saved_network_with_context(
                     ),
                     expected_revision=(int(current["revision"]) if current else None),
                     actor=actor,
-                    reason=request.scope_reason,
+                    reason=scope_reason,
                 )
     except sqlite3.IntegrityError as exc:
         if "saved_networks" in str(exc).lower():

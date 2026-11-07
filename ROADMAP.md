@@ -53,6 +53,34 @@ cannot be proven, label it Not assessed and offer a full retry instead. Extend t
 after current restart, cancellation and retained-data acceptance closes; do not infer
 safe resume from a percentage or the last line of Nmap output.
 
+Reviewed-scope carry-forward usability correction completed (2026-11-07): repeated
+hands-on use showed that analysts could create a Saved Network without its reusable
+scope association even though Mission Environment already contained one valid reviewed
+active scope, and the required initial free-text association note encouraged redundant
+filler. The visible new-network editor now preselects that exact reviewed scope and
+allows the initial note to remain blank; NCT then retains a clearly marked factual
+history reason with the actor, time, scope identity/version and setup-review revision.
+The displayed scope and review values freeze with the draft. Mission Environment and
+scope-option refreshes cannot silently change, clear or replace them, and a removed
+choice stays visibly selected as unavailable until the analyst clears or reloads the
+editor. An in-flight refresh also preserves the analyst's latest explicit scope choice,
+including an intentional clear. The server rechecks the exact scope and review inside
+the same short write transaction as the network and association, so concurrent changes
+either commit before the draft and reject it cleanly or wait until its exact association
+commits. Existing associations remain preserved on edit; changing or clearing one later
+still requires a human reason. **Documented deviation:** configuration-derived,
+historical and legacy creation paths remain deliberately unassociated because NCT does
+not infer context for retained or externally collected evidence. No earlier evidence is
+rewritten. The built-in README, Operator Guide and tutorial now explain this boundary.
+Qualification passed in the supported Linux environment: 2,775 tests passed with 25
+intentional skips and one upstream deprecation warning; all 26 browser-runtime checks
+passed, including delayed refresh, removed-option, edit and both database-ordering
+regressions. The isolated Graphite and Sage Operations browser checks showed the scope
+and optional-note state clearly without layout regression. Novice review returned CLEAR;
+backend review returned CLEAR; the Independent Reviewer returned CLEAR — DOCUMENTED
+DEVIATION. This is tested foundation work only and is not part of either
+already-deployed R26 Range instance.
+
 Linux qualification environment requirement recorded (2026-11-06): all source-level
 Python qualification must run in the supported Debian Bookworm Python 3.12 container,
 and browser/runtime JavaScript checks must run in the Debian Bookworm Node 22

@@ -152,6 +152,317 @@ def test_scope_and_safety_review_is_bound_to_exact_revisions(tmp_path, monkeypat
         assert any("Network Scope changed" in item for item in stale_scope["missing_checks"])
 
 
+def test_new_saved_network_uses_reviewed_scope_with_optional_initial_note(
+    tmp_path, monkeypatch,
+):
+    with client_for(tmp_path, monkeypatch) as client:
+        scope = reviewed_setup(client, label="Home lab")
+        setup = client.get("/api/collection-safety-setup").json()
+        created = client.post(
+            "/api/saved-networks/contextual-save",
+            json={
+                "name": "Operations",
+                "cidr": "10.44.0.0/24",
+                "scope_id": scope["scope_id"],
+                "scope_reason": "",
+                "use_reviewed_scope_default": True,
+                "expected_collection_review_revision": setup["review"]["revision"],
+                "expected_scope_version": scope["version"],
+            },
+        )
+        assert created.status_code == 200, created.text
+        record = created.json()
+        history = client.get(
+            f"/api/saved-networks/{record['saved_network_id']}/scope-history"
+        ).json()
+
+    association = record["network_scope_association"]
+    assert association["scope_id"] == scope["scope_id"]
+    assert association["revision"] == 1
+    assert len(history) == 1
+    assert history[0]["actor"] == "local-operator"
+    assert history[0]["reason"].startswith("NCT generated: Initial association")
+    assert scope["scope_id"] in history[0]["reason"]
+    assert "setup review r1" in history[0]["reason"]
+
+
+def test_reviewed_scope_default_rejects_stale_or_different_context_atomically(
+    tmp_path, monkeypatch,
+):
+    with client_for(tmp_path, monkeypatch) as client:
+        reviewed = reviewed_setup(client, label="Reviewed")
+        other = client.post("/api/network-scopes", json={"label": "Other"}).json()
+        mismatch = client.post(
+            "/api/saved-networks/contextual-save",
+            json={
+                "name": "Wrong context",
+                "cidr": "10.45.0.0/24",
+                "scope_id": other["scope_id"],
+                "use_reviewed_scope_default": True,
+                "expected_collection_review_revision": 1,
+                "expected_scope_version": other["version"],
+            },
+        )
+        assert mismatch.status_code == 409
+        assert client.get("/api/saved-networks").json() == []
+
+        changed = client.patch(
+            f"/api/network-scopes/{reviewed['scope_id']}",
+            json={
+                "expected_version": reviewed["version"],
+                "label": "Reviewed after change",
+                "reason": "Exercise boundary changed",
+            },
+        )
+        assert changed.status_code == 200
+        stale = client.post(
+            "/api/saved-networks/contextual-save",
+            json={
+                "name": "Stale context",
+                "cidr": "10.46.0.0/24",
+                "scope_id": reviewed["scope_id"],
+                "use_reviewed_scope_default": True,
+                "expected_collection_review_revision": 1,
+                "expected_scope_version": reviewed["version"],
+            },
+        )
+        assert stale.status_code == 409
+        assert client.get("/api/saved-networks").json() == []
+
+
+def test_reviewed_scope_default_rejects_changed_review_revision(tmp_path, monkeypatch):
+    with client_for(tmp_path, monkeypatch) as client:
+        reviewed = reviewed_setup(client, label="Reviewed")
+        no_strike = client.post(
+            "/api/safety/no-strike",
+            json={"entries": ["192.0.2.0/24"], "changed_by": "ignored"},
+        ).json()
+        refreshed = client.post(
+            "/api/collection-safety-setup/reviews",
+            json={
+                "scope_id": reviewed["scope_id"],
+                "expected_scope_version": reviewed["version"],
+                "expected_no_strike_revision": no_strike["revision"],
+                "empty_no_strike_reviewed": False,
+                "reason": "Reviewed revised exclusions",
+            },
+        )
+        assert refreshed.status_code == 201
+        stale = client.post(
+            "/api/saved-networks/contextual-save",
+            json={
+                "name": "Stale review",
+                "cidr": "10.47.0.0/24",
+                "scope_id": reviewed["scope_id"],
+                "use_reviewed_scope_default": True,
+                "expected_collection_review_revision": 1,
+                "expected_scope_version": reviewed["version"],
+            },
+        )
+        assert stale.status_code == 409
+        assert "changed while this Saved Network" in stale.json()["detail"]
+        assert client.get("/api/saved-networks").json() == []
+
+
+def test_reviewed_scope_default_commits_before_waiting_review_change(
+    tmp_path, monkeypatch,
+):
+    import app.poc as poc
+    from app.collection_safety_setup import record_collection_safety_review
+    from app.saved_network_scope_associations import list_saved_network_scope_history
+
+    db_path = tmp_path / "analyzer.db"
+    with client_for(tmp_path, monkeypatch) as client:
+        reviewed = reviewed_setup(client, label="Serializable")
+
+    status_read = threading.Event()
+    release_save = threading.Event()
+    review_started = threading.Event()
+    save_result: dict = {}
+    failures: list[BaseException] = []
+    original_require = poc.require_collection_safety_ready_on_connection
+
+    def pause_after_status(db, *, expected_scope_id=None):
+        status = original_require(db, expected_scope_id=expected_scope_id)
+        status_read.set()
+        assert release_save.wait(timeout=5)
+        return status
+
+    monkeypatch.setattr(
+        poc, "require_collection_safety_ready_on_connection", pause_after_status,
+    )
+
+    def save_network():
+        try:
+            save_result.update(
+                poc.save_saved_network_with_context(
+                    poc.SavedNetworkContextSave(
+                        name="Serializable network",
+                        cidr="10.48.0.0/24",
+                        scope_id=reviewed["scope_id"],
+                        use_reviewed_scope_default=True,
+                        expected_collection_review_revision=1,
+                        expected_scope_version=reviewed["version"],
+                    ),
+                    actor="analyst",
+                    db_path=db_path,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    def refresh_review():
+        try:
+            review_started.set()
+            record_collection_safety_review(
+                db_path,
+                scope_id=reviewed["scope_id"],
+                expected_scope_version=reviewed["version"],
+                expected_no_strike_revision=0,
+                empty_no_strike_reviewed=True,
+                reviewed_by="admin",
+                reason="Concurrent review refresh",
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    save_thread = threading.Thread(target=save_network)
+    review_thread = threading.Thread(target=refresh_review)
+    save_thread.start()
+    assert status_read.wait(timeout=5)
+    review_thread.start()
+    assert review_started.wait(timeout=5)
+    time.sleep(0.1)
+    assert review_thread.is_alive()
+    release_save.set()
+    save_thread.join(timeout=5)
+    review_thread.join(timeout=5)
+
+    assert not failures
+    assert not save_thread.is_alive()
+    assert not review_thread.is_alive()
+    history = list_saved_network_scope_history(
+        db_path, save_result["saved_network_id"],
+    )
+    assert len(history) == 1
+    assert "setup review r1" in history[0]["reason"]
+
+
+def test_waiting_reviewed_scope_default_rechecks_after_review_commits(
+    tmp_path, monkeypatch,
+):
+    import app.collection_safety_setup as safety
+    import app.poc as poc
+    from app.collection_safety_setup import (
+        CollectionSafetySetupIncomplete,
+        record_collection_safety_review,
+    )
+    from app.saved_network_scope_associations import list_saved_network_scope_history
+
+    db_path = tmp_path / "analyzer.db"
+    with client_for(tmp_path, monkeypatch) as client:
+        reviewed = reviewed_setup(client, label="Review first")
+
+    review_locked = threading.Event()
+    release_review = threading.Event()
+    save_started = threading.Event()
+    failures: list[BaseException] = []
+    save_error: list[BaseException] = []
+    original_latest = safety._latest_review
+    paused = False
+
+    def pause_review_with_write_lock(db):
+        nonlocal paused
+        result = original_latest(db)
+        if threading.current_thread().name == "review-first" and not paused:
+            paused = True
+            review_locked.set()
+            assert release_review.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(safety, "_latest_review", pause_review_with_write_lock)
+
+    def refresh_review():
+        try:
+            record_collection_safety_review(
+                db_path,
+                scope_id=reviewed["scope_id"],
+                expected_scope_version=reviewed["version"],
+                expected_no_strike_revision=0,
+                empty_no_strike_reviewed=True,
+                reviewed_by="admin",
+                reason="Review commits before Saved Network",
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    def save_network():
+        save_started.set()
+        try:
+            poc.save_saved_network_with_context(
+                poc.SavedNetworkContextSave(
+                    name="Waiting stale draft",
+                    cidr="10.49.0.0/24",
+                    scope_id=reviewed["scope_id"],
+                    use_reviewed_scope_default=True,
+                    expected_collection_review_revision=1,
+                    expected_scope_version=reviewed["version"],
+                ),
+                actor="analyst",
+                db_path=db_path,
+            )
+        except BaseException as exc:
+            save_error.append(exc)
+
+    review_thread = threading.Thread(target=refresh_review, name="review-first")
+    save_thread = threading.Thread(target=save_network, name="waiting-save")
+    review_thread.start()
+    assert review_locked.wait(timeout=5)
+    save_thread.start()
+    assert save_started.wait(timeout=5)
+    time.sleep(0.1)
+    assert save_thread.is_alive()
+    release_review.set()
+    review_thread.join(timeout=5)
+    save_thread.join(timeout=5)
+
+    assert not failures
+    assert not review_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert len(save_error) == 1
+    assert isinstance(save_error[0], CollectionSafetySetupIncomplete)
+    assert "changed while this Saved Network" in str(save_error[0])
+    assert poc.list_saved_networks(db_path) == []
+    assert list_saved_network_scope_history(db_path, "missing") == []
+
+
+def test_legacy_saved_network_create_remains_unassociated_with_reviewed_scope(
+    tmp_path, monkeypatch,
+):
+    with client_for(tmp_path, monkeypatch) as client:
+        reviewed_setup(client, label="Reviewed but not inferred")
+        created = client.post(
+            "/api/saved-networks",
+            json={
+                "name": "Legacy path",
+                "cidr": "10.50.0.0/24",
+                "created_by": "analyst",
+            },
+        )
+        assert created.status_code == 201, created.text
+        record = created.json()
+        detail = client.get(
+            f"/api/saved-networks/{record['saved_network_id']}"
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["network_scope_association"] is None
+        history = client.get(
+            f"/api/saved-networks/{record['saved_network_id']}/scope-history"
+        )
+        assert history.status_code == 200, history.text
+        assert history.json() == []
+
+
 def test_nmap_scan_details_do_not_duplicate_shared_no_strike_management():
     from app.mission_environment_ui import mission_environment_page
     from app.ui import operator_page

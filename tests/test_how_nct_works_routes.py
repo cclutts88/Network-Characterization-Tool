@@ -86,7 +86,9 @@ def test_built_in_readme_explains_pipeline_storage_and_current_limits():
     assert "preserves its immutable versions" in html
     assert "Uploading existing Nmap XML" in html
     assert "Saved Network" in html and "Network Scope" in html
-    assert "an optional Network Scope association supplies stable reusable context" in html
+    assert "preselects the exact current reviewed Mission Environment scope" in html
+    assert "The initial note is optional" in html
+    assert "Configuration-derived and historical one-click creation paths remain unassociated" in html
     assert "affects future collection only" in html
     assert "Hunt reads that saved assessment" in html
     assert "does not claim that every historical scan or manual import already has one" in html
