@@ -30,6 +30,18 @@ The release application image may still be tested as the exact built candidate, 
 minimal or mismatched convenience image cannot substitute for the source-test
 environment. This is a permanent requirement for subsequent NCT changes.
 
+R26 fresh Range release qualification started (2026-11-06): freeze the cleared R25
+stability behavior and prepare one new exact-source, fresh-install-only offline release.
+This bounded release does not add the larger deferred capabilities or advertise a
+retained-install upgrade. It must rebuild the application and independent recovery
+console from one clean committed source, pass the exact fresh-host installation and
+restart journey, retain the first-run Mission Environment and Emergency Stop contracts,
+seal the immutable ZIP, generate and independently verify the standard transfer pieces
+no larger than 48 MiB, and receive novice-operator and independent-reviewer clearance.
+The release remains development qualification until the exact package passes these
+gates, and remains distinct from actual Range installation, Range acceptance,
+mission-readiness and stable `main`.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
