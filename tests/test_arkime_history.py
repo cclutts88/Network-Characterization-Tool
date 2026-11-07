@@ -92,6 +92,8 @@ def _pull(db, profile_id, rows, *, filtered=None):
 def test_history_deduplicates_exact_records_and_preserves_unknown_capture(
     configured, monkeypatch, tmp_path,
 ):
+    frozen_pull_time = connector._parse_time("2030-01-01T12:00:00+00:00")
+    monkeypatch.setattr(connector, "_now", lambda: frozen_pull_time)
     db = tmp_path / "history.db"
     scope = create_network_scope(db, label="Range", created_by="admin")
     profile = _profile(db, scope["scope_id"])

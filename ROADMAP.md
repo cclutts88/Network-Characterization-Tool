@@ -42,6 +42,15 @@ The release remains development qualification until the exact package passes the
 gates, and remains distinct from actual Range installation, Range acceptance,
 mission-readiness and stable `main`.
 
+The first complete R26 Linux qualification stopped before packaging on the previously
+observed intermittent Arkime-history test (2026-11-06): the duplicate-session fixture
+derived packet times from each pull's live wall clock, so two intentionally identical
+sessions became conflicting whenever the test crossed a one-second boundary. The
+application correctly refused those altered records. The fixture now freezes its pull
+time so it deterministically proves exact duplicate reuse rather than scheduler speed.
+Rebuild both exact R26 images from the corrected commit and repeat the complete Linux
+gate; do not reuse or package the superseded pre-correction images.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
