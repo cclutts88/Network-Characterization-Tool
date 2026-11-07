@@ -69,6 +69,34 @@ sealing and states that older accounts, settings and evidence do not carry forwa
 Restage the committed source and repeat fresh-install acceptance and the novice gate;
 neither earlier staging folder is a release artifact.
 
+R26 fresh-only Range package completed local qualification and entered the final
+independent gate (2026-11-06). Payload commit
+`6fd589030a54cb94b99c5c43f97943b95b4bbe6f` produced exact application image
+`sha256:724090194271a925718a72ba69d2d2b876d7709e6fa44a3d27790cd82a9a1e76`
+and recovery-console image
+`sha256:32a4659c1c58f549dff789ec0e959d887ebfdf18d8c346dbfdf0d6660860b73c`.
+The supported Debian Bookworm Python 3.12 gate passed 2,761 tests with 25 supported
+skips and one existing dependency warning; all 24 Debian Bookworm Node 22 runtime
+checks passed. Exact-package fresh acceptance passed empty-host refusal, interrupted
+password resume, interactive Administrator creation, CA-verified HTTPS, application
+and console identity, recovery handoff, final restart, service persistence and
+original evidence downloads. The novice gate is CLEAR.
+
+Sealed artifact `NCT-Full-Range-20261106-Stability-r26.zip` is 76,877,454 bytes with
+SHA-256 `3f68d2a3987097b5f607e5fac6df3d1084af8a9686c86cfdeb15adfd604c3cc5`;
+its sealed manifest is
+`35be661a383c88030e9356a022389d84b0ae42b50e41fa28b166e326c334e99c`.
+The standard transfer set contains two verified pieces of 50,331,648 and 26,545,806
+bytes. Independent reconstruction matched the sealed ZIP, a repeated join preserved
+the correct output, and a conflicting output was refused. The same sealed package is
+intended for two independent clean controllers; each installation creates separate
+accounts, settings, storage, evidence and recovery state. Local acceptance substitutes
+an actual service process for real systemd boot, uses Docker port admission for the
+socket check and excludes its administrative coordinator from evidence peer checks;
+therefore real controller boot, browser trust and authorized network acceptance remain
+required separately on both Ranges. This record does not claim either Range is
+installed or accepted, that the package is mission-ready, or that it is on `main`.
+
 Complete novice workflow requalification in progress (2026-11-06): exercise every
 visible NCT workspace, guide and supported mutation against an exact isolated Linux
 candidate, including scheduled scans, duplicate evidence, malformed imports,
